@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>app-store-connect</string>
+	<key>teamID</key>
+	<string>4A5NSJ6Y3G</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>signingStyle</key>
+	<string>automatic</string>
+	<!-- Symbols go up so a crash from a tester is readable. -->
+	<key>uploadSymbols</key>
+	<true/>
+	<!-- The build number is ours: scripts/archive-upload.sh sets it, and
+	     Xcode picking its own would break the one thing TestFlight
+	     insists on, which is that it always goes up. -->
+	<key>manageAppVersionAndBuildNumber</key>
+	<false/>
+</dict>
+</plist>

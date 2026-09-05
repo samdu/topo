@@ -52,6 +52,7 @@
 		DBF79EB9513943C208538DA0 /* HouseViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EE41AD574BBB3BE1DD0AE04 /* HouseViewController.swift */; };
 		DCE98B574416BD1DBFB55B68 /* TranscriptViewControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48FA51F824EE74606F5CA5AB /* TranscriptViewControllerTests.swift */; };
 		DD746FF5BCF19E89F8E04E4F /* Transcript.swift in Sources */ = {isa = PBXBuildFile; fileRef = E05346CE35DD4762D47A90FB /* Transcript.swift */; };
+		E584455B3576E05D78371A23 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 1BBD6CE6B194116A1582F30F /* PrivacyInfo.xcprivacy */; };
 		E5CBB41F4101A23135761371 /* TurnCell.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BAD143A809737C056F8A769 /* TurnCell.swift */; };
 		EC9DF7B6C3BD74836E681391 /* TailProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5E6F4009385466E9B7C778D /* TailProbeTests.swift */; };
 		F117CCC2389BEC532E925481 /* Board.swift in Sources */ = {isa = PBXBuildFile; fileRef = 350EC4607F61ED4EDC76582D /* Board.swift */; };
@@ -61,6 +62,7 @@
 /* Begin PBXFileReference section */
 		01DD0765C99B7ED1DC0C9587 /* CardRecordStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CardRecordStore.swift; sourceTree = "<group>"; };
 		10EAE8FDAFA34998F5532EF7 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		1BBD6CE6B194116A1582F30F /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		2009FC0A36DA82B14D905089 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
 		21D0403F87C1400C900C9C12 /* TurnRecordStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnRecordStore.swift; sourceTree = "<group>"; };
 		223DC632AF8144E3E6A9AAB1 /* SurfaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceTests.swift; sourceTree = "<group>"; };
@@ -163,6 +165,7 @@
 			children = (
 				10EAE8FDAFA34998F5532EF7 /* AppDelegate.swift */,
 				F17E930C15D9D19C923C6577 /* Info.plist */,
+				1BBD6CE6B194116A1582F30F /* PrivacyInfo.xcprivacy */,
 				E62937C2E735A4C164CC16EB /* Womble.entitlements */,
 				5920D27E73AA2CC483E3D8D3 /* Resources */,
 			);
@@ -289,6 +292,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				038EEDCF1B2E68687F7A2ADF /* LaunchScreen.storyboard in Resources */,
+				E584455B3576E05D78371A23 /* PrivacyInfo.xcprivacy in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
