@@ -32,6 +32,57 @@ Joining the roster is the room's decision, not the network's. An agent already r
 
 The roster survives launches. It does not survive a reinstall, which costs the registrations and no more; the room can give them again.
 
+## The page a television opens
+
+Off Apple there is no bundle to install, so a Womble is a web page the hub serves on the house's own network — `Womble/Web`, static, no build step and no dependencies, because the browser on the other end may be a television's.
+
+It reads one document, polled, and shows the same two things the app does: the house board and the transcript.
+
+### `GET /surface.json`
+
+```json
+{
+  "version": 1,
+  "house": "Hexagon Zone",
+  "transcript": {
+    "complete": true,
+    "notice": null,
+    "turns": [
+      { "ref": "phone/1", "role": "person", "text": "…", "at": "2026-09-05T19:02:00Z" }
+    ]
+  },
+  "board": {
+    "cards": [
+      { "id": "hub/3", "owner": "hub", "body": "Bins out tonight", "state": "posted",
+        "postedAt": "2026-09-05T19:02:33Z", "at": "2026-09-05T19:02:33Z" }
+    ]
+  }
+}
+```
+
+| Field | Holds |
+| ----- | ----- |
+| `version` | `1`. A page that does not know the version says so rather than guessing |
+| `house` | What to call the household, or absent |
+| `transcript.turns` | Oldest first, as the log orders them: `ref`, `role` (`person` or `assistant`), `text`, `at` in RFC 3339 |
+| `transcript.complete` | False when the read could not be finished; the page shows what there is and says so |
+| `transcript.notice` | A line to show above the turns, or null: what the app puts in its banner |
+| `board.cards` | Newest posting first: `id`, `owner`, `body`, `state` (`posted`, `ticked`, `dismissed`), `postedAt`, `at` |
+
+One document rather than two endpoints, because a wall screen wants the board and the transcript to agree with each other, and two requests can disagree.
+
+The hub decides what a page may see. This is the household's view — the board, and the transcript of whoever the screen is registered to — and the page has no login of its own and asks for nothing else.
+
+### Polling
+
+Every five seconds, with `If-None-Match` when the hub gave an `ETag`, and again when a hidden tab comes back. A wall screen wants to be current more than it wants to be quick, and a `304` costs the hub nothing.
+
+Anything but a `200` or a `304` leaves what is on screen where it is and says the hub is not answering. A screen that clears itself because the network hiccuped is worse than one showing what it last knew — the same rule as the app.
+
+### Writing
+
+None. Every one of these screens is a noticeboard: it shows what the house posted, and a tap that changes something is the client app's business.
+
 ## What this is not
 
 There is no unregistering from the network's side: an agent can ask to join and cannot make itself leave, and a screen's roster is cleared by the person holding it. Nothing here reaches an agent or carries a turn — a Womble shows the transcript from CloudKit, as it always did. This is only how a hub learns that the screen exists and whose it is.
