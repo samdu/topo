@@ -6,8 +6,7 @@
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
-# `codex login`, written into a private codex-home for the run. With no
-# `openai-api-key` the action skips its Responses proxy and the CLI
+# `codex login`, written into a private codex-home for the run, and the CLI
 # authenticates from that file. Refresh it with a new `codex login` when the
 # reviewer starts failing with 401s.
 name: PR validate
@@ -95,18 +94,26 @@ jobs:
             "$RUNNER_TEMP/codex-home/auth.json" >/dev/null \
             || { echo "::error::CODEX_AUTH_JSON is not a chatgpt-mode codex auth.json."; exit 1; }
 
+      # The Codex CLI directly rather than openai/codex-action: the action
+      # unconditionally waits on the Responses proxy its API-key path starts,
+      # so it cannot run on a ChatGPT login. `codex exec` reads the login from
+      # $CODEX_HOME/auth.json on its own.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex && codex --version
+
       - name: Run Codex
         id: run_codex
-        uses: openai/codex-action@v1
-        with:
-          codex-home: ${{ runner.temp }}/codex-home
-          model: gpt-5.6-sol
-          permission-profile: ":workspace"
+        env:
+          CODEX_HOME: ${{ runner.temp }}/codex-home
+          CODEX_MODEL: gpt-5.6-sol
           # A verdict the workflow can act on. Free prose can only be posted;
           # a schema makes "does this block the merge" a field.
-          output-schema: |
+          OUTPUT_SCHEMA: |
             {"type": "object", "additionalProperties": false, "properties": {"blocking": {"type": "boolean"}, "summary": {"type": "string"}, "findings": {"type": "array", "items": {"type": "string"}}}, "required": ["blocking", "summary", "findings"]}
-          prompt: |
+          PROMPT: |
             Review PR #${{ github.event.pull_request.number }} in this
             repository. Review ONLY the changes it introduces.
 
@@ -150,6 +157,20 @@ jobs:
             things you would merely prefer are not blocking. `summary` is what
             a reader sees; `findings` is one string per issue, each citing
             `path:line`. Say plainly when you find nothing.
+        run: |
+          set -euo pipefail
+          printf '%s' "$OUTPUT_SCHEMA" > "$RUNNER_TEMP/schema.json"
+          printf '%s' "$PROMPT" | codex exec \
+            --model "$CODEX_MODEL" \
+            --sandbox read-only \
+            --skip-git-repo-check \
+            --color never \
+            --output-schema "$RUNNER_TEMP/schema.json" \
+            --output-last-message "$RUNNER_TEMP/verdict.json" \
+            -
+          # Multi-line output, so a heredoc delimiter the verdict cannot contain.
+          d="verdict-$RANDOM$RANDOM"
+          { echo "final-message<<$d"; cat "$RUNNER_TEMP/verdict.json"; echo; echo "$d"; } >> "$GITHUB_OUTPUT"
 
   post_feedback:
     runs-on: ubuntu-latest
@@ -284,8 +305,8 @@ jobs:
             finish block "no verdict: reviewer job $CODEX_RESULT (see reviewer_ran)" 0
           fi
 
-          # `codex-action` hands back whatever the CLI emitted; it does not check
-          # it against `output-schema`. So a reviewer that answered in prose, or
+          # The CLI's last message is whatever it emitted; nothing checks it
+          # against the schema. So a reviewer that answered in prose, or
           # with JSON of the wrong shape, reaches here — and reading `.blocking`
           # off it with a bare `jq` inside an `if` yields the empty string, which
           # is not "true", which reads as a clean review. Demand all three
