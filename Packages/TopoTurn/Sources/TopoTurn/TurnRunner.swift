@@ -24,9 +24,9 @@ public struct NoSocketProbe: LeaseProbe {
 ///
 /// Each turn takes the primary lease first and runs only as its holder. The person's turn is
 /// appended before the model is called, so a failed call leaves the words in the log and the next
-/// turn carries on from them; the reply is appended as a child of the person's turn, and only if
-/// this device is still primary once it arrives, so a device displaced during a long call does
-/// not write a second brain's answer.
+/// turn carries on from them; the reply is appended as a child of the person's turn in one atomic
+/// batch with a heartbeat of the lease, so a device displaced during a long call, or in the moment
+/// between the reply arriving and its write, does not write a second brain's answer.
 public actor TurnRunner {
     public struct Result: Sendable {
         public var person: Turn
@@ -74,10 +74,11 @@ public actor TurnRunner {
         do {
             let history = before.ordered.suffix(historyLimit - 1) + [person]
             let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
-            // A heartbeat is a compare-and-set on the lease record, so a claim made during the
-            // call is seen now rather than on the next scheduled heartbeat.
-            guard try await lease.heartbeat() else { throw TurnRunnerError.displaced }
-            let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref])
+            // The reply and a heartbeat of the lease are one atomic batch: a claim made during
+            // the call, or between the call and this write, refuses the batch and nothing lands.
+            guard let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref], renewing: lease) else {
+                throw TurnRunnerError.displaced
+            }
             return Result(person: person, assistant: assistant, reply: reply)
         } catch {
             throw TurnRunnerError.replyFailed(person: person, underlying: error)

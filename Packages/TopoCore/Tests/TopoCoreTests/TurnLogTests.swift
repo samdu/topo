@@ -84,6 +84,22 @@ import TopoCoreTesting
         #expect(after.exclusive(to: joined.ref).count == after.turns.count)
     }
 
+    @Test func anAppendRenewingTheLeaseWritesNothingOnceDisplaced() async throws {
+        let w = try await log.writer(for: hub)
+        let ticker = Ticker()
+        let mine = PrimaryLease(database: db, device: hub, endpoint: nil, probe: StubProbe.allAlive, sleep: ticker.sleep)
+        _ = try await mine.acquire()
+        let a = try #require(try await w.append(.person, "hi", parents: [], at: t0, renewing: mine))
+        #expect(try await log.read().ordered == [a])
+
+        let taker = PrimaryLease(database: db, device: phone, endpoint: nil, probe: StubProbe.allDead, sleep: ticker.sleep)
+        _ = try await taker.acquire()
+        #expect(try await w.append(.assistant, "too late", parents: [a.ref], at: t0 + 1, renewing: mine) == nil)
+        #expect(try await log.read().ordered == [a])
+        #expect(await w.nextRef == .ref("hub", 2))
+        #expect(!(await mine.isPrimary()))
+    }
+
     @Test func emptyLogHasNoHeads() async throws {
         let t = try await log.read()
         #expect(t.isEmpty && t.heads.isEmpty && !t.isForked)

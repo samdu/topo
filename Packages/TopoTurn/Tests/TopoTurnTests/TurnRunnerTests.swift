@@ -79,6 +79,31 @@ import TopoCoreTesting
         #expect(await hub.isPrimary())
     }
 
+    @Test func aClaimLandingBetweenTheReplyAndItsWriteRefusesTheWrite() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("two brains")))
+        let (runner, lease) = try await makeRunner(database: db, transport: transport)
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        // The claim lands inside the save of the reply's batch, after every check the runner
+        // could have made: only the batch's own compare-and-set on the lease can see it.
+        await db.setBeforeSave { records in
+            guard records.contains(where: { $0.type == Turn.recordType && $0.string("role") == "assistant" }) else { return }
+            await db.setBeforeSave(nil)
+            _ = try? await hub.acquire()
+        }
+        do {
+            _ = try await runner.run("hello", model: .sonnet5)
+            Issue.record("expected displacement")
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
+        }
+        let after = try await TurnLog(database: db).read()
+        #expect(after.ordered.map(\.text) == ["hello"])
+        #expect(await hub.isPrimary())
+        #expect(!(await lease.isPrimary()))
+    }
+
     @Test func theSameNonceAgainFindsTheTurnAlreadyInTheLog() async throws {
         let db = InMemoryRecordDatabase()
         let transport = RecordingTransport((500, "{}"), (200, reply("ok")))
