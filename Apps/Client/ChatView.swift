@@ -10,9 +10,17 @@ struct ChatView: View {
     @Environment(SignIn.self) private var signIn
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     @AppStorage("firstRunAnswered") private var answered = false
+    @Environment(VoiceInput.self) private var voice
+    @Environment(Speaker.self) private var speaker
+    @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("readAloud") private var readAloud = true
     @State private var draft = ""
-    @State private var dictation = Dictation()
     @State private var showDiagnostics = false
+    /// True while the microphone is held open by a tap rather than a hold.
+    @State private var handsFree = false
+    @State private var pressedAt: Date?
+    /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
+    @State private var spokenTurns: Set<String> = []
 
     var body: some View {
         NavigationStack {
@@ -66,6 +74,7 @@ struct ChatView: View {
                         Picker("Model", selection: $harness.model) {
                             ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                         }
+                        Toggle("Read replies aloud", isOn: $readAloud)
                         Button("Diagnostics") { showDiagnostics = true }
                         Divider()
                         Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
@@ -95,7 +104,47 @@ struct ChatView: View {
             // write into the log.
             await harness.answering(every: .seconds(5))
         }
-        .onChange(of: dictation.text) { _, text in if !text.isEmpty { draft = text } }
+        .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
+        .onChange(of: harness.turns.last?.ref) { _, _ in
+            // A spoken question gets a spoken answer; a typed one stays quiet.
+            guard readAloud, let last = harness.turns.last, last.role == .assistant,
+                  let asked = last.parents.first.flatMap({ ref in harness.turns.first { $0.ref == ref } }),
+                  spokenTurns.remove(asked.nonce) != nil else { return }
+            speaker.speak(last.text)
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Speaking is foreground work; a backgrounded process submitting GPU commands is killed.
+            if phase != .active { speaker.stop(); if voice.listening { Task { _ = await voice.end() } } }
+        }
+    }
+
+    /// Hold to talk and release to send; a tap opens the microphone until the next tap.
+    private func micPressed(_ down: Bool) async {
+        if down {
+            pressedAt = Date()
+            if handsFree {
+                handsFree = false
+                await sendSpoken()
+                return
+            }
+            speaker.stop()
+            _ = await voice.begin(as: .chat)
+        } else {
+            guard voice.listening, voice.owner == .chat else { return }
+            if let pressedAt, Date().timeIntervalSince(pressedAt) < 0.4 {
+                handsFree = true
+                return
+            }
+            await sendSpoken()
+        }
+    }
+
+    private func sendSpoken() async {
+        let text = await voice.end()
+        draft = ""
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        spokenTurns.insert(harness.willSend(text))
+        await harness.retry()
     }
 
     private var composer: some View {
@@ -104,13 +153,13 @@ struct ChatView: View {
                 .textFieldStyle(.roundedBorder)
                 .lineLimit(1...5)
                 .onSubmit(send)
-            Button {
-                Task { await dictation.toggle() }
-            } label: {
-                Image(systemName: dictation.listening ? "waveform.circle.fill" : "mic.circle.fill")
-                    .font(.title)
-                    .foregroundStyle(dictation.denied ? .secondary : Theme.teal)
-            }
+            Image(systemName: voice.listening && voice.owner == .chat ? "waveform.circle.fill" : "mic.circle.fill")
+                .font(.title)
+                .foregroundStyle(voice.denied ? .secondary : Theme.teal)
+                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
+                    Task { await micPressed(down) }
+                }
+                .accessibilityLabel(voice.listening ? "Listening; release to send" : "Hold to talk")
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }
@@ -121,7 +170,7 @@ struct ChatView: View {
     }
 
     private func send() {
-        dictation.stop()
+        if voice.listening { voice.cancel() }
         let text = draft
         draft = ""
         Task { await harness.send(text) }
