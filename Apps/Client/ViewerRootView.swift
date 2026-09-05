@@ -8,6 +8,7 @@ struct ViewerRootView: View {
     private static let refreshInterval = Duration.seconds(10)
 
     @Environment(RoleSelector.self) private var roleSelector
+    @Environment(Harness.self) private var harness
     @State private var store = TranscriptStore(database: TopoCloudKit.database())
     @State private var primary = PrimaryReader(database: TopoCloudKit.database())
     @State private var confirmingTakeover = false
@@ -39,7 +40,10 @@ struct ViewerRootView: View {
             }
             .confirmationDialog("Make this device the primary?", isPresented: $confirmingTakeover, titleVisibility: .visible) {
                 Button("Make this device the primary", role: .destructive) {
-                    Task { await roleSelector.takePrimary() }
+                    Task {
+                        // The lease that made the claim is the one the harness keeps.
+                        if let lease = await roleSelector.takePrimary() { harness.adopt(lease) }
+                    }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {

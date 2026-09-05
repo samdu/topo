@@ -126,8 +126,11 @@ final class RoleSelectorTests: XCTestCase {
                              sleep: { await slept.add($0) })
         await s.decide()
         XCTAssertEqual(s.role, .viewer)
-        await s.takePrimary()
+        let taken = await s.takePrimary()
         XCTAssertEqual(s.role, .primary)
+        // The instance that claimed is handed on, and it holds the lease.
+        let holds = await taken?.isPrimary()
+        XCTAssertEqual(holds, true)
         let waits = await slept.all
         XCTAssertEqual(waits.count, 1)
         XCTAssertGreaterThan(waits[0], 9)

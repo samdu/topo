@@ -285,10 +285,17 @@ final class Harness {
         }
     }
 
+    /// Takes a lease another part of the app claimed for this device (the deliberate takeover),
+    /// so the harness runs on that claim's epoch rather than making a second claim the displaced
+    /// device never yielded to.
+    func adopt(_ lease: PrimaryLease) {
+        self.lease = lease
+    }
+
     private func makeRunner() async throws -> TurnRunner {
         let writer = try await log.writer(for: device)
         self.writer = writer
-        let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe())
+        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe())
         self.lease = lease
         var api = MessagesAPI(tokens: tokens)
         api.onResponse = { [weak self] status, seconds in

@@ -98,10 +98,14 @@ final class RoleSelector {
     /// before the claim, so a holder that is merely between heartbeats keeps its lease if it
     /// heartbeats again, and only a holder that has stopped is claimed over; a holder that keeps
     /// heartbeating through the wait is alive and is claimed over anyway, and yields on its next
-    /// heartbeat, as the lease provides. On success the role is primary and the screen shows
-    /// sign-in. On failure the role is unchanged and `trouble` says why.
-    func takePrimary() async {
-        guard taking == nil else { return }
+    /// heartbeat, as the lease provides. On success the role is primary, the screen shows
+    /// sign-in, and the lease instance that made the claim is returned for the harness to keep:
+    /// the displaced device yields to that lease's epoch, and a second claim from another
+    /// instance would be an epoch it never yielded to, which it would claim back over. On failure
+    /// nil, the role unchanged, and `trouble` says why.
+    @discardableResult
+    func takePrimary() async -> PrimaryLease? {
+        guard taking == nil else { return nil }
         defer { taking = nil }
         do {
             taking = "Checking who is primary…"
@@ -117,6 +121,7 @@ final class RoleSelector {
             switch try await lease.acquire() {
             case .primary:
                 keep(.primary)
+                return lease
             case .held(let by):
                 trouble = "\(by.holder.rawValue) is answering right now and kept primary."
             case .unreachable(let other):
@@ -127,6 +132,7 @@ final class RoleSelector {
         } catch {
             trouble = TranscriptStore.message(for: error)
         }
+        return nil
     }
 
     private struct NeverConfirms: LeaseProbe {
