@@ -40,6 +40,7 @@ targets:
     platform: iOS
     sources:
       - path: Tests
+      - path: Sources/Board
       - path: Sources/Log
       - path: Sources/Net
       - path: Sources/UI
