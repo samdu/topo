@@ -1,0 +1,119 @@
+/* A screen on a wall, usually across a room and usually at night: dark by
+   default, large type, and nothing that moves unless the house did
+   something. */
+:root {
+  color-scheme: dark light;
+  --bg: #0b0f10;
+  --surface: #141a1c;
+  --text: #eef3f4;
+  --quiet: #8b979a;
+  --rule: #223034;
+  --accent: #1e8c9e;
+  --person: #eef3f4;
+  --assistant: #5cc3d4;
+  font-size: clamp(16px, 1.6vw, 24px);
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #ffffff;
+    --surface: #f2f6f7;
+    --text: #14191a;
+    --quiet: #5c686b;
+    --rule: #dde5e7;
+    --person: #14191a;
+    --assistant: #0f6d7c;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  line-height: 1.45;
+  /* A TV overscans; a phone has a notch. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  /* The screen, and a line under it that has to be readable when there is
+     nothing else: a page that has been told it is no longer registered
+     shows only that line. */
+  display: grid;
+  grid-template-rows: 1fr auto;
+  height: 100vh;
+  height: 100dvh;
+}
+
+main {
+  display: grid;
+  gap: 1px;
+  background: var(--rule);
+  min-height: 0;
+  /* Tall screen: the board above, at eye height in a room. */
+  grid-template-rows: 34fr 66fr;
+}
+
+/* Wide screen: side by side, the transcript given the greater share. */
+@media (min-aspect-ratio: 1/1) {
+  main {
+    grid-template-rows: none;
+    grid-template-columns: 66fr 34fr;
+  }
+  #transcript { order: 1; }
+  #board { order: 2; }
+}
+
+section {
+  background: var(--bg);
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+  scrollbar-width: thin;
+}
+
+h1 {
+  margin: 0 0 .5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  text-transform: uppercase;
+  color: var(--quiet);
+}
+
+ol { list-style: none; margin: 0; padding: 0; }
+
+#cards li {
+  background: var(--surface);
+  border-radius: .5rem;
+  padding: .6rem .75rem;
+  margin-bottom: .5rem;
+}
+
+#cards .body { display: block; }
+
+.who, .when, .quiet { color: var(--quiet); font-size: .8rem; }
+
+#turns li { margin-bottom: .9rem; }
+
+#turns .who {
+  display: block;
+  font-size: .7rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+
+#turns .assistant .who { color: var(--assistant); }
+
+#turns .text { white-space: pre-wrap; }
+
+#status {
+  margin: 0;
+  padding: .35rem 1.25rem;
+  border-top: 1px solid var(--rule);
+  background: var(--bg);
+}
+
+/* Nothing to say, nothing shown. */
+#status:empty { display: none; }
+
+[data-state="loading"] .quiet[hidden] { display: none; }
