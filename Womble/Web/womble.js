@@ -13,7 +13,25 @@
   // How often to ask. A wall screen wants to be current more than it wants
   // to be quick; the hub answers 304 when nothing has changed.
   var INTERVAL = 5000;
-  var source = new URLSearchParams(window.location.search).get('from') || 'surface.json';
+
+  // Whatever this page was served under. The hub serves it beneath the
+  // token it minted for this screen, so a relative path carries the token
+  // without this page ever handling one — and a copy of these files opened
+  // from disk reads the sample beside them.
+  var source = parameter('from') || 'surface.json';
+
+  // Not URLSearchParams: this runs on televisions whose engines predate it,
+  // where a missing global is a ReferenceError before anything is drawn.
+  function parameter(name) {
+    var pairs = window.location.search.replace(/^\?/, '').split('&');
+    for (var i = 0; i < pairs.length; i++) {
+      var pair = pairs[i].split('=');
+      if (decodeURIComponent(pair[0]) === name) {
+        return decodeURIComponent((pair[1] || '').replace(/\+/g, ' '));
+      }
+    }
+    return null;
+  }
 
   var screenEl = document.getElementById('screen');
   var cardsEl = document.getElementById('cards');

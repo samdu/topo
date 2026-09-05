@@ -38,7 +38,21 @@ Off Apple there is no bundle to install, so a Womble is a web page the hub serve
 
 It reads one document, polled, and shows the same two things the app does: the house board and the transcript.
 
-### `GET /surface.json`
+### Where it is
+
+`GET /s/<token>/surface.json`, and the page itself is served from `/s/<token>/`, so it asks for `surface.json` beside itself and never handles a token at all.
+
+The token is the whole of the access control, and it has to be: this is a person's transcript on a household network, and the roster being open to anyone on the LAN is about *reading who is registered*, not about reading what anyone said. So:
+
+- One token per screen, minted by the hub when somebody in the house registers that screen — the same tap that puts an agent on a Bonjour surface's roster, and the same rule: the network can ask, the room decides.
+- Unguessable: 128 bits or more from a cryptographic source, not a device name or a counter.
+- Revocable, in the app, and revoked by default when the screen is taken off the roster.
+- Bound to what that screen may see. A token is a screen, not an account: it is the household board and the transcript of whoever registered it, and nothing else.
+- Refused when unknown, with a 404 and no hint of whether the token was ever real.
+
+A token in a path is in the browser's history and in any proxy's logs, so the hub serves this on the LAN only, over the local network interfaces, and never through the tunnel.
+
+### The document
 
 ```json
 {
@@ -71,13 +85,13 @@ It reads one document, polled, and shows the same two things the app does: the h
 
 One document rather than two endpoints, because a wall screen wants the board and the transcript to agree with each other, and two requests can disagree.
 
-The hub decides what a page may see. This is the household's view — the board, and the transcript of whoever the screen is registered to — and the page has no login of its own and asks for nothing else.
+The hub decides what a page may see, and the token is how it knows which page is asking. This is the household's view — the board, and the transcript of whoever the screen is registered to — and the page has no login of its own and asks for nothing else.
 
 ### Polling
 
 Every five seconds, with `If-None-Match` when the hub gave an `ETag`, and again when a hidden tab comes back. A wall screen wants to be current more than it wants to be quick, and a `304` costs the hub nothing.
 
-Anything but a `200` or a `304` leaves what is on screen where it is and says the hub is not answering. A screen that clears itself because the network hiccuped is worse than one showing what it last knew — the same rule as the app.
+Anything but a `200` or a `304` leaves what is on screen where it is and says the hub is not answering. A `404` is the one worth reading twice: a screen whose registration was revoked shows what it last had and stops being told anything new, which is the right shape for taking a screen out of the house. A screen that clears itself because the network hiccuped is worse than one showing what it last knew — the same rule as the app.
 
 ### Writing
 
