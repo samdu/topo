@@ -74,8 +74,15 @@ targets:
       - package: TopoCore
         product: TopoCoreTesting
       - package: TopoLink
+    # XcodeGen writes this file from these properties on every generate.
     entitlements:
       path: Apps/TopoHub/TopoHub.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.developer.icloud-container-identifiers: [iCloud.zone.hexagon.topo]
+        com.apple.developer.icloud-services: [CloudKit]
     info:
       path: Apps/TopoHub/Info.plist
       properties:

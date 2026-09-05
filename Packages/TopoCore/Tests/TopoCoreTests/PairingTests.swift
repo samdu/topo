@@ -67,6 +67,38 @@ import TopoCoreTesting
         #expect(Set(try await directory.device(hub)?.pairedWith ?? []) == [phone, watch])
     }
 
+    @Test func pairingThatCannotBeSavedChangesNeitherRecord() async throws {
+        let mac = try await directory.register(device(hub, kind: .mac))
+        _ = try await directory.register(device(phone, kind: .phone))
+        let dropping = DeviceDirectory(database: DropOnceDatabase(inner: db))
+        await #expect(throws: RecordDatabaseError.self) { try await dropping.pair(PairingCode(mac), as: phone) }
+        #expect(try await directory.device(hub)?.pairedWith == [])
+        #expect(try await directory.device(phone)?.pairedWith == [])
+        #expect(await db.writes.count == 2)
+        // The retry lands both in one save.
+        _ = try await dropping.pair(PairingCode(mac), as: phone)
+        #expect(try await directory.device(hub)?.pairedWith == [phone])
+        #expect(try await directory.device(phone)?.pairedWith == [hub])
+        #expect(await db.writes.count == 4)
+    }
+
+    @Test func pairingRetriesWhenEitherRecordMoves() async throws {
+        let mac = try await directory.register(device(hub, kind: .mac))
+        _ = try await directory.register(device(phone, kind: .phone))
+        // The phone's own record is touched under the pairing's feet, once.
+        let touched = Touched()
+        await db.setBeforeSave { [directory] records in
+            if records.count == 2, await touched.first() {
+                try? await directory.touch(phone, at: tA + 9)
+            }
+        }
+        _ = try await directory.pair(PairingCode(mac), as: phone)
+        let mine = try await directory.device(phone)
+        #expect(mine?.pairedWith == [hub])
+        #expect(mine?.seenAt == tA + 9)
+        #expect(try await directory.device(hub)?.pairedWith == [phone])
+    }
+
     @Test func pairingCodeRoundTripsAndRejectsOtherURLs() throws {
         let code = PairingCode(device: DeviceID("mac/1"), name: "Sam's Mac", publicKey: "a+b/c=", endpoint: "[fe80::1]:4000")
         let back = try #require(PairingCode(url: code.url))
@@ -94,6 +126,11 @@ import TopoCoreTesting
         #expect(try await directory.device(hub)?.seenAt == tA + 5)
         await #expect(throws: PairingError.unknownDevice(watch)) { try await directory.touch(watch, at: tA) }
     }
+}
+
+actor Touched {
+    private var done = false
+    func first() -> Bool { if done { return false }; done = true; return true }
 }
 
 private extension Device {

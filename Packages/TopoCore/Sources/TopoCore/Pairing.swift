@@ -181,14 +181,30 @@ public struct DeviceDirectory: Sendable {
     }
 
     /// The scanner's half of pairing: checks the code against the record it
-    /// names and lists each device in the other's `pairedWith`. Returns the
-    /// scanned device's record.
+    /// names and lists each device in the other's `pairedWith`, both records
+    /// in one atomic save, so the pairing is on both sides or on neither.
+    /// Returns the scanned device's record.
     public func pair(_ code: PairingCode, as me: DeviceID) async throws -> Device {
         guard code.device != me else { throw PairingError.selfPairing }
-        guard let other = try await device(code.device) else { throw PairingError.unknownDevice(code.device) }
-        guard other.publicKey == code.publicKey else { throw PairingError.keyMismatch(code.device) }
-        _ = try await update(me) { if !$0.pairedWith.contains(code.device) { $0.pairedWith.append(code.device) } }
-        return try await update(code.device) { if !$0.pairedWith.contains(me) { $0.pairedWith.append(me) } }
+        for _ in 0..<5 {
+            let records = try await database.fetch([Device.recordID(for: code.device), Device.recordID(for: me)])
+            guard let otherRecord = records[Device.recordID(for: code.device)],
+                  var other = Device(record: otherRecord) else { throw PairingError.unknownDevice(code.device) }
+            guard other.publicKey == code.publicKey else { throw PairingError.keyMismatch(code.device) }
+            guard let mineRecord = records[Device.recordID(for: me)],
+                  var mine = Device(record: mineRecord) else { throw PairingError.unknownDevice(me) }
+            if other.isPaired(with: me), mine.isPaired(with: code.device) { return other }
+            if !mine.pairedWith.contains(code.device) { mine.pairedWith.append(code.device) }
+            if !other.pairedWith.contains(me) { other.pairedWith.append(me) }
+            do {
+                let saved = try await database.save([mine.record(changeTag: mineRecord.changeTag),
+                                                     other.record(changeTag: otherRecord.changeTag)])
+                return saved.last.flatMap(Device.init(record:)) ?? other
+            } catch RecordDatabaseError.serverRecordChanged {
+                continue
+            }
+        }
+        throw PairingError.contended
     }
 
     /// Compare-and-set on one device record, retried while it moves.

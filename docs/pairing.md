@@ -28,7 +28,7 @@ The phone scans it and runs the scanner's half, `DeviceDirectory.pair(_:as:)`:
 
 1. Fetch `device/<d>` by ID. Absent means the hub has not launched against this Apple ID, or its launch has not landed yet: `unknownDevice`.
 2. Require the record's `publicKey` to equal `k`. The code is on a screen in the room; the record is in iCloud. Agreement between the two is what the scan proves. A mismatch is `keyMismatch` and nothing is written.
-3. Add `d` to the phone's own `pairedWith`, and the phone's ID to the hub's, each by compare-and-set on the record's change tag, retried while it moves. Two phones scanning at once both land.
+3. Add `d` to the phone's own `pairedWith` and the phone's ID to the hub's, both records in one atomic save, compare-and-set on each record's change tag and retried while either moves. The pairing is on both sides or on neither; two phones scanning at once both land.
 
 Pairing is symmetric and idempotent: scanning the same code again changes nothing. A device does not pair with itself. There is no unpairing yet; removing an ID from both `pairedWith` lists is all it would take.
 
