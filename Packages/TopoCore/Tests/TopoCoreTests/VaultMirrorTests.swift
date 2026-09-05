@@ -296,6 +296,42 @@ import TopoCoreTesting
         }
     }
 
+    @Test func aFolderAndAFileOfTheSameNameBothReachTheFolder() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("a note called notes", to: VaultPath("notes")!, continuing: store.read(), at: t0)
+            try await w.write("today's note", to: VaultPath("notes/today.md")!, continuing: store.read(), at: t0 + 1)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let report = try await mirror.sync(at: t0 + 2)
+            #expect(report.skipped.isEmpty)
+            #expect(read("notes/today.md", in: directory) == "today's note")
+            #expect(read("notes (Conflicted copy hub 197001121346)", in: directory) == "a note called notes")
+            // And it settles: a second sync has nothing left to do.
+            #expect(try await mirror.sync(at: t0 + 3).isEmpty)
+        }
+    }
+
+    @Test func aFolderThatBecomesAFileIsMadeWayFor() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            let inside = VaultPath("notes/today.md")!
+            try await w.write("today's note", to: inside, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+            #expect(read("notes/today.md", in: directory) == "today's note")
+
+            // Elsewhere the folder's one file goes and a file takes its name.
+            try await w.delete(inside, continuing: store.read(), at: t0 + 2)
+            try await w.write("a note called notes", to: VaultPath("notes")!, continuing: store.read(), at: t0 + 3)
+
+            let report = try await mirror.sync(at: t0 + 4)
+            #expect(report.skipped.isEmpty)
+            #expect(read("notes", in: directory) == "a note called notes")
+            #expect(try await mirror.sync(at: t0 + 5).isEmpty)
+        }
+    }
+
     @Test func twoFoldersOverOneStoreEndUpTheSame() async throws {
         try await inTemporaryDirectory { here in
             try await inTemporaryDirectory { there in

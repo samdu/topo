@@ -262,6 +262,32 @@ public struct Vault: Sendable {
             files[path] = VaultFile(path: path, origin: origin, text: loser.text, at: loser.at, head: loser.ref)
         }
 
+        // A path cannot be both a file and a folder. Two devices can write
+        // `notes` and `notes/today.md` without either being wrong, and both
+        // revisions are kept — but a folder of markdown has to hold them,
+        // so the one standing where the folder goes is shown beside it
+        // under a copy's name. Every device reads the same records and
+        // moves the same file, and an edit or a deletion of it is an edit
+        // or a deletion of the revision it came from, the way a conflict
+        // copy is.
+        for _ in 0..<8 {
+            var folders: Set<VaultPath> = []
+            for path in files.keys {
+                for depth in 1..<max(path.components.count, 1) {
+                    folders.insert(VaultPath(checked: Array(path.components[0..<depth])))
+                }
+            }
+            let blocking = files.keys.filter { folders.contains($0) }.sorted()
+            if blocking.isEmpty { break }
+            for path in blocking {
+                guard let file = files[path], let note = byRef[file.head] else { continue }
+                files[path] = nil
+                let moved = Self.conflictCopyPath(of: file.origin, for: note, avoiding: files.keys)
+                files[moved] = VaultFile(path: moved, origin: file.origin, text: file.text,
+                                         at: file.at, head: file.head)
+            }
+        }
+
         self.notes = byRef
         self.files = files
         self.missing = missing

@@ -94,6 +94,26 @@ import TopoCoreTesting
         #expect(vault.files[copy]?.isConflictCopy == true)
     }
 
+    @Test func aFileStandingWhereAFolderGoesIsShownBesideIt() async throws {
+        let w = try await store.writer(for: phone)
+        let folder = VaultPath("notes")!
+        try await w.write("a note called notes", to: folder, continuing: store.read(), at: t0)
+        try await w.write("today's note", to: VaultPath("notes/today.md")!, continuing: store.read(), at: t0 + 1)
+
+        let vault = try await store.read()
+        // Both revisions are kept and neither path is inside the other.
+        #expect(vault.files[folder] == nil)
+        #expect(vault.text(at: VaultPath("notes/today.md")!) == "today's note")
+        let moved = try #require(vault.ordered.first { $0.origin == folder })
+        #expect(moved.text == "a note called notes")
+        #expect(moved.path == VaultPath("notes (Conflicted copy phone 197001121346)")!)
+        for file in vault.ordered {
+            for other in vault.ordered where other.path != file.path {
+                #expect(!other.path.components.starts(with: file.path.components))
+            }
+        }
+    }
+
     @Test func aWriteThatSawTheForkResolvesIt() async throws {
         let one = try await store.writer(for: phone)
         let other = try await store.writer(for: hub)

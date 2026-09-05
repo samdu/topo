@@ -162,6 +162,12 @@ public actor VaultMirror {
 
         var state = State()
         for path in vault.knownPaths { state.heads[path] = vault.heads(of: path) }
+        // Taking away what has gone comes first: a file the store no longer
+        // holds may be standing exactly where a folder is now needed.
+        for (path, _) in onDisk.sorted(by: { $0.key < $1.key }) where vault.files[path] == nil {
+            try disk.removeItem(at: url(of: path))
+            report.removed.append(path)
+        }
         for file in vault.ordered {
             if onDisk[file.path] == file.text {
                 state.files[file.path] = digest(file.text)
@@ -175,14 +181,21 @@ public actor VaultMirror {
                 report.skipped.append(file.path.string)
                 continue
             }
+            // A folder left where this file goes, emptied by the removals
+            // above or by a sync that had it as a folder, is cleared away;
+            // one with anything of the person's still in it is not.
+            var isFolder: ObjCBool = false
+            if disk.fileExists(atPath: url.path, isDirectory: &isFolder), isFolder.boolValue {
+                guard (try? disk.contentsOfDirectory(atPath: url.path))?.isEmpty == true else {
+                    report.skipped.append(file.path.string)
+                    continue
+                }
+                try disk.removeItem(at: url)
+            }
             try disk.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(file.text.utf8).write(to: url, options: .atomic)
             state.files[file.path] = digest(file.text)
             report.written.append(file.path)
-        }
-        for (path, _) in onDisk where vault.files[path] == nil {
-            try disk.removeItem(at: url(of: path))
-            report.removed.append(path)
         }
 
         synced = state
