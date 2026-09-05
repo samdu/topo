@@ -6,6 +6,14 @@ Beside the transcript it shows the house board: the cards the household has post
 
 Off Apple — a television, a projector, anything with a browser and no bundle to install — the same two views are a page the hub serves: `Web/`, static and dependency-free, reading the one document in `docs/surfaces.md`, from beneath the unguessable path the hub mints for that screen. Open `Web/index.html` against `Web/surface.json` to see it with nothing running.
 
+## The self-test
+
+Five taps on the title opens it. It writes a turn and a card against the real containers, reads them back through the zone's change feed, probes past the end of the run by ID, and checks that a second write of the same record is refused — the four things that fail quietly on a device and look identical from a simulator. Each step says what happened and how long it took, and the run stops at the first failure, because that is the answer.
+
+It writes into a zone of its own, named for the run and deleted at the end, under a device ID nothing else could have. The transcript and the board are not touched. This is the one place this bundle writes anything, and it writes nowhere anybody reads.
+
+"It reads nothing" is the report that brings a person here; what they leave with is which call failed and what CloudKit said about it.
+
 It does say where it is. While it is on screen it advertises itself on the local network as a surface — a screen in the house — carrying its name and the agents registered to it, so a hub can list the house without anything being written anywhere. Joining that roster takes a tap on this screen; `docs/surfaces.md` is the whole of the protocol, and `Sources/Net` is the whole of the code.
 
 Deployment target is **iOS 12.0**, so the whole target is UIKit and completion handlers — no SwiftUI, no `async`/`await`, no scene lifecycle. Universal: iPhone and iPad, portrait and landscape.

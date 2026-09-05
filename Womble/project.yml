@@ -41,6 +41,7 @@ targets:
     sources:
       - path: Tests
       - path: Sources/Board
+      - path: Sources/Diagnostics
       - path: Sources/Log
       - path: Sources/Net
       - path: Sources/UI
