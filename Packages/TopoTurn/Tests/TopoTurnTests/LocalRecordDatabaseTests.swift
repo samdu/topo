@@ -58,6 +58,34 @@ import TopoCore
         #expect(next.changeTag != saved.changeTag)
     }
 
+    @Test func aFailedWriteLeavesNothingBehind() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("topo-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        // A directory where the file should be makes the atomic write fail.
+        let url = dir.appendingPathComponent("log.json")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let db = try LocalRecordDatabase(url: url)
+        await #expect(throws: (any Error).self) { _ = try await db.save(Record(type: "T", id: RecordID("a"))) }
+        #expect(try await db.fetch(RecordID("a")) == nil)
+        // The same create-only save is still open, not a conflict.
+        try FileManager.default.removeItem(at: url)
+        #expect(try await db.save(Record(type: "T", id: RecordID("a"))).changeTag == "1")
+    }
+
+    @Test func destroyEmptiesItDeletesTheFileAndRefusesWrites() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("topo-\(UUID().uuidString)/log.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let db = try LocalRecordDatabase(url: url)
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        try db.destroy()
+        #expect(try await db.fetch(RecordID("a")) == nil)
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        await #expect(throws: RecordDatabaseError.self) { _ = try await db.save(Record(type: "T", id: RecordID("b"))) }
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(try await LocalRecordDatabase(url: url).query(RecordQuery(type: "T")).isEmpty)
+    }
+
     @Test func theTurnLogAndLeaseRunOnIt() async throws {
         let db = try LocalRecordDatabase(url: nil)
         let transport = RecordingTransport((200, reply("hello")))

@@ -3,12 +3,16 @@ import TopoCore
 
 /// `RecordDatabase` in one JSON file, with CloudKit's conflict semantics: a save with no tag
 /// creates only, a tagged save applies only to that version, and a batch applies all or none.
+/// A save is acknowledged only once the file is written, so nothing in memory outruns the disk.
 /// The device's log when there is no iCloud account to hold it.
 public final class LocalRecordDatabase: RecordDatabase, @unchecked Sendable {
     private let url: URL?
     private let lock = NSLock()
     private var store: [RecordID: Record] = [:]
     private var tag = 0
+    private var destroyed = false
+
+    public struct Destroyed: Error {}
 
     /// Pass nil for a database that lives only in memory.
     public init(url: URL?) throws {
@@ -20,8 +24,19 @@ public final class LocalRecordDatabase: RecordDatabase, @unchecked Sendable {
         }
     }
 
+    /// Empties the database, deletes its file and refuses every later save, so a writer still
+    /// holding it after a sign-out cannot bring the log back.
+    public func destroy() throws {
+        try lock.withLock {
+            destroyed = true
+            store = [:]
+            if let url { try? FileManager.default.removeItem(at: url) }
+        }
+    }
+
     public func save(_ records: [Record]) async throws -> [Record] {
         try lock.withLock {
+            guard !destroyed else { throw RecordDatabaseError.rejected(underlying: Destroyed()) }
             for record in records {
                 let current = store[record.id]
                 if let current, current.changeTag != record.changeTag {
@@ -31,15 +46,19 @@ public final class LocalRecordDatabase: RecordDatabase, @unchecked Sendable {
                     throw RecordDatabaseError.unknownItem(record.id)
                 }
             }
+            var staged = store
+            var nextTag = tag
             var saved: [Record] = []
             for record in records {
-                tag += 1
+                nextTag += 1
                 var next = record
-                next.changeTag = String(tag)
-                store[record.id] = next
+                next.changeTag = String(nextTag)
+                staged[record.id] = next
                 saved.append(next)
             }
-            try persist()
+            try persist(staged, tag: nextTag)
+            store = staged
+            tag = nextTag
             return saved
         }
     }
@@ -65,9 +84,9 @@ public final class LocalRecordDatabase: RecordDatabase, @unchecked Sendable {
         }
     }
 
-    private func persist() throws {
+    private func persist(_ records: [RecordID: Record], tag: Int) throws {
         guard let url else { return }
-        let file = File(tag: tag, records: store.values.map(CodableRecord.init))
+        let file = File(tag: tag, records: records.values.map(CodableRecord.init))
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try JSONEncoder().encode(file).write(to: url, options: .atomic)
     }

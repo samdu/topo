@@ -19,13 +19,14 @@ final class Harness {
     private(set) var error: String?
     let device: DeviceID
 
-    private let database: any RecordDatabase
+    private var database: LocalRecordDatabase
     private let logURL: URL?
-    private let log: TurnLog
+    private var log: TurnLog
     private var runner: TurnRunner?
+    private var inFlight: Task<Void, Never>?
     private let tokens: TokenProvider
 
-    init(database: any RecordDatabase, logURL: URL? = nil, tokens: TokenProvider, device: DeviceID) {
+    init(database: LocalRecordDatabase, logURL: URL? = nil, tokens: TokenProvider, device: DeviceID) {
         self.database = database
         self.logURL = logURL
         self.tokens = tokens
@@ -55,16 +56,21 @@ final class Harness {
     }
 
     /// Sign-out leaves nothing of the person on the device: the local log goes with the tokens,
-    /// and the next sign-in starts at the first question. The runner is dropped so a turn in
-    /// flight cannot write into a log that is no longer this person's.
+    /// and the next sign-in starts at the first question. The turn in flight is cancelled, the
+    /// old database is destroyed so a late append into it is refused, and a fresh one replaces it.
     func forget() {
+        inFlight?.cancel()
+        inFlight = nil
         runner = nil
+        try? database.destroy()
+        if let fresh = try? LocalRecordDatabase(url: logURL) {
+            database = fresh
+            log = TurnLog(database: fresh)
+        }
         turns = []
         error = nil
+        busy = false
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
-        if let logURL {
-            try? FileManager.default.removeItem(at: logURL)
-        }
     }
 
     func refresh() async {
@@ -81,13 +87,24 @@ final class Harness {
         guard !text.isEmpty, !busy else { return }
         busy = true
         error = nil
-        defer { busy = false }
+        let task = Task { await run(text) }
+        inFlight = task
+        await task.value
+        if inFlight == task { inFlight = nil; busy = false }
+    }
+
+    private func run(_ text: String) async {
+        let database = self.database
         do {
             if runner == nil { runner = try await makeRunner() }
             guard let runner else { return }
             let result = try await runner.run(text, model: model)
+            // A sign-out during the turn replaced the log; this result is not for it.
+            guard database === self.database, !Task.isCancelled else { return }
             turns.append(result.person)
             turns.append(result.assistant)
+        } catch is CancellationError {
+            return
         } catch TurnRunnerError.notPrimary(let outcome) {
             error = Self.describe(outcome)
             await refresh()
@@ -99,7 +116,11 @@ final class Harness {
             await refresh()
         } catch TokenProviderError.signedOut {
             error = "Signed out. Sign in again to continue."
+        } catch TurnRunnerError.displaced {
+            error = "Another device became primary while Claude was answering; it will answer."
+            await refresh()
         } catch {
+            guard database === self.database else { return }
             self.error = "\(error)"
             await refresh()
         }
