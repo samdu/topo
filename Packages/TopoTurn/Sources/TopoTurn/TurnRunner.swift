@@ -53,15 +53,30 @@ public actor TurnRunner {
         self.api = api
     }
 
+    /// Where a turn is, told to the caller as it goes, so a screen never shows nothing while
+    /// CloudKit or the model takes its time.
+    public enum Progress: Sendable, Equatable {
+        case takingLease
+        case saving
+        /// The person's turn is in the log; the model has it now.
+        case asking(person: Turn)
+        case savingReply
+    }
+
     /// `nonce` names the append of the person's turn; a caller that keeps it and passes the same
     /// one again after a failure gets the turn already in the log rather than a second copy.
-    public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString) async throws -> Result {
+    /// `progress` is called at each step, on no particular actor.
+    public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString,
+                    progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
+        await progress?(.takingLease)
         let outcome = try await lease.acquire()
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
 
+        await progress?(.saving)
         let before = try await log.read()
         let at = Date()
         let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
+        await progress?(.asking(person: person))
         if person.at != at {
             // A retry: the person's turn was written by an earlier attempt. If that attempt also
             // got its reply into the log before it was cut off, that is the reply.
@@ -75,6 +90,7 @@ public actor TurnRunner {
             // On a retry `before` already holds the recovered person turn; it goes to the model once.
             let history = before.ordered.filter { $0.ref != person.ref }.suffix(historyLimit - 1) + [person]
             let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
+            await progress?(.savingReply)
             // The reply and a heartbeat of the lease are one atomic batch: a claim made during
             // the call, or between the call and this write, refuses the batch and nothing lands.
             guard let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref], renewing: lease) else {
