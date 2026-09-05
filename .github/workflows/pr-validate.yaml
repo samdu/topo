@@ -1,0 +1,329 @@
+# The merge gate. Codex reviews every non-draft PR and its verdict is what
+# gates: `review_gate` is the only required status check on main, and
+# automerge.yaml merges on this workflow concluding green. The Swift suite runs
+# in tests.yaml as a signal, deliberately outside this workflow, so a queued or
+# absent macOS runner cannot hold a merge.
+#
+# Codex signs in with a ChatGPT-mode login rather than an API key: the
+# `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
+# `codex login`, written into a private codex-home for the run. With no
+# `openai-api-key` the action skips its Responses proxy and the CLI
+# authenticates from that file. Refresh it with a new `codex login` when the
+# reviewer starts failing with 401s.
+name: PR validate
+
+on:
+  pull_request:
+    branches: [main]
+    # `ready_for_review` is here so the ready transition starts a run at all —
+    # without it, a draft marked ready sits on whatever its last draft run
+    # concluded until someone pushes. It is not what skips the reviewer on
+    # drafts; the `if` on the codex job does that.
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# One run per PR: a superseded push should not keep burning a reviewer.
+concurrency:
+  group: pr-validate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # The status pane's review feed. Best-effort: a pane that is down must not
+  # redden a review.
+  STATUS_PANE_URL: https://experiments.hexagon.zone/topo-status/api/review
+
+jobs:
+  # Codex runs the CLI in the runner with the repo checked out, so unlike a
+  # single-shot reviewer it can open the file the diff only mentions. Its
+  # verdict is a step exit code in review_gate below, which is what makes it a
+  # gate rather than a comment.
+  #
+  # Skipped while the PR is a draft: an agent opens the PR as a draft, iterates
+  # against the free local reviewer, and marks it ready — that transition is
+  # what first spends a Codex round.
+  codex:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+    steps:
+      - name: Tell the status pane the review is running
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          jq -nc --argjson pr "$PR" --arg branch "$BRANCH" --arg ts "$(date -u +%FT%TZ)" \
+            '{pr: $pr, branch: $branch, state: "running", summary: "Codex review running", ts: $ts}' \
+            | curl -sS -m 10 -X POST -H 'content-type: application/json' --data-binary @- "$STATUS_PANE_URL" \
+            || echo "::warning::status pane unreachable"
+
+      # This job holds `contents: read` and nothing more: the persisted token
+      # is repo-scoped and cannot push, comment or merge. The job that comments
+      # is a separate one, with no checkout.
+      - uses: actions/checkout@v5
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+
+      - name: Pre-fetch base and head refs for the PR
+        env:
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags origin \
+            "$PR_BASE_REF" \
+            "+refs/pull/$PR_NUMBER/head"
+
+      - name: Write the Codex login
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CODEX_AUTH_JSON" ]; then
+            echo "::error::CODEX_AUTH_JSON secret is unset; the reviewer has no login."
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          chmod 700 "$RUNNER_TEMP/codex-home"
+          printf '%s' "$CODEX_AUTH_JSON" > "$RUNNER_TEMP/codex-home/auth.json"
+          chmod 600 "$RUNNER_TEMP/codex-home/auth.json"
+          jq -e '.auth_mode == "chatgpt" and (.tokens.access_token | type) == "string"' \
+            "$RUNNER_TEMP/codex-home/auth.json" >/dev/null \
+            || { echo "::error::CODEX_AUTH_JSON is not a chatgpt-mode codex auth.json."; exit 1; }
+
+      - name: Run Codex
+        id: run_codex
+        uses: openai/codex-action@v1
+        with:
+          codex-home: ${{ runner.temp }}/codex-home
+          model: gpt-5.6-sol
+          permission-profile: ":workspace"
+          # A verdict the workflow can act on. Free prose can only be posted;
+          # a schema makes "does this block the merge" a field.
+          output-schema: |
+            {"type": "object", "additionalProperties": false, "properties": {"blocking": {"type": "boolean"}, "summary": {"type": "string"}, "findings": {"type": "array", "items": {"type": "string"}}}, "required": ["blocking", "summary", "findings"]}
+          prompt: |
+            Review PR #${{ github.event.pull_request.number }} in this
+            repository. Review ONLY the changes it introduces.
+
+            This repo is Topo: one always-on agent per person, every Apple
+            device a limb of it, sharing one transcript through the user's own
+            iCloud account. Read CLAUDE.md and docs/design.md first — they
+            hold the invariants the diff will not spell out.
+
+            Where the risk lives in this repo — look hardest here. These are
+            pointers to where a serious problem is likely to be, not a second
+            blocking bar: a finding only blocks if it also meets the blocking
+            test at the end of this prompt.
+            - The transcript log is append-only: one record per turn, per-device
+              sequence numbers, create-only saves. Anything that can overwrite,
+              skip or duplicate a turn, or that writes a record without a
+              compare-and-set on its change tag.
+            - The primary lease: two devices both believing they are primary
+              for longer than the lease duration, a heartbeat that keeps a lost
+              lease alive, a claim that is not atomic.
+            - CloudKit is truth, sockets are speed: a path that only works when
+              a socket is up, or that treats a socket's view as authoritative
+              over the records.
+            - The test doubles: `InMemoryRecordDatabase` reproducing weaker
+              semantics than CloudKit's, so the suite passes on behaviour the
+              real store rejects.
+            - Licensing: GPL code from others reaching a bundle, or a borrowed
+              piece with no entry in THIRD-PARTY.
+            - The Swift suite runs on a separate, non-gating workflow here, so
+              a test that cannot fail, or a change that leaves the suite red,
+              is yours to notice.
+
+            You can read any file in the checkout — do that rather than
+            guessing, and cite `path:line` for every finding. Skip style and
+            formatting; report only what would actually break something, and
+            say plainly if you find nothing.
+
+            Return JSON matching the schema. Set `blocking` true only for a
+            finding that should stop this merge — something that would break at
+            runtime, lose or corrupt a record, split the primary, leak a secret,
+            or ship code the licence forbids. Style, naming, missing tests and
+            things you would merely prefer are not blocking. `summary` is what
+            a reader sees; `findings` is one string per issue, each citing
+            `path:line`. Say plainly when you find nothing.
+
+  post_feedback:
+    runs-on: ubuntu-latest
+    needs: codex
+    if: needs.codex.outputs.final_message != ''
+    permissions:
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Report Codex feedback
+        uses: actions/github-script@v7
+        env:
+          CODEX_FINAL_MESSAGE: ${{ needs.codex.outputs.final_message }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const v = JSON.parse(process.env.CODEX_FINAL_MESSAGE)
+            const lines = [v.summary, ...(v.findings ?? []).map(f => `- ${f}`)]
+            if (v.blocking) {
+              lines.unshift('**Blocking — this merge is held until these are addressed or overridden.**', '')
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              // The marker is what the githubpr channel matches on to deliver
+              // this review back to the session that opened the PR. Removing it
+              // does not break the review; it breaks the fix loop, silently.
+              body: `<!-- agent-review: codex -->\n### Codex review\n\n${lines.join('\n')}`,
+            })
+
+  # "The reviewer said no" and "there is no verdict" are different answers, and
+  # one red check cannot say which. So the gate is two jobs, and *which one is
+  # red* is the diagnosis:
+  #
+  #   reviewer_ran   red  ⇒ no verdict exists. Infrastructure or a draft.
+  #                         Re-runnable; not a statement about the code.
+  #   review_gate    red  ⇒ the reviewer ran and its verdict blocks, or it
+  #                         answered with nothing usable. A review decision.
+  #
+  # Readable without opening a log:
+  #   gh api repos/OWNER/REPO/actions/runs/RUNID/jobs \
+  #     -q '.jobs[]|"\(.name): \(.conclusion) steps=\(.steps|length)"'
+  #
+  # Both fail closed and neither can be skipped into green. automerge merges
+  # only on this workflow concluding `completed success`, so either job red
+  # holds the merge — and a `cancelled` or `skipped` conclusion holds it too:
+  # concurrency cancels a superseded run, `!cancelled()` skips both jobs, and
+  # the run concludes `cancelled` rather than red.
+  reviewer_ran:
+    needs: [codex, post_feedback]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Assert a verdict was produced and delivered
+        env:
+          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          CODEX_RESULT: ${{ needs.codex.result }}
+          FEEDBACK_RESULT: ${{ needs.post_feedback.result }}
+        run: |
+          set -euo pipefail
+
+          if [ "$IS_DRAFT" = "true" ]; then
+            echo "::error::No verdict: this PR is a draft, so the reviewer was deliberately skipped. Mark it ready for review — nothing here is a review decision."
+            exit 1
+          fi
+          if [ "$CODEX_RESULT" != "success" ]; then
+            echo "::error::No verdict: the reviewer job did not complete (result: $CODEX_RESULT). Re-run the failed jobs — nothing here is a review decision."
+            exit 1
+          fi
+
+          # Past this point the reviewer ran, so whatever it returned — a
+          # verdict or nothing usable — is review_gate's to judge. A *skipped*
+          # post_feedback is not a failure here: the job is gated on a
+          # non-empty final_message, so skipped means the reviewer answered
+          # with nothing, and an empty answer is a review outcome this job must
+          # not relabel as infrastructure. Only an outright failure or
+          # cancellation is: a verdict existed and never reached the PR.
+          case "$FEEDBACK_RESULT" in
+            failure | cancelled)
+              echo "::error::No verdict delivered: the reviewer answered but post_feedback did not post it (result: $FEEDBACK_RESULT). Re-run the failed jobs — nothing here is a review decision."
+              exit 1
+              ;;
+          esac
+
+          echo "The reviewer ran; its answer is review_gate's to enforce."
+
+  # The verdict, and deliberately after post_feedback: a blocking verdict must
+  # still reach the PR (and through it the session) before it fails the run.
+  #
+  # `needs: reviewer_ran` is load-bearing beyond ordering. This job exits 0 when
+  # no verdict exists, on the sole grounds that reviewer_ran has already gone
+  # red in exactly those cases — so a copy of this workflow that dropped
+  # reviewer_ran would leave a verdict-free run green and automerge would merge
+  # it unreviewed. Naming the job here makes that copy refuse to parse instead
+  # of silently opening the hole, and the guard below re-checks the invariant at
+  # runtime rather than trusting the comment.
+  #
+  # This is the required status check on main.
+  review_gate:
+    needs: [reviewer_ran, codex, post_feedback]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce the review verdict
+        id: verdict
+        env:
+          PRECHECK_RESULT: ${{ needs.reviewer_ran.result }}
+          CODEX_RESULT: ${{ needs.codex.result }}
+          VERDICT: ${{ needs.codex.outputs.final_message }}
+        run: |
+          set -euo pipefail
+
+          # Everything below records the outcome for the status-pane step, then
+          # exits with it; `state` is pass|block, `summary` is one line.
+          finish() {
+            { echo "state=$1"; echo "summary=$2"; } >> "$GITHUB_OUTPUT"
+            exit "$3"
+          }
+
+          if [ "$CODEX_RESULT" != "success" ]; then
+            # No verdict exists, so there is no review decision to report and
+            # this check must not read as one. reviewer_ran owns the reason.
+            # Assert it actually took the failure: if it is green here the split
+            # has broken and the run would otherwise conclude success with
+            # nothing reviewed, so fail closed instead.
+            if [ "$PRECHECK_RESULT" = "success" ]; then
+              echo "::error::No verdict exists (reviewer: $CODEX_RESULT) but reviewer_ran passed. The gate split is broken; failing closed."
+              finish block "gate split broken: no verdict but reviewer_ran passed" 1
+            fi
+            echo "No verdict to enforce (reviewer job: $CODEX_RESULT). Not a review decision — see the reviewer_ran check for why."
+            finish block "no verdict: reviewer job $CODEX_RESULT (see reviewer_ran)" 0
+          fi
+
+          # `codex-action` hands back whatever the CLI emitted; it does not check
+          # it against `output-schema`. So a reviewer that answered in prose, or
+          # with JSON of the wrong shape, reaches here — and reading `.blocking`
+          # off it with a bare `jq` inside an `if` yields the empty string, which
+          # is not "true", which reads as a clean review. Demand all three
+          # required fields and treat everything else as no verdict at all.
+          blocking="$(jq -r 'if type == "object" and (.blocking | type) == "boolean" and (.summary | type) == "string" and (.findings | type) == "array" then .blocking else "invalid" end' <<<"$VERDICT" 2>/dev/null || echo invalid)"
+          summary="$(jq -r '.summary? // "" | .[0:300]' <<<"$VERDICT" 2>/dev/null || true)"
+
+          case "$blocking" in
+            false)
+              echo "Review verdict: not blocking."
+              finish pass "$summary" 0
+              ;;
+            true)
+              echo "::error::Review is blocking. See the Codex review comment on the PR."
+              # `.findings[]` on a verdict without the key exits 5 under pipefail
+              # and aborts the gate before it can name the reason.
+              jq -r '.findings[]? // empty' <<<"$VERDICT" | sed 's/^/  - /'
+              finish block "$summary" 1
+              ;;
+            *)
+              # The reviewer ran to completion and answered with nothing usable.
+              # Not re-runnable infrastructure: the reviewer answered, and this
+              # is what it said.
+              echo "::error::The reviewer ran but returned no usable verdict. Not re-runnable infrastructure — the reviewer answered, and this is what it said:"
+              printf '%s\n' "$VERDICT" | head -c 2000
+              finish block "reviewer returned no usable verdict" 1
+              ;;
+          esac
+
+      - name: Tell the status pane the verdict
+        if: ${{ always() }}
+        env:
+          PR: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          STATE: ${{ steps.verdict.outputs.state || 'block' }}
+          SUMMARY: ${{ steps.verdict.outputs.summary || 'review_gate did not reach a verdict' }}
+        run: |
+          jq -nc --argjson pr "$PR" --arg branch "$BRANCH" --arg state "$STATE" --arg summary "$SUMMARY" --arg ts "$(date -u +%FT%TZ)" \
+            '{pr: $pr, branch: $branch, state: $state, summary: $summary, ts: $ts}' \
+            | curl -sS -m 10 -X POST -H 'content-type: application/json' --data-binary @- "$STATUS_PANE_URL" \
+            || echo "::warning::status pane unreachable"
