@@ -35,7 +35,7 @@ A change made after seeing the fork resolves it, because a write continues from 
 
 ## Reading it
 
-The query index is eventually consistent, and a tick nobody has caught up with leaves no gap behind it: a board short by its tail looks complete, and a done thing stays on the wall. So a read probes past the end of every device's run by ID, which is read-your-writes, and folds in what it finds — unlike the transcript, which reports a gap rather than filling it, because a card is small and its newest revision is the whole answer.
+The zone's change feed is what a read uses — no index, and every record however malformed. It is eventually consistent, and a tick nobody has caught up with leaves no gap behind it: a board short by its tail looks complete, and a done thing stays on the wall. So a read probes past the end of every device's run by ID, which is read-your-writes, and folds in what it finds — unlike the transcript, which reports a gap rather than filling it, because a card is small and its newest revision is the whole answer.
 
 A probe that fails is a read that failed. Presenting a possibly stale board as the current one is exactly the mistake worth avoiding on a wall, and the screen keeps what it last knew rather than clearing.
 

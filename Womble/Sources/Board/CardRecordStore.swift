@@ -8,10 +8,10 @@ import Foundation
 /// Every completion may run on any queue; the reader hops to the main queue
 /// once, at the end.
 protocol CardRecordStore: AnyObject {
-    /// Every card record the query index knows about. An empty result is an
-    /// empty board; a board nobody has shared with this screen is also
+    /// Every card record in the zone, from its change feed. An empty result
+    /// is an empty board; a board nobody has shared with this screen is also
     /// empty, and neither is a failure.
-    func queryCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void)
+    func allCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void)
     /// These records, fetched by ID. A name that is not there is absent from
     /// the result rather than an error.
     func fetchCards(named names: [String], _ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void)
@@ -33,17 +33,12 @@ final class CloudKitCardStore: CardRecordStore {
     private let zoneName: String
     private var found: (database: CKDatabase, zoneID: CKRecordZone.ID)?
 
-    /// Every card there is, asked for by sequence: a match-all predicate is
-    /// answered out of the record name's index, which the schema never
-    /// marks queryable. Sequences start at 1.
-    static let everyCard = NSPredicate(format: "sequence > 0")
-
     init(containerIdentifier: String = "iCloud.zone.hexagon.topo.board", zoneName: String = "Board") {
         self.container = CKContainer(identifier: containerIdentifier)
         self.zoneName = zoneName
     }
 
-    func queryCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+    func allCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
         zone { result in
             switch result {
             case .failure(let error):
@@ -52,35 +47,8 @@ final class CloudKitCardStore: CardRecordStore {
                 // Nobody has a board yet, or nobody has shared one here.
                 completion(.success([]))
             case .success(let found?):
-                var records: [CKRecord] = []
-                let lock = NSLock()
-
-                func run(_ operation: CKQueryOperation) {
-                    operation.zoneID = found.zoneID
-                    operation.recordFetchedBlock = { record in
-                        lock.lock()
-                        records.append(record)
-                        lock.unlock()
-                    }
-                    operation.queryCompletionBlock = { cursor, error in
-                        if let error = error {
-                            completion(.failure(CloudKitStore.mapped(error)))
-                            return
-                        }
-                        if let cursor = cursor {
-                            run(CKQueryOperation(cursor: cursor))
-                            return
-                        }
-                        lock.lock()
-                        let all = records
-                        lock.unlock()
-                        completion(.success(all))
-                    }
-                    found.database.add(operation)
-                }
-
-                run(CKQueryOperation(query: CKQuery(recordType: CardRevision.recordType,
-                                                    predicate: CloudKitCardStore.everyCard)))
+                ZoneChanges.records(ofType: CardRevision.recordType, in: found.database,
+                                    zoneID: found.zoneID, completion: completion)
             }
         }
     }

@@ -31,6 +31,6 @@ The read is the query plus a probe: the query index is eventually consistent, an
 
 Anything the read cannot account for is said on screen rather than hidden: a gap in a device's sequence, a parent that is not there, a record that does not parse. A fork — two devices carrying on from the same point — shows both branches and says so. A failed refresh keeps the turns already on screen; CloudKit is truth, and what it last said is still what it said.
 
-The query asks for turns with a sequence above zero rather than for everything: CloudKit answers a match-all predicate out of the record name's index, which the development schema never marks queryable, so asking for everything is asking for an error. Sequences start at 1, so it is the same set of records by a road that exists.
+The log is read from the zone's change feed rather than a query: CloudKit answers a match-all predicate out of the record name's index, which the development schema never marks queryable, and a query by a field of ours cannot see a record damaged badly enough to have lost that field. The feed needs no index and hands back everything in the zone, which is what lets this screen say what it could not make sense of.
 
 It reads on launch, on returning to the foreground, and on a pull. There are no subscriptions yet, so a turn written while the screen is open appears on the next read.

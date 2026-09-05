@@ -20,13 +20,11 @@ public struct BoardStore: Sendable {
         self.database = database
     }
 
-    /// The whole board. Asks by sequence rather than for everything: a
-    /// match-all predicate is answered from the record name's index, which
-    /// the schema does not mark queryable.
+    /// The whole board, from the zone's change feed: no index needed, and
+    /// every record however malformed, so a damaged revision is reported
+    /// rather than quietly missed.
     public func read() async throws -> Board {
-        let records = try await database.query(RecordQuery(type: CardRevision.recordType, filters: [
-            .init("sequence", .greaterThan, .int(0)),
-        ]))
+        let records = try await database.records(ofType: CardRevision.recordType)
         let seen = Self.board(from: records)
         var last: [DeviceID: Int64] = [:]
         for ref in seen.revisions.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }

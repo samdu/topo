@@ -248,11 +248,12 @@ import TopoCoreTesting
     }
 
     @Test func aRecordThatDoesNotParseIsMissingRatherThanAbsent() async throws {
-        // Damaged, but enough of it survives to say which revision it was.
+        // Damaged past the point where a query by a field of ours could
+        // find it: no sequence at all. The change feed hands it over, so
+        // the read can say something is there and unreadable.
         _ = try await db.save(Record(type: Note.recordType, id: RecordID("note/phone/1"),
-                                     fields: ["device": .string("phone"), "sequence": .int(1)]))
-        _ = try await db.save(Record(type: Note.recordType, id: RecordID("scribble"),
-                                     fields: ["sequence": .int(1)]))
+                                     fields: ["device": .string("phone")]))
+        _ = try await db.save(Record(type: Note.recordType, id: RecordID("scribble")))
         let vault = try await store.read()
         #expect(vault.missing == [NoteRef(device: phone, sequence: 1)])
         #expect(vault.unreadable == [RecordID("scribble")])
@@ -273,19 +274,18 @@ import TopoCoreTesting
         #expect(!vault.isComplete)
     }
 
-    @Test func noReadAsksForEverything() async throws {
-        // CloudKit answers a match-all predicate out of the record name's
-        // index, which the development schema never marks queryable, so a
-        // query with no filter is one that fails on a real container.
+    @Test func theWholeMemoryIsReadFromTheFeedAndNoQueryAsksForEverything() async throws {
+        // A match-all query is answered out of the record name's index,
+        // which the schema never marks queryable; the change feed needs no
+        // index and sees the malformed records a filter would hide.
         let watcher = QueryWatcher(inner: db)
         let store = MemoryStore(database: watcher)
         let w = try await store.writer(for: phone)
         try await w.write("one", to: note, continuing: store.read(), at: t0)
         _ = try await store.read()
         _ = try await store.read(device: phone, after: 0)
-        let asked = await watcher.queries
-        #expect(!asked.isEmpty)
-        #expect(asked.allSatisfy { !$0.filters.isEmpty })
+        #expect(await watcher.feedReads.contains(Note.recordType))
+        #expect(await watcher.queries.allSatisfy { !$0.filters.isEmpty })
     }
 
     @Test func aRevisionRoundTripsThroughItsRecord() async throws {

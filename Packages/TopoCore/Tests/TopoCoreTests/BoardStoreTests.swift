@@ -163,14 +163,13 @@ import TopoCoreTesting
         #expect(!board.isComplete)
     }
 
-    @Test func noReadAsksForEverything() async throws {
+    @Test func theWholeBoardIsReadFromTheFeedAndNoQueryAsksForEverything() async throws {
         let watcher = QueryWatcher(inner: db)
         let store = BoardStore(database: watcher)
         let w = try await store.writer(for: phone)
         try await w.post("milk", at: t0)
         _ = try await store.read()
-        let asked = await watcher.queries
-        #expect(!asked.isEmpty)
-        #expect(asked.allSatisfy { !$0.filters.isEmpty })
+        #expect(await watcher.feedReads.contains(CardRevision.recordType))
+        #expect(await watcher.queries.allSatisfy { !$0.filters.isEmpty })
     }
 }
