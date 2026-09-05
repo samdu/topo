@@ -72,3 +72,23 @@ final class CloudKitReadTests: XCTestCase {
         }
     }
 }
+
+/// CloudKit answers a match-all predicate out of the record name's index,
+/// which the development schema never marks queryable — so asking for
+/// everything is asking for an error on a real container, and the screen
+/// says the log could not be read. Asking by a field of our own works,
+/// because that index is built when the first record carrying it is saved.
+final class TurnQueryPredicateTests: XCTestCase {
+    func testTheQueryAsksBySequenceRatherThanForEverything() {
+        XCTAssertEqual(CloudKitStore.everyTurn.predicateFormat, "sequence > 0")
+        XCTAssertNotEqual(CloudKitStore.everyTurn, NSPredicate(value: true))
+    }
+
+    func testEverySequenceARealTurnCanHaveMatches() {
+        // Sequences start at 1, so this is every turn there is.
+        for sequence in [1, 2, 99, Int(Int32.max)] {
+            XCTAssertTrue(CloudKitStore.everyTurn.evaluate(with: ["sequence": sequence]),
+                          "turn \(sequence) would not be read")
+        }
+    }
+}
