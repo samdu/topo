@@ -56,7 +56,14 @@ final class RoleSelector {
             return
         }
         do {
-            guard let record = try await database.fetch(Lease.recordID) else {
+            let record: Record?
+            do {
+                record = try await database.fetch(Lease.recordID)
+            } catch where TopoCloudKit.meansNoLogYet(error) {
+                // Nothing has been written on this Apple ID yet: no zone, so no record.
+                record = nil
+            }
+            guard let record else {
                 try await ensureZone()
                 keep(try await stake() ? .primary : .viewer)
                 return

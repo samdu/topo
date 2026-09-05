@@ -1,3 +1,4 @@
+import CloudKit
 import TopoCore
 import TopoCoreTesting
 import XCTest
@@ -81,6 +82,17 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(second.role, .primary)
     }
 
+    func testNoZoneYetMeansTheZoneIsMadeAndThisDeviceIsPrimary() async throws {
+        let db = InMemoryRecordDatabase()
+        let gate = ZoneGate(db)
+        let s = RoleSelector(database: gate, device: me, defaults: defaults(), isSignedIn: { false },
+                             ensureZone: { await gate.open() })
+        await s.decide()
+        XCTAssertEqual(s.role, .primary)
+        let record = await db.current(Lease.recordID)
+        XCTAssertNotNil(record)
+    }
+
     func testAnUnreadableRecordLeavesTheRoleUndecided() async {
         let s = selector(Failing())
         await s.decide()
@@ -99,4 +111,20 @@ private struct Failing: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { throw RecordDatabaseError.unavailable(underlying: Down()) }
     func query(_ query: RecordQuery) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Down()) }
     func records(ofType type: String) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Down()) }
+}
+
+/// A database whose zone does not exist until `open()`: every call before that is CloudKit's
+/// `zoneNotFound`, which is what a fresh Apple ID answers.
+private actor ZoneGate: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    private var isOpen = false
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+    func open() { isOpen = true }
+    private func check() throws {
+        if !isOpen { throw RecordDatabaseError.rejected(underlying: CKError(.zoneNotFound)) }
+    }
+    func save(_ records: [Record]) async throws -> [Record] { try check(); return try await wrapped.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try check(); return try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try check(); return try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try check(); return try await wrapped.records(ofType: type) }
 }
