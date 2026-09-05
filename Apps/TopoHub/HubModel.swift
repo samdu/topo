@@ -68,40 +68,55 @@ final class HubModel {
         loop = Task { await run() }
     }
 
-    /// Ensures the zone, registers the device, opens the probe listener,
-    /// then takes the lease and keeps the device list fresh.
+    /// Brings the hub up, retrying with backoff until it is, then takes the
+    /// lease and keeps the device list fresh for the life of the process. A
+    /// CloudKit or network outage at launch is a delay, not a verdict.
     private func run() async {
-        do {
-            if let ck = database as? CloudKitRecordDatabase { try await ck.ensureZone() }
-            let server = try LeaseProbeServer(advertising: device) { [weak self] holder, epoch in
-                guard let self else { return false }
-                return await self.holds(holder, epoch: epoch)
+        var delay: TimeInterval = 2
+        while !Task.isCancelled {
+            do {
+                try await bringUp()
+                break
+            } catch {
+                Self.log.error("hub start failed, retrying in \(delay)s: \(String(describing: error), privacy: .public)")
+                status = .failed("\(error)")
+                try? await Task.sleep(for: .seconds(delay))
+                delay = min(delay * 2, 60)
             }
-            let port = try await server.start()
-            self.server = server
-            self.port = port
-            Self.log.notice("hub \(self.device.rawValue, privacy: .public) listening on \(port) store \(self.store.rawValue, privacy: .public)")
-            let endpoints = HubIdentity.addresses().map { "\($0):\(port)" }
-            let record = try await directory.register(Device(
-                id: device, name: name, kind: .mac, publicKey: HubIdentity.publicKey,
-                endpoints: endpoints, registeredAt: Date(), seenAt: Date()))
-            pairingCode = PairingCode(record)
-            let lease = PrimaryLease(database: database, device: device, endpoint: endpoints.first,
-                                     probe: SocketLeaseProbe())
-            self.lease = lease
-            await presence.start()
-            await presence.observe { [weak self] names in
-                Task { @MainActor in self?.onLAN = names }
-            }
-        } catch {
-            Self.log.error("hub failed to start: \(String(describing: error), privacy: .public)")
-            status = .failed("\(error)")
-            return
         }
         while !Task.isCancelled {
             await acquire()
             await refreshDevices()
             try? await Task.sleep(for: .seconds(10))
+        }
+    }
+
+    /// Ensures the zone, opens the probe listener, registers the device and
+    /// makes the lease. Each step keeps what it made, so a retry after a
+    /// failure picks up where it stopped.
+    private func bringUp() async throws {
+        if let ck = database as? CloudKitRecordDatabase { try await ck.ensureZone() }
+        if server == nil {
+            let server = try LeaseProbeServer(advertising: device) { [weak self] holder, epoch in
+                guard let self else { return false }
+                return await self.holds(holder, epoch: epoch)
+            }
+            port = try await server.start()
+            self.server = server
+            Self.log.notice("hub \(self.device.rawValue, privacy: .public) listening on \(self.port ?? 0) store \(self.store.rawValue, privacy: .public)")
+        }
+        let endpoints = HubIdentity.addresses().map { "\($0):\(port ?? 0)" }
+        let record = try await directory.register(Device(
+            id: device, name: name, kind: .mac, publicKey: HubIdentity.publicKey,
+            endpoints: endpoints, registeredAt: Date(), seenAt: Date()))
+        pairingCode = PairingCode(record)
+        if lease == nil {
+            lease = PrimaryLease(database: database, device: device, endpoint: endpoints.first,
+                                 probe: SocketLeaseProbe())
+            await presence.start()
+            await presence.observe { [weak self] names in
+                Task { @MainActor in self?.onLAN = names }
+            }
         }
     }
 
