@@ -29,6 +29,10 @@ final class Harness {
     private let tokens: TokenProvider
     private var runner: TurnRunner?
     private var lease: PrimaryLease?
+    private var writer: TurnWriter?
+    /// A line for something that went right but not the usual way: the words went to another
+    /// device's primary and the reply is on its way. Cleared by the next send.
+    private(set) var info: String?
     private var inFlight: Task<Bool, Never>?
     /// The last answer from the Messages API: status, when, how long it took.
     private var lastAPI: (status: Int, at: Date, seconds: TimeInterval)?
@@ -89,6 +93,8 @@ final class Harness {
         inFlight = nil
         runner = nil
         lease = nil
+        writer = nil
+        info = nil
         turns = []
         notice = nil
         error = nil
@@ -133,6 +139,7 @@ final class Harness {
         guard !busy else { return }
         busy = true
         error = nil
+        info = nil
         while let next = pending.first {
             let task = Task { await run(next) }
             inFlight = task
@@ -180,8 +187,20 @@ final class Harness {
             return true
         } catch TurnRunnerError.notPrimary(let outcome) {
             guard inFlight == generation else { return false }
-            error = Self.describe(outcome)
-            await refresh()
+            // Not this device's turn to answer: the words go in the log as a limb's, and whichever
+            // device is primary answers them there. Settled once they are in the log.
+            do {
+                status = "Saving what you said…"
+                let transcript = try await log.read()
+                guard let writer else { return false }
+                let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
+                show(person)
+                info = Self.describe(outcome) + " The reply will appear here."
+                status = nil
+                return true
+            } catch {
+                self.error = Self.describe(error)
+            }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
             error = "Signed out. Sign in again to continue."
@@ -228,8 +247,47 @@ final class Harness {
         }
     }
 
+    /// Keeps the screen current and answers what waits in the log, until the calling task is
+    /// cancelled. The log's own path for a limb's words: a watch, a pad or a second phone appends
+    /// the person's turn, and this device, as primary, answers it here. A reply that failed
+    /// earlier, on this device or any other, is answered on the next pass too, so nothing said
+    /// stays unanswered while a primary is awake.
+    func answering(every interval: Duration) async {
+        while !Task.isCancelled {
+            await refresh()
+            await answerPending()
+            do { try await Task.sleep(for: interval) } catch { return }
+        }
+    }
+
+    /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
+    func answerPending() async {
+        guard !busy else { return }
+        do {
+            if runner == nil {
+                try await ensureZone()
+                runner = try await makeRunner()
+            }
+            guard let runner else { return }
+            if let reply = try await runner.answerPending(model: model) {
+                show(reply)
+                error = nil
+                await refresh()
+            }
+        } catch TurnRunnerError.notPrimary {
+            // Another device holds the lease and this one has yielded to it; that device answers.
+        } catch TurnRunnerError.displaced {
+            // Another device took the lease as the reply was ready; it answers.
+        } catch is CancellationError {
+            return
+        } catch {
+            self.error = Self.describe(error)
+        }
+    }
+
     private func makeRunner() async throws -> TurnRunner {
         let writer = try await log.writer(for: device)
+        self.writer = writer
         let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe())
         self.lease = lease
         var api = MessagesAPI(tokens: tokens)

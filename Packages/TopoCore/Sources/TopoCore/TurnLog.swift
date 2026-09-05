@@ -269,9 +269,9 @@ public struct TurnLog: Sendable {
     /// by ID. Nil when no such append has landed. `markerWithoutTurn` when
     /// the marker exists and its turn cannot be read.
     public func turn(appendedUnder nonce: String) async throws -> Turn? {
-        guard let marker = try await database.fetch(Turn.markerID(nonce: nonce)) else { return nil }
-        guard let named = marker.string("turn"), let ref = TurnRef(parsing: named),
-              let record = try await database.fetch(Turn.recordID(for: ref)),
+        guard let marker = try await database.fetch(Turn.naming.markerID(nonce: nonce)) else { return nil }
+        guard let named = marker.string(Turn.naming.markerField),
+              let record = try await database.fetch(Turn.naming.recordID(named: named)),
               let turn = Turn(record: record) else {
             throw TurnLogError.markerWithoutTurn(nonce: nonce)
         }
