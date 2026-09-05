@@ -10,7 +10,7 @@ Off Apple — a television, a projector, anything with a browser and no bundle t
 
 Five taps on the title opens it. It writes a turn and a card against the real containers, reads them back through the zone's change feed, probes past the end of the run by ID, and checks that a second write of the same record is refused — the four things that fail quietly on a device and look identical from a simulator. Each step says what happened and how long it took, and the run stops at the first failure, because that is the answer.
 
-It writes into a zone of its own, named for the run and deleted at the end, under a device ID nothing else could have. The transcript and the board are not touched. This is the one place this bundle writes anything, and it writes nowhere anybody reads.
+It writes into a zone of its own, named for the run and deleted at the end whether the run passed or failed — the runs that failed are the ones that left something behind — under a device ID nothing else could have. Running it again is a new zone and a new device ID, not the same one twice. The transcript and the board are not touched. This is the one place this bundle writes anything, and it writes nowhere anybody reads.
 
 "It reads nothing" is the report that brings a person here; what they leave with is which call failed and what CloudKit said about it.
 

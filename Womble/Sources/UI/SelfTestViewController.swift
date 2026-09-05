@@ -12,11 +12,18 @@ final class SelfTestViewController: UIViewController {
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let runButton = UIButton(type: .system)
     private let footer = UILabel()
+    private let makeSteps: () -> [SelfTestStep]
     private var test: SelfTest
     private var running = false
 
-    init(test: SelfTest = SelfTest(steps: CloudKitSelfTest.steps())) {
-        self.test = test
+    /// The steps are made afresh for every run, not once for the screen: a
+    /// run writes records under a device ID and into a zone of its own, and
+    /// running again has to be a new one of each. Reusing them would mean
+    /// the second run writing a record the first one already wrote, which
+    /// is refused — the self-test would fail at itself.
+    init(steps: @escaping () -> [SelfTestStep] = { CloudKitSelfTest.steps() }) {
+        self.makeSteps = steps
+        self.test = SelfTest(steps: steps())
         super.init(nibName: nil, bundle: nil)
         title = "Self-test"
     }
@@ -81,6 +88,8 @@ final class SelfTestViewController: UIViewController {
         running = true
         runButton.isEnabled = false
         runButton.setTitle("Running…", for: .normal)
+        test = SelfTest(steps: makeSteps())
+        tableView.reloadData()
         test.run(changed: { [weak self] in
             self?.tableView.reloadData()
         }, finished: { [weak self] in

@@ -29,7 +29,9 @@ enum CloudKitSelfTest {
             SelfTestStep(name: "Probe past the end: found by ID") { run.probe(sequence: 2, expecting: true, $0) },
             SelfTestStep(name: "Refuse to overwrite a turn") { run.refuseOverwrite($0) },
             SelfTestStep(name: "The board's container") { run.board($0) },
-            SelfTestStep(name: "Tidy up") { run.tidy($0) },
+            // Always, and last: the runs that failed are the ones that left
+            // a zone behind.
+            SelfTestStep(name: "Tidy up", always: true) { run.tidy($0) },
         ]
     }
 
@@ -212,6 +214,9 @@ enum CloudKitSelfTest {
         }
 
         func tidy(_ done: @escaping (Result<String, Error>) -> Void) {
+            guard logZone != nil || boardZone != nil else {
+                return done(.success("nothing was made"))
+            }
             var failures: [String] = []
             let group = DispatchGroup()
             for (zone, database) in [(logZone, logContainer.privateCloudDatabase),
