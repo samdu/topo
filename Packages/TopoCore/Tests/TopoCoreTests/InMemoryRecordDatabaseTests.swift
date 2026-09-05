@@ -34,6 +34,14 @@ import TopoCoreTesting
         #expect(await db.current(id)?.int("v") == 4)
     }
 
+    @Test func recordsOfATypeAreEveryRecordOfItWhateverTheirFields() async throws {
+        _ = try await db.save(Record(type: "T", id: RecordID("a"), fields: ["v": .int(1)]))
+        _ = try await db.save(Record(type: "T", id: RecordID("junk")))
+        _ = try await db.save(Record(type: "U", id: RecordID("b"), fields: ["v": .int(1)]))
+        let all = try await db.records(ofType: "T")
+        #expect(all.map(\.id.name) == ["a", "junk"])
+    }
+
     @Test func taggedSaveOfMissingRecordIsUnknownItem() async throws {
         await #expect(throws: RecordDatabaseError.self) {
             try await db.save(Record(type: "T", id: RecordID("gone"), changeTag: "x"))

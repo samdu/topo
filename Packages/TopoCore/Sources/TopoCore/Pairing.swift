@@ -170,12 +170,7 @@ public struct DeviceDirectory: Sendable {
 
     /// Every device record, by name.
     public func all() async throws -> [Device] {
-        // Every device has a `seenAt`, so this is the whole directory. It is not a match-all
-        // predicate because CloudKit answers one of those from the record name's index, which
-        // the development schema never builds; a custom field's index it builds on first save.
-        try await database.query(RecordQuery(type: Device.recordType, filters: [
-            .init("seenAt", .greaterThan, .date(.distantPast)),
-        ]))
+        try await database.records(ofType: Device.recordType)
             .compactMap(Device.init(record:))
             .sorted { ($0.name, $0.id.rawValue) < ($1.name, $1.id.rawValue) }
     }

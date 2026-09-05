@@ -57,6 +57,7 @@ public struct Turn: Hashable, Sendable, Identifiable {
     /// Marks the append that wrote this turn. A retry after a lost
     /// acknowledgement carries the same nonce, which is how the writer
     /// tells its own turn from another writer's at the same sequence.
+    /// Empty when the record carried none: such a turn is nobody's retry.
     public let nonce: String
 
     public var id: TurnRef { ref }
@@ -74,17 +75,12 @@ public struct Turn: Hashable, Sendable, Identifiable {
         RecordID(recordPrefix + ref.description)
     }
 
-    /// The marker written in the same atomic batch as the turn, named by the
-    /// append's nonce and pointing at the turn's ref. It is what makes a
-    /// retry find its turn after a restart: creating it again fails, and
-    /// the version on the server says where the turn went.
-    static let markerType = "Append"
-
-    static func markerID(nonce: String) -> RecordID { RecordID("append/" + nonce) }
-
-    var marker: Record {
-        Record(type: Turn.markerType, id: Turn.markerID(nonce: nonce), fields: ["turn": .string(ref.description)])
-    }
+    /// How a turn record, and the marker written beside it, are named. The
+    /// marker is what makes a retry find its turn after a restart: creating
+    /// it again fails, and the version on the server says where the turn
+    /// went.
+    static let naming = RecordNaming(prefix: recordPrefix, markerType: "Append",
+                                     markerPrefix: "append/", markerField: "turn")
 
     /// The ref a turn record's name carries, whatever the rest of it holds.
     static func ref(ofRecordNamed name: String) -> TurnRef? {
@@ -106,21 +102,25 @@ public struct Turn: Hashable, Sendable, Identifiable {
     }
 
     /// Nil if the record is not a well-formed turn: a sequence below 1 is
-    /// not one. An absent `parents` field reads as no parents, since
-    /// CloudKit may drop an empty list.
+    /// not one, and so is a record whose fields name a different ref from
+    /// its record name, which would otherwise let one record stand in for
+    /// another. An absent `parents` field reads as no parents, since
+    /// CloudKit may drop an empty list, and an absent `nonce` reads as
+    /// empty, so a record written without one still reads as a turn.
     public init?(record: Record) {
         guard record.type == Turn.recordType,
               let device = record.string("device"),
               let sequence = record.int("sequence"), sequence >= 1,
+              Turn.ref(ofRecordNamed: record.id.name) == TurnRef(device: DeviceID(device), sequence: sequence),
               let roleString = record.string("role"), let role = TurnRole(rawValue: roleString),
               let text = record.string("text"),
-              let at = record.date("at"),
-              let nonce = record.string("nonce") else { return nil }
+              let at = record.date("at") else { return nil }
         let parentStrings = record.strings("parents") ?? []
         let parents = parentStrings.compactMap(TurnRef.init(parsing:))
         guard parents.count == parentStrings.count else { return nil }
         self.init(ref: TurnRef(device: DeviceID(device), sequence: sequence),
-                  parents: parents, role: role, text: text, at: at, nonce: nonce)
+                  parents: parents, role: role, text: text, at: at,
+                  nonce: record.string("nonce") ?? "")
     }
 }
 
@@ -243,14 +243,15 @@ public struct TurnLog: Sendable {
     /// The whole log. A record that does not parse is reported in the
     /// transcript's `missing` (by the ref its name carries) or `unreadable`.
     ///
-    /// The query index is eventually consistent and a newest turn it has
-    /// not caught up with leaves no gap behind it, so after the query every
-    /// known device's next sequence is fetched by ID, which is read-your-
-    /// writes; one that exists is reported missing. A device none of whose
-    /// turns the query returned cannot be probed this way; a writer checks
-    /// its own newest turn itself before continuing.
+    /// The records come from the zone's change feed, not a query: it needs
+    /// no index and misses no record. The feed is eventually consistent and
+    /// a newest turn it has not caught up with leaves no gap behind it, so
+    /// after it every known device's next sequence is fetched by ID, which
+    /// is read-your-writes; one that exists is reported missing. A device
+    /// none of whose turns the feed returned cannot be probed this way; a
+    /// writer checks its own newest turn itself before continuing.
     public func read() async throws -> Transcript {
-        let records = try await database.query(RecordQuery(type: Turn.recordType))
+        let records = try await database.records(ofType: Turn.recordType)
         let seen = Self.transcript(from: records)
         var last: [DeviceID: Int64] = [:]
         for ref in seen.turns.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }
@@ -301,45 +302,71 @@ public struct TurnLog: Sendable {
 }
 
 /// Appends turns for one device. Each append creates a new record and never
-/// touches an existing one: the record ID is the turn's ref, and the save is
-/// create-only, so two writers for the same device cannot clobber each other.
-/// A writer that finds its sequence number taken moves past every taken
-/// number, checking by ID rather than by query so a cold query index cannot
-/// mislead it. Every turn is saved in one atomic batch with a marker
-/// record named by the append's nonce, so an append that throws
-/// `unavailable` after committing is found again by any retry carrying
-/// the same nonce, on this writer or on one started after a relaunch,
-/// however many appends have gone through in between: the marker refuses
-/// to be created twice and names the turn.
+/// touches an existing one, under a sequence number that is this device's
+/// alone; the writing itself is `SequenceAppender`, which is also what makes
+/// an append idempotent under retry.
 public actor TurnWriter {
-    private let database: any RecordDatabase
+    private let appender: SequenceAppender
     public let device: DeviceID
-    private var next: Int64
-    private var queue: Task<Turn, any Error>?
 
     init(database: any RecordDatabase, device: DeviceID, next: Int64) {
-        self.database = database
         self.device = device
-        self.next = next
+        self.appender = SequenceAppender(database: database, naming: Turn.naming, device: device, next: next)
     }
 
     /// The ref the next append will take, barring contention.
-    public var nextRef: TurnRef { TurnRef(device: device, sequence: next) }
+    public var nextRef: TurnRef {
+        get async { TurnRef(device: device, sequence: await appender.nextSequence) }
+    }
 
     /// Appends a turn continuing from `parents`. Pass the transcript's heads
     /// to carry on from wherever the log is, fork included. Appends on one
     /// writer run one at a time, in the order they were called. `nonce`
     /// identifies this append; pass the same one again when retrying after
-    /// `unavailable`, and leave it to default otherwise.
+    /// `unavailable`, and leave it to default otherwise. An empty nonce is
+    /// replaced by a fresh one: it could never name a marker.
     public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
                        nonce: String = UUID().uuidString) async throws -> Turn {
-        let previous = queue
-        let task = Task<Turn, any Error> {
-            _ = try? await previous?.value
-            return try await appendNow(role, text, parents: parents, at: at, nonce: nonce)
+        try await appended(role, text, parents: parents, at: at, nonce: nonce, save: nil)
+    }
+
+    /// Appends a turn in one atomic batch with a heartbeat of `lease`, so the
+    /// turn lands only if this device still holds the lease it last wrote and
+    /// a device displaced while it was working writes nothing. Returns nil,
+    /// with nothing written, when the lease is not held (see
+    /// `PrimaryLease.heartbeat(saving:)`); otherwise as `append(_:_:parents:at:nonce:)`,
+    /// a retried nonce included.
+    public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
+                       nonce: String = UUID().uuidString, renewing lease: PrimaryLease) async throws -> Turn? {
+        do {
+            return try await appended(role, text, parents: parents, at: at, nonce: nonce) { records in
+                guard let saved = try await lease.heartbeat(saving: records) else { throw LeaseNotHeld() }
+                return saved
+            }
+        } catch is LeaseNotHeld {
+            return nil
         }
-        queue = task
-        return try await task.value
+    }
+
+    private struct LeaseNotHeld: Error {}
+
+    private func appended(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String,
+                          save: (@Sendable ([Record]) async throws -> [Record])?) async throws -> Turn {
+        let device = self.device
+        do {
+            let record = try await appender.append(nonce: nonce, save: save) { sequence, nonce in
+                Turn(ref: TurnRef(device: device, sequence: sequence), parents: parents,
+                     role: role, text: text, at: at, nonce: nonce).record
+            }
+            guard let turn = Turn(record: record) else {
+                throw TurnLogError.markerWithoutTurn(nonce: nonce)
+            }
+            return turn
+        } catch SequenceError.contended(let device) {
+            throw TurnLogError.sequenceContended(device)
+        } catch SequenceError.markerWithoutRecord(let nonce) {
+            throw TurnLogError.markerWithoutTurn(nonce: nonce)
+        }
     }
 
     /// Appends a turn continuing from the transcript's heads. Throws
@@ -352,6 +379,7 @@ public actor TurnWriter {
                        nonce: String = UUID().uuidString) async throws -> Turn {
         try await syncWithLog()
         var missing = transcript.missing
+        let next = await appender.nextSequence
         if next > 1 {
             let own = TurnRef(device: device, sequence: next - 1)
             if transcript[own] == nil { missing.insert(own) }
@@ -362,56 +390,13 @@ public actor TurnWriter {
         return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce)
     }
 
-    /// Moves `next` past any turn of this device the log already holds at
-    /// or after it, found by ID rather than by query.
+    /// Moves past any turn of this device the log already holds at or after
+    /// the next sequence number, found by ID rather than by query.
     func syncWithLog() async throws {
-        if try await database.fetch(Turn.recordID(for: nextRef)) != nil {
-            next = try await firstFreeSequence(from: next + 1)
+        do {
+            try await appender.syncWithStore()
+        } catch SequenceError.contended(let device) {
+            throw TurnLogError.sequenceContended(device)
         }
-    }
-
-    private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
-        for _ in 0..<32 {
-            let turn = Turn(ref: nextRef, parents: parents, role: role, text: text, at: at, nonce: nonce)
-            do {
-                _ = try await database.save([turn.marker, turn.record])
-                next += 1
-                return turn
-            } catch RecordDatabaseError.serverRecordChanged(let id, let server) {
-                if id == Turn.markerID(nonce: nonce) {
-                    // This append already went through: the marker says where.
-                    guard let named = server.string("turn"), let ref = TurnRef(parsing: named),
-                          let record = try await database.fetch(Turn.recordID(for: ref)),
-                          let existing = Turn(record: record) else {
-                        throw TurnLogError.markerWithoutTurn(nonce: nonce)
-                    }
-                    next = max(next, ref.sequence + 1)
-                    return existing
-                }
-                if let existing = Turn(record: server), existing.nonce == nonce {
-                    next += 1
-                    return existing
-                }
-                next = try await firstFreeSequence(from: next + 1)
-            }
-        }
-        throw TurnLogError.sequenceContended(device)
-    }
-
-    /// The first sequence number at or after `start` with no record, found
-    /// by fetching IDs in batches. Fetch by ID is read-your-writes; the
-    /// query index is not.
-    private func firstFreeSequence(from start: Int64) async throws -> Int64 {
-        let batch: Int64 = 16
-        var from = start
-        for _ in 0..<4 {
-            let refs = (from..<(from + batch)).map { TurnRef(device: device, sequence: $0) }
-            let present = try await database.fetch(refs.map(Turn.recordID(for:)))
-            if let free = refs.first(where: { present[Turn.recordID(for: $0)] == nil }) {
-                return free.sequence
-            }
-            from += batch
-        }
-        throw TurnLogError.sequenceContended(device)
     }
 }

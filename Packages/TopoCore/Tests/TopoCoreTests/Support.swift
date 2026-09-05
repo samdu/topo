@@ -117,6 +117,7 @@ struct StaleTailDatabase: RecordDatabase {
     let inner: InMemoryRecordDatabase
     func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] {
         let all = try await inner.query(query)
         var newest: [String: Int64] = [:]
@@ -135,6 +136,7 @@ struct BlindQueryDatabase: RecordDatabase {
     let inner: InMemoryRecordDatabase
     func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] { [] }
 }
 
@@ -147,6 +149,7 @@ struct LossySaveDatabase: RecordDatabase {
         return out
     }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
@@ -170,6 +173,7 @@ final class FlakyOnceDatabase: RecordDatabase, @unchecked Sendable {
         return out
     }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
@@ -192,6 +196,7 @@ final class DropOnceDatabase: RecordDatabase, @unchecked Sendable {
         return try await inner.save(records)
     }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
@@ -217,6 +222,7 @@ final class LossyLinkDatabase: RecordDatabase, @unchecked Sendable {
         if drop { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
         return try await inner.fetch(ids)
     }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
@@ -256,3 +262,27 @@ let tA = Date(timeIntervalSince1970: 1_000_000)
 let phone = DeviceID("phone")
 let hub = DeviceID("hub")
 let watch = DeviceID("watch")
+
+/// Remembers what was asked of the query index.
+actor QueryWatcher: RecordDatabase {
+    let inner: InMemoryRecordDatabase
+    /// What was asked of the query index, which needs an index per field.
+    private(set) var queries: [RecordQuery] = []
+    /// What was read from the zone's change feed, which needs none.
+    private(set) var feedReads: [String] = []
+
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+
+    func records(ofType type: String) async throws -> [Record] {
+        feedReads.append(type)
+        return try await inner.records(ofType: type)
+    }
+
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        queries.append(query)
+        return try await inner.query(query)
+    }
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Topo</title>
+<link rel="stylesheet" href="womble.css">
+</head>
+<body>
+<!-- The Womble a television can open: the transcript and the house board,
+     read-only, from one document the hub serves. No build step and no
+     dependencies, because this is served off a Mac on the house's own
+     network to whatever browser an old TV happens to have. -->
+<main id="screen" data-state="loading">
+  <section id="board" aria-label="The house">
+    <h1>The house</h1>
+    <ol id="cards"></ol>
+    <p id="board-empty" class="quiet">Nothing on the board.</p>
+  </section>
+  <section id="transcript" aria-label="Transcript">
+    <p id="notice" class="quiet" hidden></p>
+    <ol id="turns"></ol>
+    <p id="transcript-empty" class="quiet">Nothing has been said yet.</p>
+  </section>
+</main>
+<p id="status" class="quiet" role="status"></p>
+<script src="womble.js"></script>
+</body>
+</html>

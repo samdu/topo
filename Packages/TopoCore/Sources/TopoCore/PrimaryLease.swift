@@ -265,6 +265,21 @@ public actor PrimaryLease {
         return .contended
     }
 
+    /// Creates the lease record for this device only if none exists: the
+    /// atomic first claim, which exactly one of any number of devices
+    /// launching together wins. True for the winner. The record is not held
+    /// or heartbeated here; it lapses in one duration, and `acquire()` takes
+    /// it properly when the first turn runs. False when a record exists,
+    /// whoever holds it and however old.
+    public func claimIfNone() async throws -> Bool {
+        do {
+            _ = try await database.save(holder(epoch: 1).record(changeTag: nil))
+            return true
+        } catch RecordDatabaseError.serverRecordChanged {
+            return false
+        }
+    }
+
     /// Extends the held lease by one duration. Returns false, and forgets
     /// the lease, when the server holds a different version (another device
     /// has claimed it) or the lease has already expired locally (this device
@@ -276,6 +291,50 @@ public actor PrimaryLease {
             return false
         }
         return try await write(holder(epoch: lease.epoch), over: record.changeTag) != nil
+    }
+
+    /// Saves `records` and a heartbeat of the held lease in one atomic batch,
+    /// so the records land only if this device still holds the lease at the
+    /// version it last wrote: a turn appended this way is never the work of
+    /// a displaced brain. Returns the saved records, or nil with nothing
+    /// applied when the lease is not held: never granted, lapsed locally, or
+    /// taken by another device (which this device then yields to, as after
+    /// a failed heartbeat). A conflict on any record but the lease propagates
+    /// as the database threw it, again with nothing applied.
+    public func heartbeat(saving records: [Record]) async throws -> [Record]? {
+        for _ in 0..<3 {
+            guard let record = heldRecord, let lease = Lease(record: record) else { return nil }
+            if hasLapsed(lease) {
+                heldRecord = nil
+                return nil
+            }
+            let renewal = holder(epoch: lease.epoch)
+            let deadline = monotonic() + timing.duration
+            do {
+                let saved = try await database.save(records + [renewal.record(changeTag: record.changeTag)])
+                let tag = saved.first(where: { $0.id == Lease.recordID })?.changeTag
+                heldRecord = renewal.record(changeTag: tag)
+                heldUntil = deadline
+                yieldedTo = nil
+                startHeartbeats()
+                return saved.filter { $0.id != Lease.recordID }
+            } catch RecordDatabaseError.serverRecordChanged(let id, let server) where id == Lease.recordID {
+                let winner = Lease(record: server)
+                if let winner, winner.holder == device, winner.epoch == lease.epoch, winner.endpoint == endpoint {
+                    // An overlapping heartbeat of ours got there first: still
+                    // our lease, at the server's version; the batch goes again over it.
+                    heldRecord = server
+                    continue
+                }
+                heldRecord = nil
+                yieldedTo = winner
+                return nil
+            } catch RecordDatabaseError.unknownItem(let id) where id == Lease.recordID {
+                heldRecord = nil
+                return nil
+            }
+        }
+        return nil
     }
 
     private func holder(epoch: Int64) -> Lease {

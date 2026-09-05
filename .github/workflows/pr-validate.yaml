@@ -23,6 +23,18 @@
 # is deleted when the job ends. What remains — a same-repo branch carrying
 # instructions that steer the reviewer — is accepted by design: a compromised
 # same-repo branch already means a compromised agent with push rights.
+#
+# The verdict is scoped to the diff mechanically, not by prompt. The prompt
+# asks Codex to review only the PR's changes, and it still blocks on defects in
+# files the PR never touched. So after Codex answers, a step in the codex job
+# resolves every path each finding cites (`path:line`, or a backticked path)
+# against the checkout and the PR's changed-file list. A finding whose cited
+# files are all real repo files and none of them changed in this PR is
+# demoted: it is posted under "Pre-existing, not blocking" and does not count
+# toward `blocking`; if every finding is demoted the verdict becomes
+# non-blocking. A finding that cites no repo file at all keeps whatever Codex
+# decided, and an answer that is not a valid verdict passes through untouched
+# so review_gate's no-verdict handling still sees it.
 name: PR validate
 
 on:
@@ -67,8 +79,10 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      # Read-only, for the PR's changed-file list in the scoping step.
+      pull-requests: read
     outputs:
-      final_message: ${{ steps.run_codex.outputs.final-message }}
+      final_message: ${{ steps.scope.outputs.final-message }}
     steps:
       - name: Tell the status pane the review is running
         env:
@@ -80,7 +94,7 @@ jobs:
             | curl -sS -m 10 -X POST -H 'content-type: application/json' --data-binary @- "$STATUS_PANE_URL" \
             || echo "::warning::status pane unreachable"
 
-      # This job holds `contents: read` and nothing more: the persisted token
+      # This job holds read permissions and nothing more: the persisted token
       # is repo-scoped and cannot push, comment or merge. The job that comments
       # is a separate one, with no checkout.
       - uses: actions/checkout@v5
@@ -185,6 +199,15 @@ jobs:
             formatting; report only what would actually break something, and
             say plainly if you find nothing.
 
+            Review the diff, not the repository. A defect in a file the PR
+            does not touch is not this PR's to fix: mention it in `summary`
+            as pre-existing, never as a blocking finding. In particular the
+            workflows under `.github/workflows/` run PR-authored code with a
+            reviewer credential and a write token for same-repository
+            branches; that exposure is accepted by design, documented in this
+            file's header, and is not a finding on any PR that does not
+            change those workflows.
+
             Return JSON matching the schema. Set `blocking` true only for a
             finding that should stop this merge — something that would break at
             runtime, lose or corrupt a record, split the primary, leak a secret,
@@ -214,9 +237,86 @@ jobs:
             --output-schema "$RUNNER_TEMP/schema.json" \
             --output-last-message "$RUNNER_TEMP/verdict.json" \
             -
+
+      # The diff-scope rule from the header. Owns the job's `final-message`
+      # output: a valid verdict leaves here with its findings split into
+      # `findings` (kept) and `demoted` (cite only unchanged files), plus
+      # `codex_blocking` recording what Codex itself said; anything that is
+      # not a valid verdict leaves here verbatim.
+      - name: Scope the verdict to the diff
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          VERDICT_PATH: ${{ runner.temp }}/verdict.json
+        run: |
+          set -euo pipefail
+          # Renames list under their new name; the old name counts as changed
+          # too so a finding citing either spelling stays in scope.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/changed.txt"
+          echo "Changed files:"; sed 's/^/  /' "$RUNNER_TEMP/changed.txt"
+          git ls-files -z > "$RUNNER_TEMP/repo-files.txt"
+          python3 - "$VERDICT_PATH" "$RUNNER_TEMP/changed.txt" "$RUNNER_TEMP/repo-files.txt" > "$RUNNER_TEMP/scoped.json" <<'PY'
+          import json, re, sys
+
+          verdict_path, changed_path, repo_path = sys.argv[1:4]
+          raw = open(verdict_path).read()
+          try:
+              v = json.loads(raw)
+              ok = (isinstance(v, dict) and isinstance(v.get("blocking"), bool)
+                    and isinstance(v.get("summary"), str) and isinstance(v.get("findings"), list)
+                    and all(isinstance(f, str) for f in v["findings"]))
+          except ValueError:
+              ok = False
+          if not ok:
+              print("verdict is not a valid {blocking, summary, findings}; passing it through unscoped", file=sys.stderr)
+              sys.stdout.write(raw)
+              sys.exit(0)
+
+          changed = {l.strip() for l in open(changed_path) if l.strip()}
+          repo = {p for p in open(repo_path).read().split("\0") if p}
+
+          # A cite is `path:line` anywhere, or anything in backticks. Both are
+          # only candidates: one that does not resolve to a file in the checkout
+          # (a symbol, an example filename) is not a citation.
+          CITE = re.compile(r"`([^`\n]+)`|((?<![\w./-])[\w./-]+\.\w+:\d+)")
+          PATHISH = re.compile(r"^\.?/?[\w./-]+$")
+
+          def resolve(cand):
+              cand = re.sub(r":\d+(?:[-–]\d+)?\s*$", "", cand.strip())
+              cand = re.sub(r"^\./", "", cand)
+              if not cand or not PATHISH.match(cand):
+                  return []
+              if cand in repo:
+                  return [cand]
+              return sorted(f for f in repo if f.endswith("/" + cand))
+
+          kept, demoted = [], []
+          for f in v["findings"]:
+              cited = set()
+              for m in CITE.finditer(f):
+                  cited.update(resolve(m.group(1) or m.group(2)))
+              hit = sorted(cited & changed)
+              if cited and not hit:
+                  demoted.append(f)
+                  print(f"demoted (cites only unchanged files {sorted(cited)}): {f[:120]}", file=sys.stderr)
+              else:
+                  kept.append(f)
+                  print(f"kept (cites {hit or 'no repo file'}): {f[:120]}", file=sys.stderr)
+
+          out = dict(v)
+          out["codex_blocking"] = v["blocking"]
+          out["findings"] = kept
+          out["demoted"] = demoted
+          if v["blocking"] and demoted and not kept:
+              out["blocking"] = False
+              print("every finding cites only unchanged files; verdict is now non-blocking", file=sys.stderr)
+          json.dump(out, sys.stdout)
+          PY
           # Multi-line output, so a heredoc delimiter the verdict cannot contain.
           d="verdict-$RANDOM$RANDOM"
-          { echo "final-message<<$d"; cat "$RUNNER_TEMP/verdict.json"; echo; echo "$d"; } >> "$GITHUB_OUTPUT"
+          { echo "final-message<<$d"; cat "$RUNNER_TEMP/scoped.json"; echo; echo "$d"; } >> "$GITHUB_OUTPUT"
 
       - name: Delete the Codex login
         if: ${{ always() }}
@@ -241,6 +341,12 @@ jobs:
             const lines = [v.summary, ...(v.findings ?? []).map(f => `- ${f}`)]
             if (v.blocking) {
               lines.unshift('**Blocking — this merge is held until these are addressed or overridden.**', '')
+            } else if (v.codex_blocking) {
+              lines.unshift('Codex marked this blocking, but every finding cites only files this PR does not change, so the gate treats it as non-blocking.', '')
+            }
+            if (v.demoted?.length) {
+              lines.push('', '**Pre-existing, not blocking** — these cite only files this PR does not change:',
+                ...v.demoted.map(f => `- ${f}`))
             }
             await github.rest.issues.createComment({
               owner: context.repo.owner,
@@ -378,6 +484,10 @@ jobs:
                 finish block "reviewer could not complete the review: $summary" 1
               fi
               echo "Review verdict: not blocking."
+              if [ "$(jq -r '.codex_blocking? // false' <<<"$VERDICT")" = "true" ]; then
+                echo "Codex answered blocking; every finding was demoted as pre-existing (cites only files this PR does not change):"
+                jq -r '.demoted[]? // empty' <<<"$VERDICT" | sed 's/^/  - /'
+              fi
               finish pass "$summary" 0
               ;;
             true)

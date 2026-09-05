@@ -1,20 +1,33 @@
 import SwiftUI
 import TopoAuth
 
-/// The client's role is decided at first launch from the CloudKit records; until that wiring
-/// lands the phone is primary and the watch and TV are viewers waiting to pair.
+/// The client's role is decided at first launch from the CloudKit records (`RoleSelector`): a
+/// phone or pad becomes primary and shows sign-in when nothing is primary yet, and a viewer
+/// otherwise. The watch and TV are always viewers.
 struct RootView: View {
     @Environment(SignIn.self) private var signIn
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
+    /// Set once the first answer is in the log, so the question is not asked twice.
+    @AppStorage("firstRunAnswered") private var answered = false
+    #if os(iOS)
+    @Environment(RoleSelector.self) private var roleSelector
+    #endif
 
     var body: some View {
         #if os(iOS)
-        if signIn.phase != .signedIn {
-            SignInView()
-        } else if firstRunAnswer.isEmpty {
-            FirstRunView { _ in }
-        } else {
-            TranscriptPlaceholder()
+        switch roleSelector.role {
+        case nil:
+            DecidingView(trouble: roleSelector.trouble) { await roleSelector.decide() }
+        case .viewer:
+            ViewerRootView()
+        case .primary:
+            if signIn.phase != .signedIn {
+                SignInView()
+            } else if firstRunAnswer.isEmpty, !answered {
+                FirstRunView { _ in }
+            } else {
+                ChatView()
+            }
         }
         #elseif os(watchOS)
         WatchRootView()
@@ -23,23 +36,6 @@ struct RootView: View {
         #else
         ViewerPlaceholder()
         #endif
-    }
-}
-
-/// Until the turn log is wired, the transcript is the one answer given so far.
-struct TranscriptPlaceholder: View {
-    @Environment(SignIn.self) private var signIn
-    @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
-    var body: some View {
-        VStack(spacing: 16) {
-            OctopusMark().frame(width: 64, height: 64)
-            Text("Signed in with Claude").font(.headline)
-            Text(firstRunAnswer)
-                .padding()
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.teal.opacity(0.12)))
-            Button("Sign out") { signIn.signOut() }.font(.footnote)
-        }
-        .padding()
     }
 }
 
@@ -56,3 +52,29 @@ struct ViewerPlaceholder: View {
         .padding()
     }
 }
+
+#if os(iOS)
+/// First launch, before the records have said what this device is. Reads again on its own
+/// while iCloud is out of reach, and says so.
+struct DecidingView: View {
+    var trouble: String?
+    var decide: () async -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            OctopusMark().frame(width: 64, height: 64)
+            ProgressView()
+            Text(trouble == nil ? "Checking iCloud for your other devices…" : "Couldn't check iCloud: \(trouble!)")
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .padding()
+        .task {
+            while !Task.isCancelled {
+                await decide()
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
+        }
+    }
+}
+#endif

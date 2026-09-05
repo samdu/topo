@@ -15,18 +15,21 @@ settings:
     SWIFT_VERSION: "6.0"
     SWIFT_STRICT_CONCURRENCY: complete
     CODE_SIGN_STYLE: Automatic
+    DEVELOPMENT_TEAM: 4A5NSJ6Y3G
     CURRENT_PROJECT_VERSION: 1
     MARKETING_VERSION: 0.1
     GENERATE_INFOPLIST_FILE: true
     INFOPLIST_KEY_CFBundleDisplayName: Topo
     ENABLE_USER_SCRIPT_SANDBOXING: true
 packages:
-  TopoAuth:
-    path: Packages/TopoAuth
   TopoCore:
     path: Packages/TopoCore
   TopoLink:
     path: Packages/TopoLink
+  TopoAuth:
+    path: Packages/TopoAuth
+  TopoTurn:
+    path: Packages/TopoTurn
 targets:
   Topo:
     type: application
@@ -34,13 +37,16 @@ targets:
     supportedDestinations: [iOS, iPadOS]
     sources: [Apps/Shared, Apps/Client, Apps/Topo]
     dependencies:
-      - package: TopoAuth
       - package: TopoCore
+      - package: TopoAuth
+      - package: TopoTurn
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Topo listens when you press the microphone, so it can hear what you forgot.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Topo turns what you say into text so it can answer you.
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
@@ -54,6 +60,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_WKWatchOnly: true
         INFOPLIST_KEY_WKApplication: true
@@ -67,6 +74,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tv
+        ASSETCATALOG_COMPILER_APPICON_NAME: App Icon & Top Shelf Image
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_UILaunchScreen_Generation: true
   # The app targets' own logic — the transcript store, the identity, the
@@ -116,6 +124,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.hub
         GENERATE_INFOPLIST_FILE: false
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 schemes:
   Topo:
     build:

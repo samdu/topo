@@ -43,6 +43,21 @@ import TopoCoreTesting
         #expect(await p.isPrimary())
     }
 
+    @Test func theFirstClaimIsWonByExactlyOneDevice() async throws {
+        // A staked record names no endpoint, so no probe can confirm it.
+        let p = lease(phone, probe: .allDead), h = lease(hub, probe: .allDead)
+        let (a, b) = try await (p.claimIfNone(), h.claimIfNone())
+        #expect(a != b)
+        #expect(!(try await p.claimIfNone()))
+        let pHeld = await p.held, hHeld = await h.held
+        #expect(pHeld == nil && hHeld == nil)
+        let record = try #require(await db.current(Lease.recordID))
+        #expect(Lease(record: record)?.holder == (a ? phone : hub))
+        // The winner takes it properly on its first turn; the loser defers.
+        let winner = a ? p : h
+        guard case .primary = try await winner.acquire() else { Issue.record("winner should hold"); return }
+    }
+
     @Test func heartbeatExtendsWithoutChangingEpoch() async throws {
         let p = lease(phone)
         _ = try await p.acquire()
@@ -152,6 +167,43 @@ import TopoCoreTesting
         #expect(try await !h.heartbeat())
         #expect(!(await h.isPrimary()))
         #expect(await h.held == nil)
+    }
+
+    @Test func aBatchSavedWithAHeartbeatLandsOnlyWhileTheLeaseIsHeld() async throws {
+        let h = lease(hub, probe: .allDead)
+        _ = try await h.acquire()
+        let first = Record(type: "Note", id: RecordID("note/1"))
+        clock.advance(2)
+        let saved = try #require(try await h.heartbeat(saving: [first]))
+        #expect(saved.map(\.id) == [first.id])
+        #expect(await db.current(first.id) != nil)
+        let held = try #require(await h.held)
+        #expect(held.epoch == 1 && held.expiresAt == clock.now + 10)
+
+        clock.advance(1)
+        _ = try await lease(phone, probe: .allDead).acquire()
+        let second = Record(type: "Note", id: RecordID("note/2"))
+        #expect(try await h.heartbeat(saving: [second]) == nil)
+        #expect(await db.current(second.id) == nil)
+        #expect(!(await h.isPrimary()))
+        // Displaced, so it yields to the taker rather than claiming back.
+        guard case .unreachable(let taker) = try await h.acquire() else { Issue.record("should yield"); return }
+        #expect(taker.holder == phone)
+    }
+
+    @Test func aConflictOnTheBatchItselfLeavesTheLeaseHeldAndPropagates() async throws {
+        let h = lease(hub)
+        _ = try await h.acquire()
+        let taken = Record(type: "Note", id: RecordID("note/1"))
+        _ = try await db.save([taken])
+        await #expect(throws: RecordDatabaseError.self) { try await h.heartbeat(saving: [taken]) }
+        #expect(await h.isPrimary())
+    }
+
+    @Test func aBatchNotHeldIsRefusedWithoutAWrite() async throws {
+        let h = lease(hub)
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/1"))]) == nil)
+        #expect(await db.current(RecordID("note/1")) == nil)
     }
 
     @Test func displacedHolderDefersToALiveOrUnreachableTakerAndRetakesFromADeadOne() async throws {

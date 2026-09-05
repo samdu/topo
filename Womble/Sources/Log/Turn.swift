@@ -79,6 +79,9 @@ struct Turn: Hashable {
         self.at = at
     }
 
+    /// The name a turn's record has.
+    static func recordName(for ref: TurnRef) -> String { return recordPrefix + ref.description }
+
     /// The ref a turn record's name carries, whatever the rest of it holds.
     static func ref(ofRecordNamed name: String) -> TurnRef? {
         guard name.hasPrefix(recordPrefix) else { return nil }
