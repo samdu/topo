@@ -256,3 +256,19 @@ let tA = Date(timeIntervalSince1970: 1_000_000)
 let phone = DeviceID("phone")
 let hub = DeviceID("hub")
 let watch = DeviceID("watch")
+
+/// Remembers what was asked of the query index.
+actor QueryWatcher: RecordDatabase {
+    let inner: InMemoryRecordDatabase
+    private(set) var queries: [RecordQuery] = []
+
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        queries.append(query)
+        return try await inner.query(query)
+    }
+}

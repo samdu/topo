@@ -31,7 +31,14 @@ public struct MemoryStore: Sendable {
     /// of whose revisions the query returned cannot be probed this way; a
     /// writer checks its own by ID before it writes.
     public func read() async throws -> Vault {
-        let records = try await database.query(RecordQuery(type: Note.recordType))
+        // Every revision has a positive sequence, so this is the whole
+        // memory. It is not a match-all predicate because CloudKit answers
+        // one of those from the record name's index, which the development
+        // schema never marks queryable; the index behind a field of our own
+        // is built when the first record carrying it is saved.
+        let records = try await database.query(RecordQuery(type: Note.recordType, filters: [
+            .init("sequence", .greaterThan, .int(0)),
+        ]))
         let seen = Self.vault(from: records)
         var last: [DeviceID: Int64] = [:]
         for ref in seen.notes.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }
