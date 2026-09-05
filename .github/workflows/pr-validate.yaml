@@ -10,8 +10,19 @@
 # authenticates from that file. Store it as ONE line (`jq -c . auth.json |
 # gh secret set CODEX_AUTH_JSON`): the runner masks every line of a multi-line
 # secret, and a pretty-printed file's `{` and `}` lines then get every JSON
-# verdict flagged as "may contain secret" and dropped from the job outputs. Refresh it with a new `codex login` when the
-# reviewer starts failing with 401s.
+# verdict flagged as "may contain secret" and dropped from the job outputs.
+# Refresh it with a new `codex login` when the reviewer starts failing with
+# 401s.
+#
+# That login is a reusable credential on a runner that also holds PR content,
+# and Codex reads that content. The exposure is bounded, not removed: the
+# trigger is `pull_request` (never `pull_request_target`), so a fork PR gets
+# no secrets and no reviewer; the codex job runs only for branches of this
+# repository; the CLI runs in its read-only sandbox, which denies its tool
+# commands the network and the filesystem outside the checkout; and the login
+# is deleted when the job ends. What remains — a same-repo branch carrying
+# instructions that steer the reviewer — is accepted by design: a compromised
+# same-repo branch already means a compromised agent with push rights.
 name: PR validate
 
 on:
@@ -46,7 +57,12 @@ jobs:
   # against the free local reviewer, and marks it ready — that transition is
   # what first spends a Codex round.
   codex:
-    if: github.event.pull_request.draft == false
+    # Same-repo branches only: a fork PR carries untrusted content and must
+    # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
+    # red, and it stays a human merge.)
+    if: >-
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -106,6 +122,20 @@ jobs:
           node-version: 22
       - name: Install Codex CLI
         run: npm install -g @openai/codex && codex --version
+
+      # The CLI's read-only sandbox is bubblewrap, and Ubuntu 24.04 runners
+      # block unprivileged user namespaces via AppArmor (bwrap fails with
+      # `loopback: Failed RTM_NEWADDR: Operation not permitted`). Same fix
+      # openai/codex-action applies on hosted Linux runners.
+      - name: Enable user namespaces for the Codex sandbox
+        run: |
+          set -euo pipefail
+          if [ "$(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo 1)" != "1" ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" != "0" ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
 
       - name: Run Codex
         id: run_codex
@@ -167,12 +197,13 @@ jobs:
         run: |
           set -euo pipefail
           printf '%s' "$OUTPUT_SCHEMA" > "$RUNNER_TEMP/schema.json"
-          # No CLI sandbox: bubblewrap cannot initialise on the GitHub runner
-          # (`bwrap: loopback: Failed RTM_NEWADDR`), and the runner is already
-          # an ephemeral VM holding nothing but this checkout and the login.
+          # read-only: the reviewer's tool commands get no network and no
+          # writes, so a prompt-injected `curl` of the login has nowhere to go.
+          # The model call itself is made by the codex process, outside the
+          # sandbox.
           printf '%s' "$PROMPT" | codex exec \
             --model "$CODEX_MODEL" \
-            --sandbox danger-full-access \
+            --sandbox read-only \
             --skip-git-repo-check \
             --color never \
             --output-schema "$RUNNER_TEMP/schema.json" \
@@ -181,6 +212,10 @@ jobs:
           # Multi-line output, so a heredoc delimiter the verdict cannot contain.
           d="verdict-$RANDOM$RANDOM"
           { echo "final-message<<$d"; cat "$RUNNER_TEMP/verdict.json"; echo; echo "$d"; } >> "$GITHUB_OUTPUT"
+
+      - name: Delete the Codex login
+        if: ${{ always() }}
+        run: rm -rf "$RUNNER_TEMP/codex-home"
 
   post_feedback:
     runs-on: ubuntu-latest
