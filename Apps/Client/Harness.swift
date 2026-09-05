@@ -62,14 +62,19 @@ final class Harness {
         inFlight?.cancel()
         inFlight = nil
         runner = nil
-        try? database.destroy()
-        if let fresh = try? LocalRecordDatabase(url: logURL) {
+        turns = []
+        busy = false
+        do {
+            try database.destroy()
+            let fresh = try LocalRecordDatabase(url: logURL)
             database = fresh
             log = TurnLog(database: fresh)
+            error = nil
+        } catch {
+            // The destroyed database stays in place: empty, and refusing writes, so nothing
+            // reloads a file that could not be removed.
+            self.error = "Couldn't remove the transcript file: \(error)"
         }
-        turns = []
-        error = nil
-        busy = false
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
     }
 

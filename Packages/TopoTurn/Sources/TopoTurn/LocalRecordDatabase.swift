@@ -25,12 +25,15 @@ public final class LocalRecordDatabase: RecordDatabase, @unchecked Sendable {
     }
 
     /// Empties the database, deletes its file and refuses every later save, so a writer still
-    /// holding it after a sign-out cannot bring the log back.
+    /// holding it after a sign-out cannot bring the log back. Memory is emptied and writes are
+    /// refused whether or not the file could be removed; a removal failure is thrown after that,
+    /// so the caller knows the file is still on disk.
     public func destroy() throws {
         try lock.withLock {
             destroyed = true
             store = [:]
-            if let url { try? FileManager.default.removeItem(at: url) }
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return }
+            try FileManager.default.removeItem(at: url)
         }
     }
 

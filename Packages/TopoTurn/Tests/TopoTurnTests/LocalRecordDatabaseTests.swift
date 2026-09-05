@@ -86,6 +86,22 @@ import TopoCore
         #expect(try await LocalRecordDatabase(url: url).query(RecordQuery(type: "T")).isEmpty)
     }
 
+    @Test func aFileThatCannotBeRemovedIsReportedAndStillNotServed() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("topo-\(UUID().uuidString)")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let url = dir.appendingPathComponent("log.json")
+        let db = try LocalRecordDatabase(url: url)
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        // A read-only directory refuses the unlink.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        #expect(throws: (any Error).self) { try db.destroy() }
+        #expect(try await db.fetch(RecordID("a")) == nil)
+        await #expect(throws: RecordDatabaseError.self) { _ = try await db.save(Record(type: "T", id: RecordID("b"))) }
+    }
+
     @Test func theTurnLogAndLeaseRunOnIt() async throws {
         let db = try LocalRecordDatabase(url: nil)
         let transport = RecordingTransport((200, reply("hello")))
