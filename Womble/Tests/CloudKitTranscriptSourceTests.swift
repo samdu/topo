@@ -37,6 +37,21 @@ final class CloudKitReadTests: XCTestCase {
         XCTAssertFalse(transcript.isComplete)
     }
 
+    func testARecordWhoseFieldsClaimAnotherRefIsMissing() {
+        // The impostor is reported at its own name, and the turn it claimed
+        // to be is untouched.
+        var fields = wellFormed
+        fields["device"] = "hub" as NSString
+        fields["sequence"] = NSNumber(value: 2)
+        let real = record("turn/hub/2", fields)
+        let impostor = record("turn/phone/1", fields)
+        let transcript = CloudKitTranscriptSource.transcript(from: [real, impostor])
+        XCTAssertEqual(transcript.ordered.count, 1)
+        XCTAssertEqual(transcript.ordered.first?.ref, TurnRef(device: DeviceID("hub"), sequence: 2))
+        XCTAssertTrue(transcript.missing.contains(TurnRef(device: DeviceID("phone"), sequence: 1)))
+        XCTAssertFalse(transcript.isComplete)
+    }
+
     func testARecordWithNoRefIsUnreadable() {
         let transcript = CloudKitTranscriptSource.transcript(from: [record("something-else", wellFormed)])
         XCTAssertEqual(transcript.unreadable, ["something-else"])

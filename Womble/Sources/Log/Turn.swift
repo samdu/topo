@@ -55,10 +55,16 @@ struct Turn: Hashable {
     /// one, and neither is a parent list Womble cannot parse in full. An
     /// absent `parents` field reads as no parents, since CloudKit may drop an
     /// empty list. `nonce` is a writer's business and is not read here.
+    ///
+    /// The name and the fields must agree on which turn this is. A record
+    /// named `turn/phone/1` whose fields say `hub/2` is not a turn: taking
+    /// its word would let it stand where the real `hub/2` goes, and the
+    /// reader would show a turn nobody wrote at a ref it does not hold.
     init?(recordName: String, fields: [String: Any]) {
-        guard Turn.ref(ofRecordNamed: recordName) != nil,
+        guard let named = Turn.ref(ofRecordNamed: recordName),
             let device = fields["device"] as? String,
             let sequence = (fields["sequence"] as? NSNumber)?.int64Value, sequence >= 1,
+            named == TurnRef(device: DeviceID(device), sequence: sequence),
             let roleString = fields["role"] as? String, let role = TurnRole(rawValue: roleString),
             let text = fields["text"] as? String,
             let at = fields["at"] as? Date

@@ -76,6 +76,14 @@ final class TurnParsingTests: XCTestCase {
         XCTAssertNil(Turn(recordName: "phone/1", fields: fields()), "the record name must be a turn's")
     }
 
+    func testTheNameAndTheFieldsMustAgree() {
+        // Otherwise a record could stand at a ref it does not hold, over the
+        // top of the turn that does, and the read would look complete.
+        XCTAssertNil(Turn(recordName: "turn/hub/2", fields: fields()))
+        XCTAssertNil(Turn(recordName: "turn/phone/2", fields: fields()))
+        XCTAssertNotNil(Turn(recordName: "turn/phone/1", fields: fields()))
+    }
+
     func testMissingNonceIsStillReadable() {
         // The nonce is a writer's business; a viewer never uses it, so its
         // absence must not hide a turn.
