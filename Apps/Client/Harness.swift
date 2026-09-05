@@ -247,6 +247,7 @@ final class Harness {
     func diagnostics() async -> Diagnostics {
         var rows: [(String, String)] = []
         rows.append(("Device", device.rawValue))
+        rows.append(("Role", UserDefaults.standard.string(forKey: "topo.role") ?? "undecided"))
         rows.append(("Container", TopoCloudKit.containerIdentifier))
         rows.append(("iCloud account", await TopoCloudKit.accountStatus()))
         rows.append(("Turn in flight", busy ? (status ?? "yes") : "none"))
