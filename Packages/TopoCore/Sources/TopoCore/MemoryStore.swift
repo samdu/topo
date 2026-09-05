@@ -154,7 +154,7 @@ public actor NoteWriter {
         let device = self.device
         let parents = vault.heads(of: path)
         do {
-            let record = try await appender.append(nonce: nonce) { sequence in
+            let record = try await appender.append(nonce: nonce) { sequence, nonce in
                 Note(ref: NoteRef(device: device, sequence: sequence), path: path, text: text,
                      isDeleted: deleted, parents: parents, at: at, nonce: nonce).record
             }

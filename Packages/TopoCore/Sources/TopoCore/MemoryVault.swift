@@ -145,21 +145,23 @@ public struct Note: Hashable, Sendable, Identifiable {
     }
 
     /// Nil if the record is not a well-formed revision. An absent `parents`
-    /// field reads as no parents, since CloudKit may drop an empty list,
-    /// and an absent `deleted` field reads as not deleted.
+    /// field reads as no parents, since CloudKit may drop an empty list, an
+    /// absent `deleted` field reads as not deleted, and an absent `nonce`
+    /// reads as empty, so a record written without one still reads as a
+    /// revision and is nobody's retry.
     public init?(record: Record) {
         guard record.type == Note.recordType,
               let device = record.string("device"),
               let sequence = record.int("sequence"), sequence >= 1,
               let pathString = record.string("path"), let path = VaultPath(pathString),
               let text = record.string("text"),
-              let at = record.date("at"),
-              let nonce = record.string("nonce") else { return nil }
+              let at = record.date("at") else { return nil }
         let parentStrings = record.strings("parents") ?? []
         let parents = parentStrings.compactMap(NoteRef.init(parsing:))
         guard parents.count == parentStrings.count else { return nil }
         self.init(ref: NoteRef(device: DeviceID(device), sequence: sequence), path: path, text: text,
-                  isDeleted: (record.int("deleted") ?? 0) != 0, parents: parents, at: at, nonce: nonce)
+                  isDeleted: (record.int("deleted") ?? 0) != 0, parents: parents, at: at,
+                  nonce: record.string("nonce") ?? "")
     }
 }
 

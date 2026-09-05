@@ -76,9 +76,15 @@ actor SequenceAppender {
     var nextSequence: Int64 { next }
 
     /// Appends one record, built by `make` for whichever sequence number it
-    /// lands on. Appends run in the order they were called. Pass the same
-    /// `nonce` again when retrying after `unavailable`.
-    func append(nonce: String, _ make: @escaping @Sendable (Int64) -> Record) async throws -> Record {
+    /// lands on and under the nonce this append is actually carrying — which
+    /// the record has to hold, since it is what a retry matches on. Appends
+    /// run in the order they were called. Pass the same `nonce` again when
+    /// retrying after `unavailable`. An empty nonce is replaced by a fresh
+    /// one: it could never name a marker, and a record written without one
+    /// reads as having an empty nonce, so an empty one would match every
+    /// such record rather than this append's own.
+    func append(nonce: String, _ make: @escaping @Sendable (Int64, String) -> Record) async throws -> Record {
+        let nonce = nonce.isEmpty ? UUID().uuidString : nonce
         let previous = queue
         let task = Task<Record, any Error> {
             _ = try? await previous?.value
@@ -96,9 +102,9 @@ actor SequenceAppender {
         }
     }
 
-    private func appendNow(nonce: String, _ make: @Sendable (Int64) -> Record) async throws -> Record {
+    private func appendNow(nonce: String, _ make: @Sendable (Int64, String) -> Record) async throws -> Record {
         for _ in 0..<32 {
-            let record = make(next)
+            let record = make(next, nonce)
             let marker = naming.marker(nonce: nonce, device: device, sequence: next)
             do {
                 _ = try await database.save([marker, record])

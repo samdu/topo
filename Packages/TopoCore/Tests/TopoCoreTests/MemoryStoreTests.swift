@@ -204,6 +204,25 @@ import TopoCoreTesting
         #expect(Note(record: Record(type: Note.recordType, id: RecordID("note/hub/9"))) == nil)
     }
 
+    @Test func aRecordWithoutANonceReadsAsARevisionAndMatchesNoRetry() async throws {
+        var old = Record(type: Note.recordType, id: RecordID("note/phone/1"), fields: [
+            "device": .string("phone"), "sequence": .int(1), "path": .string(note.string),
+            "text": .string("from another bundle"), "at": .date(t0),
+        ])
+        old.fields.removeValue(forKey: "nonce")
+        _ = try await db.save(old)
+        let vault = try await store.read()
+        #expect(vault.isComplete)
+        #expect(vault.text(at: note) == "from another bundle")
+        #expect(vault.notes[NoteRef(device: phone, sequence: 1)]?.nonce == "")
+
+        // An empty nonce is nobody's retry, so the write gets one of its own.
+        let w = try await store.writer(for: phone)
+        let written = try await w.write("mine", to: note, continuing: vault, at: t0 + 1, nonce: "")
+        #expect(!written.nonce.isEmpty)
+        #expect(written.ref == NoteRef(device: phone, sequence: 2))
+    }
+
     @Test func theRemoteIsRecordedAndCleared() async throws {
         #expect(try await store.remote() == nil)
         try await store.setRemote(VaultRemote(url: "git@github.com:samdu/memory.git"))

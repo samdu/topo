@@ -403,6 +403,25 @@ import TopoCoreTesting
         }
     }
 
+    @Test func aRecordWithoutANonceReadsAsATurnAndMatchesNoRetry() async throws {
+        let db = InMemoryRecordDatabase()
+        var old = turnRecord(device: "phone", seq: 1, parents: [])
+        old.fields.removeValue(forKey: "nonce")
+        _ = try await db.save(old)
+        let log = TurnLog(database: db)
+        let read = try await log.read()
+        #expect(read.isComplete)
+        #expect(read[.ref("phone", 1)]?.nonce == "")
+
+        // A writer that believes the log is empty collides with it and moves on.
+        let blind = try await TurnLog(database: BlindQueryDatabase(inner: db)).writer(for: phone)
+        #expect(await blind.nextRef.sequence == 2)
+        let next = try await blind.append(.person, "t", parents: [], at: tA, nonce: "")
+        #expect(next.ref.sequence == 2)
+        #expect(!next.nonce.isEmpty)
+        #expect(await db.turnWrites == 2)
+    }
+
     @Test func aRetryWithoutTheNonceIsASecondTurn() async throws {
         let inner = InMemoryRecordDatabase()
         let log = TurnLog(database: FlakyOnceDatabase(inner: inner))
