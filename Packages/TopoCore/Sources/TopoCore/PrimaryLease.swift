@@ -135,15 +135,14 @@ public actor PrimaryLease {
     /// - Parameters:
     ///   - now: the wall clock the record's expiry is written and read in;
     ///     tests move it by hand.
-    ///   - monotonic: seconds on a clock that only goes forward and keeps
-    ///     counting through sleep; the local expiry is judged on it too.
+    ///   - monotonic: seconds on a clock that only goes forward, keeps
+    ///     counting through sleep and ignores clock adjustments; the local
+    ///     expiry is judged on it too. The default is `mach_continuous_time`.
     ///   - sleep: how the heartbeat loop waits; tests drive it.
     public init(database: any RecordDatabase, device: DeviceID, endpoint: String?,
                 probe: any LeaseProbe, timing: LeaseTiming = .standard,
                 now: @escaping @Sendable () -> Date = { Date() },
-                monotonic: @escaping @Sendable () -> TimeInterval = {
-                    TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000_000
-                },
+                monotonic: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime,
                 sleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
                     try await Task.sleep(for: .seconds($0))
                 }) {
@@ -155,6 +154,15 @@ public actor PrimaryLease {
         self.now = now
         self.monotonic = monotonic
         self.sleep = sleep
+    }
+
+    /// Seconds on `mach_continuous_time`: monotonic, counting through
+    /// sleep, unmoved by adjustments to the system time.
+    public static let continuousUptime: @Sendable () -> TimeInterval = {
+        var info = mach_timebase_info_data_t()
+        mach_timebase_info(&info)
+        let nanos = TimeInterval(mach_continuous_time()) * TimeInterval(info.numer) / TimeInterval(info.denom)
+        return nanos / 1_000_000_000
     }
 
     /// The lease this device holds, or nil.

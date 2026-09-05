@@ -3,6 +3,27 @@ import Testing
 import TopoCore
 import TopoCoreTesting
 
+@Suite struct ContinuousUptimeTests {
+    @Test func defaultMonotonicClockOnlyGoesForwardAndTracksRealTime() async throws {
+        let a = PrimaryLease.continuousUptime()
+        try await Task.sleep(for: .milliseconds(20))
+        let b = PrimaryLease.continuousUptime()
+        #expect(a > 0)
+        #expect(b - a >= 0.02)
+        #expect(b - a < 5)
+    }
+
+    @Test func aLeaseOnTheDefaultClocksLapsesInRealTime() async throws {
+        let db = InMemoryRecordDatabase()
+        let p = PrimaryLease(database: db, device: phone, endpoint: nil, probe: StubProbe.allDead,
+                             timing: LeaseTiming(duration: 0.05, heartbeat: 60), sleep: Ticker().sleep)
+        _ = try await p.acquire()
+        #expect(await p.isPrimary())
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(!(await p.isPrimary()))
+    }
+}
+
 @Suite struct PrimaryLeaseTests {
     let db = InMemoryRecordDatabase()
     let clock = ManualClock()
