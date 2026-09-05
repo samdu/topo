@@ -4,6 +4,8 @@ The viewer-only bundle: it shows the transcript on a device too old for the clie
 
 Beside the transcript it shows the house board: the cards the household has posted, from the shared container that board lives in, read-only like everything else here. Side by side on a wide screen, stacked on a tall one. `docs/board.md` is what a card is.
 
+Off Apple — a television, a projector, anything with a browser and no bundle to install — the same two views are a page the hub serves: `Web/`, static and dependency-free, reading the one document in `docs/surfaces.md`, from beneath the unguessable path the hub mints for that screen. Open `Web/index.html` against `Web/surface.json` to see it with nothing running.
+
 It does say where it is. While it is on screen it advertises itself on the local network as a surface — a screen in the house — carrying its name and the agents registered to it, so a hub can list the house without anything being written anywhere. Joining that roster takes a tap on this screen; `docs/surfaces.md` is the whole of the protocol, and `Sources/Net` is the whole of the code.
 
 Deployment target is **iOS 12.0**, so the whole target is UIKit and completion handlers — no SwiftUI, no `async`/`await`, no scene lifecycle. Universal: iPhone and iPad, portrait and landscape.
