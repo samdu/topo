@@ -107,13 +107,16 @@ public struct Turn: Hashable, Sendable, Identifiable {
     }
 
     /// Nil if the record is not a well-formed turn: a sequence below 1 is
-    /// not one. An absent `parents` field reads as no parents, since
+    /// not one, and so is a record whose fields name a different ref from
+    /// its record name, which would otherwise let one record stand in for
+    /// another. An absent `parents` field reads as no parents, since
     /// CloudKit may drop an empty list, and an absent `nonce` reads as
     /// empty, so a record written without one still reads as a turn.
     public init?(record: Record) {
         guard record.type == Turn.recordType,
               let device = record.string("device"),
               let sequence = record.int("sequence"), sequence >= 1,
+              Turn.ref(ofRecordNamed: record.id.name) == TurnRef(device: DeviceID(device), sequence: sequence),
               let roleString = record.string("role"), let role = TurnRole(rawValue: roleString),
               let text = record.string("text"),
               let at = record.date("at") else { return nil }
@@ -337,10 +340,40 @@ public actor TurnWriter {
     public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
                        nonce: String = UUID().uuidString) async throws -> Turn {
         let nonce = nonce.isEmpty ? UUID().uuidString : nonce
+        return try await enqueue {
+            try await self.appendNow(role, text, parents: parents, at: at, nonce: nonce,
+                                     save: { try await self.database.save($0) })
+        }
+    }
+
+    /// Appends a turn in one atomic batch with a heartbeat of `lease`, so the
+    /// turn lands only if this device still holds the lease it last wrote and
+    /// a device displaced while it was working writes nothing. Returns nil,
+    /// with nothing written, when the lease is not held (see
+    /// `PrimaryLease.heartbeat(saving:)`); otherwise as `append(_:_:parents:at:nonce:)`,
+    /// a retried nonce included.
+    public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
+                       nonce: String = UUID().uuidString, renewing lease: PrimaryLease) async throws -> Turn? {
+        let nonce = nonce.isEmpty ? UUID().uuidString : nonce
+        do {
+            return try await enqueue {
+                try await self.appendNow(role, text, parents: parents, at: at, nonce: nonce, save: { records in
+                    guard let saved = try await lease.heartbeat(saving: records) else { throw LeaseNotHeld() }
+                    return saved
+                })
+            }
+        } catch is LeaseNotHeld {
+            return nil
+        }
+    }
+
+    private struct LeaseNotHeld: Error {}
+
+    private func enqueue(_ body: @escaping @Sendable () async throws -> Turn) async throws -> Turn {
         let previous = queue
         let task = Task<Turn, any Error> {
             _ = try? await previous?.value
-            return try await appendNow(role, text, parents: parents, at: at, nonce: nonce)
+            return try await body()
         }
         queue = task
         return try await task.value
@@ -374,11 +407,12 @@ public actor TurnWriter {
         }
     }
 
-    private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
+    private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String,
+                           save: @Sendable ([Record]) async throws -> [Record]) async throws -> Turn {
         for _ in 0..<32 {
             let turn = Turn(ref: nextRef, parents: parents, role: role, text: text, at: at, nonce: nonce)
             do {
-                _ = try await database.save([turn.marker, turn.record])
+                _ = try await save([turn.marker, turn.record])
                 next += 1
                 return turn
             } catch RecordDatabaseError.serverRecordChanged(let id, let server) {

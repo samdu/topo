@@ -154,6 +154,43 @@ import TopoCoreTesting
         #expect(await h.held == nil)
     }
 
+    @Test func aBatchSavedWithAHeartbeatLandsOnlyWhileTheLeaseIsHeld() async throws {
+        let h = lease(hub, probe: .allDead)
+        _ = try await h.acquire()
+        let first = Record(type: "Note", id: RecordID("note/1"))
+        clock.advance(2)
+        let saved = try #require(try await h.heartbeat(saving: [first]))
+        #expect(saved.map(\.id) == [first.id])
+        #expect(await db.current(first.id) != nil)
+        let held = try #require(await h.held)
+        #expect(held.epoch == 1 && held.expiresAt == clock.now + 10)
+
+        clock.advance(1)
+        _ = try await lease(phone, probe: .allDead).acquire()
+        let second = Record(type: "Note", id: RecordID("note/2"))
+        #expect(try await h.heartbeat(saving: [second]) == nil)
+        #expect(await db.current(second.id) == nil)
+        #expect(!(await h.isPrimary()))
+        // Displaced, so it yields to the taker rather than claiming back.
+        guard case .unreachable(let taker) = try await h.acquire() else { Issue.record("should yield"); return }
+        #expect(taker.holder == phone)
+    }
+
+    @Test func aConflictOnTheBatchItselfLeavesTheLeaseHeldAndPropagates() async throws {
+        let h = lease(hub)
+        _ = try await h.acquire()
+        let taken = Record(type: "Note", id: RecordID("note/1"))
+        _ = try await db.save([taken])
+        await #expect(throws: RecordDatabaseError.self) { try await h.heartbeat(saving: [taken]) }
+        #expect(await h.isPrimary())
+    }
+
+    @Test func aBatchNotHeldIsRefusedWithoutAWrite() async throws {
+        let h = lease(hub)
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/1"))]) == nil)
+        #expect(await db.current(RecordID("note/1")) == nil)
+    }
+
     @Test func displacedHolderDefersToALiveOrUnreachableTakerAndRetakesFromADeadOne() async throws {
         let h = lease(hub, probe: .allDead)
         _ = try await h.acquire()

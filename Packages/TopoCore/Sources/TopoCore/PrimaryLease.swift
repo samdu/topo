@@ -248,6 +248,50 @@ public actor PrimaryLease {
         return try await write(holder(epoch: lease.epoch), over: record.changeTag) != nil
     }
 
+    /// Saves `records` and a heartbeat of the held lease in one atomic batch,
+    /// so the records land only if this device still holds the lease at the
+    /// version it last wrote: a turn appended this way is never the work of
+    /// a displaced brain. Returns the saved records, or nil with nothing
+    /// applied when the lease is not held: never granted, lapsed locally, or
+    /// taken by another device (which this device then yields to, as after
+    /// a failed heartbeat). A conflict on any record but the lease propagates
+    /// as the database threw it, again with nothing applied.
+    public func heartbeat(saving records: [Record]) async throws -> [Record]? {
+        for _ in 0..<3 {
+            guard let record = heldRecord, let lease = Lease(record: record) else { return nil }
+            if hasLapsed(lease) {
+                heldRecord = nil
+                return nil
+            }
+            let renewal = holder(epoch: lease.epoch)
+            let deadline = monotonic() + timing.duration
+            do {
+                let saved = try await database.save(records + [renewal.record(changeTag: record.changeTag)])
+                let tag = saved.first(where: { $0.id == Lease.recordID })?.changeTag
+                heldRecord = renewal.record(changeTag: tag)
+                heldUntil = deadline
+                yieldedTo = nil
+                startHeartbeats()
+                return saved.filter { $0.id != Lease.recordID }
+            } catch RecordDatabaseError.serverRecordChanged(let id, let server) where id == Lease.recordID {
+                let winner = Lease(record: server)
+                if let winner, winner.holder == device, winner.epoch == lease.epoch, winner.endpoint == endpoint {
+                    // An overlapping heartbeat of ours got there first: still
+                    // our lease, at the server's version; the batch goes again over it.
+                    heldRecord = server
+                    continue
+                }
+                heldRecord = nil
+                yieldedTo = winner
+                return nil
+            } catch RecordDatabaseError.unknownItem(let id) where id == Lease.recordID {
+                heldRecord = nil
+                return nil
+            }
+        }
+        return nil
+    }
+
     private func holder(epoch: Int64) -> Lease {
         Lease(holder: device, endpoint: endpoint, epoch: epoch, expiresAt: now() + timing.duration)
     }
