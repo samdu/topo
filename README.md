@@ -4,4 +4,4 @@ Topo is one always-on mind per person, with every Apple device you own as a limb
 
 ## Building
 
-`Packages/TopoCore` is the transcript log and the primary lease, a Swift package with no UI. `swift test` in that directory runs its tests against an in-memory database; nothing needs a signed-in device or a CloudKit container.
+`Topo.xcodeproj` holds the client targets (`Topo`, `TopoWatch`, `TopoTV`) and the Mac hub (`TopoHub`); `xcodebuild -scheme Topo -destination 'generic/platform=iOS Simulator' build` is the check. The logic is in packages under `Packages/`, each with `swift test` that needs no signed-in device: `TopoCore` is the transcript log and the primary lease, `TopoAuth` is Sign in with Claude, and `TopoTurn` is the phone harness that runs a turn against the Messages API.

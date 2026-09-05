@@ -8,32 +8,43 @@
 
 /* Begin PBXBuildFile section */
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
+		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		0BB1FC3236EA16193196ED7B /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		1BEC39172B57A4B26C11F530 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176612C66B66529BC2738F9 /* RootView.swift */; };
 		3437864E6AD2F3E01FA3D8B7 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		3BB50E214E3CCDE7B541504F /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
+		3FD6601DD9ABAC3CC53FD7B5 /* TopoTurn in Frameworks */ = {isa = PBXBuildFile; productRef = FE39E35328B7F68962D1C4D7 /* TopoTurn */; };
+		47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		50B378B1C1B86503B32F9583 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		56431FC8A14E610ABACF6520 /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		5848F2221D988D4F93698E6A /* TopoApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4E0F75855123C685AAD8ED1 /* TopoApp.swift */; };
+		5ADB9E3D8ACFC40D15A2B63E /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		5D1CA22207CAE02C962F417D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176612C66B66529BC2738F9 /* RootView.swift */; };
+		5E1111510510B24B236906B5 /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
+		73BD2BFD4C40E7CBC67D0EE3 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		81DC5C89635984031B4B114A /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		843B8C0DD0B51288A54C3D7D /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		885E163C66AC4D7A380BB634 /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		88FF3270F1B6E0F1C3E7E075 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = BE0456F6A513C5827A219BE6 /* TopoAuth */; };
 		94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
+		9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		A3D661B5CE177C2B33F05C6F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D33CC62A8C821EACD662C /* TopoHubApp.swift */; };
+		B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 45B7067577746DC49D3FFD8F /* TopoAuth */; };
 		BD0BB7A7D364CC4E7926AE75 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		C98F73E1BE6A55B941965C68 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176612C66B66529BC2738F9 /* RootView.swift */; };
 		CAC4FF7C1FD4AFE398708CA8 /* TopoWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 681C38D7D6494813315D4051 /* TopoWatchApp.swift */; };
 		CEDE0DECFBB5BCF16F65601D /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		CFF0361D936128D236BEE661 /* TopoTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */; };
 		E72AC5641EFE61743159DCD5 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 5A4E38620A9CC6B4ED612A12 /* TopoAuth */; };
-		F0BA3D90910C9AD803840F86 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 45B7067577746DC49D3FFD8F /* TopoAuth */; };
+		F009A2290679ADEB835A97AE /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
+		F0BA3D90910C9AD803840F86 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 3F87D19718887EBA98EA56FA /* TopoCore */; };
 		F4974068046E34EB0AB10E96 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		FEE6786314BBF06C3CF8A7B8 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 /* End PBXBuildFile section */
@@ -41,17 +52,22 @@
 /* Begin PBXFileReference section */
 		004642A0824EA785157BF757 /* FirstRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunView.swift; sourceTree = "<group>"; };
 		13ECC73FF9E6B054343D56C5 /* TopoWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		18DEE83593874ABE4660BB2D /* Dictation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Dictation.swift; sourceTree = "<group>"; };
 		26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctopusMark.swift; sourceTree = "<group>"; };
 		3C73B06423A3D15D5A7B7093 /* WebAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuth.swift; sourceTree = "<group>"; };
 		5990B1776EC4BC101510B22E /* TopoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoAuth; path = Packages/TopoAuth; sourceTree = SOURCE_ROOT; };
+		5BC384737CD70F66D0AB8921 /* TopoCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoCore; path = Packages/TopoCore; sourceTree = SOURCE_ROOT; };
 		654D33CC62A8C821EACD662C /* TopoHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoHubApp.swift; sourceTree = "<group>"; };
 		681C38D7D6494813315D4051 /* TopoWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWatchApp.swift; sourceTree = "<group>"; };
 		6B5D9DE746B7D268AD71B7A2 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		6C7E1C60D34856E30862D65D /* TopoTurn */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoTurn; path = Packages/TopoTurn; sourceTree = SOURCE_ROOT; };
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		9A03F8DA19F37B857BA8F079 /* Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harness.swift; sourceTree = "<group>"; };
 		A64DF85F65D65AA39B2128BD /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoTVApp.swift; sourceTree = "<group>"; };
 		BE9C965D7E36544A4F9526C9 /* TopoHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E4E0F75855123C685AAD8ED1 /* TopoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoApp.swift; sourceTree = "<group>"; };
+		E8BC4617024AD72D114DF8C7 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F176612C66B66529BC2738F9 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		FF1945CD92E7D90DE491BDDB /* TopoTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TopoTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -85,7 +101,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F0BA3D90910C9AD803840F86 /* TopoAuth in Frameworks */,
+				F0BA3D90910C9AD803840F86 /* TopoCore in Frameworks */,
+				B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */,
+				3FD6601DD9ABAC3CC53FD7B5 /* TopoTurn in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -129,6 +147,8 @@
 			isa = PBXGroup;
 			children = (
 				5990B1776EC4BC101510B22E /* TopoAuth */,
+				5BC384737CD70F66D0AB8921 /* TopoCore */,
+				6C7E1C60D34856E30862D65D /* TopoTurn */,
 			);
 			path = Packages;
 			sourceTree = "<group>";
@@ -136,7 +156,10 @@
 		6976DDF79BD9F5C0FAA9367F /* Client */ = {
 			isa = PBXGroup;
 			children = (
+				E8BC4617024AD72D114DF8C7 /* ChatView.swift */,
+				18DEE83593874ABE4660BB2D /* Dictation.swift */,
 				004642A0824EA785157BF757 /* FirstRunView.swift */,
+				9A03F8DA19F37B857BA8F079 /* Harness.swift */,
 				F176612C66B66529BC2738F9 /* RootView.swift */,
 				A64DF85F65D65AA39B2128BD /* SignInView.swift */,
 			);
@@ -239,7 +262,9 @@
 			);
 			name = Topo;
 			packageProductDependencies = (
+				3F87D19718887EBA98EA56FA /* TopoCore */,
 				45B7067577746DC49D3FFD8F /* TopoAuth */,
+				FE39E35328B7F68962D1C4D7 /* TopoTurn */,
 			);
 			productName = Topo;
 			productReference = 99296C045628A368812315E3 /* Topo.app */;
@@ -298,6 +323,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				44BFC1A6FFE8F646066FC6D3 /* XCLocalSwiftPackageReference "Packages/TopoAuth" */,
+				1E536CC259DF31745E68DDFA /* XCLocalSwiftPackageReference "Packages/TopoCore" */,
+				93D0CD534651E631B1A6A93A /* XCLocalSwiftPackageReference "Packages/TopoTurn" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = EAC6A101F29DFA9ADF0A052D /* Products */;
@@ -317,7 +344,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */,
+				F009A2290679ADEB835A97AE /* Dictation.swift in Sources */,
 				BD0BB7A7D364CC4E7926AE75 /* FirstRunView.swift in Sources */,
+				043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */,
 				56431FC8A14E610ABACF6520 /* OctopusMark.swift in Sources */,
 				C98F73E1BE6A55B941965C68 /* RootView.swift in Sources */,
 				A3D661B5CE177C2B33F05C6F /* SignInView.swift in Sources */,
@@ -342,7 +372,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */,
+				73BD2BFD4C40E7CBC67D0EE3 /* Dictation.swift in Sources */,
 				497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */,
+				5ADB9E3D8ACFC40D15A2B63E /* Harness.swift in Sources */,
 				81DC5C89635984031B4B114A /* OctopusMark.swift in Sources */,
 				5D1CA22207CAE02C962F417D /* RootView.swift in Sources */,
 				843B8C0DD0B51288A54C3D7D /* SignInView.swift in Sources */,
@@ -356,7 +389,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */,
+				957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */,
 				01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */,
+				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
 				885E163C66AC4D7A380BB634 /* OctopusMark.swift in Sources */,
 				1BEC39172B57A4B26C11F530 /* RootView.swift in Sources */,
 				3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */,
@@ -404,6 +440,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Topo turns what you say into text so it can answer you.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -508,6 +545,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
+				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Topo turns what you say into text so it can answer you.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -693,13 +731,25 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
+		1E536CC259DF31745E68DDFA /* XCLocalSwiftPackageReference "Packages/TopoCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TopoCore;
+		};
 		44BFC1A6FFE8F646066FC6D3 /* XCLocalSwiftPackageReference "Packages/TopoAuth" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/TopoAuth;
 		};
+		93D0CD534651E631B1A6A93A /* XCLocalSwiftPackageReference "Packages/TopoTurn" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TopoTurn;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		3F87D19718887EBA98EA56FA /* TopoCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TopoCore;
+		};
 		45B7067577746DC49D3FFD8F /* TopoAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoAuth;
@@ -715,6 +765,10 @@
 		BE0456F6A513C5827A219BE6 /* TopoAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoAuth;
+		};
+		FE39E35328B7F68962D1C4D7 /* TopoTurn */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TopoTurn;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
