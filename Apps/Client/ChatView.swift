@@ -33,6 +33,9 @@ struct ChatView: View {
                 if let error = harness.error {
                     Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
                 }
+                if let info = harness.info {
+                    Text(info).font(.footnote).foregroundStyle(.secondary).padding(.horizontal).padding(.bottom, 8)
+                }
                 if harness.hasWaiting {
                     // The line stopped on a failure; what was said is kept and goes again from here.
                     Button {
@@ -88,6 +91,9 @@ struct ChatView: View {
                     firstRunAnswer = ""
                 }
             }
+            // From here the screen stays current and, as primary, answers what the other devices
+            // write into the log.
+            await harness.answering(every: .seconds(5))
         }
         .onChange(of: dictation.text) { _, text in if !text.isEmpty { draft = text } }
     }
