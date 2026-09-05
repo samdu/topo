@@ -7,6 +7,9 @@ public enum TurnRunnerError: Error {
     /// The lease was lost while the model was answering. The person's turn is in the log, the
     /// reply is not: whoever is primary now answers it.
     case displaced
+    /// The person's turn is in the log and the reply is not; `underlying` says why (an API
+    /// error, or `displaced`). The caller keeps `person` and owes nothing for it.
+    case replyFailed(person: Turn, underlying: any Error)
 }
 
 /// A probe for a device with no socket yet: every holder looks unreachable, so a live holder
@@ -50,19 +53,25 @@ public actor TurnRunner {
         self.api = api
     }
 
-    public func run(_ text: String, model: ClaudeModel) async throws -> Result {
+    /// `nonce` names the append of the person's turn; a caller that keeps it and passes the same
+    /// one again after a failure gets the turn already in the log rather than a second copy.
+    public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString) async throws -> Result {
         let outcome = try await lease.acquire()
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
 
         let before = try await log.read()
-        let person = try await writer.append(.person, text, continuing: before)
-        let history = before.ordered.suffix(historyLimit - 1) + [person]
-        let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
-        // A heartbeat is a compare-and-set on the lease record, so a claim made during the call
-        // is seen now rather than on the next scheduled heartbeat.
-        guard try await lease.heartbeat() else { throw TurnRunnerError.displaced }
-        let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref])
-        return Result(person: person, assistant: assistant, reply: reply)
+        let person = try await writer.append(.person, text, continuing: before, nonce: nonce)
+        do {
+            let history = before.ordered.suffix(historyLimit - 1) + [person]
+            let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
+            // A heartbeat is a compare-and-set on the lease record, so a claim made during the
+            // call is seen now rather than on the next scheduled heartbeat.
+            guard try await lease.heartbeat() else { throw TurnRunnerError.displaced }
+            let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref])
+            return Result(person: person, assistant: assistant, reply: reply)
+        } catch {
+            throw TurnRunnerError.replyFailed(person: person, underlying: error)
+        }
     }
 
     /// Turns as the API takes them: roles alternate, so consecutive turns of one role are joined,

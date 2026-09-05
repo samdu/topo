@@ -45,7 +45,13 @@ import TopoCoreTesting
         let db = InMemoryRecordDatabase()
         let transport = RecordingTransport((500, "{}"), (200, reply("ok now")))
         let (runner, _) = try await makeRunner(database: db, transport: transport)
-        await #expect(throws: MessagesAPIError.http(status: 500, message: nil)) { try await runner.run("first", model: .sonnet5) }
+        do {
+            _ = try await runner.run("first", model: .sonnet5)
+            Issue.record("expected the reply to fail")
+        } catch TurnRunnerError.replyFailed(let person, let underlying) {
+            #expect(person.text == "first")
+            #expect(underlying as? MessagesAPIError == .http(status: 500, message: nil))
+        }
         let after = try await TurnLog(database: db).read()
         #expect(after.ordered.map(\.text) == ["first"])
 
@@ -62,10 +68,27 @@ import TopoCoreTesting
         let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
                                sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         transport.duringRequest = { _ = try? await hub.acquire() }
-        await #expect(throws: TurnRunnerError.self) { try await runner.run("hello", model: .sonnet5) }
+        do {
+            _ = try await runner.run("hello", model: .sonnet5)
+            Issue.record("expected displacement")
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
+        }
         let after = try await TurnLog(database: db).read()
         #expect(after.ordered.map(\.text) == ["hello"])
         #expect(await hub.isPrimary())
+    }
+
+    @Test func theSameNonceAgainFindsTheTurnAlreadyInTheLog() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((500, "{}"), (200, reply("ok")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let nonce = "same-nonce"
+        _ = try? await runner.run("once", model: .sonnet5, nonce: nonce)
+        let again = try await runner.run("once", model: .sonnet5, nonce: nonce)
+        #expect(again.person.nonce == nonce)
+        let transcript = try await TurnLog(database: db).read()
+        #expect(transcript.ordered.map(\.text) == ["once", "ok"])
     }
 
     @Test func historyIsCappedAndRolesAlternate() {

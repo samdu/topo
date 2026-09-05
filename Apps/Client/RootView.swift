@@ -6,12 +6,14 @@ import TopoAuth
 struct RootView: View {
     @Environment(SignIn.self) private var signIn
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
+    /// Set once the first answer is in the log, so the question is not asked twice.
+    @AppStorage("firstRunAnswered") private var answered = false
 
     var body: some View {
         #if os(iOS)
         if signIn.phase != .signedIn {
             SignInView()
-        } else if firstRunAnswer.isEmpty {
+        } else if firstRunAnswer.isEmpty, !answered {
             FirstRunView { _ in }
         } else {
             ChatView()

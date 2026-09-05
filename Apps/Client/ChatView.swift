@@ -9,6 +9,7 @@ struct ChatView: View {
     @Environment(Harness.self) private var harness
     @Environment(SignIn.self) private var signIn
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
+    @AppStorage("firstRunAnswered") private var answered = false
     @State private var draft = ""
     @State private var dictation = Dictation()
 
@@ -40,9 +41,18 @@ struct ChatView: View {
         }
         .task {
             await harness.refresh()
-            // The first-run answer is the first turn, once and only if nothing is in the log yet.
-            if harness.turns.isEmpty, !firstRunAnswer.isEmpty, !harness.busy {
-                await harness.send(firstRunAnswer)
+            // Words on their way when the app last went away go first, under their own nonce.
+            // Otherwise the first-run answer is the first turn, once, only when the log is empty;
+            // it clears once it is in the log so a stale read on a later launch cannot resend it.
+            if let unsent = harness.unsent {
+                await harness.send(unsent)
+            } else if harness.turns.isEmpty, !firstRunAnswer.isEmpty, !harness.busy {
+                let answer = firstRunAnswer
+                await harness.send(answer)
+                if harness.turns.contains(where: { $0.role == .person && $0.text == answer }) {
+                    answered = true
+                    firstRunAnswer = ""
+                }
             }
         }
         .onChange(of: dictation.text) { _, text in if !text.isEmpty { draft = text } }

@@ -25,6 +25,25 @@ final class Harness {
     private var runner: TurnRunner?
     private var inFlight: Task<Void, Never>?
 
+    /// The person's turn that may or may not be in the log yet. Written before the attempt and
+    /// cleared once the turn is known to be there, so a relaunch after a lost acknowledgement
+    /// sends the same words under the same nonce and gets the turn already written.
+    private struct Outgoing: Codable, Equatable {
+        var text: String
+        var nonce: String
+    }
+    private static let outgoingKey = "topo.harness.outgoing"
+    private var outgoing: Outgoing? {
+        get { UserDefaults.standard.data(forKey: Self.outgoingKey).flatMap { try? JSONDecoder().decode(Outgoing.self, from: $0) } }
+        set {
+            if let newValue { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.outgoingKey) }
+            else { UserDefaults.standard.removeObject(forKey: Self.outgoingKey) }
+        }
+    }
+
+    /// Words that were on their way when the app last went away, if any.
+    var unsent: String? { outgoing?.text }
+
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) {
         self.database = database
@@ -55,7 +74,9 @@ final class Harness {
         notice = nil
         error = nil
         busy = false
+        outgoing = nil
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
+        UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
     }
 
     func refresh() async {
@@ -83,37 +104,53 @@ final class Harness {
 
     private func run(_ text: String) async {
         let generation = inFlight
+        // The same words again reuse the nonce of the attempt that may have landed.
+        let attempt = outgoing.flatMap { $0.text == text ? $0 : nil } ?? Outgoing(text: text, nonce: UUID().uuidString)
+        outgoing = attempt
         do {
             if runner == nil {
                 try await ensureZone()
                 runner = try await makeRunner()
             }
             guard let runner else { return }
-            let result = try await runner.run(text, model: model)
+            let result = try await runner.run(text, model: model, nonce: attempt.nonce)
+            if outgoing == attempt { outgoing = nil }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return }
             turns.append(result.person)
             turns.append(result.assistant)
         } catch is CancellationError {
             return
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            // The person's turn is in the log; only the reply is owed.
+            if outgoing == attempt { outgoing = nil }
+            guard inFlight == generation else { return }
+            error = Self.describe(underlying)
+            await refresh()
         } catch TurnRunnerError.notPrimary(let outcome) {
             error = Self.describe(outcome)
-            await refresh()
-        } catch TurnRunnerError.displaced {
-            error = "Another device became primary while Claude was answering; it will answer."
-            await refresh()
-        } catch MessagesAPIError.refused {
-            error = "Claude declined that one."
-            await refresh()
-        } catch MessagesAPIError.http(let status, let message) {
-            error = message ?? "Claude answered \(status)."
             await refresh()
         } catch TokenProviderError.signedOut {
             error = "Signed out. Sign in again to continue."
         } catch {
             guard inFlight == generation else { return }
-            self.error = TranscriptStore.message(for: error)
+            self.error = Self.describe(error)
             await refresh()
+        }
+    }
+
+    static func describe(_ error: any Error) -> String {
+        switch error {
+        case TurnRunnerError.displaced:
+            "Another device became primary while Claude was answering; it will answer."
+        case MessagesAPIError.refused:
+            "Claude declined that one."
+        case MessagesAPIError.http(let status, let message):
+            message ?? "Claude answered \(status)."
+        case TokenProviderError.signedOut:
+            "Signed out. Sign in again to continue."
+        default:
+            TranscriptStore.message(for: error)
         }
     }
 

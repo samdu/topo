@@ -53,10 +53,11 @@ final class Dictation {
         }
     }
 
+    /// Safe to call at any point, including after a start that never got going: the tap comes
+    /// off whether or not the engine ran, so the next start does not install a second one.
     func stop() {
-        guard listening || engine.isRunning else { return }
-        engine.stop()
         engine.inputNode.removeTap(onBus: 0)
+        if engine.isRunning { engine.stop() }
         request?.endAudio()
         task?.cancel()
         task = nil
