@@ -266,14 +266,20 @@ let watch = DeviceID("watch")
 /// Remembers what was asked of the query index.
 actor QueryWatcher: RecordDatabase {
     let inner: InMemoryRecordDatabase
+    /// What was asked of the query index, which needs an index per field.
     private(set) var queries: [RecordQuery] = []
+    /// What was read from the zone's change feed, which needs none.
+    private(set) var feedReads: [String] = []
 
     init(inner: InMemoryRecordDatabase) { self.inner = inner }
 
     func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
 
-    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
+    func records(ofType type: String) async throws -> [Record] {
+        feedReads.append(type)
+        return try await inner.records(ofType: type)
+    }
 
     func query(_ query: RecordQuery) async throws -> [Record] {
         queries.append(query)

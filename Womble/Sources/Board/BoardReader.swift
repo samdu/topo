@@ -11,9 +11,9 @@ protocol BoardSource: AnyObject {
 /// Reads the board: the query, then a probe past the end of every device's
 /// run.
 ///
-/// The query index is eventually consistent, and a tick nobody has caught
-/// up with leaves no gap behind it — a board short by its tail looks
-/// complete, and a done thing stays on the wall. So after the query, every
+/// The zone's change feed is eventually consistent, and a tick nobody has
+/// caught up with leaves no gap behind it — a board short by its tail looks
+/// complete, and a done thing stays on the wall. So after the read, every
 /// known device's next revision is fetched by ID, which is read-your-writes,
 /// and what is there is folded in. A card is small and its newest revision
 /// is the whole answer, so unlike the transcript there is nothing to report:
@@ -38,7 +38,7 @@ final class BoardReader: BoardSource {
         let finish: (Result<Board, TranscriptError>) -> Void = { result in
             DispatchQueue.main.async { completion(result) }
         }
-        store.queryCards { result in
+        store.allCards { result in
             switch result {
             case .failure(let error):
                 finish(.failure(error))

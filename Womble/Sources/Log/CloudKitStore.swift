@@ -45,39 +45,8 @@ final class CloudKitStore: TurnRecordStore {
         }
     }
 
-    /// Every turn there is. It asks for a positive sequence rather than for
-    /// everything, and the difference is not cosmetic: CloudKit answers a
-    /// match-all predicate out of the record name's index, which the
-    /// development schema never marks queryable, so `NSPredicate(value: true)`
-    /// comes back as an error on a real container and the screen says the log
-    /// could not be read. The index behind a field of our own is built when
-    /// the first record carrying it is saved. Sequences start at 1, so this
-    /// asks for the same records by a road that exists.
-    static let everyTurn = NSPredicate(format: "sequence > 0")
-
-    func queryTurns(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
-        var records: [CKRecord] = []
-
-        func run(_ operation: CKQueryOperation) {
-            operation.zoneID = zoneID
-            operation.recordFetchedBlock = { record in
-                self.accumulator.sync { records.append(record) }
-            }
-            operation.queryCompletionBlock = { cursor, error in
-                if let error = error {
-                    completion(.failure(CloudKitStore.mapped(error)))
-                    return
-                }
-                if let cursor = cursor {
-                    run(CKQueryOperation(cursor: cursor))
-                    return
-                }
-                completion(.success(self.accumulator.sync { records }))
-            }
-            database.add(operation)
-        }
-
-        run(CKQueryOperation(query: CKQuery(recordType: Turn.recordType, predicate: CloudKitStore.everyTurn)))
+    func allTurns(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+        ZoneChanges.records(ofType: Turn.recordType, in: database, zoneID: zoneID, completion: completion)
     }
 
     func fetchTurns(named names: [String], _ completion: @escaping (Result<Set<String>, TranscriptError>) -> Void) {

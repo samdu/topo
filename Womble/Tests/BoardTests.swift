@@ -158,7 +158,7 @@ private final class StubCardStore: CardRecordStore {
         self.fetchResult = fetch
     }
 
-    func queryCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+    func allCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
         completion(queryResult)
     }
 
