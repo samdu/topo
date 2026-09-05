@@ -1,5 +1,10 @@
 import CryptoKit
 import Foundation
+import Testing
+
+/// Every suite that talks to `StubURLProtocol` sits under here, so they run one at a time and
+/// never read each other's stubbed reply.
+@Suite(.serialized) enum Stubbed {}
 
 func import_CryptoKit_sha256(_ data: Data) -> Data { Data(SHA256.hash(data: data)) }
 
