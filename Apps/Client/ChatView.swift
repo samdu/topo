@@ -12,25 +12,44 @@ struct ChatView: View {
     @AppStorage("firstRunAnswered") private var answered = false
     @State private var draft = ""
     @State private var dictation = Dictation()
+    @State private var showDiagnostics = false
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
                 TranscriptView(turns: harness.turns, notice: harness.notice)
-                if harness.busy { ProgressView().padding(.bottom, 8) }
+                if harness.busy {
+                    // A turn in flight always says where it is; a spinner alone reads as nothing.
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Text(harness.status ?? "Working…")
+                        if !harness.queued.isEmpty {
+                            Text("· \(harness.queued.count) waiting").foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.footnote)
+                    .padding(.bottom, 8)
+                }
                 if let error = harness.error {
                     Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
                 }
             }
             .safeAreaInset(edge: .bottom) { composer }
             .navigationTitle("Topo")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Text("Topo").font(.headline)
+                        .onLongPressGesture { showDiagnostics = true }
+                        .accessibilityHint("Long press for diagnostics")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         @Bindable var harness = harness
                         Picker("Model", selection: $harness.model) {
                             ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                         }
+                        Button("Diagnostics") { showDiagnostics = true }
                         Divider()
                         Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
                     } label: {
@@ -38,6 +57,7 @@ struct ChatView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
         }
         .task {
             await harness.refresh()
@@ -74,7 +94,7 @@ struct ChatView: View {
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty || harness.busy)
+            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
         }
         .padding()
         .background(.bar)

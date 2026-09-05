@@ -30,6 +30,22 @@ enum TopoCloudKit {
         _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: zoneID)], deleting: [])
     }
 
+    /// The iCloud account as CloudKit sees it, in words, for the diagnostics screen.
+    static func accountStatus() async -> String {
+        do {
+            switch try await CKContainer(identifier: containerIdentifier).accountStatus() {
+            case .available: return "available"
+            case .noAccount: return "no iCloud account on this device"
+            case .restricted: return "restricted"
+            case .couldNotDetermine: return "could not determine"
+            case .temporarilyUnavailable: return "temporarily unavailable"
+            @unknown default: return "unknown"
+            }
+        } catch {
+            return "error: \(error.localizedDescription)"
+        }
+    }
+
     /// True when the error means the log does not exist yet rather than
     /// something being wrong with it: nobody has written a turn, so the zone
     /// the writers create is not there.
