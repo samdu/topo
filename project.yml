@@ -23,6 +23,10 @@ settings:
 packages:
   TopoAuth:
     path: Packages/TopoAuth
+  TopoCore:
+    path: Packages/TopoCore
+  TopoLink:
+    path: Packages/TopoLink
 targets:
   Topo:
     type: application
@@ -65,11 +69,24 @@ targets:
     sources: [Apps/Shared, Apps/TopoHub]
     dependencies:
       - package: TopoAuth
+      - package: TopoCore
+        product: TopoCore
+      - package: TopoCore
+        product: TopoCoreTesting
+      - package: TopoLink
+    entitlements:
+      path: Apps/TopoHub/TopoHub.entitlements
+    info:
+      path: Apps/TopoHub/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: Topo Hub
+        NSBonjourServices: [_topo._tcp]
+        NSLocalNetworkUsageDescription: Topo Hub finds your other devices on this network and answers when they check it is here.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.hub
-        INFOPLIST_KEY_LSUIElement: true
-        INFOPLIST_KEY_CFBundleDisplayName: Topo Hub
+        GENERATE_INFOPLIST_FILE: false
 schemes:
   Topo:
     build:

@@ -22,9 +22,29 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
     private let lock = NSLock()
     private var fetched: [RecordID: CKRecord] = [:]
 
+    /// The container every bundle shares and the zone the records live in.
+    public static let containerIdentifier = "iCloud.zone.hexagon.topo"
+    public static let zoneName = "Topo"
+
     public init(database: CKDatabase, zoneID: CKRecordZone.ID) {
         self.database = database
         self.zoneID = zoneID
+    }
+
+    /// The private database of the shared container, in the shared zone.
+    public convenience init(container: CKContainer = CKContainer(identifier: containerIdentifier)) {
+        self.init(database: container.privateCloudDatabase,
+                  zoneID: CKRecordZone.ID(zoneName: Self.zoneName, ownerName: CKCurrentUserDefaultName))
+    }
+
+    /// Creates the zone if it does not exist. Saving an existing zone is a
+    /// no-op on the server, so this is safe to call at every launch.
+    public func ensureZone() async throws {
+        do {
+            _ = try await database.modifyRecordZones(saving: [CKRecordZone(zoneID: zoneID)], deleting: [])
+        } catch {
+            throw Self.mapped(error, recordIDs: [])
+        }
     }
 
     public func save(_ records: [Record]) async throws -> [Record] {
