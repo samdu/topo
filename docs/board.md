@@ -33,6 +33,12 @@ That is the opposite of what the memory does, and deliberately. A note is a docu
 
 A change made after seeing the fork resolves it, because a write continues from every head the writer saw.
 
+## Reading it
+
+The query index is eventually consistent, and a tick nobody has caught up with leaves no gap behind it: a board short by its tail looks complete, and a done thing stays on the wall. So a read probes past the end of every device's run by ID, which is read-your-writes, and folds in what it finds — unlike the transcript, which reports a gap rather than filling it, because a card is small and its newest revision is the whole answer.
+
+A probe that fails is a read that failed. Presenting a possibly stale board as the current one is exactly the mistake worth avoiding on a wall, and the screen keeps what it last knew rather than clearing.
+
 ## On a screen in a room
 
 Womble shows the board beside the transcript: side by side on a wide screen with the transcript given the greater share, stacked on a tall one with the board above, following the device rather than asking. It shows the cards that are still open — a ticked card is not deleted, but a noticeboard is for what is open.

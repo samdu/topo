@@ -143,3 +143,102 @@ final class HouseLayoutTests: XCTestCase {
         XCTAssertEqual(house.layoutOrder.count, 2)
     }
 }
+
+/// A store with scripted answers, so the reader can be tested with no
+/// account and no network.
+private final class StubCardStore: CardRecordStore {
+    var queryResult: Result<[CKRecord], TranscriptError>
+    var fetchResult: Result<[CKRecord], TranscriptError>
+    /// Records the query pretends not to know about yet, by name.
+    var hidden: [String: CKRecord] = [:]
+    private(set) var fetchedNames: [[String]] = []
+
+    init(query: Result<[CKRecord], TranscriptError>, fetch: Result<[CKRecord], TranscriptError> = .success([])) {
+        self.queryResult = query
+        self.fetchResult = fetch
+    }
+
+    func queryCards(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+        completion(queryResult)
+    }
+
+    func fetchCards(named names: [String], _ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+        fetchedNames.append(names)
+        if case .failure = fetchResult { return completion(fetchResult) }
+        completion(.success(names.compactMap { hidden[$0] }))
+    }
+}
+
+private func cardRecord(_ ref: String, card: String, body: String, state: String = "posted",
+                        parents: [String] = [], owner: String = "phone", at: Date) -> CKRecord {
+    let record = CKRecord(recordType: "Card", recordID: CKRecord.ID(recordName: "card/" + ref))
+    record["card"] = card as NSString
+    record["owner"] = owner as NSString
+    record["body"] = body as NSString
+    record["state"] = state as NSString
+    record["parents"] = parents as NSArray
+    record["at"] = at as NSDate
+    record["sequence"] = (BoardReader.split(ref)?.1 ?? 0) as NSNumber
+    return record
+}
+
+final class BoardReaderTests: XCTestCase {
+    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+
+    private func read(_ store: CardRecordStore) -> Result<Board, TranscriptError> {
+        let reader = BoardReader(store: store)
+        var answer: Result<Board, TranscriptError>?
+        let done = expectation(description: "read")
+        reader.read { result in
+            answer = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 2)
+        return answer!
+    }
+
+    func testATickTheQueryHasNotCaughtUpWithIsStillFound() {
+        // The board as the index knows it: a card, still open.
+        let store = StubCardStore(query: .success([
+            cardRecord("phone/1", card: "phone/1", body: "bins", at: t0),
+        ]))
+        // And the tick, which it has not caught up with.
+        store.hidden["card/phone/2"] = cardRecord("phone/2", card: "phone/1", body: "bins",
+                                                  state: "ticked", parents: ["phone/1"], at: t0 + 60)
+
+        guard case .success(let board) = read(store) else { return XCTFail("not a board") }
+        // Without the probe this card would still be on the wall.
+        XCTAssertTrue(board.open.isEmpty)
+        XCTAssertEqual(board.cards.first?.state, .ticked)
+        XCTAssertEqual(store.fetchedNames.first, ["card/phone/2"])
+    }
+
+    func testAProbeThatFailsIsAReadThatFailed() {
+        let store = StubCardStore(query: .success([
+            cardRecord("phone/1", card: "phone/1", body: "bins", at: t0),
+        ]), fetch: .failure(.unavailable(NSError(domain: "test", code: 1))))
+        guard case .failure = read(store) else {
+            return XCTFail("a stale board is not an answer")
+        }
+    }
+
+    func testAQueryThatFailsIsAReadThatFailed() {
+        let store = StubCardStore(query: .failure(.unavailable(NSError(domain: "test", code: 1))))
+        guard case .failure = read(store) else { return XCTFail("not a failure") }
+    }
+
+    func testAnEmptyBoardIsAnAnswerAndNotAFailure() {
+        guard case .success(let board) = read(StubCardStore(query: .success([]))) else {
+            return XCTFail("not a board")
+        }
+        XCTAssertTrue(board.isEmpty)
+    }
+
+    func testTheProbeStopsWhenThereIsNothingPastTheEnd() {
+        let store = StubCardStore(query: .success([
+            cardRecord("phone/1", card: "phone/1", body: "bins", at: t0),
+        ]))
+        _ = read(store)
+        XCTAssertEqual(store.fetchedNames.count, 1)
+    }
+}

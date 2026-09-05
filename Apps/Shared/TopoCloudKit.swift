@@ -104,8 +104,14 @@ enum TopoBoard {
     /// own. A house where nobody has shared one yet still has a board — it
     /// is simply not shared, which is what one person's first card looks
     /// like before anybody else is invited.
-    static func database() async -> CloudKitRecordDatabase {
-        if let joined = try? await joined() { return joined }
+    ///
+    /// A lookup that fails throws rather than quietly answering with this
+    /// device's own board. Only a lookup that succeeded and found nothing
+    /// means there is nothing to join: treating a network hiccup as that
+    /// would put this device's cards in a zone of its own, and a split
+    /// board looks to everyone like the other people's cards vanishing.
+    static func database() async throws -> CloudKitRecordDatabase {
+        if let joined = try await joined() { return joined }
         return own()
     }
 }

@@ -17,7 +17,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         let window = UIWindow(frame: UIScreen.main.bounds)
         let transcript = TranscriptViewController(source: CloudKitTranscriptSource())
         let house = HouseViewController(transcript: transcript,
-                                        board: BoardViewController(source: CloudKitBoardSource()))
+                                        board: BoardViewController(source: BoardReader()))
         let navigation = UINavigationController(rootViewController: house)
         navigation.navigationBar.tintColor = Palette.accent
         window.rootViewController = navigation
