@@ -27,6 +27,13 @@ public struct NoSocketProbe: LeaseProbe {
 /// turn carries on from them; the reply is appended as a child of the person's turn in one atomic
 /// batch with a heartbeat of the lease, so a device displaced during a long call, or in the moment
 /// between the reply arriving and its write, does not write a second brain's answer.
+///
+/// A reply's nonce is derived from the turns it answers (`replyNonce(for:)`), so the marker the
+/// writer saves with it is the same on every device: a retry after a lost acknowledgement, and a
+/// second primary answering the same words inside the lease's two-brain window, both find the
+/// reply already written rather than writing another. `answerPending` is the log's own path for a
+/// limb's words, with no socket to the primary: the limb appends the person's turn and the
+/// primary finds and answers it here.
 public actor TurnRunner {
     public struct Result: Sendable {
         public var person: Turn
@@ -77,13 +84,12 @@ public actor TurnRunner {
         let at = Date()
         let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
         await progress?(.asking(person: person))
+        let replyNonce = Self.replyNonce(for: [person.ref])
         if person.at != at {
             // A retry: the person's turn was written by an earlier attempt. If that attempt also
             // got its reply into the log before it was cut off, that is the reply.
-            let now = try await log.read()
-            if let answered = now.ordered.first(where: { $0.role == .assistant && $0.parents.contains(person.ref) }) {
-                return Result(person: person, assistant: answered,
-                              reply: Reply(text: answered.text, model: model.rawValue, stopReason: nil, inputTokens: 0, outputTokens: 0))
+            if let answered = try await log.turn(appendedUnder: replyNonce) {
+                return Result(person: person, assistant: answered, reply: Reply(recovered: answered, model: model))
             }
         }
         do {
@@ -93,13 +99,45 @@ public actor TurnRunner {
             await progress?(.savingReply)
             // The reply and a heartbeat of the lease are one atomic batch: a claim made during
             // the call, or between the call and this write, refuses the batch and nothing lands.
-            guard let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref], renewing: lease) else {
+            guard let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref],
+                                                          nonce: replyNonce, renewing: lease) else {
                 throw TurnRunnerError.displaced
             }
             return Result(person: person, assistant: assistant, reply: reply)
         } catch {
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
         }
+    }
+
+    /// Answers the log as it stands, if its newest turns include a person's turn with no reply:
+    /// one reply continuing every head, so a fork is joined rather than answered twice. Nothing
+    /// waiting, or a read with turns still missing, returns nil without touching the lease; the
+    /// caller reads again later. Otherwise this device takes the lease, and runs only as primary.
+    public func answerPending(model: ClaudeModel) async throws -> Turn? {
+        let transcript = try await log.read()
+        guard transcript.isComplete, Self.awaitsReply(transcript) else { return nil }
+        let outcome = try await lease.acquire()
+        guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+        let nonce = Self.replyNonce(for: transcript.heads)
+        if let answered = try await log.turn(appendedUnder: nonce) { return answered }
+        let reply = try await api.complete(Self.messages(from: transcript.ordered.suffix(historyLimit)),
+                                           model: model, system: Self.systemPrompt)
+        guard let assistant = try await writer.append(.assistant, reply.text, continuing: transcript,
+                                                      nonce: nonce, renewing: lease) else {
+            throw TurnRunnerError.displaced
+        }
+        return assistant
+    }
+
+    /// True when a head of the transcript is the person's: words nobody has answered.
+    static func awaitsReply(_ transcript: Transcript) -> Bool {
+        transcript.heads.contains { transcript[$0]?.role == .person }
+    }
+
+    /// The nonce of the reply to these turns, the same on every device: `answer/` and the refs
+    /// in sorted order joined by `+`.
+    static func replyNonce(for heads: [TurnRef]) -> String {
+        "answer/" + heads.sorted().map(\.description).joined(separator: "+")
     }
 
     /// Turns as the API takes them: roles alternate, so consecutive turns of one role are joined,
