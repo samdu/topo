@@ -4,10 +4,10 @@ One always-on mind per person, every Apple device a limb. The design is `docs/de
 
 ## Stack
 
-- Swift and SwiftUI. One Xcode project with three targets:
+- Swift and SwiftUI, except in Womble, which is as old as its devices. Three bundles:
   - **client**: iOS, iPadOS, watchOS, tvOS. One codebase; role (primary, viewer, limb) is decided at first launch from the CloudKit records.
   - **hub**: macOS menu-bar app bundling the Claude CLI and the channel servers. The only target that runs resident code.
-  - **Womble**: the viewer-only bundle for old devices, built on old APIs so it can target back to iOS 12/13. Same CloudKit records and pairing; no mic, no models, no sign-in.
+  - **Womble**: the viewer-only bundle for old devices, in its own project (`Womble/`, generated with XcodeGen) because it targets iOS 12 — UIKit, completion handlers, no concurrency and no scenes. It reads the same CloudKit records without depending on TopoCore, whose minimum is iOS 17; no mic, no models, no sign-in.
 - **CloudKit is truth, sockets are speed.** State (transcript log, pairing record, primary lease) lives in the private CloudKit database; direct sockets and the punched tunnel only make live turns fast. With no socket the app still works off the records, just slower.
 - The transcript is an append-only log: one record per turn, per-device sequence numbers, never overwrite. The primary lease is the one mutable record: atomic claim, 10s expiry, 5s heartbeat, probe-driven handover.
 - Core logic ships as Swift packages with tests that run against a mock `CKDatabase`; no test needs a signed-in device.

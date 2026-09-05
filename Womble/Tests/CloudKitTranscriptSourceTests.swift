@@ -1,0 +1,59 @@
+import CloudKit
+import XCTest
+
+
+final class CloudKitReadTests: XCTestCase {
+    private func record(_ name: String, _ fields: [String: CKRecordValue]) -> CKRecord {
+        let record = CKRecord(recordType: Turn.recordType, recordID: CKRecord.ID(recordName: name))
+        for (key, value) in fields { record[key] = value }
+        return record
+    }
+
+    private var wellFormed: [String: CKRecordValue] {
+        return [
+            "device": "phone" as NSString,
+            "sequence": NSNumber(value: 1),
+            "role": "assistant" as NSString,
+            "text": "hello" as NSString,
+            "at": Date(timeIntervalSince1970: 100) as NSDate,
+            "nonce": "n1" as NSString,
+        ]
+    }
+
+    func testReadsRecords() {
+        let transcript = CloudKitTranscriptSource.transcript(from: [record("turn/phone/1", wellFormed)])
+        XCTAssertEqual(transcript.ordered.count, 1)
+        XCTAssertEqual(transcript.ordered.first?.role, .assistant)
+        XCTAssertTrue(transcript.isComplete)
+    }
+
+    func testARecordNamedAsATurnThatDoesNotParseIsMissing() {
+        // Something is at that ref and it is not readable as the turn it
+        // claims to be, so the read is incomplete rather than quietly short.
+        var fields = wellFormed
+        fields.removeValue(forKey: "text")
+        let transcript = CloudKitTranscriptSource.transcript(from: [record("turn/phone/1", fields)])
+        XCTAssertEqual(transcript.missing, [TurnRef(device: DeviceID("phone"), sequence: 1)])
+        XCTAssertFalse(transcript.isComplete)
+    }
+
+    func testARecordWithNoRefIsUnreadable() {
+        let transcript = CloudKitTranscriptSource.transcript(from: [record("something-else", wellFormed)])
+        XCTAssertEqual(transcript.unreadable, ["something-else"])
+        XCTAssertFalse(transcript.isComplete)
+    }
+
+    func testErrorMapping() {
+        func mapped(_ code: CKError.Code) -> TranscriptError {
+            return CloudKitTranscriptSource.mapped(CKError(code))
+        }
+        if case .noAccount = mapped(.notAuthenticated) {} else { XCTFail("not signed in is an account problem") }
+        if case .noLog = mapped(.zoneNotFound) {} else { XCTFail("no zone means nothing has been written") }
+        if case .rejected = mapped(.permissionFailure) {} else { XCTFail("permission failure will not clear") }
+        if case .unavailable = mapped(.networkUnavailable) {} else { XCTFail("no network is a retry") }
+        if case .unavailable = mapped(.serviceUnavailable) {} else { XCTFail("a busy server is a retry") }
+        if case .unavailable = CloudKitTranscriptSource.mapped(NSError(domain: "test", code: 1)) {} else {
+            XCTFail("a non-CloudKit error is a retry")
+        }
+    }
+}
