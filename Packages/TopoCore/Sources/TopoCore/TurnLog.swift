@@ -358,10 +358,13 @@ public actor TurnWriter {
     }
 
     private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
-        if let tried = unacknowledged.removeValue(forKey: nonce) {
+        if let tried = unacknowledged[nonce] {
+            // The entry stays until the fetch answers; a fetch that fails
+            // leaves the question open for the next retry.
             let ref = TurnRef(device: device, sequence: tried)
-            if let record = try await database.fetch(Turn.recordID(for: ref)),
-               let existing = Turn(record: record), existing.nonce == nonce {
+            let record = try await database.fetch(Turn.recordID(for: ref))
+            unacknowledged.removeValue(forKey: nonce)
+            if let record, let existing = Turn(record: record), existing.nonce == nonce {
                 next = max(next, tried + 1)
                 return existing
             }

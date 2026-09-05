@@ -195,6 +195,31 @@ final class DropOnceDatabase: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
+/// A database whose link drops on request: the next save commits but
+/// reports a transport failure, or the next fetch fails outright.
+final class LossyLinkDatabase: RecordDatabase, @unchecked Sendable {
+    let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var dropSaveAck = false
+    private var dropFetch = false
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    func commitButDropNextSaveAck() { lock.withLock { dropSaveAck = true } }
+    func dropNextFetch() { lock.withLock { dropFetch = true } }
+    private struct Dropped: Error {}
+    func save(_ records: [Record]) async throws -> [Record] {
+        let out = try await inner.save(records)
+        let drop = lock.withLock { () -> Bool in defer { dropSaveAck = false }; return dropSaveAck }
+        if drop { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
+        return out
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        let drop = lock.withLock { () -> Bool in defer { dropFetch = false }; return dropFetch }
+        if drop { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
+        return try await inner.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+}
+
 /// Deterministic pseudo-random numbers for model checks.
 struct LCG {
     var s: UInt64

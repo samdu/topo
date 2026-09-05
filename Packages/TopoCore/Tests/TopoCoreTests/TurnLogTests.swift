@@ -323,6 +323,28 @@ import TopoCoreTesting
         #expect(await w.nextRef.sequence == 3)
     }
 
+    @Test func aRecoveryFetchThatFailsLeavesTheQuestionOpenForTheNextRetry() async throws {
+        let inner = InMemoryRecordDatabase()
+        let link = LossyLinkDatabase(inner: inner)
+        let log = TurnLog(database: link)
+        let w = try await log.writer(for: phone)
+        let nonce = UUID().uuidString
+        link.commitButDropNextSaveAck()
+        await #expect(throws: RecordDatabaseError.self) {
+            _ = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        }
+        link.dropNextFetch()
+        await #expect(throws: RecordDatabaseError.self) {
+            _ = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        }
+        let b = try await w.append(.person, "meanwhile", parents: [], at: tA + 1)
+        #expect(b.ref.sequence == 2)
+        let retried = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        #expect(retried.ref.sequence == 1)
+        #expect(try await log.read(device: phone, after: 0).map(\.text) == ["hello", "meanwhile"])
+        #expect(await inner.writes.count == 2)
+    }
+
     @Test func aFailedAppendThatDidNotCommitIsWrittenOnRetry() async throws {
         let inner = InMemoryRecordDatabase()
         let log = TurnLog(database: DropOnceDatabase(inner: inner))
