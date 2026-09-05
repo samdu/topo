@@ -73,6 +73,27 @@ import TopoCoreTesting
         #expect(vault.ordered.count == 2)
     }
 
+    @Test func aConflictCopyNeverTakesTheNameOfARealFile() async throws {
+        let one = try await store.writer(for: phone)
+        let other = try await store.writer(for: hub)
+        let empty = try await store.read()
+        try await one.write("from the phone", to: note, continuing: empty, at: t0)
+        try await other.write("from the hub", to: note, continuing: empty, at: t0 + 10)
+
+        // Both names the copy would reach for are files the person has.
+        let taken = VaultPath("Meeting notes (Conflicted copy phone 197001121346).md")!
+        let alsoTaken = VaultPath("Meeting notes (Conflicted copy phone 197001121346 1).md")!
+        try await other.write("a file of mine", to: taken, continuing: store.read(), at: t0 + 20)
+        try await other.write("another of mine", to: alsoTaken, continuing: store.read(), at: t0 + 21)
+
+        let vault = try await store.read()
+        #expect(vault.text(at: taken) == "a file of mine")
+        #expect(vault.text(at: alsoTaken) == "another of mine")
+        let copy = try #require(VaultPath("Meeting notes (Conflicted copy phone 197001121346 1 2).md"))
+        #expect(vault.files[copy]?.text == "from the phone")
+        #expect(vault.files[copy]?.isConflictCopy == true)
+    }
+
     @Test func aWriteThatSawTheForkResolvesIt() async throws {
         let one = try await store.writer(for: phone)
         let other = try await store.writer(for: hub)

@@ -297,16 +297,26 @@ public struct Vault: Sendable {
     /// `Meeting notes (Conflicted copy hub 202609051930).md`, beside the
     /// file it is a copy of: what Obsidian Sync names one, so a vault full
     /// of them reads the way its own do. The stamp is UTC, since every
-    /// device derives this name and they agree on no other clock; the
-    /// revision's own sequence number is added where a name is somehow
-    /// taken already, and cannot itself be taken.
+    /// device derives this name and they agree on no other clock.
+    ///
+    /// A name already in use is somebody's file, and a copy never takes a
+    /// name off a file that is really there, so it keeps looking: the
+    /// revision's own sequence number first, since that is stable for as
+    /// long as the revision exists, and then a count. Every device reads
+    /// the same records in the same order and lands on the same name.
     private static func conflictCopyPath(of origin: VaultPath, for note: Note,
                                          avoiding taken: some Collection<VaultPath>) -> VaultPath {
         let (stem, ext) = origin.stemAndExtension
-        let name = "\(stem) (Conflicted copy \(note.ref.device.rawValue) \(stamp(note.at)))"
-        let candidate = origin.sibling(named: name + ext)
+        let name = "\(stem) (Conflicted copy \(note.ref.device.rawValue) \(stamp(note.at))"
+        var candidate = origin.sibling(named: name + ")" + ext)
         guard taken.contains(candidate) else { return candidate }
-        return origin.sibling(named: "\(name) \(note.ref.sequence)\(ext)")
+        candidate = origin.sibling(named: "\(name) \(note.ref.sequence))\(ext)")
+        var count = 2
+        while taken.contains(candidate) {
+            candidate = origin.sibling(named: "\(name) \(note.ref.sequence) \(count))\(ext)")
+            count += 1
+        }
+        return candidate
     }
 
     private static func stamp(_ date: Date) -> String {

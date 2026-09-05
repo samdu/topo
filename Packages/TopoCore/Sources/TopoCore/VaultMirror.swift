@@ -117,7 +117,10 @@ public actor VaultMirror {
             guard previous.files[path] != digest(text) else { continue }  // this mirror wrote it
             let file = vault.files[path]
             if file?.text == text { continue }                            // the store already says this
-            if let file, file.isConflictCopy {
+            // Only a copy this folder was actually given is an answer to a
+            // fork; a file the person made that happens to sit where one
+            // would go is a file, and becomes a revision of its own.
+            if let file, file.isConflictCopy, previous.files[path] != nil {
                 propose(file.origin, .editedCopy(text))
             } else {
                 propose(path, .edited(text))
@@ -160,11 +163,21 @@ public actor VaultMirror {
         var state = State()
         for path in vault.knownPaths { state.heads[path] = vault.heads(of: path) }
         for file in vault.ordered {
-            state.files[file.path] = digest(file.text)
-            guard onDisk[file.path] != file.text else { continue }
+            if onDisk[file.path] == file.text {
+                state.files[file.path] = digest(file.text)
+                continue
+            }
             let url = url(of: file.path)
+            // A link where a file should be is somebody else's business,
+            // and writing to it writes wherever it points. Leave it, and
+            // leave the path out of the state so the next sync tries again.
+            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+                report.skipped.append(file.path.string)
+                continue
+            }
             try disk.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try Data(file.text.utf8).write(to: url, options: .atomic)
+            state.files[file.path] = digest(file.text)
             report.written.append(file.path)
         }
         for (path, _) in onDisk where vault.files[path] == nil {
@@ -174,6 +187,8 @@ public actor VaultMirror {
 
         synced = state
         try save(state)
+        // A link both scanned and written to is one thing in the way.
+        report.skipped = Array(Set(report.skipped)).sorted()
         report.written.sort()
         report.removed.sort()
         report.pushed.sort()
@@ -203,19 +218,37 @@ public actor VaultMirror {
     /// Every readable file in the directory, by vault path. A file whose
     /// path a vault cannot hold, or whose bytes are not text, is reported
     /// as skipped and otherwise untouched.
+    ///
+    /// So is a symbolic link, and that one is not a nicety: a link inside
+    /// the vault can point anywhere the app can read, and following one
+    /// would copy a file the person never put in their memory into
+    /// CloudKit. Only what is really in this folder is the vault's, which
+    /// is checked twice — the link itself is refused, and every file's
+    /// resolved path has to still be under the vault root.
     private func scan() throws -> (files: [VaultPath: String], skipped: [String]) {
         var found: [VaultPath: String] = [:]
         var skipped: [String] = []
         let root = directory.standardizedFileURL.path
-        guard let walk = disk.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey],
+        let realRoot = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        guard let walk = disk.enumerator(at: directory,
+                                         includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
                                          options: [.skipsHiddenFiles]) else {
             return (found, skipped)
         }
         for case let url as URL in walk {
-            guard try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true else { continue }
             let full = url.standardizedFileURL.path
             guard full.hasPrefix(root + "/") else { continue }
             let relative = String(full.dropFirst(root.count + 1))
+            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
+            if values.isSymbolicLink == true {
+                skipped.append(relative)
+                continue
+            }
+            guard values.isRegularFile == true else { continue }
+            guard url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(realRoot + "/") else {
+                skipped.append(relative)
+                continue
+            }
             guard let path = VaultPath(relative) else {
                 skipped.append(relative)
                 continue
@@ -226,6 +259,7 @@ public actor VaultMirror {
             }
             found[path] = text
         }
+        skipped.sort()
         return (found, skipped)
     }
 

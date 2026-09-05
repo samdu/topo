@@ -104,6 +104,71 @@ import TopoCoreTesting
         }
     }
 
+    @Test func aLinkOutOfTheVaultIsNeverRead() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                let secret = elsewhere.appendingPathComponent("secrets.txt")
+                try Data("nobody put this in the vault".utf8).write(to: secret)
+                try FileManager.default.createSymbolicLink(
+                    at: directory.appendingPathComponent("secrets.md"), withDestinationURL: secret)
+                try write("mine", to: "Meeting notes.md", in: directory)
+
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let report = try await mirror.sync(at: t0)
+                #expect(report.skipped == ["secrets.md"])
+                #expect(report.pushed == [note])
+                let vault = try await store.read()
+                #expect(vault.ordered.map(\.path) == [note])
+                #expect(vault.text(at: VaultPath("secrets.md")!) == nil)
+                // The link is left exactly where it was.
+                #expect(read("secrets.txt", in: elsewhere) == "nobody put this in the vault")
+            }
+        }
+    }
+
+    @Test func aLinkWhereAFileShouldGoIsNotWrittenThrough() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                let target = elsewhere.appendingPathComponent("theirs.txt")
+                try Data("not ours to write".utf8).write(to: target)
+                try FileManager.default.createSymbolicLink(
+                    at: directory.appendingPathComponent("Meeting notes.md"), withDestinationURL: target)
+
+                let w = try await store.writer(for: hub)
+                try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let report = try await mirror.sync(at: t0 + 1)
+                #expect(report.written.isEmpty)
+                #expect(report.skipped == ["Meeting notes.md"])
+                #expect(read("theirs.txt", in: elsewhere) == "not ours to write")
+            }
+        }
+    }
+
+    @Test func aFileWhereACopyWouldGoIsAFileOfItsOwn() async throws {
+        try await inTemporaryDirectory { directory in
+            let one = try await store.writer(for: phone)
+            let other = try await store.writer(for: hub)
+            let empty = try await store.read()
+            try await one.write("from the phone", to: note, continuing: empty, at: t0)
+            try await other.write("from the hub", to: note, continuing: empty, at: t0 + 10)
+
+            // Made by the person, at the name a copy of this fork wants,
+            // before any sync has put a copy there.
+            let name = "Meeting notes (Conflicted copy phone 197001121346).md"
+            try write("nothing to do with the fork", to: name, in: directory)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 20)
+            let vault = try await store.read()
+            #expect(vault.isForked(note))
+            #expect(vault.text(at: VaultPath(name)!) == "nothing to do with the fork")
+            #expect(read(name, in: directory) == "nothing to do with the fork")
+            // The copy went somewhere else rather than over it.
+            #expect(read("Meeting notes (Conflicted copy phone 197001121346 1).md", in: directory) == "from the phone")
+        }
+    }
+
     @Test func aConflictAppearsInTheFolderAsACopyBesideTheFile() async throws {
         try await inTemporaryDirectory { directory in
             let one = try await store.writer(for: phone)
