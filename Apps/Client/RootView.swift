@@ -16,6 +16,10 @@ struct RootView: View {
         } else {
             TranscriptPlaceholder()
         }
+        #elseif os(watchOS)
+        WatchRootView()
+        #elseif os(tvOS)
+        TVRootView()
         #else
         ViewerPlaceholder()
         #endif

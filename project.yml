@@ -23,6 +23,8 @@ settings:
 packages:
   TopoAuth:
     path: Packages/TopoAuth
+  TopoCore:
+    path: Packages/TopoCore
 targets:
   Topo:
     type: application
@@ -31,9 +33,11 @@ targets:
     sources: [Apps/Shared, Apps/Client, Apps/Topo]
     dependencies:
       - package: TopoAuth
+      - package: TopoCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Topo listens when you press the microphone, so it can hear what you forgot.
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
@@ -44,9 +48,11 @@ targets:
     sources: [Apps/Shared, Apps/Client, Apps/TopoWatch]
     dependencies:
       - package: TopoAuth
+      - package: TopoCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch
+        CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_WKWatchOnly: true
         INFOPLIST_KEY_WKApplication: true
   TopoTV:
@@ -55,10 +61,28 @@ targets:
     sources: [Apps/Shared, Apps/Client, Apps/TopoTV]
     dependencies:
       - package: TopoAuth
+      - package: TopoCore
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tv
+        CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_UILaunchScreen_Generation: true
+  # The app targets' own logic — the transcript store, the identity, the
+  # views' data — tested against TopoCoreTesting's in-memory database, so no
+  # test needs an account. Hosted by the iOS app; the watch and TV builds
+  # share every file it covers.
+  TopoTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [Tests/Client]
+    dependencies:
+      - target: Topo
+      - package: TopoCore
+        product: TopoCoreTesting
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tests
+
   TopoHub:
     type: application
     platform: macOS
@@ -73,8 +97,11 @@ targets:
 schemes:
   Topo:
     build:
-      targets: { Topo: all }
+      targets: { Topo: all, TopoTests: [test] }
     run: { config: Debug }
+    test:
+      config: Debug
+      targets: [TopoTests]
   TopoWatch:
     build:
       targets: { TopoWatch: all }
