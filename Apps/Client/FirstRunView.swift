@@ -5,9 +5,10 @@ import AVFAudio
 #endif
 
 /// The first ten minutes: one question, with the microphone the only permission asked, at the
-/// first press. Buddy's answer to what was forgotten is the next PR; this screen takes the answer.
+/// first press. The answer is kept in `firstRunAnswer` until the turn log takes it as the first
+/// turn; nothing said here is dropped.
 struct FirstRunView: View {
-    @AppStorage("firstRunAnswered") private var answered = false
+    @AppStorage("firstRunAnswer") private var storedAnswer = ""
     @State private var answer = ""
     @State private var micDenied = false
     @State private var listening = false
@@ -54,7 +55,7 @@ struct FirstRunView: View {
     private func submit() {
         let text = answer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        answered = true
+        storedAnswer = text
         onDone(text)
     }
 

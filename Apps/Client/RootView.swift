@@ -5,13 +5,13 @@ import TopoAuth
 /// lands the phone is primary and the watch and TV are viewers waiting to pair.
 struct RootView: View {
     @Environment(SignIn.self) private var signIn
-    @AppStorage("firstRunAnswered") private var answered = false
+    @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
 
     var body: some View {
         #if os(iOS)
         if signIn.phase != .signedIn {
             SignInView()
-        } else if !answered {
+        } else if firstRunAnswer.isEmpty {
             FirstRunView { _ in }
         } else {
             TranscriptPlaceholder()
@@ -22,12 +22,17 @@ struct RootView: View {
     }
 }
 
+/// Until the turn log is wired, the transcript is the one answer given so far.
 struct TranscriptPlaceholder: View {
     @Environment(SignIn.self) private var signIn
+    @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     var body: some View {
         VStack(spacing: 16) {
             OctopusMark().frame(width: 64, height: 64)
             Text("Signed in with Claude").font(.headline)
+            Text(firstRunAnswer)
+                .padding()
+                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.teal.opacity(0.12)))
             Button("Sign out") { signIn.signOut() }.font(.footnote)
         }
         .padding()
