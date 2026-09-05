@@ -36,14 +36,20 @@ body {
   line-height: 1.45;
   /* A TV overscans; a phone has a notch. */
   padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  /* The screen, and a line under it that has to be readable when there is
+     nothing else: a page that has been told it is no longer registered
+     shows only that line. */
+  display: grid;
+  grid-template-rows: 1fr auto;
+  height: 100vh;
+  height: 100dvh;
 }
 
 main {
   display: grid;
   gap: 1px;
   background: var(--rule);
-  height: 100vh;
-  height: 100dvh;
+  min-height: 0;
   /* Tall screen: the board above, at eye height in a room. */
   grid-template-rows: 34fr 66fr;
 }

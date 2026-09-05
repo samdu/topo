@@ -79,7 +79,7 @@ A token in a path is in the browser's history and in any proxy's logs, so the hu
 | `version` | `1`. A page that does not know the version says so rather than guessing |
 | `house` | What to call the household, or absent |
 | `transcript.turns` | Oldest first, as the log orders them: `ref`, `role` (`person` or `assistant`), `text`, `at` in RFC 3339 |
-| `transcript.complete` | False when the read could not be finished; the page shows what there is and says so |
+| `transcript.complete` | False when the read could not be finished. The page says so above the turns whether or not a `notice` came with it: a partial conversation shown as the whole one is the transcript's one unforgivable failure |
 | `transcript.notice` | A line to show above the turns, or null: what the app puts in its banner |
 | `board.cards` | Newest posting first: `id`, `owner`, `body`, `state` (`posted`, `ticked`, `dismissed`), `postedAt`, `at` |
 
@@ -91,7 +91,9 @@ The hub decides what a page may see, and the token is how it knows which page is
 
 Every five seconds, with `If-None-Match` when the hub gave an `ETag`, and again when a hidden tab comes back. A wall screen wants to be current more than it wants to be quick, and a `304` costs the hub nothing.
 
-Anything but a `200` or a `304` leaves what is on screen where it is and says the hub is not answering. A `404` is the one worth reading twice: a screen whose registration was revoked shows what it last had and stops being told anything new, which is the right shape for taking a screen out of the house. A screen that clears itself because the network hiccuped is worse than one showing what it last knew — the same rule as the app.
+A transient failure — no answer, a `500` — leaves what is on screen where it is and says the hub is not answering, because a screen that clears itself over a hiccup is worse than one showing what it last knew.
+
+A `401`, `403` or `404` is not that. It means this screen is not registered, and the page clears the board, the transcript and its cached state at once: revoking a screen has to stop it showing what it was showing, and a screen that has left the house may be in somebody else's hands. It keeps asking, so a hub that has only just started up, or a screen registered again, comes back on its own. A screen that clears itself because the network hiccuped is worse than one showing what it last knew — the same rule as the app.
 
 ### Writing
 

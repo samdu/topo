@@ -98,9 +98,14 @@
     transcriptEmpty.hidden = turns.length > 0;
 
     // Anything the read could not account for is said rather than hidden,
-    // the way the app says it.
-    var notice = transcript && transcript.notice;
-    text(noticeEl, notice || '');
+    // the way the app says it. A read the hub could not finish says so even
+    // when it sent no words for it: a partial conversation shown as the
+    // whole one is the transcript's one unforgivable failure.
+    var notice = (transcript && transcript.notice) || '';
+    if (transcript && transcript.complete === false && !notice) {
+      notice = 'Some of this could not be read. This is not the whole conversation.';
+    }
+    text(noticeEl, notice);
     noticeEl.hidden = !notice;
 
     // The newest turn is the one worth seeing.
@@ -130,6 +135,25 @@
     }
   }
 
+  // Taken off the roster, or never on it. Not a hiccup to ride out: the
+  // whole point of revoking a screen is that it stops showing what it was
+  // showing, and a screen that has left the house may be in somebody
+  // else's hands. Everything goes, at once.
+  function revoked() {
+    shown = null;
+    lastEtag = null;
+    while (cardsEl.firstChild) { cardsEl.removeChild(cardsEl.firstChild); }
+    while (turnsEl.firstChild) { turnsEl.removeChild(turnsEl.firstChild); }
+    boardEmpty.hidden = true;
+    transcriptEmpty.hidden = true;
+    noticeEl.hidden = true;
+    text(noticeEl, '');
+    screenEl.setAttribute('data-state', 'revoked');
+    // Kept asking, so a hub that has only just started up, or a screen
+    // registered again, comes back on its own.
+    text(statusEl, 'This screen is not registered with the house.');
+  }
+
   function poll() {
     var request = new XMLHttpRequest();
     request.open('GET', source + (source.indexOf('?') === -1 ? '?' : '&') + 't=' + Date.now(), true);
@@ -137,6 +161,10 @@
     request.onreadystatechange = function () {
       if (request.readyState !== 4) { return; }
       if (request.status === 304) { text(statusEl, ''); return; }
+      if (request.status === 401 || request.status === 403 || request.status === 404) {
+        revoked();
+        return;
+      }
       if (request.status < 200 || request.status >= 300) {
         failed('The hub answered ' + request.status + '.');
         return;
