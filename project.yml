@@ -1,0 +1,86 @@
+# Topo.xcodeproj is generated from this file: `xcodegen generate` after editing, commit both.
+name: Topo
+options:
+  bundleIdPrefix: zone.hexagon.topo
+  deploymentTarget:
+    iOS: "17.0"
+    watchOS: "10.0"
+    tvOS: "17.0"
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    CODE_SIGN_STYLE: Automatic
+    CURRENT_PROJECT_VERSION: 1
+    MARKETING_VERSION: 0.1
+    GENERATE_INFOPLIST_FILE: true
+    INFOPLIST_KEY_CFBundleDisplayName: Topo
+    ENABLE_USER_SCRIPT_SANDBOXING: true
+packages:
+  TopoAuth:
+    path: Packages/TopoAuth
+targets:
+  Topo:
+    type: application
+    platform: iOS
+    supportedDestinations: [iOS, iPadOS]
+    sources: [Apps/Shared, Apps/Client, Apps/Topo]
+    dependencies:
+      - package: TopoAuth
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Topo listens when you press the microphone, so it can hear what you forgot.
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+  TopoWatch:
+    type: application
+    platform: watchOS
+    sources: [Apps/Shared, Apps/Client, Apps/TopoWatch]
+    dependencies:
+      - package: TopoAuth
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch
+        INFOPLIST_KEY_WKWatchOnly: true
+        INFOPLIST_KEY_WKApplication: true
+  TopoTV:
+    type: application
+    platform: tvOS
+    sources: [Apps/Shared, Apps/Client, Apps/TopoTV]
+    dependencies:
+      - package: TopoAuth
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tv
+        INFOPLIST_KEY_UILaunchScreen_Generation: true
+  TopoHub:
+    type: application
+    platform: macOS
+    sources: [Apps/Shared, Apps/TopoHub]
+    dependencies:
+      - package: TopoAuth
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.hub
+        INFOPLIST_KEY_LSUIElement: true
+        INFOPLIST_KEY_CFBundleDisplayName: Topo Hub
+schemes:
+  Topo:
+    build:
+      targets: { Topo: all }
+    run: { config: Debug }
+  TopoWatch:
+    build:
+      targets: { TopoWatch: all }
+  TopoTV:
+    build:
+      targets: { TopoTV: all }
+  TopoHub:
+    build:
+      targets: { TopoHub: all }
