@@ -215,6 +215,41 @@ import TopoCoreTesting
         #expect(caughtUp.heads == [newest.ref])
     }
 
+    @Test func aRestartedWriterOnAFullyStaleIndexFindsItsOwnTurnsAndRefusesToFork() async throws {
+        let fresh = TurnLog(database: db)
+        let p = try await fresh.writer(for: phone)
+        let h = try await fresh.writer(for: hub)
+        let one = try await p.append(.person, "one", parents: [], at: tA)
+        let two = try await h.append(.assistant, "two", parents: [one.ref], at: tA + 1)
+        let three = try await p.append(.person, "three", parents: [two.ref], at: tA + 2)
+
+        // Restart against an index that returns nothing.
+        let blind = TurnLog(database: BlindQueryDatabase(inner: db))
+        let again = try await blind.writer(for: phone)
+        #expect(await again.nextRef == .ref("phone", 3))
+        let empty = try await blind.read()
+        #expect(empty.isEmpty && empty.isComplete)
+        await #expect(throws: TurnLogError.self) {
+            _ = try await again.append(.person, "four", continuing: empty, at: tA + 3)
+        }
+        #expect(await db.writes.count == 3)
+
+        // Against an index that hides only the newest turn of each device.
+        let stale = TurnLog(database: StaleTailDatabase(inner: db))
+        let partial = try await stale.read()
+        #expect(partial.missing == [three.ref])      // hub/1 is hidden with nothing of the hub's to probe past
+        let w = try await stale.writer(for: phone)
+        #expect(await w.nextRef == .ref("phone", 3))
+        await #expect(throws: TurnLogError.self) {
+            _ = try await w.append(.person, "four", continuing: partial, at: tA + 3)
+        }
+
+        // A caught-up read carries on from the real head.
+        let four = try await again.append(.person, "four", continuing: try await fresh.read(), at: tA + 3)
+        #expect(four.ref == .ref("phone", 3))
+        #expect(four.parents == [three.ref])
+    }
+
     @Test func aWriterWillNotContinueFromAReadThatLacksItsOwnNewestTurn() async throws {
         let log = TurnLog(database: db)
         let p = try await log.writer(for: phone)
@@ -238,11 +273,11 @@ import TopoCoreTesting
 }
 
 @Suite struct TurnWriterRecoveryTests {
-    @Test func coldQueryIndexCostsOneCollisionNotTheTurn() async throws {
+    @Test func coldQueryIndexIsCorrectedByIDBeforeTheFirstAppend() async throws {
         let inner = InMemoryRecordDatabase()
         for i in Int64(1)...5 { _ = try await inner.save(turnRecord(device: "phone", seq: i, parents: [])) }
         let w = try await TurnLog(database: BlindQueryDatabase(inner: inner)).writer(for: phone)
-        #expect(await w.nextRef.sequence == 1)
+        #expect(await w.nextRef.sequence == 6)
         let t = try await w.append(.person, "found", parents: [], at: tA)
         #expect(t.ref.sequence == 6)
         #expect(await inner.writes.count == 6)

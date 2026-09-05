@@ -258,10 +258,14 @@ public struct TurnLog: Sendable {
         return records.compactMap(Turn.init(record:)).sorted { $0.ref.sequence < $1.ref.sequence }
     }
 
-    /// A writer for this device, starting after its last written turn.
+    /// A writer for this device, starting after its last written turn. The
+    /// query gives the starting point and a fetch by ID past it corrects
+    /// for an index that has not caught up.
     public func writer(for device: DeviceID) async throws -> TurnWriter {
         let last = try await read(device: device, after: 0).last?.ref.sequence ?? 0
-        return TurnWriter(database: database, device: device, next: last + 1)
+        let writer = TurnWriter(database: database, device: device, next: last + 1)
+        try await writer.syncWithLog()
+        return writer
     }
 
     static func transcript(from records: [Record]) -> Transcript {
@@ -327,9 +331,13 @@ public actor TurnWriter {
 
     /// Appends a turn continuing from the transcript's heads. Throws
     /// `incompleteTranscript` rather than continue from a read with holes,
-    /// including a read that lacks this writer's own newest turn.
+    /// including a read that lacks this device's newest turn: before the
+    /// parents are chosen the writer checks by ID, which is read-your-
+    /// writes, whether the log holds turns of this device beyond what it
+    /// knows, and then whether the transcript holds the newest of them.
     public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
                        nonce: String = UUID().uuidString) async throws -> Turn {
+        try await syncWithLog()
         var missing = transcript.missing
         if next > 1 {
             let own = TurnRef(device: device, sequence: next - 1)
@@ -339,6 +347,14 @@ public actor TurnWriter {
             throw TurnLogError.incompleteTranscript(missing: missing, unreadable: transcript.unreadable)
         }
         return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce)
+    }
+
+    /// Moves `next` past any turn of this device the log already holds at
+    /// or after it, found by ID rather than by query.
+    func syncWithLog() async throws {
+        if try await database.fetch(Turn.recordID(for: nextRef)) != nil {
+            next = try await firstFreeSequence(from: next + 1)
+        }
     }
 
     private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
