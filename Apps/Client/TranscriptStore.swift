@@ -26,20 +26,27 @@ final class TranscriptStore {
     /// line: turns missing from the read, a fork, a refresh that failed.
     private(set) var notice: String?
     private(set) var isSending = false
-    /// What a person said that did not reach the log. Kept so the retry
-    /// carries the same nonce as the attempt that failed.
-    private(set) var unsent: String?
+    /// What the person has said that is not in the log yet, oldest first.
+    /// Nothing said is dropped: a turn that fails stays here, and anything
+    /// said after it queues behind it so the log keeps the order it was
+    /// said in.
+    var outbox: [String] { pending.map(\.text) }
 
     let device: DeviceID
     private let log: TurnLog
     private let ensureZone: @Sendable () async throws -> Void
     private let defaults: UserDefaults
     private var writer: TurnWriter?
-    /// The nonce `unsent` was first attempted with.
-    private var unsentNonce: String?
+    /// Each queued turn keeps the nonce it was first attempted under, which
+    /// is what makes a retry exactly-once.
+    private var pending: [Outgoing] = []
 
-    private static let unsentTextKey = "topo.unsent.text"
-    private static let unsentNonceKey = "topo.unsent.nonce"
+    private static let outboxKey = "topo.outbox"
+
+    private struct Outgoing: Codable, Equatable {
+        var text: String
+        var nonce: String
+    }
 
     /// - Parameter ensureZone: run before the first append, because the zone
     ///   every record goes in has to exist before anything can be written
@@ -51,10 +58,12 @@ final class TranscriptStore {
         self.log = TurnLog(database: database)
         self.ensureZone = ensureZone
         self.defaults = defaults
-        // A send that was in flight when the app went away is still owed an
-        // answer, so it survives the launch that lost it.
-        self.unsent = defaults.string(forKey: TranscriptStore.unsentTextKey)
-        self.unsentNonce = defaults.string(forKey: TranscriptStore.unsentNonceKey)
+        // Sends that were in flight when the app went away are still owed,
+        // so they survive the launch that lost them.
+        if let data = defaults.data(forKey: TranscriptStore.outboxKey),
+           let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
+            self.pending = saved
+        }
     }
 
     func refresh() async {
@@ -81,6 +90,10 @@ final class TranscriptStore {
     func refreshing(every interval: Duration) async {
         while !Task.isCancelled {
             await refresh()
+            // Anything the person said that has not landed goes with the
+            // next read, so a send that failed on a bad minute is not left
+            // waiting on them to press it again.
+            if !pending.isEmpty { await flush() }
             do { try await Task.sleep(for: interval) } catch { return }
         }
     }
@@ -93,60 +106,67 @@ final class TranscriptStore {
     /// is refused rather than written, because continuing from a read with
     /// holes writes a fork that never happened.
     ///
-    /// An append that fails may still have committed — CloudKit can lose the
-    /// acknowledgement, not the write — so the text and the nonce it was
-    /// attempted with are written down before the attempt, and survive the
-    /// launch that lost them. Sending the same words again carries that
-    /// nonce, and TopoCore's writer saves a marker record under it
-    /// alongside the turn: the second save finds the marker, follows it to
-    /// the turn already there and hands that back. So the retry is
-    /// exactly-once whether or not the app died in between; what this has
-    /// to do is not lose the nonce.
+    /// What is said goes on a queue first, written down before any attempt,
+    /// and the queue drains in order. So nothing said is lost to a failed
+    /// send or a relaunch, and saying something new does not step over a
+    /// turn that has not landed yet.
     func send(_ text: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending else { return }
-        let nonce = (text == unsent ? unsentNonce : nil) ?? UUID().uuidString
+        guard !text.isEmpty else { return }
+        pending.append(Outgoing(text: text, nonce: UUID().uuidString))
+        save(pending)
+        await flush()
+    }
+
+    /// Sends whatever is queued, oldest first. Stops at the first one that
+    /// will not go, so the order the person said things in is the order the
+    /// log gets them.
+    ///
+    /// An append that fails may still have committed — CloudKit can lose the
+    /// acknowledgement, not the write — so each queued turn keeps the nonce
+    /// it was first attempted under. TopoCore's writer saves a marker record
+    /// under that nonce alongside the turn, so a retry carrying it finds the
+    /// marker, follows it to the turn already there and hands that back.
+    /// Exactly-once is the writer's; not losing the nonce is this side's.
+    func flush() async {
+        guard !isSending, !pending.isEmpty else { return }
         isSending = true
-        rememberUnsent(text, nonce: nonce)
         defer { isSending = false }
-        do {
-            try await ensureZone()
-            let transcript = try await log.read()
-            let writer: TurnWriter
-            if let existing = self.writer {
-                writer = existing
-            } else {
-                writer = try await log.writer(for: device)
-                self.writer = writer
+        // The read at the end has its own notice to set, so what went wrong
+        // here is put back after it rather than being written over.
+        var failure: String?
+        while let next = pending.first {
+            do {
+                try await ensureZone()
+                let transcript = try await log.read()
+                let writer: TurnWriter
+                if let existing = self.writer {
+                    writer = existing
+                } else {
+                    writer = try await log.writer(for: device)
+                    self.writer = writer
+                }
+                _ = try await writer.append(.person, next.text, continuing: transcript, nonce: next.nonce)
+                pending.removeFirst()
+                save(pending)
+            } catch TurnLogError.incompleteTranscript {
+                failure = "Not every turn has arrived yet. Topo will send it in a moment."
+                break
+            } catch {
+                failure = "That didn't send: \(TranscriptStore.message(for: error))"
+                break
             }
-            _ = try await writer.append(.person, text, continuing: transcript, nonce: nonce)
-            forgetUnsent()
-            await refresh()
-        } catch TurnLogError.incompleteTranscript {
-            notice = "Not every turn has arrived yet. Try again in a moment."
-        } catch {
-            notice = "That didn't send: \(TranscriptStore.message(for: error))"
         }
+        await refresh()
+        if let failure { notice = failure }
     }
 
-    /// Sends the last thing that did not land, again.
-    func sendAgain() async {
-        guard let unsent else { return }
-        await send(unsent)
-    }
-
-    private func rememberUnsent(_ text: String, nonce: String) {
-        unsent = text
-        unsentNonce = nonce
-        defaults.set(text, forKey: TranscriptStore.unsentTextKey)
-        defaults.set(nonce, forKey: TranscriptStore.unsentNonceKey)
-    }
-
-    private func forgetUnsent() {
-        unsent = nil
-        unsentNonce = nil
-        defaults.removeObject(forKey: TranscriptStore.unsentTextKey)
-        defaults.removeObject(forKey: TranscriptStore.unsentNonceKey)
+    private func save(_ pending: [Outgoing]) {
+        guard !pending.isEmpty else {
+            defaults.removeObject(forKey: TranscriptStore.outboxKey)
+            return
+        }
+        defaults.set(try? JSONEncoder().encode(pending), forKey: TranscriptStore.outboxKey)
     }
 
     static func notice(for transcript: Transcript) -> String? {

@@ -77,13 +77,14 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertTrue(store.turns.isEmpty)
     }
 
-    func testAFailedZoneCreationIsSaidAndNothingIsWritten() async {
+    func testAFailedZoneCreationIsSaidAndTheTurnIsKept() async {
         let database = InMemoryRecordDatabase()
         let store = store(database, ensureZone: { throw RecordDatabaseError.unavailable(underlying: CancellationError()) })
 
         await store.send("hello")
 
         XCTAssertTrue(store.turns.isEmpty)
+        XCTAssertEqual(store.outbox, ["hello"], "nothing said is dropped")
         XCTAssertNotNil(store.notice, "a send that did not land says so")
     }
 
@@ -113,12 +114,12 @@ final class TranscriptStoreTests: XCTestCase {
 
         await store.send("call Helen")
 
-        XCTAssertEqual(store.unsent, "call Helen", "the send is remembered because it was not acknowledged")
+        XCTAssertEqual(store.outbox, ["call Helen"], "the send is queued because it was not acknowledged")
         await database.setFailAfterSave(false)
-        await store.sendAgain()
+        await store.flush()
 
         XCTAssertEqual(store.turns.map(\.text), ["call Helen"], "one turn, not two")
-        XCTAssertNil(store.unsent)
+        XCTAssertTrue(store.outbox.isEmpty)
     }
 
     func testDifferentWordsAreADifferentTurn() async throws {
@@ -132,6 +133,41 @@ final class TranscriptStoreTests: XCTestCase {
 
         XCTAssertEqual(store.turns.map(\.text), ["call Helen", "call Helen back"],
                        "the first turn committed; the second is a new thing said")
+    }
+
+    func testSayingSomethingNewDoesNotDropWhatDidNotSend() async throws {
+        // A turn that failed outright is still owed. Speaking again queues
+        // behind it rather than taking its place.
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let store = store(database)
+        await database.setFailure(RecordDatabaseError.unavailable(underlying: CancellationError()))
+
+        await store.send("call Helen")
+        await store.send("and book the flights")
+        XCTAssertEqual(store.outbox, ["call Helen", "and book the flights"])
+
+        await database.setFailure(nil)
+        await store.flush()
+
+        XCTAssertEqual(store.turns.map(\.text), ["call Helen", "and book the flights"],
+                       "both, in the order they were said")
+        XCTAssertTrue(store.outbox.isEmpty)
+    }
+
+    func testTheQueueDrainsOnTheNextRead() async throws {
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let store = store(database)
+        await database.setFailure(RecordDatabaseError.unavailable(underlying: CancellationError()))
+        await store.send("call Helen")
+        await database.setFailure(nil)
+
+        let loop = Task { await store.refreshing(every: .milliseconds(10)) }
+        defer { loop.cancel() }
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(store.turns.map(\.text), ["call Helen"],
+                       "a send that failed on a bad minute goes with the next read")
+        XCTAssertTrue(store.outbox.isEmpty)
     }
 
     func testRefreshingStopsWhenItsTaskIsCancelled() async throws {
@@ -177,7 +213,7 @@ final class TranscriptStoreTests: XCTestCase {
 
         let relaunched = store(database, defaults: defaults)
 
-        XCTAssertEqual(relaunched.unsent, "call Helen")
+        XCTAssertEqual(relaunched.outbox, ["call Helen"])
     }
 
     func testARelaunchedRetryFindsTheCommittedTurnInsteadOfWritingASecond() async throws {
@@ -191,11 +227,11 @@ final class TranscriptStoreTests: XCTestCase {
         await database.setFailAfterSave(false)
 
         let relaunched = store(database, defaults: defaults)
-        await relaunched.sendAgain()
+        await relaunched.flush()
 
         XCTAssertEqual(relaunched.turns.map(\.text), ["call Helen"], "one turn, not two")
-        XCTAssertNil(relaunched.unsent)
-        XCTAssertNil(defaults.string(forKey: "topo.unsent.text"), "and nothing is still owed")
+        XCTAssertTrue(relaunched.outbox.isEmpty)
+        XCTAssertNil(defaults.data(forKey: "topo.outbox"), "and nothing is still owed")
     }
 
     func testAFailedRefreshKeepsTheTurnsAlreadyRead() async throws {

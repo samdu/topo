@@ -59,14 +59,17 @@ struct WatchRootView: View {
     /// back what they said, which goes into the log as their turn.
     private var talkButton: some View {
         VStack(spacing: 4) {
-            if let unsent = store.unsent, !store.isSending {
-                // The turn may well have committed and lost its
-                // acknowledgement; sending again carries the same nonce, so
-                // this recovers that turn rather than writing a second one.
+            if !store.outbox.isEmpty, !store.isSending {
+                // Queued, not lost: this is the same turn again, under the
+                // nonce it was first attempted with, so a send that
+                // committed and lost its acknowledgement comes back rather
+                // than being written twice.
                 Button {
-                    Task { await store.sendAgain() }
+                    Task { await store.flush() }
                 } label: {
-                    Label("Send \"\(unsent)\" again", systemImage: "arrow.clockwise")
+                    Label(store.outbox.count == 1 ? "Send \"\(store.outbox[0])\" again"
+                                                  : "Send \(store.outbox.count) unsent",
+                          systemImage: "arrow.clockwise")
                         .lineLimit(1)
                         .font(.caption2)
                 }
