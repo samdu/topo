@@ -14,6 +14,8 @@ final class StubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var body = Data()
     nonisolated(unsafe) static var lastRequest: URLRequest?
     nonisolated(unsafe) static var lastBody: Data?
+    /// Runs while the request is in flight, before the reply lands.
+    nonisolated(unsafe) static var beforeResponse: (@Sendable () -> Void)?
 
     static func respond(status: Int, json: String) {
         self.status = status
@@ -41,6 +43,7 @@ final class StubURLProtocol: URLProtocol {
             }
             return data
         }
+        Self.beforeResponse?()
         let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: Self.body)

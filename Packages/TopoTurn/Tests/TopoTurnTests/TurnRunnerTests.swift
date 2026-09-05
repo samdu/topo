@@ -55,6 +55,19 @@ import TopoCoreTesting
         #expect(messages == [["role": "user", "content": "first\n\nsecond"]])
     }
 
+    @Test func aDeviceDisplacedDuringTheCallDoesNotWriteTheReply() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("too late")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        transport.duringRequest = { _ = try? await hub.acquire() }
+        await #expect(throws: TurnRunnerError.self) { try await runner.run("hello", model: .sonnet5) }
+        let after = try await TurnLog(database: db).read()
+        #expect(after.ordered.map(\.text) == ["hello"])
+        #expect(await hub.isPrimary())
+    }
+
     @Test func historyIsCappedAndRolesAlternate() {
         let d = DeviceID("d")
         var turns: [Turn] = []

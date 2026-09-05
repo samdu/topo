@@ -4,6 +4,9 @@ import TopoCore
 public enum TurnRunnerError: Error {
     /// This device does not hold the primary lease; the outcome says who does.
     case notPrimary(LeaseOutcome)
+    /// The lease was lost while the model was answering. The person's turn is in the log, the
+    /// reply is not: whoever is primary now answers it.
+    case displaced
 }
 
 /// A probe for a device with no socket yet: every holder looks unreachable, so a live holder
@@ -18,7 +21,9 @@ public struct NoSocketProbe: LeaseProbe {
 ///
 /// Each turn takes the primary lease first and runs only as its holder. The person's turn is
 /// appended before the model is called, so a failed call leaves the words in the log and the next
-/// turn carries on from them; the reply is appended as a child of the person's turn.
+/// turn carries on from them; the reply is appended as a child of the person's turn, and only if
+/// this device is still primary once it arrives, so a device displaced during a long call does
+/// not write a second brain's answer.
 public actor TurnRunner {
     public struct Result: Sendable {
         public var person: Turn
@@ -53,6 +58,9 @@ public actor TurnRunner {
         let person = try await writer.append(.person, text, continuing: before)
         let history = before.ordered.suffix(historyLimit - 1) + [person]
         let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
+        // A heartbeat is a compare-and-set on the lease record, so a claim made during the call
+        // is seen now rather than on the next scheduled heartbeat.
+        guard try await lease.heartbeat() else { throw TurnRunnerError.displaced }
         let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref])
         return Result(person: person, assistant: assistant, reply: reply)
     }

@@ -8,11 +8,14 @@ final class RecordingTransport: Transport, @unchecked Sendable {
     private let lock = NSLock()
     private(set) var requests: [URLRequest] = []
     var replies: [(Int, String)] = []
+    /// Runs while a request is in flight, before its reply.
+    var duringRequest: (@Sendable () async -> Void)?
 
     init(_ replies: (Int, String)...) { self.replies = replies }
 
     func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        lock.withLock {
+        await duringRequest?()
+        return lock.withLock {
             requests.append(request)
             let (status, body) = replies.isEmpty ? (500, "{}") : replies.removeFirst()
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!

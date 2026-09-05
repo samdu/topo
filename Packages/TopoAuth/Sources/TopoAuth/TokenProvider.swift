@@ -10,7 +10,9 @@ public enum TokenProviderError: Error, Equatable {
 }
 
 /// Tokens from the store, refreshed through the OAuth client and written back. Refreshes run one
-/// at a time so two turns in flight cannot both spend the same refresh token.
+/// at a time so two turns in flight cannot both spend the same refresh token, and a refresh that
+/// finishes after a sign-out, or after another writer replaced the tokens, is not written back:
+/// the store must still hold exactly what was loaded.
 public actor StoredTokenProvider: TokenProvider {
     private let store: TokenStore
     private let oauth: ClaudeOAuth
@@ -26,6 +28,7 @@ public actor StoredTokenProvider: TokenProvider {
         guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
         guard tokens.isExpired(at: now()) else { return tokens.accessToken }
         let refreshed = try await oauth.refresh(tokens)
+        guard try store.load() == tokens else { throw TokenProviderError.signedOut }
         try store.save(refreshed)
         return refreshed.accessToken
     }

@@ -86,6 +86,17 @@ extension Stubbed {
             #expect(try store.load()?.refreshToken == "r2")
         }
 
+        @Test func aRefreshFinishingAfterSignOutIsDropped() async throws {
+            let store = InMemoryTokenStore(Tokens(accessToken: "stale", refreshToken: "r", expiresAt: Date(), scopes: []))
+            let oauth = ClaudeOAuth(session: StubURLProtocol.session())
+            let provider = StoredTokenProvider(store: store, oauth: oauth)
+            StubURLProtocol.respond(status: 200, json: #"{"access_token":"new","refresh_token":"r2","expires_in":3600}"#)
+            StubURLProtocol.beforeResponse = { try? store.clear() }
+            defer { StubURLProtocol.beforeResponse = nil }
+            await #expect(throws: TokenProviderError.signedOut) { try await provider.accessToken() }
+            #expect(try store.load() == nil)
+        }
+
         @Test func signedOutIsAnError() async throws {
             let provider = StoredTokenProvider(store: InMemoryTokenStore(), oauth: ClaudeOAuth(session: StubURLProtocol.session()))
             await #expect(throws: TokenProviderError.signedOut) { try await provider.accessToken() }

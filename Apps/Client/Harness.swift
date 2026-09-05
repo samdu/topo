@@ -20,12 +20,14 @@ final class Harness {
     let device: DeviceID
 
     private let database: any RecordDatabase
+    private let logURL: URL?
     private let log: TurnLog
     private var runner: TurnRunner?
     private let tokens: TokenProvider
 
-    init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID) {
+    init(database: any RecordDatabase, logURL: URL? = nil, tokens: TokenProvider, device: DeviceID) {
         self.database = database
+        self.logURL = logURL
         self.tokens = tokens
         self.device = device
         log = TurnLog(database: database)
@@ -34,8 +36,8 @@ final class Harness {
     /// The app's harness: a file-backed log and the keychain's tokens.
     static func standard(store: TokenStore = KeychainTokenStore()) throws -> Harness {
         let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let database = try LocalRecordDatabase(url: support.appendingPathComponent("Topo/log.json"))
-        return Harness(database: database, tokens: StoredTokenProvider(store: store), device: Self.deviceID())
+        let url = support.appendingPathComponent("Topo/log.json")
+        return Harness(database: try LocalRecordDatabase(url: url), logURL: url, tokens: StoredTokenProvider(store: store), device: Self.deviceID())
     }
 
     /// Stable across launches, unique across devices.
@@ -50,6 +52,19 @@ final class Harness {
     var model: ClaudeModel {
         get { UserDefaults.standard.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.modelKey) }
+    }
+
+    /// Sign-out leaves nothing of the person on the device: the local log goes with the tokens,
+    /// and the next sign-in starts at the first question. The runner is dropped so a turn in
+    /// flight cannot write into a log that is no longer this person's.
+    func forget() {
+        runner = nil
+        turns = []
+        error = nil
+        UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
+        if let logURL {
+            try? FileManager.default.removeItem(at: logURL)
+        }
     }
 
     func refresh() async {

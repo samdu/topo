@@ -41,7 +41,7 @@ struct ChatView: View {
                             ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                         }
                         Divider()
-                        Button("Sign out", role: .destructive) { signIn.signOut() }
+                        Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
