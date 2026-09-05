@@ -44,7 +44,8 @@ import TopoCoreTesting
     }
 
     @Test func theFirstClaimIsWonByExactlyOneDevice() async throws {
-        let p = lease(phone), h = lease(hub)
+        // A staked record names no endpoint, so no probe can confirm it.
+        let p = lease(phone, probe: .allDead), h = lease(hub, probe: .allDead)
         let (a, b) = try await (p.claimIfNone(), h.claimIfNone())
         #expect(a != b)
         #expect(!(try await p.claimIfNone()))
