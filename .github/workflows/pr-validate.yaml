@@ -7,7 +7,10 @@
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
 # `codex login`, written into a private codex-home for the run, and the CLI
-# authenticates from that file. Refresh it with a new `codex login` when the
+# authenticates from that file. Store it as ONE line (`jq -c . auth.json |
+# gh secret set CODEX_AUTH_JSON`): the runner masks every line of a multi-line
+# secret, and a pretty-printed file's `{` and `}` lines then get every JSON
+# verdict flagged as "may contain secret" and dropped from the job outputs. Refresh it with a new `codex login` when the
 # reviewer starts failing with 401s.
 name: PR validate
 
@@ -157,12 +160,19 @@ jobs:
             things you would merely prefer are not blocking. `summary` is what
             a reader sees; `findings` is one string per issue, each citing
             `path:line`. Say plainly when you find nothing.
+
+            If you cannot complete the review — a tool fails, the checkout
+            is unreadable, anything — set `blocking` true and say why in
+            `summary`. A review you could not do is not a clean review.
         run: |
           set -euo pipefail
           printf '%s' "$OUTPUT_SCHEMA" > "$RUNNER_TEMP/schema.json"
+          # No CLI sandbox: bubblewrap cannot initialise on the GitHub runner
+          # (`bwrap: loopback: Failed RTM_NEWADDR`), and the runner is already
+          # an ephemeral VM holding nothing but this checkout and the login.
           printf '%s' "$PROMPT" | codex exec \
             --model "$CODEX_MODEL" \
-            --sandbox read-only \
+            --sandbox danger-full-access \
             --skip-git-repo-check \
             --color never \
             --output-schema "$RUNNER_TEMP/schema.json" \
@@ -314,8 +324,19 @@ jobs:
           blocking="$(jq -r 'if type == "object" and (.blocking | type) == "boolean" and (.summary | type) == "string" and (.findings | type) == "array" then .blocking else "invalid" end' <<<"$VERDICT" 2>/dev/null || echo invalid)"
           summary="$(jq -r '.summary? // "" | .[0:300]' <<<"$VERDICT" 2>/dev/null || true)"
 
+          # A reviewer that gave up but still answered `blocking: false` — the
+          # prompt tells it to block instead, but the gate does not trust the
+          # prompt: no findings and a summary that opens with an admission of
+          # failure is no verdict, not a pass.
+          gave_up="$(jq -r 'if .blocking == false and (.findings | length) == 0 and (.summary | test("^\\s*(unable|not able|could ?n.t|cannot|can.t|failed|i was unable|i could not|i cannot|did not complete|couldn)"; "i")) then "true" else "false" end' <<<"$VERDICT" 2>/dev/null || echo false)"
+
           case "$blocking" in
             false)
+              if [ "$gave_up" = "true" ]; then
+                echo "::error::The reviewer reported it could not complete the review; that is no verdict, not a pass."
+                jq -r '.summary' <<<"$VERDICT"
+                finish block "reviewer could not complete the review: $summary" 1
+              fi
               echo "Review verdict: not blocking."
               finish pass "$summary" 0
               ;;
