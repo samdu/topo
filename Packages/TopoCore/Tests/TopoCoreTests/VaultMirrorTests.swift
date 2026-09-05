@@ -332,6 +332,27 @@ import TopoCoreTesting
         }
     }
 
+    @Test func aLinkedFolderIsNotWrittenThrough() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                let target = elsewhere.appendingPathComponent("theirs.md")
+                try Data("not ours to write".utf8).write(to: target)
+                // A link standing in for a folder inside the vault.
+                try FileManager.default.createSymbolicLink(
+                    at: directory.appendingPathComponent("linked"), withDestinationURL: elsewhere)
+
+                let w = try await store.writer(for: hub)
+                try await w.write("from the hub", to: VaultPath("linked/theirs.md")!,
+                                  continuing: store.read(), at: t0)
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let report = try await mirror.sync(at: t0 + 1)
+                #expect(report.written.isEmpty)
+                #expect(report.skipped == ["linked", "linked/theirs.md"])
+                #expect(read("theirs.md", in: elsewhere) == "not ours to write")
+            }
+        }
+    }
+
     @Test func twoFoldersOverOneStoreEndUpTheSame() async throws {
         try await inTemporaryDirectory { here in
             try await inTemporaryDirectory { there in

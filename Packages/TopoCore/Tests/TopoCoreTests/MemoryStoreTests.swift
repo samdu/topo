@@ -114,6 +114,26 @@ import TopoCoreTesting
         }
     }
 
+    @Test func twoNamesThatDifferOnlyInCaseAreOneName() async throws {
+        let w = try await store.writer(for: phone)
+        let upper = VaultPath("Note.md")!
+        let lower = VaultPath("note.md")!
+        try await w.write("the first", to: upper, continuing: store.read(), at: t0)
+        try await w.write("the second", to: lower, continuing: store.read(), at: t0 + 1)
+
+        // The usual Mac disk cannot hold both, so the vault does not
+        // pretend it can: the newer keeps the name and the other is beside
+        // it, which is the same on every device whatever its filesystem.
+        let vault = try await store.read()
+        #expect(vault.text(at: lower) == "the second")
+        #expect(vault.files[upper] == nil)
+        let moved = try #require(vault.ordered.first { $0.origin == upper })
+        #expect(moved.text == "the first")
+        #expect(moved.isConflictCopy)
+        let spellings = Set(vault.ordered.map { $0.path.string.lowercased() })
+        #expect(spellings.count == vault.ordered.count)
+    }
+
     @Test func aWriteThatSawTheForkResolvesIt() async throws {
         let one = try await store.writer(for: phone)
         let other = try await store.writer(for: hub)

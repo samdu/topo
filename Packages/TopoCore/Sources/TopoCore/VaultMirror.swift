@@ -175,9 +175,13 @@ public actor VaultMirror {
             }
             let url = url(of: file.path)
             // A link where a file should be is somebody else's business,
-            // and writing to it writes wherever it points. Leave it, and
-            // leave the path out of the state so the next sync tries again.
-            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+            // and writing to it writes wherever it points — as does a link
+            // anywhere above it, which is why the folder this goes in has
+            // to resolve back inside the vault before anything is written.
+            // Leave it, and leave the path out of the state so the next
+            // sync tries again.
+            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+                || !isInsideVault(url.deletingLastPathComponent()) {
                 report.skipped.append(file.path.string)
                 continue
             }
@@ -228,6 +232,21 @@ public actor VaultMirror {
         path.components.reduce(directory) { $0.appendingPathComponent($1) }
     }
 
+    /// The vault root with every link in it followed: what a path has to
+    /// still be under to be the vault's.
+    private var realRoot: String {
+        directory.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
+    /// True when a folder, following every link on the way to it, is the
+    /// vault root or inside it. A folder that does not exist yet resolves
+    /// as far as it does exist, which is the part that could be a link.
+    private func isInsideVault(_ folder: URL) -> Bool {
+        let resolved = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        let root = realRoot
+        return resolved == root || resolved.hasPrefix(root + "/")
+    }
+
     /// Every readable file in the directory, by vault path. A file whose
     /// path a vault cannot hold, or whose bytes are not text, is reported
     /// as skipped and otherwise untouched.
@@ -242,7 +261,7 @@ public actor VaultMirror {
         var found: [VaultPath: String] = [:]
         var skipped: [String] = []
         let root = directory.standardizedFileURL.path
-        let realRoot = directory.resolvingSymlinksInPath().standardizedFileURL.path
+        let realRoot = self.realRoot
         guard let walk = disk.enumerator(at: directory,
                                          includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
                                          options: [.skipsHiddenFiles]) else {

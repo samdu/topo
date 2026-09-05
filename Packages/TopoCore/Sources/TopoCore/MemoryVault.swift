@@ -262,24 +262,34 @@ public struct Vault: Sendable {
             files[path] = VaultFile(path: path, origin: origin, text: loser.text, at: loser.at, head: loser.ref)
         }
 
-        // A path cannot be both a file and a folder. Two devices can write
-        // `notes` and `notes/today.md` without either being wrong, and both
-        // revisions are kept — but a folder of markdown has to hold them,
-        // so the one standing where the folder goes is shown beside it
-        // under a copy's name. Every device reads the same records and
-        // moves the same file, and an edit or a deletion of it is an edit
-        // or a deletion of the revision it came from, the way a conflict
-        // copy is.
+        // Two revisions can name paths that are both proper and cannot
+        // both be files in one folder: `notes` and `notes/today.md`, or
+        // `Note.md` and `note.md` on the ordinary case-insensitive Mac
+        // disk. Neither writer was wrong and both revisions are kept, so
+        // the one that cannot have the name is shown beside it under a
+        // copy's name. Every device reads the same records and moves the
+        // same file, whatever filesystem it is on, so the vault looks the
+        // same everywhere; and an edit or a deletion of a moved file is an
+        // edit or a deletion of the revision it came from, the way a
+        // conflict copy is.
         for _ in 0..<8 {
-            var folders: Set<VaultPath> = []
+            var folders: Set<String> = []
             for path in files.keys {
                 for depth in 1..<max(path.components.count, 1) {
-                    folders.insert(VaultPath(checked: Array(path.components[0..<depth])))
+                    folders.insert(path.components[0..<depth].joined(separator: "/").lowercased())
                 }
             }
-            let blocking = files.keys.filter { folders.contains($0) }.sorted()
-            if blocking.isEmpty { break }
-            for path in blocking {
+            var sharing: [String: [VaultPath]] = [:]
+            for path in files.keys { sharing[path.string.lowercased(), default: []].append(path) }
+            var displaced: Set<VaultPath> = []
+            for path in files.keys where folders.contains(path.string.lowercased()) { displaced.insert(path) }
+            for (_, group) in sharing where group.count > 1 {
+                // The newest keeps the name, as the newest wins a fork.
+                let ordered = group.sorted { (files[$0]!.at, files[$0]!.head) > (files[$1]!.at, files[$1]!.head) }
+                displaced.formUnion(ordered.dropFirst())
+            }
+            if displaced.isEmpty { break }
+            for path in displaced.sorted() {
                 guard let file = files[path], let note = byRef[file.head] else { continue }
                 files[path] = nil
                 let moved = Self.conflictCopyPath(of: file.origin, for: note, avoiding: files.keys)
@@ -332,13 +342,17 @@ public struct Vault: Sendable {
     /// the same records in the same order and lands on the same name.
     private static func conflictCopyPath(of origin: VaultPath, for note: Note,
                                          avoiding taken: some Collection<VaultPath>) -> VaultPath {
+        // A name differing only in case is the same name on the ordinary
+        // Mac disk, so it counts as taken.
+        let held = Set(taken.map { $0.string.lowercased() })
+        func free(_ path: VaultPath) -> Bool { !held.contains(path.string.lowercased()) }
         let (stem, ext) = origin.stemAndExtension
         let name = "\(stem) (Conflicted copy \(note.ref.device.rawValue) \(stamp(note.at))"
         var candidate = origin.sibling(named: name + ")" + ext)
-        guard taken.contains(candidate) else { return candidate }
+        if free(candidate) { return candidate }
         candidate = origin.sibling(named: "\(name) \(note.ref.sequence))\(ext)")
         var count = 2
-        while taken.contains(candidate) {
+        while !free(candidate) {
             candidate = origin.sibling(named: "\(name) \(note.ref.sequence) \(count))\(ext)")
             count += 1
         }

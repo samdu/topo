@@ -83,12 +83,21 @@ actor SequenceAppender {
     /// one: it could never name a marker, and a record written without one
     /// reads as having an empty nonce, so an empty one would match every
     /// such record rather than this append's own.
-    func append(nonce: String, _ make: @escaping @Sendable (Int64, String) -> Record) async throws -> Record {
+    /// `save` is how the batch reaches the store. It defaults to a plain
+    /// save; a caller that has to land the record together with something
+    /// else of its own — a lease heartbeat, so a displaced device writes
+    /// nothing — passes its own, and whatever that throws comes back out
+    /// of here untouched.
+    func append(nonce: String,
+                save: (@Sendable ([Record]) async throws -> [Record])? = nil,
+                _ make: @escaping @Sendable (Int64, String) -> Record) async throws -> Record {
         let nonce = nonce.isEmpty ? UUID().uuidString : nonce
+        let database = database
+        let save = save ?? { try await database.save($0) }
         let previous = queue
         let task = Task<Record, any Error> {
             _ = try? await previous?.value
-            return try await appendNow(nonce: nonce, make)
+            return try await appendNow(nonce: nonce, save: save, make)
         }
         queue = task
         return try await task.value
@@ -102,12 +111,14 @@ actor SequenceAppender {
         }
     }
 
-    private func appendNow(nonce: String, _ make: @Sendable (Int64, String) -> Record) async throws -> Record {
+    private func appendNow(nonce: String,
+                           save: @Sendable ([Record]) async throws -> [Record],
+                           _ make: @Sendable (Int64, String) -> Record) async throws -> Record {
         for _ in 0..<32 {
             let record = make(next, nonce)
             let marker = naming.marker(nonce: nonce, device: device, sequence: next)
             do {
-                _ = try await database.save([marker, record])
+                _ = try await save([marker, record])
                 next += 1
                 return record
             } catch RecordDatabaseError.serverRecordChanged(let id, let server) {

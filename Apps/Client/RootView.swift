@@ -6,15 +6,17 @@ import TopoAuth
 struct RootView: View {
     @Environment(SignIn.self) private var signIn
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
+    /// Set once the first answer is in the log, so the question is not asked twice.
+    @AppStorage("firstRunAnswered") private var answered = false
 
     var body: some View {
         #if os(iOS)
         if signIn.phase != .signedIn {
             SignInView()
-        } else if firstRunAnswer.isEmpty {
+        } else if firstRunAnswer.isEmpty, !answered {
             FirstRunView { _ in }
         } else {
-            TranscriptPlaceholder()
+            ChatView()
         }
         #elseif os(watchOS)
         WatchRootView()
@@ -23,23 +25,6 @@ struct RootView: View {
         #else
         ViewerPlaceholder()
         #endif
-    }
-}
-
-/// Until the turn log is wired, the transcript is the one answer given so far.
-struct TranscriptPlaceholder: View {
-    @Environment(SignIn.self) private var signIn
-    @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
-    var body: some View {
-        VStack(spacing: 16) {
-            OctopusMark().frame(width: 64, height: 64)
-            Text("Signed in with Claude").font(.headline)
-            Text(firstRunAnswer)
-                .padding()
-                .background(RoundedRectangle(cornerRadius: 12).fill(Theme.teal.opacity(0.12)))
-            Button("Sign out") { signIn.signOut() }.font(.footnote)
-        }
-        .padding()
     }
 }
 
