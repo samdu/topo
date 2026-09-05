@@ -10,7 +10,7 @@ One always-on mind per person, every Apple device a limb. The design is `docs/de
   - **Womble**: the viewer-only bundle for old devices, built on old APIs so it can target back to iOS 12/13. Same CloudKit records and pairing; no mic, no models, no sign-in.
 - **CloudKit is truth, sockets are speed.** State (transcript log, pairing record, primary lease) lives in the private CloudKit database; direct sockets and the punched tunnel only make live turns fast. With no socket the app still works off the records, just slower.
 - The transcript is an append-only log: one record per turn, per-device sequence numbers, never overwrite. The primary lease is the one mutable record: atomic claim, 10s expiry, 5s heartbeat, probe-driven handover.
-- Core logic ships as Swift packages with tests that run against a mock `CKDatabase`; no test needs a signed-in device.
+- Core logic ships as Swift packages with tests that run against a mock `CKDatabase`; no test needs a signed-in device. `Packages/TopoCore` is the log and the lease: `RecordDatabase` is the protocol over the CloudKit calls used (compare-and-set save, fetch, query), `CloudKitRecordDatabase` is the adapter, and `TopoCoreTesting` holds the in-memory database with CloudKit's conflict semantics. `swift test` from the package directory runs everything.
 
 ## Working here
 
