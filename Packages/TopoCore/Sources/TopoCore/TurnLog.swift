@@ -106,12 +106,15 @@ public struct Turn: Hashable, Sendable, Identifiable {
     }
 
     /// Nil if the record is not a well-formed turn: a sequence below 1 is
-    /// not one. An absent `parents` field reads as no parents, since
+    /// not one, and so is a record whose fields name a different ref from
+    /// its record name, which would otherwise let one record stand in for
+    /// another. An absent `parents` field reads as no parents, since
     /// CloudKit may drop an empty list.
     public init?(record: Record) {
         guard record.type == Turn.recordType,
               let device = record.string("device"),
               let sequence = record.int("sequence"), sequence >= 1,
+              Turn.ref(ofRecordNamed: record.id.name) == TurnRef(device: DeviceID(device), sequence: sequence),
               let roleString = record.string("role"), let role = TurnRole(rawValue: roleString),
               let text = record.string("text"),
               let at = record.date("at"),

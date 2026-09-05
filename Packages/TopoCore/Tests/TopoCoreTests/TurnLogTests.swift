@@ -117,6 +117,18 @@ import TopoCoreTesting
         #expect(t.exclusive(to: t.heads[0]).count == 1)
     }
 
+    @Test func aRecordWhoseFieldsNameAnotherRefCannotStandInForIt() async throws {
+        _ = try await db.save(turnRecord(device: "hub", seq: 1, parents: []))
+        var impostor = turnRecord(device: "hub", seq: 1, parents: [])
+        impostor.id = Turn.recordID(for: .ref("phone", 1))
+        impostor["text"] = .string("not the hub's turn")
+        _ = try await db.save(impostor)
+        let t = try await log.read()
+        #expect(t.turns[.ref("hub", 1)]?.text != "not the hub's turn")
+        #expect(t.missing == [.ref("phone", 1)])
+        #expect(Turn(record: impostor) == nil)
+    }
+
     @Test func parentNotYetVisibleToTheQueryIsMissing() async throws {
         _ = try await db.save(turnRecord(device: "phone", seq: 2, parents: ["hub/1"]))
         let t = try await log.read()
