@@ -1,0 +1,36 @@
+# The Swift suite, as a signal on the PR: it is not a required check and the
+# review gate does not wait on it, so a macOS runner that never picks the job
+# up cannot hold a merge. `review_gate` in pr-validate.yaml is the one gate.
+name: Tests
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      # The package arrives with the first TopoCore PR; a tree without it has
+      # nothing to test, which is a notice rather than a failure.
+      - name: swift test (Packages/TopoCore)
+        run: |
+          set -euo pipefail
+          if [ ! -f Packages/TopoCore/Package.swift ]; then
+            echo "::notice::No Packages/TopoCore/Package.swift in this tree; nothing to test."
+            exit 0
+          fi
+          cd Packages/TopoCore
+          swift test

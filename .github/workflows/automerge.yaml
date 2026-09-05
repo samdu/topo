@@ -1,0 +1,99 @@
+# Workflow-based auto-merge. Squash-merges a PR once the "PR validate" workflow
+# has concluded green for its head commit — the Codex verdict is the gate, and
+# `review_gate` is also main's required status check, so the merge cannot get
+# past a red verdict by either route.
+#
+# The `automerge` label is required only when the repository variable
+# AUTOMERGE_REQUIRE_LABEL is "true". Unset or anything else, every ready PR
+# that passes review merges unattended — the fleet's label-as-authorization
+# rule is one `gh variable set AUTOMERGE_REQUIRE_LABEL --body true` away.
+#
+# Two entry points:
+#   - pull_request (labeled/opened/reopened/synchronize/ready_for_review):
+#     merges immediately if validation is already green.
+#   - workflow_run (PR validate completed): merges the PR that just went green.
+# Both paths funnel through the same idempotent script, which no-ops unless
+# every condition holds.
+name: Auto-merge
+
+on:
+  pull_request:
+    types: [labeled, opened, reopened, synchronize, ready_for_review]
+  workflow_run:
+    workflows: ["PR validate"]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      REQUIRE_LABEL: ${{ vars.AUTOMERGE_REQUIRE_LABEL }}
+    steps:
+      - name: Merge when validated
+        run: |
+          set -euo pipefail
+
+          # Resolve candidate PR numbers from whichever event fired.
+          case "${{ github.event_name }}" in
+            pull_request)
+              prs="${{ github.event.pull_request.number }}"
+              ;;
+            workflow_run)
+              prs="$(jq -r '.workflow_run.pull_requests[]?.number // empty' "$GITHUB_EVENT_PATH")"
+              if [ -z "$prs" ]; then
+                sha="${{ github.event.workflow_run.head_sha }}"
+                prs="$(gh pr list --state open --json number,headRefOid \
+                        --jq ".[] | select(.headRefOid==\"$sha\") | .number")"
+              fi
+              ;;
+            *) prs="" ;;
+          esac
+
+          [ -n "$prs" ] || { echo "No candidate PR; nothing to do."; exit 0; }
+
+          for pr in $prs; do
+            echo "::group::PR #$pr"
+
+            info="$(gh pr view "$pr" --json state,isDraft,labels,headRefOid,baseRefName)"
+            state="$(jq -r .state <<<"$info")"
+            draft="$(jq -r .isDraft <<<"$info")"
+            sha="$(jq -r .headRefOid <<<"$info")"
+            base="$(jq -r .baseRefName <<<"$info")"
+            labelled="$(jq -r '[.labels[].name] | index("automerge") != null' <<<"$info")"
+
+            if [ "$state" != "OPEN" ] || [ "$draft" = "true" ] || [ "$base" != "main" ]; then
+              echo "skip: state=$state draft=$draft base=$base"
+              echo "::endgroup::"; continue
+            fi
+            if [ "$REQUIRE_LABEL" = "true" ] && [ "$labelled" != "true" ]; then
+              echo "skip: AUTOMERGE_REQUIRE_LABEL is true and the PR has no automerge label"
+              echo "::endgroup::"; continue
+            fi
+
+            # Require the latest "PR validate" run for this exact head commit to
+            # have concluded success. Pick the newest run explicitly rather than
+            # trusting the API's order: one sha can carry several runs (a draft
+            # accumulates red runs, and `ready_for_review` adds the green one to
+            # the same commit).
+            run="$(gh api "repos/$GH_REPO/actions/workflows/pr-validate.yaml/runs?head_sha=$sha&per_page=100" \
+                    --jq '[.workflow_runs[]] | sort_by(.created_at, .id) | last | "\(.status) \(.conclusion)"' || echo "none")"
+            echo "pr-validate for $sha: $run"
+            if [ "$run" != "completed success" ]; then
+              echo "skip: PR validate not green yet"
+              echo "::endgroup::"; continue
+            fi
+
+            echo "Merging PR #$pr (squash)"
+            # Pinned to the sha the green run was read for: a push landing
+            # between that read and this merge must not merge code no reviewer
+            # saw.
+            gh pr merge "$pr" --squash --delete-branch --match-head-commit "$sha"
+
+            echo "::endgroup::"
+          done
