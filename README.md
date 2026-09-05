@@ -5,3 +5,4 @@ Topo is one always-on mind per person, with every Apple device you own as a limb
 ## Building
 
 `Packages/TopoCore` is the transcript log and the primary lease, a Swift package with no UI. `swift test` in that directory runs its tests against an in-memory database; nothing needs a signed-in device or a CloudKit container.
+
