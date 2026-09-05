@@ -24,6 +24,18 @@ public actor StoredTokenProvider: TokenProvider {
         self.now = now
     }
 
+    /// What the store holds, without touching the network, for a diagnostics screen.
+    public enum State: Equatable, Sendable {
+        case signedOut
+        case expired(at: Date)
+        case valid(until: Date)
+    }
+
+    public func state() -> State {
+        guard let tokens = try? store.load() else { return .signedOut }
+        return tokens.isExpired(at: now()) ? .expired(at: tokens.expiresAt) : .valid(until: tokens.expiresAt)
+    }
+
     public func accessToken() async throws -> String {
         guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
         guard tokens.isExpired(at: now()) else { return tokens.accessToken }

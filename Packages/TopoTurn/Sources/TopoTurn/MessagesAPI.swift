@@ -73,6 +73,11 @@ public struct MessagesAPI: Sendable {
     public var transport: Transport
     public var tokens: TokenProvider
     public var maxTokens = 16000
+    /// How long one call may take before it fails rather than hangs. Non-streaming, so the whole
+    /// reply arrives at once; a long answer on a slow link needs minutes, not the default minute.
+    public var timeout: TimeInterval = 300
+    /// Told the HTTP status of every answer, and the time it took; a screen shows the last.
+    public var onResponse: (@Sendable (Int, TimeInterval) -> Void)?
 
     public init(transport: Transport = URLSessionTransport(), tokens: TokenProvider) {
         self.transport = transport
@@ -82,7 +87,7 @@ public struct MessagesAPI: Sendable {
     public func complete(_ messages: [ChatMessage], model: ClaudeModel, system: String) async throws -> Reply {
         var request = URLRequest(url: Self.endpoint)
         request.httpMethod = "POST"
-        request.timeoutInterval = 600
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
@@ -93,7 +98,9 @@ public struct MessagesAPI: Sendable {
             system: [.init(type: "text", text: Self.identity), .init(type: "text", text: system)],
             messages: messages
         ))
+        let started = Date()
         let (data, response) = try await transport.send(request)
+        onResponse?(response.statusCode, Date().timeIntervalSince(started))
         guard response.statusCode == 200 else {
             let message = (try? JSONDecoder().decode(ErrorEnvelope.self, from: data))?.error.message
             throw MessagesAPIError.http(status: response.statusCode, message: message)

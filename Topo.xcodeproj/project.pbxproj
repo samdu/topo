@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
+		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		0BB1FC3236EA16193196ED7B /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
@@ -37,10 +38,12 @@
 		5E1111510510B24B236906B5 /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		6322C31CF98F5ECFA3AE56D3 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
 		6D6F51A6884E7842339B80AC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */; };
+		6DDF523A0250D4A9CC22C13C /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		73BD2BFD4C40E7CBC67D0EE3 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
+		7E98663347BABCF07C89A28B /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		81DC5C89635984031B4B114A /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		843B8C0DD0B51288A54C3D7D /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		885E163C66AC4D7A380BB634 /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
@@ -117,6 +120,7 @@
 		A64DF85F65D65AA39B2128BD /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoTVApp.swift; sourceTree = "<group>"; };
 		BE9C965D7E36544A4F9526C9 /* TopoHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
 		E4E0F75855123C685AAD8ED1 /* TopoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoApp.swift; sourceTree = "<group>"; };
 		E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectedGlyph.swift; sourceTree = "<group>"; };
@@ -229,6 +233,7 @@
 			children = (
 				E8BC4617024AD72D114DF8C7 /* ChatView.swift */,
 				46425616D224D5EDABBDE93E /* DeviceIdentity.swift */,
+				D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */,
 				18DEE83593874ABE4660BB2D /* Dictation.swift */,
 				004642A0824EA785157BF757 /* FirstRunView.swift */,
 				9A03F8DA19F37B857BA8F079 /* Harness.swift */,
@@ -514,6 +519,7 @@
 				9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */,
 				CBF883802BF44C4DE1D6B5C9 /* ConnectedGlyph.swift in Sources */,
 				CC57D44CB7EB39BF75BEF57D /* DeviceIdentity.swift in Sources */,
+				6DDF523A0250D4A9CC22C13C /* DiagnosticsView.swift in Sources */,
 				F009A2290679ADEB835A97AE /* Dictation.swift in Sources */,
 				BD0BB7A7D364CC4E7926AE75 /* FirstRunView.swift in Sources */,
 				043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */,
@@ -551,6 +557,7 @@
 				08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */,
 				B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */,
 				AAE4C1BAB7A289077470D9BC /* DeviceIdentity.swift in Sources */,
+				7E98663347BABCF07C89A28B /* DiagnosticsView.swift in Sources */,
 				73BD2BFD4C40E7CBC67D0EE3 /* Dictation.swift in Sources */,
 				497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */,
 				5ADB9E3D8ACFC40D15A2B63E /* Harness.swift in Sources */,
@@ -583,6 +590,7 @@
 				47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */,
 				C9EBB675F20EA85264A72BA6 /* ConnectedGlyph.swift in Sources */,
 				4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */,
+				05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */,
 				957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */,
 				01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
