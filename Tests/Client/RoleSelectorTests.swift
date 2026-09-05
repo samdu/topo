@@ -12,7 +12,8 @@ final class RoleSelectorTests: XCTestCase {
 
     private func selector(_ database: any RecordDatabase, defaults: UserDefaults? = nil,
                           signedIn: Bool = false) -> RoleSelector {
-        RoleSelector(database: database, device: me, defaults: defaults ?? self.defaults(), isSignedIn: { signedIn })
+        RoleSelector(database: database, device: me, defaults: defaults ?? self.defaults(), isSignedIn: { signedIn },
+                     ensureZone: {})
     }
 
     private func lease(_ database: InMemoryRecordDatabase, holder: DeviceID) async throws {
@@ -21,10 +22,24 @@ final class RoleSelectorTests: XCTestCase {
         guard case .primary = try await lease.acquire() else { return XCTFail("claim") }
     }
 
-    func testNoLeaseRecordMeansPrimary() async {
-        let s = selector(InMemoryRecordDatabase())
+    func testNoLeaseRecordMeansPrimaryAndStakesTheLease() async throws {
+        let db = InMemoryRecordDatabase()
+        let s = selector(db)
         await s.decide()
         XCTAssertEqual(s.role, .primary)
+        let record = await db.current(Lease.recordID)
+        XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, me)
+    }
+
+    func testTwoFreshDevicesLaunchingTogetherGetOnePrimary() async {
+        let db = InMemoryRecordDatabase()
+        let a = RoleSelector(database: db, device: DeviceID("ios-a"), defaults: defaults(), isSignedIn: { false }, ensureZone: {})
+        let b = RoleSelector(database: db, device: DeviceID("ios-b"), defaults: defaults(), isSignedIn: { false }, ensureZone: {})
+        async let da: Void = a.decide()
+        async let db2: Void = b.decide()
+        _ = await (da, db2)
+        XCTAssertEqual([a.role, b.role].filter { $0 == .primary }.count, 1)
+        XCTAssertEqual([a.role, b.role].filter { $0 == .viewer }.count, 1)
     }
 
     func testAnotherDevicesLeaseMeansViewerEvenWhenExpired() async throws {

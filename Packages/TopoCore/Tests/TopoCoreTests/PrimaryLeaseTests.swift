@@ -43,6 +43,20 @@ import TopoCoreTesting
         #expect(await p.isPrimary())
     }
 
+    @Test func theFirstClaimIsWonByExactlyOneDevice() async throws {
+        let p = lease(phone), h = lease(hub)
+        let (a, b) = try await (p.claimIfNone(), h.claimIfNone())
+        #expect(a != b)
+        #expect(!(try await p.claimIfNone()))
+        let pHeld = await p.held, hHeld = await h.held
+        #expect(pHeld == nil && hHeld == nil)
+        let record = try #require(await db.current(Lease.recordID))
+        #expect(Lease(record: record)?.holder == (a ? phone : hub))
+        // The winner takes it properly on its first turn; the loser defers.
+        let winner = a ? p : h
+        guard case .primary = try await winner.acquire() else { Issue.record("winner should hold"); return }
+    }
+
     @Test func heartbeatExtendsWithoutChangingEpoch() async throws {
         let p = lease(phone)
         _ = try await p.acquire()
