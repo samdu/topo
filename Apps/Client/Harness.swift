@@ -6,48 +6,37 @@ import TopoCore
 import TopoTurn
 
 /// The phone harness as the UI sees it: the transcript, the model setting, and one turn at a time.
-///
-/// The log lives in a local record database in Application Support. CloudKit is the design's home
-/// for it and `RecordDatabase` is the seam; the app carries no iCloud entitlement yet.
+/// The log is the shared CloudKit log, on the person's own Apple ID.
 @MainActor
 @Observable
 final class Harness {
     static let modelKey = "model"
 
     private(set) var turns: [Turn] = []
+    private(set) var notice: String?
     private(set) var busy = false
     private(set) var error: String?
     let device: DeviceID
 
-    private var database: LocalRecordDatabase
-    private let logURL: URL?
-    private var log: TurnLog
+    private let database: any RecordDatabase
+    private let log: TurnLog
+    private let ensureZone: @Sendable () async throws -> Void
+    private let tokens: TokenProvider
     private var runner: TurnRunner?
     private var inFlight: Task<Void, Never>?
-    private let tokens: TokenProvider
 
-    init(database: LocalRecordDatabase, logURL: URL? = nil, tokens: TokenProvider, device: DeviceID) {
+    init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
+         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) {
         self.database = database
-        self.logURL = logURL
         self.tokens = tokens
         self.device = device
+        self.ensureZone = ensureZone
         log = TurnLog(database: database)
     }
 
-    /// The app's harness: a file-backed log and the keychain's tokens.
-    static func standard(store: TokenStore = KeychainTokenStore()) throws -> Harness {
-        let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        let url = support.appendingPathComponent("Topo/log.json")
-        return Harness(database: try LocalRecordDatabase(url: url), logURL: url, tokens: StoredTokenProvider(store: store), device: Self.deviceID())
-    }
-
-    /// Stable across launches, unique across devices.
-    static func deviceID() -> DeviceID {
-        let key = "deviceID"
-        if let saved = UserDefaults.standard.string(forKey: key) { return DeviceID(saved) }
-        let fresh = "phone-" + UUID().uuidString.lowercased()
-        UserDefaults.standard.set(fresh, forKey: key)
-        return DeviceID(fresh)
+    /// The app's harness: the shared CloudKit log and the keychain's tokens.
+    static func standard(store: TokenStore = KeychainTokenStore()) -> Harness {
+        Harness(database: TopoCloudKit.database(), tokens: StoredTokenProvider(store: store))
     }
 
     var model: ClaudeModel {
@@ -55,34 +44,28 @@ final class Harness {
         set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.modelKey) }
     }
 
-    /// Sign-out leaves nothing of the person on the device: the local log goes with the tokens,
-    /// and the next sign-in starts at the first question. The turn in flight is cancelled, the
-    /// old database is destroyed so a late append into it is refused, and a fresh one replaces it.
+    /// Sign-out: the turn in flight is cancelled and its result dropped, the runner and screen
+    /// are cleared, and the next sign-in starts at the first question. The log itself stays where
+    /// it is, in the person's own iCloud; nothing of it is on this device to remove.
     func forget() {
         inFlight?.cancel()
         inFlight = nil
         runner = nil
         turns = []
+        notice = nil
+        error = nil
         busy = false
-        do {
-            try database.destroy()
-            let fresh = try LocalRecordDatabase(url: logURL)
-            database = fresh
-            log = TurnLog(database: fresh)
-            error = nil
-        } catch {
-            // The destroyed database stays in place: empty, and refusing writes, so nothing
-            // reloads a file that could not be removed.
-            self.error = "Couldn't remove the transcript file: \(error)"
-        }
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
     }
 
     func refresh() async {
         do {
-            turns = try await log.read().ordered
+            let transcript = try await log.read()
+            turns = transcript.ordered
+            notice = TranscriptStore.notice(for: transcript)
         } catch {
-            self.error = "Couldn't read the transcript: \(error)"
+            guard !TopoCloudKit.meansNoLogYet(error) else { turns = []; return }
+            self.error = "Couldn't read the transcript: \(TranscriptStore.message(for: error))"
         }
     }
 
@@ -99,19 +82,25 @@ final class Harness {
     }
 
     private func run(_ text: String) async {
-        let database = self.database
+        let generation = inFlight
         do {
-            if runner == nil { runner = try await makeRunner() }
+            if runner == nil {
+                try await ensureZone()
+                runner = try await makeRunner()
+            }
             guard let runner else { return }
             let result = try await runner.run(text, model: model)
-            // A sign-out during the turn replaced the log; this result is not for it.
-            guard database === self.database, !Task.isCancelled else { return }
+            // A sign-out during the turn cleared the screen; this result is not for it.
+            guard inFlight == generation, !Task.isCancelled else { return }
             turns.append(result.person)
             turns.append(result.assistant)
         } catch is CancellationError {
             return
         } catch TurnRunnerError.notPrimary(let outcome) {
             error = Self.describe(outcome)
+            await refresh()
+        } catch TurnRunnerError.displaced {
+            error = "Another device became primary while Claude was answering; it will answer."
             await refresh()
         } catch MessagesAPIError.refused {
             error = "Claude declined that one."
@@ -121,12 +110,9 @@ final class Harness {
             await refresh()
         } catch TokenProviderError.signedOut {
             error = "Signed out. Sign in again to continue."
-        } catch TurnRunnerError.displaced {
-            error = "Another device became primary while Claude was answering; it will answer."
-            await refresh()
         } catch {
-            guard database === self.database else { return }
-            self.error = "\(error)"
+            guard inFlight == generation else { return }
+            self.error = TranscriptStore.message(for: error)
             await refresh()
         }
     }

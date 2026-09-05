@@ -14,21 +14,11 @@ struct ChatView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(harness.turns) { turn in
-                            TurnBubble(turn: turn).id(turn.ref)
-                        }
-                        if harness.busy { ProgressView().padding(.leading) }
-                        if let error = harness.error {
-                            Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal)
-                        }
-                    }
-                    .padding(.vertical)
-                }
-                .onChange(of: harness.turns.count) { _, _ in
-                    if let last = harness.turns.last { withAnimation { proxy.scrollTo(last.ref, anchor: .bottom) } }
+            VStack(spacing: 0) {
+                TranscriptView(turns: harness.turns, notice: harness.notice)
+                if harness.busy { ProgressView().padding(.bottom, 8) }
+                if let error = harness.error {
+                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
                 }
             }
             .safeAreaInset(edge: .bottom) { composer }
@@ -85,21 +75,6 @@ struct ChatView: View {
         let text = draft
         draft = ""
         Task { await harness.send(text) }
-    }
-}
-
-struct TurnBubble: View {
-    let turn: Turn
-    var body: some View {
-        HStack {
-            if turn.role == .person { Spacer(minLength: 48) }
-            Text(turn.text)
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 14).fill(turn.role == .person ? Theme.teal.opacity(0.18) : Color.secondary.opacity(0.12)))
-                .textSelection(.enabled)
-            if turn.role == .assistant { Spacer(minLength: 48) }
-        }
-        .padding(.horizontal)
     }
 }
 #endif

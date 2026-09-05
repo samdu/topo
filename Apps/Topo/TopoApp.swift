@@ -4,7 +4,7 @@ import TopoAuth
 @main
 struct TopoApp: App {
     @State private var signIn = SignIn()
-    @State private var harness = try! Harness.standard()
+    @State private var harness = Harness.standard()
 
     var body: some Scene {
         WindowGroup {

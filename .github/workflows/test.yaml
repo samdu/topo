@@ -63,3 +63,35 @@ jobs:
             -project Womble/Womble.xcodeproj \
             -scheme Womble \
             -destination "platform=iOS Simulator,id=$udid"
+
+      # The app targets' own suite. It is hosted by the iOS app and covers
+      # the code the watch and TV builds share with the phone, so it runs on
+      # an iPhone simulator whatever the runner's Xcode ships.
+      - name: xcodebuild test (Topo)
+        run: |
+          set -euo pipefail
+          if [ ! -d Topo.xcodeproj ]; then
+            echo "::notice::No Topo.xcodeproj in this tree; nothing to test."
+            exit 0
+          fi
+          udid="$(xcrun simctl list devices available --json \
+                  | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          if [ -z "$udid" ]; then
+            echo "::error::No iPhone simulator available on this runner."
+            exit 1
+          fi
+          xcodebuild test \
+            -project Topo.xcodeproj \
+            -scheme Topo \
+            -destination "platform=iOS Simulator,id=$udid"
+
+      # The watch and TV builds are not covered by that suite's host, so they
+      # are built for their own simulators here.
+      - name: xcodebuild build (TopoWatch, TopoTV)
+        run: |
+          set -euo pipefail
+          [ -d Topo.xcodeproj ] || exit 0
+          xcodebuild build -project Topo.xcodeproj -scheme TopoWatch \
+            -destination 'generic/platform=watchOS Simulator'
+          xcodebuild build -project Topo.xcodeproj -scheme TopoTV \
+            -destination 'generic/platform=tvOS Simulator'
