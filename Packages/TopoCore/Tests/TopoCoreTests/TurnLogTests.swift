@@ -186,6 +186,49 @@ import TopoCoreTesting
         _ = try await w.append(.person, "next", parents: t.heads, at: tA + 2)
     }
 
+    @Test func aQueryThatHidesTheNewestTurnIsIncomplete() async throws {
+        let stale = StaleTailDatabase(inner: db)
+        let fresh = TurnLog(database: db)
+        let p = try await fresh.writer(for: phone)
+        let h = try await fresh.writer(for: hub)
+        let root = try await p.append(.person, "start", parents: [], at: tA)
+        let reply = try await h.append(.assistant, "ok", parents: [root.ref], at: tA + 1)
+        let more = try await p.append(.person, "more", parents: [reply.ref], at: tA + 2)
+        let newest = try await h.append(.assistant, "and", parents: [more.ref], at: tA + 3)
+
+        // The stale index shows only phone/1 and hub/1, which look complete
+        // and unforked; the probe past each device's last seen turn finds
+        // phone/2 and hub/2.
+        let t = try await TurnLog(database: stale).read()
+        #expect(Set(t.turns.keys) == [root.ref, reply.ref])
+        #expect(t.missing == [more.ref, newest.ref])
+        #expect(!t.isComplete)
+        let w = try await TurnLog(database: stale).writer(for: watch)
+        await #expect(throws: TurnLogError.self) {
+            _ = try await w.append(.assistant, "fork", continuing: t, at: tA + 3)
+        }
+        #expect(await db.writes.count == 4)
+
+        // The same log through a caught-up index reads complete.
+        let caughtUp = try await fresh.read()
+        #expect(caughtUp.isComplete)
+        #expect(caughtUp.heads == [newest.ref])
+    }
+
+    @Test func aWriterWillNotContinueFromAReadThatLacksItsOwnNewestTurn() async throws {
+        let log = TurnLog(database: db)
+        let p = try await log.writer(for: phone)
+        _ = try await p.append(.person, "one", parents: [], at: tA)
+        let before = try await log.read()
+        _ = try await p.append(.person, "two", parents: before.heads, at: tA + 1)
+        await #expect(throws: TurnLogError.self) {
+            _ = try await p.append(.person, "three", continuing: before, at: tA + 2)
+        }
+        #expect(await db.writes.count == 2)
+        _ = try await p.append(.person, "three", continuing: try await log.read(), at: tA + 2)
+        #expect(await db.writes.count == 3)
+    }
+
     @Test func exclusiveForTheOnlyHeadIsTheWholeLog() async throws {
         let root = Turn(ref: .ref("phone", 1), parents: [], role: .person, text: "root", at: tA)
         let child = Turn(ref: .ref("phone", 2), parents: [root.ref], role: .assistant, text: "child", at: tA + 1)

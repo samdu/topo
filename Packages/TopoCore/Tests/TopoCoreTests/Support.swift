@@ -111,6 +111,25 @@ actor Barrier {
     }
 }
 
+/// A database whose query index has not caught up with the newest turn of
+/// each device: every query drops the highest sequence it would return.
+struct StaleTailDatabase: RecordDatabase {
+    let inner: InMemoryRecordDatabase
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        let all = try await inner.query(query)
+        var newest: [String: Int64] = [:]
+        for r in all {
+            if let d = r.string("device"), let s = r.int("sequence") { newest[d] = max(newest[d] ?? 0, s) }
+        }
+        return all.filter { r in
+            guard let d = r.string("device"), let s = r.int("sequence") else { return true }
+            return s != newest[d]
+        }
+    }
+}
+
 /// A database whose query index is permanently cold.
 struct BlindQueryDatabase: RecordDatabase {
     let inner: InMemoryRecordDatabase
