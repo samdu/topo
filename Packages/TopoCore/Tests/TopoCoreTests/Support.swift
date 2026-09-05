@@ -228,6 +228,11 @@ struct LCG {
     mutating func int(_ n: Int) -> Int { Int(next() >> 33) % max(n, 1) }
 }
 
+extension InMemoryRecordDatabase {
+    /// Turn records written, leaving out the append markers saved beside them.
+    var turnWrites: Int { writes.filter { $0.type == Turn.recordType }.count }
+}
+
 func turnRecord(device: String, seq: Int64, parents: [String], role: String = "person",
                 text: String = "t", at: Date = tA) -> Record {
     Record(type: Turn.recordType, id: RecordID("turn/\(device)/\(seq)"), fields: [

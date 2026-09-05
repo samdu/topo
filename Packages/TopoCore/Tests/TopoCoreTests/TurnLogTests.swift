@@ -40,8 +40,8 @@ import TopoCoreTesting
             try await group.waitForAll()
         }
         let writes = await db.writes
-        #expect(writes.count == 40)
-        #expect(Set(writes.map(\.id)).count == 40)
+        #expect(writes.filter { $0.type == Turn.recordType }.count == 40)
+        #expect(Set(writes.map(\.id)).count == writes.count)
         let phoneTurns = try await log.read(device: phone, after: 0)
         #expect(phoneTurns.map(\.ref.sequence) == Array(1...20))
         #expect(try await log.read(device: hub, after: 17).map(\.ref.sequence) == [18, 19, 20])
@@ -54,7 +54,7 @@ import TopoCoreTesting
         let b = try await second.append(.person, "b", parents: [a.ref], at: t0)
         let c = try await first.append(.person, "c", parents: [b.ref], at: t0)
         #expect([a.ref, b.ref, c.ref] == [.ref("phone", 1), .ref("phone", 2), .ref("phone", 3)])
-        #expect(await db.writes.count == 3)
+        #expect(await db.turnWrites == 3)
         #expect(await db.current(Turn.recordID(for: b.ref)).flatMap(Turn.init(record:))?.text == "b")
     }
 
@@ -138,7 +138,7 @@ import TopoCoreTesting
         await #expect(throws: TurnLogError.self) {
             _ = try await w.append(.assistant, "carrying on", continuing: t, at: tA + 100)
         }
-        #expect(await db.writes.count == 3)
+        #expect(await db.turnWrites == 3)
     }
 
     @Test func absentParentsFieldReadsAsARoot() async throws {
@@ -207,7 +207,7 @@ import TopoCoreTesting
         await #expect(throws: TurnLogError.self) {
             _ = try await w.append(.assistant, "fork", continuing: t, at: tA + 3)
         }
-        #expect(await db.writes.count == 4)
+        #expect(await db.turnWrites == 4)
 
         // The same log through a caught-up index reads complete.
         let caughtUp = try await fresh.read()
@@ -232,7 +232,7 @@ import TopoCoreTesting
         await #expect(throws: TurnLogError.self) {
             _ = try await again.append(.person, "four", continuing: empty, at: tA + 3)
         }
-        #expect(await db.writes.count == 3)
+        #expect(await db.turnWrites == 3)
 
         // Against an index that hides only the newest turn of each device.
         let stale = TurnLog(database: StaleTailDatabase(inner: db))
@@ -259,9 +259,9 @@ import TopoCoreTesting
         await #expect(throws: TurnLogError.self) {
             _ = try await p.append(.person, "three", continuing: before, at: tA + 2)
         }
-        #expect(await db.writes.count == 2)
+        #expect(await db.turnWrites == 2)
         _ = try await p.append(.person, "three", continuing: try await log.read(), at: tA + 2)
-        #expect(await db.writes.count == 3)
+        #expect(await db.turnWrites == 3)
     }
 
     @Test func exclusiveForTheOnlyHeadIsTheWholeLog() async throws {
@@ -280,7 +280,7 @@ import TopoCoreTesting
         #expect(await w.nextRef.sequence == 6)
         let t = try await w.append(.person, "found", parents: [], at: tA)
         #expect(t.ref.sequence == 6)
-        #expect(await inner.writes.count == 6)
+        #expect(await inner.turnWrites == 6)
     }
 
     @Test func manyTakenSequencesAreSkippedInOneAppend() async throws {
@@ -319,7 +319,7 @@ import TopoCoreTesting
         let retried = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
         #expect(retried.ref.sequence == 1)
         #expect(try await log.read(device: phone, after: 0).map(\.text) == ["hello", "meanwhile"])
-        #expect(await inner.writes.count == 2)
+        #expect(await inner.turnWrites == 2)
         #expect(await w.nextRef.sequence == 3)
     }
 
@@ -342,7 +342,36 @@ import TopoCoreTesting
         let retried = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
         #expect(retried.ref.sequence == 1)
         #expect(try await log.read(device: phone, after: 0).map(\.text) == ["hello", "meanwhile"])
-        #expect(await inner.writes.count == 2)
+        #expect(await inner.turnWrites == 2)
+    }
+
+    @Test func lostAcknowledgementRetriedAfterARelaunchDoesNotDuplicateTheTurn() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: FlakyOnceDatabase(inner: inner))
+        let first = try await log.writer(for: phone)
+        let nonce = UUID().uuidString
+        await #expect(throws: RecordDatabaseError.self) {
+            _ = try await first.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        }
+        // The app relaunches: a fresh writer with no memory of the attempt.
+        let relaunched = try await log.writer(for: phone)
+        #expect(await relaunched.nextRef == .ref("phone", 2))
+        for i in 0..<20 { _ = try await relaunched.append(.person, "later \(i)", parents: [], at: tA + 1) }
+        let retried = try await relaunched.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        #expect(retried.ref == .ref("phone", 1))
+        #expect(await inner.turnWrites == 21)
+        #expect(await relaunched.nextRef == .ref("phone", 22))
+    }
+
+    @Test func turnRecordsAreOnlyEverWrittenOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let log = TurnLog(database: db)
+        let w = try await log.writer(for: phone)
+        for i in 0..<5 { _ = try await w.append(.person, "\(i)", parents: [], at: tA) }
+        let writes = await db.writes
+        #expect(writes.filter { $0.type == Turn.recordType }.count == 5)
+        #expect(writes.filter { $0.type == "Append" }.count == 5)
+        #expect(Set(writes.map(\.id)).count == writes.count)
     }
 
     @Test func aFailedAppendThatDidNotCommitIsWrittenOnRetry() async throws {
@@ -370,7 +399,7 @@ import TopoCoreTesting
             let b = try await w2.append(.person, "ok", parents: [], at: tA + delta)
             #expect(a.ref == .ref("phone", 1))
             #expect(b.ref == .ref("phone", 2))
-            #expect(await db.writes.count == 2)
+            #expect(await db.turnWrites == 2)
         }
     }
 
@@ -432,7 +461,7 @@ import TopoCoreTesting
             }
             let writes = await db.writes
             #expect(Set(writes.map(\.id)).count == writes.count)
-            #expect(writes.count == wrote)
+            #expect(writes.filter { $0.type == Turn.recordType }.count == wrote)
             #expect(wrote == 12)
         }
     }

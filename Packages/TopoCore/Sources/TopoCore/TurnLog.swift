@@ -74,6 +74,18 @@ public struct Turn: Hashable, Sendable, Identifiable {
         RecordID(recordPrefix + ref.description)
     }
 
+    /// The marker written in the same atomic batch as the turn, named by the
+    /// append's nonce and pointing at the turn's ref. It is what makes a
+    /// retry find its turn after a restart: creating it again fails, and
+    /// the version on the server says where the turn went.
+    static let markerType = "Append"
+
+    static func markerID(nonce: String) -> RecordID { RecordID("append/" + nonce) }
+
+    var marker: Record {
+        Record(type: Turn.markerType, id: Turn.markerID(nonce: nonce), fields: ["turn": .string(ref.description)])
+    }
+
     /// The ref a turn record's name carries, whatever the rest of it holds.
     static func ref(ofRecordNamed name: String) -> TurnRef? {
         guard name.hasPrefix(recordPrefix) else { return nil }
@@ -215,6 +227,9 @@ public enum TurnLogError: Error, Sendable {
     /// The transcript is missing turns; continuing from it would write a
     /// fork that never happened. Read again once they are visible.
     case incompleteTranscript(missing: Set<TurnRef>, unreadable: [RecordID])
+    /// A marker for this nonce exists but the turn it names cannot be read.
+    /// The two are written atomically, so this is a damaged log.
+    case markerWithoutTurn(nonce: String)
 }
 
 /// Reads the append-only log.
@@ -290,19 +305,17 @@ public struct TurnLog: Sendable {
 /// create-only, so two writers for the same device cannot clobber each other.
 /// A writer that finds its sequence number taken moves past every taken
 /// number, checking by ID rather than by query so a cold query index cannot
-/// mislead it. An append that throws `unavailable` may have been committed
-/// before the acknowledgement was lost; a caller that retries it with the
-/// same nonce gets the turn already there rather than a second one, even
-/// when other appends have gone through in between.
+/// mislead it. Every turn is saved in one atomic batch with a marker
+/// record named by the append's nonce, so an append that throws
+/// `unavailable` after committing is found again by any retry carrying
+/// the same nonce, on this writer or on one started after a relaunch,
+/// however many appends have gone through in between: the marker refuses
+/// to be created twice and names the turn.
 public actor TurnWriter {
     private let database: any RecordDatabase
     public let device: DeviceID
     private var next: Int64
     private var queue: Task<Turn, any Error>?
-    /// Appends whose save threw `unavailable`, by nonce, with the sequence
-    /// they were tried at: the save may have committed. A retry with that
-    /// nonce looks there first, by ID, before writing anywhere else.
-    private var unacknowledged: [String: Int64] = [:]
 
     init(database: any RecordDatabase, device: DeviceID, next: Int64) {
         self.database = database
@@ -358,32 +371,28 @@ public actor TurnWriter {
     }
 
     private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
-        if let tried = unacknowledged[nonce] {
-            // The entry stays until the fetch answers; a fetch that fails
-            // leaves the question open for the next retry.
-            let ref = TurnRef(device: device, sequence: tried)
-            let record = try await database.fetch(Turn.recordID(for: ref))
-            unacknowledged.removeValue(forKey: nonce)
-            if let record, let existing = Turn(record: record), existing.nonce == nonce {
-                next = max(next, tried + 1)
-                return existing
-            }
-        }
         for _ in 0..<32 {
             let turn = Turn(ref: nextRef, parents: parents, role: role, text: text, at: at, nonce: nonce)
             do {
-                _ = try await database.save(turn.record)
+                _ = try await database.save([turn.marker, turn.record])
                 next += 1
                 return turn
-            } catch RecordDatabaseError.serverRecordChanged(_, let server) {
+            } catch RecordDatabaseError.serverRecordChanged(let id, let server) {
+                if id == Turn.markerID(nonce: nonce) {
+                    // This append already went through: the marker says where.
+                    guard let named = server.string("turn"), let ref = TurnRef(parsing: named),
+                          let record = try await database.fetch(Turn.recordID(for: ref)),
+                          let existing = Turn(record: record) else {
+                        throw TurnLogError.markerWithoutTurn(nonce: nonce)
+                    }
+                    next = max(next, ref.sequence + 1)
+                    return existing
+                }
                 if let existing = Turn(record: server), existing.nonce == nonce {
                     next += 1
                     return existing
                 }
                 next = try await firstFreeSequence(from: next + 1)
-            } catch RecordDatabaseError.unavailable(let underlying) {
-                unacknowledged[nonce] = turn.ref.sequence
-                throw RecordDatabaseError.unavailable(underlying: underlying)
             }
         }
         throw TurnLogError.sequenceContended(device)
