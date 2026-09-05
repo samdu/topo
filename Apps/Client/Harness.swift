@@ -28,7 +28,7 @@ final class Harness {
     private let tokens: TokenProvider
     private var runner: TurnRunner?
     private var lease: PrimaryLease?
-    private var inFlight: Task<Void, Never>?
+    private var inFlight: Task<Bool, Never>?
     /// The last answer from the Messages API: status, when, how long it took.
     private var lastAPI: (status: Int, at: Date, seconds: TimeInterval)?
 
@@ -101,31 +101,46 @@ final class Harness {
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
-    /// is in flight wait their turn and go next, in order; nothing said is dropped.
+    /// is in flight wait their turn and go next, in order; nothing said is dropped. A turn that
+    /// never reached the log stops the line: it is kept as the unsent turn and goes first next
+    /// time, and what was queued behind it waits.
     func send(_ text: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        if busy {
-            queued.append(text)
-            return
-        }
+        // The unsent turn's own words again are that turn, not one behind it.
+        if outgoing?.text != text { queued.append(text) }
+        await drain()
+    }
+
+    /// Sends the unsent turn and whatever waits behind it, after a turn that stopped the line.
+    func retry() async {
+        await drain()
+    }
+
+    /// True when a turn is waiting to go and none is in flight: the line stopped on a failure.
+    var hasWaiting: Bool { !busy && (outgoing != nil || !queued.isEmpty) }
+
+    private func drain() async {
+        guard !busy else { return }
         busy = true
         error = nil
-        var next: String? = text
-        while let text = next {
+        while let text = outgoing?.text ?? (queued.isEmpty ? nil : queued.removeFirst()) {
             let task = Task { await run(text) }
             inFlight = task
-            await task.value
+            let settled = await task.value
             // A sign-out cleared everything, this turn included; the queue went with it.
             guard inFlight == task else { return }
             inFlight = nil
-            next = queued.isEmpty ? nil : queued.removeFirst()
+            guard settled else { break }
         }
         busy = false
         status = nil
     }
 
-    private func run(_ text: String) async {
+    /// True when the turn is settled: answered, or at least in the log with only the reply owed.
+    /// False leaves it as the unsent turn.
+    @discardableResult
+    private func run(_ text: String) async -> Bool {
         let generation = inFlight
         // The same words again reuse the nonce of the attempt that may have landed.
         let attempt = outgoing.flatMap { $0.text == text ? $0 : nil } ?? Outgoing(text: text, nonce: UUID().uuidString)
@@ -136,42 +151,46 @@ final class Harness {
                 try await ensureZone()
                 runner = try await makeRunner()
             }
-            guard let runner else { return }
+            guard let runner else { return false }
             let result = try await runner.run(text, model: model, nonce: attempt.nonce) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
             if outgoing == attempt { outgoing = nil }
             // A sign-out during the turn cleared the screen; this result is not for it.
-            guard inFlight == generation, !Task.isCancelled else { return }
+            guard inFlight == generation, !Task.isCancelled else { return false }
             show(result.person)
             show(result.assistant)
             status = nil
+            return true
         } catch is CancellationError {
-            return
+            return false
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             // The person's turn is in the log; only the reply is owed.
             if outgoing == attempt { outgoing = nil }
-            guard inFlight == generation else { return }
+            guard inFlight == generation else { return false }
             error = Self.describe(underlying)
             await refresh()
+            status = nil
+            return true
         } catch TurnRunnerError.notPrimary(let outcome) {
-            guard inFlight == generation else { return }
+            guard inFlight == generation else { return false }
             error = Self.describe(outcome)
             await refresh()
         } catch TokenProviderError.signedOut {
-            guard inFlight == generation else { return }
+            guard inFlight == generation else { return false }
             error = "Signed out. Sign in again to continue."
         } catch {
-            guard inFlight == generation else { return }
+            guard inFlight == generation else { return false }
             self.error = Self.describe(error)
             await refresh()
         }
         status = nil
+        return false
     }
 
     /// A step of the turn in flight, as words on the screen. The person's turn shows the moment
     /// it is in the log, before the model has answered.
-    private func show(_ step: TurnRunner.Progress, generation: Task<Void, Never>?) {
+    private func show(_ step: TurnRunner.Progress, generation: Task<Bool, Never>?) {
         guard inFlight == generation else { return }
         switch step {
         case .takingLease: status = "Checking this device is primary…"

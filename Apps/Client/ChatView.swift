@@ -33,6 +33,20 @@ struct ChatView: View {
                 if let error = harness.error {
                     Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
                 }
+                if harness.hasWaiting {
+                    // The line stopped on a failure; what was said is kept and goes again from here.
+                    Button {
+                        Task { await harness.retry() }
+                    } label: {
+                        Label(harness.queued.isEmpty ? "Send \"\(harness.unsent ?? "")\" again"
+                                                     : "Send \(harness.queued.count + (harness.unsent == nil ? 0 : 1)) waiting",
+                              systemImage: "arrow.clockwise")
+                            .lineLimit(1)
+                    }
+                    .buttonStyle(.bordered)
+                    .font(.footnote)
+                    .padding(.bottom, 8)
+                }
             }
             .safeAreaInset(edge: .bottom) { composer }
             .navigationTitle("Topo")
