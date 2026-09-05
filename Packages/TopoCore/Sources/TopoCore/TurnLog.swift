@@ -288,12 +288,17 @@ public struct TurnLog: Sendable {
 /// number, checking by ID rather than by query so a cold query index cannot
 /// mislead it. An append that throws `unavailable` may have been committed
 /// before the acknowledgement was lost; a caller that retries it with the
-/// same nonce gets the turn already there rather than a second one.
+/// same nonce gets the turn already there rather than a second one, even
+/// when other appends have gone through in between.
 public actor TurnWriter {
     private let database: any RecordDatabase
     public let device: DeviceID
     private var next: Int64
     private var queue: Task<Turn, any Error>?
+    /// Appends whose save threw `unavailable`, by nonce, with the sequence
+    /// they were tried at: the save may have committed. A retry with that
+    /// nonce looks there first, by ID, before writing anywhere else.
+    private var unacknowledged: [String: Int64] = [:]
 
     init(database: any RecordDatabase, device: DeviceID, next: Int64) {
         self.database = database
@@ -337,6 +342,14 @@ public actor TurnWriter {
     }
 
     private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
+        if let tried = unacknowledged.removeValue(forKey: nonce) {
+            let ref = TurnRef(device: device, sequence: tried)
+            if let record = try await database.fetch(Turn.recordID(for: ref)),
+               let existing = Turn(record: record), existing.nonce == nonce {
+                next = max(next, tried + 1)
+                return existing
+            }
+        }
         for _ in 0..<32 {
             let turn = Turn(ref: nextRef, parents: parents, role: role, text: text, at: at, nonce: nonce)
             do {
@@ -349,6 +362,9 @@ public actor TurnWriter {
                     return existing
                 }
                 next = try await firstFreeSequence(from: next + 1)
+            } catch RecordDatabaseError.unavailable(let underlying) {
+                unacknowledged[nonce] = turn.ref.sequence
+                throw RecordDatabaseError.unavailable(underlying: underlying)
             }
         }
         throw TurnLogError.sequenceContended(device)

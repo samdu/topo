@@ -271,6 +271,38 @@ import TopoCoreTesting
         #expect(await w.nextRef.sequence == 2)
     }
 
+    @Test func lostAcknowledgementRetriedAfterOtherAppendsDoesNotDuplicateTheTurn() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: FlakyOnceDatabase(inner: inner))
+        let w = try await log.writer(for: phone)
+        let nonce = UUID().uuidString
+        await #expect(throws: RecordDatabaseError.self) {
+            _ = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        }
+        let b = try await w.append(.person, "meanwhile", parents: [], at: tA + 1)
+        #expect(b.ref.sequence == 2)
+        let retried = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        #expect(retried.ref.sequence == 1)
+        #expect(try await log.read(device: phone, after: 0).map(\.text) == ["hello", "meanwhile"])
+        #expect(await inner.writes.count == 2)
+        #expect(await w.nextRef.sequence == 3)
+    }
+
+    @Test func aFailedAppendThatDidNotCommitIsWrittenOnRetry() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: DropOnceDatabase(inner: inner))
+        let w = try await log.writer(for: phone)
+        let nonce = UUID().uuidString
+        await #expect(throws: RecordDatabaseError.self) {
+            _ = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        }
+        let b = try await w.append(.person, "meanwhile", parents: [], at: tA + 1)
+        #expect(b.ref.sequence == 1)
+        let retried = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
+        #expect(retried.ref.sequence == 2)
+        #expect(try await log.read(device: phone, after: 0).map(\.text) == ["meanwhile", "hello"])
+    }
+
     @Test func identicalContentFromAnotherWriterIsASecondTurn() async throws {
         for delta in [0.0, 0.0005, 0.002] {
             let db = InMemoryRecordDatabase()

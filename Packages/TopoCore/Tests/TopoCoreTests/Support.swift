@@ -173,6 +173,28 @@ final class FlakyOnceDatabase: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
+/// Reports the first save as a transport failure without committing it.
+final class DropOnceDatabase: RecordDatabase, @unchecked Sendable {
+    let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var fired = false
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    func save(_ records: [Record]) async throws -> [Record] {
+        let first = lock.withLock { () -> Bool in
+            if fired { return false }
+            fired = true
+            return true
+        }
+        if first {
+            struct Dropped: Error {}
+            throw RecordDatabaseError.unavailable(underlying: Dropped())
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+}
+
 /// Deterministic pseudo-random numbers for model checks.
 struct LCG {
     var s: UInt64
