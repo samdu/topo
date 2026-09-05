@@ -1,83 +1,75 @@
 import CloudKit
 import Foundation
 
-/// Reads the turn log out of the private CloudKit database, in the zone the
-/// client and the hub write.
+/// Reads the turn log: the query, then a probe past the end of every device's
+/// run.
 ///
 /// CloudKit is truth here, and for Womble it is the whole truth: there is no
 /// socket, no live turn and nothing to be fast about. It reads the records,
 /// and a read that cannot be completed says so rather than showing part of a
 /// conversation as all of it.
 ///
-/// Written against the CloudKit of iOS 12 — `CKQueryOperation` with
-/// `recordFetchedBlock` and `queryCompletionBlock` — because that is the
-/// deployment target. The replacements (`recordMatchedBlock`,
-/// `queryResultBlock`) arrived in iOS 15 and are unavailable on the devices
-/// this bundle exists for.
+/// The query index is eventually consistent, and a newest turn it has not
+/// caught up with leaves no gap behind it — a transcript that is short by
+/// its tail looks complete. So after the query, every known device's next
+/// sequence is fetched by ID, which is read-your-writes, and one that exists
+/// is reported missing. This mirrors `TurnLog.read` in TopoCore, deliberately
+/// and exactly: a device none of whose turns the query returned cannot be
+/// probed this way, and a viewer has no writer of its own to ask.
 final class CloudKitTranscriptSource: TranscriptSource {
-    /// The container the whole of Topo shares. Every bundle — client, hub,
-    /// Womble — reads and writes this one, so the identifier is a contract
-    /// between them, not a per-target setting.
-    static let containerIdentifier = "iCloud.zone.hexagon.topo"
-    /// The log lives in a custom zone: the default zone has no atomic
-    /// batches, which the writers need and the readers inherit.
-    static let zoneName = "Topo"
+    private let store: TurnRecordStore
 
-    private let database: CKDatabase
-    private let container: CKContainer
-    private let zoneID: CKRecordZone.ID
-    private let accumulator = DispatchQueue(label: "zone.hexagon.topo.womble.read")
-
-    init(container: CKContainer = CKContainer(identifier: CloudKitTranscriptSource.containerIdentifier)) {
-        self.container = container
-        self.database = container.privateCloudDatabase
-        self.zoneID = CKRecordZone.ID(zoneName: CloudKitTranscriptSource.zoneName,
-                                      ownerName: CKCurrentUserDefaultName)
+    init(store: TurnRecordStore = CloudKitStore()) {
+        self.store = store
     }
 
     func read(completion: @escaping (Result<Transcript, TranscriptError>) -> Void) {
         let finish: (Result<Transcript, TranscriptError>) -> Void = { result in
             DispatchQueue.main.async { completion(result) }
         }
-        container.accountStatus { status, error in
-            switch status {
-            case .available:
-                self.query(finish)
-            case .noAccount, .restricted:
-                finish(.failure(.noAccount))
-            default:
-                // `.couldNotDetermine`, and anything a later OS adds: the
-                // account may well be fine, so this is a retry, not a verdict
-                // about the device's Apple ID.
-                finish(.failure(.unavailable(error ?? CKError(.internalError))))
+        store.accountAvailable { result in
+            switch result {
+            case .failure(let error):
+                finish(.failure(error))
+            case .success:
+                self.store.queryTurns { result in
+                    switch result {
+                    case .failure(let error):
+                        finish(.failure(error))
+                    case .success(let records):
+                        self.probingTail(of: CloudKitTranscriptSource.transcript(from: records), finish)
+                    }
+                }
             }
         }
     }
 
-    private func query(_ completion: @escaping (Result<Transcript, TranscriptError>) -> Void) {
-        var records: [CKRecord] = []
-
-        func run(_ operation: CKQueryOperation) {
-            operation.zoneID = zoneID
-            operation.recordFetchedBlock = { record in
-                self.accumulator.sync { records.append(record) }
-            }
-            operation.queryCompletionBlock = { cursor, error in
-                if let error = error {
-                    completion(.failure(CloudKitTranscriptSource.mapped(error)))
-                    return
-                }
-                if let cursor = cursor {
-                    run(CKQueryOperation(cursor: cursor))
-                    return
-                }
-                let fetched = self.accumulator.sync { records }
-                completion(.success(CloudKitTranscriptSource.transcript(from: fetched)))
-            }
-            database.add(operation)
+    /// The turns the query returned, plus any that exist just past the end of
+    /// a device's run and the index has not caught up with.
+    private func probingTail(of seen: Transcript,
+                             _ completion: @escaping (Result<Transcript, TranscriptError>) -> Void) {
+        var last: [DeviceID: Int64] = [:]
+        for ref in seen.ordered.map({ $0.ref }) + Array(seen.missing) {
+            last[ref.device] = max(last[ref.device] ?? 0, ref.sequence)
         }
+        let probes = last.map { TurnRef(device: $0.key, sequence: $0.value + 1) }
+        guard !probes.isEmpty else { return completion(.success(seen)) }
 
-        run(CKQueryOperation(query: CKQuery(recordType: Turn.recordType, predicate: NSPredicate(value: true))))
+        store.fetchTurns(named: probes.map(Turn.recordName(for:))) { result in
+            switch result {
+            case .failure(let error):
+                // The probe is part of the read, so a probe that fails is a
+                // read that failed: reporting the query's answer here would
+                // be presenting a possibly short transcript as the whole one.
+                completion(.failure(error))
+            case .success(let present):
+                let hidden = probes.filter { present.contains(Turn.recordName(for: $0)) }
+                guard !hidden.isEmpty else { return completion(.success(seen)) }
+                completion(.success(Transcript(turns: seen.ordered,
+                                               missing: seen.missing.union(hidden),
+                                               unreadable: seen.unreadable)))
+            }
+        }
     }
 
     /// The turns, and what the read could not make sense of. A record whose
@@ -107,23 +99,5 @@ final class CloudKitTranscriptSource: TranscriptSource {
             if let value = record[key] { fields[key] = value }
         }
         return fields
-    }
-
-    static func mapped(_ error: Error) -> TranscriptError {
-        guard let ck = error as? CKError else { return .unavailable(error) }
-        switch ck.code {
-        case .notAuthenticated, .managedAccountRestricted:
-            return .noAccount
-        case .zoneNotFound, .userDeletedZone:
-            // Nobody has written a turn on this Apple ID, so there is no zone
-            // to read. That is an empty log, not a broken one.
-            return .noLog
-        case .permissionFailure, .badContainer, .badDatabase, .missingEntitlement,
-             .invalidArguments, .incompatibleVersion,
-             .constraintViolation, .limitExceeded, .quotaExceeded:
-            return .rejected(error)
-        default:
-            return .unavailable(error)
-        }
     }
 }

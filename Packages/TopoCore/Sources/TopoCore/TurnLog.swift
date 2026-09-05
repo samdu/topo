@@ -57,6 +57,7 @@ public struct Turn: Hashable, Sendable, Identifiable {
     /// Marks the append that wrote this turn. A retry after a lost
     /// acknowledgement carries the same nonce, which is how the writer
     /// tells its own turn from another writer's at the same sequence.
+    /// Empty when the record carried none: such a turn is nobody's retry.
     public let nonce: String
 
     public var id: TurnRef { ref }
@@ -109,7 +110,8 @@ public struct Turn: Hashable, Sendable, Identifiable {
     /// not one, and so is a record whose fields name a different ref from
     /// its record name, which would otherwise let one record stand in for
     /// another. An absent `parents` field reads as no parents, since
-    /// CloudKit may drop an empty list.
+    /// CloudKit may drop an empty list, and an absent `nonce` reads as
+    /// empty, so a record written without one still reads as a turn.
     public init?(record: Record) {
         guard record.type == Turn.recordType,
               let device = record.string("device"),
@@ -117,13 +119,13 @@ public struct Turn: Hashable, Sendable, Identifiable {
               Turn.ref(ofRecordNamed: record.id.name) == TurnRef(device: DeviceID(device), sequence: sequence),
               let roleString = record.string("role"), let role = TurnRole(rawValue: roleString),
               let text = record.string("text"),
-              let at = record.date("at"),
-              let nonce = record.string("nonce") else { return nil }
+              let at = record.date("at") else { return nil }
         let parentStrings = record.strings("parents") ?? []
         let parents = parentStrings.compactMap(TurnRef.init(parsing:))
         guard parents.count == parentStrings.count else { return nil }
         self.init(ref: TurnRef(device: DeviceID(device), sequence: sequence),
-                  parents: parents, role: role, text: text, at: at, nonce: nonce)
+                  parents: parents, role: role, text: text, at: at,
+                  nonce: record.string("nonce") ?? "")
     }
 }
 
@@ -333,10 +335,12 @@ public actor TurnWriter {
     /// to carry on from wherever the log is, fork included. Appends on one
     /// writer run one at a time, in the order they were called. `nonce`
     /// identifies this append; pass the same one again when retrying after
-    /// `unavailable`, and leave it to default otherwise.
+    /// `unavailable`, and leave it to default otherwise. An empty nonce is
+    /// replaced by a fresh one: it could never name a marker.
     public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
                        nonce: String = UUID().uuidString) async throws -> Turn {
-        try await enqueue {
+        let nonce = nonce.isEmpty ? UUID().uuidString : nonce
+        return try await enqueue {
             try await self.appendNow(role, text, parents: parents, at: at, nonce: nonce,
                                      save: { try await self.database.save($0) })
         }
@@ -350,6 +354,7 @@ public actor TurnWriter {
     /// a retried nonce included.
     public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
                        nonce: String = UUID().uuidString, renewing lease: PrimaryLease) async throws -> Turn? {
+        let nonce = nonce.isEmpty ? UUID().uuidString : nonce
         do {
             return try await enqueue {
                 try await self.appendNow(role, text, parents: parents, at: at, nonce: nonce, save: { records in
@@ -421,7 +426,7 @@ public actor TurnWriter {
                     next = max(next, ref.sequence + 1)
                     return existing
                 }
-                if let existing = Turn(record: server), existing.nonce == nonce {
+                if let existing = Turn(record: server), !existing.nonce.isEmpty, existing.nonce == nonce {
                     next += 1
                     return existing
                 }

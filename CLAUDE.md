@@ -23,3 +23,12 @@ One always-on mind per person, every Apple device a limb. The design is `docs/de
 - Never force push.
 - Prefer what exists: stdlib, then a platform framework, then an already-linked dependency, before new code or a new dependency. Nothing GPL from others ships in a bundle (App Store distribution); every borrowed piece is attributed in `THIRD-PARTY`.
 - Docs describe the present state. When you change behaviour, change the doc to match; do not narrate the change.
+
+## Working here (engineers)
+
+Three engineers (lead, senior, junior) each work in their own clone on buddybox, dispatched by buddy-prime. These are the standing instructions; a brief adds the task, never replaces these.
+
+- **Branches.** The `<role>/` prefix is required on every branch you push. Never touch another engineer's branch: no commits, no rebases, no pushes, no reviews-by-edit. If their work blocks yours, say so in your status and wait.
+- **PRs.** One concern per PR, kept small; split rather than grow. Never open a second PR for the same work; a finding on an open PR is fixed on that PR's branch.
+- **Review loop.** After every push, wait for the Codex review comment on the PR and read it (`gh pr view <n> --comments`; it arrives within about five minutes). Fix every blocking finding on the same branch and push again, which re-runs the review. A PR that passes merges by automerge on its own; you never merge.
+- **Status.** At every task boundary (PR opened, PR merged, blocked, finished, or a question you cannot answer from the repo) send one paragraph to buddy-prime with `SendMessage` to `buddy-prime` (it is on the mesh roster; `ListAgents` shows it): what you did, where it is (branch, commit, PR number), and what you are waiting on. Then stop and wait for the next brief. Do not poll for merges or reviews with background shells; the githubpr channel reports them to you.

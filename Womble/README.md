@@ -23,6 +23,8 @@ The tests are logic tests with no host application, and they compile `Sources/Lo
 
 The CloudKit container `iCloud.zone.hexagon.topo`, private database, custom zone `Topo` — the same records `Packages/TopoCore` writes, on the Apple ID the device is already signed into. `Sources/Log` is a minimal read side of that schema: `Turn` records named `turn/<device>/<sequence>`, carrying `device`, `sequence`, `parents`, `role`, `text`, `at` and `nonce`. It does not depend on TopoCore, whose minimum is iOS 17 — six years past the devices this bundle exists for.
 
+The read is the query plus a probe: the query index is eventually consistent, and a newest turn it has not caught up with leaves no gap behind it, so a transcript short by its tail would otherwise look complete. After the query, every device's next sequence is fetched by ID — read-your-writes — and one that exists is reported missing. This mirrors `TurnLog.read` in TopoCore.
+
 Anything the read cannot account for is said on screen rather than hidden: a gap in a device's sequence, a parent that is not there, a record that does not parse. A fork — two devices carrying on from the same point — shows both branches and says so. A failed refresh keeps the turns already on screen; CloudKit is truth, and what it last said is still what it said.
 
 It reads on launch, on returning to the foreground, and on a pull. There are no subscriptions yet, so a turn written while the screen is open appears on the next read.

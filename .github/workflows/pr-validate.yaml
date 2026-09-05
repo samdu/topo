@@ -185,6 +185,15 @@ jobs:
             formatting; report only what would actually break something, and
             say plainly if you find nothing.
 
+            Review the diff, not the repository. A defect in a file the PR
+            does not touch is not this PR's to fix: mention it in `summary`
+            as pre-existing, never as a blocking finding. In particular the
+            workflows under `.github/workflows/` run PR-authored code with a
+            reviewer credential and a write token for same-repository
+            branches; that exposure is accepted by design, documented in this
+            file's header, and is not a finding on any PR that does not
+            change those workflows.
+
             Return JSON matching the schema. Set `blocking` true only for a
             finding that should stop this merge — something that would break at
             runtime, lose or corrupt a record, split the primary, leak a secret,
