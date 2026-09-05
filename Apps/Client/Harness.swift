@@ -318,6 +318,7 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     func save(_ records: [Record]) async throws -> [Record] { try await noting { try await base.save(records) } }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await noting { try await base.fetch(ids) } }
     func query(_ query: RecordQuery) async throws -> [Record] { try await noting { try await base.query(query) } }
+    func records(ofType type: String) async throws -> [Record] { try await noting { try await base.records(ofType: type) } }
 
     private func noting<T>(_ call: () async throws -> T) async throws -> T {
         do {
