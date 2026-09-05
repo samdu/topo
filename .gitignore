@@ -3,3 +3,6 @@ DerivedData/
 .build/
 .swiftpm/
 *.xcworkspace/xcuserdata/
+
+# What scripts/archive-upload.sh makes.
+build/
