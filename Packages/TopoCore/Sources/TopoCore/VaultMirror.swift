@@ -10,6 +10,14 @@ import Foundation
 /// files, and neither knows about CloudKit; a sync is what carries their
 /// work to the other devices and brings back what those devices did.
 ///
+/// A local change continues from the revisions the last sync left in this
+/// folder, never from whatever the store holds at the moment of the push.
+/// The person edited what they could see, so a revision written on another
+/// device since then is concurrent with their edit and has to stay that
+/// way: naming it as a parent would say this edit replaces it, and it would
+/// go without ever having been read. That is what makes a conflict here a
+/// copy in the folder rather than something quietly lost.
+///
 /// Hidden files are left alone in both directions — Obsidian's own
 /// `.obsidian` folder, and this mirror's `.topo/mirror.json`, are local to
 /// the machine they are on. So is anything at a path a vault cannot hold,
@@ -19,7 +27,8 @@ import Foundation
 /// their own, so a person's answer to one is expressed against the file it
 /// is a copy of: editing a conflict copy writes its text to that file and
 /// resolves the fork, and deleting one resolves the fork the other way, in
-/// favour of what the file already says.
+/// favour of what the file already says. A folder holding several answers
+/// for one file writes one revision of it, the most particular of them.
 public actor VaultMirror {
     public struct Report: Sendable, Equatable {
         /// Files created or changed on disk from the store.
@@ -38,14 +47,44 @@ public actor VaultMirror {
         }
     }
 
+    /// What one sync left behind: the digest of every file it wrote, so an
+    /// edit made since is told from a file this mirror put there, and the
+    /// heads each path stood at, which is what the next sync's local
+    /// changes continue from.
+    private struct State: Sendable {
+        var files: [VaultPath: String] = [:]
+        var heads: [VaultPath: [NoteRef]] = [:]
+    }
+
+    /// What the folder is asking for one file to become. The order is what
+    /// happens when it holds more than one answer for the same file: text
+    /// a person wrote beats text they left alone, the file itself beats a
+    /// copy of it, and either beats an answer about whether the file is
+    /// there at all.
+    private enum Resolution: Comparable {
+        case edited(String)         // the file itself was written
+        case editedCopy(String)     // a copy of it was written
+        case removed                // the file itself was taken away
+        case copyRemoved(String?)   // a copy was taken away; keep what the file says
+
+        var rank: Int {
+            switch self {
+            case .edited: 0
+            case .editedCopy: 1
+            case .removed: 2
+            case .copyRemoved: 3
+            }
+        }
+
+        static func < (a: Resolution, b: Resolution) -> Bool { a.rank < b.rank }
+    }
+
     public let directory: URL
     private let store: MemoryStore
     private let device: DeviceID
     private let disk = FileManager.default
     private var writer: NoteWriter?
-    /// What the last sync left on disk: the digest of each file's text, so
-    /// an edit made since is told from a file this mirror wrote itself.
-    private var synced: [VaultPath: String]?
+    private var synced: State?
 
     public init(directory: URL, store: MemoryStore, device: DeviceID) {
         self.directory = directory
@@ -67,71 +106,61 @@ public actor VaultMirror {
         report.skipped = skipped
         let previous = try synced ?? loadState()
 
-        var vault = try await store.read()
-        guard vault.isComplete else {
-            throw MemoryError.incompleteVault(missing: vault.missing, unreadable: vault.unreadable)
+        var vault = try await read()
+        var wanted: [VaultPath: Resolution] = [:]
+        func propose(_ path: VaultPath, _ resolution: Resolution) {
+            if let standing = wanted[path], standing <= resolution { return }
+            wanted[path] = resolution
         }
 
-        var pushes: [(path: VaultPath, text: String, delete: Bool)] = []
-        for (path, text) in onDisk {
-            guard previous[path] != digest(text) else { continue }  // this mirror wrote it
+        for (path, text) in onDisk.sorted(by: { $0.key < $1.key }) {
+            guard previous.files[path] != digest(text) else { continue }  // this mirror wrote it
             let file = vault.files[path]
-            if file?.text == text { continue }                       // the store already agrees
+            if file?.text == text { continue }                            // the store already says this
             if let file, file.isConflictCopy {
-                // An edited copy is an answer to the fork, not a file.
-                pushes.append((file.origin, text, false))
+                propose(file.origin, .editedCopy(text))
             } else {
-                pushes.append((path, text, false))
+                propose(path, .edited(text))
             }
         }
-        for (path, _) in previous where onDisk[path] == nil {
+        for path in previous.files.keys.sorted() where onDisk[path] == nil {
             guard let file = vault.files[path] else { continue }
             if file.isConflictCopy {
-                // Dropping a copy settles the fork on what the file says.
-                if let kept = vault.files[file.origin] {
-                    pushes.append((file.origin, kept.text, false))
-                } else {
-                    pushes.append((file.origin, "", true))
-                }
+                propose(file.origin, .copyRemoved(vault.files[file.origin]?.text))
             } else {
-                pushes.append((path, "", true))
+                propose(path, .removed)
             }
         }
 
-        if !pushes.isEmpty {
-            let writer: NoteWriter
-            if let existing = self.writer {
-                writer = existing
-            } else {
-                writer = try await store.writer(for: device)
-                self.writer = writer
-            }
-            // One path at a time and in path order, so a directory holding
-            // two answers to the same fork writes them in a stable order.
-            for push in pushes.sorted(by: { $0.path < $1.path }) {
-                vault = try await store.read()
-                guard vault.isComplete else {
-                    throw MemoryError.incompleteVault(missing: vault.missing, unreadable: vault.unreadable)
-                }
-                if push.delete {
-                    guard vault.files[push.path] != nil || !vault.heads(of: push.path).isEmpty else { continue }
-                    try await writer.delete(push.path, continuing: vault, at: now)
-                    report.deleted.append(push.path)
-                } else {
-                    guard vault.files[push.path]?.text != push.text || vault.isForked(push.path) else { continue }
-                    try await writer.write(push.text, to: push.path, continuing: vault, at: now)
-                    report.pushed.append(push.path)
+        if !wanted.isEmpty {
+            let writer = try await noteWriter()
+            for path in wanted.keys.sorted() {
+                // The heads this folder was last shown, not the heads the
+                // store holds now: anything written elsewhere since is
+                // concurrent with what the person did here.
+                let parents = previous.heads[path] ?? []
+                vault = try await read()
+                switch wanted[path]! {
+                case .edited(let text), .editedCopy(let text), .copyRemoved(.some(let text)):
+                    // A revision that says what the store already says, from
+                    // where it already is, and settles no fork, is nothing.
+                    if vault.files[path]?.text == text, !vault.isForked(path),
+                       Set(parents) == Set(vault.heads(of: path)) { continue }
+                    try await writer.write(text, to: path, after: parents, continuing: vault, at: now)
+                    report.pushed.append(path)
+                case .removed, .copyRemoved(.none):
+                    guard !vault.heads(of: path).isEmpty else { continue }
+                    try await writer.delete(path, after: parents, continuing: vault, at: now)
+                    report.deleted.append(path)
                 }
             }
-            vault = try await store.read()
-            guard vault.isComplete else {
-                throw MemoryError.incompleteVault(missing: vault.missing, unreadable: vault.unreadable)
-            }
+            vault = try await read()
         }
 
-        var state: [VaultPath: String] = [:]
+        var state = State()
+        for path in vault.knownPaths { state.heads[path] = vault.heads(of: path) }
         for file in vault.ordered {
-            state[file.path] = digest(file.text)
+            state.files[file.path] = digest(file.text)
             guard onDisk[file.path] != file.text else { continue }
             let url = url(of: file.path)
             try disk.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -152,6 +181,21 @@ public actor VaultMirror {
         return report
     }
 
+    private func read() async throws -> Vault {
+        let vault = try await store.read()
+        guard vault.isComplete else {
+            throw MemoryError.incompleteVault(missing: vault.missing, unreadable: vault.unreadable)
+        }
+        return vault
+    }
+
+    private func noteWriter() async throws -> NoteWriter {
+        if let writer { return writer }
+        let made = try await store.writer(for: device)
+        writer = made
+        return made
+    }
+
     private func url(of path: VaultPath) -> URL {
         path.components.reduce(directory) { $0.appendingPathComponent($1) }
     }
@@ -164,7 +208,7 @@ public actor VaultMirror {
         var skipped: [String] = []
         let root = directory.standardizedFileURL.path
         guard let walk = disk.enumerator(at: directory, includingPropertiesForKeys: [.isRegularFileKey],
-                                          options: [.skipsHiddenFiles]) else {
+                                         options: [.skipsHiddenFiles]) else {
             return (found, skipped)
         }
         for case let url as URL in walk {
@@ -189,19 +233,32 @@ public actor VaultMirror {
         directory.appendingPathComponent(".topo").appendingPathComponent("mirror.json")
     }
 
-    private func loadState() throws -> [VaultPath: String] {
-        guard let data = try? Data(contentsOf: stateURL) else { return [:] }
-        let stored = try? JSONDecoder().decode([String: String].self, from: data)
-        var state: [VaultPath: String] = [:]
-        for (name, digest) in stored ?? [:] {
-            if let path = VaultPath(name) { state[path] = digest }
+    /// The shape on disk. A state this cannot read is an empty one, which
+    /// costs a conflict copy for anything edited since rather than an edit.
+    private struct StoredState: Codable {
+        var version: Int
+        var files: [String: String]
+        var heads: [String: [String]]
+    }
+
+    private func loadState() throws -> State {
+        guard let data = try? Data(contentsOf: stateURL),
+              let stored = try? JSONDecoder().decode(StoredState.self, from: data),
+              stored.version == 1 else { return State() }
+        var state = State()
+        for (name, digest) in stored.files {
+            if let path = VaultPath(name) { state.files[path] = digest }
+        }
+        for (name, refs) in stored.heads {
+            if let path = VaultPath(name) { state.heads[path] = refs.compactMap(NoteRef.init(parsing:)) }
         }
         return state
     }
 
-    private func save(_ state: [VaultPath: String]) throws {
-        var stored: [String: String] = [:]
-        for (path, digest) in state { stored[path.string] = digest }
+    private func save(_ state: State) throws {
+        var stored = StoredState(version: 1, files: [:], heads: [:])
+        for (path, digest) in state.files { stored.files[path.string] = digest }
+        for (path, heads) in state.heads { stored.heads[path.string] = heads.map(\.description) }
         let data = try JSONEncoder().encode(stored)
         try disk.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: stateURL, options: .atomic)

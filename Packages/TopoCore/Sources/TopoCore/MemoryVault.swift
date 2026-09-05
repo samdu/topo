@@ -279,6 +279,9 @@ public struct Vault: Sendable {
 
     public func isForked(_ path: VaultPath) -> Bool { heads(of: path).count > 1 }
 
+    /// Every path the store holds a revision of, deleted ones included.
+    public var knownPaths: [VaultPath] { headsByPath.keys.sorted() }
+
     /// The text of a file, or nil where the vault holds none.
     public func text(at path: VaultPath) -> String? { files[path]?.text }
 

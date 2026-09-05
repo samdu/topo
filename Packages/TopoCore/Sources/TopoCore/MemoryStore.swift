@@ -126,33 +126,55 @@ public actor NoteWriter {
         get async { NoteRef(device: device, sequence: await appender.nextSequence) }
     }
 
+    /// Writes a file, continuing from the revisions of that path the writer
+    /// actually saw. Naming a revision as a parent says this write replaces
+    /// it, so `parents` is exactly what was read and edited from and never
+    /// more: a revision written elsewhere since, and unseen here, must stay
+    /// concurrent, which is what leaves a conflict copy rather than quietly
+    /// dropping it. `nonce` identifies this write; pass the same one again
+    /// when retrying after `unavailable`, and leave it to default otherwise.
+    @discardableResult
+    public func write(_ text: String, to path: VaultPath, after parents: [NoteRef], continuing vault: Vault,
+                      at: Date = Date(), nonce: String = UUID().uuidString) async throws -> Note {
+        try await save(text: text, deleted: false, to: path, after: parents, continuing: vault, at: at, nonce: nonce)
+    }
+
     /// Writes a file, continuing from every revision of that path the vault
-    /// holds as a head — so a write made after seeing a fork resolves it.
-    /// `nonce` identifies this write; pass the same one again when retrying
-    /// after `unavailable`, and leave it to default otherwise.
+    /// holds as a head: for a writer working from a vault it has just read,
+    /// which is a write that resolves a fork it can see.
     @discardableResult
     public func write(_ text: String, to path: VaultPath, continuing vault: Vault,
                       at: Date = Date(), nonce: String = UUID().uuidString) async throws -> Note {
-        try await save(text: text, deleted: false, to: path, continuing: vault, at: at, nonce: nonce)
+        try await save(text: text, deleted: false, to: path, after: vault.heads(of: path),
+                       continuing: vault, at: at, nonce: nonce)
     }
 
-    /// Removes a file, by writing the revision that says it is gone. A
-    /// concurrent edit elsewhere is not swallowed: it stays a head, and the
-    /// vault keeps it as a file or a conflict copy.
+    /// Removes a file, by writing the revision that says it is gone, after
+    /// the revisions the writer saw. An edit it did not see is not
+    /// swallowed: it stays a head, and the vault keeps it as a file or a
+    /// conflict copy.
+    @discardableResult
+    public func delete(_ path: VaultPath, after parents: [NoteRef], continuing vault: Vault,
+                       at: Date = Date(), nonce: String = UUID().uuidString) async throws -> Note {
+        try await save(text: "", deleted: true, to: path, after: parents, continuing: vault, at: at, nonce: nonce)
+    }
+
+    /// Removes a file, continuing from every revision of that path the
+    /// vault holds as a head.
     @discardableResult
     public func delete(_ path: VaultPath, continuing vault: Vault,
                        at: Date = Date(), nonce: String = UUID().uuidString) async throws -> Note {
-        try await save(text: "", deleted: true, to: path, continuing: vault, at: at, nonce: nonce)
+        try await save(text: "", deleted: true, to: path, after: vault.heads(of: path),
+                       continuing: vault, at: at, nonce: nonce)
     }
 
-    private func save(text: String, deleted: Bool, to path: VaultPath, continuing vault: Vault,
-                      at: Date, nonce: String) async throws -> Note {
+    private func save(text: String, deleted: Bool, to path: VaultPath, after parents: [NoteRef],
+                      continuing vault: Vault, at: Date, nonce: String) async throws -> Note {
         try await syncWithStore()
         guard vault.isComplete else {
             throw MemoryError.incompleteVault(missing: vault.missing, unreadable: vault.unreadable)
         }
         let device = self.device
-        let parents = vault.heads(of: path)
         do {
             let record = try await appender.append(nonce: nonce) { sequence, nonce in
                 Note(ref: NoteRef(device: device, sequence: sequence), path: path, text: text,

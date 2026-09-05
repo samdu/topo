@@ -165,6 +165,72 @@ import TopoCoreTesting
         }
     }
 
+    @Test func anEditMadeElsewhereSinceTheLastSyncIsNotSwallowed() async throws {
+        try await inTemporaryDirectory { directory in
+            let elsewhere = try await store.writer(for: hub)
+            try await elsewhere.write("first", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+
+            // The other device moves on; this folder is never told.
+            try await elsewhere.write("what the hub says", to: note, continuing: store.read(), at: t0 + 2)
+            // Meanwhile the person edits what they can see, which is "first".
+            try write("what I say", to: "Meeting notes.md", in: directory)
+
+            try await mirror.sync(at: t0 + 3)
+            let vault = try await store.read()
+            // The two edits never saw each other, so neither replaces the
+            // other: this one is newer and is the file, the hub's is beside it.
+            #expect(vault.isForked(note))
+            #expect(vault.text(at: note) == "what I say")
+            let copy = "Meeting notes (Conflicted copy hub 197001121346).md"
+            #expect(read(copy, in: directory) == "what the hub says")
+            #expect(read("Meeting notes.md", in: directory) == "what I say")
+        }
+    }
+
+    @Test func aDeletionHereDoesNotSwallowAnEditMadeElsewhere() async throws {
+        try await inTemporaryDirectory { directory in
+            let elsewhere = try await store.writer(for: hub)
+            try await elsewhere.write("first", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+
+            try await elsewhere.write("still wanted", to: note, continuing: store.read(), at: t0 + 2)
+            try FileManager.default.removeItem(at: directory.appendingPathComponent("Meeting notes.md"))
+
+            #expect(try await mirror.sync(at: t0 + 3).deleted == [note])
+            let vault = try await store.read()
+            #expect(vault.files[note] == nil)
+            #expect(read("Meeting notes.md", in: directory) == nil)
+            let copy = "Meeting notes (Conflicted copy hub 197001121346).md"
+            #expect(read(copy, in: directory) == "still wanted")
+        }
+    }
+
+    @Test func aFolderWithSeveralAnswersToOneForkWritesOneRevision() async throws {
+        try await inTemporaryDirectory { directory in
+            let one = try await store.writer(for: phone)
+            let other = try await store.writer(for: hub)
+            let empty = try await store.read()
+            try await one.write("from the phone", to: note, continuing: empty, at: t0)
+            try await other.write("from the hub", to: note, continuing: empty, at: t0 + 10)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 20)
+            // The person merges by hand and throws the copy away.
+            try write("from both", to: "Meeting notes.md", in: directory)
+            try FileManager.default.removeItem(
+                at: directory.appendingPathComponent("Meeting notes (Conflicted copy phone 197001121346).md"))
+
+            #expect(try await mirror.sync(at: t0 + 30).pushed == [note])
+            let vault = try await store.read()
+            #expect(!vault.isForked(note))
+            #expect(vault.text(at: note) == "from both")
+            #expect(vault.notes.count == 3)
+        }
+    }
+
     @Test func twoFoldersOverOneStoreEndUpTheSame() async throws {
         try await inTemporaryDirectory { here in
             try await inTemporaryDirectory { there in
