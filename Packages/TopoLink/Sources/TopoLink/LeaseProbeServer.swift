@@ -24,6 +24,8 @@ enum ProbeWire {
 
     static let yes = Data("yes\n".utf8)
     static let no = Data("no\n".utf8)
+
+    struct LineTooLong: Error {}
 }
 
 /// Answers lease probes and advertises the device on the LAN.
@@ -178,19 +180,38 @@ extension NWConnection {
         try await box.value()
     }
 
-    /// Reads up to `maximum` bytes and returns them as text; the first
-    /// newline ends the line.
+    /// Reads until a newline, the end of the stream, or `maximum` bytes,
+    /// however TCP splits it, and returns the line without its newline.
     func readLine(maximum: Int) async throws -> String {
-        let box = OneShot<String>()
-        receive(minimumIncompleteLength: 1, maximumLength: maximum) { data, _, _, error in
-            if let error { box.resume(.failure(error)); return }
-            guard let data, let text = String(data: data, encoding: .utf8) else {
-                box.resume(.failure(CancellationError())); return
+        var buffer = Data()
+        while true {
+            if let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+                return String(decoding: buffer[..<newline], as: UTF8.self)
             }
-            box.resume(.success(text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text))
+            guard buffer.count < maximum else { throw ProbeWire.LineTooLong() }
+            let (chunk, complete) = try await receiveSome(maximum: maximum - buffer.count)
+            if let chunk { buffer.append(chunk) }
+            // The end of the stream may arrive with the newline; the newline wins.
+            if complete, !buffer.contains(UInt8(ascii: "\n")) {
+                return String(decoding: buffer, as: UTF8.self)
+            }
         }
-        return try await box.value()
     }
+
+    private func receiveSome(maximum: Int) async throws -> (Data?, Bool) {
+        let box = OneShot<ReceivedChunk>()
+        receive(minimumIncompleteLength: 1, maximumLength: maximum) { data, _, complete, error in
+            if let error { box.resume(.failure(error)); return }
+            box.resume(.success(ReceivedChunk(data: data, complete: complete)))
+        }
+        let chunk = try await box.value()
+        return (chunk.data, chunk.complete)
+    }
+}
+
+struct ReceivedChunk: Sendable {
+    var data: Data?
+    var complete: Bool
 }
 
 /// A continuation that can only be resumed once, whichever callback fires.

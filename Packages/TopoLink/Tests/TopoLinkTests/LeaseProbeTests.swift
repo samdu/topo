@@ -46,6 +46,57 @@ import TopoCore
         #expect(took >= 0.4 && took < 2)
     }
 
+    /// A request that arrives one byte at a time is still one request.
+    @Test func serverReadsAFragmentedRequest() async throws {
+        let server = try LeaseProbeServer(advertising: nil) { device, epoch in device == DeviceID("hub") && epoch == 3 }
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        connection.start(queue: .global())
+        defer { connection.cancel() }
+        try await connection.waitUntilReady()
+        for byte in "hold hub 3\n".utf8 {
+            try await connection.send(Data([byte]))
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        let line = try await connection.readLine(maximum: 16)
+        #expect(line == "yes", "got \(line.debugDescription)")
+    }
+
+    /// An answer that arrives in pieces is still the answer.
+    @Test func probeReadsAFragmentedAnswer() async throws {
+        let listener = try NWListener(using: .tcp, on: .any)
+        let bound = OneShot<UInt16>()
+        listener.stateUpdateHandler = { state in if case .ready = state { bound.resume(.success(listener.port?.rawValue ?? 0)) } }
+        listener.newConnectionHandler = { connection in
+            connection.start(queue: .global())
+            Task {
+                _ = try? await connection.readLine(maximum: 256)
+                for piece in ["y", "e", "s\n"] {
+                    try? await connection.send(Data(piece.utf8))
+                    try? await Task.sleep(for: .milliseconds(20))
+                }
+            }
+        }
+        listener.start(queue: .global())
+        let port = try await bound.value()
+        defer { listener.cancel() }
+        #expect(await SocketLeaseProbe(timeout: 2).confirms(lease(hub, epoch: 1, port: port)))
+    }
+
+    /// A line that never ends is not a line.
+    @Test func anEndlessLineIsRefused() async throws {
+        let server = try LeaseProbeServer(advertising: nil) { _, _ in true }
+        let port = try await server.start()
+        defer { Task { await server.stop() } }
+        let connection = NWConnection(host: "127.0.0.1", port: NWEndpoint.Port(rawValue: port)!, using: .tcp)
+        connection.start(queue: .global())
+        defer { connection.cancel() }
+        try await connection.waitUntilReady()
+        try await connection.send(Data(repeating: UInt8(ascii: "x"), count: 300))
+        #expect(try await connection.readLine(maximum: 16) == "no")
+    }
+
     @Test func aLeaseWithoutAnEndpointIsNo() async {
         let probe = SocketLeaseProbe(timeout: 0.5)
         #expect(!(await probe.confirms(Lease(holder: hub, endpoint: nil, epoch: 1, expiresAt: Date() + 10))))
