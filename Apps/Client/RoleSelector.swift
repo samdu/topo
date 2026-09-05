@@ -24,24 +24,32 @@ final class RoleSelector {
     private(set) var role: Role?
     /// Why the last attempt to decide did not, in words for the screen.
     private(set) var trouble: String?
+    /// Where a deliberate takeover is, in words, while it runs. Nil otherwise.
+    private(set) var taking: String?
 
     private let database: any RecordDatabase
     private let device: DeviceID
     private let defaults: UserDefaults
     private let isSignedIn: @Sendable () -> Bool
     private let ensureZone: @Sendable () async throws -> Void
+    private let timing: LeaseTiming
+    private let sleep: @Sendable (TimeInterval) async throws -> Void
     private static let key = "topo.role"
 
     /// - Parameter ensureZone: run before the first claim, because the lease record goes in the
     ///   zone the writers create. Injected so a test can hold a database and no iCloud.
     init(database: any RecordDatabase, device: DeviceID = DeviceIdentity.current,
          defaults: UserDefaults = .standard, isSignedIn: @escaping @Sendable () -> Bool,
-         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) {
+         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
+         timing: LeaseTiming = .standard,
+         sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.database = database
         self.device = device
         self.defaults = defaults
         self.isSignedIn = isSignedIn
         self.ensureZone = ensureZone
+        self.timing = timing
+        self.sleep = sleep
         if let stored = defaults.string(forKey: Self.key), let role = Role(rawValue: stored) {
             self.role = role
         }
@@ -78,8 +86,47 @@ final class RoleSelector {
     /// The first claim: true when this device created the lease record, false when another got
     /// there first.
     private func stake() async throws -> Bool {
-        let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NeverConfirms())
+        let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NeverConfirms(), timing: timing)
         return try await lease.claimIfNone()
+    }
+
+    /// The deliberate takeover, from the settings of a viewer: this device becomes primary and
+    /// the device that was stops answering. The one control that hands primary over, for a
+    /// primary phone that is lost, wiped or simply retired.
+    ///
+    /// The safety is the wait: a lease that is fresh is left to lapse, one duration at most,
+    /// before the claim, so a holder that is merely between heartbeats keeps its lease if it
+    /// heartbeats again, and only a holder that has stopped is claimed over; a holder that keeps
+    /// heartbeating through the wait is alive and is claimed over anyway, and yields on its next
+    /// heartbeat, as the lease provides. On success the role is primary and the screen shows
+    /// sign-in. On failure the role is unchanged and `trouble` says why.
+    func takePrimary() async {
+        guard taking == nil else { return }
+        defer { taking = nil }
+        do {
+            taking = "Checking who is primary…"
+            let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NeverConfirms(), timing: timing)
+            if let record = try await database.fetch(Lease.recordID), let current = Lease(record: record),
+               current.holder != device, !current.isExpired(at: Date()) {
+                let wait = min(current.expiresAt.timeIntervalSinceNow, timing.duration)
+                taking = "Waiting \(Int(wait.rounded(.up))) seconds for \(current.holder.rawValue) to finish…"
+                try await sleep(max(wait, 0))
+            }
+            taking = "Taking over…"
+            try await ensureZone()
+            switch try await lease.acquire() {
+            case .primary:
+                keep(.primary)
+            case .held(let by):
+                trouble = "\(by.holder.rawValue) is answering right now and kept primary."
+            case .unreachable(let other):
+                trouble = "\(other.holder.rawValue) took primary just now. Try again in a moment."
+            case .contended:
+                trouble = "Another device is claiming primary. Try again in a moment."
+            }
+        } catch {
+            trouble = TranscriptStore.message(for: error)
+        }
     }
 
     private struct NeverConfirms: LeaseProbe {
