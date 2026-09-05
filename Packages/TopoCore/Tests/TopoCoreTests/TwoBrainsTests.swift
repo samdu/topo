@@ -11,8 +11,115 @@ import TopoCoreTesting
     let db = InMemoryRecordDatabase()
     let clock = ManualClock()
 
-    func lease(_ d: DeviceID, probe: any LeaseProbe) -> PrimaryLease {
-        PrimaryLease(database: db, device: d, endpoint: "\(d.rawValue):1", probe: probe, now: clock.read, sleep: Ticker().sleep)
+    func lease(_ d: DeviceID, probe: any LeaseProbe, clock: ManualClock? = nil) -> PrimaryLease {
+        let c = clock ?? self.clock
+        return PrimaryLease(database: db, device: d, endpoint: "\(d.rawValue):1", probe: probe,
+                            now: c.read, monotonic: c.uptime, sleep: Ticker().sleep)
+    }
+
+    /// The displaced holder's wall clock steps back an hour while it is
+    /// suspended and the live holder keeps heartbeating. Its monotonic
+    /// deadline lapses regardless, so it is primary for at most one
+    /// duration after its last write.
+    @Test func backwardClockStepOnASuspendedDisplacedHolder() async throws {
+        let hubClock = ManualClock(), phoneClock = ManualClock()
+        let none = SetProbe([])
+        let h = lease(hub, probe: none, clock: hubClock)
+        let p = lease(phone, probe: none, clock: phoneClock)
+        _ = try await h.acquire()
+        hubClock.advance(1); phoneClock.advance(1)
+        _ = try await p.acquire()
+        hubClock.wallStep(-3600)
+        var both = 0.0
+        for step in 0..<300 {
+            hubClock.advance(1); phoneClock.advance(1)
+            if step % 5 == 0 { _ = try? await p.heartbeat() }
+            if await h.isPrimary(), await p.isPrimary() { both += 1 }
+        }
+        #expect(both <= 10)
+        #expect(both >= 8)
+        #expect(!(await h.isPrimary()))
+        #expect(await p.isPrimary())
+    }
+
+    @Test func backwardClockStepWithAndWithoutTheDisplacedHeartbeat() async throws {
+        for heartbeating in [false, true] {
+            let db = InMemoryRecordDatabase()
+            let hubClock = ManualClock(), phoneClock = ManualClock()
+            let none = SetProbe([])
+            let h = PrimaryLease(database: db, device: hub, endpoint: "hub:1", probe: none, now: hubClock.read, monotonic: hubClock.uptime, sleep: Ticker().sleep)
+            let p = PrimaryLease(database: db, device: phone, endpoint: "phone:1", probe: none, now: phoneClock.read, monotonic: phoneClock.uptime, sleep: Ticker().sleep)
+            _ = try await h.acquire()
+            hubClock.advance(1); phoneClock.advance(1)
+            _ = try await p.acquire()
+            hubClock.wallStep(-3600)
+            var both = 0.0
+            for step in 0..<120 {
+                hubClock.advance(1); phoneClock.advance(1)
+                if heartbeating, step % 5 == 0 { _ = try? await h.heartbeat() }
+                if await h.isPrimary(), await p.isPrimary() { both += 1 }
+            }
+            #expect(both <= (heartbeating ? 5 : 10))
+        }
+    }
+
+    @Test func threeWayPartitionConverges() async throws {
+        let none = SetProbe([])
+        let names = [hub, phone, watch]
+        let ls = names.map { lease($0, probe: none) }
+        _ = try await ls[0].acquire()
+        var since: [Int: Date] = [:], worst = 0.0
+        for step in 0..<60 {
+            clock.advance(3)
+            _ = try await ls[step % 3].acquire()
+            var live: [Int] = []
+            let t = clock.now
+            for (j, l) in ls.enumerated() {
+                if await l.isPrimary() { since[j] = since[j] ?? t; live.append(j) } else { since[j] = nil }
+            }
+            if live.count >= 2 { worst = max(worst, t.timeIntervalSince(live.map { since[$0]! }.max()!)) }
+        }
+        #expect(worst <= 3)
+        var primaries = 0
+        for l in ls where await l.isPrimary() { primaries += 1 }
+        #expect(primaries == 1)
+    }
+
+    @Test func yieldingNeverLeavesNobodyPrimary() async throws {
+        let none = SetProbe([])
+        let a = lease(hub, probe: none)
+        let b = lease(phone, probe: none)
+        _ = try await a.acquire()
+        var noneSince: Date?, longestNone = 0.0
+        for _ in 0..<40 {
+            clock.advance(2)
+            _ = try await a.acquire()
+            _ = try await b.acquire()
+            let ap = await a.isPrimary(), bp = await b.isPrimary()
+            if ap || bp {
+                noneSince = nil
+            } else {
+                noneSince = noneSince ?? clock.now
+                longestNone = max(longestNone, clock.now.timeIntervalSince(noneSince!))
+            }
+        }
+        #expect(longestNone == 0)
+    }
+
+    @Test func aDeadHolderYouYieldedToCostsOneDuration() async throws {
+        let none = SetProbe([])
+        let a = lease(hub, probe: none)
+        let b = lease(phone, probe: none)
+        _ = try await a.acquire()
+        clock.advance(1)
+        _ = try await b.acquire()
+        guard case .unreachable = try await a.acquire() else { Issue.record("expected .unreachable"); return }
+        var waited = 0.0
+        for _ in 0..<40 {
+            clock.advance(0.5); waited += 0.5
+            if case .primary = try await a.acquire() { break }
+        }
+        #expect(waited == 10)
     }
 
     /// Advances the clock in steps, running `step` each time, and returns the

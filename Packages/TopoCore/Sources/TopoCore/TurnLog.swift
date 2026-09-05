@@ -54,21 +54,20 @@ public struct Turn: Hashable, Sendable, Identifiable {
     public let role: TurnRole
     public let text: String
     public let at: Date
+    /// Marks the append that wrote this turn. A retry after a lost
+    /// acknowledgement carries the same nonce, which is how the writer
+    /// tells its own turn from another writer's at the same sequence.
+    public let nonce: String
 
     public var id: TurnRef { ref }
 
-    public init(ref: TurnRef, parents: [TurnRef], role: TurnRole, text: String, at: Date) {
+    public init(ref: TurnRef, parents: [TurnRef], role: TurnRole, text: String, at: Date, nonce: String = UUID().uuidString) {
         self.ref = ref
         self.parents = parents
         self.role = role
         self.text = text
         self.at = at
-    }
-
-    /// The same turn, allowing for the date losing precision on the server.
-    func isSameWrite(as other: Turn) -> Bool {
-        ref == other.ref && parents == other.parents && role == other.role && text == other.text
-            && abs(at.timeIntervalSince(other.at)) < 0.001
+        self.nonce = nonce
     }
 
     public static func recordID(for ref: TurnRef) -> RecordID {
@@ -90,23 +89,26 @@ public struct Turn: Hashable, Sendable, Identifiable {
             "role": .string(role.rawValue),
             "text": .string(text),
             "at": .date(at),
+            "nonce": .string(nonce),
         ])
     }
 
-    /// Nil if the record is not a well-formed turn. An absent `parents`
-    /// field reads as no parents, since CloudKit may drop an empty list.
+    /// Nil if the record is not a well-formed turn: a sequence below 1 is
+    /// not one. An absent `parents` field reads as no parents, since
+    /// CloudKit may drop an empty list.
     public init?(record: Record) {
         guard record.type == Turn.recordType,
               let device = record.string("device"),
-              let sequence = record.int("sequence"),
+              let sequence = record.int("sequence"), sequence >= 1,
               let roleString = record.string("role"), let role = TurnRole(rawValue: roleString),
               let text = record.string("text"),
-              let at = record.date("at") else { return nil }
+              let at = record.date("at"),
+              let nonce = record.string("nonce") else { return nil }
         let parentStrings = record.strings("parents") ?? []
         let parents = parentStrings.compactMap(TurnRef.init(parsing:))
         guard parents.count == parentStrings.count else { return nil }
         self.init(ref: TurnRef(device: DeviceID(device), sequence: sequence),
-                  parents: parents, role: role, text: text, at: at)
+                  parents: parents, role: role, text: text, at: at, nonce: nonce)
     }
 }
 
@@ -129,8 +131,8 @@ public struct Transcript: Sendable {
     /// records whose name parses but whose fields do not.
     public let missing: Set<TurnRef>
 
-    /// Records of the turn type whose name is not a ref. Nothing can be
-    /// said about them.
+    /// Records of the turn type whose name is not a ref with a sequence of
+    /// 1 or more. Nothing can be said about them.
     public let unreadable: [RecordID]
 
     public init(turns: [Turn], missing: Set<TurnRef> = [], unreadable: [RecordID] = []) {
@@ -142,7 +144,7 @@ public struct Transcript: Sendable {
             for p in t.parents where byRef[p] == nil { missing.insert(p) }
             lastSeen[t.ref.device] = max(lastSeen[t.ref.device] ?? 0, t.ref.sequence)
         }
-        for (device, last) in lastSeen {
+        for (device, last) in lastSeen where last >= 1 {
             for seq in 1...last where byRef[TurnRef(device: device, sequence: seq)] == nil {
                 missing.insert(TurnRef(device: device, sequence: seq))
             }
@@ -253,7 +255,7 @@ public struct TurnLog: Sendable {
         for record in records {
             if let turn = Turn(record: record) {
                 turns.append(turn)
-            } else if let ref = Turn.ref(ofRecordNamed: record.id.name) {
+            } else if let ref = Turn.ref(ofRecordNamed: record.id.name), ref.sequence >= 1 {
                 missing.insert(ref)
             } else {
                 unreadable.append(record.id)
@@ -268,8 +270,9 @@ public struct TurnLog: Sendable {
 /// create-only, so two writers for the same device cannot clobber each other.
 /// A writer that finds its sequence number taken moves past every taken
 /// number, checking by ID rather than by query so a cold query index cannot
-/// mislead it. A retry after a lost acknowledgement finds its own turn
-/// already there and returns it rather than writing it twice.
+/// mislead it. An append that throws `unavailable` may have been committed
+/// before the acknowledgement was lost; a caller that retries it with the
+/// same nonce gets the turn already there rather than a second one.
 public actor TurnWriter {
     private let database: any RecordDatabase
     public let device: DeviceID
@@ -287,12 +290,15 @@ public actor TurnWriter {
 
     /// Appends a turn continuing from `parents`. Pass the transcript's heads
     /// to carry on from wherever the log is, fork included. Appends on one
-    /// writer run one at a time, in the order they were called.
-    public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date()) async throws -> Turn {
+    /// writer run one at a time, in the order they were called. `nonce`
+    /// identifies this append; pass the same one again when retrying after
+    /// `unavailable`, and leave it to default otherwise.
+    public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
+                       nonce: String = UUID().uuidString) async throws -> Turn {
         let previous = queue
         let task = Task<Turn, any Error> {
             _ = try? await previous?.value
-            return try await appendNow(role, text, parents: parents, at: at)
+            return try await appendNow(role, text, parents: parents, at: at, nonce: nonce)
         }
         queue = task
         return try await task.value
@@ -300,22 +306,23 @@ public actor TurnWriter {
 
     /// Appends a turn continuing from the transcript's heads. Throws
     /// `incompleteTranscript` rather than continue from a read with holes.
-    public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date()) async throws -> Turn {
+    public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
+                       nonce: String = UUID().uuidString) async throws -> Turn {
         guard transcript.isComplete else {
             throw TurnLogError.incompleteTranscript(missing: transcript.missing, unreadable: transcript.unreadable)
         }
-        return try await append(role, text, parents: transcript.heads, at: at)
+        return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce)
     }
 
-    private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date) async throws -> Turn {
+    private func appendNow(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String) async throws -> Turn {
         for _ in 0..<32 {
-            let turn = Turn(ref: nextRef, parents: parents, role: role, text: text, at: at)
+            let turn = Turn(ref: nextRef, parents: parents, role: role, text: text, at: at, nonce: nonce)
             do {
                 _ = try await database.save(turn.record)
                 next += 1
                 return turn
             } catch RecordDatabaseError.serverRecordChanged(_, let server) {
-                if let existing = Turn(record: server), existing.isSameWrite(as: turn) {
+                if let existing = Turn(record: server), existing.nonce == nonce {
                     next += 1
                     return existing
                 }

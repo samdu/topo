@@ -79,7 +79,8 @@ public enum LeaseOutcome: Hashable, Sendable {
     /// Another device took the lease from this one and is still heartbeating
     /// it, but does not answer probes: the two can both reach CloudKit and
     /// not each other. This device is not primary and does not claim; it
-    /// runs the turn itself, or through the log, until that lease lapses.
+    /// runs the turn itself, or through the log, until that lease lapses,
+    /// which is one duration after its holder's last heartbeat.
     case unreachable(Lease)
     /// The record kept changing under us. Try again next turn.
     case contended
@@ -101,11 +102,17 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// the lease that displaced it, so two devices that cannot reach each other
 /// settle on one primary instead of taking the lease from each other every
 /// turn. A holder that cannot reach CloudKit at all stops counting itself
-/// primary when its lease expires (`isPrimary()`). So two brains last at
-/// most one heartbeat interval after a claim over a live holder, and one
-/// duration after a claim over a cut-off one.
+/// primary when its lease expires (`isPrimary()`), judged on a monotonic
+/// clock as well as the wall clock so a clock correction on wake cannot
+/// revive it. So two brains last at most one heartbeat interval after a
+/// claim over a live holder, and one duration after a claim over a
+/// cut-off or suspended one.
 ///
-/// There is no release. A holder that goes away is found by the next probe.
+/// A device that yielded to a lease waits for that lease to lapse before
+/// claiming, one duration, because the probe is exactly what it cannot
+/// trust; any device that has not yielded takes over a dead holder on one
+/// probe. There is no release. A holder that goes away is found by the
+/// next probe.
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
@@ -113,20 +120,30 @@ public actor PrimaryLease {
     private let probe: any LeaseProbe
     private let timing: LeaseTiming
     private let now: @Sendable () -> Date
+    private let monotonic: @Sendable () -> TimeInterval
     private let sleep: @Sendable (TimeInterval) async throws -> Void
 
     /// The lease record this device last successfully wrote, if any.
     private var heldRecord: Record?
+    /// When the held lease lapses on the monotonic clock: set with every
+    /// write, so a wall clock stepped backwards cannot revive a lease.
+    private var heldUntil: TimeInterval = 0
     /// The lease that took ours, while it stays fresh.
     private var yieldedTo: Lease?
     private var heartbeatTask: Task<Void, Never>?
 
     /// - Parameters:
-    ///   - now: the clock; tests move it by hand.
+    ///   - now: the wall clock the record's expiry is written and read in;
+    ///     tests move it by hand.
+    ///   - monotonic: seconds on a clock that only goes forward and keeps
+    ///     counting through sleep; the local expiry is judged on it too.
     ///   - sleep: how the heartbeat loop waits; tests drive it.
     public init(database: any RecordDatabase, device: DeviceID, endpoint: String?,
                 probe: any LeaseProbe, timing: LeaseTiming = .standard,
                 now: @escaping @Sendable () -> Date = { Date() },
+                monotonic: @escaping @Sendable () -> TimeInterval = {
+                    TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000_000
+                },
                 sleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
                     try await Task.sleep(for: .seconds($0))
                 }) {
@@ -136,6 +153,7 @@ public actor PrimaryLease {
         self.probe = probe
         self.timing = timing
         self.now = now
+        self.monotonic = monotonic
         self.sleep = sleep
     }
 
@@ -144,10 +162,16 @@ public actor PrimaryLease {
 
     /// True while this device holds an unexpired lease. Needs no network:
     /// a holder that has not managed a heartbeat inside the duration is not
-    /// primary, whatever the server says.
+    /// primary, whatever the server says. Expiry is judged on the wall
+    /// clock and the monotonic clock, whichever lapses first, so a wall
+    /// clock corrected backwards on wake does not revive a stale lease.
     public func isPrimary() -> Bool {
         guard let lease = held else { return false }
-        return !lease.isExpired(at: now())
+        return !hasLapsed(lease)
+    }
+
+    private func hasLapsed(_ lease: Lease) -> Bool {
+        lease.isExpired(at: now()) || monotonic() >= heldUntil
     }
 
     /// The turn-time path. Returns `.primary` when this device holds the
@@ -209,7 +233,7 @@ public actor PrimaryLease {
     /// missed its heartbeats and is not primary until it claims again).
     public func heartbeat() async throws -> Bool {
         guard let record = heldRecord, let lease = Lease(record: record) else { return false }
-        if lease.isExpired(at: now()) {
+        if hasLapsed(lease) {
             heldRecord = nil
             return false
         }
@@ -232,23 +256,29 @@ public actor PrimaryLease {
     }
 
     /// Compare-and-set of the lease record. On success this device holds the
-    /// saved version and its heartbeats are running. On a conflict the lease
-    /// is forgotten and the lease that won, written just now by a device
-    /// that is evidently alive, is the one this device yields to; unless the
-    /// winner is this same lease, written by an overlapping heartbeat of
-    /// ours, which is a success. Anything but a conflict propagates.
+    /// saved version, its local deadline is set, and its heartbeats are
+    /// running. On a conflict the lease is forgotten and the lease that
+    /// won, written just now by a device that is evidently alive, is the
+    /// one this device yields to; unless this device holds the lease and
+    /// the winner is that same lease, written by an overlapping heartbeat
+    /// of ours, which is a success. Anything but a conflict propagates.
     private func write(_ lease: Lease, over changeTag: String?) async throws -> Lease? {
         do {
+            let deadline = monotonic() + timing.duration
             let saved = try await database.save(lease.record(changeTag: changeTag))
             heldRecord = lease.record(changeTag: saved.changeTag)
+            heldUntil = deadline
             yieldedTo = nil
             startHeartbeats()
             return lease
         } catch RecordDatabaseError.serverRecordChanged(_, let server) {
             let winner = Lease(record: server)
-            if let winner, winner.holder == lease.holder, winner.epoch == lease.epoch, winner.endpoint == lease.endpoint {
-                // A concurrent write of ours got there first: the lease is
-                // still this one, at the server's version.
+            if heldRecord != nil, let winner, winner.holder == lease.holder, winner.epoch == lease.epoch,
+               winner.endpoint == lease.endpoint {
+                // A concurrent heartbeat of ours got there first: the lease
+                // is still this one, at the server's version. Only a holder
+                // can say so; two cold instances creating the same lease
+                // look identical to each other and one must lose.
                 heldRecord = server
                 return winner
             }

@@ -9,7 +9,7 @@ import TopoCoreTesting
 
     func lease(_ device: DeviceID, probe: StubProbe = .allAlive, ticker: Ticker = Ticker()) -> PrimaryLease {
         PrimaryLease(database: db, device: device, endpoint: "\(device.rawValue).local:1",
-                     probe: probe, now: clock.read, sleep: ticker.sleep)
+                     probe: probe, now: clock.read, monotonic: clock.uptime, sleep: ticker.sleep)
     }
 
     @Test func firstClaimCreatesTheRecord() async throws {
@@ -151,6 +151,31 @@ import TopoCoreTesting
         clock.advance(7)
         guard case .primary(let mine) = try await h.acquire() else { Issue.record("expected .primary"); return }
         #expect(mine.epoch == 3)
+    }
+
+    @Test func twoColdInstancesOfOneDeviceCreatingTogetherYieldOnePrimary() async throws {
+        let none = SetProbe([])
+        let a = PrimaryLease(database: db, device: phone, endpoint: "phone:1", probe: none, now: clock.read, sleep: Ticker().sleep)
+        let b = PrimaryLease(database: db, device: phone, endpoint: "phone:1", probe: none, now: clock.read, sleep: Ticker().sleep)
+        let barrier = Barrier(parties: 2)
+        await db.setBeforeSave { _ in await barrier.arrive() }
+        async let oa = a.acquire()
+        async let ob = b.acquire()
+        let outcomes = try await [oa, ob]
+        await db.setBeforeSave(nil)
+        let primaries = outcomes.filter { if case .primary = $0 { true } else { false } }
+        let unreachable = outcomes.filter { if case .unreachable = $0 { true } else { false } }
+        #expect(primaries.count == 1)
+        #expect(unreachable.count == 1)
+        var both = 0.0
+        for _ in 0..<10 {
+            clock.advance(4)
+            _ = try? await a.heartbeat(); _ = try? await b.heartbeat()
+            if await a.isPrimary(), await b.isPrimary() { both += 4 }
+        }
+        #expect(both == 0)
+        let aPrimary = await a.isPrimary(), bPrimary = await b.isPrimary()
+        #expect(aPrimary != bPrimary)
     }
 
     @Test func twoInstancesOfOneDeviceAreNotBothPrimary() async throws {

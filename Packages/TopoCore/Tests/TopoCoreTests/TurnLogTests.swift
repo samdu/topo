@@ -150,6 +150,42 @@ import TopoCoreTesting
         #expect(t[.ref("phone", 1)]?.parents == [])
     }
 
+    @Test func nonPositiveSequencesDoNotTrapTheReader() async throws {
+        let zero = Turn(ref: .ref("phone", 0), parents: [], role: .person, text: "zero", at: tA)
+        let t = Transcript(turns: [zero])
+        #expect(t.turns.count == 1)
+        #expect(t.missing.isEmpty)
+
+        _ = try await db.save(turnRecord(device: "phone", seq: -1, parents: []))
+        _ = try await db.save(turnRecord(device: "phone", seq: 0, parents: []))
+        _ = try await db.save(turnRecord(device: "phone", seq: 1, parents: []))
+        let read = try await log.read()
+        #expect(read.turns.count == 1)
+        #expect(read.missing.isEmpty)
+        #expect(Set(read.unreadable) == [RecordID("turn/phone/-1"), RecordID("turn/phone/0")])
+        #expect(!read.isComplete)
+        let w = try await log.writer(for: phone)
+        #expect(await w.nextRef.sequence == 2)
+    }
+
+    @Test func oneUnreadableRecordKeepsBlockingContinuingUntilRepaired() async throws {
+        _ = try await db.save(turnRecord(device: "phone", seq: 1, parents: []))
+        var bad = turnRecord(device: "phone", seq: 2, parents: ["phone/1"])
+        bad["role"] = .string("narrator")
+        _ = try await db.save(bad)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "three", parents: [.ref("phone", 1)], at: tA + 1)
+        var blocked = 0
+        for _ in 0..<3 {
+            let t = try await log.read()
+            do { _ = try await w.append(.person, "next", continuing: t, at: tA + 2) } catch { blocked += 1 }
+        }
+        #expect(blocked == 3)
+        // The plain append is the way on: name the heads by hand.
+        let t = try await log.read()
+        _ = try await w.append(.person, "next", parents: t.heads, at: tA + 2)
+    }
+
     @Test func exclusiveForTheOnlyHeadIsTheWholeLog() async throws {
         let root = Turn(ref: .ref("phone", 1), parents: [], role: .person, text: "root", at: tA)
         let child = Turn(ref: .ref("phone", 2), parents: [root.ref], role: .assistant, text: "child", at: tA + 1)
@@ -176,28 +212,43 @@ import TopoCoreTesting
         #expect(try await w.append(.person, "x", parents: [], at: tA).ref.sequence == 41)
     }
 
-    @Test func lostAcknowledgementDoesNotDuplicateTheTurn() async throws {
+    @Test func lostAcknowledgementRetriedWithTheSameNonceDoesNotDuplicateTheTurn() async throws {
         let inner = InMemoryRecordDatabase()
         let log = TurnLog(database: FlakyOnceDatabase(inner: inner))
         let w = try await log.writer(for: phone)
+        let nonce = UUID().uuidString
         await #expect(throws: RecordDatabaseError.self) {
-            _ = try await w.append(.person, "hello", parents: [], at: tA)
+            _ = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
         }
-        let retried = try await w.append(.person, "hello", parents: [], at: tA)
+        let retried = try await w.append(.person, "hello", parents: [], at: tA, nonce: nonce)
         #expect(retried.ref.sequence == 1)
+        #expect(retried.nonce == nonce)
         let turns = try await log.read(device: phone, after: 0)
         #expect(turns.map(\.text) == ["hello"])
         #expect(await w.nextRef.sequence == 2)
     }
 
-    @Test func aDifferentTurnAtTheSameSequenceIsNotMistakenForOurs() async throws {
-        let db = InMemoryRecordDatabase()
-        let log = TurnLog(database: db)
-        let a = try await log.writer(for: phone)
-        let b = try await log.writer(for: phone)
-        _ = try await a.append(.person, "hello", parents: [], at: tA)
-        let other = try await b.append(.person, "hello", parents: [], at: tA + 1)
-        #expect(other.ref.sequence == 2)
+    @Test func identicalContentFromAnotherWriterIsASecondTurn() async throws {
+        for delta in [0.0, 0.0005, 0.002] {
+            let db = InMemoryRecordDatabase()
+            let log = TurnLog(database: db)
+            let w1 = try await log.writer(for: phone)
+            let w2 = try await log.writer(for: phone)
+            let a = try await w1.append(.person, "ok", parents: [], at: tA)
+            let b = try await w2.append(.person, "ok", parents: [], at: tA + delta)
+            #expect(a.ref == .ref("phone", 1))
+            #expect(b.ref == .ref("phone", 2))
+            #expect(await db.writes.count == 2)
+        }
+    }
+
+    @Test func aRetryWithoutTheNonceIsASecondTurn() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: FlakyOnceDatabase(inner: inner))
+        let w = try await log.writer(for: phone)
+        _ = try? await w.append(.person, "hello", parents: [], at: tA)
+        let again = try await w.append(.person, "hello", parents: [], at: tA)
+        #expect(again.ref.sequence == 2)
     }
 
     @Test func malformedRecordAtTheTailIsSkippedAndReported() async throws {

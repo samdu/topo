@@ -2,18 +2,25 @@ import Foundation
 import TopoCore
 import TopoCoreTesting
 
-/// A clock tests move by hand.
+/// A clock tests move by hand: a wall clock and a monotonic clock that
+/// advance together, except that `wallStep` moves the wall clock alone.
 final class ManualClock: @unchecked Sendable {
     private let lock = NSLock()
     private var current: Date
+    private var elapsed: TimeInterval = 0
 
     init(_ start: Date = tA) { current = start }
 
     var now: Date { lock.withLock { current } }
 
-    func advance(_ seconds: TimeInterval) { lock.withLock { current += seconds } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { current += seconds; elapsed += seconds } }
+
+    /// A clock correction: the wall clock jumps, the monotonic clock does not.
+    func wallStep(_ seconds: TimeInterval) { lock.withLock { current += seconds } }
 
     var read: @Sendable () -> Date { { [self] in self.now } }
+
+    var uptime: @Sendable () -> TimeInterval { { [self] in self.lock.withLock { self.elapsed } } }
 }
 
 /// Stands in for the heartbeat loop's sleep: the loop parks here and each
@@ -164,6 +171,7 @@ func turnRecord(device: String, seq: Int64, parents: [String], role: String = "p
         "role": .string(role),
         "text": .string(text),
         "at": .date(at),
+        "nonce": .string("n-\(device)-\(seq)"),
     ])
 }
 
