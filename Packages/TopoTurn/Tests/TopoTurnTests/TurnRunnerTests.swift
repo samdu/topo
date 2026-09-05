@@ -91,6 +91,18 @@ import TopoCoreTesting
         #expect(transcript.ordered.map(\.text) == ["once", "ok"])
     }
 
+    @Test func aRetryAfterTheReplyLandedReturnsThatReplyWithoutAnotherCall() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("the reply")), (200, reply("never")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let nonce = "cut-off-after-commit"
+        let first = try await runner.run("words", model: .sonnet5, nonce: nonce)
+        let again = try await runner.run("words", model: .sonnet5, nonce: nonce)
+        #expect(again.assistant == first.assistant)
+        #expect(transport.requests.count == 1)
+        #expect(try await TurnLog(database: db).read().ordered.count == 2)
+    }
+
     @Test func historyIsCappedAndRolesAlternate() {
         let d = DeviceID("d")
         var turns: [Turn] = []

@@ -60,7 +60,17 @@ public actor TurnRunner {
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
 
         let before = try await log.read()
-        let person = try await writer.append(.person, text, continuing: before, nonce: nonce)
+        let at = Date()
+        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
+        if person.at != at {
+            // A retry: the person's turn was written by an earlier attempt. If that attempt also
+            // got its reply into the log before it was cut off, that is the reply.
+            let now = try await log.read()
+            if let answered = now.ordered.first(where: { $0.role == .assistant && $0.parents.contains(person.ref) }) {
+                return Result(person: person, assistant: answered,
+                              reply: Reply(text: answered.text, model: model.rawValue, stopReason: nil, inputTokens: 0, outputTokens: 0))
+            }
+        }
         do {
             let history = before.ordered.suffix(historyLimit - 1) + [person]
             let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
