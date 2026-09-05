@@ -202,6 +202,14 @@ import TopoCoreTesting
         #expect(transport.requests.isEmpty)
     }
 
+    @Test func theReplyNonceIsFixedLengthAndOrderBlind() {
+        let a = TurnRef(device: DeviceID("watch"), sequence: 3), b = TurnRef(device: DeviceID("pad"), sequence: 9)
+        #expect(TurnRunner.replyNonce(for: [a, b]) == TurnRunner.replyNonce(for: [b, a]))
+        #expect(TurnRunner.replyNonce(for: [a]) != TurnRunner.replyNonce(for: [b]))
+        let wide = (1...500).map { TurnRef(device: DeviceID("device-\($0)"), sequence: Int64($0)) }
+        #expect(TurnRunner.replyNonce(for: wide).count == "answer/".count + 64)
+    }
+
     @Test func historyIsCappedAndRolesAlternate() {
         let d = DeviceID("d")
         var turns: [Turn] = []

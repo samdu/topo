@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import TopoCore
 
@@ -134,10 +135,13 @@ public actor TurnRunner {
         transcript.heads.contains { transcript[$0]?.role == .person }
     }
 
-    /// The nonce of the reply to these turns, the same on every device: `answer/` and the refs
-    /// in sorted order joined by `+`.
+    /// The nonce of the reply to these turns, the same on every device: `answer/` and the SHA-256
+    /// of the refs in sorted order, so its length is fixed however wide a fork it answers (the
+    /// marker's record name carries it, and CloudKit caps a record name at 255 characters).
     static func replyNonce(for heads: [TurnRef]) -> String {
-        "answer/" + heads.sorted().map(\.description).joined(separator: "+")
+        let canonical = heads.sorted().map(\.description).joined(separator: "\n")
+        let digest = SHA256.hash(data: Data(canonical.utf8))
+        return "answer/" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Turns as the API takes them: roles alternate, so consecutive turns of one role are joined,
