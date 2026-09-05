@@ -18,6 +18,12 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Womble tells the hubs in your home that this screen is here, and answers which agents are registered to it.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_topo._tcp</string>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

@@ -41,6 +41,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Topo listens when you press the microphone, so it can hear what you forgot.
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Topo turns what you say into text so it can answer you.
@@ -57,6 +58,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_WKWatchOnly: true
         INFOPLIST_KEY_WKApplication: true
@@ -70,6 +72,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tv
+        ASSETCATALOG_COMPILER_APPICON_NAME: App Icon & Top Shelf Image
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_UILaunchScreen_Generation: true
   # The app targets' own logic — the transcript store, the identity, the
@@ -98,6 +101,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.hub
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_LSUIElement: true
         INFOPLIST_KEY_CFBundleDisplayName: Topo Hub
 schemes:
