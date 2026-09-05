@@ -5,11 +5,13 @@ import Foundation
 /// `RecordDatabase` over a `CKDatabase` and one record zone.
 ///
 /// Compare-and-set rides CloudKit's own `ifServerRecordUnchanged` policy: a
-/// tagged record is saved through the `CKRecord` it was fetched as, whose
-/// change tag CloudKit checks, and an untagged one is a fresh `CKRecord`
-/// that CloudKit refuses if the ID exists. Fetched `CKRecord`s are kept by
-/// tag so a later save can find the one to write through; a record whose
-/// tag is not on hand is fetched again and checked before the save.
+/// tagged record is saved through a copy of the `CKRecord` it was fetched
+/// as, whose change tag CloudKit checks, and an untagged one is a fresh
+/// `CKRecord` that CloudKit refuses if the ID exists. `CKRecord`s from
+/// `fetch` and from saves are kept so a later save can find the one to
+/// write through; query results are not kept, since nothing saves over
+/// them. A record whose tag is not on hand is fetched again and checked
+/// before the save.
 ///
 /// The zone must exist, and it must be a custom zone: the default zone has
 /// no atomic batches. Every field that appears in a query filter needs a
@@ -75,16 +77,7 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
     }
 
     public func query(_ query: RecordQuery) async throws -> [Record] {
-        let predicate: NSPredicate
-        if query.filters.isEmpty {
-            predicate = NSPredicate(value: true)
-        } else {
-            predicate = NSCompoundPredicate(andPredicateWithSubpredicates: query.filters.map { f in
-                let op = f.op == .equals ? "==" : ">"
-                return NSPredicate(format: "%K \(op) %@", f.field, Self.ckValue(f.value) as! NSObject)
-            })
-        }
-        let ckQuery = CKQuery(recordType: query.type, predicate: predicate)
+        let ckQuery = CKQuery(recordType: query.type, predicate: Self.predicate(for: query))
         var out: [Record] = []
         var cursor: CKQueryOperation.Cursor?
         repeat {
@@ -96,12 +89,11 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
                     page = try await database.records(matching: ckQuery, inZoneWith: zoneID)
                 }
             } catch {
-                throw RecordDatabaseError.unavailable(underlying: error)
+                throw Self.mapped(error, recordIDs: [])
             }
             for (id, result) in page.matchResults {
                 switch result {
                 case .success(let ck):
-                    remember(ck)
                     out.append(Self.record(from: ck))
                 case .failure(let e):
                     throw Self.mapped(e, recordIDs: [id])
@@ -137,13 +129,22 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
         } else {
             base = CKRecord(recordType: record.type, recordID: ckID)
         }
-        for key in base.allKeys() where record.fields[key] == nil {
-            base[key] = nil
+        return Self.applying(record.fields, to: base)
+    }
+
+    /// A copy of `base` carrying exactly `fields` among the field kinds this
+    /// package maps. Fields of other kinds are left as they are, so a newer
+    /// version's data survives an older version's heartbeat. The copy keeps
+    /// the change tag, and the cached original is never written to.
+    static func applying(_ fields: [String: FieldValue], to base: CKRecord) -> CKRecord {
+        let copy = base.copy() as! CKRecord
+        for key in copy.allKeys() where fields[key] == nil && fieldValue(copy[key]) != nil {
+            copy[key] = nil
         }
-        for (key, value) in record.fields {
-            base[key] = Self.ckValue(value)
+        for (key, value) in fields {
+            copy[key] = ckValue(value)
         }
-        return base
+        return copy
     }
 
     private func remember(_ ck: CKRecord) {
@@ -154,19 +155,31 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
         lock.withLock { fetched[id] }
     }
 
+    static func predicate(for query: RecordQuery) -> NSPredicate {
+        if query.filters.isEmpty { return NSPredicate(value: true) }
+        return NSCompoundPredicate(andPredicateWithSubpredicates: query.filters.map { f in
+            let op = f.op == .equals ? "==" : ">"
+            return NSPredicate(format: "%K \(op) %@", f.field, ckValue(f.value) as! NSObject)
+        })
+    }
+
     static func record(from ck: CKRecord) -> Record {
         var fields: [String: FieldValue] = [:]
         for key in ck.allKeys() {
-            switch ck[key] {
-            case let s as String: fields[key] = .string(s)
-            case let d as Date: fields[key] = .date(d)
-            case let n as NSNumber: fields[key] = .int(n.int64Value)
-            case let a as [String]: fields[key] = .strings(a)
-            default: break
-            }
+            if let value = fieldValue(ck[key]) { fields[key] = value }
         }
         return Record(type: ck.recordType, id: RecordID(ck.recordID.recordName),
                       fields: fields, changeTag: ck.recordChangeTag)
+    }
+
+    static func fieldValue(_ value: (any CKRecordValue)?) -> FieldValue? {
+        switch value {
+        case let s as String: return .string(s)
+        case let d as Date: return .date(d)
+        case let n as NSNumber: return .int(n.int64Value)
+        case let a as [String]: return .strings(a)
+        default: return nil
+        }
     }
 
     static func ckValue(_ value: FieldValue) -> any CKRecordValue {
@@ -177,6 +190,13 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
         case .strings(let a): return a as NSArray
         }
     }
+
+    /// CloudKit errors that will not clear on their own.
+    static let permanentCodes: Set<CKError.Code> = [
+        .notAuthenticated, .permissionFailure, .badContainer, .badDatabase, .missingEntitlement,
+        .zoneNotFound, .userDeletedZone, .quotaExceeded, .invalidArguments, .incompatibleVersion,
+        .constraintViolation, .limitExceeded, .managedAccountRestricted, .participantMayNeedVerification,
+    ]
 
     static func mapped(_ error: any Error, recordIDs: [CKRecord.ID]) -> any Error {
         guard let ck = error as? CKError else { return RecordDatabaseError.unavailable(underlying: error) }
@@ -196,6 +216,8 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
                 return m
             }
             return RecordDatabaseError.unavailable(underlying: error)
+        case let code where permanentCodes.contains(code):
+            return RecordDatabaseError.rejected(underlying: error)
         default:
             return RecordDatabaseError.unavailable(underlying: error)
         }

@@ -37,6 +37,10 @@ public enum RecordDatabaseError: Error, Sendable {
     case unknownItem(RecordID)
     /// The store could not be reached. Retry later; nothing was applied.
     case unavailable(underlying: any Error)
+    /// The store refused the request and will keep refusing it: not signed
+    /// in, no permission, no such zone, over quota, a bad argument. Nothing
+    /// was applied, and retrying will not help until something changes.
+    case rejected(underlying: any Error)
 }
 
 /// The subset of CloudKit the package uses, over the private database.
