@@ -16,7 +16,7 @@ private final class FakeStore: TurnRecordStore {
         completion(account)
     }
 
-    func queryTurns(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+    func allTurns(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
         if let error = queryResult { return completion(.failure(error)) }
         completion(.success(queried))
     }

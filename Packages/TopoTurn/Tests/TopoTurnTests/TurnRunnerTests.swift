@@ -29,6 +29,16 @@ import TopoCoreTesting
         #expect(transcript.heads.count == 1)
     }
 
+    @Test func progressReportsEachStepAndThePersonsTurnBeforeTheReply() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("ok")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let steps = Steps()
+        let result = try await runner.run("words", model: .sonnet5) { await steps.add($0) }
+        let seen = await steps.all
+        #expect(seen == [.takingLease, .saving, .asking(person: result.person), .savingReply])
+    }
+
     @Test func notPrimaryMeansNoCallAndNoAppend() async throws {
         let db = InMemoryRecordDatabase()
         let other = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: AlwaysConfirms(),
@@ -144,4 +154,9 @@ import TopoCoreTesting
         let leadingAssistant = TurnRunner.messages(from: [turns[1], turns[2]])
         #expect(leadingAssistant == [ChatMessage(role: .user, content: "t3")])
     }
+}
+
+actor Steps {
+    private(set) var all: [TurnRunner.Progress] = []
+    func add(_ step: TurnRunner.Progress) { all.append(step) }
 }

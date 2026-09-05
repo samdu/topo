@@ -10,19 +10,23 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     private let roster = SurfaceRoster()
     private var surface: SurfaceServer?
     private var prompt: RegistrationPrompt?
+    private weak var house: HouseViewController?
 
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         let window = UIWindow(frame: UIScreen.main.bounds)
         let transcript = TranscriptViewController(source: CloudKitTranscriptSource())
-        let navigation = UINavigationController(rootViewController: transcript)
+        let house = HouseViewController(transcript: transcript,
+                                        board: BoardViewController(source: BoardReader()))
+        let navigation = UINavigationController(rootViewController: house)
         navigation.navigationBar.tintColor = Palette.accent
         window.rootViewController = navigation
         window.backgroundColor = Palette.background
         window.makeKeyAndVisible()
         self.window = window
+        self.house = house
 
-        let prompt = RegistrationPrompt(roster: roster, presenting: transcript)
+        let prompt = RegistrationPrompt(roster: roster, presenting: house)
         roster.pendingChanged = { [weak prompt] in prompt?.askIfNeeded() }
         self.prompt = prompt
         let surface = SurfaceServer(device: SurfaceIdentity.device(),
@@ -42,5 +46,6 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     func applicationWillEnterForeground(_ application: UIApplication) {
         surface?.start()
         prompt?.askIfNeeded()
+        house?.read()
     }
 }

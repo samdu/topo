@@ -235,6 +235,21 @@ public actor PrimaryLease {
         return .contended
     }
 
+    /// Creates the lease record for this device only if none exists: the
+    /// atomic first claim, which exactly one of any number of devices
+    /// launching together wins. True for the winner. The record is not held
+    /// or heartbeated here; it lapses in one duration, and `acquire()` takes
+    /// it properly when the first turn runs. False when a record exists,
+    /// whoever holds it and however old.
+    public func claimIfNone() async throws -> Bool {
+        do {
+            _ = try await database.save(holder(epoch: 1).record(changeTag: nil))
+            return true
+        } catch RecordDatabaseError.serverRecordChanged {
+            return false
+        }
+    }
+
     /// Extends the held lease by one duration. Returns false, and forgets
     /// the lease, when the server holds a different version (another device
     /// has claimed it) or the lease has already expired locally (this device

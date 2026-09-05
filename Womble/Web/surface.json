@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "house": "Hexagon Zone",
+  "transcript": {
+    "complete": true,
+    "notice": null,
+    "turns": [
+      { "ref": "phone/1", "role": "person", "text": "What did you forget this week?", "at": "2026-09-05T19:02:00Z" },
+      { "ref": "hub/1", "role": "assistant", "text": "The bins go out tonight, and Helen's birthday is on Tuesday.", "at": "2026-09-05T19:02:04Z" },
+      { "ref": "phone/2", "role": "person", "text": "Put the bins on the board.", "at": "2026-09-05T19:02:31Z" },
+      { "ref": "hub/2", "role": "assistant", "text": "On the board.", "at": "2026-09-05T19:02:33Z" }
+    ]
+  },
+  "board": {
+    "cards": [
+      { "id": "hub/3", "owner": "hub", "body": "Bins out tonight", "state": "posted", "postedAt": "2026-09-05T19:02:33Z", "at": "2026-09-05T19:02:33Z" },
+      { "id": "phone/7", "owner": "phone", "body": "Card for Helen", "state": "posted", "postedAt": "2026-09-05T18:10:00Z", "at": "2026-09-05T18:10:00Z" },
+      { "id": "phone/4", "owner": "phone", "body": "Oat milk", "state": "ticked", "postedAt": "2026-09-04T09:00:00Z", "at": "2026-09-05T08:31:00Z" }
+    ]
+  }
+}

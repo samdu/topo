@@ -9,11 +9,11 @@ import Foundation
 /// and a read that cannot be completed says so rather than showing part of a
 /// conversation as all of it.
 ///
-/// The query index is eventually consistent, and a newest turn it has not
-/// caught up with leaves no gap behind it — a transcript that is short by
-/// its tail looks complete. So after the query, every known device's next
-/// sequence is fetched by ID, which is read-your-writes, and one that exists
-/// is reported missing. This mirrors `TurnLog.read` in TopoCore, deliberately
+/// The zone's change feed is eventually consistent, and a newest turn it
+/// has not caught up with leaves no gap behind it — a transcript that is
+/// short by its tail looks complete. So after the read, every known device's
+/// next sequence is fetched by ID, which is read-your-writes, and one that
+/// exists is reported missing. This mirrors `TurnLog.read` in TopoCore, deliberately
 /// and exactly: a device none of whose turns the query returned cannot be
 /// probed this way, and a viewer has no writer of its own to ask.
 final class CloudKitTranscriptSource: TranscriptSource {
@@ -32,7 +32,7 @@ final class CloudKitTranscriptSource: TranscriptSource {
             case .failure(let error):
                 finish(.failure(error))
             case .success:
-                self.store.queryTurns { result in
+                self.store.allTurns { result in
                     switch result {
                     case .failure(let error):
                         finish(.failure(error))

@@ -15,7 +15,8 @@ import Foundation
 ///
 /// The zone must exist, and it must be a custom zone: the default zone has
 /// no atomic batches. Every field that appears in a query filter needs a
-/// queryable index in the CloudKit schema.
+/// queryable index in the CloudKit schema; the whole of a type is read from
+/// the zone's change feed, which needs none.
 public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
     private let database: CKDatabase
     private let zoneID: CKRecordZone.ID
@@ -101,6 +102,36 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
             }
             cursor = page.queryCursor
         } while cursor != nil
+        return out
+    }
+
+    /// The zone's change feed from the beginning, kept to the one type. A
+    /// match-all query would do the same only with a queryable index on the
+    /// record name, which the development schema never builds.
+    public func records(ofType type: String) async throws -> [Record] {
+        var out: [Record] = []
+        var token: CKServerChangeToken?
+        var more = true
+        while more {
+            let page: (modificationResultsByID: [CKRecord.ID: Result<CKDatabase.RecordZoneChange.Modification, any Error>],
+                       deletions: [CKDatabase.RecordZoneChange.Deletion],
+                       changeToken: CKServerChangeToken, moreComing: Bool)
+            do {
+                page = try await database.recordZoneChanges(inZoneWith: zoneID, since: token)
+            } catch {
+                throw Self.mapped(error, recordIDs: [])
+            }
+            for (id, result) in page.modificationResultsByID {
+                switch result {
+                case .success(let change):
+                    if change.record.recordType == type { out.append(Self.record(from: change.record)) }
+                case .failure(let e):
+                    throw Self.mapped(e, recordIDs: [id])
+                }
+            }
+            token = page.changeToken
+            more = page.moreComing
+        }
         return out
     }
 

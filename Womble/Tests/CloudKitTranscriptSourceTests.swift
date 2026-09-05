@@ -73,22 +73,49 @@ final class CloudKitReadTests: XCTestCase {
     }
 }
 
-/// CloudKit answers a match-all predicate out of the record name's index,
-/// which the development schema never marks queryable — so asking for
-/// everything is asking for an error on a real container, and the screen
-/// says the log could not be read. Asking by a field of our own works,
-/// because that index is built when the first record carrying it is saved.
-final class TurnQueryPredicateTests: XCTestCase {
-    func testTheQueryAsksBySequenceRatherThanForEverything() {
-        XCTAssertEqual(CloudKitStore.everyTurn.predicateFormat, "sequence > 0")
-        XCTAssertNotEqual(CloudKitStore.everyTurn, NSPredicate(value: true))
+/// The read is the zone's change feed rather than a query, so a record too
+/// damaged to be found by a field of ours is still seen — and a screen that
+/// says a turn is missing is telling the truth about the log rather than
+/// about the index.
+final class DamagedRecordTests: XCTestCase {
+    func testARecordWithNoSequenceIsStillSeenAndReported() {
+        let damaged = CKRecord(recordType: Turn.recordType,
+                               recordID: CKRecord.ID(recordName: "turn/phone/1"))
+        damaged["device"] = "phone" as NSString
+        // No sequence, no role, no text: a query by sequence could not
+        // return this at all, and the feed hands it over.
+        let store = DamagedRecordStore(records: [damaged])
+        let source = CloudKitTranscriptSource(store: store)
+
+        var answer: Result<Transcript, TranscriptError>?
+        let done = expectation(description: "read")
+        source.read { result in
+            answer = result
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 2)
+
+        guard case .success(let transcript)? = answer else { return XCTFail("not a transcript") }
+        XCTAssertFalse(transcript.isComplete)
+        XCTAssertEqual(transcript.missing, [TurnRef(device: DeviceID("phone"), sequence: 1)])
+    }
+}
+
+/// Answers with whatever it was given, and finds nothing past the end.
+private final class DamagedRecordStore: TurnRecordStore {
+    private let records: [CKRecord]
+
+    init(records: [CKRecord]) { self.records = records }
+
+    func accountAvailable(_ completion: @escaping (Result<Void, TranscriptError>) -> Void) {
+        completion(.success(()))
     }
 
-    func testEverySequenceARealTurnCanHaveMatches() {
-        // Sequences start at 1, so this is every turn there is.
-        for sequence in [1, 2, 99, Int(Int32.max)] {
-            XCTAssertTrue(CloudKitStore.everyTurn.evaluate(with: ["sequence": sequence]),
-                          "turn \(sequence) would not be read")
-        }
+    func allTurns(_ completion: @escaping (Result<[CKRecord], TranscriptError>) -> Void) {
+        completion(.success(records))
+    }
+
+    func fetchTurns(named names: [String], _ completion: @escaping (Result<Set<String>, TranscriptError>) -> Void) {
+        completion(.success([]))
     }
 }
