@@ -18,8 +18,9 @@ final class Harness {
     private(set) var error: String?
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
-    /// Words said while a turn was in flight, oldest first; each goes as its own turn after it.
-    private(set) var queued: [String] = []
+    /// Turns said and not yet settled, oldest first: the head is the one in flight or the one
+    /// that stopped the line, the rest wait behind it.
+    var waiting: [String] { pending.map(\.text) }
     let device: DeviceID
 
     private let database: RecordingDatabase
@@ -32,24 +33,22 @@ final class Harness {
     /// The last answer from the Messages API: status, when, how long it took.
     private var lastAPI: (status: Int, at: Date, seconds: TimeInterval)?
 
-    /// The person's turn that may or may not be in the log yet. Written before the attempt and
-    /// cleared once the turn is known to be there, so a relaunch after a lost acknowledgement
-    /// sends the same words under the same nonce and gets the turn already written.
+    /// What the person said that is not settled yet, oldest first, each under the nonce it was
+    /// first attempted with and written to disk before any attempt. So a relaunch after a lost
+    /// acknowledgement sends the same words under the same nonce and gets the turn already
+    /// written, and a turn said behind a long one survives the app being killed during it.
     private struct Outgoing: Codable, Equatable {
         var text: String
         var nonce: String
     }
-    private static let outgoingKey = "topo.harness.outgoing"
-    private var outgoing: Outgoing? {
-        get { UserDefaults.standard.data(forKey: Self.outgoingKey).flatMap { try? JSONDecoder().decode(Outgoing.self, from: $0) } }
-        set {
-            if let newValue { UserDefaults.standard.set(try? JSONEncoder().encode(newValue), forKey: Self.outgoingKey) }
-            else { UserDefaults.standard.removeObject(forKey: Self.outgoingKey) }
+    private static let outboxKey = "topo.harness.outbox"
+    private var pending: [Outgoing] = [] {
+        didSet {
+            if pending.isEmpty { UserDefaults.standard.removeObject(forKey: Self.outboxKey) }
+            else { UserDefaults.standard.set(try? JSONEncoder().encode(pending), forKey: Self.outboxKey) }
         }
     }
-
-    /// Words that were on their way when the app last went away, if any.
-    var unsent: String? { outgoing?.text }
+    private var outgoing: Outgoing? { pending.first }
 
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) {
@@ -58,6 +57,18 @@ final class Harness {
         self.device = device
         self.ensureZone = ensureZone
         log = TurnLog(database: self.database)
+        if let data = UserDefaults.standard.data(forKey: Self.outboxKey),
+           let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
+            pending = saved
+        }
+        // The single unsent turn an earlier build kept under its own key heads the line.
+        let singleKey = "topo.harness.outgoing"
+        if let data = UserDefaults.standard.data(forKey: singleKey) {
+            if let single = try? JSONDecoder().decode(Outgoing.self, from: data), !pending.contains(single) {
+                pending.insert(single, at: 0)
+            }
+            UserDefaults.standard.removeObject(forKey: singleKey)
+        }
     }
 
     /// The app's harness: the shared CloudKit log and the keychain's tokens.
@@ -82,9 +93,8 @@ final class Harness {
         notice = nil
         error = nil
         status = nil
-        queued = []
         busy = false
-        outgoing = nil
+        pending = []
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
     }
@@ -101,37 +111,37 @@ final class Harness {
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
-    /// is in flight wait their turn and go next, in order; nothing said is dropped. A turn that
-    /// never reached the log stops the line: it is kept as the unsent turn and goes first next
-    /// time, and what was queued behind it waits.
+    /// is in flight wait their turn and go next, in order, the same words twice being two turns;
+    /// nothing said is dropped. A turn that never reached the log stops the line: it stays at the
+    /// head and goes first next time, and what was said behind it waits.
     func send(_ text: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        // The unsent turn's own words again are that turn, not one behind it.
-        if outgoing?.text != text { queued.append(text) }
+        pending.append(Outgoing(text: text, nonce: UUID().uuidString))
         await drain()
     }
 
-    /// Sends the unsent turn and whatever waits behind it, after a turn that stopped the line.
+    /// Sends the line from its head, after a turn that stopped it or a launch that found it.
     func retry() async {
         await drain()
     }
 
     /// True when a turn is waiting to go and none is in flight: the line stopped on a failure.
-    var hasWaiting: Bool { !busy && (outgoing != nil || !queued.isEmpty) }
+    var hasWaiting: Bool { !busy && !pending.isEmpty }
 
     private func drain() async {
         guard !busy else { return }
         busy = true
         error = nil
-        while let text = outgoing?.text ?? (queued.isEmpty ? nil : queued.removeFirst()) {
-            let task = Task { await run(text) }
+        while let next = pending.first {
+            let task = Task { await run(next) }
             inFlight = task
             let settled = await task.value
-            // A sign-out cleared everything, this turn included; the queue went with it.
+            // A sign-out cleared everything, this turn included; the line went with it.
             guard inFlight == task else { return }
             inFlight = nil
             guard settled else { break }
+            if pending.first == next { pending.removeFirst() }
         }
         busy = false
         status = nil
@@ -140,11 +150,9 @@ final class Harness {
     /// True when the turn is settled: answered, or at least in the log with only the reply owed.
     /// False leaves it as the unsent turn.
     @discardableResult
-    private func run(_ text: String) async -> Bool {
+    private func run(_ attempt: Outgoing) async -> Bool {
         let generation = inFlight
-        // The same words again reuse the nonce of the attempt that may have landed.
-        let attempt = outgoing.flatMap { $0.text == text ? $0 : nil } ?? Outgoing(text: text, nonce: UUID().uuidString)
-        outgoing = attempt
+        let text = attempt.text
         do {
             if runner == nil {
                 status = "Reaching iCloud…"
@@ -155,7 +163,6 @@ final class Harness {
             let result = try await runner.run(text, model: model, nonce: attempt.nonce) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
-            if outgoing == attempt { outgoing = nil }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
             show(result.person)
@@ -166,7 +173,6 @@ final class Harness {
             return false
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             // The person's turn is in the log; only the reply is owed.
-            if outgoing == attempt { outgoing = nil }
             guard inFlight == generation else { return false }
             error = Self.describe(underlying)
             await refresh()
@@ -244,8 +250,7 @@ final class Harness {
         rows.append(("Container", TopoCloudKit.containerIdentifier))
         rows.append(("iCloud account", await TopoCloudKit.accountStatus()))
         rows.append(("Turn in flight", busy ? (status ?? "yes") : "none"))
-        rows.append(("Queued", queued.isEmpty ? "none" : "\(queued.count)"))
-        rows.append(("Unsent from last launch", outgoing?.text ?? "none"))
+        rows.append(("Waiting to send", pending.isEmpty ? "none" : pending.map(\.text).joined(separator: " | ")))
         rows.append(("Last error shown", error ?? "none"))
         if let lease {
             let primary = await lease.isPrimary()

@@ -23,8 +23,8 @@ struct ChatView: View {
                     HStack(spacing: 8) {
                         ProgressView()
                         Text(harness.status ?? "Working…")
-                        if !harness.queued.isEmpty {
-                            Text("· \(harness.queued.count) waiting").foregroundStyle(.secondary)
+                        if harness.waiting.count > 1 {
+                            Text("· \(harness.waiting.count - 1) waiting").foregroundStyle(.secondary)
                         }
                     }
                     .font(.footnote)
@@ -38,8 +38,8 @@ struct ChatView: View {
                     Button {
                         Task { await harness.retry() }
                     } label: {
-                        Label(harness.queued.isEmpty ? "Send \"\(harness.unsent ?? "")\" again"
-                                                     : "Send \(harness.queued.count + (harness.unsent == nil ? 0 : 1)) waiting",
+                        Label(harness.waiting.count == 1 ? "Send \"\(harness.waiting[0])\" again"
+                                                         : "Send \(harness.waiting.count) waiting",
                               systemImage: "arrow.clockwise")
                             .lineLimit(1)
                     }
@@ -78,8 +78,8 @@ struct ChatView: View {
             // Words on their way when the app last went away go first, under their own nonce.
             // Otherwise the first-run answer is the first turn, once, only when the log is empty;
             // it clears once it is in the log so a stale read on a later launch cannot resend it.
-            if let unsent = harness.unsent {
-                await harness.send(unsent)
+            if harness.hasWaiting {
+                await harness.retry()
             } else if harness.turns.isEmpty, !firstRunAnswer.isEmpty, !harness.busy {
                 let answer = firstRunAnswer
                 await harness.send(answer)
