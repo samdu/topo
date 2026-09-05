@@ -174,9 +174,11 @@ jobs:
               real store rejects.
             - Licensing: GPL code from others reaching a bundle, or a borrowed
               piece with no entry in THIRD-PARTY.
-            - The Swift suite runs on a separate, non-gating workflow here, so
-              a test that cannot fail, or a change that leaves the suite red,
-              is yours to notice.
+            - The tests. The Swift suite runs on macOS in the separate,
+              non-gating `Tests` workflow; this runner is Linux with no Swift
+              toolchain and your sandbox is read-only, so do not try to build
+              or run anything — review the tests by reading them. A test that
+              cannot fail is yours to notice.
 
             You can read any file in the checkout — do that rather than
             guessing, and cite `path:line` for every finding. Skip style and
@@ -191,9 +193,12 @@ jobs:
             a reader sees; `findings` is one string per issue, each citing
             `path:line`. Say plainly when you find nothing.
 
-            If you cannot complete the review — a tool fails, the checkout
-            is unreadable, anything — set `blocking` true and say why in
-            `summary`. A review you could not do is not a clean review.
+            If you cannot complete the review — the checkout is unreadable,
+            the diff will not load, anything that stops you reading — set
+            `blocking` true and say why in `summary`. A review you could not
+            do is not a clean review. A build or test command the sandbox
+            refuses is not that: you review by reading, and every file you
+            need is in the checkout.
         run: |
           set -euo pipefail
           printf '%s' "$OUTPUT_SCHEMA" > "$RUNNER_TEMP/schema.json"
