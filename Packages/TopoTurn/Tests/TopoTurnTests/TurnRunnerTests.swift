@@ -112,6 +112,9 @@ import TopoCoreTesting
         _ = try? await runner.run("once", model: .sonnet5, nonce: nonce)
         let again = try await runner.run("once", model: .sonnet5, nonce: nonce)
         #expect(again.person.nonce == nonce)
+        // The recovered turn goes to the model once, not joined with itself.
+        let messages = try #require(transport.lastBody?["messages"] as? [[String: String]])
+        #expect(messages == [["role": "user", "content": "once"]])
         let transcript = try await TurnLog(database: db).read()
         #expect(transcript.ordered.map(\.text) == ["once", "ok"])
     }

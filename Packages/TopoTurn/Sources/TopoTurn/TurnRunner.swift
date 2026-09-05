@@ -72,7 +72,8 @@ public actor TurnRunner {
             }
         }
         do {
-            let history = before.ordered.suffix(historyLimit - 1) + [person]
+            // On a retry `before` already holds the recovered person turn; it goes to the model once.
+            let history = before.ordered.filter { $0.ref != person.ref }.suffix(historyLimit - 1) + [person]
             let reply = try await api.complete(Self.messages(from: history), model: model, system: Self.systemPrompt)
             // The reply and a heartbeat of the lease are one atomic batch: a claim made during
             // the call, or between the call and this write, refuses the batch and nothing lands.
