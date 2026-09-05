@@ -243,14 +243,15 @@ public struct TurnLog: Sendable {
     /// The whole log. A record that does not parse is reported in the
     /// transcript's `missing` (by the ref its name carries) or `unreadable`.
     ///
-    /// The query index is eventually consistent and a newest turn it has
-    /// not caught up with leaves no gap behind it, so after the query every
-    /// known device's next sequence is fetched by ID, which is read-your-
-    /// writes; one that exists is reported missing. A device none of whose
-    /// turns the query returned cannot be probed this way; a writer checks
-    /// its own newest turn itself before continuing.
+    /// The records come from the zone's change feed, not a query: it needs
+    /// no index and misses no record. The feed is eventually consistent and
+    /// a newest turn it has not caught up with leaves no gap behind it, so
+    /// after it every known device's next sequence is fetched by ID, which
+    /// is read-your-writes; one that exists is reported missing. A device
+    /// none of whose turns the feed returned cannot be probed this way; a
+    /// writer checks its own newest turn itself before continuing.
     public func read() async throws -> Transcript {
-        let records = try await database.query(RecordQuery(type: Turn.recordType))
+        let records = try await database.records(ofType: Turn.recordType)
         let seen = Self.transcript(from: records)
         var last: [DeviceID: Int64] = [:]
         for ref in seen.turns.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }

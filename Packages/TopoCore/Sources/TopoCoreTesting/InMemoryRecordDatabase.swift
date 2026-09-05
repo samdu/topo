@@ -66,6 +66,10 @@ public actor InMemoryRecordDatabase: RecordDatabase {
             .sorted { $0.id.name < $1.id.name }
     }
 
+    public func records(ofType type: String) async throws -> [Record] {
+        store.values.filter { $0.type == type }.sorted { $0.id.name < $1.id.name }
+    }
+
     private func matches(_ record: Record, _ filter: RecordQuery.Filter) -> Bool {
         guard let value = record.fields[filter.field] else { return false }
         switch (filter.op, value, filter.value) {

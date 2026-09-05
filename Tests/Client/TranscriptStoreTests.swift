@@ -288,6 +288,8 @@ private actor FailingDatabase: RecordDatabase {
         return try await wrapped.fetch(ids)
     }
 
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
+
     func query(_ query: RecordQuery) async throws -> [Record] {
         if let failure { throw failure }
         return try await wrapped.query(query)

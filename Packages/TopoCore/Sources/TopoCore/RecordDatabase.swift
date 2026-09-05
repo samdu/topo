@@ -56,8 +56,14 @@ public protocol RecordDatabase: Sendable {
     func save(_ records: [Record]) async throws -> [Record]
     /// Fetches by ID. IDs with no record are absent from the result.
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record]
-    /// Every record of the query's type matching all its filters.
+    /// Every record of the query's type matching all its filters. Needs a
+    /// queryable index on every filtered field.
     func query(_ query: RecordQuery) async throws -> [Record]
+    /// Every record of the type in the zone, read from the zone's change
+    /// feed rather than a query: it needs no index, so it works on a schema
+    /// nobody has touched, and it sees every record however malformed, so a
+    /// reader can report what it cannot parse.
+    func records(ofType type: String) async throws -> [Record]
 }
 
 extension RecordDatabase {
