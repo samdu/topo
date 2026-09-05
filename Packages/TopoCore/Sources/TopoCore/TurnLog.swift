@@ -250,12 +250,7 @@ public struct TurnLog: Sendable {
     /// turns the query returned cannot be probed this way; a writer checks
     /// its own newest turn itself before continuing.
     public func read() async throws -> Transcript {
-        // Every turn has a positive sequence, so this is the whole log. It is not a match-all
-        // predicate because CloudKit answers one of those from the record name's index, which the
-        // development schema never builds; a custom field's index it builds on first save.
-        let records = try await database.query(RecordQuery(type: Turn.recordType, filters: [
-            .init("sequence", .greaterThan, .int(0)),
-        ]))
+        let records = try await database.query(RecordQuery(type: Turn.recordType))
         let seen = Self.transcript(from: records)
         var last: [DeviceID: Int64] = [:]
         for ref in seen.turns.keys { last[ref.device] = max(last[ref.device] ?? 0, ref.sequence) }

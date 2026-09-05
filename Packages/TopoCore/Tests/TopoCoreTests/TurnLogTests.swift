@@ -125,29 +125,12 @@ import TopoCoreTesting
         bad["role"] = .string("narrator")
         _ = try await db.save(bad)
         _ = try await db.save(turnRecord(device: "phone", seq: 2, parents: ["phone/1"]))
-        // A record with no sequence field is outside the read's query and so outside the read.
         _ = try await db.save(Record(type: Turn.recordType, id: RecordID("junk")))
         let t = try await log.read()
         #expect(t.turns.count == 1)
         #expect(t.missing == [.ref("phone", 1)])
-        #expect(t.unreadable.isEmpty)
+        #expect(t.unreadable == [RecordID("junk")])
         #expect(t.exclusive(to: t.heads[0]).count == 1)
-    }
-
-    @Test func aRecordWithoutASequenceFieldInsideARunIsStillMissing() async throws {
-        _ = try await db.save(turnRecord(device: "phone", seq: 1, parents: []))
-        var bad = turnRecord(device: "phone", seq: 2, parents: ["phone/1"])
-        bad.fields.removeValue(forKey: "sequence")
-        _ = try await db.save(bad)
-        _ = try await db.save(turnRecord(device: "phone", seq: 3, parents: ["phone/2"]))
-        let t = try await log.read()
-        #expect(t.missing == [.ref("phone", 2)])
-        #expect(!t.isComplete)
-        // And one at the end of the run is found by the probe past the last seen turn.
-        var tail = turnRecord(device: "phone", seq: 4, parents: ["phone/3"])
-        tail.fields.removeValue(forKey: "sequence")
-        _ = try await db.save(tail)
-        #expect(try await log.read().missing == [.ref("phone", 2), .ref("phone", 4)])
     }
 
     @Test func aRecordWhoseFieldsNameAnotherRefCannotStandInForIt() async throws {
@@ -204,12 +187,11 @@ import TopoCoreTesting
         _ = try await db.save(turnRecord(device: "phone", seq: -1, parents: []))
         _ = try await db.save(turnRecord(device: "phone", seq: 0, parents: []))
         _ = try await db.save(turnRecord(device: "phone", seq: 1, parents: []))
-        // Sequences start at one, so the read's query does not see these and nothing is blocked.
         let read = try await log.read()
         #expect(read.turns.count == 1)
         #expect(read.missing.isEmpty)
-        #expect(read.unreadable.isEmpty)
-        #expect(read.isComplete)
+        #expect(Set(read.unreadable) == [RecordID("turn/phone/-1"), RecordID("turn/phone/0")])
+        #expect(!read.isComplete)
         let w = try await log.writer(for: phone)
         #expect(await w.nextRef.sequence == 2)
     }
