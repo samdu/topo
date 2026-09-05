@@ -120,13 +120,13 @@ final class HubModel {
         }
     }
 
-    /// The turn-time path, run on a timer while the hub has no turns of its
-    /// own, so a lease lost to a phone is noticed and one left by a dead
-    /// phone is taken.
+    /// The hub takes the lease from whoever holds it and keeps it, on a
+    /// timer while the hub has no turns of its own: a phone that was primary
+    /// while the Mac was away is displaced and yields.
     func acquire() async {
         guard let lease else { return }
         do {
-            switch try await lease.acquire() {
+            switch try await lease.takeOver() {
             case .primary(let l): status = .primary(epoch: l.epoch)
             case .held(let by): status = .held(by: by.holder)
             case .unreachable(let l): status = .unreachable(l.holder)
