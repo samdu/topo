@@ -8,9 +8,18 @@ import XCTest
 final class TranscriptStoreTests: XCTestCase {
     private let device = DeviceID("watch-test")
 
+    /// Defaults of its own per test, so a remembered send in one does not
+    /// reach another — and so the suite never writes to the real ones.
+    private func makeDefaults() -> UserDefaults {
+        let defaults = UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!
+        return defaults
+    }
+
     private func store(_ database: any RecordDatabase,
-                       ensureZone: @escaping @Sendable () async throws -> Void = {}) -> TranscriptStore {
-        TranscriptStore(database: database, device: device, ensureZone: ensureZone)
+                       ensureZone: @escaping @Sendable () async throws -> Void = {},
+                       defaults: UserDefaults? = nil) -> TranscriptStore {
+        TranscriptStore(database: database, device: device, ensureZone: ensureZone,
+                        defaults: defaults ?? makeDefaults())
     }
 
     /// Puts turns in the log the way another device would have.
@@ -155,6 +164,38 @@ final class TranscriptStoreTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(60))
 
         XCTAssertEqual(Set(store.turns.map(\.text)), ["first", "second"])
+    }
+
+    func testAnUnsentTurnSurvivesARelaunch() async throws {
+        // The app went away between the write and its acknowledgement. What
+        // the person said is still owed an answer, so the next launch knows
+        // about it.
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let defaults = makeDefaults()
+        await database.setFailAfterSave(true)
+        await store(database, defaults: defaults).send("call Helen")
+
+        let relaunched = store(database, defaults: defaults)
+
+        XCTAssertEqual(relaunched.unsent, "call Helen")
+    }
+
+    func testARelaunchedRetryFindsTheCommittedTurnInsteadOfWritingASecond() async throws {
+        // The marker TopoCore saves under the nonce is what makes the retry
+        // exactly-once; keeping the nonce across the launch is what makes it
+        // reachable at all.
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let defaults = makeDefaults()
+        await database.setFailAfterSave(true)
+        await store(database, defaults: defaults).send("call Helen")
+        await database.setFailAfterSave(false)
+
+        let relaunched = store(database, defaults: defaults)
+        await relaunched.sendAgain()
+
+        XCTAssertEqual(relaunched.turns.map(\.text), ["call Helen"], "one turn, not two")
+        XCTAssertNil(relaunched.unsent)
+        XCTAssertNil(defaults.string(forKey: "topo.unsent.text"), "and nothing is still owed")
     }
 
     func testAFailedRefreshKeepsTheTurnsAlreadyRead() async throws {

@@ -33,18 +33,28 @@ final class TranscriptStore {
     let device: DeviceID
     private let log: TurnLog
     private let ensureZone: @Sendable () async throws -> Void
+    private let defaults: UserDefaults
     private var writer: TurnWriter?
     /// The nonce `unsent` was first attempted with.
     private var unsentNonce: String?
+
+    private static let unsentTextKey = "topo.unsent.text"
+    private static let unsentNonceKey = "topo.unsent.nonce"
 
     /// - Parameter ensureZone: run before the first append, because the zone
     ///   every record goes in has to exist before anything can be written
     ///   into it. Injected so a test can hold a database and no iCloud.
     init(database: any RecordDatabase, device: DeviceID = DeviceIdentity.current,
-         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) {
+         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
+         defaults: UserDefaults = .standard) {
         self.device = device
         self.log = TurnLog(database: database)
         self.ensureZone = ensureZone
+        self.defaults = defaults
+        // A send that was in flight when the app went away is still owed an
+        // answer, so it survives the launch that lost it.
+        self.unsent = defaults.string(forKey: TranscriptStore.unsentTextKey)
+        self.unsentNonce = defaults.string(forKey: TranscriptStore.unsentNonceKey)
     }
 
     func refresh() async {
@@ -85,16 +95,19 @@ final class TranscriptStore {
     ///
     /// An append that fails may still have committed — CloudKit can lose the
     /// acknowledgement, not the write — so the text and the nonce it was
-    /// attempted with are kept. Sending that same text again carries the
-    /// same nonce, and the writer hands back the turn already there instead
-    /// of writing the person's words twice.
+    /// attempted with are written down before the attempt, and survive the
+    /// launch that lost them. Sending the same words again carries that
+    /// nonce, and TopoCore's writer saves a marker record under it
+    /// alongside the turn: the second save finds the marker, follows it to
+    /// the turn already there and hands that back. So the retry is
+    /// exactly-once whether or not the app died in between; what this has
+    /// to do is not lose the nonce.
     func send(_ text: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
         let nonce = (text == unsent ? unsentNonce : nil) ?? UUID().uuidString
         isSending = true
-        unsent = text
-        unsentNonce = nonce
+        rememberUnsent(text, nonce: nonce)
         defer { isSending = false }
         do {
             try await ensureZone()
@@ -107,8 +120,7 @@ final class TranscriptStore {
                 self.writer = writer
             }
             _ = try await writer.append(.person, text, continuing: transcript, nonce: nonce)
-            unsent = nil
-            unsentNonce = nil
+            forgetUnsent()
             await refresh()
         } catch TurnLogError.incompleteTranscript {
             notice = "Not every turn has arrived yet. Try again in a moment."
@@ -121,6 +133,20 @@ final class TranscriptStore {
     func sendAgain() async {
         guard let unsent else { return }
         await send(unsent)
+    }
+
+    private func rememberUnsent(_ text: String, nonce: String) {
+        unsent = text
+        unsentNonce = nonce
+        defaults.set(text, forKey: TranscriptStore.unsentTextKey)
+        defaults.set(nonce, forKey: TranscriptStore.unsentNonceKey)
+    }
+
+    private func forgetUnsent() {
+        unsent = nil
+        unsentNonce = nil
+        defaults.removeObject(forKey: TranscriptStore.unsentTextKey)
+        defaults.removeObject(forKey: TranscriptStore.unsentNonceKey)
     }
 
     static func notice(for transcript: Transcript) -> String? {
