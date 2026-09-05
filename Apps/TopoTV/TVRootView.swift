@@ -22,11 +22,11 @@ struct TVRootView: View {
             Divider()
             content
         }
+        .task { await store.refreshing(every: Self.refreshInterval) }
         .task {
             while !Task.isCancelled {
-                await store.refresh()
                 await primary.refresh()
-                try? await Task.sleep(for: Self.refreshInterval)
+                do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
         }
     }

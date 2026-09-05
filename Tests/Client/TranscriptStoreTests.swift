@@ -94,6 +94,69 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertEqual(store.notice, "Two devices carried on from the same point. Both are below.")
     }
 
+    func testARetryAfterALostAcknowledgementDoesNotWriteTheTurnTwice() async throws {
+        // CloudKit can lose the acknowledgement and keep the write. The
+        // person presses send again; the same nonce recovers the turn that
+        // is already there rather than saying it twice.
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let store = store(database)
+        await database.setFailAfterSave(true)
+
+        await store.send("call Helen")
+
+        XCTAssertEqual(store.unsent, "call Helen", "the send is remembered because it was not acknowledged")
+        await database.setFailAfterSave(false)
+        await store.sendAgain()
+
+        XCTAssertEqual(store.turns.map(\.text), ["call Helen"], "one turn, not two")
+        XCTAssertNil(store.unsent)
+    }
+
+    func testDifferentWordsAreADifferentTurn() async throws {
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let store = store(database)
+        await database.setFailAfterSave(true)
+        await store.send("call Helen")
+        await database.setFailAfterSave(false)
+
+        await store.send("call Helen back")
+
+        XCTAssertEqual(store.turns.map(\.text), ["call Helen", "call Helen back"],
+                       "the first turn committed; the second is a new thing said")
+    }
+
+    func testRefreshingStopsWhenItsTaskIsCancelled() async throws {
+        let database = InMemoryRecordDatabase()
+        try await write(database, [(.person, "first")])
+        let store = store(database)
+
+        let loop = Task { await store.refreshing(every: .milliseconds(10)) }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(store.turns.map(\.text), ["first"])
+        loop.cancel()
+        _ = await loop.value
+
+        // A turn written after the loop stopped is not picked up: the loop
+        // is the only thing reading.
+        try await write(database, [(.assistant, "second")], device: DeviceID("hub"))
+        try await Task.sleep(for: .milliseconds(30))
+        XCTAssertEqual(store.turns.map(\.text), ["first"])
+    }
+
+    func testRefreshingPicksUpTurnsWrittenWhileTheScreenIsOpen() async throws {
+        let database = InMemoryRecordDatabase()
+        try await write(database, [(.person, "first")])
+        let store = store(database)
+        let loop = Task { await store.refreshing(every: .milliseconds(10)) }
+        defer { loop.cancel() }
+
+        try await Task.sleep(for: .milliseconds(30))
+        try await write(database, [(.assistant, "second")], device: DeviceID("hub"))
+        try await Task.sleep(for: .milliseconds(60))
+
+        XCTAssertEqual(Set(store.turns.map(\.text)), ["first", "second"])
+    }
+
     func testAFailedRefreshKeepsTheTurnsAlreadyRead() async throws {
         let database = FailingDatabase(InMemoryRecordDatabase())
         try await write(database.wrapped, [(.person, "first")])
@@ -126,14 +189,21 @@ final class TranscriptStoreTests: XCTestCase {
 private actor FailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
     private var failure: (any Error)?
+    /// Commits the save and then throws, which is what a lost
+    /// acknowledgement looks like from the writer's side.
+    private var failAfterSave = false
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
     func setFailure(_ error: (any Error)?) { failure = error }
 
+    func setFailAfterSave(_ on: Bool) { failAfterSave = on }
+
     func save(_ records: [Record]) async throws -> [Record] {
         if let failure { throw failure }
-        return try await wrapped.save(records)
+        let saved = try await wrapped.save(records)
+        if failAfterSave { throw RecordDatabaseError.unavailable(underlying: CancellationError()) }
+        return saved
     }
 
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {

@@ -26,11 +26,16 @@ final class TranscriptStore {
     /// line: turns missing from the read, a fork, a refresh that failed.
     private(set) var notice: String?
     private(set) var isSending = false
+    /// What a person said that did not reach the log. Kept so the retry
+    /// carries the same nonce as the attempt that failed.
+    private(set) var unsent: String?
 
     let device: DeviceID
     private let log: TurnLog
     private let ensureZone: @Sendable () async throws -> Void
     private var writer: TurnWriter?
+    /// The nonce `unsent` was first attempted with.
+    private var unsentNonce: String?
 
     /// - Parameter ensureZone: run before the first append, because the zone
     ///   every record goes in has to exist before anything can be written
@@ -59,6 +64,17 @@ final class TranscriptStore {
         }
     }
 
+    /// Re-reads until the calling task is cancelled. Subscriptions are the
+    /// design's answer for staying current and are not wired yet, so a
+    /// screen that stays open reads again on an interval; without this a
+    /// device shows the transcript as it was when the screen opened.
+    func refreshing(every interval: Duration) async {
+        while !Task.isCancelled {
+            await refresh()
+            do { try await Task.sleep(for: interval) } catch { return }
+        }
+    }
+
     /// Appends what the person said, as a turn of theirs.
     ///
     /// This is a limb writing, not a mind answering: the turn goes in the
@@ -66,10 +82,19 @@ final class TranscriptStore {
     /// precedes it is what the turn continues from, and an incomplete one
     /// is refused rather than written, because continuing from a read with
     /// holes writes a fork that never happened.
+    ///
+    /// An append that fails may still have committed — CloudKit can lose the
+    /// acknowledgement, not the write — so the text and the nonce it was
+    /// attempted with are kept. Sending that same text again carries the
+    /// same nonce, and the writer hands back the turn already there instead
+    /// of writing the person's words twice.
     func send(_ text: String) async {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isSending else { return }
+        let nonce = (text == unsent ? unsentNonce : nil) ?? UUID().uuidString
         isSending = true
+        unsent = text
+        unsentNonce = nonce
         defer { isSending = false }
         do {
             try await ensureZone()
@@ -81,13 +106,21 @@ final class TranscriptStore {
                 writer = try await log.writer(for: device)
                 self.writer = writer
             }
-            _ = try await writer.append(.person, text, continuing: transcript)
+            _ = try await writer.append(.person, text, continuing: transcript, nonce: nonce)
+            unsent = nil
+            unsentNonce = nil
             await refresh()
         } catch TurnLogError.incompleteTranscript {
             notice = "Not every turn has arrived yet. Try again in a moment."
         } catch {
             notice = "That didn't send: \(TranscriptStore.message(for: error))"
         }
+    }
+
+    /// Sends the last thing that did not land, again.
+    func sendAgain() async {
+        guard let unsent else { return }
+        await send(unsent)
     }
 
     static func notice(for transcript: Transcript) -> String? {
