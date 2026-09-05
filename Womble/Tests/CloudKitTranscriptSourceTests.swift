@@ -60,14 +60,14 @@ final class CloudKitReadTests: XCTestCase {
 
     func testErrorMapping() {
         func mapped(_ code: CKError.Code) -> TranscriptError {
-            return CloudKitTranscriptSource.mapped(CKError(code))
+            return CloudKitStore.mapped(CKError(code))
         }
         if case .noAccount = mapped(.notAuthenticated) {} else { XCTFail("not signed in is an account problem") }
         if case .noLog = mapped(.zoneNotFound) {} else { XCTFail("no zone means nothing has been written") }
         if case .rejected = mapped(.permissionFailure) {} else { XCTFail("permission failure will not clear") }
         if case .unavailable = mapped(.networkUnavailable) {} else { XCTFail("no network is a retry") }
         if case .unavailable = mapped(.serviceUnavailable) {} else { XCTFail("a busy server is a retry") }
-        if case .unavailable = CloudKitTranscriptSource.mapped(NSError(domain: "test", code: 1)) {} else {
+        if case .unavailable = CloudKitStore.mapped(NSError(domain: "test", code: 1)) {} else {
             XCTFail("a non-CloudKit error is a retry")
         }
     }
