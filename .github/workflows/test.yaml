@@ -23,14 +23,43 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: swift --version
-      # The package arrives with the first TopoCore PR; a tree without it has
+      # Every package under Packages/ runs its suite; a tree with none has
       # nothing to test, which is a notice rather than a failure.
-      - name: swift test (Packages/TopoCore)
+      - name: swift test (Packages/*)
         run: |
           set -euo pipefail
-          if [ ! -f Packages/TopoCore/Package.swift ]; then
-            echo "::notice::No Packages/TopoCore/Package.swift in this tree; nothing to test."
+          found=0
+          for manifest in Packages/*/Package.swift; do
+            [ -f "$manifest" ] || continue
+            found=1
+            echo "::group::$(dirname "$manifest")"
+            (cd "$(dirname "$manifest")" && swift test)
+            echo "::endgroup::"
+          done
+          if [ "$found" = 0 ]; then
+            echo "::notice::No Packages/*/Package.swift in this tree; nothing to test."
+          fi
+
+      # Womble is an Xcode project, not a package, so it needs a simulator
+      # rather than `swift test`. Its deployment target is iOS 12; the
+      # simulator it runs the tests on is whatever the runner's Xcode ships,
+      # which is the same arrangement as building it on a Mac by hand.
+      - name: xcodebuild test (Womble)
+        run: |
+          set -euo pipefail
+          if [ ! -d Womble/Womble.xcodeproj ]; then
+            echo "::notice::No Womble/Womble.xcodeproj in this tree; nothing to test."
             exit 0
           fi
-          cd Packages/TopoCore
-          swift test
+          # Whichever iPhone this runner's Xcode has. Naming one pins the
+          # suite to a device the next Xcode may drop.
+          udid="$(xcrun simctl list devices available --json \
+                  | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          if [ -z "$udid" ]; then
+            echo "::error::No iPhone simulator available on this runner."
+            exit 1
+          fi
+          xcodebuild test \
+            -project Womble/Womble.xcodeproj \
+            -scheme Womble \
+            -destination "platform=iOS Simulator,id=$udid"

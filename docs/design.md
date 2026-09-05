@@ -15,7 +15,7 @@ A design page, not a build. The question: what would it take for someone like He
 ## Decisions
 
 - **Two harnesses that feel like one Buddy.** The mind is the Claude CLI on the Mac; the phone carries its own small harness so the app works alone, OpenMinis-style, with nothing else installed. The phone harness is the spare, not a rival: same transcript format, same skills folder, same tools where the phone can do them, and anything it can't do says so rather than pretending. Because the phone harness is ours, other providers are cheap there; the mind stays Anthropic.
-- **First screen: one button, "Sign in with Claude"**, using the app's existing OAuth. An "advanced" link underneath takes an API key, another provider, or a custom endpoint.
+- **First screen: one button, "Sign in with Claude"**, through the OAuth client the Claude Code CLI uses (authorization code with PKCE, the CLI's client id and scopes), because a Claude subscription is only reachable as that client. The browser comes back to a loopback listener in the app, or to the hosted callback page whose code the user pastes when the listener cannot bind. An "advanced" link underneath takes an API key, another provider, or a custom endpoint.
 
 - **One primary, never two brains.** Without a mind, the device that signed in first is primary and runs the phone harness; every other device is a viewer of the transcript (iCloud carries it as history, never as something two devices append to). One control hands primary to another device, the way the Home app picks a hub. Install the Mac app and it takes primary for good; everything else becomes a limb. The Home app is the model to borrow for the copy: works now, add a hub for automations, remote access and sharing.
 

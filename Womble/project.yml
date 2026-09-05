@@ -1,0 +1,60 @@
+# Womble's Xcode project, generated with XcodeGen (`xcodegen generate` in this
+# directory). The generated `Womble.xcodeproj` is committed too, so a build
+# needs Xcode and nothing else; regenerate it whenever this file changes.
+name: Womble
+options:
+  bundleIdPrefix: zone.hexagon.topo
+  deploymentTarget:
+    iOS: "12.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    TARGETED_DEVICE_FAMILY: "1,2"  # iPhone and iPad
+    # No team and no profile in this repository yet, so the simulator build
+    # signs ad-hoc. That is not ceremony: the entitlements file has to be
+    # applied for `CKContainer(identifier:)` to exist at all, and an
+    # unsigned build of this app raises on launch.
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "-"
+    DEVELOPMENT_TEAM: ""
+targets:
+  Womble:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.womble
+        PRODUCT_NAME: Womble
+        INFOPLIST_FILE: Sources/App/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Sources/App/Womble.entitlements
+  # Logic tests, with no host application: the app builds unsigned here, so
+  # it has no iCloud entitlement, and `CKContainer(identifier:)` raises the
+  # moment such an app launches. The tests compile the same `Sources/Log`
+  # files the app does and exercise them directly — nothing in there touches
+  # the container.
+  WombleTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+      - path: Sources/Log
+      - path: Sources/UI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.womble.tests
+        GENERATE_INFOPLIST_FILE: "YES"
+schemes:
+  Womble:
+    build:
+      targets:
+        Womble: all
+        WombleTests: [test]
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - WombleTests
