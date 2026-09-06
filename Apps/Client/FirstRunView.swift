@@ -66,6 +66,9 @@ struct FirstRunView: View {
             Spacer().frame(height: 24)
         }
         .padding()
+        #if os(iOS)
+        .onDisappear { voice.cancel(.firstRun) }
+        #endif
     }
 
     private func submit() {
@@ -75,12 +78,16 @@ struct FirstRunView: View {
         onDone(text)
     }
 
+    /// Hold to talk, release to answer; on this screen a tap is a short hold, not a hands-free
+    /// press, since one answer is all it takes.
     private func pressed(_ down: Bool) async {
         #if os(iOS)
-        if down {
-            _ = await voice.begin(as: .firstRun)
-        } else {
-            answer = await voice.end()
+        let heard = down ? await voice.pressDown(as: .firstRun) : await voice.pressUp(as: .firstRun)
+        if let heard {
+            answer = heard
+            submit()
+        } else if !down, voice.handsFree {
+            answer = await voice.pressDown(as: .firstRun) ?? ""
             submit()
         }
         #endif

@@ -12,6 +12,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
     private let audio: AudioSession
     private let synthesizer = AVSpeechSynthesizer()
+    /// The utterance being read; a delegate callback for any other is an old one's and is ignored,
+    /// so stopping A to say B does not drop B's claim when A's cancellation lands.
+    private var current: AVSpeechUtterance?
 
     init(audio: AudioSession) {
         self.audio = audio
@@ -24,27 +27,33 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         let utterance = AVSpeechUtterance(string: text)
         utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
             ?? AVSpeechSynthesisVoice(language: "en-GB")
+        current = utterance
         speaking = true
         audio.wantScreenAwake(true, for: .speaking)
         synthesizer.speak(utterance)
     }
 
     func stop() {
+        current = nil
         if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
         done()
     }
 
-    private func done() {
+    private func done(_ utteranceID: ObjectIdentifier? = nil) {
+        if let utteranceID, let current, utteranceID != ObjectIdentifier(current) { return }
+        current = nil
         speaking = false
         audio.wantScreenAwake(false, for: .speaking)
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.done() }
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in self.done(id) }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
-        Task { @MainActor in self.done() }
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in self.done(id) }
     }
 }
 #endif

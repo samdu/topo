@@ -16,9 +16,6 @@ struct ChatView: View {
     @AppStorage("readAloud") private var readAloud = true
     @State private var draft = ""
     @State private var showDiagnostics = false
-    /// True while the microphone is held open by a tap rather than a hold.
-    @State private var handsFree = false
-    @State private var pressedAt: Date?
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
 
@@ -113,37 +110,23 @@ struct ChatView: View {
             speaker.speak(last.text)
         }
         .onChange(of: scenePhase) { _, phase in
-            // Speaking is foreground work; a backgrounded process submitting GPU commands is killed.
-            if phase != .active { speaker.stop(); if voice.listening { Task { _ = await voice.end() } } }
+            // Speaking is foreground work; a backgrounded process submitting GPU commands is
+            // killed. A microphone open when the scene goes is dropped, words and all: nobody is
+            // holding it, so nothing said into it was meant.
+            if phase != .active { speaker.stop(); voice.cancel(.chat) }
         }
+        .onDisappear { voice.cancel(.chat) }
     }
 
-    /// Hold to talk and release to send; a tap opens the microphone until the next tap.
+    /// Hold to talk and release to send; a tap opens the microphone until the next press. The
+    /// session logic is `VoiceInput`'s; this only sends what a press hands back.
     private func micPressed(_ down: Bool) async {
-        if down {
-            pressedAt = Date()
-            if handsFree {
-                handsFree = false
-                await sendSpoken()
-                return
-            }
-            speaker.stop()
-            _ = await voice.begin(as: .chat)
-        } else {
-            guard voice.listening, voice.owner == .chat else { return }
-            if let pressedAt, Date().timeIntervalSince(pressedAt) < 0.4 {
-                handsFree = true
-                return
-            }
-            await sendSpoken()
-        }
-    }
-
-    private func sendSpoken() async {
-        let text = await voice.end()
+        if down { speaker.stop() }
+        let heard = down ? await voice.pressDown(as: .chat) : await voice.pressUp(as: .chat)
+        guard let heard else { return }
         draft = ""
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        spokenTurns.insert(harness.willSend(text))
+        guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        spokenTurns.insert(harness.willSend(heard))
         await harness.retry()
     }
 
@@ -159,7 +142,7 @@ struct ChatView: View {
                 .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                     Task { await micPressed(down) }
                 }
-                .accessibilityLabel(voice.listening ? "Listening; release to send" : "Hold to talk")
+                .accessibilityLabel(voice.handsFree ? "Listening; press to send" : voice.listening ? "Listening; release to send" : "Hold to talk")
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }
@@ -170,7 +153,7 @@ struct ChatView: View {
     }
 
     private func send() {
-        if voice.listening { voice.cancel() }
+        voice.cancel(.chat)
         let text = draft
         draft = ""
         Task { await harness.send(text) }
