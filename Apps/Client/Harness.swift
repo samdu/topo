@@ -121,10 +121,19 @@ final class Harness {
     /// nothing said is dropped. A turn that never reached the log stops the line: it stays at the
     /// head and goes first next time, and what was said behind it waits.
     func send(_ text: String) async {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        pending.append(Outgoing(text: text, nonce: UUID().uuidString))
+        willSend(text)
         await drain()
+    }
+
+    /// Puts the words on the line without sending yet, and returns the nonce the turn will carry,
+    /// which is how a caller recognises the turn once it is in the log. `retry()` sends.
+    @discardableResult
+    func willSend(_ text: String) -> String {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
+        guard !text.isEmpty else { return outgoing.nonce }
+        pending.append(outgoing)
+        return outgoing.nonce
     }
 
     /// Sends the line from its head, after a turn that stopped it or a launch that found it.

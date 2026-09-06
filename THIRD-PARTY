@@ -1,0 +1,5 @@
+# Third-party and borrowed code
+
+Every borrowed piece in a Topo bundle is listed here with its source and licence. Nothing under a copyleft licence held by others ships in a bundle.
+
+- **Daphne** (samdu/daphne-assistant, `clients/ios`, Sam du Rose's own code): the pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, and the rule that speaking is foreground work in `Apps/Client/Speaker.swift`. Same author as Topo; no licence terms apply between the two.
