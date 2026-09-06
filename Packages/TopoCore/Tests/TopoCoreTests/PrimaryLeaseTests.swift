@@ -411,3 +411,16 @@ import TopoCoreTesting
         #expect(await mover.isPrimary())
     }
 }
+
+@Suite struct LinkSecretTests {
+    @Test func theSecretIsMadeOnceAndSharedByWhoeverAsks() async throws {
+        let db = InMemoryRecordDatabase()
+        #expect(try await LinkSecret.read(from: db) == nil)
+        let a = Data(repeating: 1, count: 32), b = Data(repeating: 2, count: 32)
+        let (first, second) = try await (LinkSecret.ensure(in: db, random: { a }), LinkSecret.ensure(in: db, random: { b }))
+        #expect(first == second)
+        #expect(first.bytes == a || first.bytes == b)
+        #expect(try await LinkSecret.read(from: db) == first)
+        #expect(try await LinkSecret.ensure(in: db, random: { Data(repeating: 3, count: 32) }) == first)
+    }
+}

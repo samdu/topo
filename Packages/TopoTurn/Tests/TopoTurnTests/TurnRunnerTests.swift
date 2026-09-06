@@ -183,6 +183,37 @@ import TopoCoreTesting
         #expect(try await runner.answer(answer.ref, model: .sonnet5) == nil)
     }
 
+    @Test func aNamedTurnAfterADevicesEarlierTurnsIsAnsweredThoughTheReadReportsItMissing() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("first")), (200, reply("second")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        let first = try await watch.append(.person, "one", parents: [])
+        let reply1 = try #require(try await runner.answer(first.ref, model: .sonnet5))
+        // The feed lags by exactly the newest turn: the read's probe finds it by ID and reports
+        // it missing, which is the case the named path must see through.
+        let lagging = NewestHiddenDatabase(inner: db, hidden: TurnRef(device: DeviceID("watch"), sequence: 2))
+        let (laggingRunner, _) = try await makeRunner(database: lagging, transport: transport)
+        let second = try await watch.append(.person, "two", parents: [reply1.ref])
+        let reply2 = try #require(try await laggingRunner.answer(second.ref, model: .sonnet5))
+        #expect(reply2.parents == [second.ref] && reply2.text == "second")
+        #expect(transport.requests.count == 2)
+    }
+
+    @Test func aNamedTurnIsNotAnsweredByADeviceThatIsNotPrimary() async throws {
+        let db = InMemoryRecordDatabase()
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: "h:1", probe: AlwaysConfirms(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await hub.acquire() else { Issue.record("hub should claim"); return }
+        let transport = RecordingTransport((200, reply("never")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport, probe: AlwaysConfirms())
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        let asked = try await watch.append(.person, "who answers?", parents: [])
+        await #expect(throws: TurnRunnerError.self) { try await runner.answer(asked.ref, model: .sonnet5) }
+        #expect(transport.requests.isEmpty)
+        #expect(try await TurnLog(database: db).read().ordered.count == 1)
+    }
+
     @Test func aReplyThatFailedIsRetriedOnTheNextPassAndNeverDoubled() async throws {
         let db = InMemoryRecordDatabase()
         let transport = RecordingTransport((500, "{}"), (200, reply("second time")))
@@ -261,5 +292,18 @@ struct FeedLagDatabase: RecordDatabase {
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
     func records(ofType type: String) async throws -> [Record] {
         try await inner.records(ofType: type).filter { $0.string("device") != "watch" }
+    }
+}
+
+/// A database whose change feed lacks one turn, the newest of a device: the read's probe finds
+/// it by ID and reports it missing.
+struct NewestHiddenDatabase: RecordDatabase {
+    let inner: InMemoryRecordDatabase
+    let hidden: TurnRef
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] {
+        try await inner.records(ofType: type).filter { $0.id != Turn.recordID(for: hidden) }
     }
 }

@@ -1,30 +1,56 @@
+import CryptoKit
 import Foundation
 import Network
 import TopoCore
 
 /// The wire form of a live turn, on the same listener as the lease probe: one request line,
-/// one reply. `answer <device>/<sequence>\n` names a person's turn already in the log and asks
-/// the listener, if it is primary, to answer it now. The listener replies
-/// `reply <device>/<sequence> <byteCount>\n` naming the reply's own turn, followed by exactly
-/// `byteCount` bytes of UTF-8, the reply's text; or `no\n` when it is not primary or cannot.
-/// CloudKit is truth: the reply lands in the log as it always does, and this only makes it
-/// arrive at once. Anything else, or silence, is no.
-///
-/// The body is transcript content sent to any LAN client that can spell a ref, where `hold`
-/// leaks nothing. Before TestFlight `answer` is to be gated on pairing, challenging against the
-/// `Device` record's public key.
+/// one reply. `answer <device>/<sequence> <asker> <nonce> <mac>\n` names a person's turn
+/// already in the log and asks the listener, if it is primary, to answer it now; `mac` is the
+/// hex HMAC-SHA256, under the Apple ID's link secret (`LinkSecret` in the private database), of
+/// the line before it, so only one of this person's devices can ask, and a stranger on the LAN
+/// who can spell a ref gets `no`. The listener replies `reply <device>/<sequence> <byteCount>\n`
+/// naming the reply's own turn, followed by exactly `byteCount` bytes of UTF-8, the reply's
+/// text; or `no\n` when the MAC is wrong, it is not primary, or it cannot. CloudKit is truth:
+/// the reply lands in the log as it always does, and this only makes it arrive at once.
+/// Anything else, or silence, is no. A captured request replayed yields the same reply to the
+/// same turn and nothing else; the nonce keeps two asks apart, it is not a replay guard.
 enum TurnWire {
     /// The most a reply body may be; a count above this is refused before anything is allocated.
     static let maximumBody = 1 << 20
 
-    static func request(_ ref: TurnRef) -> Data {
-        Data("answer \(ref)\n".utf8)
+    struct Request: Hashable {
+        var ref: TurnRef
+        var asker: DeviceID
+        var nonce: String
+        var mac: String
+
+        var signed: String { "answer \(ref) \(asker.rawValue) \(nonce)" }
+
+        func verifies(with secret: Data) -> Bool {
+            let expected = TurnWire.mac(of: signed, secret: secret)
+            // Constant time, so a wrong MAC's failure says nothing about how wrong.
+            guard expected.utf8.count == mac.utf8.count else { return false }
+            var differ: UInt8 = 0
+            for (a, b) in zip(expected.utf8, mac.utf8) { differ |= a ^ b }
+            return differ == 0
+        }
     }
 
-    static func parseRequest(_ line: String) -> TurnRef? {
+    static func request(_ ref: TurnRef, from asker: DeviceID, secret: Data) -> Data {
+        let signed = "answer \(ref) \(asker.rawValue) \(UUID().uuidString)"
+        return Data("\(signed) \(mac(of: signed, secret: secret))\n".utf8)
+    }
+
+    static func parseRequest(_ line: String) -> Request? {
         let parts = line.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: " ")
-        guard parts.count == 2, parts[0] == "answer" else { return nil }
-        return TurnRef(parsing: String(parts[1]))
+        guard parts.count == 5, parts[0] == "answer", let ref = TurnRef(parsing: String(parts[1])),
+              !parts[2].isEmpty, !parts[3].isEmpty, parts[4].count == 64 else { return nil }
+        return Request(ref: ref, asker: DeviceID(String(parts[2])), nonce: String(parts[3]), mac: String(parts[4]))
+    }
+
+    static func mac(of message: String, secret: Data) -> String {
+        let code = HMAC<SHA256>.authenticationCode(for: Data(message.utf8), using: SymmetricKey(data: secret))
+        return code.map { String(format: "%02x", $0) }.joined()
     }
 
     static func reply(_ ref: TurnRef, _ text: String) -> Data {
@@ -53,31 +79,39 @@ public struct LiveReply: Hashable, Sendable {
 }
 
 /// Asks a primary, at the `host:port` its lease or device record names, to answer a person's
-/// turn now. The reply's ref and text, or nil: not primary, unreachable, silent past the
-/// timeout, or garbage. A model call takes tens of seconds, so the timeout is minutes, not the
-/// probe's two seconds; the caller loses nothing on nil, since the log's own path answers the
+/// turn now, as `asker`, under the link secret. The reply's ref and text, or nil: not primary,
+/// unreachable, silent past the timeout, or garbage. Connecting has a deadline of seconds, so a
+/// stale address that swallows the packets costs little; the reply has minutes, since a model
+/// call takes tens of seconds. The caller loses nothing on nil: the log's own path answers the
 /// turn anyway.
 public struct SocketTurnClient: Sendable {
+    public var connectTimeout: TimeInterval
     public var timeout: TimeInterval
 
-    public init(timeout: TimeInterval = 120) {
+    public init(connectTimeout: TimeInterval = 3, timeout: TimeInterval = 120) {
+        self.connectTimeout = connectTimeout
         self.timeout = timeout
     }
 
-    public func ask(_ endpoint: String, toAnswer ref: TurnRef) async -> LiveReply? {
+    public func ask(_ endpoint: String, toAnswer ref: TurnRef, as asker: DeviceID, secret: Data) async -> LiveReply? {
         guard let (host, port) = SocketLeaseProbe.parse(endpoint) else { return nil }
         let connection = NWConnection(host: host, port: port, using: .tcp)
+        let connecting = Task { [connectTimeout] in
+            try? await Task.sleep(for: .seconds(connectTimeout))
+            guard !Task.isCancelled else { return }
+            connection.cancel()
+        }
+        defer { connection.cancel() }
+        connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.turn"))
+        guard (try? await connection.waitUntilReady()) != nil else { connecting.cancel(); return nil }
+        connecting.cancel()
         let deadline = Task { [timeout] in
             try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled else { return }
             connection.cancel()
         }
-        defer {
-            deadline.cancel()
-            connection.cancel()
-        }
-        connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.turn"))
-        guard (try? await connection.waitUntilReady()) != nil,
-              (try? await connection.send(TurnWire.request(ref))) != nil,
+        defer { deadline.cancel() }
+        guard (try? await connection.send(TurnWire.request(ref, from: asker, secret: secret))) != nil,
               let (line, rest) = try? await connection.readLineKeepingRest(maximum: 256),
               let (replyRef, count) = TurnWire.parseReplyLine(line),
               let body = try? await connection.readExactly(count, startingWith: rest) else { return nil }

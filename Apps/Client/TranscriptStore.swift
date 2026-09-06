@@ -39,12 +39,14 @@ final class TranscriptStore {
     private let ensureZone: @Sendable () async throws -> Void
     private let defaults: UserDefaults
     private var writer: TurnWriter?
-    /// Asks the primary over the LAN to answer a turn now: the reply's ref and text, or nil.
-    /// The socket client in the app; a stub in tests.
-    private let ask: @Sendable (String, TurnRef) async -> LiveReply?
-    /// A reply that came back over the socket and is shown before the read has its record.
-    /// Cleared once a read shows it, or shows a reply to the same turn from the log.
-    private var live: Turn?
+    /// Asks the primary over the LAN to answer a turn now, as this device under the link
+    /// secret: the reply's ref and text, or nil. The socket client in the app; a stub in tests.
+    private let ask: @Sendable (String, TurnRef, DeviceID, Data) async -> LiveReply?
+    /// Replies that came back over the socket and are shown before the read has their records.
+    /// Each goes once a read shows it, or shows a reply to the same turn from the log.
+    private var live: [Turn] = []
+    /// The asks in flight, so a second send does not wait on them and a sign-out can drop them.
+    private var asking: [TurnRef: Task<Void, Never>] = [:]
     /// Each queued turn keeps the nonce it was first attempted under, which
     /// is what makes a retry exactly-once.
     private var pending: [Outgoing] = []
@@ -62,8 +64,8 @@ final class TranscriptStore {
     init(database: any RecordDatabase, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          defaults: UserDefaults = .standard,
-         ask: @escaping @Sendable (String, TurnRef) async -> LiveReply? = { endpoint, ref in
-             await SocketTurnClient().ask(endpoint, toAnswer: ref)
+         ask: @escaping @Sendable (String, TurnRef, DeviceID, Data) async -> LiveReply? = { endpoint, ref, asker, secret in
+             await SocketTurnClient().ask(endpoint, toAnswer: ref, as: asker, secret: secret)
          }) {
         self.device = device
         self.database = database
@@ -86,13 +88,8 @@ final class TranscriptStore {
             var ordered = transcript.ordered
             // A reply that came over the socket stays on screen until the read has it, or has
             // another reply to the same turn.
-            if let live {
-                if transcript[live.ref] != nil || ordered.contains(where: { $0.role == .assistant && $0.parents == live.parents }) {
-                    self.live = nil
-                } else {
-                    ordered.append(live)
-                }
-            }
+            live.removeAll { l in transcript[l.ref] != nil || ordered.contains { $0.role == .assistant && $0.parents == l.parents } }
+            ordered.append(contentsOf: live)
             turns = ordered
             notice = TranscriptStore.notice(for: transcript)
             phase = .ready
@@ -172,7 +169,7 @@ final class TranscriptStore {
                 let person = try await writer.append(.person, next.text, continuing: transcript, nonce: next.nonce)
                 pending.removeFirst()
                 save(pending)
-                await askPrimary(toAnswer: person)
+                askPrimary(toAnswer: person)
             } catch TurnLogError.incompleteTranscript {
                 failure = "Not every turn has arrived yet. Topo will send it in a moment."
                 break
@@ -188,13 +185,26 @@ final class TranscriptStore {
     /// The live path: the turn is in the log, so ask the primary, at the endpoint its lease
     /// names, to answer it now and show the reply at once. CloudKit is truth and sockets are
     /// speed: no endpoint, no answer or a dead socket costs nothing, since the primary's own
-    /// pass answers the turn from the log and the next read shows it.
-    private func askPrimary(toAnswer person: Turn) async {
-        guard let record = try? await database.fetch(Lease.recordID), let lease = Lease(record: record),
-              !lease.isExpired(at: Date()), let endpoint = lease.endpoint else { return }
-        guard let reply = await ask(endpoint, person.ref) else { return }
-        live = Turn(ref: reply.ref, parents: [person.ref], role: .assistant, text: reply.text, at: Date())
-        if !turns.contains(where: { $0.ref == reply.ref }) { turns.append(live!) }
+    /// pass answers the turn from the log and the next read shows it. The ask runs on its own,
+    /// not under the send, so a slow or dead socket never holds up what is said next.
+    private func askPrimary(toAnswer person: Turn) {
+        guard asking[person.ref] == nil else { return }
+        asking[person.ref] = Task { [database, device, ask] in
+            defer { asking[person.ref] = nil }
+            guard let record = try? await database.fetch(Lease.recordID), let lease = Lease(record: record),
+                  !lease.isExpired(at: Date()), let endpoint = lease.endpoint,
+                  let secret = try? await LinkSecret.ensure(in: database).bytes else { return }
+            guard let reply = await ask(endpoint, person.ref, device, secret), !Task.isCancelled else { return }
+            let turn = Turn(ref: reply.ref, parents: [person.ref], role: .assistant, text: reply.text, at: Date())
+            guard !turns.contains(where: { $0.ref == reply.ref }) else { return }
+            live.append(turn)
+            turns.append(turn)
+        }
+    }
+
+    /// Waits for every ask in flight; tests, which otherwise race it.
+    func settleAsks() async {
+        for task in asking.values { await task.value }
     }
 
     private func save(_ pending: [Outgoing]) {
@@ -221,6 +231,8 @@ final class TranscriptStore {
             return "The log moved under us. Try again."
         case TurnLogError.sequenceContended:
             return "Another device is writing as fast as we are. Try again."
+        case TurnLogError.unreadable(let ref):
+            return "A turn in the log (\(ref)) can't be read."
         default:
             return (error as NSError).localizedDescription
         }

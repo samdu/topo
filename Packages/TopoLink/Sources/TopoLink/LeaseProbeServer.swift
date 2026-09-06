@@ -42,10 +42,14 @@ enum ProbeWire {
 public actor LeaseProbeServer {
     public typealias Holds = @Sendable (DeviceID, Int64) async -> Bool
     public typealias Answers = @Sendable (TurnRef) async -> LiveReply?
+    /// The link secret the owner can read from the private database, or nil when it has none
+    /// yet; without it every `answer` is `no`.
+    public typealias Secret = @Sendable () async -> Data?
 
     private let listener: NWListener
     private let holds: Holds
     private let answers: Answers?
+    private let secret: Secret?
     private var ready: CheckedContinuation<UInt16, any Error>?
     public private(set) var port: UInt16?
 
@@ -53,7 +57,8 @@ public actor LeaseProbeServer {
     ///   - advertising: the device ID to register under `TopoService.type`,
     ///     or nil to listen without advertising.
     ///   - port: 0 picks a free one.
-    public init(advertising device: DeviceID?, port: UInt16 = 0, answers: Answers? = nil, holds: @escaping Holds) throws {
+    public init(advertising device: DeviceID?, port: UInt16 = 0, answers: Answers? = nil, secret: Secret? = nil,
+                holds: @escaping Holds) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
@@ -63,6 +68,7 @@ public actor LeaseProbeServer {
         self.listener = listener
         self.holds = holds
         self.answers = answers
+        self.secret = secret
     }
 
     /// Starts listening. Returns the port once bound.
@@ -100,22 +106,40 @@ public actor LeaseProbeServer {
         case .cancelled:
             ready?.resume(throwing: CancellationError())
             ready = nil
+        case .waiting(let error):
+            // Cannot listen now and nothing here will change that: on iOS this is the local
+            // network permission refused. A start that never returned would hold its caller.
+            ready?.resume(throwing: error)
+            ready = nil
         default:
             break
         }
     }
 
+    /// How long a connection may take to send its request line before it is dropped.
+    static let requestDeadline: TimeInterval = 5
+
     private func serve(_ connection: NWConnection) async {
         connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.serve"))
+        // A connection that opens and says nothing is dropped, not kept.
+        let deadline = Task {
+            try? await Task.sleep(for: .seconds(Self.requestDeadline))
+            // Cancelled because the request arrived: the sleep threw at once, and this is no deadline.
+            guard !Task.isCancelled else { return }
+            connection.cancel()
+        }
         defer { connection.cancel() }
         guard let line = try? await connection.readLine(maximum: 256) else {
+            deadline.cancel()
             try? await connection.send(ProbeWire.no)
             return
         }
+        deadline.cancel()
         if let (device, epoch) = ProbeWire.parseRequest(line) {
             let answer = await holds(device, epoch)
             try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
-        } else if let ref = TurnWire.parseRequest(line), let answers, let reply = await answers(ref) {
+        } else if let request = TurnWire.parseRequest(line), let answers, let secret,
+                  let key = await secret(), request.verifies(with: key), let reply = await answers(request.ref) {
             try? await connection.send(TurnWire.reply(reply.ref, reply.text))
         } else {
             try? await connection.send(ProbeWire.no)

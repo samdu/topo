@@ -100,6 +100,9 @@ final class Harness {
         lease = nil
         writer = nil
         info = nil
+        if let server { Task { await server.stop() } }
+        server = nil
+        endpoint = nil
         turns = []
         notice = nil
         error = nil
@@ -212,8 +215,12 @@ final class Harness {
                 runner = try await makeRunner()
             }
             guard let runner else { return false }
-            let result = try await runner.run(text, model: model, nonce: attempt.nonce) { [weak self] step in
-                await self?.show(step, generation: generation)
+            // The phone's own turn takes its place in the same line as the socket answers and
+            // the pass, so no two model calls run against the same heads.
+            let result = try await oneAtATime {
+                try await runner.run(text, model: self.model, nonce: attempt.nonce) { [weak self] step in
+                    await self?.show(step, generation: generation)
+                }
             }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
@@ -305,25 +312,26 @@ final class Harness {
         }
     }
 
-    /// Answers run one at a time: the five-second pass and every limb's ask over the socket
-    /// wait for the answer in flight before starting, and an asker whose turn was answered
-    /// meanwhile gets that reply, so one turn costs one model call however many ask for it.
+    /// Model calls run one at a time: the phone's own turn, the five-second pass and every
+    /// limb's ask over the socket wait for the one in flight, and an asker whose turn was
+    /// answered meanwhile gets that reply. The reply nonce's marker is what makes a second
+    /// reply impossible; this is what makes a second call unnecessary.
     private var answerQueue: Task<Void, Never>?
 
-    private func oneAtATime<T: Sendable>(_ body: @escaping @MainActor () async -> T) async -> T {
+    private func oneAtATime<T: Sendable>(_ body: @escaping @MainActor () async throws -> T) async throws -> T {
         let previous = answerQueue
         let task = Task { @MainActor in
             _ = await previous?.value
-            return await body()
+            return try await body()
         }
-        answerQueue = Task { _ = await task.value }
-        return await task.value
+        answerQueue = Task { _ = try? await task.value }
+        return try await task.value
     }
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
     func answerPending() async {
         guard !busy else { return }
-        await oneAtATime { await self.answerPendingNow() }
+        try? await oneAtATime { await self.answerPendingNow() }
     }
 
     private func answerPendingNow() async {
@@ -365,6 +373,9 @@ final class Harness {
         // live path, since every turn still goes through the log.
         if server == nil, let server = try? LeaseProbeServer(advertising: device, answers: { [weak self] ref in
             await self?.answer(ref)
+        }, secret: { [database] in
+            // The Apple ID's link secret, made if none; a stranger on the LAN cannot read it.
+            try? await LinkSecret.ensure(in: database).bytes
         }, holds: { [weak self] holder, epoch in
             guard let self, let lease = await self.lease, let held = await lease.held else { return false }
             return await lease.isPrimary() && held.holder == holder && held.epoch == epoch
@@ -376,6 +387,8 @@ final class Harness {
         }
         let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: endpoint,
                                                probe: endpoint == nil ? NoSocketProbe() : SocketLeaseProbe())
+        // A lease made before the listener (the takeover's) learns the endpoint here.
+        await lease.use(endpoint: endpoint)
         self.lease = lease
         var api = MessagesAPI(tokens: tokens)
         api.onResponse = { [weak self] status, seconds in
@@ -388,11 +401,13 @@ final class Harness {
     /// the log as any reply does; the socket only carries it back at once.
     private func answer(_ ref: TurnRef) async -> LiveReply? {
         guard !busy, runner != nil else { return nil }
-        return await oneAtATime { await self.answerNow(ref) }
+        return try? await oneAtATime { await self.answerNow(ref) }
     }
 
     private func answerNow(_ ref: TurnRef) async -> LiveReply? {
-        guard !busy, let runner else { return nil }
+        // Only a primary answers over the socket, the same test the probe's `holds` makes: a
+        // device that has yielded, or lapsed, serves no reply text to anyone.
+        guard !busy, let runner, let lease, await lease.isPrimary() else { return nil }
         do {
             // Answered while this ask waited its turn: that reply, no second call.
             if let already = try await runner.reply(to: ref) {
@@ -402,6 +417,8 @@ final class Harness {
             show(reply)
             await refresh()
             return LiveReply(ref: reply.ref, text: reply.text)
+        } catch TurnRunnerError.notPrimary, TurnRunnerError.displaced {
+            return nil
         } catch {
             self.error = Self.describe(error)
             return nil

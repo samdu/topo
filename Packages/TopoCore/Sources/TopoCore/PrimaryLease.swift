@@ -117,7 +117,9 @@ public enum LeaseOutcome: Hashable, Sendable {
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
-    private let endpoint: String?
+    /// Where this device answers probes and live turns, written into every claim and
+    /// heartbeat; a listener that comes up after the lease sets it with `use(endpoint:)`.
+    private var endpoint: String?
     private let probe: any LeaseProbe
     private let timing: LeaseTiming
     private let now: @Sendable () -> Date
@@ -273,6 +275,12 @@ public actor PrimaryLease {
     public func claim(overLapsed record: Record) async throws -> Bool {
         guard let lease = Lease(record: record), lease.holder != device, lease.isExpired(at: now()) else { return false }
         return try await write(holder(epoch: lease.epoch + 1), over: record.changeTag) != nil
+    }
+
+    /// The endpoint the next claim or heartbeat writes: a listener that came up after the lease
+    /// was made, or an address that changed.
+    public func use(endpoint: String?) {
+        self.endpoint = endpoint
     }
 
     /// Stops counting this device primary and stops its heartbeats, without touching the

@@ -125,9 +125,12 @@ public actor TurnRunner {
     /// is missing other turns.
     public func answer(_ ref: TurnRef, model: ClaudeModel) async throws -> Turn? {
         guard let asked = try await log.turn(ref), asked.role == .person else { return nil }
+        // The read's probe past the device's last seen turn finds this one and reports it
+        // missing; it is here by ID, so it stands in the transcript and is not missing.
         let read = try await log.read()
         let transcript = read[ref] == nil
-            ? Transcript(turns: Array(read.turns.values) + [asked], missing: read.missing, unreadable: read.unreadable)
+            ? Transcript(turns: Array(read.turns.values) + [asked], missing: read.missing.subtracting([ref]),
+                         unreadable: read.unreadable)
             : read
         return try await answer(transcript, model: model)
     }

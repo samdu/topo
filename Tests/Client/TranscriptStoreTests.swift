@@ -45,11 +45,14 @@ final class TranscriptStoreTests: XCTestCase {
         let asked = Asked()
         let replyRef = TurnRef(device: phone, sequence: 1)
         let store = TranscriptStore(database: database, device: device, ensureZone: {}, defaults: makeDefaults(),
-                                    ask: { endpoint, ref in
+                                    ask: { endpoint, ref, asker, secret in
                                         await asked.note(endpoint, ref)
+                                        XCTAssertEqual(asker, DeviceID("watch-test"))
+                                        XCTAssertEqual(secret.count, 32)
                                         return LiveReply(ref: replyRef, text: "at once")
                                     })
         await store.send("now?")
+        await store.settleAsks()
         let calls = await asked.calls
         XCTAssertEqual(calls.count, 1)
         XCTAssertEqual(calls.first?.0, "10.0.0.2:4242")
@@ -66,12 +69,31 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertEqual(store.turns.last?.ref, replyRef)
     }
 
+    func testASlowAskDoesNotHoldUpTheNextSend() async throws {
+        let database = InMemoryRecordDatabase()
+        let holder = PrimaryLease(database: database, device: DeviceID("phone"), endpoint: "10.0.0.2:4242", probe: AlwaysAlive(),
+                                  sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await holder.acquire() else { return XCTFail("claim") }
+        let gate = Gate()
+        let store = TranscriptStore(database: database, device: device, ensureZone: {}, defaults: makeDefaults(),
+                                    ask: { _, _, _, _ in await gate.wait(); return nil })
+        await store.send("one")
+        XCTAssertFalse(store.isSending)
+        // The socket is still hanging; the next send goes through regardless.
+        await store.send("two")
+        let written = try await TurnLog(database: database).read().ordered.map(\.text)
+        XCTAssertEqual(written, ["one", "two"])
+        await gate.open()
+        await store.settleAsks()
+    }
+
     func testNoPrimaryEndpointMeansNoAskAndTheLogPathStands() async throws {
         let database = InMemoryRecordDatabase()
         let asked = Asked()
         let store = TranscriptStore(database: database, device: device, ensureZone: {}, defaults: makeDefaults(),
-                                    ask: { endpoint, ref in await asked.note(endpoint, ref); return nil })
+                                    ask: { endpoint, ref, _, _ in await asked.note(endpoint, ref); return nil })
         await store.send("hello")
+        await store.settleAsks()
         let calls = await asked.calls
         XCTAssertTrue(calls.isEmpty)
         XCTAssertEqual(store.turns.map(\.text), ["hello"])
@@ -346,4 +368,18 @@ private actor Asked {
 
 private struct AlwaysAlive: LeaseProbe {
     func confirms(_ lease: Lease) async -> Bool { true }
+}
+
+private actor Gate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+    func open() {
+        opened = true
+        for w in waiters { w.resume() }
+        waiters = []
+    }
 }
