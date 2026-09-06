@@ -142,6 +142,56 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertFalse(primary)
     }
 
+    func testAHolderThatHeartbeatsThroughTheWaitKeepsPrimary() async throws {
+        let db = InMemoryRecordDatabase()
+        let holder = PrimaryLease(database: db, device: DeviceID("phone"), endpoint: nil, probe: NoProbe(),
+                                  sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await holder.acquire() else { return XCTFail("claim") }
+        // The wait is where the holder heartbeats.
+        let s = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
+                             sleep: { _ in _ = try await holder.heartbeat() })
+        await s.decide()
+        let taken = await s.takePrimary()
+        XCTAssertNil(taken)
+        XCTAssertEqual(s.role, .viewer)
+        XCTAssertNotNil(s.trouble)
+        let stillHeld = await holder.isPrimary()
+        XCTAssertTrue(stillHeld)
+        let recorded = try await DeviceRole.read(DeviceID("phone"), from: db)
+        XCTAssertNil(recorded)
+    }
+
+    func testATakeoverWritesBothRolesAndTheOldPrimaryDemotesOnItsNextPass() async throws {
+        let db = InMemoryRecordDatabase()
+        let phone = DeviceID("phone")
+        try await lease(db, holder: phone)
+        let old = RoleSelector(database: db, device: phone, defaults: defaults(), isSignedIn: { true }, ensureZone: {})
+        await old.decide()
+        XCTAssertEqual(old.role, .primary)
+        let slept = Slept()
+        let pad = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
+                               sleep: { await slept.add($0) })
+        await pad.decide()
+        let took = await pad.takePrimary()
+        XCTAssertNotNil(took)
+        let mine = try await DeviceRole.read(me, from: db)
+        let theirs = try await DeviceRole.read(phone, from: db)
+        XCTAssertEqual(mine?.role, .primary)
+        XCTAssertEqual(theirs?.role, .viewer)
+        XCTAssertEqual(theirs?.setBy, me)
+        // The old primary finds its record on its next pass and drops to viewer; a relaunch too.
+        let demoted = await old.checkDemotion()
+        XCTAssertTrue(demoted)
+        XCTAssertEqual(old.role, .viewer)
+        let relaunched = RoleSelector(database: db, device: phone, defaults: defaults(), isSignedIn: { true }, ensureZone: {})
+        await relaunched.decide()
+        XCTAssertEqual(relaunched.role, .viewer)
+        // The taker's own record does not demote it.
+        let selfCheck = await pad.checkDemotion()
+        XCTAssertFalse(selfCheck)
+        XCTAssertEqual(pad.role, .primary)
+    }
+
     func testAnUnreadableRecordLeavesTheRoleUndecided() async {
         let s = selector(Failing())
         await s.decide()

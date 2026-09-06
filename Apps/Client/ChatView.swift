@@ -8,6 +8,7 @@ import TopoTurn
 struct ChatView: View {
     @Environment(Harness.self) private var harness
     @Environment(SignIn.self) private var signIn
+    @Environment(RoleSelector.self) private var roleSelector
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     @AppStorage("firstRunAnswered") private var answered = false
     @State private var draft = ""
@@ -94,6 +95,18 @@ struct ChatView: View {
             // From here the screen stays current and, as primary, answers what the other devices
             // write into the log.
             await harness.answering(every: .seconds(5))
+        }
+        .task {
+            // The far end of a takeover: another device wrote this one's role as viewer, so it
+            // stops answering, forgets its login, and the root shows the viewer screen.
+            while !Task.isCancelled {
+                if await roleSelector.checkDemotion() {
+                    harness.forget()
+                    signIn.signOut()
+                    return
+                }
+                do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            }
         }
         .onChange(of: dictation.text) { _, text in if !text.isEmpty { draft = text } }
     }

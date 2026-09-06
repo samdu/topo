@@ -58,7 +58,12 @@ final class RoleSelector {
     /// Decides the role if it is not decided yet. A decision is kept; a failure to read leaves it
     /// open for the next call, with `trouble` saying why.
     func decide() async {
+        if role == .primary { await checkDemotion() }
         guard role == nil else { return }
+        if let recorded = try? await DeviceRole.read(device, from: database), recorded.role == .viewer {
+            keep(.viewer)
+            return
+        }
         if isSignedIn() {
             keep(.primary)
             return
@@ -90,19 +95,20 @@ final class RoleSelector {
         return try await lease.claimIfNone()
     }
 
-    /// The deliberate takeover, from the settings of a viewer: this device becomes primary and
-    /// the device that was stops answering. The one control that hands primary over, for a
-    /// primary phone that is lost, wiped or simply retired.
+    /// The deliberate takeover, from a viewer's menu: this device becomes primary and the device
+    /// that was stops answering. The one control that hands primary over, for a primary phone
+    /// that is lost, wiped or simply retired.
     ///
-    /// The safety is the wait: a lease that is fresh is left to lapse, one duration at most,
-    /// before the claim, so a holder that is merely between heartbeats keeps its lease if it
-    /// heartbeats again, and only a holder that has stopped is claimed over; a holder that keeps
-    /// heartbeating through the wait is alive and is claimed over anyway, and yields on its next
-    /// heartbeat, as the lease provides. On success the role is primary, the screen shows
-    /// sign-in, and the lease instance that made the claim is returned for the harness to keep:
-    /// the displaced device yields to that lease's epoch, and a second claim from another
-    /// instance would be an epoch it never yielded to, which it would claim back over. On failure
-    /// nil, the role unchanged, and `trouble` says why.
+    /// The safety is the wait: a fresh lease is left to lapse, one duration at most, and then
+    /// read again. A holder that heartbeated meanwhile is alive and keeps primary; the takeover
+    /// is refused and says so. A holder that did not is gone, and is claimed over. With the
+    /// claim, in one batch with the lease's heartbeat, the old holder's role record is written
+    /// as viewer and this device's as primary, so the old device drops to viewer on its next
+    /// launch or answering pass rather than answering again whenever this one goes quiet.
+    /// On success the role is primary, the screen shows sign-in, and the lease instance that
+    /// made the claim is returned for the harness to keep (the displaced device yields to that
+    /// lease's epoch; a second claim from another instance would be one it never yielded to).
+    /// On failure nil, the role unchanged, and `trouble` says why.
     @discardableResult
     func takePrimary() async -> PrimaryLease? {
         guard taking == nil else { return nil }
@@ -110,16 +116,33 @@ final class RoleSelector {
         do {
             taking = "Checking who is primary…"
             let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NeverConfirms(), timing: timing)
-            if let record = try await database.fetch(Lease.recordID), let current = Lease(record: record),
-               current.holder != device, !current.isExpired(at: Date()) {
-                let wait = min(current.expiresAt.timeIntervalSinceNow, timing.duration)
-                taking = "Waiting \(Int(wait.rounded(.up))) seconds for \(current.holder.rawValue) to finish…"
-                try await sleep(max(wait, 0))
+            var previous: Lease?
+            if let record = try await database.fetch(Lease.recordID), let current = Lease(record: record), current.holder != device {
+                previous = current
+                if !current.isExpired(at: Date()) {
+                    let wait = min(current.expiresAt.timeIntervalSinceNow, timing.duration)
+                    taking = "Waiting \(Int(wait.rounded(.up))) seconds for \(current.holder.rawValue) to finish…"
+                    try await sleep(max(wait, 0))
+                    if let again = try await database.fetch(Lease.recordID), let after = Lease(record: again),
+                       after.holder == current.holder, after.expiresAt > current.expiresAt {
+                        trouble = "\(current.holder.rawValue) is answering right now and kept primary."
+                        return nil
+                    }
+                }
             }
             taking = "Taking over…"
             try await ensureZone()
             switch try await lease.acquire() {
             case .primary:
+                let now = Date()
+                var roles = [try await DeviceRole(device: device, role: .primary, setBy: device, at: now).record(over: database)]
+                if let previous {
+                    roles.append(try await DeviceRole(device: previous.holder, role: .viewer, setBy: device, at: now).record(over: database))
+                }
+                guard try await lease.heartbeat(saving: roles) != nil else {
+                    trouble = "Another device took primary just now. Try again in a moment."
+                    return nil
+                }
                 keep(.primary)
                 return lease
             case .held(let by):
@@ -133,6 +156,17 @@ final class RoleSelector {
             trouble = TranscriptStore.message(for: error)
         }
         return nil
+    }
+
+    /// Reads this device's role record and drops to viewer if another device wrote it so: the
+    /// far end of a takeover. True when the role changed, so the caller can forget the harness
+    /// and the login. Read at launch and on every answering pass. Unreadable is no change.
+    @discardableResult
+    func checkDemotion() async -> Bool {
+        guard role == .primary, let recorded = try? await DeviceRole.read(device, from: database),
+              recorded.role == .viewer, recorded.setBy != device else { return false }
+        keep(.viewer)
+        return true
     }
 
     private struct NeverConfirms: LeaseProbe {
