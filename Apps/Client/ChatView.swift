@@ -17,6 +17,7 @@ struct ChatView: View {
     @AppStorage("readAloud") private var readAloud = true
     @State private var draft = ""
     @State private var showDiagnostics = false
+    @State private var showAbout = false
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
 
@@ -74,6 +75,7 @@ struct ChatView: View {
                         }
                         Toggle("Read replies aloud", isOn: $readAloud)
                         Button("Diagnostics") { showDiagnostics = true }
+                        Button("About Topo") { showAbout = true }
                         Divider()
                         Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
                     } label: {
@@ -82,6 +84,7 @@ struct ChatView: View {
                 }
             }
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
+            .sheet(isPresented: $showAbout) { AboutView() }
         }
         .task {
             await harness.refresh()

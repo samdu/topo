@@ -35,7 +35,13 @@ targets:
     type: application
     platform: iOS
     supportedDestinations: [iOS, iPadOS]
-    sources: [Apps/Shared, Apps/Client, Apps/Topo]
+    sources:
+      - Apps/Shared
+      - Apps/Client
+      - Apps/Topo
+      # What the About screen reads, rather than a copy of it in Swift.
+      - path: THIRD-PARTY
+        buildPhase: resources
     dependencies:
       - package: TopoCore
       - package: TopoAuth
@@ -60,7 +66,12 @@ targets:
   TopoWatch:
     type: application
     platform: watchOS
-    sources: [Apps/Shared, Apps/Client, Apps/TopoWatch]
+    sources:
+      - Apps/Shared
+      - Apps/Client
+      - Apps/TopoWatch
+      - path: THIRD-PARTY
+        buildPhase: resources
     dependencies:
       - package: TopoAuth
       - package: TopoCore
@@ -76,7 +87,12 @@ targets:
   TopoTV:
     type: application
     platform: tvOS
-    sources: [Apps/Shared, Apps/Client, Apps/TopoTV]
+    sources:
+      - Apps/Shared
+      - Apps/Client
+      - Apps/TopoTV
+      - path: THIRD-PARTY
+        buildPhase: resources
     dependencies:
       - package: TopoAuth
       - package: TopoCore
@@ -95,7 +111,10 @@ targets:
   TopoTests:
     type: bundle.unit-test
     platform: iOS
-    sources: [Tests/Client]
+    sources:
+      - Tests/Client
+      - path: THIRD-PARTY
+        buildPhase: resources
     dependencies:
       - target: Topo
       - package: TopoCore

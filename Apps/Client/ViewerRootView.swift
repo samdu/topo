@@ -11,6 +11,7 @@ struct ViewerRootView: View {
     @Environment(Harness.self) private var harness
     @State private var store = TranscriptStore(database: TopoCloudKit.database())
     @State private var primary = PrimaryReader(database: TopoCloudKit.database())
+    @State private var showAbout = false
     @State private var confirmingTakeover = false
 
     var body: some View {
@@ -33,11 +34,13 @@ struct ViewerRootView: View {
                     Menu {
                         Button("Make this device the primary…") { confirmingTakeover = true }
                             .disabled(roleSelector.taking != nil)
+                        Button("About Topo") { showAbout = true }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
                 }
             }
+            .sheet(isPresented: $showAbout) { AboutView() }
             .confirmationDialog("Make this device the primary?", isPresented: $confirmingTakeover, titleVisibility: .visible) {
                 Button("Make this device the primary", role: .destructive) {
                     Task {
