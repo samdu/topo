@@ -300,6 +300,32 @@ import TopoCoreTesting
         #expect(try await p.heartbeat())
     }
 
+    @Test func theHubTakesOverALiveHolderWhoThenYields() async throws {
+        let p = lease(phone, probe: .allAlive)
+        _ = try await p.acquire()
+        clock.advance(2)
+        let h = lease(hub, probe: .allAlive)
+        guard case .primary(let taken) = try await h.takeOver() else { Issue.record("expected .primary"); return }
+        #expect(taken.epoch == 2)
+        #expect(await h.isPrimary())
+        // The phone learns at its heartbeat, and its next turn defers to the hub.
+        #expect(try await !p.heartbeat())
+        #expect(!(await p.isPrimary()))
+        guard case .held(let by) = try await p.acquire() else { Issue.record("expected .held"); return }
+        #expect(by.holder == hub && by.epoch == 2)
+        // The hub's next take-over is a renewal, not a new claim.
+        clock.advance(5)
+        guard case .primary(let again) = try await h.takeOver() else { Issue.record("expected .primary"); return }
+        #expect(again.epoch == 2 && again.expiresAt == clock.now + 10)
+    }
+
+    @Test func takeOverCreatesWhenNobodyHolds() async throws {
+        let h = lease(hub)
+        guard case .primary(let l) = try await h.takeOver() else { Issue.record("expected .primary"); return }
+        #expect(l.epoch == 1)
+        #expect(await h.isPrimary())
+    }
+
     @Test func twoClaimantsRacingForADeadHolderProduceOnePrimary() async throws {
         _ = try await lease(hub).acquire()
         clock.advance(2)
