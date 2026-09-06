@@ -1,6 +1,7 @@
 import SwiftUI
 import TopoAuth
 import TopoCore
+import TopoLink
 
 /// The menu-bar hub: the only target that runs resident code. It holds the
 /// primary lease, answers probes for it, shows a pairing code and the
@@ -45,6 +46,8 @@ struct HubMenu: View {
             StatusLine()
             Divider()
             DevicesList()
+            Divider()
+            SurfacesList()
             Divider()
             DisclosureGroup("Pair a device", isExpanded: $showingCode) {
                 PairingPane()
@@ -142,6 +145,97 @@ struct DevicesList: View {
             parts.append(device.isPaired(with: hub.device) ? "Paired" : "Not paired")
         }
         parts.append("Seen \(device.seenAt.formatted(.relative(presentation: .named)))")
+        return parts.joined(separator: " · ")
+    }
+}
+
+/// The screens in the house: what each is called, who it answers for, and
+/// the button that asks it to answer for this hub. Registering is the room's
+/// decision, so the button's ordinary answer is that the question is now on
+/// the screen and somebody there has to say yes.
+struct SurfacesList: View {
+    @Environment(HubModel.self) private var hub
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Screens").font(.subheadline.weight(.semibold))
+            if let failure = hub.surfaces.failure {
+                Label(failure, systemImage: "wifi.slash").font(.caption).foregroundStyle(.secondary)
+            } else if hub.surfaces.surfaces.isEmpty {
+                Text("None on this network. A Womble advertises itself while it is on screen.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(hub.surfaces.surfaces) { surface in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "rectangle.on.rectangle").frame(width: 18)
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(surface.name)
+                        Text(detail(surface)).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    action(for: surface)
+                }
+                if hub.pages.isRevoked(surface.device), hub.surfaces.isRegistered(hub.device, with: surface) {
+                    HStack(spacing: 6) {
+                        Text("Revoked. It is still on this screen's roster.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Serve again") { hub.pages.serveAgain(surface.device, named: surface.name) }
+                            .help("Serves this screen again, at a new address")
+                    }
+                    .padding(.leading, 26)
+                } else if let address = hub.pages.address(for: surface.device, host: hub.lanAddress) {
+                    HStack(spacing: 6) {
+                        Text(address.absoluteString)
+                            .font(.caption2.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Revoke") { hub.pages.revoke(surface.device) }
+                            .help("Stops this screen showing what it is showing. It can be registered again.")
+                    }
+                    .padding(.leading, 26)
+                }
+            }
+            if let failure = hub.pages.failure {
+                Label("Not serving screen pages: \(failure)", systemImage: "exclamationmark.triangle")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func action(for surface: Surface) -> some View {
+        if hub.surfaces.isRegistered(hub.device, with: surface) {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.teal).help("This hub is on its roster")
+        } else {
+            switch hub.surfaces.registrations[surface.device] {
+            case .asking:
+                ProgressView().controlSize(.small)
+            case .waiting:
+                Button("Ask again") { ask(surface) }.help("Tap Register on the screen itself, then ask again")
+            case .refused(let reason):
+                Button("Ask again") { ask(surface) }.help(reason)
+            case .failed(let message):
+                Button("Try again") { ask(surface) }.help(message)
+            case .registered, .none:
+                Button("Register") { ask(surface) }.disabled(hub.pairingCode == nil)
+            }
+        }
+    }
+
+    private func ask(_ surface: Surface) {
+        guard let code = hub.pairingCode else { return }
+        Task { await hub.surfaces.register(code, with: surface) }
+    }
+
+    private func detail(_ surface: Surface) -> String {
+        let agents = hub.surfaces.agents(of: surface)
+        var parts = [agents.isEmpty ? "No agents registered" : "\(agents.count) registered"]
+        if case .waiting = hub.surfaces.registrations[surface.device] {
+            parts.append("waiting for someone in the room")
+        }
         return parts.joined(separator: " · ")
     }
 }
