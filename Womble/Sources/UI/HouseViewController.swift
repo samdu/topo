@@ -28,6 +28,11 @@ final class HouseViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = Palette.background
         installTitleTap()
+        // The one button a wall screen gets: the acknowledgements are a
+        // promise the app makes about what is in it, so they are reachable
+        // without knowing a gesture.
+        navigationItem.rightBarButtonItem = UIBarButtonItem(title: "About", style: .plain,
+                                                            target: self, action: #selector(openAbout))
 
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.distribution = .fill
@@ -92,6 +97,10 @@ final class HouseViewController: UIViewController {
         tap.numberOfTapsRequired = 5
         label.addGestureRecognizer(tap)
         navigationItem.titleView = label
+    }
+
+    @objc private func openAbout() {
+        navigationController?.pushViewController(AboutViewController(), animated: true)
     }
 
     @objc private func openSelfTest() {

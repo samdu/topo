@@ -1,0 +1,17 @@
+# Third-party
+
+The About screen in Topo and in Womble is this file: the apps read it out of their own bundle and render it, so what a person sees credited is what is written here.
+
+Nothing anybody else wrote ships inside a Topo bundle. Topo is distributed through the App Store, which is why: embedding somebody else's copyleft code would make the whole app theirs to object to. What is named below is either a tool that runs on the developer's Mac and stays there, or something borrowed that is not code.
+
+The format is the whole contract with the apps: a heading beginning `## ` opens an entry, and the `Licence`, `Where` and `Use` lines under it are shown as they are written. Everything above the first heading is the note at the top of the screen.
+
+## XcodeGen
+Licence: MIT, © Yonas Kolb
+Where: https://github.com/yonaskolb/XcodeGen
+Use: Generates `Topo.xcodeproj` and `Womble/Womble.xcodeproj` from `project.yml`. A build tool: it runs on the Mac that builds Topo and none of it ships in a bundle.
+
+## The Claude Code CLI's OAuth client
+Licence: Anthropic's, used as its client rather than copied
+Where: https://claude.com/product/claude-code
+Use: Sign in with Claude is the OAuth client the Claude Code CLI is — its client id, its scopes, its authorize and token endpoints, and its identity line as the first system block of a turn. That is what a Claude subscription is reachable as. No code of Anthropic's is in this repository.

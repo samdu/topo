@@ -13,6 +13,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var dictation = Dictation()
     @State private var showDiagnostics = false
+    @State private var showAbout = false
 
     var body: some View {
         NavigationStack {
@@ -67,6 +68,7 @@ struct ChatView: View {
                             ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                         }
                         Button("Diagnostics") { showDiagnostics = true }
+                        Button("About Topo") { showAbout = true }
                         Divider()
                         Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
                     } label: {
@@ -75,6 +77,7 @@ struct ChatView: View {
                 }
             }
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
+            .sheet(isPresented: $showAbout) { AboutView() }
         }
         .task {
             await harness.refresh()

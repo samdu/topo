@@ -9,6 +9,7 @@ struct ViewerRootView: View {
 
     @State private var store = TranscriptStore(database: TopoCloudKit.database())
     @State private var primary = PrimaryReader(database: TopoCloudKit.database())
+    @State private var showAbout = false
 
     var body: some View {
         NavigationStack {
@@ -19,6 +20,15 @@ struct ViewerRootView: View {
             }
             .navigationTitle("Topo")
             .navigationBarTitleDisplayMode(.inline)
+            // A viewer has no menu of its own, and the acknowledgements have
+            // to be reachable from whatever screen a device happens to show.
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showAbout = true } label: { Image(systemName: "info.circle") }
+                        .accessibilityLabel("About Topo")
+                }
+            }
+            .sheet(isPresented: $showAbout) { AboutView() }
         }
         .task { await store.refreshing(every: Self.refreshInterval) }
         .task {
