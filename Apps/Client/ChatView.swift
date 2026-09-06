@@ -107,7 +107,8 @@ struct ChatView: View {
             // stops answering, forgets its login, and the root shows the viewer screen.
             while !Task.isCancelled {
                 if await roleSelector.checkDemotion() {
-                    harness.forget()
+                    // What was waiting goes into the log first; the login goes last.
+                    await harness.demote()
                     signIn.signOut()
                     return
                 }

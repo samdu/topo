@@ -105,6 +105,34 @@ final class Harness {
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
     }
 
+    /// The far end of a takeover: this device is a viewer now. The turn in flight is cancelled;
+    /// what is waiting to be sent goes into the log as a limb's turns, in order, so nothing said
+    /// is lost to the handover, and whichever device is primary answers it there. A turn that
+    /// will not go stays on disk for the next launch. Then the harness is dropped as `forget`
+    /// drops it, but the transcript stays on screen.
+    func demote() async {
+        inFlight?.cancel()
+        inFlight = nil
+        busy = false
+        status = nil
+        do {
+            let writer: TurnWriter
+            if let existing = self.writer { writer = existing } else { writer = try await log.writer(for: device) }
+            while let next = pending.first {
+                let transcript = try await log.read()
+                let person = try await writer.append(.person, next.text, continuing: transcript, nonce: next.nonce)
+                show(person)
+                if pending.first == next { pending.removeFirst() }
+            }
+        } catch {
+            self.error = "Not everything said has reached the log yet: \(Self.describe(error))"
+        }
+        runner = nil
+        lease = nil
+        writer = nil
+        info = nil
+    }
+
     func refresh() async {
         do {
             let transcript = try await log.read()
