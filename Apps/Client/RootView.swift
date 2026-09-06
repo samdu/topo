@@ -6,6 +6,9 @@ import TopoAuth
 /// otherwise. The watch and TV are always viewers.
 struct RootView: View {
     @Environment(SignIn.self) private var signIn
+    #if os(iOS)
+    @Environment(Harness.self) private var harness
+    #endif
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     /// Set once the first answer is in the log, so the question is not asked twice.
     @AppStorage("firstRunAnswered") private var answered = false
@@ -19,7 +22,16 @@ struct RootView: View {
         case nil:
             DecidingView(trouble: roleSelector.trouble) { await roleSelector.decide() }
         case .viewer:
-            ViewerRootView()
+            // A viewer holds no login and keeps nothing waiting. One found here (a reinstall
+            // keeps the keychain while the role record says viewer; a demotion decided at
+            // launch leaves an outbox on disk) puts what was waiting into the log as a limb's
+            // turns and drops the login.
+            ViewerRootView().task {
+                if signIn.phase == .signedIn || harness.hasWaiting {
+                    await harness.demote()
+                    signIn.signOut()
+                }
+            }
         case .primary:
             if signIn.phase != .signedIn {
                 SignInView()

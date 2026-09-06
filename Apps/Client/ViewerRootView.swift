@@ -7,9 +7,12 @@ import TopoCore
 struct ViewerRootView: View {
     private static let refreshInterval = Duration.seconds(10)
 
+    @Environment(RoleSelector.self) private var roleSelector
+    @Environment(Harness.self) private var harness
     @State private var store = TranscriptStore(database: TopoCloudKit.database())
     @State private var primary = PrimaryReader(database: TopoCloudKit.database())
     @State private var showAbout = false
+    @State private var confirmingTakeover = false
 
     var body: some View {
         NavigationStack {
@@ -17,18 +20,38 @@ struct ViewerRootView: View {
                 connectedLine
                 Divider()
                 content
+                if let taking = roleSelector.taking {
+                    HStack(spacing: 8) { ProgressView(); Text(taking) }
+                        .font(.footnote).padding(.bottom, 8)
+                } else if let trouble = roleSelector.trouble {
+                    Text(trouble).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
+                }
             }
             .navigationTitle("Topo")
             .navigationBarTitleDisplayMode(.inline)
-            // A viewer has no menu of its own, and the acknowledgements have
-            // to be reachable from whatever screen a device happens to show.
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { showAbout = true } label: { Image(systemName: "info.circle") }
-                        .accessibilityLabel("About Topo")
+                    Menu {
+                        Button("Make this device the primary…") { confirmingTakeover = true }
+                            .disabled(roleSelector.taking != nil)
+                        Button("About Topo") { showAbout = true }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
                 }
             }
             .sheet(isPresented: $showAbout) { AboutView() }
+            .confirmationDialog("Make this device the primary?", isPresented: $confirmingTakeover, titleVisibility: .visible) {
+                Button("Make this device the primary", role: .destructive) {
+                    Task {
+                        // The lease that made the claim is the one the harness keeps.
+                        if let lease = await roleSelector.takePrimary() { harness.adopt(lease) }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(takeoverWarning)
+            }
         }
         .task { await store.refreshing(every: Self.refreshInterval) }
         .task {
@@ -37,6 +60,12 @@ struct ViewerRootView: View {
                 do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
             }
         }
+    }
+
+    /// Plain words for what the takeover does: the other device stops answering.
+    private var takeoverWarning: String {
+        let other = primary.lease?.holder.rawValue ?? "The device that is primary now"
+        return "\(other) stops answering, and you sign in with Claude here. If it is only asleep, this waits up to ten seconds for it first."
     }
 
     private var connectedLine: some View {
