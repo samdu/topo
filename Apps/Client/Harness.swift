@@ -305,8 +305,28 @@ final class Harness {
         }
     }
 
+    /// Answers run one at a time: the five-second pass and every limb's ask over the socket
+    /// wait for the answer in flight before starting, and an asker whose turn was answered
+    /// meanwhile gets that reply, so one turn costs one model call however many ask for it.
+    private var answerQueue: Task<Void, Never>?
+
+    private func oneAtATime<T: Sendable>(_ body: @escaping @MainActor () async -> T) async -> T {
+        let previous = answerQueue
+        let task = Task { @MainActor in
+            _ = await previous?.value
+            return await body()
+        }
+        answerQueue = Task { _ = await task.value }
+        return await task.value
+    }
+
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
     func answerPending() async {
+        guard !busy else { return }
+        await oneAtATime { await self.answerPendingNow() }
+    }
+
+    private func answerPendingNow() async {
         guard !busy else { return }
         do {
             if runner == nil {
@@ -367,8 +387,17 @@ final class Harness {
     /// A limb asked over the LAN: answer its turn now, as primary, or say no. The reply lands in
     /// the log as any reply does; the socket only carries it back at once.
     private func answer(_ ref: TurnRef) async -> LiveReply? {
+        guard !busy, runner != nil else { return nil }
+        return await oneAtATime { await self.answerNow(ref) }
+    }
+
+    private func answerNow(_ ref: TurnRef) async -> LiveReply? {
         guard !busy, let runner else { return nil }
         do {
+            // Answered while this ask waited its turn: that reply, no second call.
+            if let already = try await runner.reply(to: ref) {
+                return LiveReply(ref: already.ref, text: already.text)
+            }
             guard let reply = try await runner.answer(ref, model: model) else { return nil }
             show(reply)
             await refresh()

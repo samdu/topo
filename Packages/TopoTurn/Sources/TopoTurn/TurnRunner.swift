@@ -132,6 +132,12 @@ public actor TurnRunner {
         return try await answer(transcript, model: model)
     }
 
+    /// The reply already in the log to a person's turn, if any: what a second asker gets instead
+    /// of a second model call.
+    public func reply(to ref: TurnRef) async throws -> Turn? {
+        try await log.read().ordered.first { $0.role == .assistant && $0.parents.contains(ref) }
+    }
+
     private func answer(_ transcript: Transcript, model: ClaudeModel) async throws -> Turn? {
         guard transcript.isComplete, Self.awaitsReply(transcript) else { return nil }
         let outcome = try await lease.acquire()

@@ -175,6 +175,9 @@ import TopoCoreTesting
         // Asked again, it is already answered: no second call.
         #expect(try await runner.answer(asked.ref, model: .sonnet5) == nil)
         #expect(transport.requests.count == 1)
+        // The reply already there is what a second asker gets.
+        #expect(try await runner.reply(to: asked.ref) == answer)
+        #expect(try await runner.reply(to: answer.ref) == nil)
         // A ref with no turn, and a reply's ref, are nil.
         #expect(try await runner.answer(TurnRef(device: DeviceID("nobody"), sequence: 1), model: .sonnet5) == nil)
         #expect(try await runner.answer(answer.ref, model: .sonnet5) == nil)
