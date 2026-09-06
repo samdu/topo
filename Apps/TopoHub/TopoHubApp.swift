@@ -175,6 +175,32 @@ struct SurfacesList: View {
                     Spacer()
                     action(for: surface)
                 }
+                if hub.pages.isRevoked(surface.device), hub.surfaces.isRegistered(hub.device, with: surface) {
+                    HStack(spacing: 6) {
+                        Text("Revoked. It is still on this screen's roster.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Serve again") { hub.pages.serveAgain(surface.device, named: surface.name) }
+                            .help("Serves this screen again, at a new address")
+                    }
+                    .padding(.leading, 26)
+                } else if let address = hub.pages.address(for: surface.device, host: hub.lanAddress) {
+                    HStack(spacing: 6) {
+                        Text(address.absoluteString)
+                            .font(.caption2.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Revoke") { hub.pages.revoke(surface.device) }
+                            .help("Stops this screen showing what it is showing. It can be registered again.")
+                    }
+                    .padding(.leading, 26)
+                }
+            }
+            if let failure = hub.pages.failure {
+                Label("Not serving screen pages: \(failure)", systemImage: "exclamationmark.triangle")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

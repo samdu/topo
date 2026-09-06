@@ -41,6 +41,9 @@ final class HubModel {
     /// The screens in the house. A browse of the same Bonjour type the lease
     /// probe advertises on; the TXT record is what tells one from a device.
     let surfaces = SurfacesModel()
+    /// The web-page Wombles this Mac serves, and the token each is served
+    /// under. Made in `init` because its reader is this hub's databases.
+    private(set) var pages: SurfacePages!
 
     private static let log = Logger(subsystem: "zone.hexagon.topo.hub", category: "hub")
     private let database: any RecordDatabase
@@ -64,6 +67,43 @@ final class HubModel {
             database = InMemoryRecordDatabase()
         }
         directory = DeviceDirectory(database: database)
+        let log = TurnLog(database: database)
+        pages = SurfacePages { [store] in
+            let transcript = try? await log.read()
+            let board = try? await Self.board(store: store)?.read()
+            guard let transcript else {
+                // A read that failed is a document that says so, never a
+                // 404: the page treats 404 as "this screen is revoked" and
+                // clears itself, and a hiccup must not do that.
+                return SurfaceDocument(
+                    house: nil,
+                    transcript: .init(complete: false,
+                                      notice: "The hub could not read the log just now.",
+                                      turns: []),
+                    board: .init(cards: []))
+            }
+            return SurfaceDocument(house: nil, transcript: transcript,
+                                   notice: Self.notice(transcript: transcript, board: board),
+                                   board: board ?? Board(revisions: []))
+        }
+    }
+
+    /// The board is its own container, shared across the household's Apple
+    /// IDs; an unsigned build has neither and serves an empty one.
+    private nonisolated static func board(store: Store) async throws -> BoardStore? {
+        guard store == .cloudKit else { return nil }
+        return BoardStore(database: try await TopoBoard.database())
+    }
+
+    /// What the page shows above the turns. A read that could not be
+    /// finished says so; so does a board that could not be read, because a
+    /// noticeboard short by its tail looks complete.
+    private nonisolated static func notice(transcript: Transcript, board: Board?) -> String? {
+        if !transcript.isComplete { return "Some turns aren't here yet. What arrived is below." }
+        if transcript.isForked { return "Two devices carried on from the same point. Both are below." }
+        if board == nil { return "The hub could not read the board just now." }
+        if let board, !board.isComplete { return "Some of the board isn't here yet." }
+        return nil
     }
 
     func start() {
@@ -91,6 +131,11 @@ final class HubModel {
             await acquire()
             await refreshDevices()
             await surfaces.refresh()
+            // A screen this hub is on the roster of is a screen it serves a
+            // page to, however it got there: the tap happened in the room.
+            for surface in surfaces.surfaces where surfaces.isRegistered(device, with: surface) {
+                pages.mint(for: surface.device, named: surface.name)
+            }
             try? await Task.sleep(for: .seconds(10))
         }
     }
@@ -122,6 +167,7 @@ final class HubModel {
                 Task { @MainActor in self?.onLAN = names }
             }
             await surfaces.start()
+            await pages.start()
         }
     }
 
@@ -153,6 +199,9 @@ final class HubModel {
         guard await lease.isPrimary(), let held = await lease.held else { return false }
         return held.holder == holder && held.epoch == epoch
     }
+
+    /// The address a screen on the house network reaches this Mac at.
+    var lanAddress: String? { HubIdentity.addresses().first }
 
     var leaseHolder: DeviceID? {
         switch status {
