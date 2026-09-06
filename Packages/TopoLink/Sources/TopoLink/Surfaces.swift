@@ -128,7 +128,10 @@ public actor SurfaceBrowser {
         guard browser == nil else { return }
         let parameters = NWParameters.tcp
         parameters.includePeerToPeer = false
-        let browser = NWBrowser(for: .bonjour(type: TopoService.type, domain: nil), using: parameters)
+        // With the TXT record: a plain `.bonjour` browse hands back no
+        // metadata at all, and the TXT record is the whole of what tells a
+        // screen from another Topo device on this type.
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: TopoService.type, domain: nil), using: parameters)
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             let found = results.compactMap { Self.surface(from: $0) }
             Task { await self?.update(found) }

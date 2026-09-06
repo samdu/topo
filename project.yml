@@ -139,7 +139,10 @@ targets:
         com.apple.security.app-sandbox: true
         com.apple.security.network.client: true
         com.apple.security.network.server: true
-        com.apple.developer.icloud-container-identifiers: [iCloud.zone.hexagon.topo]
+        # The log's container and the board's: the hub reads both, and the
+        # board is a container of its own because it is shared across the
+        # household's Apple IDs and the log never is.
+        com.apple.developer.icloud-container-identifiers: [iCloud.zone.hexagon.topo, iCloud.zone.hexagon.topo.board]
         com.apple.developer.icloud-services: [CloudKit]
     info:
       path: Apps/TopoHub/Info.plist

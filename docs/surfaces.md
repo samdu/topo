@@ -99,6 +99,21 @@ A `401`, `403` or `404` is not that. It means this screen is not registered, and
 
 None. Every one of these screens is a noticeboard: it shows what the house posted, and a tap that changes something is the client app's business.
 
+## Putting a screen on the wall
+
+What a person does, in order. Everything here is on the house's own network; nothing needs an account beyond the Apple ID the hub is already signed into.
+
+1. **Open Topo Hub on the Mac.** It is a menu-bar app: the octopus in the menu bar is it running. The hub browses the network for as long as it is open.
+2. **Open Womble on the screen, and leave it on screen.** A Womble advertises itself only while it is in the foreground, because a screen that answers for a room ought to be in it: the app in the background, or the device locked, is a screen the hub cannot see.
+3. **Find it under Screens in the hub's menu.** It is named after the device — "Drawer iPad" — with how many agents it already answers for beneath. A screen that has just come up can take a few seconds to appear.
+4. **Press Register.** The button goes to "Ask again", and the question appears on the screen itself: the network can ask, and only the person holding the screen can say yes.
+5. **Tap Register on the screen.** Tapping Not now refuses this once and is not remembered; asking again asks the room again.
+6. **Press Ask again in the hub's menu.** The screen answers that it is already registered, a tick replaces the button, and the address the screen is served at appears under it: `http://<the Mac>:<port>/s/<token>/`.
+7. **Open that address in a browser on the house network.** A television's browser, or any other. It shows the board and the transcript and polls for changes every five seconds; a screen that keeps showing what it last knew when the hub goes away is the hub being unreachable, not the screen being wrong.
+8. **Revoke stops it.** Press Revoke beside the address and the token stops working at once; within five seconds the page clears the board, the transcript and everything it had cached, and says the screen is not registered. Registering again mints a new address.
+
+An Apple-device Womble needs none of steps 6 to 8: it reads the board and the transcript from CloudKit itself, and the roster is only how a hub knows whose screen it is. The page is for the screens off Apple, and it is served on the local network only — never through the tunnel — because the token that addresses it is in the browser's history and in any proxy's log.
+
 ## What this is not
 
 There is no unregistering from the network's side: an agent can ask to join and cannot make itself leave, and a screen's roster is cleared by the person holding it. Nothing here reaches an agent or carries a turn — a Womble shows the transcript from CloudKit, as it always did. This is only how a hub learns that the screen exists and whose it is.
