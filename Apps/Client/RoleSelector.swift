@@ -126,8 +126,10 @@ final class RoleSelector {
             }
             // After the wait, any fresh lease is a live primary, the one read before or another
             // that claimed meanwhile (a hub waking): it keeps primary and the takeover is refused.
-            if let again = try await database.fetch(Lease.recordID), let after = Lease(record: again),
-               after.holder != device, !after.isExpired(at: Date()) {
+            // A lapsed one is claimed over exactly as read, so a heartbeat landing between this
+            // read and the claim is a conflict and refuses it too.
+            let lapsed = try await database.fetch(Lease.recordID)
+            if let lapsed, let after = Lease(record: lapsed), after.holder != device, !after.isExpired(at: Date()) {
                 trouble = "\(after.holder.rawValue) is answering right now and kept primary."
                 return nil
             }
@@ -142,8 +144,20 @@ final class RoleSelector {
             for other in try await primariesToDemote() {
                 roles.append(try await DeviceRole(device: other, role: .viewer, setBy: device, at: now).record(over: database))
             }
-            switch try await lease.acquire() {
-            case .primary:
+            let claimed: Bool
+            if let lapsed, let after = Lease(record: lapsed), after.holder != device {
+                claimed = try await lease.claim(overLapsed: lapsed)
+            } else if lapsed == nil {
+                claimed = try await lease.claimIfNone()
+            } else {
+                // Our own lease, or a record that does not parse: the ordinary path.
+                if case .primary = try await lease.acquire() { claimed = true } else { claimed = false }
+            }
+            guard claimed else {
+                trouble = "Another device is answering right now and kept primary. Try again in a moment."
+                return nil
+            }
+            do {
                 // A claim whose role records do not land is abandoned, whatever stopped them: a
                 // lease heartbeated by nobody would answer no turns and block every device.
                 let landed: Bool
@@ -160,12 +174,6 @@ final class RoleSelector {
                 }
                 keep(.primary)
                 return lease
-            case .held(let by):
-                trouble = "\(by.holder.rawValue) is answering right now and kept primary."
-            case .unreachable(let other):
-                trouble = "\(other.holder.rawValue) took primary just now. Try again in a moment."
-            case .contended:
-                trouble = "Another device is claiming primary. Try again in a moment."
             }
         } catch {
             trouble = TranscriptStore.message(for: error)
