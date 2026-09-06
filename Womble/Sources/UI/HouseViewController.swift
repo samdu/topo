@@ -27,6 +27,7 @@ final class HouseViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = Palette.background
+        installTitleTap()
 
         stack.translatesAutoresizingMaskIntoConstraints = false
         stack.distribution = .fill
@@ -73,6 +74,28 @@ final class HouseViewController: UIViewController {
             : board.view.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.34)
         constraint.isActive = true
         boardSizeConstraint = constraint
+    }
+
+    /// Five taps on the title opens the self-test. Hidden because nobody
+    /// looking at a wall wants a diagnostics button on it, and reachable
+    /// without a cable because the failures it finds only happen on a real
+    /// device with a real Apple ID.
+    private func installTitleTap() {
+        let label = UILabel()
+        label.text = title
+        label.font = UIFont.preferredFont(forTextStyle: .headline)
+        label.adjustsFontForContentSizeCategory = true
+        label.textColor = Palette.text
+        label.isUserInteractionEnabled = true
+        label.sizeToFit()
+        let tap = UITapGestureRecognizer(target: self, action: #selector(openSelfTest))
+        tap.numberOfTapsRequired = 5
+        label.addGestureRecognizer(tap)
+        navigationItem.titleView = label
+    }
+
+    @objc private func openSelfTest() {
+        navigationController?.pushViewController(SelfTestViewController(), animated: true)
     }
 
     /// Which way the two are laid out right now.

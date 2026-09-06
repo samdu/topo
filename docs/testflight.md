@@ -56,7 +56,7 @@ Records written in development do not exist in production until the schema is pr
 
 Do this after running the app against development at least once, so there is a schema to promote: the record types and their fields are created by the first save of each. The reads ask by a field of ours rather than by record name, so the index that matters is the one behind `sequence`, which arrives with the field.
 
-A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step.
+A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never promoted fails at the write, an entitlement that was never granted fails before that, at the account.
 
 ## 5. Upload
 
