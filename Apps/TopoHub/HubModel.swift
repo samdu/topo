@@ -38,6 +38,9 @@ final class HubModel {
     private(set) var lanFailure: String?
     private(set) var pairingCode: PairingCode?
     private(set) var port: UInt16?
+    /// The screens in the house. A browse of the same Bonjour type the lease
+    /// probe advertises on; the TXT record is what tells one from a device.
+    let surfaces = SurfacesModel()
 
     private static let log = Logger(subsystem: "zone.hexagon.topo.hub", category: "hub")
     private let database: any RecordDatabase
@@ -87,6 +90,7 @@ final class HubModel {
         while !Task.isCancelled {
             await acquire()
             await refreshDevices()
+            await surfaces.refresh()
             try? await Task.sleep(for: .seconds(10))
         }
     }
@@ -117,6 +121,7 @@ final class HubModel {
             await presence.observe { [weak self] names in
                 Task { @MainActor in self?.onLAN = names }
             }
+            await surfaces.start()
         }
     }
 

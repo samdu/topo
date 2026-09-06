@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0033D5043460871D4D290C82 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
+		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
@@ -142,6 +143,7 @@
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
 		2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */ = {isa = PBXFileReference; path = "THIRD-PARTY"; sourceTree = "<group>"; };
 		3C73B06423A3D15D5A7B7093 /* WebAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuth.swift; sourceTree = "<group>"; };
+		43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacesModel.swift; sourceTree = "<group>"; };
 		46425616D224D5EDABBDE93E /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		57BE8636EBBD805D555F974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -267,6 +269,7 @@
 				8809A0CAEB64B3D22525D3DD /* HubModel.swift */,
 				B2F92FDD0A90790863EA800E /* Info.plist */,
 				11800CD3827F773B71C8B1B7 /* QRImage.swift */,
+				43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */,
 				07A540CB983CA3975DFDC89D /* TopoHub.entitlements */,
 				654D33CC62A8C821EACD662C /* TopoHubApp.swift */,
 			);
@@ -636,6 +639,7 @@
 				826779FB38E9EDF80785009F /* HubModel.swift in Sources */,
 				3BB50E214E3CCDE7B541504F /* OctopusMark.swift in Sources */,
 				D671E7599D8A068B094ADFD9 /* QRImage.swift in Sources */,
+				0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */,
 				F4974068046E34EB0AB10E96 /* Theme.swift in Sources */,
 				D7D4A4D582A7379655220F68 /* TopoCloudKit.swift in Sources */,
 				B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */,
