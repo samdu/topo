@@ -230,6 +230,8 @@ public enum TurnLogError: Error, Sendable {
     /// A marker for this nonce exists but the turn it names cannot be read.
     /// The two are written atomically, so this is a damaged log.
     case markerWithoutTurn(nonce: String)
+    /// A record exists under this ref and does not parse as a turn.
+    case unreadable(TurnRef)
 }
 
 /// Reads the append-only log.
@@ -262,6 +264,15 @@ public struct TurnLog: Sendable {
         let hidden = probes.filter { present[Turn.recordID(for: $0)] != nil }
         guard !hidden.isEmpty else { return seen }
         return Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
+    }
+
+    /// One turn by ref, fetched by ID: strongly consistent, unlike the feed, so a turn another
+    /// device wrote a moment ago is found here before the feed has it. Nil when there is none;
+    /// `unreadable` when a record exists under the name and does not parse.
+    public func turn(_ ref: TurnRef) async throws -> Turn? {
+        guard let record = try await database.fetch(Turn.recordID(for: ref)) else { return nil }
+        guard let turn = Turn(record: record) else { throw TurnLogError.unreadable(ref) }
+        return turn
     }
 
     /// The turn an append under `nonce` wrote, if that append went through:

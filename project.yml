@@ -46,6 +46,12 @@ targets:
       - package: TopoCore
       - package: TopoAuth
       - package: TopoTurn
+      - package: TopoLink
+    info:
+      path: Apps/Topo/Info.plist
+      properties:
+        NSBonjourServices: [_topo._tcp]
+        NSLocalNetworkUsageDescription: Topo reaches your other devices on this network, so a reply arrives at once instead of through iCloud.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
@@ -69,6 +75,7 @@ targets:
     dependencies:
       - package: TopoAuth
       - package: TopoCore
+      - package: TopoLink
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch
@@ -89,6 +96,7 @@ targets:
     dependencies:
       - package: TopoAuth
       - package: TopoCore
+      - package: TopoLink
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tv

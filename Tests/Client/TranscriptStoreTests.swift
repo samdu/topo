@@ -1,5 +1,6 @@
 import TopoCore
 import TopoCoreTesting
+import TopoLink
 import XCTest
 
 @testable import Topo
@@ -32,6 +33,48 @@ final class TranscriptStoreTests: XCTestCase {
                                                at: Date(timeIntervalSince1970: TimeInterval(index + 1)))
             parents = [turn.ref]
         }
+    }
+
+    func testASentTurnAsksThePrimaryOverTheLANAndShowsTheReplyBeforeTheReadHasIt() async throws {
+        let database = InMemoryRecordDatabase()
+        // A primary with an endpoint holds the lease.
+        let phone = DeviceID("phone")
+        let holder = PrimaryLease(database: database, device: phone, endpoint: "10.0.0.2:4242", probe: AlwaysAlive(),
+                                  sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await holder.acquire() else { return XCTFail("claim") }
+        let asked = Asked()
+        let replyRef = TurnRef(device: phone, sequence: 1)
+        let store = TranscriptStore(database: database, device: device, ensureZone: {}, defaults: makeDefaults(),
+                                    ask: { endpoint, ref in
+                                        await asked.note(endpoint, ref)
+                                        return LiveReply(ref: replyRef, text: "at once")
+                                    })
+        await store.send("now?")
+        let calls = await asked.calls
+        XCTAssertEqual(calls.count, 1)
+        XCTAssertEqual(calls.first?.0, "10.0.0.2:4242")
+        XCTAssertEqual(calls.first?.1, TurnRef(device: device, sequence: 1))
+        // The reply shows before any record of it exists, and survives a read without it.
+        XCTAssertEqual(store.turns.map(\.text), ["now?", "at once"])
+        await store.refresh()
+        XCTAssertEqual(store.turns.map(\.text), ["now?", "at once"])
+        // Once the primary's record lands, the read's copy is the one shown, once.
+        let writer = try await TurnLog(database: database).writer(for: phone)
+        _ = try await writer.append(.assistant, "at once", parents: [TurnRef(device: device, sequence: 1)])
+        await store.refresh()
+        XCTAssertEqual(store.turns.map(\.text), ["now?", "at once"])
+        XCTAssertEqual(store.turns.last?.ref, replyRef)
+    }
+
+    func testNoPrimaryEndpointMeansNoAskAndTheLogPathStands() async throws {
+        let database = InMemoryRecordDatabase()
+        let asked = Asked()
+        let store = TranscriptStore(database: database, device: device, ensureZone: {}, defaults: makeDefaults(),
+                                    ask: { endpoint, ref in await asked.note(endpoint, ref); return nil })
+        await store.send("hello")
+        let calls = await asked.calls
+        XCTAssertTrue(calls.isEmpty)
+        XCTAssertEqual(store.turns.map(\.text), ["hello"])
     }
 
     func testReadsTheLogInOrder() async throws {
@@ -294,4 +337,13 @@ private actor FailingDatabase: RecordDatabase {
         if let failure { throw failure }
         return try await wrapped.query(query)
     }
+}
+
+private actor Asked {
+    private(set) var calls: [(String, TurnRef)] = []
+    func note(_ endpoint: String, _ ref: TurnRef) { calls.append((endpoint, ref)) }
+}
+
+private struct AlwaysAlive: LeaseProbe {
+    func confirms(_ lease: Lease) async -> Bool { true }
 }

@@ -3,6 +3,7 @@ import Foundation
 import Observation
 import TopoAuth
 import TopoCore
+import TopoLink
 import TopoTurn
 
 /// The phone harness as the UI sees it: the transcript, the model setting, and one turn at a time.
@@ -30,6 +31,10 @@ final class Harness {
     private var runner: TurnRunner?
     private var lease: PrimaryLease?
     private var writer: TurnWriter?
+    /// The listener the other devices probe and ask over the LAN while this device is primary:
+    /// its endpoint is what the lease record names.
+    private var server: LeaseProbeServer?
+    private(set) var endpoint: String?
     /// A line for something that went right but not the usual way: the words went to another
     /// device's primary and the reply is on its way. Cleared by the next send.
     private(set) var info: String?
@@ -131,6 +136,9 @@ final class Harness {
         lease = nil
         writer = nil
         info = nil
+        await server?.stop()
+        server = nil
+        endpoint = nil
     }
 
     func refresh() async {
@@ -297,8 +305,28 @@ final class Harness {
         }
     }
 
+    /// Answers run one at a time: the five-second pass and every limb's ask over the socket
+    /// wait for the answer in flight before starting, and an asker whose turn was answered
+    /// meanwhile gets that reply, so one turn costs one model call however many ask for it.
+    private var answerQueue: Task<Void, Never>?
+
+    private func oneAtATime<T: Sendable>(_ body: @escaping @MainActor () async -> T) async -> T {
+        let previous = answerQueue
+        let task = Task { @MainActor in
+            _ = await previous?.value
+            return await body()
+        }
+        answerQueue = Task { _ = await task.value }
+        return await task.value
+    }
+
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
     func answerPending() async {
+        guard !busy else { return }
+        await oneAtATime { await self.answerPendingNow() }
+    }
+
+    private func answerPendingNow() async {
         guard !busy else { return }
         do {
             if runner == nil {
@@ -332,13 +360,52 @@ final class Harness {
     private func makeRunner() async throws -> TurnRunner {
         let writer = try await log.writer(for: device)
         self.writer = writer
-        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe())
+        // The listener answers probes for the lease this device holds and live turns from the
+        // limbs; a listener that will not bind (no local network permission yet) costs only the
+        // live path, since every turn still goes through the log.
+        if server == nil, let server = try? LeaseProbeServer(advertising: device, answers: { [weak self] ref in
+            await self?.answer(ref)
+        }, holds: { [weak self] holder, epoch in
+            guard let self, let lease = await self.lease, let held = await lease.held else { return false }
+            return await lease.isPrimary() && held.holder == holder && held.epoch == epoch
+        }) {
+            if let port = try? await server.start() {
+                self.server = server
+                endpoint = LANAddress.current().first.map { "\($0):\(port)" }
+            }
+        }
+        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: endpoint,
+                                               probe: endpoint == nil ? NoSocketProbe() : SocketLeaseProbe())
         self.lease = lease
         var api = MessagesAPI(tokens: tokens)
         api.onResponse = { [weak self] status, seconds in
             Task { @MainActor in self?.lastAPI = (status, Date(), seconds) }
         }
         return TurnRunner(log: log, writer: writer, lease: lease, api: api)
+    }
+
+    /// A limb asked over the LAN: answer its turn now, as primary, or say no. The reply lands in
+    /// the log as any reply does; the socket only carries it back at once.
+    private func answer(_ ref: TurnRef) async -> LiveReply? {
+        guard !busy, runner != nil else { return nil }
+        return await oneAtATime { await self.answerNow(ref) }
+    }
+
+    private func answerNow(_ ref: TurnRef) async -> LiveReply? {
+        guard !busy, let runner else { return nil }
+        do {
+            // Answered while this ask waited its turn: that reply, no second call.
+            if let already = try await runner.reply(to: ref) {
+                return LiveReply(ref: already.ref, text: already.text)
+            }
+            guard let reply = try await runner.answer(ref, model: model) else { return nil }
+            show(reply)
+            await refresh()
+            return LiveReply(ref: reply.ref, text: reply.text)
+        } catch {
+            self.error = Self.describe(error)
+            return nil
+        }
     }
 
     /// What the diagnostics screen shows: everything a failed or silent turn could be blamed on.
@@ -350,6 +417,7 @@ final class Harness {
         var rows: [(String, String)] = []
         rows.append(("Device", device.rawValue))
         rows.append(("Role", UserDefaults.standard.string(forKey: "topo.role") ?? "undecided"))
+        rows.append(("LAN endpoint", endpoint ?? "not listening"))
         rows.append(("Container", TopoCloudKit.containerIdentifier))
         rows.append(("iCloud account", await TopoCloudKit.accountStatus()))
         rows.append(("Turn in flight", busy ? (status ?? "yes") : "none"))

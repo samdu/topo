@@ -161,6 +161,28 @@ import TopoCoreTesting
         #expect(transport.requests.count == 1)
     }
 
+    @Test func aNamedTurnIsAnsweredBeforeTheFeedHasIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let blind = FeedLagDatabase(inner: db)
+        let transport = RecordingTransport((200, reply("right away")))
+        let (runner, _) = try await makeRunner(database: blind, transport: transport)
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        let asked = try await watch.append(.person, "now?", parents: [])
+        // The feed has not caught up, so the pass finds nothing; the named path fetches by ID.
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        let answer = try #require(try await runner.answer(asked.ref, model: .sonnet5))
+        #expect(answer.parents == [asked.ref] && answer.text == "right away")
+        // Asked again, it is already answered: no second call.
+        #expect(try await runner.answer(asked.ref, model: .sonnet5) == nil)
+        #expect(transport.requests.count == 1)
+        // The reply already there is what a second asker gets.
+        #expect(try await runner.reply(to: asked.ref) == answer)
+        #expect(try await runner.reply(to: answer.ref) == nil)
+        // A ref with no turn, and a reply's ref, are nil.
+        #expect(try await runner.answer(TurnRef(device: DeviceID("nobody"), sequence: 1), model: .sonnet5) == nil)
+        #expect(try await runner.answer(answer.ref, model: .sonnet5) == nil)
+    }
+
     @Test func aReplyThatFailedIsRetriedOnTheNextPassAndNeverDoubled() async throws {
         let db = InMemoryRecordDatabase()
         let transport = RecordingTransport((500, "{}"), (200, reply("second time")))
@@ -228,4 +250,16 @@ import TopoCoreTesting
 actor Steps {
     private(set) var all: [TurnRunner.Progress] = []
     func add(_ step: TurnRunner.Progress) { all.append(step) }
+}
+
+/// A database whose change feed shows nothing: what a limb's fresh turn looks like to the
+/// primary before the feed catches up. Fetch by ID sees everything.
+struct FeedLagDatabase: RecordDatabase {
+    let inner: InMemoryRecordDatabase
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] {
+        try await inner.records(ofType: type).filter { $0.string("device") != "watch" }
+    }
 }

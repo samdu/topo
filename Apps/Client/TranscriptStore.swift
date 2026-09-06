@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import TopoCore
+import TopoLink
 
 /// The transcript, as a screen sees it: the turns, whether the last read
 /// worked, and — on a device that carries a microphone — a way to add one.
@@ -33,10 +34,17 @@ final class TranscriptStore {
     var outbox: [String] { pending.map(\.text) }
 
     let device: DeviceID
+    private let database: any RecordDatabase
     private let log: TurnLog
     private let ensureZone: @Sendable () async throws -> Void
     private let defaults: UserDefaults
     private var writer: TurnWriter?
+    /// Asks the primary over the LAN to answer a turn now: the reply's ref and text, or nil.
+    /// The socket client in the app; a stub in tests.
+    private let ask: @Sendable (String, TurnRef) async -> LiveReply?
+    /// A reply that came back over the socket and is shown before the read has its record.
+    /// Cleared once a read shows it, or shows a reply to the same turn from the log.
+    private var live: Turn?
     /// Each queued turn keeps the nonce it was first attempted under, which
     /// is what makes a retry exactly-once.
     private var pending: [Outgoing] = []
@@ -53,11 +61,16 @@ final class TranscriptStore {
     ///   into it. Injected so a test can hold a database and no iCloud.
     init(database: any RecordDatabase, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
-         defaults: UserDefaults = .standard) {
+         defaults: UserDefaults = .standard,
+         ask: @escaping @Sendable (String, TurnRef) async -> LiveReply? = { endpoint, ref in
+             await SocketTurnClient().ask(endpoint, toAnswer: ref)
+         }) {
         self.device = device
+        self.database = database
         self.log = TurnLog(database: database)
         self.ensureZone = ensureZone
         self.defaults = defaults
+        self.ask = ask
         // Sends that were in flight when the app went away are still owed,
         // so they survive the launch that lost them.
         if let data = defaults.data(forKey: TranscriptStore.outboxKey),
@@ -70,7 +83,17 @@ final class TranscriptStore {
         if turns.isEmpty, phase != .reading { phase = .reading }
         do {
             let transcript = try await log.read()
-            turns = transcript.ordered
+            var ordered = transcript.ordered
+            // A reply that came over the socket stays on screen until the read has it, or has
+            // another reply to the same turn.
+            if let live {
+                if transcript[live.ref] != nil || ordered.contains(where: { $0.role == .assistant && $0.parents == live.parents }) {
+                    self.live = nil
+                } else {
+                    ordered.append(live)
+                }
+            }
+            turns = ordered
             notice = TranscriptStore.notice(for: transcript)
             phase = .ready
         } catch {
@@ -146,9 +169,10 @@ final class TranscriptStore {
                     writer = try await log.writer(for: device)
                     self.writer = writer
                 }
-                _ = try await writer.append(.person, next.text, continuing: transcript, nonce: next.nonce)
+                let person = try await writer.append(.person, next.text, continuing: transcript, nonce: next.nonce)
                 pending.removeFirst()
                 save(pending)
+                await askPrimary(toAnswer: person)
             } catch TurnLogError.incompleteTranscript {
                 failure = "Not every turn has arrived yet. Topo will send it in a moment."
                 break
@@ -159,6 +183,18 @@ final class TranscriptStore {
         }
         await refresh()
         if let failure { notice = failure }
+    }
+
+    /// The live path: the turn is in the log, so ask the primary, at the endpoint its lease
+    /// names, to answer it now and show the reply at once. CloudKit is truth and sockets are
+    /// speed: no endpoint, no answer or a dead socket costs nothing, since the primary's own
+    /// pass answers the turn from the log and the next read shows it.
+    private func askPrimary(toAnswer person: Turn) async {
+        guard let record = try? await database.fetch(Lease.recordID), let lease = Lease(record: record),
+              !lease.isExpired(at: Date()), let endpoint = lease.endpoint else { return }
+        guard let reply = await ask(endpoint, person.ref) else { return }
+        live = Turn(ref: reply.ref, parents: [person.ref], role: .assistant, text: reply.text, at: Date())
+        if !turns.contains(where: { $0.ref == reply.ref }) { turns.append(live!) }
     }
 
     private func save(_ pending: [Outgoing]) {
