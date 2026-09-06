@@ -115,6 +115,11 @@ struct ChatView: View {
             }
         }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
+        .onChange(of: voice.unsent) { _, _ in
+            // The recogniser ended the session itself; what it heard goes as a spoken turn.
+            guard let heard = voice.takeUnsent(for: .chat) else { return }
+            Task { await sendSpoken(heard) }
+        }
         .onChange(of: harness.turns.last?.ref) { _, _ in
             // A spoken question gets a spoken answer; a typed one stays quiet.
             guard readAloud, let last = harness.turns.last, last.role == .assistant,
@@ -137,6 +142,10 @@ struct ChatView: View {
         if down { speaker.stop() }
         let heard = down ? await voice.pressDown(as: .chat) : await voice.pressUp(as: .chat)
         guard let heard else { return }
+        await sendSpoken(heard)
+    }
+
+    private func sendSpoken(_ heard: String) async {
         draft = ""
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         spokenTurns.insert(harness.willSend(heard))
