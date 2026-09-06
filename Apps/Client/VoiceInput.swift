@@ -34,6 +34,15 @@ final class VoiceInput {
     private(set) var handsFree = false
     /// True when recognition ran on the device; false when it went to Apple's servers.
     private(set) var onDevice = false
+    /// Words a session heard before the recogniser ended it on its own (server recognition's
+    /// one-minute cap in hands-free, a network or no-speech error), waiting for the owner to
+    /// send them; `takeUnsent` hands them over. Nothing said is dropped for an error.
+    private(set) var unsent: Unsent?
+
+    struct Unsent: Equatable {
+        var gate: Gate
+        var text: String
+    }
 
     private let audio: AudioSession
     private let engine = AVAudioEngine()
@@ -54,8 +63,12 @@ final class VoiceInput {
         self.audio = audio
         interruptionObserver = NotificationCenter.default.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            // A call or Siri took the session; whatever was being said is over.
+        ) { [weak self] note in
+            // A call or Siri took the session; whatever was being said is over. Only the start
+            // of an interruption: iOS posts its end seconds later, by which time a new session
+            // may be up and is not to be cancelled for it.
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in self?.cancel() }
         }
     }
@@ -88,6 +101,25 @@ final class VoiceInput {
             return nil
         }
         return await end(as: gate)
+    }
+
+    /// The words kept from a session the recogniser ended, once; nil when there are none.
+    func takeUnsent(for gate: Gate) -> String? {
+        guard let unsent, unsent.gate == gate else { return nil }
+        self.unsent = nil
+        return unsent.text
+    }
+
+    /// The recogniser ended the session on its own: the words it heard are kept for the owner
+    /// to send, and the microphone is released as on a release.
+    private func endedByRecogniser(_ gate: Gate) {
+        let heard = text
+        generation += 1
+        text = ""
+        tearDown()
+        if !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            unsent = Unsent(gate: gate, text: heard)
+        }
     }
 
     /// Stops listening and drops what was heard. Any gate's session, or `gate`'s only.
@@ -136,7 +168,10 @@ final class VoiceInput {
                     guard let self, self.generation == mine else { return }
                     if let result { self.text = result.bestTranscription.formattedString }
                     if result?.isFinal == true { self.finalArrived = true }
-                    if error != nil { self.finalArrived = true; if !self.ending { self.cancel(gate) } }
+                    if error != nil {
+                        self.finalArrived = true
+                        if !self.ending { self.endedByRecogniser(gate) }
+                    }
                 }
             }
         } catch {

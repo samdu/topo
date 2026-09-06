@@ -68,6 +68,12 @@ struct FirstRunView: View {
         .padding()
         #if os(iOS)
         .onDisappear { voice.cancel(.firstRun) }
+        .onChange(of: voice.unsent) { _, _ in
+            // The recogniser ended the session itself; what it heard is the answer.
+            guard let heard = voice.takeUnsent(for: .firstRun) else { return }
+            answer = heard
+            submit()
+        }
         #endif
     }
 
