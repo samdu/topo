@@ -123,7 +123,7 @@ final class RoleSelectorTests: XCTestCase {
         guard case .primary = try await holder.acquire() else { return XCTFail("claim") }
         let slept = Slept()
         let s = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
-                             sleep: { await slept.add($0) })
+                             sleep: lapsing(db, slept))
         await s.decide()
         XCTAssertEqual(s.role, .viewer)
         let taken = await s.takePrimary()
@@ -168,9 +168,8 @@ final class RoleSelectorTests: XCTestCase {
         let old = RoleSelector(database: db, device: phone, defaults: defaults(), isSignedIn: { true }, ensureZone: {})
         await old.decide()
         XCTAssertEqual(old.role, .primary)
-        let slept = Slept()
         let pad = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
-                               sleep: { await slept.add($0) })
+                               sleep: lapsing(db))
         await pad.decide()
         let took = await pad.takePrimary()
         XCTAssertNotNil(took)
@@ -293,6 +292,18 @@ private actor ZoneGate: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try check(); return try await wrapped.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try check(); return try await wrapped.query(query) }
     func records(ofType type: String) async throws -> [Record] { try check(); return try await wrapped.records(ofType: type) }
+}
+
+/// A wait as real time would leave the record: the sleep is instant, so the lease that the wait
+/// was for is backdated to lapsed, as it would have by the end of a real one.
+private func lapsing(_ db: InMemoryRecordDatabase, _ slept: Slept? = nil) -> @Sendable (TimeInterval) async throws -> Void {
+    { seconds in
+        await slept?.add(seconds)
+        if var record = await db.current(Lease.recordID) {
+            record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -1))
+            _ = try await db.save(record)
+        }
+    }
 }
 
 private actor Slept {
