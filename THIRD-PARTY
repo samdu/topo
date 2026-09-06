@@ -1,5 +1,22 @@
 # Third-party and borrowed code
 
-Every borrowed piece in a Topo bundle is listed here with its source and licence. Nothing under a copyleft licence held by others ships in a bundle.
+The About screen in Topo and in Womble is this file: the apps read it out of their own bundle and render it, so what a person sees credited is what is written here.
 
-- **Daphne** (samdu/daphne-assistant, `clients/ios`, Sam du Rose's own code): the pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, and the rule that speaking is foreground work in `Apps/Client/Speaker.swift`. Same author as Topo; no licence terms apply between the two.
+Every borrowed piece in a Topo bundle is named below with where it came from and what its licence is. Nothing under a copyleft licence held by somebody else ships inside a bundle: Topo is distributed through the App Store, and embedding such code would make the whole app theirs to object to. What is left is Sam's own code, which carries no terms between one project and the other, and tools that run on the Mac that builds Topo and stay there.
+
+The format is the whole contract with the apps: a heading beginning `## ` opens an entry, and the `Licence`, `Where` and `Use` lines under it are shown as they are written. Everything above the first heading is the note at the top of the screen.
+
+## Daphne
+Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
+Where: samdu/daphne-assistant, `clients/ios`
+Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, and the rule that speaking is foreground work in `Apps/Client/Speaker.swift`.
+
+## XcodeGen
+Licence: MIT, © Yonas Kolb
+Where: https://github.com/yonaskolb/XcodeGen
+Use: Generates `Topo.xcodeproj` and `Womble/Womble.xcodeproj` from `project.yml`. A build tool: it runs on the Mac that builds Topo and none of it ships in a bundle.
+
+## The Claude Code CLI's OAuth client
+Licence: Anthropic's, used as its client rather than copied
+Where: https://claude.com/product/claude-code
+Use: Sign in with Claude is the OAuth client the Claude Code CLI is — its client id, its scopes, its authorize and token endpoints, and its identity line as the first system block of a turn. That is what a Claude subscription is reachable as. No code of Anthropic's is in this repository.

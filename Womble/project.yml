@@ -24,6 +24,12 @@ targets:
     platform: iOS
     sources:
       - path: Sources
+      # The About screen is these two files read out of the bundle rather
+      # than a copy of them in Swift, so neither can drift from the repository.
+      - path: ../THIRD-PARTY
+        buildPhase: resources
+      - path: ../Design/topo-mark.svg
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.womble
@@ -45,6 +51,10 @@ targets:
       - path: Sources/Log
       - path: Sources/Net
       - path: Sources/UI
+      - path: ../THIRD-PARTY
+        buildPhase: resources
+      - path: ../Design/topo-mark.svg
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.womble.tests
