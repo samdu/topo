@@ -100,8 +100,9 @@ final class RoleSelector {
     /// that is lost, wiped or simply retired.
     ///
     /// The safety is the wait: a fresh lease is left to lapse, one duration at most, and then
-    /// read again. A holder that heartbeated meanwhile is alive and keeps primary; the takeover
-    /// is refused and says so. A holder that did not is gone, and is claimed over. With the
+    /// read again. A lease fresh after the wait is a live primary, the holder that heartbeated
+    /// or another that claimed meanwhile, and keeps primary; the takeover is refused and says
+    /// so. A lapsed one is a holder that is gone, and is claimed over. With the
     /// claim, in one batch with the lease's heartbeat, the old holder's role record is written
     /// as viewer and this device's as primary, so the old device drops to viewer on its next
     /// launch or answering pass rather than answering again whenever this one goes quiet.
@@ -121,12 +122,14 @@ final class RoleSelector {
                     let wait = min(current.expiresAt.timeIntervalSinceNow, timing.duration)
                     taking = "Waiting \(Int(wait.rounded(.up))) seconds for \(current.holder.rawValue) to finish…"
                     try await sleep(max(wait, 0))
-                    if let again = try await database.fetch(Lease.recordID), let after = Lease(record: again),
-                       after.holder == current.holder, after.expiresAt > current.expiresAt {
-                        trouble = "\(current.holder.rawValue) is answering right now and kept primary."
-                        return nil
-                    }
                 }
+            }
+            // After the wait, any fresh lease is a live primary, the one read before or another
+            // that claimed meanwhile (a hub waking): it keeps primary and the takeover is refused.
+            if let again = try await database.fetch(Lease.recordID), let after = Lease(record: again),
+               after.holder != device, !after.isExpired(at: Date()) {
+                trouble = "\(after.holder.rawValue) is answering right now and kept primary."
+                return nil
             }
             taking = "Taking over…"
             try await ensureZone()

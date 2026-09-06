@@ -198,11 +198,17 @@ final class RoleSelectorTests: XCTestCase {
         try await lease(db, holder: phone)
         // A device that once took primary and is recorded so, though it no longer holds the lease.
         _ = try await db.save(DeviceRole(device: watchPad, role: .primary, setBy: watchPad, at: Date()).record(changeTag: nil))
-        // During the wait a third device takes the lease over the phone.
+        // During the wait a third device takes the lease over the phone, and its lease lapses too.
         let third = PrimaryLease(database: db, device: DeviceID("third"), endpoint: nil, probe: NoProbe(),
                                  sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         let s = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
-                             sleep: { _ in _ = try await third.acquire() })
+                             sleep: { _ in
+                                 _ = try await third.acquire()
+                                 if var record = await db.current(Lease.recordID) {
+                                     record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -3600))
+                                     _ = try await db.save(record)
+                                 }
+                             })
         await s.decide()
         let taken = await s.takePrimary()
         XCTAssertNotNil(taken)
@@ -212,6 +218,23 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(thirdRole?.role, .viewer)
         XCTAssertEqual(padRole?.role, .viewer)
         XCTAssertEqual(mine?.role, .primary)
+    }
+
+    func testAFreshLeaseFromAnotherDeviceAfterTheWaitIsRefused() async throws {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("phone"))
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        // A hub wakes and claims during the wait.
+        let s = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
+                             sleep: { _ in _ = try await hub.acquire() })
+        await s.decide()
+        let taken = await s.takePrimary()
+        XCTAssertNil(taken)
+        XCTAssertEqual(s.role, .viewer)
+        XCTAssertEqual(s.trouble, "hub is answering right now and kept primary.")
+        let hubHolds = await hub.isPrimary()
+        XCTAssertTrue(hubHolds)
     }
 
     func testATakeoverWhoseRoleRecordsFailAbandonsTheLease() async throws {
