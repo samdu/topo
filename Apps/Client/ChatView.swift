@@ -106,9 +106,11 @@ struct ChatView: View {
             // The far end of a takeover: another device wrote this one's role as viewer, so it
             // stops answering, forgets its login, and the root shows the viewer screen.
             while !Task.isCancelled {
-                if await roleSelector.checkDemotion() {
-                    // What was waiting goes into the log first; the login goes last.
+                if await roleSelector.demotionRecorded() {
+                    // What was waiting goes into the log first, while this screen and its task
+                    // still stand; the role flips after, and the login goes last.
                     await harness.demote()
+                    roleSelector.acceptDemotion()
                     signIn.signOut()
                     return
                 }

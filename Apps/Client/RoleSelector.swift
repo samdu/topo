@@ -192,10 +192,23 @@ final class RoleSelector {
     /// and the login. Read at launch and on every answering pass. Unreadable is no change.
     @discardableResult
     func checkDemotion() async -> Bool {
+        guard await demotionRecorded() else { return false }
+        acceptDemotion()
+        return true
+    }
+
+    /// True when another device has written this primary's role as viewer. Changes nothing, so
+    /// the caller can put what it has waiting into the log before the role flips and the chat
+    /// goes; `acceptDemotion` then flips it.
+    func demotionRecorded() async -> Bool {
         guard role == .primary, let recorded = try? await DeviceRole.read(device, from: database),
               recorded.role == .viewer, recorded.setBy != device else { return false }
-        keep(.viewer)
         return true
+    }
+
+    func acceptDemotion() {
+        guard role == .primary else { return }
+        keep(.viewer)
     }
 
     private struct NeverConfirms: LeaseProbe {

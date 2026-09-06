@@ -22,11 +22,13 @@ struct RootView: View {
         case nil:
             DecidingView(trouble: roleSelector.trouble) { await roleSelector.decide() }
         case .viewer:
-            // A viewer holds no login. One found here (a reinstall keeps the keychain while the
-            // role record says viewer, or a demotion decided at launch) goes now.
+            // A viewer holds no login and keeps nothing waiting. One found here (a reinstall
+            // keeps the keychain while the role record says viewer; a demotion decided at
+            // launch leaves an outbox on disk) puts what was waiting into the log as a limb's
+            // turns and drops the login.
             ViewerRootView().task {
-                if signIn.phase == .signedIn {
-                    harness.forget()
+                if signIn.phase == .signedIn || harness.hasWaiting {
+                    await harness.demote()
                     signIn.signOut()
                 }
             }
