@@ -2,7 +2,7 @@ import Foundation
 
 /// What this screen says about itself on the LAN, and the two things it
 /// answers on its socket. The other end of all of this is `TopoLink`'s
-/// `SurfaceAdvert` and `SurfaceWire`; Womble cannot link that package (its
+/// `SurfaceWire` and `SurfaceBrowser`; Womble cannot link that package (its
 /// minimum is iOS 17, six years past the devices this bundle exists for),
 /// so the format lives in both and is pinned by the tests on both sides.
 enum SurfaceWire {
