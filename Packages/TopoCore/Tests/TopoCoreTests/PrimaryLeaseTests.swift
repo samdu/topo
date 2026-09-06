@@ -58,6 +58,44 @@ import TopoCoreTesting
         guard case .primary = try await winner.acquire() else { Issue.record("winner should hold"); return }
     }
 
+    @Test func aClaimOverALapsedVersionFailsIfAHeartbeatLandedFirst() async throws {
+        let h = lease(hub)
+        _ = try await h.acquire()
+        clock.advance(11)
+        let lapsed = try #require(await db.current(Lease.recordID))
+        // The holder heartbeats between the read and the claim: the version moved.
+        clock.advance(-2)
+        #expect(try await h.heartbeat())
+        let p = lease(phone, probe: .allDead)
+        clock.advance(2)
+        #expect(!(try await p.claim(overLapsed: lapsed)))
+        #expect(!(await p.isPrimary()))
+        // Read again, lapsed for real, the claim goes through.
+        clock.advance(11)
+        let again = try #require(await db.current(Lease.recordID))
+        #expect(try await p.claim(overLapsed: again))
+        #expect(await p.isPrimary())
+        #expect(await p.held?.epoch == 2)
+        // Not over a fresh one, and not over its own.
+        let fresh = try #require(await db.current(Lease.recordID))
+        #expect(!(try await h.claim(overLapsed: fresh)))
+    }
+
+    @Test func anAbandonedLeaseStopsHeartbeatingAndLapses() async throws {
+        let ticker = Ticker()
+        let p = lease(phone, ticker: ticker)
+        _ = try await p.acquire()
+        #expect(await p.isPrimary())
+        await p.abandon()
+        #expect(!(await p.isPrimary()))
+        #expect(await p.held == nil)
+        let before = try #require(await db.current(Lease.recordID)).changeTag
+        await ticker.tick(); await ticker.tick()
+        #expect(try #require(await db.current(Lease.recordID)).changeTag == before)
+        clock.advance(11)
+        #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.isExpired(at: clock.now) == true)
+    }
+
     @Test func heartbeatExtendsWithoutChangingEpoch() async throws {
         let p = lease(phone)
         _ = try await p.acquire()

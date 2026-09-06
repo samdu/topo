@@ -265,6 +265,26 @@ public actor PrimaryLease {
         return .contended
     }
 
+    /// Claims over exactly the lapsed lease `record` the caller read: a compare-and-set on that
+    /// version, so a heartbeat landing between the read and the claim is a conflict and the
+    /// claim fails, rather than a claim over a holder that turned out to be alive. True when
+    /// this device holds the lease afterwards. False, with nothing written, when the record is
+    /// not a lapsed lease of another device or the version moved.
+    public func claim(overLapsed record: Record) async throws -> Bool {
+        guard let lease = Lease(record: record), lease.holder != device, lease.isExpired(at: now()) else { return false }
+        return try await write(holder(epoch: lease.epoch + 1), over: record.changeTag) != nil
+    }
+
+    /// Stops counting this device primary and stops its heartbeats, without touching the
+    /// record, which lapses on its own within one duration. For a claim whose owner cannot
+    /// keep it (a takeover whose role records failed to land): the alternative is a lease
+    /// renewed forever by nobody, which answers no turns and blocks every other device.
+    public func abandon() {
+        heldRecord = nil
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
     /// Creates the lease record for this device only if none exists: the
     /// atomic first claim, which exactly one of any number of devices
     /// launching together wins. True for the winner. The record is not held
