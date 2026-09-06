@@ -70,14 +70,28 @@ final class SurfacePages {
     }
 
     func mint(for surface: DeviceID, named name: String) {
+        guard tokens.token(for: surface) == nil, !tokens.isRevoked(surface) else { return }
         tokens.mint(for: surface, named: name)
+        tokens.save()
     }
 
+    /// Serves a screen somebody revoked, under a new token. The old address
+    /// is gone for good; this is a fresh decision and a fresh one of those.
+    func serveAgain(_ surface: DeviceID, named name: String) {
+        tokens.serveAgain(surface, named: name)
+        tokens.save()
+    }
+
+    func isRevoked(_ surface: DeviceID) -> Bool { tokens.isRevoked(surface) }
+
     /// Taking a screen off the roster is not something the network can do,
-    /// so this is the other half: the token stops working at once, and the
-    /// page it was serving clears itself the next time it asks.
+    /// so this is the other half: the token stops working at once, the page
+    /// it was serving clears itself the next time it asks, and the screen is
+    /// remembered as revoked so the hub's next pass does not quietly mint it
+    /// another one.
     func revoke(_ surface: DeviceID) {
         tokens.revoke(surface)
+        tokens.save()
     }
 
     /// `Womble/Web` as the hub bundles it. A build that left the files out

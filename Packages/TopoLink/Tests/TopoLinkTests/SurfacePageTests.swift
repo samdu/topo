@@ -186,3 +186,67 @@ import TopoCore
         #expect(status.trimmingCharacters(in: .whitespacesAndNewlines) == "HTTP/1.1 200 OK")
     }
 }
+
+@Suite struct SurfaceTokenTests {
+    let pad = DeviceID("womble-1")
+
+    @Test func mintsOneTokenPerScreenAndKeepsIt() throws {
+        var tokens = SurfaceTokens()
+        let minted = tokens.mint(for: pad, named: "Drawer iPad")
+        let first = try #require(minted)
+        // Registering again — what a hub does after a restart — leaves the
+        // address the screen is sitting on where it is.
+        #expect(tokens.mint(for: pad, named: "Drawer iPad") == first)
+        #expect(tokens.token(for: pad) == first)
+        #expect(tokens.screen(for: first)?.surface == pad)
+        #expect(tokens.mint(for: DeviceID("womble-2"), named: "Wall") != first)
+    }
+
+    /// The finding this exists for: a revoked screen is still on the hub's
+    /// roster, and the hub's own refresh must not read that as permission to
+    /// mint another token and quietly serve the screen again.
+    @Test func aRevokedScreenIsNotMintedAnotherToken() {
+        var tokens = SurfaceTokens()
+        let first = tokens.mint(for: pad, named: "Drawer iPad")
+        tokens.revoke(pad)
+        #expect(tokens.token(for: pad) == nil)
+        #expect(tokens.isRevoked(pad))
+        #expect(tokens.screen(for: first!) == nil)
+        #expect(tokens.mint(for: pad, named: "Drawer iPad") == nil)
+        #expect(tokens.token(for: pad) == nil)
+    }
+
+    @Test func servingAgainIsANewDecisionAndANewAddress() throws {
+        var tokens = SurfaceTokens()
+        let first = tokens.mint(for: pad, named: "Drawer iPad")
+        tokens.revoke(pad)
+        let served = tokens.serveAgain(pad, named: "Drawer iPad")
+        let second = try #require(served)
+        #expect(second != first)
+        #expect(!tokens.isRevoked(pad))
+        // The revoked address never comes back.
+        #expect(tokens.screen(for: first!) == nil)
+    }
+
+    /// A hub that forgot a revocation over a restart would undo it.
+    @Test func revocationsSurviveBeingWrittenDownAndReadBack() throws {
+        var tokens = SurfaceTokens()
+        tokens.mint(for: pad, named: "Drawer iPad")
+        tokens.revoke(pad)
+        tokens.mint(for: DeviceID("womble-2"), named: "Wall")
+        let read = try JSONDecoder().decode(SurfaceTokens.self, from: try JSONEncoder().encode(tokens))
+        #expect(read == tokens)
+        #expect(read.isRevoked(pad))
+        #expect(read.token(for: DeviceID("womble-2")) != nil)
+    }
+
+    @Test func aTokenIsUnguessableAndFitsInAPath() {
+        let tokens = Set((0..<64).map { _ in SurfaceTokens.freshToken() })
+        #expect(tokens.count == 64)
+        for token in tokens {
+            #expect(token.count == 32)
+            #expect(token.allSatisfy { $0.isHexDigit })
+            #expect(SurfacePageServer.route("/s/\(token)/surface.json")?.token == token)
+        }
+    }
+}

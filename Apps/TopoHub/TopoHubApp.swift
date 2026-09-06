@@ -175,7 +175,16 @@ struct SurfacesList: View {
                     Spacer()
                     action(for: surface)
                 }
-                if let address = hub.pages.address(for: surface.device, host: hub.lanAddress) {
+                if hub.pages.isRevoked(surface.device), hub.surfaces.isRegistered(hub.device, with: surface) {
+                    HStack(spacing: 6) {
+                        Text("Revoked. It is still on this screen's roster.")
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Serve again") { hub.pages.serveAgain(surface.device, named: surface.name) }
+                            .help("Serves this screen again, at a new address")
+                    }
+                    .padding(.leading, 26)
+                } else if let address = hub.pages.address(for: surface.device, host: hub.lanAddress) {
                     HStack(spacing: 6) {
                         Text(address.absoluteString)
                             .font(.caption2.monospaced())
