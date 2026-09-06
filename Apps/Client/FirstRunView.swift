@@ -1,18 +1,32 @@
 #if os(iOS) || os(macOS)
 import SwiftUI
-#if canImport(AVFAudio)
-import AVFAudio
-#endif
 
-/// The first ten minutes: one question, with the microphone the only permission asked, at the
-/// first press. The answer is kept in `firstRunAnswer` until the turn log takes it as the first
-/// turn; nothing said here is dropped.
+/// The first ten minutes: one question, with the microphone and speech recognition asked for at
+/// the first press and nothing before it. The answer is kept in `firstRunAnswer` until the turn
+/// log takes it as the first turn; nothing said here is dropped.
 struct FirstRunView: View {
     @AppStorage("firstRunAnswer") private var storedAnswer = ""
     @State private var answer = ""
-    @State private var micDenied = false
-    @State private var listening = false
+    #if os(iOS)
+    @Environment(VoiceInput.self) private var voice
+    #endif
     var onDone: (String) -> Void
+
+    private var micDenied: Bool {
+        #if os(iOS)
+        voice.denied
+        #else
+        true
+        #endif
+    }
+
+    private var listening: Bool {
+        #if os(iOS)
+        voice.listening && voice.owner == .firstRun
+        #else
+        false
+        #endif
+    }
 
     var body: some View {
         VStack(spacing: 28) {
@@ -23,16 +37,18 @@ struct FirstRunView: View {
             Text("or just start talking")
                 .foregroundStyle(.secondary)
             Spacer()
-            Button {
-                Task { await pressMic() }
-            } label: {
-                Image(systemName: listening ? "waveform" : "mic.fill")
-                    .font(.system(size: 36))
-                    .frame(width: 96, height: 96)
-                    .background(Circle().fill(Theme.teal))
-                    .foregroundStyle(.white)
+            // Hold to talk, release to answer. The two permissions are asked here and nowhere earlier.
+            Image(systemName: listening ? "waveform" : "mic.fill")
+                .font(.system(size: 36))
+                .frame(width: 96, height: 96)
+                .background(Circle().fill(Theme.teal))
+                .foregroundStyle(.white)
+                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
+                    Task { await pressed(down) }
+                }
+            if listening, !answer.isEmpty {
+                Text(answer).multilineTextAlignment(.center).foregroundStyle(.secondary)
             }
-            .buttonStyle(.plain)
             if micDenied {
                 Text("Topo can't hear you without the microphone. You can type instead, or allow it in Settings.")
                     .font(.footnote)
@@ -50,6 +66,9 @@ struct FirstRunView: View {
             Spacer().frame(height: 24)
         }
         .padding()
+        #if os(iOS)
+        .onDisappear { voice.cancel(.firstRun) }
+        #endif
     }
 
     private func submit() {
@@ -59,14 +78,18 @@ struct FirstRunView: View {
         onDone(text)
     }
 
-    /// The microphone is asked for here and nowhere earlier.
-    private func pressMic() async {
-        #if os(iOS) || os(watchOS)
-        let granted = await AVAudioApplication.requestRecordPermission()
-        micDenied = !granted
-        listening = granted
-        #else
-        micDenied = true
+    /// Hold to talk, release to answer; on this screen a tap is a short hold, not a hands-free
+    /// press, since one answer is all it takes.
+    private func pressed(_ down: Bool) async {
+        #if os(iOS)
+        let heard = down ? await voice.pressDown(as: .firstRun) : await voice.pressUp(as: .firstRun)
+        if let heard {
+            answer = heard
+            submit()
+        } else if !down, voice.handsFree {
+            answer = await voice.pressDown(as: .firstRun) ?? ""
+            submit()
+        }
         #endif
     }
 }

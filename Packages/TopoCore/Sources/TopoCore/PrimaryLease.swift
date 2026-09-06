@@ -111,8 +111,9 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// A device that yielded to a lease waits for that lease to lapse before
 /// claiming, one duration, because the probe is exactly what it cannot
 /// trust; any device that has not yielded takes over a dead holder on one
-/// probe. There is no release. A holder that goes away is found by the
-/// next probe.
+/// probe. The hub alone takes over a live holder, through `takeOver()`,
+/// because a hub is primary whenever it is awake. There is no release. A
+/// holder that goes away is found by the next probe.
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
@@ -229,6 +230,35 @@ public actor PrimaryLease {
                 return .unreachable(lease)
             }
 
+            if let mine = try await write(holder(epoch: lease.epoch + 1), over: record.changeTag) { return .primary(mine) }
+        }
+        heldRecord = nil
+        return .contended
+    }
+
+    /// The hub's path: takes the lease from whoever holds it, live or not,
+    /// without a probe. A hub is primary for as long as it is awake, so a
+    /// phone holding the lease when the hub launches or wakes is displaced,
+    /// learns so at its next heartbeat or turn, and yields. Nothing but the
+    /// hub calls this; every other device goes through `acquire()`.
+    public func takeOver() async throws -> LeaseOutcome {
+        for _ in 0..<3 {
+            let current = try await database.fetch(Lease.recordID)
+            guard let record = current else {
+                if let lease = try await write(holder(epoch: 1), over: nil) { return .primary(lease) }
+                continue
+            }
+            guard let lease = Lease(record: record) else {
+                let epoch = (record.int("epoch") ?? 0) + 1
+                if let mine = try await write(holder(epoch: epoch), over: record.changeTag) { return .primary(mine) }
+                continue
+            }
+            if let mine = heldRecord, mine.changeTag == record.changeTag, !lease.isExpired(at: now()) {
+                if let renewed = try await write(holder(epoch: lease.epoch), over: record.changeTag) {
+                    return .primary(renewed)
+                }
+                continue
+            }
             if let mine = try await write(holder(epoch: lease.epoch + 1), over: record.changeTag) { return .primary(mine) }
         }
         heldRecord = nil

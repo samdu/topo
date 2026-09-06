@@ -24,6 +24,8 @@ settings:
 packages:
   TopoCore:
     path: Packages/TopoCore
+  TopoLink:
+    path: Packages/TopoLink
   TopoAuth:
     path: Packages/TopoAuth
   TopoTurn:
@@ -99,15 +101,34 @@ targets:
     platform: macOS
     sources: [Apps/Shared, Apps/TopoHub]
     dependencies:
-      - package: TopoCore
       - package: TopoAuth
+      - package: TopoCore
+        product: TopoCore
+      - package: TopoCore
+        product: TopoCoreTesting
+      - package: TopoLink
+    # XcodeGen writes this file from these properties on every generate.
+    entitlements:
+      path: Apps/TopoHub/TopoHub.entitlements
+      properties:
+        com.apple.security.app-sandbox: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.developer.icloud-container-identifiers: [iCloud.zone.hexagon.topo]
+        com.apple.developer.icloud-services: [CloudKit]
+    info:
+      path: Apps/TopoHub/Info.plist
+      properties:
+        LSUIElement: true
+        CFBundleDisplayName: Topo Hub
+        NSBonjourServices: [_topo._tcp]
+        NSLocalNetworkUsageDescription: Topo Hub finds your other devices on this network and answers when they check it is here.
+        ITSAppUsesNonExemptEncryption: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.hub
-        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        GENERATE_INFOPLIST_FILE: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        INFOPLIST_KEY_LSUIElement: true
-        INFOPLIST_KEY_CFBundleDisplayName: Topo Hub
 schemes:
   Topo:
     build:
