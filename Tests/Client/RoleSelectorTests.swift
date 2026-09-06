@@ -192,6 +192,28 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(pad.role, .primary)
     }
 
+    func testATakeoverWhoseRoleRecordsFailAbandonsTheLease() async throws {
+        let db = InMemoryRecordDatabase()
+        try await lease(db, holder: DeviceID("phone"))
+        let current = await db.current(Lease.recordID)
+        var record = try XCTUnwrap(current)
+        record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -3600))
+        _ = try await db.save(record)
+        // The role save is refused: a stale role record for the taker, written between the read
+        // and the batch, makes the compare-and-set fail.
+        await db.setBeforeSave { records in
+            guard records.contains(where: { $0.type == DeviceRole.recordType }) else { return }
+            await db.setBeforeSave(nil)
+            _ = try? await db.save(DeviceRole(device: DeviceID("ios-test"), role: .viewer, setBy: DeviceID("x"), at: Date()).record(changeTag: nil))
+        }
+        let s = selector(db)
+        await s.decide()
+        let taken = await s.takePrimary()
+        XCTAssertNil(taken)
+        XCTAssertEqual(s.role, .viewer)
+        XCTAssertNotNil(s.trouble)
+    }
+
     func testAnUnreadableRecordLeavesTheRoleUndecided() async {
         let s = selector(Failing())
         await s.decide()

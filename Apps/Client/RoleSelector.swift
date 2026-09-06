@@ -132,14 +132,25 @@ final class RoleSelector {
             }
             taking = "Taking over…"
             try await ensureZone()
+            // The role records are prepared before the claim, so what follows the claim is one save.
+            let now = Date()
+            var roles = [try await DeviceRole(device: device, role: .primary, setBy: device, at: now).record(over: database)]
+            if let previous {
+                roles.append(try await DeviceRole(device: previous.holder, role: .viewer, setBy: device, at: now).record(over: database))
+            }
             switch try await lease.acquire() {
             case .primary:
-                let now = Date()
-                var roles = [try await DeviceRole(device: device, role: .primary, setBy: device, at: now).record(over: database)]
-                if let previous {
-                    roles.append(try await DeviceRole(device: previous.holder, role: .viewer, setBy: device, at: now).record(over: database))
+                // A claim whose role records do not land is abandoned, whatever stopped them: a
+                // lease heartbeated by nobody would answer no turns and block every device.
+                let landed: Bool
+                do {
+                    landed = try await lease.heartbeat(saving: roles) != nil
+                } catch {
+                    await lease.abandon()
+                    throw error
                 }
-                guard try await lease.heartbeat(saving: roles) != nil else {
+                guard landed else {
+                    await lease.abandon()
                     trouble = "Another device took primary just now. Try again in a moment."
                     return nil
                 }
