@@ -115,7 +115,24 @@ public actor TurnRunner {
     /// waiting, or a read with turns still missing, returns nil without touching the lease; the
     /// caller reads again later. Otherwise this device takes the lease, and runs only as primary.
     public func answerPending(model: ClaudeModel) async throws -> Turn? {
-        let transcript = try await log.read()
+        try await answer(try await log.read(), model: model)
+    }
+
+    /// Answers a named person's turn now: the live path, asked over a socket by the limb that
+    /// wrote it. The turn is fetched by ID, which sees it before the feed does, and stands in
+    /// the transcript whether or not the feed has caught up; the rest is `answerPending`. Nil
+    /// when there is no such turn, it is not the person's, it is already answered, or the read
+    /// is missing other turns.
+    public func answer(_ ref: TurnRef, model: ClaudeModel) async throws -> Turn? {
+        guard let asked = try await log.turn(ref), asked.role == .person else { return nil }
+        let read = try await log.read()
+        let transcript = read[ref] == nil
+            ? Transcript(turns: Array(read.turns.values) + [asked], missing: read.missing, unreadable: read.unreadable)
+            : read
+        return try await answer(transcript, model: model)
+    }
+
+    private func answer(_ transcript: Transcript, model: ClaudeModel) async throws -> Turn? {
         guard transcript.isComplete, Self.awaitsReply(transcript) else { return nil }
         let outcome = try await lease.acquire()
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }

@@ -28,18 +28,24 @@ enum ProbeWire {
     struct LineTooLong: Error {}
 }
 
-/// Answers lease probes and advertises the device on the LAN.
+/// Answers lease probes and live turns, and advertises the device on the LAN.
 ///
-/// The answer comes from `holds`, which the owner points at its
+/// The probe's answer comes from `holds`, which the owner points at its
 /// `PrimaryLease`: true only for the lease it holds right now, epoch
 /// included, so a device that restarted or lost the lease says no and the
-/// asker claims. One listener does both jobs: it is the endpoint the lease
-/// record names, and its Bonjour registration is the device's presence.
+/// asker claims. A turn's answer comes from `answers`, which the owner
+/// points at its harness: the reply turn it wrote for the ref, or nil, sent
+/// as `no`; an owner with no brain leaves it nil. One listener does every
+/// job: it is the endpoint the lease record names, and its Bonjour
+/// registration is the device's presence. Each connection is served in its
+/// own task, so a long answer never holds up a probe.
 public actor LeaseProbeServer {
     public typealias Holds = @Sendable (DeviceID, Int64) async -> Bool
+    public typealias Answers = @Sendable (TurnRef) async -> LiveReply?
 
     private let listener: NWListener
     private let holds: Holds
+    private let answers: Answers?
     private var ready: CheckedContinuation<UInt16, any Error>?
     public private(set) var port: UInt16?
 
@@ -47,7 +53,7 @@ public actor LeaseProbeServer {
     ///   - advertising: the device ID to register under `TopoService.type`,
     ///     or nil to listen without advertising.
     ///   - port: 0 picks a free one.
-    public init(advertising device: DeviceID?, port: UInt16 = 0, holds: @escaping Holds) throws {
+    public init(advertising device: DeviceID?, port: UInt16 = 0, answers: Answers? = nil, holds: @escaping Holds) throws {
         let parameters = NWParameters.tcp
         parameters.allowLocalEndpointReuse = true
         let listener = try NWListener(using: parameters, on: port == 0 ? .any : NWEndpoint.Port(rawValue: port)!)
@@ -56,6 +62,7 @@ public actor LeaseProbeServer {
         }
         self.listener = listener
         self.holds = holds
+        self.answers = answers
     }
 
     /// Starts listening. Returns the port once bound.
@@ -101,13 +108,18 @@ public actor LeaseProbeServer {
     private func serve(_ connection: NWConnection) async {
         connection.start(queue: DispatchQueue(label: "zone.hexagon.topo.link.serve"))
         defer { connection.cancel() }
-        guard let line = try? await connection.readLine(maximum: 256),
-              let (device, epoch) = ProbeWire.parseRequest(line) else {
+        guard let line = try? await connection.readLine(maximum: 256) else {
             try? await connection.send(ProbeWire.no)
             return
         }
-        let answer = await holds(device, epoch)
-        try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
+        if let (device, epoch) = ProbeWire.parseRequest(line) {
+            let answer = await holds(device, epoch)
+            try? await connection.send(answer ? ProbeWire.yes : ProbeWire.no)
+        } else if let ref = TurnWire.parseRequest(line), let answers, let reply = await answers(ref) {
+            try? await connection.send(TurnWire.reply(reply.ref, reply.text))
+        } else {
+            try? await connection.send(ProbeWire.no)
+        }
     }
 }
 
@@ -198,7 +210,7 @@ extension NWConnection {
         }
     }
 
-    private func receiveSome(maximum: Int) async throws -> (Data?, Bool) {
+    func receiveSome(maximum: Int) async throws -> (Data?, Bool) {
         let box = OneShot<ReceivedChunk>()
         receive(minimumIncompleteLength: 1, maximumLength: maximum) { data, _, complete, error in
             if let error { box.resume(.failure(error)); return }
