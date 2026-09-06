@@ -175,6 +175,23 @@ struct SurfacesList: View {
                     Spacer()
                     action(for: surface)
                 }
+                if let address = hub.pages.address(for: surface.device, host: hub.lanAddress) {
+                    HStack(spacing: 6) {
+                        Text(address.absoluteString)
+                            .font(.caption2.monospaced())
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        Button("Revoke") { hub.pages.revoke(surface.device) }
+                            .help("Stops this screen showing what it is showing. It can be registered again.")
+                    }
+                    .padding(.leading, 26)
+                }
+            }
+            if let failure = hub.pages.failure {
+                Label("Not serving screen pages: \(failure)", systemImage: "exclamationmark.triangle")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
     }

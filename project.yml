@@ -118,7 +118,13 @@ targets:
   TopoHub:
     type: application
     platform: macOS
-    sources: [Apps/Shared, Apps/TopoHub]
+    sources:
+      - Apps/Shared
+      - Apps/TopoHub
+      # The page a television opens, served from this bundle as it is.
+      - path: Womble/Web
+        buildPhase: resources
+        excludes: [surface.json]
     dependencies:
       - package: TopoAuth
       - package: TopoCore
