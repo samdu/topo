@@ -192,6 +192,28 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(pad.role, .primary)
     }
 
+    func testATakeoverDemotesWhoeverHoldsTheLeaseAtTheClaimAndEveryRecordedPrimary() async throws {
+        let db = InMemoryRecordDatabase()
+        let phone = DeviceID("phone"), watchPad = DeviceID("old-pad")
+        try await lease(db, holder: phone)
+        // A device that once took primary and is recorded so, though it no longer holds the lease.
+        _ = try await db.save(DeviceRole(device: watchPad, role: .primary, setBy: watchPad, at: Date()).record(changeTag: nil))
+        // During the wait a third device takes the lease over the phone.
+        let third = PrimaryLease(database: db, device: DeviceID("third"), endpoint: nil, probe: NoProbe(),
+                                 sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        let s = RoleSelector(database: db, device: me, defaults: defaults(), isSignedIn: { false }, ensureZone: {},
+                             sleep: { _ in _ = try await third.acquire() })
+        await s.decide()
+        let taken = await s.takePrimary()
+        XCTAssertNotNil(taken)
+        let thirdRole = try await DeviceRole.read(DeviceID("third"), from: db)
+        let padRole = try await DeviceRole.read(watchPad, from: db)
+        let mine = try await DeviceRole.read(me, from: db)
+        XCTAssertEqual(thirdRole?.role, .viewer)
+        XCTAssertEqual(padRole?.role, .viewer)
+        XCTAssertEqual(mine?.role, .primary)
+    }
+
     func testATakeoverWhoseRoleRecordsFailAbandonsTheLease() async throws {
         let db = InMemoryRecordDatabase()
         try await lease(db, holder: DeviceID("phone"))

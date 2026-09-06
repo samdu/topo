@@ -116,9 +116,7 @@ final class RoleSelector {
         do {
             taking = "Checking who is primary…"
             let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NeverConfirms(), timing: timing)
-            var previous: Lease?
             if let record = try await database.fetch(Lease.recordID), let current = Lease(record: record), current.holder != device {
-                previous = current
                 if !current.isExpired(at: Date()) {
                     let wait = min(current.expiresAt.timeIntervalSinceNow, timing.duration)
                     taking = "Waiting \(Int(wait.rounded(.up))) seconds for \(current.holder.rawValue) to finish…"
@@ -132,11 +130,14 @@ final class RoleSelector {
             }
             taking = "Taking over…"
             try await ensureZone()
-            // The role records are prepared before the claim, so what follows the claim is one save.
+            // Whoever is primary is read just before the claim, not before the wait: the lease's
+            // holder now, and every device whose role record says primary, since a lease can pass
+            // through hands without a role changing. The role records are prepared here so what
+            // follows the claim is one save.
             let now = Date()
             var roles = [try await DeviceRole(device: device, role: .primary, setBy: device, at: now).record(over: database)]
-            if let previous {
-                roles.append(try await DeviceRole(device: previous.holder, role: .viewer, setBy: device, at: now).record(over: database))
+            for other in try await primariesToDemote() {
+                roles.append(try await DeviceRole(device: other, role: .viewer, setBy: device, at: now).record(over: database))
             }
             switch try await lease.acquire() {
             case .primary:
@@ -167,6 +168,20 @@ final class RoleSelector {
             trouble = TranscriptStore.message(for: error)
         }
         return nil
+    }
+
+    /// The devices a takeover demotes: the lease's holder as the record stands now, and every
+    /// device recorded as primary. Never this device.
+    private func primariesToDemote() async throws -> Set<DeviceID> {
+        var others: Set<DeviceID> = []
+        if let record = try await database.fetch(Lease.recordID), let current = Lease(record: record) {
+            others.insert(current.holder)
+        }
+        for record in try await database.records(ofType: DeviceRole.recordType) {
+            if let recorded = DeviceRole(record: record), recorded.role == .primary { others.insert(recorded.device) }
+        }
+        others.remove(device)
+        return others
     }
 
     /// Reads this device's role record and drops to viewer if another device wrote it so: the
