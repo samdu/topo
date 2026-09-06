@@ -141,6 +141,75 @@ import TopoCoreTesting
         #expect(try await TurnLog(database: db).read().ordered.count == 2)
     }
 
+    @Test func thePrimaryAnswersATurnALimbWroteIntoTheLog() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("from the phone")))
+        let (runner, lease) = try await makeRunner(database: db, transport: transport)
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(!(await lease.isPrimary()))
+
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        let asked = try await watch.append(.person, "bins?", parents: [])
+        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        #expect(answer.role == .assistant && answer.text == "from the phone")
+        #expect(answer.parents == [asked.ref])
+        #expect(await lease.isPrimary())
+        let messages = try #require(transport.lastBody?["messages"] as? [[String: String]])
+        #expect(messages == [["role": "user", "content": "bins?"]])
+        // Answered, so nothing is pending; no second call.
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(transport.requests.count == 1)
+    }
+
+    @Test func aReplyThatFailedIsRetriedOnTheNextPassAndNeverDoubled() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((500, "{}"), (200, reply("second time")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        _ = try await watch.append(.person, "hello", parents: [])
+        await #expect(throws: MessagesAPIError.self) { try await runner.answerPending(model: .sonnet5) }
+        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        #expect(answer.text == "second time")
+
+        // Another primary answering the same words finds this reply by its nonce and makes no call.
+        let other = RecordingTransport((200, reply("never")))
+        let (hub, _) = try await makeRunner(database: db, device: "hub", transport: other)
+        #expect(try await hub.answerPending(model: .sonnet5) == nil)
+        #expect(other.requests.isEmpty)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["hello", "second time"])
+    }
+
+    @Test func aForkOfPersonTurnsGetsOneReplyContinuingEveryHead() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("both")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let log = TurnLog(database: db)
+        let a = try await log.writer(for: DeviceID("watch")).append(.person, "one", parents: [])
+        let b = try await log.writer(for: DeviceID("pad")).append(.person, "two", parents: [])
+        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        #expect(Set(answer.parents) == [a.ref, b.ref])
+        #expect(try await log.read().heads == [answer.ref])
+    }
+
+    @Test func aReadWithTurnsMissingIsNotAnswered() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((200, reply("never")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        // A turn continuing from one the read cannot see: the read is incomplete.
+        _ = try await watch.append(.person, "second", parents: [TurnRef(device: DeviceID("ghost"), sequence: 1)])
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(transport.requests.isEmpty)
+    }
+
+    @Test func theReplyNonceIsFixedLengthAndOrderBlind() {
+        let a = TurnRef(device: DeviceID("watch"), sequence: 3), b = TurnRef(device: DeviceID("pad"), sequence: 9)
+        #expect(TurnRunner.replyNonce(for: [a, b]) == TurnRunner.replyNonce(for: [b, a]))
+        #expect(TurnRunner.replyNonce(for: [a]) != TurnRunner.replyNonce(for: [b]))
+        let wide = (1...500).map { TurnRef(device: DeviceID("device-\($0)"), sequence: Int64($0)) }
+        #expect(TurnRunner.replyNonce(for: wide).count == "answer/".count + 64)
+    }
+
     @Test func historyIsCappedAndRolesAlternate() {
         let d = DeviceID("d")
         var turns: [Turn] = []

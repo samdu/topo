@@ -1,5 +1,6 @@
 import Foundation
 import TopoAuth
+import TopoCore
 
 /// The models the phone harness offers. Sonnet is the default; the others are a setting.
 public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
@@ -61,6 +62,19 @@ public struct Reply: Sendable, Equatable {
     public var stopReason: String?
     public var inputTokens: Int
     public var outputTokens: Int
+
+    public init(text: String, model: String, stopReason: String?, inputTokens: Int, outputTokens: Int) {
+        self.text = text
+        self.model = model
+        self.stopReason = stopReason
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
+    }
+
+    /// A reply found already in the log: its text is the turn's, and nothing else is known.
+    init(recovered turn: Turn, model: ClaudeModel) {
+        self.init(text: turn.text, model: model.rawValue, stopReason: nil, inputTokens: 0, outputTokens: 0)
+    }
 }
 
 /// `POST /v1/messages` with an OAuth bearer token, the way the Claude Code CLI calls it: the

@@ -264,6 +264,20 @@ public struct TurnLog: Sendable {
         return Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
     }
 
+    /// The turn an append under `nonce` wrote, if that append went through:
+    /// the marker named by the nonce says which turn, and the turn is fetched
+    /// by ID. Nil when no such append has landed. `markerWithoutTurn` when
+    /// the marker exists and its turn cannot be read.
+    public func turn(appendedUnder nonce: String) async throws -> Turn? {
+        guard let marker = try await database.fetch(Turn.naming.markerID(nonce: nonce)) else { return nil }
+        guard let named = marker.string(Turn.naming.markerField),
+              let record = try await database.fetch(Turn.naming.recordID(named: named)),
+              let turn = Turn(record: record) else {
+            throw TurnLogError.markerWithoutTurn(nonce: nonce)
+        }
+        return turn
+    }
+
     /// One device's turns after a sequence number, in sequence order.
     /// `after: 0` is everything that device wrote.
     public func read(device: DeviceID, after sequence: Int64) async throws -> [Turn] {
@@ -377,6 +391,20 @@ public actor TurnWriter {
     /// knows, and then whether the transcript holds the newest of them.
     public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
                        nonce: String = UUID().uuidString) async throws -> Turn {
+        try await checkContinuable(transcript)
+        return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce)
+    }
+
+    /// `append(_:_:continuing:at:nonce:)` in one atomic batch with a
+    /// heartbeat of `lease`: nil, with nothing written, when the lease is not
+    /// held. See `append(_:_:parents:at:nonce:renewing:)`.
+    public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
+                       nonce: String = UUID().uuidString, renewing lease: PrimaryLease) async throws -> Turn? {
+        try await checkContinuable(transcript)
+        return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce, renewing: lease)
+    }
+
+    private func checkContinuable(_ transcript: Transcript) async throws {
         try await syncWithLog()
         var missing = transcript.missing
         let next = await appender.nextSequence
@@ -387,7 +415,6 @@ public actor TurnWriter {
         guard missing.isEmpty, transcript.unreadable.isEmpty else {
             throw TurnLogError.incompleteTranscript(missing: missing, unreadable: transcript.unreadable)
         }
-        return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce)
     }
 
     /// Moves past any turn of this device the log already holds at or after
