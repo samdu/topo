@@ -87,6 +87,20 @@ struct ChatView: View {
             .sheet(isPresented: $showAbout) { AboutView() }
         }
         .task {
+            // A limb's turn wakes this screen rather than waiting for the next pass. The pass
+            // still runs underneath: a push is an accelerator, and with every push dropped the
+            // app behaves exactly as it did without one. The handler stands only as long as this
+            // task does, which is as long as this screen is the one answering — so a push
+            // arriving after a sign-out or a takeover reaches nothing.
+            PushWake.install { [harness] in
+                await harness.refresh()
+                await harness.answerPending()
+            }
+            defer { PushWake.remove() }
+            // Cheap when the subscription is already there, and a failure costs only the
+            // acceleration, so it is not the screen's to report.
+            try? await TurnPush.ensureSubscription()
+
             await harness.refresh()
             // Words on their way when the app last went away go first, under their own nonce.
             // Otherwise the first-run answer is the first turn, once, only when the log is empty;

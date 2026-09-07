@@ -3,6 +3,8 @@ import TopoAuth
 
 @main
 struct TopoApp: App {
+    // Only so a silent push has somewhere to land; see PushWake.
+    @UIApplicationDelegateAdaptor(PushDelegate.self) private var delegate
     @State private var signIn = SignIn()
     @State private var harness = Harness.standard()
     @State private var roleSelector = RoleSelector(database: TopoCloudKit.database(),
