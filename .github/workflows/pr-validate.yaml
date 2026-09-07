@@ -1,8 +1,8 @@
-# The merge gate. Codex reviews every non-draft PR and its verdict is what
-# gates: `review_gate` is the only required status check on main, and
-# automerge.yaml merges on this workflow concluding green. The Swift suite runs
-# in tests.yaml as a signal, deliberately outside this workflow, so a queued or
-# absent macOS runner cannot hold a merge.
+# The merge gate. The Swift suite runs first; Codex reviews every non-draft PR
+# whose suite is green, and its verdict is what gates. `review_gate` and `test`
+# are the required status checks on main, and automerge.yaml merges on this
+# workflow concluding green — so a red suite holds the merge by both routes and
+# costs no reviewer round.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
@@ -60,6 +60,92 @@ env:
   STATUS_PANE_URL: https://experiments.hexagon.zone/topo-status/api/review
 
 jobs:
+  # The Swift suite, and the reviewer's precondition. It runs on every PR
+  # including drafts, so an agent iterating locally still gets the signal; the
+  # `codex` job below needs it green. A macOS runner that never picks this job
+  # up therefore holds the merge — deliberately, because a reviewer round spent
+  # on a build that does not compile is a round wasted, and a merge waved
+  # through on a red suite is worse than a late one.
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: swift --version
+      # Every package under Packages/ runs its suite; a tree with none has
+      # nothing to test, which is a notice rather than a failure.
+      - name: swift test (Packages/*)
+        run: |
+          set -euo pipefail
+          found=0
+          for manifest in Packages/*/Package.swift; do
+            [ -f "$manifest" ] || continue
+            found=1
+            echo "::group::$(dirname "$manifest")"
+            (cd "$(dirname "$manifest")" && swift test)
+            echo "::endgroup::"
+          done
+          if [ "$found" = 0 ]; then
+            echo "::notice::No Packages/*/Package.swift in this tree; nothing to test."
+          fi
+
+      # Womble is an Xcode project, not a package, so it needs a simulator
+      # rather than `swift test`. Its deployment target is iOS 12; the
+      # simulator it runs the tests on is whatever the runner's Xcode ships,
+      # which is the same arrangement as building it on a Mac by hand.
+      - name: xcodebuild test (Womble)
+        run: |
+          set -euo pipefail
+          if [ ! -d Womble/Womble.xcodeproj ]; then
+            echo "::notice::No Womble/Womble.xcodeproj in this tree; nothing to test."
+            exit 0
+          fi
+          # Whichever iPhone this runner's Xcode has. Naming one pins the
+          # suite to a device the next Xcode may drop.
+          udid="$(xcrun simctl list devices available --json \
+                  | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          if [ -z "$udid" ]; then
+            echo "::error::No iPhone simulator available on this runner."
+            exit 1
+          fi
+          xcodebuild test \
+            -project Womble/Womble.xcodeproj \
+            -scheme Womble \
+            -destination "platform=iOS Simulator,id=$udid"
+
+      # The app targets' own suite. It is hosted by the iOS app and covers
+      # the code the watch and TV builds share with the phone, so it runs on
+      # an iPhone simulator whatever the runner's Xcode ships.
+      - name: xcodebuild test (Topo)
+        run: |
+          set -euo pipefail
+          if [ ! -d Topo.xcodeproj ]; then
+            echo "::notice::No Topo.xcodeproj in this tree; nothing to test."
+            exit 0
+          fi
+          udid="$(xcrun simctl list devices available --json \
+                  | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          if [ -z "$udid" ]; then
+            echo "::error::No iPhone simulator available on this runner."
+            exit 1
+          fi
+          xcodebuild test \
+            -project Topo.xcodeproj \
+            -scheme Topo \
+            -destination "platform=iOS Simulator,id=$udid"
+
+      # The watch and TV builds are not covered by that suite's host, so they
+      # are built for their own simulators here.
+      - name: xcodebuild build (TopoWatch, TopoTV)
+        run: |
+          set -euo pipefail
+          [ -d Topo.xcodeproj ] || exit 0
+          xcodebuild build -project Topo.xcodeproj -scheme TopoWatch \
+            -destination 'generic/platform=watchOS Simulator'
+          xcodebuild build -project Topo.xcodeproj -scheme TopoTV \
+            -destination 'generic/platform=tvOS Simulator'
+
   # Codex runs the CLI in the runner with the repo checked out, so unlike a
   # single-shot reviewer it can open the file the diff only mentions. Its
   # verdict is a step exit code in review_gate below, which is what makes it a
@@ -69,10 +155,16 @@ jobs:
   # against the free local reviewer, and marks it ready — that transition is
   # what first spends a Codex round.
   codex:
+    needs: test
     # Same-repo branches only: a fork PR carries untrusted content and must
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
+    #
+    # `needs.test.result` is spelled out because a job with its own `if:` drops
+    # the implicit `success()` over its `needs` — without it, a red suite would
+    # still spend a reviewer round.
     if: >-
+      needs.test.result == 'success' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -188,11 +280,11 @@ jobs:
               real store rejects.
             - Licensing: GPL code from others reaching a bundle, or a borrowed
               piece with no entry in THIRD-PARTY.
-            - The tests. The Swift suite runs on macOS in the separate,
-              non-gating `Tests` workflow; this runner is Linux with no Swift
-              toolchain and your sandbox is read-only, so do not try to build
-              or run anything — review the tests by reading them. A test that
-              cannot fail is yours to notice.
+            - The tests. The Swift suite has already passed on macOS in the
+              `test` job that gates this one; this runner is Linux with no
+              Swift toolchain and your sandbox is read-only, so do not try to
+              build or run anything — review the tests by reading them. A test
+              that cannot fail is yours to notice.
 
             You can read any file in the checkout — do that rather than
             guessing, and cite `path:line` for every finding. Skip style and
@@ -377,13 +469,14 @@ jobs:
   # concurrency cancels a superseded run, `!cancelled()` skips both jobs, and
   # the run concludes `cancelled` rather than red.
   reviewer_ran:
-    needs: [codex, post_feedback]
+    needs: [test, codex, post_feedback]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - name: Assert a verdict was produced and delivered
         env:
           IS_DRAFT: ${{ github.event.pull_request.draft }}
+          TEST_RESULT: ${{ needs.test.result }}
           CODEX_RESULT: ${{ needs.codex.result }}
           FEEDBACK_RESULT: ${{ needs.post_feedback.result }}
         run: |
@@ -391,6 +484,13 @@ jobs:
 
           if [ "$IS_DRAFT" = "true" ]; then
             echo "::error::No verdict: this PR is a draft, so the reviewer was deliberately skipped. Mark it ready for review — nothing here is a review decision."
+            exit 1
+          fi
+          # Named before the reviewer's own result, because a red suite is why
+          # the reviewer did not run and "the reviewer job did not complete"
+          # would send a reader to the wrong log.
+          if [ "$TEST_RESULT" != "success" ]; then
+            echo "::error::No verdict: the Swift suite did not pass (result: $TEST_RESULT), so the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
             exit 1
           fi
           if [ "$CODEX_RESULT" != "success" ]; then
@@ -427,7 +527,7 @@ jobs:
   #
   # This is the required status check on main.
   review_gate:
-    needs: [reviewer_ran, codex, post_feedback]
+    needs: [reviewer_ran, test, codex, post_feedback]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
