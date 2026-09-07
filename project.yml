@@ -50,6 +50,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        # A silent push wakes the primary when a limb writes a turn; see TurnPush.
+        INFOPLIST_KEY_UIBackgroundModes: remote-notification
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Topo listens when you press the microphone, so it can hear what you forgot.
