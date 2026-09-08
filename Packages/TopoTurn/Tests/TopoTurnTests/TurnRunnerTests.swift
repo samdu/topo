@@ -20,7 +20,7 @@ import TopoCoreTesting
         let second = try await runner.run("and the milk", model: .fable51)
         #expect(second.person.parents == [first.assistant.ref])
         let body = try #require(transport.lastBody)
-        #expect(body["model"] as? String == "claude-fable-5-1")
+        #expect(body["model"] as? String == ClaudeModel.effective(.fable51).rawValue)
         let messages = try #require(body["messages"] as? [[String: String]])
         #expect(messages.map { $0["content"] } == ["I forgot the bins", "Reply one", "and the milk"])
 
