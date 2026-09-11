@@ -123,6 +123,7 @@
 		F4974068046E34EB0AB10E96 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		F710CD8D19E9952AD050CCD8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 843B7316243F6B0BFD30D130 /* Assets.xcassets */; };
 		F9E31DDC84CCFFF526FA5044 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 783E689C1554D54D945E0F11 /* TopoCore */; };
+		FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */; };
 		FEE6786314BBF06C3CF8A7B8 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 /* End PBXBuildFile section */
 
@@ -193,6 +194,7 @@
 		F3D543E552C5A46713503953 /* DebugRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRunTests.swift; sourceTree = "<group>"; };
 		F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptStoreTests.swift; sourceTree = "<group>"; };
 		FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSession.swift; sourceTree = "<group>"; };
+		FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessTests.swift; sourceTree = "<group>"; };
 		FF1945CD92E7D90DE491BDDB /* TopoTV.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = TopoTV.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		FF5484D41029680680F3D4D4 /* ViewerRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ViewerRootView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -356,6 +358,7 @@
 			children = (
 				F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
+				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
 			);
@@ -730,6 +733,7 @@
 			files = (
 				B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
+				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
 			);

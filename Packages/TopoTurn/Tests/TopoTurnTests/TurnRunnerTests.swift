@@ -179,6 +179,57 @@ import TopoCoreTesting
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["hello", "second time"])
     }
 
+    @Test func aTurnAcceptedAndThenFailedByTheModelIsAnsweredOnceByALaterPass() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = RecordingTransport((500, "{}"), (200, reply("second time")))
+        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        do {
+            _ = try await runner.run("I forgot the bins", model: .sonnet5)
+            Issue.record("expected the reply to fail")
+        } catch TurnRunnerError.replyFailed(let person, let underlying) {
+            // The app accepted the turn: it is in the log, so its caller owes nothing for it.
+            #expect(person.text == "I forgot the bins")
+            #expect(underlying as? MessagesAPIError == .http(status: 500, message: nil))
+        }
+        let accepted = try await TurnLog(database: db).read()
+        #expect(accepted.ordered.map(\.text) == ["I forgot the bins"])
+
+        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        #expect(answer.text == "second time")
+        #expect(answer.parents == accepted.heads)
+        // Exactly one reply: the next pass finds nothing waiting and makes no call.
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(transport.requests.count == 2)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["I forgot the bins", "second time"])
+    }
+
+    @Test func aTurnLeftByADisplacedDeviceIsAnsweredOnceByTheDeviceThatTookTheLease() async throws {
+        let db = InMemoryRecordDatabase()
+        let phone = RecordingTransport((200, reply("too late")))
+        let (runner, _) = try await makeRunner(database: db, transport: phone)
+        let hubTransport = RecordingTransport((200, reply("from the hub")))
+        let (hub, hubLease) = try await makeRunner(database: db, device: "hub", transport: hubTransport)
+        phone.duringRequest = { _ = try? await hubLease.acquire() }
+        do {
+            _ = try await runner.run("bins?", model: .sonnet5)
+            Issue.record("expected displacement")
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
+        }
+        let accepted = try await TurnLog(database: db).read()
+        #expect(accepted.ordered.map(\.text) == ["bins?"])
+
+        let answer = try #require(try await hub.answerPending(model: .sonnet5))
+        #expect(answer.text == "from the hub")
+        #expect(answer.parents == accepted.heads)
+        // Nothing waits now, so neither device answers again and the phone makes no second call.
+        #expect(try await hub.answerPending(model: .sonnet5) == nil)
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(phone.requests.count == 1)
+        #expect(hubTransport.requests.count == 1)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "from the hub"])
+    }
+
     @Test func aForkOfPersonTurnsGetsOneReplyContinuingEveryHead() async throws {
         let db = InMemoryRecordDatabase()
         let transport = RecordingTransport((200, reply("both")))
