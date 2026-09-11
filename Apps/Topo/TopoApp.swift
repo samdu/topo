@@ -39,11 +39,15 @@ struct TopoApp: App {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
                 .environment(voice).environment(speaker)
                 // The record configuration is brought up on the foreground so the press is not
-                // what pays for the route change; permission-gated inside. The ear's models load
-                // on the same cue, so they are resident by the first press.
+                // what pays for the route change; permission-gated inside. The ear's and the
+                // voice's models load on the same cue, so they are resident by the first press.
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     audio.warmRecord(phase == .active)
-                    if phase == .active { voice.prepare() }
+                    speaker.foreground = phase == .active
+                    if phase == .active {
+                        voice.prepare()
+                        speaker.prepare()
+                    }
                 }
                 // Nothing unless a debug build was launched asking for a turn; the screen
                 // behaves as it always does either way.

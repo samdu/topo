@@ -38,6 +38,24 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.15.6"
+  # MLX-Audio's Swift port, for the phone's voice (Apps/Client/Voice.swift): Kokoro synthesising
+  # replies on the device. Pinned to a revision rather than a version range because the
+  # published tags are a long way behind main and the Kokoro API the voice calls
+  # (`KokoroModel`'s refAudio/language arguments, `KokoroMultilingualProcessor`) is main's. The
+  # iOS app only: MLX wants a real Metal device, and nothing on the wrist or the television
+  # synthesises anything.
+  MLXAudio:
+    url: https://github.com/Blaizzy/mlx-audio-swift
+    revision: cae704f53bc32a3d0b606823828fbc5bedaaf388
+  # MLXAudioTTS vends MLXArray across its own API, so the voice names the array type and the
+  # safetensors loader directly. Declared rather than relied on as a transitive import, and
+  # pinned exactly inside the range MLXAudio asks for (0.30.6 up to the next major), so SPM
+  # resolves one copy: 0.31.4 is the last release without the CudaBuild build-tool plugin,
+  # which 0.31.5 adds and which xcodebuild refuses to run unvalidated, on the CI runner
+  # included.
+  mlx-swift:
+    url: https://github.com/ml-explore/mlx-swift
+    exactVersion: "0.31.4"
 targets:
   Topo:
     type: application
@@ -50,11 +68,18 @@ targets:
       # What the About screen reads, rather than a copy of it in Swift.
       - path: THIRD-PARTY
         buildPhase: resources
+      # Buddy's blended Kokoro style vector, which is not one of the model repo's own voices.
+      - path: Apps/Topo/Resources/bm_buddy.safetensors
+        buildPhase: resources
     dependencies:
       - package: TopoCore
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
+      - package: MLXAudio
+        product: MLXAudioTTS
+      - package: mlx-swift
+        product: MLX
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
