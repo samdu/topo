@@ -29,12 +29,15 @@
 		20F2A0B4C6E8592CD1F27954 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
 		23BF8C9AB0A659820195042C /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */; };
+		250B656BBEC3CA81673470FE /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = 9A23AAE8D73D6B2959B0ECA0 /* MLXAudioTTS */; };
+		2908E979E18FAFFBCBBA3F5C /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		2AF169CA7DA76C7448A360A2 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		2DB26E2E9DD8FA0757FB7500 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC10F86563FE12BC674EFBB /* AboutView.swift */; };
 		30DF481D4769365D1072FE1B /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		30F4866307B7B7B4BD27CBF2 /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
 		3437864E6AD2F3E01FA3D8B7 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		366808E32D484A6F8AB966CE /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
+		39DD8E0131A9E3A312E554E5 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		3BB50E214E3CCDE7B541504F /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		3C6EE019F5CEBDDD755176BB /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
@@ -64,7 +67,9 @@
 		72726826FE4958249B7EFF62 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
+		7943C91E581BB3C2DA88542B /* bm_buddy.safetensors in Resources */ = {isa = PBXBuildFile; fileRef = D2746E503492B4017733D81B /* bm_buddy.safetensors */; };
 		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
+		7CA608BAC02829F2E58A6BA4 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		7E98663347BABCF07C89A28B /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		815C061D9BB10A6B9FFCEB3B /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		81C4725975A6BE77B65E080C /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
@@ -96,6 +101,7 @@
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
 		B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
+		B63B6F52C265588ADE976B9B /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 11BFD456B9384FC5F303ABF1 /* MLX */; };
 		B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D33CC62A8C821EACD662C /* TopoHubApp.swift */; };
 		B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */; };
 		B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 45B7067577746DC49D3FFD8F /* TopoAuth */; };
@@ -159,6 +165,7 @@
 		2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */ = {isa = PBXFileReference; path = "THIRD-PARTY"; sourceTree = "<group>"; };
 		3C73B06423A3D15D5A7B7093 /* WebAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuth.swift; sourceTree = "<group>"; };
 		43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacesModel.swift; sourceTree = "<group>"; };
+		45A790C5DC880D6BBF044F6A /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		46425616D224D5EDABBDE93E /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		57BE8636EBBD805D555F974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
@@ -187,6 +194,7 @@
 		C29E502597377F5D2A77876B /* womble.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = womble.css; sourceTree = "<group>"; };
 		C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
+		D2746E503492B4017733D81B /* bm_buddy.safetensors */ = {isa = PBXFileReference; path = bm_buddy.safetensors; sourceTree = "<group>"; };
 		D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
 		D946D8851F96D23296B16179 /* RoleSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelectorTests.swift; sourceTree = "<group>"; };
 		DEF0C378213C9A0018F5BC0B /* TopoLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoLink; path = Packages/TopoLink; sourceTree = SOURCE_ROOT; };
@@ -250,6 +258,8 @@
 				B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */,
 				3FD6601DD9ABAC3CC53FD7B5 /* TopoTurn in Frameworks */,
 				1B7B2F193C4455E96A95552E /* FluidAudio in Frameworks */,
+				250B656BBEC3CA81673470FE /* MLXAudioTTS in Frameworks */,
+				B63B6F52C265588ADE976B9B /* MLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -271,6 +281,7 @@
 			children = (
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
+				6E826910F2690AB85DC11B57 /* Resources */,
 			);
 			path = Topo;
 			sourceTree = "<group>";
@@ -334,9 +345,18 @@
 				00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */,
 				D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */,
 				FF5484D41029680680F3D4D4 /* ViewerRootView.swift */,
+				45A790C5DC880D6BBF044F6A /* Voice.swift */,
 				175EA8671E9C84024DDB99D4 /* VoiceInput.swift */,
 			);
 			path = Client;
+			sourceTree = "<group>";
+		};
+		6E826910F2690AB85DC11B57 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				D2746E503492B4017733D81B /* bm_buddy.safetensors */,
+			);
+			path = Resources;
 			sourceTree = "<group>";
 		};
 		73516B840F018A2E1C1376ED /* Tests */ = {
@@ -491,6 +511,8 @@
 				45B7067577746DC49D3FFD8F /* TopoAuth */,
 				FE39E35328B7F68962D1C4D7 /* TopoTurn */,
 				B3BA0E084B64DA5739DA87CC /* FluidAudio */,
+				9A23AAE8D73D6B2959B0ECA0 /* MLXAudioTTS */,
+				11BFD456B9384FC5F303ABF1 /* MLX */,
 			);
 			productName = Topo;
 			productReference = 99296C045628A368812315E3 /* Topo.app */;
@@ -580,6 +602,8 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				103CF933AED6235CE3C80367 /* XCRemoteSwiftPackageReference "FluidAudio" */,
+				6BD0512D4DC64AD8EA22CF23 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
+				12861F3E822291E2CF72CD0B /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				44BFC1A6FFE8F646066FC6D3 /* XCLocalSwiftPackageReference "Packages/TopoAuth" */,
 				1E536CC259DF31745E68DDFA /* XCLocalSwiftPackageReference "Packages/TopoCore" */,
 				B799C97BE3650B1621A9547D /* XCLocalSwiftPackageReference "Packages/TopoLink" */,
@@ -647,6 +671,7 @@
 				56D87FA7BAFAB16DF3E30DE7 /* Assets.xcassets in Resources */,
 				6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */,
 				86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */,
+				7943C91E581BB3C2DA88542B /* bm_buddy.safetensors in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -680,6 +705,7 @@
 				0C53C4EE08987A6A0555C32E /* TranscriptStore.swift in Sources */,
 				AD4F9E8277006852F3904EED /* TranscriptView.swift in Sources */,
 				23BF8C9AB0A659820195042C /* ViewerRootView.swift in Sources */,
+				7CA608BAC02829F2E58A6BA4 /* Voice.swift in Sources */,
 				82621EF76ECEDB9B9F825F8C /* VoiceInput.swift in Sources */,
 				D2DC72F45F5F9DB79FDAFD95 /* WatchRootView.swift in Sources */,
 				0BB1FC3236EA16193196ED7B /* WebAuth.swift in Sources */,
@@ -733,6 +759,7 @@
 				6322C31CF98F5ECFA3AE56D3 /* TranscriptStore.swift in Sources */,
 				20F2A0B4C6E8592CD1F27954 /* TranscriptView.swift in Sources */,
 				BE5D03B4667AA4BD89FBD2AB /* ViewerRootView.swift in Sources */,
+				39DD8E0131A9E3A312E554E5 /* Voice.swift in Sources */,
 				B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */,
 				CEDE0DECFBB5BCF16F65601D /* WebAuth.swift in Sources */,
 			);
@@ -777,6 +804,7 @@
 				B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */,
 				C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */,
 				F0E3735FB1184C474A985C4B /* ViewerRootView.swift in Sources */,
+				2908E979E18FAFFBCBBA3F5C /* Voice.swift in Sources */,
 				0033D5043460871D4D290C82 /* VoiceInput.swift in Sources */,
 				94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */,
 			);
@@ -1205,6 +1233,22 @@
 				version = 0.15.6;
 			};
 		};
+		12861F3E822291E2CF72CD0B /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift";
+			requirement = {
+				kind = exactVersion;
+				version = 0.31.4;
+			};
+		};
+		6BD0512D4DC64AD8EA22CF23 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/Blaizzy/mlx-audio-swift";
+			requirement = {
+				kind = revision;
+				revision = cae704f53bc32a3d0b606823828fbc5bedaaf388;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1215,6 +1259,11 @@
 		07E2FAB72874D49A25065E45 /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoCore;
+		};
+		11BFD456B9384FC5F303ABF1 /* MLX */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 12861F3E822291E2CF72CD0B /* XCRemoteSwiftPackageReference "mlx-swift" */;
+			productName = MLX;
 		};
 		3F87D19718887EBA98EA56FA /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1239,6 +1288,11 @@
 		7C22D3C31068651AA320F6FC /* TopoAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoAuth;
+		};
+		9A23AAE8D73D6B2959B0ECA0 /* MLXAudioTTS */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 6BD0512D4DC64AD8EA22CF23 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
+			productName = MLXAudioTTS;
 		};
 		AF1BDBBDAB883F52D9800C0C /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
