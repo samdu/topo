@@ -30,6 +30,14 @@ packages:
     path: Packages/TopoAuth
   TopoTurn:
     path: Packages/TopoTurn
+  # NVIDIA Parakeet as CoreML, with its CTC keyword spotter for the vocabulary rescoring, for
+  # the phone's ear (Apps/Client/Ear.swift). Pinned exactly: the vocabulary-boosting API the
+  # ear drives by hand (VocabularyBoostingSession) is not the version-stable part of the
+  # package, and a floating minor could move it. The iOS app only: nothing on the wrist or the
+  # television transcribes, and the models are half a gigabyte.
+  FluidAudio:
+    url: https://github.com/FluidInference/FluidAudio
+    exactVersion: "0.15.6"
 targets:
   Topo:
     type: application
@@ -46,9 +54,13 @@ targets:
       - package: TopoCore
       - package: TopoAuth
       - package: TopoTurn
+      - package: FluidAudio
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        # FluidAudio's prebuilt text-normalisation xcframework has an arm64 simulator slice and
+        # no x86_64 one, so a generic simulator build of this target is arm64 only.
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/Topo.entitlements
