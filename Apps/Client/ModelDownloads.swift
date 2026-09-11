@@ -407,11 +407,36 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
 
     private let store: ModelStore
     private let manifest: ModelManifest?
-    var events: (@Sendable (Event) -> Void)?
+    private let lock = NSLock()
+    private var sink: (@Sendable (Event) -> Void)?
+    /// Events from before the sink was set: the session can deliver a relaunch's events the
+    /// moment it exists, and the one that calls the system's completion handler must not be
+    /// lost to that gap.
+    private var pending: [Event] = []
 
     init(store: ModelStore, manifest: ModelManifest?) {
         self.store = store
         self.manifest = manifest
+    }
+
+    var events: (@Sendable (Event) -> Void)? {
+        get { lock.withLock { sink } }
+        set {
+            let held: [Event] = lock.withLock {
+                sink = newValue
+                defer { pending = [] }
+                return pending
+            }
+            held.forEach { newValue?($0) }
+        }
+    }
+
+    private func report(_ event: Event) {
+        let sink: (@Sendable (Event) -> Void)? = lock.withLock {
+            if self.sink == nil { pending.append(event) }
+            return self.sink
+        }
+        sink?(event)
     }
 
     private func lookup(_ task: URLSessionTask) -> (key: String, model: ModelManifest.Model, file: ModelManifest.File)? {
@@ -429,22 +454,22 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
         }
         if let status = (downloadTask.response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
             try? FileManager.default.removeItem(at: location)
-            events?(.failed(key, ModelStoreError.badStatus(file.path, status).localizedDescription))
+            report(.failed(key, ModelStoreError.badStatus(file.path, status).localizedDescription))
             return
         }
-        events?(.verifying(key))
+        report(.verifying(key))
         do {
             try store.admit(location, as: file, of: model)
-            events?(.verified(id: model.id, path: file.path, size: file.size))
+            report(.verified(id: model.id, path: file.path, size: file.size))
         } catch {
-            events?(.failed(key, error.localizedDescription))
+            report(.failed(key, error.localizedDescription))
         }
     }
 
     func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didWriteData bytesWritten: Int64,
                     totalBytesWritten: Int64, totalBytesExpectedToWrite: Int64) {
         guard let key = downloadTask.taskDescription else { return }
-        events?(.progress(key, totalBytesWritten))
+        report(.progress(key, totalBytesWritten))
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
@@ -455,16 +480,16 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
             try? FileManager.default.createDirectory(at: resume.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? data.write(to: resume, options: .atomic)
         }
-        events?(.failed(key, error.localizedDescription))
+        report(.failed(key, error.localizedDescription))
     }
 
     func urlSession(_ session: URLSession, taskIsWaitingForConnectivity task: URLSessionTask) {
         guard let key = task.taskDescription else { return }
-        events?(.waiting(key))
+        report(.waiting(key))
     }
 
     func urlSessionDidFinishEvents(forBackgroundURLSession session: URLSession) {
-        events?(.finished)
+        report(.finished)
     }
 }
 
