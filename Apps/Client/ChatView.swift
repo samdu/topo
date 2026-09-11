@@ -18,6 +18,7 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showDiagnostics = false
     @State private var showAbout = false
+    @State private var showVocabulary = false
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
 
@@ -74,6 +75,7 @@ struct ChatView: View {
                             ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                         }
                         Toggle("Read replies aloud", isOn: $readAloud)
+                        Button("Vocabulary") { showVocabulary = true }
                         Button("Diagnostics") { showDiagnostics = true }
                         Button("About Topo") { showAbout = true }
                         Divider()
@@ -85,6 +87,7 @@ struct ChatView: View {
             }
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
             .sheet(isPresented: $showAbout) { AboutView() }
+            .sheet(isPresented: $showVocabulary) { VocabularyView() }
         }
         .task {
             await harness.refresh()

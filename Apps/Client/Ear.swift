@@ -5,8 +5,8 @@ import Observation
 import FluidAudio
 #endif
 
-/// Speech to text on this phone: Parakeet-tdt-0.6b-v2 through FluidAudio, rescored against a
-/// vocabulary of the words the phone's own recogniser breaks. The microphone's audio never
+/// Speech to text on this phone: Parakeet-tdt-0.6b-v2 through FluidAudio, rescored against the
+/// person's own `Vocabulary`, the words the recogniser breaks on. The microphone's audio never
 /// leaves the device. The measured reason (Daphne's stt-tune sweep over Sam's own recordings):
 /// WER 0.058 against 0.186 for the server recogniser, eighteen of twenty vocabulary words
 /// recognised against two, no invented jargon in ordinary speech, and the transcript in about
@@ -35,20 +35,28 @@ final class Ear {
     /// Parakeet eats 16 kHz mono, so the microphone is converted to that and nothing else.
     nonisolated static let rate = 16000
 
-    /// The canonical spellings of the words the recogniser is rescored towards. No aliases and
-    /// a similarity gate of 0.65: the stt-tune sweep (160 configurations over Sam's own
-    /// recordings) found that multiword aliases and the default gate were the whole corruption
-    /// engine ("get some" → "jetsam"), and that dropping them costs one recall hit while
-    /// zeroing every invented word. The rescorer's other knobs stay stock because past this
-    /// gate they measurably do nothing.
-    nonisolated static let vocabulary = [
-        "microSD", "daemon", "Ceph", "buddybox", "Kokoro", "jetsam",
-        "jellyfin", "jetstream", "jamf", "Tailscale", "kubectl", "Traefik",
-        "jetlag", "worktree", "Grafana", "HomeKit", "Playdate", "systemd",
-        "xcodebuild",
-    ]
+    /// The words the recogniser is rescored towards, canonical spellings only, the person's to
+    /// edit. Every edit rebuilds the spotter's session, so a word works from the next press.
+    let vocabulary: Vocabulary
+
+    /// The rescorer's gate, constant whatever the list holds. No aliases and a similarity gate
+    /// of 0.65: the stt-tune sweep (160 configurations over Sam's own recordings) found that
+    /// multiword aliases and the default gate were the whole corruption engine ("get some" →
+    /// "jetsam"), and that dropping them costs one recall hit while zeroing every invented
+    /// word. The rescorer's other knobs stay stock because past this gate they measurably do
+    /// nothing. A term shorter than `minTermLength` is ignored by the rescorer, so the store
+    /// refuses one.
     nonisolated static let minSimilarity: Float = 0.65
     nonisolated static let minTermLength = 3
+
+    /// Counts the lists handed to the engine, so of two edits in flight the later one is the
+    /// session that stands whichever finishes first.
+    private var vocabularyVersion = 0
+
+    init(vocabulary: Vocabulary = Vocabulary()) {
+        self.vocabulary = vocabulary
+        vocabulary.changed = { [weak self] in self?.rebuild() }
+    }
 
     var ready: Bool { state == .ready }
 
@@ -57,7 +65,7 @@ final class Ear {
         switch state {
         case .cold: return "not loaded"
         case .loading: return progress.isEmpty ? "loading" : "loading: \(progress)"
-        case .ready: return "Parakeet resident"
+        case .ready: return trouble.map { "Parakeet resident; vocabulary not applied: \($0)" } ?? "Parakeet resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
@@ -70,13 +78,18 @@ final class Ear {
         guard state == .cold || state == .failed else { return }
         state = .loading
         trouble = nil
+        vocabularyVersion += 1
+        let version = vocabularyVersion
         Task {
             do {
-                try await EarEngine.shared.load(terms: Self.vocabulary) { [weak self] line in
+                try await EarEngine.shared.load(terms: vocabulary.terms, version: version) { [weak self] line in
                     Task { @MainActor in self?.progress = line }
                 }
                 state = .ready
                 progress = ""
+                // An edit that landed during the load was refused by the engine, whose session
+                // did not exist yet; it is applied now.
+                if vocabularyVersion != version { rebuild() }
             } catch {
                 state = .failed
                 trouble = error.localizedDescription
@@ -86,6 +99,26 @@ final class Ear {
         #else
         state = .failed
         trouble = "FluidAudio is not linked in this build"
+        #endif
+    }
+
+    /// The spotter's session around the list as it is now: an edit landing. Nothing until the
+    /// models are resident; a load in flight reads the list when it finishes. A rebuild that
+    /// fails leaves the session that was standing and says so in `summary`.
+    private func rebuild() {
+        #if canImport(FluidAudio)
+        vocabularyVersion += 1
+        let version = vocabularyVersion
+        guard state == .ready else { return }
+        let terms = vocabulary.terms
+        Task {
+            do {
+                try await EarEngine.shared.rebuild(terms: terms, version: version)
+                if vocabularyVersion == version { trouble = nil }
+            } catch {
+                if vocabularyVersion == version { trouble = error.localizedDescription }
+            }
+        }
         #endif
     }
 
@@ -186,10 +219,17 @@ actor EarEngine {
 
     private var asr: AsrManager?
     private var boost: VocabularyBoostingSession?
+    /// Kept resident so an edited list is a rebuilt context, not a second trip through the
+    /// CoreML loads.
+    private var ctcModels: CtcModels?
+    private var tokenizer: CtcTokenizer?
+    /// The version of the list the session holds; an older one arriving late is dropped.
+    private var applied = 0
 
     /// Download (first run only) and load, the acoustic model then the spotter, then the
-    /// vocabulary tokenised against it.
-    func load(terms: [String], onProgress: @escaping @Sendable (String) -> Void) async throws {
+    /// vocabulary tokenised against it. The gate is constant; the list is the caller's, and
+    /// `rebuild` swaps it live.
+    func load(terms: [String], version: Int, onProgress: @escaping @Sendable (String) -> Void) async throws {
         if asr != nil && boost != nil { return }
         let models = try await AsrModels.downloadAndLoad(version: Self.version) { p in
             switch p.phase {
@@ -206,8 +246,16 @@ actor EarEngine {
         asr = manager
 
         onProgress("fetching the CTC spotter")
-        let ctcModels = try await CtcModels.downloadAndLoad(variant: .ctc110m)
-        let tokenizer = try await CtcTokenizer.load(from: CtcModels.defaultCacheDirectory(for: .ctc110m))
+        ctcModels = try await CtcModels.downloadAndLoad(variant: .ctc110m)
+        tokenizer = try await CtcTokenizer.load(from: CtcModels.defaultCacheDirectory(for: .ctc110m))
+        try await rebuild(terms: terms, version: version)
+    }
+
+    /// The session around a fresh list. Cheap against the loads above: tokenisation and a new
+    /// context. Nothing until the spotter is resident, and a list older than the one applied
+    /// is dropped, so two edits in flight end on the later one.
+    func rebuild(terms: [String], version: Int) async throws {
+        guard let ctcModels, let tokenizer, version > applied else { return }
         let vterms = terms.compactMap { term -> CustomVocabularyTerm? in
             let ids = tokenizer.encode(term)
             guard !ids.isEmpty else { return nil }
@@ -215,7 +263,10 @@ actor EarEngine {
         }
         let context = CustomVocabularyContext(terms: vterms, minSimilarity: Ear.minSimilarity,
                                               minTermLength: Ear.minTermLength)
-        boost = try await VocabularyBoostingSession(vocabulary: context, ctcModels: ctcModels, config: .init())
+        let session = try await VocabularyBoostingSession(vocabulary: context, ctcModels: ctcModels, config: .init())
+        guard version > applied else { return }
+        applied = version
+        boost = session
     }
 
     /// One utterance. A fresh decoder state per call: every session, and every caption glance,
