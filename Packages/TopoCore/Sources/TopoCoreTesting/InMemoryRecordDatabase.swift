@@ -6,6 +6,16 @@ import TopoCore
 /// each successful save mints a new tag. Tests and previews use it; nothing
 /// here talks to iCloud.
 ///
+/// It is more forgiving than CloudKit in four ways, each of which has shipped
+/// a bug: its query index is strongly consistent, where the server's lags and
+/// a newest record leaves no gap behind it; an empty filter list matches every
+/// record of the type, where the server refuses a match-all predicate without
+/// a queryable record-name index; a type nothing has saved answers `[]`, where
+/// the server answers `unknownItem`; and an empty string list saves, where the
+/// server refuses the whole batch with "Syntax error in request". A test
+/// passing here proves nothing about those four, which are exercised against a
+/// real container or not at all.
+///
 /// `beforeSave` runs inside `save` before the tags are checked. Because the
 /// actor suspends at that await, a test can hold one writer there while
 /// another fetches and saves, which is how the lease race is reproduced.
