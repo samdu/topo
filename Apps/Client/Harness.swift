@@ -232,7 +232,7 @@ final class Harness {
                 guard let writer else { return false }
                 let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
                 show(person)
-                info = Self.describe(outcome) + " The reply will appear here."
+                info = Self.describe(outcome) + " What you said is in the log; the reply will appear here."
                 status = nil
                 return true
             } catch {
@@ -272,7 +272,7 @@ final class Harness {
     static func describe(_ error: any Error) -> String {
         switch error {
         case TurnRunnerError.displaced:
-            "Another device became primary while Claude was answering; it will answer."
+            "Another device became primary while Claude was answering. What you said is in the log; the reply will appear here."
         case MessagesAPIError.refused:
             "Claude declined that one."
         case MessagesAPIError.http(let status, let message):
@@ -397,8 +397,8 @@ final class Harness {
         switch outcome {
         case .primary: "This device is primary."
         case .held(let by): "\(by.holder.rawValue) is primary right now."
-        case .unreachable(let lease): "\(lease.holder.rawValue) took over and can't be reached; try again shortly."
-        case .contended: "Another device is claiming primary; try again."
+        case .unreachable(let lease): "\(lease.holder.rawValue) took over and can't be reached from here."
+        case .contended: "Another device is claiming primary."
         }
     }
 }
