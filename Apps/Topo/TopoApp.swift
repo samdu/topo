@@ -3,6 +3,9 @@ import TopoAuth
 
 @main
 struct TopoApp: App {
+    /// For the one UIKit callback SwiftUI has no spelling of: iOS relaunching the app because
+    /// the models' background download finished.
+    @UIApplicationDelegateAdaptor(TopoAppDelegate.self) private var appDelegate
     @State private var signIn: SignIn
     @State private var harness: Harness
     @State private var roleSelector: RoleSelector
@@ -40,7 +43,8 @@ struct TopoApp: App {
                 .environment(voice).environment(speaker)
                 // The record configuration is brought up on the foreground so the press is not
                 // what pays for the route change; permission-gated inside. The ear's and the
-                // voice's models load on the same cue, so they are resident by the first press.
+                // voice's models are asked for on the same cue, downloaded if the phone lacks
+                // them, so they are resident by the first press.
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     audio.warmRecord(phase == .active)
                     speaker.foreground = phase == .active

@@ -12,25 +12,29 @@ import FluidAudio
 /// recognised against two, no invented jargon in ordinary speech, and the transcript in about
 /// 0.3s with no network in the loop.
 ///
-/// The models are not in the bundle. FluidAudio downloads them from Hugging Face into the
-/// app's Application Support the first time `prepare` runs (about 540 MB of CoreML: 443 MB
-/// for Parakeet, 98 MB for the CTC spotter) and loads them from there on every launch after.
-/// Until they are resident, or if they fail to load, `VoiceInput` uses `SFSpeechRecognizer`
-/// instead, so nothing here can leave a press deaf.
+/// The models are not in the bundle. `ModelDownloads` fetches them through the app's background
+/// session (about 540 MB of CoreML: 442 MB for Parakeet, 98 MB for the CTC spotter, listed
+/// file by file in the manifest) into the app's Application Support, and FluidAudio loads them
+/// from there, told to touch no network of its own. Until they are resident, or if they fail to
+/// load, `VoiceInput` uses `SFSpeechRecognizer` instead, so nothing here can leave a press deaf.
 ///
 /// Published state lives on the main actor; recognition itself runs in `EarEngine`, an actor,
 /// because a CoreML decode on the main thread is a visible freeze.
 @MainActor
 @Observable
 final class Ear {
-    enum State: Equatable { case cold, loading, ready, failed }
+    /// `fetching` is the wait for `ModelDownloads` to have every file; `loading` is the CoreML
+    /// compile from disk.
+    enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
     /// Why the ear is not available, when it is not. Cleared by the next `prepare`.
     private(set) var trouble: String?
-    /// Where the load has got to. The first run pulls half a gigabyte, and a state that just
-    /// says "loading" for minutes reads as hung.
+    /// Where the load has got to: a state that just says "loading" for a minute reads as hung.
     private(set) var progress = ""
+
+    /// The manifest entries the ear needs on disk.
+    static let models = [ModelManifest.parakeet, ModelManifest.ctc]
 
     /// Parakeet eats 16 kHz mono, so the microphone is converted to that and nothing else.
     nonisolated static let rate = 16000
@@ -64,25 +68,45 @@ final class Ear {
     var summary: String {
         switch state {
         case .cold: return "not loaded"
+        case .fetching: return ModelDownloads.shared.describe(Self.models)
         case .loading: return progress.isEmpty ? "loading" : "loading: \(progress)"
         case .ready: return trouble.map { "Parakeet resident; vocabulary not applied: \($0)" } ?? "Parakeet resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
 
-    /// Starts the models loading, downloading them first if this phone has never had them.
-    /// Idempotent, and called on every foreground so that they are resident by the first
-    /// press; a press that beats the load uses the fallback.
+    /// Asks for the models, downloading whatever this phone lacks, and loads them once every
+    /// file is on disk. Idempotent, and called on every foreground so that they are resident by
+    /// the first press and a download that failed is tried again; a press that beats the load
+    /// uses the fallback.
     func prepare() {
         #if canImport(FluidAudio)
+        let downloads = ModelDownloads.shared
+        downloads.start(Self.models)
         guard state == .cold || state == .failed else { return }
-        state = .loading
+        state = .fetching
         trouble = nil
+        downloads.whenPresent(Self.models) { [weak self] in self?.load() }
+        #else
+        state = .failed
+        trouble = "FluidAudio is not linked in this build"
+        #endif
+    }
+
+    /// The CoreML compile, from the store's directories, once the files are all there.
+    private func load() {
+        #if canImport(FluidAudio)
+        guard state == .fetching else { return }
+        state = .loading
         vocabularyVersion += 1
         let version = vocabularyVersion
         Task {
             do {
-                try await EarEngine.shared.load(terms: vocabulary.terms, version: version) { [weak self] line in
+                let downloads = ModelDownloads.shared
+                let parakeet = try downloads.directory(for: ModelManifest.parakeet)
+                let ctc = try downloads.directory(for: ModelManifest.ctc)
+                try await EarEngine.shared.load(parakeet: parakeet, ctc: ctc, terms: vocabulary.terms,
+                                                version: version) { [weak self] line in
                     Task { @MainActor in self?.progress = line }
                 }
                 state = .ready
@@ -96,9 +120,6 @@ final class Ear {
                 progress = ""
             }
         }
-        #else
-        state = .failed
-        trouble = "FluidAudio is not linked in this build"
         #endif
     }
 
@@ -226,28 +247,28 @@ actor EarEngine {
     /// The version of the list the session holds; an older one arriving late is dropped.
     private var applied = 0
 
-    /// Download (first run only) and load, the acoustic model then the spotter, then the
-    /// vocabulary tokenised against it. The gate is constant; the list is the caller's, and
-    /// `rebuild` swaps it live.
-    func load(terms: [String], version: Int, onProgress: @escaping @Sendable (String) -> Void) async throws {
+    /// Load from disk, the acoustic model then the spotter, then the vocabulary tokenised
+    /// against it. `parakeet` is the directory the manifest's Parakeet entry fills (named as
+    /// FluidAudio's loader expects, since it appends that name to the parent it is given) and
+    /// `ctc` the spotter's. The gate is constant; the list is the caller's, and `rebuild` swaps
+    /// it live.
+    func load(parakeet: URL, ctc: URL, terms: [String], version: Int,
+              onProgress: @escaping @Sendable (String) -> Void) async throws {
         if asr != nil && boost != nil { return }
-        let models = try await AsrModels.downloadAndLoad(version: Self.version) { p in
-            switch p.phase {
-            case .listing:
-                onProgress("Parakeet: listing files")
-            case .downloading(let done, let total):
-                onProgress(String(format: "Parakeet: downloading %d/%d, %.0f%%", done, total, p.fractionCompleted * 100))
-            case .compiling(let name):
-                onProgress("Parakeet: compiling \(name)")
-            }
+        // Every file is the manifest's and verified; a load that fails is reported, and never
+        // answered by FluidAudio deleting the directory and fetching afresh over a session of
+        // its own.
+        ModelHub.offlineMode = true
+        let models = try await AsrModels.load(from: parakeet, version: Self.version) { p in
+            if case .compiling(let name) = p.phase { onProgress("Parakeet: compiling \(name)") }
         }
         let manager = AsrManager(config: .default)
         try await manager.loadModels(models)
         asr = manager
 
-        onProgress("fetching the CTC spotter")
-        ctcModels = try await CtcModels.downloadAndLoad(variant: .ctc110m)
-        tokenizer = try await CtcTokenizer.load(from: CtcModels.defaultCacheDirectory(for: .ctc110m))
+        onProgress("compiling the CTC spotter")
+        ctcModels = try await CtcModels.loadDirect(from: ctc, variant: .ctc110m)
+        tokenizer = try await CtcTokenizer.load(from: ctc)
         try await rebuild(terms: terms, version: version)
     }
 
