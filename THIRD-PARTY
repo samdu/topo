@@ -14,22 +14,22 @@ Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swi
 ## FluidAudio
 Licence: Apache-2.0, © FluidInference; its own bundled pieces are fastcluster (BSD-3, © Daniel Müllner and Google), vbx (Apache-2.0) and the text-processing-rs xcframework (Apache-2.0, FluidInference)
 Where: https://github.com/FluidInference/FluidAudio, pinned to 0.15.6
-Use: Runs Parakeet on the phone for `Apps/Client/Ear.swift`: downloads and loads the CoreML models, decodes an utterance, and rescores the transcript against the vocabulary with its CTC keyword spotter. Linked into the iOS app only.
+Use: Runs Parakeet on the phone for `Apps/Client/Ear.swift`: loads the CoreML models Topo has downloaded, decodes an utterance, and rescores the transcript against the vocabulary with its CTC keyword spotter. Linked into the iOS app only.
 
 ## Parakeet
 Licence: CC-BY-4.0, © NVIDIA; the CoreML conversions are FluidInference's
 Where: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml and https://huggingface.co/FluidInference/parakeet-ctc-110m-coreml, from NVIDIA's parakeet-tdt-0.6b-v2 and parakeet-ctc-110m
-Use: The speech-to-text model the ear runs (parakeet-tdt-0.6b-v2, 443 MB) and the CTC model that spots the vocabulary in the audio (parakeet-ctc-110m, 98 MB). Not in the bundle: FluidAudio downloads them into the app's Application Support on the first run and keeps them there.
+Use: The speech-to-text model the ear runs (parakeet-tdt-0.6b-v2, 442 MB) and the CTC model that spots the vocabulary in the audio (parakeet-ctc-110m, 98 MB). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there.
 
 ## mlx-audio-swift
 Licence: MIT, © Prince Canuma
 Where: https://github.com/Blaizzy/mlx-audio-swift, pinned to cae704f53bc32a3d0b606823828fbc5bedaaf388, on mlx-swift (MIT, © Apple)
-Use: Runs Kokoro on the phone for `Apps/Client/Voice.swift`: downloads and loads the model, phonemises a sentence, and synthesises it. Linked into the iOS app only.
+Use: Runs Kokoro on the phone for `Apps/Client/Voice.swift`: loads the model Topo has downloaded, phonemises a sentence, and synthesises it. Linked into the iOS app only.
 
 ## Kokoro
-Licence: Apache-2.0, © hexgrad; the bf16 MLX conversion is mlx-community's, and the grapheme-to-phoneme model and lexicons the port downloads with it are beshkenadze's (g2p-multilingual-byT5-tiny-mlx, kokoro-ipa-lexicons)
-Where: https://huggingface.co/mlx-community/Kokoro-82M-bf16, from https://huggingface.co/hexgrad/Kokoro-82M
-Use: The text-to-speech model the voice runs (312 MB of weights; about 425 MB with the repo's voices, the G2P model and the English lexicon). Not in the bundle: mlx-audio-swift downloads them into the app's cache on the first run and keeps them there. `Apps/Topo/Resources/bm_buddy.safetensors` is Buddy's blend of the model's British voices, Sam's own.
+Licence: Apache-2.0, © hexgrad; the bf16 MLX conversion is mlx-community's, and the English grapheme-to-phoneme resources the port reads beside it (kitten-tts-g2p: the gold and silver dictionaries and the BART fallback model) are beshkenadze's port of hexgrad's Misaki, MIT
+Where: https://huggingface.co/mlx-community/Kokoro-82M-bf16, from https://huggingface.co/hexgrad/Kokoro-82M; https://huggingface.co/beshkenadze/kitten-tts-g2p, from https://github.com/hexgrad/misaki
+Use: The text-to-speech model the voice runs (311 MB of weights and 9 MB of G2P resources; none of the repo's own voices). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there. `Apps/Topo/Resources/bm_buddy.safetensors` is Buddy's blend of the model's British voices, Sam's own.
 
 ## XcodeGen
 Licence: MIT, © Yonas Kolb

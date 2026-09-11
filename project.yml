@@ -71,6 +71,9 @@ targets:
       # Buddy's blended Kokoro style vector, which is not one of the model repo's own voices.
       - path: Apps/Topo/Resources/bm_buddy.safetensors
         buildPhase: resources
+      # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
+      - path: Apps/Topo/Resources/models.json
+        buildPhase: resources
     dependencies:
       - package: TopoCore
       - package: TopoAuth
