@@ -184,6 +184,10 @@ jobs:
     steps:
       - name: Join the tailnet, to reach the status pane
         if: ${{ env.TS_OAUTH_CLIENT_ID != '' }}
+        # Best-effort like the POST it enables: a Tailscale outage or an expired
+        # OAuth client must not fail `codex` or the required `review_gate` and hold
+        # a mergeable PR. Without this the status feed becomes a merge dependency.
+        continue-on-error: true
         uses: tailscale/github-action@v3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
@@ -625,6 +629,10 @@ jobs:
 
       - name: Join the tailnet, to reach the status pane
         if: ${{ env.TS_OAUTH_CLIENT_ID != '' }}
+        # Best-effort like the POST it enables: a Tailscale outage or an expired
+        # OAuth client must not fail `codex` or the required `review_gate` and hold
+        # a mergeable PR. Without this the status feed becomes a merge dependency.
+        continue-on-error: true
         uses: tailscale/github-action@v3
         with:
           oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
