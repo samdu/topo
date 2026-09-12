@@ -57,7 +57,13 @@ permissions:
 env:
   # The status pane's review feed. Best-effort: a pane that is down must not
   # redden a review.
-  STATUS_PANE_URL: https://experiments.hexagon.zone/topo-status/api/review
+  #
+  # The pane lives on the tailnet now — it has no public route at all — so the two
+  # jobs that post here join the tailnet first, as an ephemeral node that goes away
+  # with the runner. Without TS_OAUTH_CLIENT_ID/TS_OAUTH_SECRET the join step is
+  # skipped and the POST simply fails into its own warning, which is the same
+  # best-effort behaviour as a pane that is down.
+  STATUS_PANE_URL: https://pane.burmese-egret.ts.net/topo-status/api/review
 
 jobs:
   # The Swift suite, and the reviewer's precondition. It runs on every PR
@@ -176,6 +182,20 @@ jobs:
     outputs:
       final_message: ${{ steps.scope.outputs.final-message }}
     steps:
+      - name: Join the tailnet, to reach the status pane
+        if: ${{ env.TS_OAUTH_CLIENT_ID != '' }}
+        # Best-effort like the POST it enables: a Tailscale outage or an expired
+        # OAuth client must not fail `codex` or the required `review_gate` and hold
+        # a mergeable PR. Without this the status feed becomes a merge dependency.
+        continue-on-error: true
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+
       - name: Tell the status pane the review is running
         env:
           PR: ${{ github.event.pull_request.number }}
@@ -606,6 +626,20 @@ jobs:
               finish block "reviewer returned no usable verdict" 1
               ;;
           esac
+
+      - name: Join the tailnet, to reach the status pane
+        if: ${{ env.TS_OAUTH_CLIENT_ID != '' }}
+        # Best-effort like the POST it enables: a Tailscale outage or an expired
+        # OAuth client must not fail `codex` or the required `review_gate` and hold
+        # a mergeable PR. Without this the status feed becomes a merge dependency.
+        continue-on-error: true
+        uses: tailscale/github-action@v3
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
 
       - name: Tell the status pane the verdict
         if: ${{ always() }}
