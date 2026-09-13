@@ -1,3 +1,4 @@
+# PROBE — do not merge: the UI suite three times over the long-lived feeder.
 # The merge gate. The Swift suite runs first; Codex reviews every non-draft PR
 # whose suite is green, and its verdict is what gates. `review_gate` and `test`
 # are the required status checks on main, and automerge.yaml merges on this
@@ -178,7 +179,9 @@ jobs:
           xcodebuild test \
             -project Topo.xcodeproj \
             -scheme Topo \
-            -destination "platform=iOS Simulator,id=$udid"
+            -destination "platform=iOS Simulator,id=$udid" \
+            -only-testing:TopoUITests \
+            -test-iterations 3
 
       - name: Audio lane holds after the microphone test
         if: always() && steps.audio_lane.outcome == 'success'
