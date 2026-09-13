@@ -2,6 +2,12 @@
 # Builds Topo, boots a simulator, signs it in with the long-lived Claude setup token, and
 # optionally makes it say something and asserts the reply landed in the log.
 #
+# A --send run passes only when the app printed `done`, printed no `error:`, and printed
+# `reply to <turn> in run <id>:` under the id this script launched it with (the reply DebugRun
+# found by the sent turn's nonce and the reply's parents). A launcher that exits before `done`,
+# or non-zero at all, a turn not finished within TIMEOUT seconds (180), and a missing or foreign
+# reply each exit non-zero. scripts/tests/simulator-run-test.sh holds this against a fake xcrun.
+#
 #   scripts/simulator-run.sh                        # build, boot, install, launch signed in
 #   scripts/simulator-run.sh --send "hello"         # ... and send one turn, asserting the reply
 #   scripts/simulator-run.sh --press-mic            # ... after pressing the microphone (TopoUITests)
@@ -43,7 +49,7 @@ while [ $# -gt 0 ]; do
     --screenshot) screenshot="$2"; shift 2 ;;
     --erase) erase=yes; shift ;;
     --no-build) build=no; shift ;;
-    -h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -92,22 +98,44 @@ xcrun simctl bootstatus "$udid" -b >/dev/null
 xcrun simctl install "$udid" "$app"
 
 log="$(mktemp -t topo-sim)"
-trap 'rm -f "$log"' EXIT
-echo "==> launching"
+launcher=""
+trap '[ -z "$launcher" ] || kill "$launcher" 2>/dev/null; rm -f "$log"' EXIT
+# This run's id: the app prints it on the reply to the turn it sent, so neither a line from an
+# earlier launch nor a reply to some other turn can stand in for this run's answer.
+run="$(uuidgen)"
+echo "==> launching (run $run)"
 SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN="$token" \
 SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" \
+SIMCTL_CHILD_TOPO_DEBUG_RUN="$run" \
   xcrun simctl launch --console-pty --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
 launcher=$!
 
+fail() {
+  grep '\[topo-debug\]' "$log" || cat "$log"
+  echo "==> $*" >&2
+  exit 1
+}
+
 if [ -n "$send" ]; then
   # The app prints one prefixed line per step and `done` when the turn has settled; wait for it
-  # rather than for the app to exit, which it never does.
+  # rather than for the app to exit, which it never does. A launcher that exits first is a launch
+  # or an app that died, and fails the run there rather than at the timeout.
   waited=0
   until grep -q '\[topo-debug\] done' "$log" 2>/dev/null; do
-    [ "$waited" -lt "$timeout" ] || { echo "==> no turn finished within ${timeout}s" >&2; break; }
-    sleep 2
-    waited=$((waited + 2))
+    if ! kill -0 "$launcher" 2>/dev/null; then
+      wait "$launcher" && status=0 || status=$?; launcher=""
+      grep -q '\[topo-debug\] done' "$log" || fail "the launcher exited ($status) before the turn finished"
+      break
+    fi
+    [ "$waited" -lt "$timeout" ] || fail "no turn finished within ${timeout}s"
+    sleep 1
+    waited=$((waited + 1))
   done
+  # `done` is printed; a launcher already gone by now has to have gone cleanly.
+  if [ -n "$launcher" ] && ! kill -0 "$launcher" 2>/dev/null; then
+    wait "$launcher" && status=0 || status=$?; launcher=""
+  fi
+  [ "${status:-0}" = 0 ] || fail "the launcher exited ($status) after the turn finished"
 fi
 
 if [ -n "$screenshot" ]; then
@@ -116,14 +144,12 @@ if [ -n "$screenshot" ]; then
 fi
 
 if [ -n "$send" ]; then
-  kill "$launcher" 2>/dev/null || true
-  grep '\[topo-debug\]' "$log" || true
-  if grep -q '\[topo-debug\] error:' "$log"; then
-    echo "==> the turn reported an error" >&2
-    exit 1
-  fi
-  grep -q '\[topo-debug\] reply:' "$log" || { echo "==> no reply came back" >&2; exit 1; }
+  grep -q '\[topo-debug\] error:' "$log" && fail "the turn reported an error"
+  grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run: " "$log" \
+    || fail "no reply to the turn this run sent (run $run)"
+  grep '\[topo-debug\]' "$log"
   echo "==> the message landed and was answered"
 else
-  wait "$launcher" || true
+  wait "$launcher" && status=0 || status=$?; launcher=""
+  [ "$status" = 0 ] || fail "the launcher exited ($status)"
 fi
