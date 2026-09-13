@@ -123,6 +123,11 @@ jobs:
           echo "Simulator: $udid ($IOS_SIMULATOR_RUNTIME)"
           echo "SIMULATOR_UDID=${udid%% *}" >> "$GITHUB_ENV"
 
+      # scripts/simulator-run.sh against a fake xcrun: every failed run exits non-zero.
+      - name: simulator-run.sh fails closed
+        if: ${{ !cancelled() }}
+        run: scripts/tests/simulator-run-test.sh
+
       - name: Generate Xcode projects (XcodeGen)
         run: |
           set -euo pipefail
