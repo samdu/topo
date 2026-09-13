@@ -67,21 +67,62 @@ extension DebugRun {
     /// the same harness the chat screen uses — the lease, the log, the Messages API — and what came
     /// back is printed. A script asserts on those lines; there is no other way to send a message to
     /// a simulator from a shell without an XCUITest target and a screenful of taps.
+    ///
+    /// The reply printed is the one to the turn this run sent, found by that turn's nonce and the
+    /// reply's parents, never merely the newest reply in the log; and it carries `TOPO_DEBUG_RUN`,
+    /// the id the script launched this run under, so a line from any other launch matches nothing.
     @MainActor
-    static func send(with harness: Harness) async {
-        guard let text = words() else { return }
+    static func send(with harness: Harness,
+                     environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        guard let text = words(environment) else { return }
+        let run = environment[runVariable] ?? ""
         say("model: \(ClaudeModel.effective(harness.model).rawValue) (setting: \(harness.model.rawValue))")
         say("sending: \(text)")
-        await harness.send(text)
+        let nonce = harness.willSend(text)
+        await harness.retry()
         await harness.refresh()
         if let error = harness.error {
             say("error: \(error)")
         }
-        if let reply = harness.turns.last(where: { $0.role == .assistant }) {
-            say("reply: \(reply.text.replacingOccurrences(of: "\n", with: " "))")
-        }
+        say(line(for: answer(to: nonce, in: harness.turns), nonce: nonce, run: run))
         say("turns in the log: \(harness.turns.count)")
         say("done")
+    }
+
+    static let runVariable = "TOPO_DEBUG_RUN"
+
+    /// Where the turn sent under a nonce stands in the log.
+    enum Answer: Equatable {
+        /// No person's turn carries the nonce: the words never reached the log.
+        case notInLog
+        /// The person's turn is in the log and nothing answers it.
+        case unanswered(Turn)
+        /// The person's turn and the first reply that names it as a parent.
+        case answered(Turn, reply: Turn)
+    }
+
+    /// The reply to the person's turn appended under `nonce`: an assistant turn continuing from
+    /// that turn, whether it is its only parent (`TurnRunner.run`) or one of the heads a reply
+    /// joins (`answerPending`). A reply to any other turn, older or newer, is not an answer to it.
+    static func answer(to nonce: String, in turns: [Turn]) -> Answer {
+        guard !nonce.isEmpty,
+              let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return .notInLog }
+        guard let reply = turns.first(where: { $0.role == .assistant && $0.parents.contains(person.ref) }) else {
+            return .unanswered(person)
+        }
+        return .answered(person, reply: reply)
+    }
+
+    /// The line `scripts/simulator-run.sh` asserts on. Only `reply to <ref> in run <run>: ` passes.
+    static func line(for answer: Answer, nonce: String, run: String) -> String {
+        switch answer {
+        case .notInLog:
+            "not in the log: no turn under \(nonce) in run \(run)"
+        case .unanswered(let person):
+            "no reply to \(person.ref) in run \(run)"
+        case .answered(let person, let reply):
+            "reply to \(person.ref) in run \(run): \(reply.text.replacingOccurrences(of: "\n", with: " "))"
+        }
     }
 
     /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:

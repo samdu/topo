@@ -79,6 +79,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: swift --version
+      # scripts/simulator-run.sh against a fake xcrun: every failed run exits non-zero.
+      - name: simulator-run.sh fails closed
+        run: scripts/tests/simulator-run-test.sh
       # Every package under Packages/ runs its suite; a tree with none has
       # nothing to test, which is a notice rather than a failure.
       - name: swift test (Packages/*)
