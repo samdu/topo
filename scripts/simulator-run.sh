@@ -4,6 +4,7 @@
 #
 #   scripts/simulator-run.sh                        # build, boot, install, launch signed in
 #   scripts/simulator-run.sh --send "hello"         # ... and send one turn, asserting the reply
+#   scripts/simulator-run.sh --press-mic            # ... after pressing the microphone (TopoUITests)
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh
@@ -31,12 +32,14 @@ send=""
 screenshot=""
 erase=no
 build=yes
+pressmic=no
 timeout="${TIMEOUT:-180}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --device) device="$2"; shift 2 ;;
     --send) send="$2"; shift 2 ;;
+    --press-mic) pressmic=yes; shift ;;
     --screenshot) screenshot="$2"; shift 2 ;;
     --erase) erase=yes; shift ;;
     --no-build) build=no; shift ;;
@@ -66,6 +69,16 @@ fi
 
 app="$derived/Build/Products/Debug-iphonesimulator/Topo.app"
 [ -d "$app" ] || { echo "no app at $app; build first" >&2; exit 1; }
+
+if [ "$pressmic" = yes ]; then
+  # The XCUITest that taps, holds and releases the microphone (Tests/ClientUI), on this device.
+  # It launches the app signed in with a placeholder token, which the launch below replaces with
+  # the real one; docs/simulator.md says what the press reaches and what it cannot.
+  echo "==> pressing the microphone"
+  xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
+    -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
+    -only-testing:TopoUITests
+fi
 
 # The token, read once into a variable and never echoed. `set -u` makes an unset one an error
 # rather than an empty header the API answers 401 to.

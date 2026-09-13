@@ -35,11 +35,26 @@ What it does, in order: builds the `Topo` scheme Debug for the named simulator (
 
 The turn is a real one: it spends Sam's subscription (a Haiku turn, so barely) and it appends to the simulator account's Topo transcript in the development container, which is the point — it is the path the phone takes.
 
+## Pressing the microphone
+
+The microphone press is covered by an XCUITest, `TopoUITests` (`Tests/ClientUI/MicrophonePressTests.swift`), which is what `simctl` alone cannot reach: it drives the running app, taps through the permission prompts on SpringBoard, and taps, holds and releases the button on the chat screen, holding after each that the app is still running and the button is back at rest. A crash on the press — an instant one included — is an app that is no longer `runningForeground`, whichever layer it came from: this catches a trap or an Objective-C exception that `VoiceInput.begin`'s `do`/`catch` never sees, not only a Swift error. The test is in the `Topo` scheme's test action, so the PR check runs it beside the unit suite; `scripts/simulator-run.sh --press-mic` runs it by hand on buddybox.
+
+It launches the app signed in with a placeholder token (a press in the simulator hears nothing, so nothing is sent and the token never reaches the API) and past the first-run question, straight to the chat screen.
+
+Two launches, one per branch of `VoiceInput.begin`:
+
+- **The fallback branch, `SFSpeechRecognizer`'s**, which is the one a real simulator takes anyway.
+- **The on-device branch**, over `TOPO_DEBUG_EAR=stub` (`DebugRun.ear`): an `Ear` resident without a model, so the press installs the input tap, feeds `SampleSink`, runs the caption loop and decodes at the release — the whole on-device path — over an engine that hears nothing.
+
+### What the press cannot reach here
+
+**The simulator has no Metal, so neither Parakeet nor Pocket is ever resident on it.** That is the honest limit of this coverage: the on-device *code path* runs, but the CoreML decode itself, and any trap inside FluidAudio's `transcribe` or `VocabularyBoostingSession`, is out of reach in a simulator and only a real device exercises it. Pocket TTS is the same — `Voice.prepare` fails with "no Metal in the simulator", so the speaker always takes `AVSpeechSynthesizer`. The stub stands in for the model so the app's own on-device branch is tested; the model's own behaviour is not.
+
 ## What a shell cannot reach
 
-`simctl` has no tap. It boots a device, installs and launches an app, and captures the screen, and there is no command in it that touches what is on that screen; System Events cannot see the Simulator's window either, so an AppleScript UI script finds nothing to click. Anything behind a gesture is therefore out of reach from a shell, screenshots included — a screen that is only arrived at by tapping cannot be arrived at, so `--screenshot` captures whatever the app came up on and nothing further in.
+`simctl` has no tap. It boots a device, installs and launches an app, and captures the screen, and there is no command in it that touches what is on that screen; System Events cannot see the Simulator's window either, so an AppleScript UI script finds nothing to click. Anything behind a gesture is out of reach from a *shell* — which is why the microphone press is an XCUITest (above) rather than a `simctl` step; screenshots are the same, so `--screenshot` captures whatever the app came up on and nothing further in.
 
-That is the shape of the whole path: what a run can exercise is what the launch environment can drive — the sign-in `DebugRun` writes, the one turn `TOPO_DEBUG_SEND` takes — and everything else is for a person at the Simulator on buddybox.
+That is the shape of the whole shell path: what a run can exercise from a shell is what the launch environment can drive — the sign-in `DebugRun` writes, the one turn `TOPO_DEBUG_SEND` takes — and the gestures are the XCUITest's or a person's at the Simulator on buddybox.
 
 ## What needs a person
 

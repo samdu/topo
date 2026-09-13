@@ -150,6 +150,19 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tests
+  # The one test that presses the microphone: an XCUITest that launches the iOS
+  # app in the simulator and taps, holds and releases the button. In the Topo
+  # scheme's test action, so the PR check runs it with the suite above.
+  TopoUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/ClientUI
+    dependencies:
+      - target: Topo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.uitests
 
   TopoHub:
     type: application
@@ -196,11 +209,11 @@ targets:
 schemes:
   Topo:
     build:
-      targets: { Topo: all, TopoTests: [test] }
+      targets: { Topo: all, TopoTests: [test], TopoUITests: [test] }
     run: { config: Debug }
     test:
       config: Debug
-      targets: [TopoTests]
+      targets: [TopoTests, TopoUITests]
   TopoWatch:
     build:
       targets: { TopoWatch: all }

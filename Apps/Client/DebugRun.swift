@@ -15,6 +15,7 @@ enum DebugRun {
     static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
     static let lifetimeVariable = "TOPO_CLAUDE_SETUP_TOKEN_DAYS"
     static let sendVariable = "TOPO_DEBUG_SEND"
+    static let earVariable = "TOPO_DEBUG_EAR"
 
     /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
     /// the app comes up past the sign-in screen. Does nothing when the variable is absent, which is
@@ -80,6 +81,28 @@ extension DebugRun {
         }
         say("turns in the log: \(harness.turns.count)")
         say("done")
+    }
+
+    /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:
+    /// a press takes the on-device branch of `VoiceInput` (the tap, the sample sink, the caption
+    /// loop, the decode at the release) over an engine that hears nothing, which is how the UI
+    /// test reaches that branch in a simulator, where Parakeet never loads for want of Metal.
+    /// Any other launch gets the real ear.
+    @MainActor
+    static func ear(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Ear {
+        guard environment[earVariable] == "stub" else { return Ear() }
+        let ear = Ear(engine: StubEngine())
+        let nowhere = URL(fileURLWithPath: "/dev/null")
+        ear.load(parakeet: nowhere, ctc: nowhere)
+        say("ear: a stub, resident without a model")
+        return ear
+    }
+
+    /// Loads nothing, builds no session, hears nothing.
+    struct StubEngine: SpeechEngine {
+        func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+        func rebuild(terms: [String], version: Int) async throws {}
+        func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
     }
 }
 #endif

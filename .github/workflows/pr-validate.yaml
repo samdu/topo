@@ -120,9 +120,11 @@ jobs:
             -scheme Womble \
             -destination "platform=iOS Simulator,id=$udid"
 
-      # The app targets' own suite. It is hosted by the iOS app and covers
-      # the code the watch and TV builds share with the phone, so it runs on
-      # an iPhone simulator whatever the runner's Xcode ships.
+      # The app targets' own suite, and the UI test that presses the
+      # microphone (TopoUITests, in the scheme's test action). The suite is
+      # hosted by the iOS app and covers the code the watch and TV builds
+      # share with the phone, so both run on an iPhone simulator whatever the
+      # runner's Xcode ships.
       - name: xcodebuild test (Topo)
         run: |
           set -euo pipefail

@@ -163,7 +163,14 @@ final class VoiceInput {
         finalArrived = false
         defer { if generation == mine { starting = false } }
         guard await AVAudioApplication.requestRecordPermission() else { denied = true; owner = nil; return }
-        let speech = await withCheckedContinuation { c in SFSpeechRecognizer.requestAuthorization { c.resume(returning: $0) } }
+        // Every block handed to the system from here is `@Sendable`, and it is load-bearing: TCC
+        // answers this one on a global queue and the tap block below runs on the audio thread.
+        // A closure formed on the main actor without `@Sendable` is main-actor-isolated by
+        // inference, and Swift 6 opens it with an executor check that traps off the main thread
+        // (`dispatch_assert_queue` under `swift_task_isCurrentExecutor`), which no `catch` sees.
+        let speech = await withCheckedContinuation { c in
+            SFSpeechRecognizer.requestAuthorization { @Sendable status in c.resume(returning: status) }
+        }
         // Released or cancelled while the prompts were up: start nothing.
         guard generation == mine else { return }
         guard speech == .authorized else { denied = true; owner = nil; return }
@@ -187,13 +194,20 @@ final class VoiceInput {
             if local {
                 let sink = sink
                 sink.reset()
-                input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in sink.append(buffer) }
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
+                    sink.append(buffer)
+                }
             } else {
                 let request = SFSpeechAudioBufferRecognitionRequest()
                 request.shouldReportPartialResults = true
                 request.requiresOnDeviceRecognition = recogniser == .appleOnDevice
                 self.request = request
-                input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+                // The request is not Sendable, but `append` is made for the tap's thread: it is
+                // the one call Apple's own push-to-talk sample makes from a tap block.
+                nonisolated(unsafe) let fed = request
+                input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
+                    fed.append(buffer)
+                }
             }
             engine.prepare()
             try engine.start()

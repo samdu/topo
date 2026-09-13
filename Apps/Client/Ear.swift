@@ -94,11 +94,12 @@ final class Ear {
     /// Asks for the models, downloading whatever this phone lacks, and loads them once every
     /// file is on disk. Idempotent, and called on every foreground so that they are resident by
     /// the first press and a download that failed is tried again; a press that beats the load
-    /// uses the fallback.
+    /// uses the fallback. An ear that is loading or resident has its files and asks for nothing.
     func prepare() {
+        guard state != .loading, state != .ready else { return }
         let downloads = ModelDownloads.shared
         downloads.start(Self.models)
-        guard state == .cold || state == .failed else { return }
+        guard state != .fetching else { return }
         state = .fetching
         trouble = nil
         downloads.whenPresent(Self.models) { [weak self] in
