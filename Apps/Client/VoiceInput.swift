@@ -155,7 +155,12 @@ final class VoiceInput {
 
     /// The recogniser ended the session on its own: the words it heard are kept for the owner
     /// to send, and the microphone is released as on a release.
-    private func endedByRecogniser(_ gate: Gate) {
+    private func endedByRecogniser(_ gate: Gate, error: String?) {
+        #if DEBUG
+        capture.ended = "recogniser"
+        capture.recogniserError = error
+        capture.heard = text
+        #endif
         let heard = text
         generation += 1
         text = ""
@@ -266,13 +271,14 @@ final class VoiceInput {
                     let heard = result?.bestTranscription.formattedString
                     let final = result?.isFinal == true
                     let failed = error != nil
+                    let failure = error.map { "\($0)" }
                     Task { @MainActor in
                         guard let self, self.generation == mine else { return }
                         if let heard { self.text = heard }
                         if final { self.finalArrived = true }
                         if failed {
                             self.finalArrived = true
-                            if !self.ending { self.endedByRecogniser(gate) }
+                            if !self.ending { self.endedByRecogniser(gate, error: failure) }
                         }
                     }
                 }
@@ -317,13 +323,13 @@ final class VoiceInput {
         if engine.isRunning { engine.stop() }
         var heard: String
         #if DEBUG
-        var delivered = meter.snapshot()
+        capture.ended = "release"
         #endif
         if recogniser == .parakeet {
             let samples = sink.take()
             #if DEBUG
-            delivered.sunk = samples.count
-            delivered.sinkRMS = TapMeter.rms(samples)
+            capture.sunk = samples.count
+            capture.sinkRMS = TapMeter.rms(samples)
             #endif
             if samples.isEmpty {
                 heard = ""
@@ -343,8 +349,7 @@ final class VoiceInput {
             heard = text
         }
         #if DEBUG
-        delivered.heard = heard
-        capture = delivered
+        capture.heard = heard
         #endif
         guard generation == mine else { ending = false; return "" }
         generation += 1
@@ -401,6 +406,9 @@ final class VoiceInput {
     /// whether or not the engine ran, so the next start does not install a second one.
     private func tearDown() {
         let gate = owner
+        #if DEBUG
+        capture.delivered(meter.snapshot())
+        #endif
         captioner?.cancel()
         captioner = nil
         engine.inputNode.removeTap(onBus: 0)
@@ -427,9 +435,10 @@ final class VoiceInput {
 extension VoiceInput {
     /// What one session's microphone delivered. `buffers`, `frames` and `tapRMS` are counted
     /// in the tap block itself, so they are what the input actually handed over after the
-    /// engine started, not that a tap was installed; `sunk` and `sinkRMS` are what reached the
-    /// sample sink at the ear's rate (the on-device branch only); `heard` is what the release
-    /// returned for sending.
+    /// engine started, not that a tap was installed, and are taken at the teardown however the
+    /// session ended; `sunk` and `sinkRMS` are what reached the sample sink at the ear's rate
+    /// (the on-device branch only); `heard` is what the session heard; `ended` is "release" or
+    /// "recogniser" (the recogniser ended it on its own, with `recogniserError` when it failed).
     struct Capture: Codable, Equatable {
         var buffers = 0
         var frames = 0
@@ -438,6 +447,15 @@ extension VoiceInput {
         var sunk = 0
         var sinkRMS = 0.0
         var heard = ""
+        var ended = ""
+        var recogniserError: String?
+
+        mutating func delivered(_ tap: Capture) {
+            buffers = tap.buffers
+            frames = tap.frames
+            rate = tap.rate
+            tapRMS = tap.tapRMS
+        }
     }
 
     /// The button's debug-only accessibility value, which the UI test decodes: the counters,

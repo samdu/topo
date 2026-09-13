@@ -23,8 +23,9 @@ import XCTest
 /// - `TOPO_UITEST_AUDIO_INPUT=1`: the host has an audio input (CI's loopback device). A refused
 ///   hold is then a failure, not a skip.
 /// - `TOPO_UITEST_EAR_MODELS=<dir>`: Parakeet's model directories, for the test in which the
-///   real recogniser hears `purple-elephants.wav`, played by this runner into the host's
-///   output during the hold and captured back through the simulator's microphone.
+///   real recogniser hears `purple-elephants.wav` through the simulator's microphone. The lane
+///   plays the fixture on a loop into the host's input (CI: `afplay` into the loopback device);
+///   the simulator's own output does not reach a host loopback, so the runner cannot play it.
 ///
 /// The app is launched signed in with a placeholder token (`DebugRun.signIn` takes it from the
 /// environment) and past the first-run question, which is the chat screen with its microphone,
@@ -59,14 +60,17 @@ final class MicrophonePressTests: XCTestCase {
         try tapHoldAndRelease(app, branch: .fallback)
     }
 
-    /// The whole path: fixture audio played into the host's output, captured by the simulator's
-    /// microphone, converted by the sink, and recognised by Parakeet as the fixture's words.
+    /// The whole path: fixture audio looping on the host's input, captured by the simulator's
+    /// microphone, converted by the sink, and recognised by Parakeet as the fixture's words. The
+    /// hold is two loops and a second long, so it spans at least one whole phrase wherever in
+    /// the loop it starts.
     func testParakeetHearsTheFixtureThroughTheMicrophone() throws {
         guard let models = environment["TOPO_UITEST_EAR_MODELS"], !models.isEmpty else {
             throw XCTSkip("missing coverage: no Parakeet models on this lane (TOPO_UITEST_EAR_MODELS), so no recogniser turned microphone audio into words")
         }
         let app = launch(environment: ["TOPO_DEBUG_EAR": models])
-        let report = try tapHoldAndRelease(app, branch: .parakeet, playing: try fixture())
+        let loop = try fixtureDuration()
+        let report = try tapHoldAndRelease(app, branch: .parakeet, hold: 2 * loop + 1)
         XCTAssertGreaterThan(report.capture.tapRMS, 0.005, "the fixture's energy reached the input tap, not silence: \(report.raw)")
         XCTAssertGreaterThan(report.capture.sinkRMS, 0.005, "the fixture's energy reached the sink: \(report.raw)")
         let heard = Self.words(report.capture.heard)
@@ -107,7 +111,7 @@ final class MicrophonePressTests: XCTestCase {
     }
 
     @discardableResult
-    private func tapHoldAndRelease(_ app: XCUIApplication, branch: Branch, playing fixture: URL? = nil) throws -> Report {
+    private func tapHoldAndRelease(_ app: XCUIApplication, branch: Branch, hold: TimeInterval = 1.5) throws -> Report {
         let mic = microphone(in: app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
 
@@ -125,9 +129,12 @@ final class MicrophonePressTests: XCTestCase {
 
         // The first press on a fresh simulator meets the microphone and speech prompts, and its
         // release while they are up starts nothing (`VoiceInput.pressUp` during `starting`).
+        // On a simulator that has answered them, the press opens the microphone, and a press
+        // whose release lands inside the tap limit leaves it open hands-free: close it.
         mic.press(forDuration: 0.5)
         allowPrompts()
         XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompts")
+        closeHandsFree(app, mic)
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the tap")
 
         // A tap. Released before the microphone is running it starts nothing, by design
@@ -137,23 +144,12 @@ final class MicrophonePressTests: XCTestCase {
         mic.press(forDuration: 0.1)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the tap")
         try waitForReport(app, timeout: 15, "the tap reached VoiceInput") { $0.presses == beforeTap.presses + 1 }
-        if app.images["Listening; press to send"].waitForExistence(timeout: 3) {
-            mic.press(forDuration: 0.1)
-            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived closing the hands-free session")
-        }
+        closeHandsFree(app, mic)
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the hold")
         let before = try report(app)
 
-        // A hold, longer than the start and past the tap limit, then the release. With a
-        // fixture, it plays from this runner into the host's output from the moment of the
-        // press, and the hold outlasts it.
-        var player: AVAudioPlayer?
-        if let fixture {
-            player = try AVAudioPlayer(contentsOf: fixture)
-            XCTAssertTrue(player?.play() == true, "the fixture started playing")
-        }
-        mic.press(forDuration: fixture == nil ? 1.5 : (player?.duration ?? 0) + 1.5)
-        player?.stop()
+        // A hold, longer than the start and past the tap limit, then the release.
+        mic.press(forDuration: hold)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the hold")
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 60), "the session ended and the button is back to rest")
         let after = try waitForReport(app, timeout: 60, "the hold reached VoiceInput") { $0.presses == before.presses + 1 }
@@ -187,8 +183,9 @@ final class MicrophonePressTests: XCTestCase {
             XCTAssertEqual(Double(capture.sunk), expected, accuracy: max(expected * 0.1, 2_048),
                            "the sink holds what the tap delivered, at the ear's rate: \(after.raw)")
         }
-        record(String(format: "%@; microphone ran: %d buffers, %.2f s at %.0f Hz, tap RMS %.4f, %d samples sunk, heard \"%@\"",
-                      branch.rawValue, capture.buffers, seconds, capture.rate, capture.tapRMS, capture.sunk, capture.heard), after)
+        record(String(format: "%@; microphone ran: %d buffers, %.2f s at %.0f Hz, tap RMS %.4f, %d samples sunk, ended by %@%@, heard \"%@\"",
+                      branch.rawValue, capture.buffers, seconds, capture.rate, capture.tapRMS, capture.sunk, capture.ended,
+                      capture.recogniserError.map { " (\($0))" } ?? "", capture.heard), after)
         return after
     }
 
@@ -216,6 +213,8 @@ final class MicrophonePressTests: XCTestCase {
         var sunk: UInt = 0
         var sinkRMS = 0.0
         var heard = ""
+        var ended = ""
+        var recogniserError: String?
     }
 
     /// The report, strictly: a value that is not a whole `Report` throws, and the test fails.
@@ -266,9 +265,20 @@ final class MicrophonePressTests: XCTestCase {
         print("[microphone] \(summary) — \(report.raw)")
     }
 
-    private func fixture() throws -> URL {
-        try XCTUnwrap(Bundle(for: Self.self).url(forResource: "purple-elephants", withExtension: "wav"),
-                      "purple-elephants.wav is in the UI test bundle")
+    /// A press whose release landed inside the tap limit left the microphone open until the
+    /// next press; that press closes it.
+    private func closeHandsFree(_ app: XCUIApplication, _ mic: XCUIElement) {
+        guard app.images["Listening; press to send"].waitForExistence(timeout: 3) else { return }
+        mic.press(forDuration: 0.1)
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived closing the hands-free session")
+    }
+
+    /// The fixture's length, from the copy in this bundle, which is the file the lane loops.
+    private func fixtureDuration() throws -> TimeInterval {
+        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "purple-elephants", withExtension: "wav"),
+                                "purple-elephants.wav is in the UI test bundle")
+        let file = try AVAudioFile(forReading: url)
+        return Double(file.length) / file.fileFormat.sampleRate
     }
 
     /// Lowercased words, punctuation dropped, digits spelled for the fixture's one number.

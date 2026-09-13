@@ -42,6 +42,7 @@ jobs:
           SwitchAudioSource -t input -s "BlackHole 2ch"
           SwitchAudioSource -t output -s "BlackHole 2ch"
           test "$(SwitchAudioSource -c -t input)" = "BlackHole 2ch"
+          nohup bash -c 'while true; do afplay Tests/Fixtures/purple-elephants.wav; done' >/dev/null 2>&1 &
           test "$(SwitchAudioSource -c -t output)" = "BlackHole 2ch"
           system_profiler SPAudioDataType || true
           echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
@@ -93,6 +94,7 @@ jobs:
           SwitchAudioSource -t input -s "BlackHole 2ch"
           SwitchAudioSource -t output -s "BlackHole 2ch"
           test "$(SwitchAudioSource -c -t input)" = "BlackHole 2ch"
+          nohup bash -c 'while true; do afplay Tests/Fixtures/purple-elephants.wav; done' >/dev/null 2>&1 &
           echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
       - name: Cache the ear's models
         uses: actions/cache@v4
