@@ -4,7 +4,8 @@ import XCTest
 /// objects and `scripts/simulator-run.sh` sends a typed turn, and a press is a gesture on the
 /// running app, which only an XCUITest makes. What the test holds is that the app is still
 /// running, on the chat screen with the button back to "Hold to talk", after a tap, a hold and a
-/// release. A crash on the press is an app that is no longer running, whatever the cause, which
+/// release, and that the hold's session ran its microphone (`VoiceInput.sessions`, read from the
+/// button's debug-only accessibility value). A crash on the press is an app that is no longer running, whatever the cause, which
 /// is the class `VoiceInput.begin`'s `do`/`catch` cannot see: an Objective-C exception out of
 /// `installTap`, or a runtime trap.
 ///
@@ -58,22 +59,50 @@ final class MicrophonePressTests: XCTestCase {
         allowPrompts()
         XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompts")
 
-        // A tap opens the microphone until the next press: the tap is on the input, the engine
-        // is running and buffers are arriving for as long as this waits.
+        // A tap. Released before the microphone is running it starts nothing, by design
+        // (`VoiceInput.pressUp` during `starting`), and a synthesised tap is shorter than the
+        // permission hops and the engine start, so this holds only that the press was survived;
+        // if it did open the microphone hands-free, the next press closes it.
         mic.press(forDuration: 0.1)
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the press")
-        _ = app.images["Listening; press to send"].waitForExistence(timeout: 3)
-        XCTAssertEqual(app.state, .runningForeground, "the app survived two seconds of listening")
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the tap")
+        if app.images["Listening; press to send"].waitForExistence(timeout: 3) {
+            mic.press(forDuration: 0.1)
+            XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived closing the hands-free session")
+        }
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the hold")
+        let before = report(app)
 
-        // The next press ends it: the audio is taken and decoded, and nothing heard sends nothing.
-        mic.press(forDuration: 0.1)
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the release")
-
-        // A hold: down past the tap limit, then up.
+        // A hold, longer than the start and past the tap limit, then the release: the tap is on
+        // the input and buffers arrive for the length of it, then the audio is taken and
+        // decoded, and nothing heard sends nothing. The count is what proves the microphone ran.
         mic.press(forDuration: 1.5)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the hold")
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the session ended and the button is back to rest")
+        // The microphone ran, or the one refusal a simulator host may have: no audio input at
+        // all, a Mac without a microphone. A refusal for any other reason (a permission, the
+        // recogniser, the engine) is a fault on the press and fails here.
+        let after = report(app)
+        if after.sessions == before.sessions + 1 {
+            XCTAssertNil(after.refusal, "the hold's session ran its microphone: \(after.raw)")
+        } else {
+            XCTAssertEqual(after.refusal, "no audio input", "the hold started no microphone: \(after.raw)")
+        }
         XCTAssertEqual(app.state, .runningForeground)
+    }
+
+    /// Sessions whose microphone ran, and why the last press started none, from the button's
+    /// debug-only accessibility value ("<n> heard[; <refusal>]").
+    private struct Report {
+        var sessions: Int
+        var refusal: String?
+        var raw: String
+    }
+
+    private func report(_ app: XCUIApplication) -> Report {
+        let raw = microphone(in: app).value as? String ?? ""
+        let parts = raw.components(separatedBy: "; ")
+        let sessions = Int(parts[0].split(separator: " ").first ?? "") ?? -1
+        return Report(sessions: sessions, refusal: parts.count > 1 ? parts[1] : nil, raw: raw)
     }
 
     /// Taps through whatever permission prompts are up, microphone then speech. Nothing to do on
