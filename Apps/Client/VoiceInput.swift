@@ -47,11 +47,15 @@ final class VoiceInput {
     private(set) var handsFree = false
     /// Which recogniser the current or last session used.
     private(set) var recogniser: Recogniser?
-    /// Sessions whose microphone ran: counted when the engine starts, so a press that was
-    /// cancelled during the prompts or refused at the input is not one. The UI test reads it.
+    /// Presses that reached `begin`, whatever became of them, and sessions whose microphone
+    /// ran, counted when the engine starts, so a press cancelled during the prompts or refused
+    /// at the input is a press and not a session. The UI test reads both: the first proves a
+    /// gesture was handled, the second that it opened the microphone.
+    private(set) var presses = 0
     private(set) var sessions = 0
-    /// Why the last press started no microphone, in words; nil once one starts. The UI test
-    /// reads it too, to tell a host with no input from a refusal that is a fault.
+    /// Why the last press started no microphone, in words; nil while it is running, and from
+    /// the next press until that one is refused. The UI test reads it too, to tell a host with
+    /// no input from a refusal that is a fault.
     private(set) var refusal: String?
     /// The refusal on a host whose audio session has no input right now: a Mac with no
     /// microphone running the simulator, or a session that is playback-only.
@@ -163,6 +167,8 @@ final class VoiceInput {
     }
 
     private func begin(as gate: Gate) async {
+        presses += 1
+        refusal = nil
         generation += 1
         let mine = generation
         starting = true
@@ -231,7 +237,6 @@ final class VoiceInput {
             try engine.start()
             listening = true
             sessions += 1
-            refusal = nil
             audio.wantScreenAwake(true, for: .listening)
             if local {
                 startCaptions(for: mine)

@@ -183,7 +183,7 @@ struct ChatView: View {
                 // What the UI test asserts on after a hold: that a session's microphone ran, or
                 // why none did. A debug build only, so VoiceOver on a release build hears the
                 // label alone.
-                .debugAccessibilityValue("\(voice.sessions) heard" + (voice.refusal.map { "; \($0)" } ?? ""))
+                .debugAccessibilityValue("\(voice.presses) pressed, \(voice.sessions) heard" + (voice.refusal.map { "; \($0)" } ?? ""))
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }
