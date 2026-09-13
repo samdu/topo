@@ -1,4 +1,4 @@
-# PROBE — do not merge: the audio lane's feeder is killed as the Parakeet test starts.
+# PROBE — do not merge: host-side metering of the audio lane, UI suite iterated.
 # The merge gate. The Swift suite runs first; Codex reviews every non-draft PR
 # whose suite is green, and its verdict is what gates. `review_gate` and `test`
 # are the required status checks on main, and automerge.yaml merges on this
@@ -176,19 +176,13 @@ jobs:
             echo "::error::No iPhone simulator available on this runner."
             exit 1
           fi
-          # PROBE: kill the lane's feeder the moment the Parakeet test starts.
-          log="$RUNNER_TEMP/topo-test.log"
-          : > "$log"
-          (
-            until grep -qF "testParakeetHearsTheFixtureThroughTheMicrophone]' started" "$log"; do sleep 1; done
-            feeder="$(cat "$RUNNER_TEMP/audio-lane/feeder.pid")"
-            kill "$feeder"; pkill -x afplay || true
-            echo "::notice::PROBE killed the audio lane's feeder ($feeder) and afplay as the Parakeet test started"
-          ) &
+          # PROBE: no kill; the UI suite three times over, so a silent lane has room to recur.
           xcodebuild test \
             -project Topo.xcodeproj \
             -scheme Topo \
-            -destination "platform=iOS Simulator,id=$udid" 2>&1 | tee "$log"
+            -destination "platform=iOS Simulator,id=$udid" \
+            -only-testing:TopoUITests \
+            -test-iterations 3 -retry-tests-on-failure NO
 
       - name: Audio lane holds after the microphone test
         if: always() && steps.audio_lane.outcome == 'success'

@@ -24,6 +24,9 @@ state="${RUNNER_TEMP:-/tmp}/audio-lane"
 pidfile="$state/feeder.pid"
 heartbeat="$state/heartbeat"
 log="$state/feeder.log"
+# PROBE: every pass, with the host meter's reading of the default input while afplay plays.
+trace="$state/trace.log"
+meter="$state/ci-audio-meter"
 # One pass is a 2.9 s play plus the re-pin; a heartbeat older than this is a feeder that stopped.
 stale_after=20
 
@@ -41,6 +44,13 @@ feed() {
     date +%s > "$heartbeat"
     afplay "$fixture" &
     player=$!
+    pass=$(( ${pass:-0} + 1 ))
+    if [ $(( pass % 3 )) = 1 ] && [ -x "$meter" ]; then
+      sleep 0.8
+      echo "$(now) pass $pass afplay $player in=\"$input\" out=\"$output\" $("$meter" 1 2>&1 | tail -1)" >> "$trace"
+    else
+      echo "$(now) pass $pass afplay $player" >> "$trace"
+    fi
     for _ in $(seq 60); do
       kill -0 "$player" 2>/dev/null || break
       sleep 0.1
@@ -61,6 +71,8 @@ feed() {
 start() {
   mkdir -p "$state"
   : > "$log"
+  : > "$trace"
+  swiftc -O "$root/scripts/ci-audio-meter.swift" -o "$meter" || echo "::warning::PROBE: the host meter did not build"
   brew install --quiet blackhole-2ch switchaudio-osx
   sudo killall coreaudiod
   for _ in $(seq 30); do
@@ -98,6 +110,14 @@ check() {
   output="$(SwitchAudioSource -c -t output 2>&1 || true)"
   [ "$input" = "$device" ] || failures+=("the default input is \"$input\", not $device")
   [ "$output" = "$device" ] || failures+=("the default output is \"$output\", not $device")
+  if [ -x "$meter" ]; then
+    echo "PROBE host meter, 2 s on the default input $when: $("$meter" 2 2>&1 | tail -1)"
+  fi
+  if [ -s "$trace" ]; then
+    echo "::group::PROBE feeder trace ($when)"
+    cat "$trace"
+    echo "::endgroup::"
+  fi
   if [ -s "$log" ]; then
     while IFS= read -r line; do echo "::warning::audio lane: $line"; done < "$log"
   fi
