@@ -1,43 +1,100 @@
+import AVFoundation
 import XCTest
 
 /// The microphone, pressed. Nothing else in the suite touches it: the client tests exercise
 /// objects and `scripts/simulator-run.sh` sends a typed turn, and a press is a gesture on the
-/// running app, which only an XCUITest makes. What the test holds is that the app is still
-/// running, on the chat screen with the button back to "Hold to talk", after a tap, a hold and a
-/// release, and that the hold's session ran its microphone (`VoiceInput.sessions`, read from the
-/// button's debug-only accessibility value). A crash on the press is an app that is no longer running, whatever the cause, which
-/// is the class `VoiceInput.begin`'s `do`/`catch` cannot see: an Objective-C exception out of
-/// `installTap`, or a runtime trap.
+/// running app, which only an XCUITest makes. After a tap, a hold and a release the test holds
+/// that the app is still running and back at rest, that each press reached `VoiceInput`, which
+/// branch the press took, and what the microphone delivered: buffers counted inside the input
+/// tap after the engine started, and on the on-device branch the samples that reached the
+/// sink. All of it is read from the button's debug-only accessibility value, a JSON
+/// `VoiceInput.Report`, decoded strictly. A crash on the press is an app that is no longer
+/// running, whatever the cause: an Objective-C exception out of `installTap`, or a runtime trap.
+///
+/// Every success records its branch (the ear or the fallback; the microphone ran, or was
+/// refused and why) as an activity with the report attached, so the result bundle says what
+/// was tested. A host with no audio input cannot run the microphone at all: the press is
+/// refused at `VoiceInput`'s input guard, before the tap, and the test ends in `XCTSkip` naming
+/// the coverage that is missing, never in a pass.
+///
+/// The lane is declared by the test runner's environment (`TEST_RUNNER_`-prefixed on the
+/// `xcodebuild` command line):
+///
+/// - `TOPO_UITEST_AUDIO_INPUT=1`: the host has an audio input (CI's loopback device). A refused
+///   hold is then a failure, not a skip.
+/// - `TOPO_UITEST_EAR_MODELS=<dir>`: Parakeet's model directories, for the test in which the
+///   real recogniser hears `purple-elephants.wav`, played by this runner into the host's
+///   output during the hold and captured back through the simulator's microphone.
 ///
 /// The app is launched signed in with a placeholder token (`DebugRun.signIn` takes it from the
-/// environment; a press in the simulator hears nothing, so nothing is sent and the token is never
-/// presented to the API) and past the first-run question, which is the chat screen with its
-/// microphone. The two permission prompts of a fresh simulator are answered through SpringBoard.
-///
-/// Two launches, one per branch of `VoiceInput.begin`. The simulator has no Metal, so Parakeet is
-/// never resident there: the on-device branch runs over `TOPO_DEBUG_EAR=stub` (the tap, the
-/// sample sink's conversion off the audio thread, the caption loop, the decode at the release,
-/// with an engine that hears nothing) and the CoreML decode itself is out of reach. The other
-/// launch takes the fallback branch, `SFSpeechRecognizer`'s.
+/// environment) and past the first-run question, which is the chat screen with its microphone,
+/// and with `TOPO_DEBUG_KEEP_SPOKEN`, so what a press hears is never sent and the token never
+/// reaches the API. The two permission prompts of a fresh simulator are answered through
+/// SpringBoard.
 @MainActor
 final class MicrophonePressTests: XCTestCase {
+    /// The words spoken in `purple-elephants.wav`.
+    static let phrase = ["purple", "elephants", "juggle", "seven", "lanterns"]
+
+    private var environment: [String: String] { ProcessInfo.processInfo.environment }
+    private var laneHasInput: Bool { environment["TOPO_UITEST_AUDIO_INPUT"] == "1" }
+
     override func setUp() {
         continueAfterFailure = false
     }
 
-    func testAPressOnTheEarsPathLeavesTheAppRunning() {
+    /// The on-device branch over `TOPO_DEBUG_EAR=stub`: an ear resident without a model, so the
+    /// tap, the sample sink, the caption loop and the release's decode all run, over an engine
+    /// that returns no words.
+    func testAPressOnTheStubEarDeliversAudioToTheSink() throws {
         let app = launch(environment: ["TOPO_DEBUG_EAR": "stub"])
-        tapHoldAndRelease(app)
+        try tapHoldAndRelease(app, branch: .stubEar)
     }
 
-    func testAPressOnTheFallbackLeavesTheAppRunning() {
-        let app = launch(environment: [:])
-        tapHoldAndRelease(app)
+    /// The fallback branch, `SFSpeechRecognizer`'s, over `TOPO_DEBUG_EAR=loading`: an ear whose
+    /// load never finishes. Without it a host with a fast network downloads and loads Parakeet
+    /// before the hold, and the press takes the on-device branch instead.
+    func testAPressOnTheFallbackDeliversAudioToTheRecogniser() throws {
+        let app = launch(environment: ["TOPO_DEBUG_EAR": "loading"])
+        try tapHoldAndRelease(app, branch: .fallback)
+    }
+
+    /// The whole path: fixture audio played into the host's output, captured by the simulator's
+    /// microphone, converted by the sink, and recognised by Parakeet as the fixture's words.
+    func testParakeetHearsTheFixtureThroughTheMicrophone() throws {
+        guard let models = environment["TOPO_UITEST_EAR_MODELS"], !models.isEmpty else {
+            throw XCTSkip("missing coverage: no Parakeet models on this lane (TOPO_UITEST_EAR_MODELS), so no recogniser turned microphone audio into words")
+        }
+        let app = launch(environment: ["TOPO_DEBUG_EAR": models])
+        let report = try tapHoldAndRelease(app, branch: .parakeet, playing: try fixture())
+        XCTAssertGreaterThan(report.capture.tapRMS, 0.005, "the fixture's energy reached the input tap, not silence: \(report.raw)")
+        XCTAssertGreaterThan(report.capture.sinkRMS, 0.005, "the fixture's energy reached the sink: \(report.raw)")
+        let heard = Self.words(report.capture.heard)
+        record("recognised: \"\(report.capture.heard)\"", report)
+        for word in Self.phrase {
+            XCTAssertTrue(heard.contains(word), "Parakeet heard \"\(word)\" in the fixture: \(report.raw)")
+        }
+    }
+
+    // MARK: - The press
+
+    enum Branch: String {
+        case stubEar = "on-device ear (stub engine)"
+        case parakeet = "on-device ear (Parakeet)"
+        case fallback = "fallback (SFSpeechRecognizer)"
+
+        var recognisers: Set<String> {
+            switch self {
+            case .stubEar, .parakeet: return ["parakeet"]
+            case .fallback: return ["appleOnDevice", "appleServer"]
+            }
+        }
     }
 
     private func launch(environment: [String: String]) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
+        app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment.merge(environment) { _, new in new }
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
@@ -49,66 +106,177 @@ final class MicrophonePressTests: XCTestCase {
         app.images.matching(NSPredicate(format: "label == 'Hold to talk' OR label BEGINSWITH 'Listening'")).firstMatch
     }
 
-    private func tapHoldAndRelease(_ app: XCUIApplication) {
+    @discardableResult
+    private func tapHoldAndRelease(_ app: XCUIApplication, branch: Branch, playing fixture: URL? = nil) throws -> Report {
         let mic = microphone(in: app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+
+        // The ear the launch asked for is resident before the first press, or the press would
+        // take the fallback and the branch would not be the one under test.
+        switch branch {
+        case .stubEar:
+            try waitForReport(app, timeout: 30, "the stub ear is resident") { $0.ear == "ready" }
+        case .parakeet:
+            try waitForReport(app, timeout: 600, "Parakeet is resident") { $0.ear == "ready" || $0.ear == "failed" }
+            XCTAssertEqual(try report(app).ear, "ready", "Parakeet loaded from the models directory")
+        case .fallback:
+            XCTAssertEqual(try report(app).ear, "loading", "the ear is still loading, so the press takes the fallback")
+        }
 
         // The first press on a fresh simulator meets the microphone and speech prompts, and its
         // release while they are up starts nothing (`VoiceInput.pressUp` during `starting`).
         mic.press(forDuration: 0.5)
         allowPrompts()
         XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompts")
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the tap")
 
         // A tap. Released before the microphone is running it starts nothing, by design
-        // (`VoiceInput.pressUp` during `starting`), and a synthesised tap is shorter than the
-        // permission hops and the engine start, so this holds only that the press was survived;
-        // if it did open the microphone hands-free, the next press closes it.
+        // (`VoiceInput.pressUp` during `starting`); if it did open the microphone hands-free, the
+        // next press closes it. Either way the tap is a press `VoiceInput.begin` handled.
+        let beforeTap = try report(app)
         mic.press(forDuration: 0.1)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the tap")
+        try waitForReport(app, timeout: 15, "the tap reached VoiceInput") { $0.presses == beforeTap.presses + 1 }
         if app.images["Listening; press to send"].waitForExistence(timeout: 3) {
             mic.press(forDuration: 0.1)
             XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived closing the hands-free session")
         }
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the hold")
-        let before = report(app)
+        let before = try report(app)
 
-        // A hold, longer than the start and past the tap limit, then the release: the tap is on
-        // the input and buffers arrive for the length of it, then the audio is taken and
-        // decoded, and nothing heard sends nothing. The count is what proves the microphone ran.
-        mic.press(forDuration: 1.5)
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the hold")
-        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the session ended and the button is back to rest")
-        // The hold was handled, and then the microphone ran, or the one refusal a simulator
-        // host may have: no audio input at all, a Mac without a microphone. A refusal for any
-        // other reason (a permission, the recogniser, the engine) is a fault on the press and
-        // fails here; so does a hold that never reached `VoiceInput`, whatever the refusal
-        // left over from the tap says.
-        let after = report(app)
-        XCTAssertEqual(after.presses, before.presses + 1, "the hold reached VoiceInput: \(after.raw)")
-        if after.sessions == before.sessions + 1 {
-            XCTAssertNil(after.refusal, "the hold's session ran its microphone: \(after.raw)")
-        } else {
-            XCTAssertEqual(after.refusal, "no audio input", "the hold started no microphone: \(after.raw)")
+        // A hold, longer than the start and past the tap limit, then the release. With a
+        // fixture, it plays from this runner into the host's output from the moment of the
+        // press, and the hold outlasts it.
+        var player: AVAudioPlayer?
+        if let fixture {
+            player = try AVAudioPlayer(contentsOf: fixture)
+            XCTAssertTrue(player?.play() == true, "the fixture started playing")
         }
+        mic.press(forDuration: fixture == nil ? 1.5 : (player?.duration ?? 0) + 1.5)
+        player?.stop()
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the hold")
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 60), "the session ended and the button is back to rest")
+        let after = try waitForReport(app, timeout: 60, "the hold reached VoiceInput") { $0.presses == before.presses + 1 }
         XCTAssertEqual(app.state, .runningForeground)
-        XCTFail("[mic-probe] before=\(before.raw) after=\(after.raw)")
+
+        XCTAssertTrue(branch.recognisers.contains(after.recogniser ?? "none"),
+                      "the hold took the \(branch.rawValue) branch: \(after.raw)")
+
+        guard after.refusal == nil else {
+            // Refused. The one refusal a host may have is no audio input at all; the session
+            // count stands still and nothing reached the tap.
+            XCTAssertEqual(after.refusal, "no audio input", "the hold was refused for a reason that is a fault: \(after.raw)")
+            XCTAssertEqual(after.sessions, before.sessions, "a refused hold opened no session: \(after.raw)")
+            XCTAssertEqual(after.capture, Capture(), "a refused hold delivered nothing: \(after.raw)")
+            record("\(branch.rawValue); microphone refused: no audio input", after)
+            if laneHasInput {
+                XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the hold was refused for want of one: \(after.raw)")
+            }
+            throw XCTSkip("missing coverage: this host has no audio input, so the \(branch.rawValue) branch was refused at the input guard; the tap, the buffers, the sink and the decode did not run")
+        }
+
+        // The microphone ran: one new session, and audio counted inside the tap.
+        XCTAssertEqual(after.sessions, before.sessions + 1, "the hold's session ran its microphone: \(after.raw)")
+        let capture = after.capture
+        XCTAssertGreaterThan(capture.buffers, 0, "buffers reached the input tap: \(after.raw)")
+        XCTAssertGreaterThan(capture.rate, 0, "the tap's buffers had a sample rate: \(after.raw)")
+        let seconds = Double(capture.frames) / max(capture.rate, 1)
+        XCTAssertGreaterThan(seconds, 0.5, "the tap was fed for most of the hold, not a buffer or two: \(after.raw)")
+        if branch != .fallback {
+            let expected = Double(capture.frames) * 16_000 / max(capture.rate, 1)
+            XCTAssertEqual(Double(capture.sunk), expected, accuracy: max(expected * 0.1, 2_048),
+                           "the sink holds what the tap delivered, at the ear's rate: \(after.raw)")
+        }
+        record(String(format: "%@; microphone ran: %d buffers, %.2f s at %.0f Hz, tap RMS %.4f, %d samples sunk, heard \"%@\"",
+                      branch.rawValue, capture.buffers, seconds, capture.rate, capture.tapRMS, capture.sunk, capture.heard), after)
+        return after
     }
 
-    /// Presses handled, sessions whose microphone ran, and why the last press started none,
-    /// from the button's debug-only accessibility value ("<p> pressed, <n> heard[; <refusal>]").
-    private struct Report {
-        var presses: Int
-        var sessions: Int
+    // MARK: - The report
+
+    /// `VoiceInput.Report`, as the button's accessibility value carries it. Counts are unsigned,
+    /// so a negative one fails the decode rather than reading as a number.
+    struct Report: Decodable {
+        var presses: UInt
+        var sessions: UInt
         var refusal: String?
-        var raw: String
+        var ear: String
+        var recogniser: String?
+        var capture: Capture
+        var raw = ""
+
+        enum CodingKeys: String, CodingKey { case presses, sessions, refusal, ear, recogniser, capture }
     }
 
-    private func report(_ app: XCUIApplication) -> Report {
+    struct Capture: Decodable, Equatable {
+        var buffers: UInt = 0
+        var frames: UInt = 0
+        var rate = 0.0
+        var tapRMS = 0.0
+        var sunk: UInt = 0
+        var sinkRMS = 0.0
+        var heard = ""
+    }
+
+    /// The report, strictly: a value that is not a whole `Report` throws, and the test fails.
+    private func report(_ app: XCUIApplication) throws -> Report {
         let raw = microphone(in: app).value as? String ?? ""
-        let parts = raw.components(separatedBy: "; ")
-        let counts = parts[0].components(separatedBy: ", ").map { Int($0.split(separator: " ").first ?? "") ?? -1 }
-        return Report(presses: counts.first ?? -1, sessions: counts.count > 1 ? counts[1] : -1,
-                      refusal: parts.count > 1 ? parts[1] : nil, raw: raw)
+        return try Self.decode(raw)
+    }
+
+    static func decode(_ raw: String) throws -> Report {
+        do {
+            var report = try JSONDecoder().decode(Report.self, from: Data(raw.utf8))
+            report.raw = raw
+            return report
+        } catch {
+            throw MalformedReport(raw: raw, error: "\(error)")
+        }
+    }
+
+    struct MalformedReport: Error, CustomStringConvertible {
+        var raw: String
+        var error: String
+        var description: String { "the microphone's accessibility value is not a report: \"\(raw)\" (\(error))" }
+    }
+
+    /// Polls the report until `condition` holds; fails the test with the last report if it does not.
+    @discardableResult
+    private func waitForReport(_ app: XCUIApplication, timeout: TimeInterval, _ what: String,
+                               until condition: (Report) -> Bool) throws -> Report {
+        let deadline = Date().addingTimeInterval(timeout)
+        var last = try report(app)
+        while !condition(last), Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            last = try report(app)
+        }
+        XCTAssertTrue(condition(last), "\(what): \(last.raw)")
+        return last
+    }
+
+    /// The branch this press took and what it delivered, as an activity in the log and the
+    /// result bundle, with the report attached.
+    private func record(_ summary: String, _ report: Report) {
+        XCTContext.runActivity(named: "branch: \(summary)") { activity in
+            let attachment = XCTAttachment(string: report.raw)
+            attachment.name = "microphone report"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+        print("[microphone] \(summary) — \(report.raw)")
+    }
+
+    private func fixture() throws -> URL {
+        try XCTUnwrap(Bundle(for: Self.self).url(forResource: "purple-elephants", withExtension: "wav"),
+                      "purple-elephants.wav is in the UI test bundle")
+    }
+
+    /// Lowercased words, punctuation dropped, digits spelled for the fixture's one number.
+    static func words(_ text: String) -> [String] {
+        text.lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .map { $0 == "7" ? "seven" : $0 }
     }
 
     /// Taps through whatever permission prompts are up, microphone then speech. Nothing to do on

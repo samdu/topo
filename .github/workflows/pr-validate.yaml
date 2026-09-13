@@ -1,4 +1,4 @@
-# PROBE — do not merge. What audio input does the hosted macos-26 runner's simulator have?
+# PROBE — do not merge. The microphone test's input-capable lane on the hosted macos-26 runner.
 name: PR validate
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
 jobs:
   probe:
     runs-on: macos-26
-    timeout-minutes: 75
+    timeout-minutes: 90
     defaults:
       run:
         shell: bash
@@ -16,47 +16,96 @@ jobs:
       - uses: actions/checkout@v4
       - name: Host audio, as found
         run: |
-          set -x
           sw_vers; uname -m; xcodebuild -version
           system_profiler SPAudioDataType || true
-          brew install switchaudio-osx
-          SwitchAudioSource -a -t input || true
-          SwitchAudioSource -a -t output || true
-          SwitchAudioSource -c -t input || true
-          SwitchAudioSource -c -t output || true
-          sudo -n true && echo "passwordless sudo: yes"
-          say -o /tmp/fixture.aiff "purple elephants juggle seven lanterns" && afconvert -f WAVE -d LEI16@16000 -c 1 /tmp/fixture.aiff /tmp/fixture.wav && afinfo /tmp/fixture.wav
-          swiftc -O scripts/probe/record.swift -o /tmp/record && /tmp/record || true
       - name: Build for testing
         run: |
           set -euo pipefail
           udid="$(xcrun simctl list devices available --json | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
           echo "UDID=$udid" >> "$GITHUB_ENV"
           xcodebuild build-for-testing -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$udid" -derivedDataPath build/dd -quiet
-      - name: UI test, host audio as found
+      - name: UI test, host audio as found, no lane declared
         continue-on-error: true
         run: |
           set -o pipefail
-          xcodebuild test-without-building -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/dd -only-testing:TopoUITests 2>&1 | tee /tmp/ui1.log | grep -E "mic-probe|error|Test Case|passed|failed" || true
+          xcodebuild test-without-building -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/dd -only-testing:TopoUITests -resultBundlePath /tmp/as-found.xcresult 2>&1 | tee /tmp/ui1.log | grep -E "\[microphone\]|error:|Test Case|Test skipped|Executed|TEST (SUCC|FAIL)"
           xcrun simctl shutdown "$UDID" || true
-      - name: Install BlackHole loopback as default input and output
+      - name: Audio loopback for the microphone test
         run: |
-          set -x
-          brew install blackhole-2ch
-          sudo killall coreaudiod || true
-          sleep 8
-          SwitchAudioSource -a -t input || true
+          set -euo pipefail
+          brew install --quiet blackhole-2ch switchaudio-osx
+          sudo killall coreaudiod
+          for _ in $(seq 30); do
+            SwitchAudioSource -a -t input | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
           SwitchAudioSource -t input -s "BlackHole 2ch"
           SwitchAudioSource -t output -s "BlackHole 2ch"
-          SwitchAudioSource -c -t input; SwitchAudioSource -c -t output
+          test "$(SwitchAudioSource -c -t input)" = "BlackHole 2ch"
+          test "$(SwitchAudioSource -c -t output)" = "BlackHole 2ch"
           system_profiler SPAudioDataType || true
-          (while true; do afplay /tmp/fixture.wav; sleep 0.3; done) &
-          echo $! > /tmp/afplay.pid
-          /tmp/record || true
-      - name: UI test, BlackHole looping the fixture
-        continue-on-error: true
+          echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
+      - name: Cache the ear's models
+        uses: actions/cache@v4
+        with:
+          path: ~/ear-models
+          key: ear-models-${{ hashFiles('Apps/Topo/Resources/models.json') }}
+      - name: The ear's models for the microphone test
+        run: |
+          set -euo pipefail
+          time scripts/fetch-ear-models.sh "$HOME/ear-models"
+          echo "TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$HOME/ear-models" >> "$GITHUB_ENV"
+      - name: UI test, loopback lane
         run: |
           set -o pipefail
-          xcodebuild test-without-building -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/dd -only-testing:TopoUITests 2>&1 | tee /tmp/ui2.log | grep -E "mic-probe|error|Test Case|passed|failed" || true
-          kill "$(cat /tmp/afplay.pid)" || true
-          xcrun simctl shutdown "$UDID" || true
+          xcodebuild test-without-building -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/dd -only-testing:TopoUITests -resultBundlePath /tmp/loopback.xcresult 2>&1 | tee /tmp/ui2.log | grep -E "\[microphone\]|error:|Test Case|Test skipped|Executed|TEST (SUCC|FAIL)"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: probe-xcresults
+          path: |
+            /tmp/*.xcresult
+            /tmp/ui*.log
+          retention-days: 3
+
+  probe-broken-tap:
+    runs-on: macos-26
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Break the tap: drop every buffer with frames before the meter or the sink sees it
+        run: |
+          perl -0pi -e 's/(installTap\(onBus: 0, bufferSize: 1024, format: format\) \{ \@Sendable buffer, _ in\n)/$1                    if buffer.frameLength > 0 { return }\n/g' Apps/Client/VoiceInput.swift
+          git diff
+          test "$(git diff | grep -c 'frameLength > 0 { return }')" = 2
+      - name: Audio loopback for the microphone test
+        run: |
+          set -euo pipefail
+          brew install --quiet blackhole-2ch switchaudio-osx
+          sudo killall coreaudiod
+          for _ in $(seq 30); do
+            SwitchAudioSource -a -t input | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -t input -s "BlackHole 2ch"
+          SwitchAudioSource -t output -s "BlackHole 2ch"
+          test "$(SwitchAudioSource -c -t input)" = "BlackHole 2ch"
+          echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
+      - name: Cache the ear's models
+        uses: actions/cache@v4
+        with:
+          path: ~/ear-models
+          key: ear-models-${{ hashFiles('Apps/Topo/Resources/models.json') }}
+      - name: The ear's models for the microphone test
+        run: |
+          set -euo pipefail
+          scripts/fetch-ear-models.sh "$HOME/ear-models"
+          echo "TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$HOME/ear-models" >> "$GITHUB_ENV"
+      - name: UI test, loopback lane, broken tap (expected to FAIL)
+        run: |
+          set -o pipefail
+          udid="$(xcrun simctl list devices available --json | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
+          xcodebuild test -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$udid" -only-testing:TopoUITests 2>&1 | tee /tmp/ui.log | grep -E "\[microphone\]|error:|Test Case|Test skipped|Executed|TEST (SUCC|FAIL)"

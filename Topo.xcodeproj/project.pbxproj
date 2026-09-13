@@ -114,6 +114,7 @@
 		AEDBC2E2814F7E6370987732 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		AF4F131F2EC3C983BC0BFBB0 /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
+		B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
 		B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		B63B6F52C265588ADE976B9B /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 11BFD456B9384FC5F303ABF1 /* MLX */; };
@@ -231,6 +232,7 @@
 		D7E1A5F0E00768D69191A35A /* models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = models.json; sourceTree = "<group>"; };
 		D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
 		D946D8851F96D23296B16179 /* RoleSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelectorTests.swift; sourceTree = "<group>"; };
+		D9BDDB4560950858CA3F4314 /* purple-elephants.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "purple-elephants.wav"; sourceTree = "<group>"; };
 		DEF0C378213C9A0018F5BC0B /* TopoLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoLink; path = Packages/TopoLink; sourceTree = SOURCE_ROOT; };
 		E2DC2072C5D784DECA9AEAE0 /* Vocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Vocabulary.swift; sourceTree = "<group>"; };
 		E4E0F75855123C685AAD8ED1 /* TopoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoApp.swift; sourceTree = "<group>"; };
@@ -302,6 +304,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		15707FBBAEF305B1F8F83541 /* Fixtures */ = {
+			isa = PBXGroup;
+			children = (
+				D9BDDB4560950858CA3F4314 /* purple-elephants.wav */,
+			);
+			path = Fixtures;
+			sourceTree = "<group>";
+		};
 		1E857352147794E6A99FD826 /* TopoTV */ = {
 			isa = PBXGroup;
 			children = (
@@ -404,6 +414,7 @@
 			children = (
 				864D1485D7295621C45E9852 /* Client */,
 				D2C54D123FEACACF63B3F118 /* ClientUI */,
+				15707FBBAEF305B1F8F83541 /* Fixtures */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -599,6 +610,7 @@
 			buildConfigurationList = 7C5DBA2C7DC2772FDEBC115E /* Build configuration list for PBXNativeTarget "TopoUITests" */;
 			buildPhases = (
 				4E8FC0E8308EA00D598A6B84 /* Sources */,
+				E6FF58638E58EF557B861BAE /* Resources */,
 			);
 			buildRules = (
 			);
@@ -751,6 +763,14 @@
 				6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */,
 				86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */,
 				3E0191DE9AE9C06EF5B40374 /* models.json in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E6FF58638E58EF557B861BAE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
