@@ -187,8 +187,9 @@ final class MicrophonePressTests: XCTestCase {
             XCTAssertEqual(Double(capture.sunk), expected, accuracy: max(expected * 0.1, 2_048),
                            "the sink holds what the tap delivered, at the ear's rate: \(after.raw)")
         }
-        record(String(format: "%@; microphone ran: %d buffers, %.2f s at %.0f Hz, tap RMS %.4f, %d samples sunk, heard \"%@\"",
-                      branch.rawValue, capture.buffers, seconds, capture.rate, capture.tapRMS, capture.sunk, capture.heard), after)
+        record(String(format: "%@; microphone ran: %d buffers, %.2f s at %.0f Hz, tap RMS %.4f, %d samples sunk, ended by %@%@, heard \"%@\"",
+                      branch.rawValue, capture.buffers, seconds, capture.rate, capture.tapRMS, capture.sunk, capture.ended,
+                      capture.recogniserError.map { " (\($0))" } ?? "", capture.heard), after)
         return after
     }
 
@@ -216,6 +217,8 @@ final class MicrophonePressTests: XCTestCase {
         var sunk: UInt = 0
         var sinkRMS = 0.0
         var heard = ""
+        var ended = ""
+        var recogniserError: String?
     }
 
     /// The report, strictly: a value that is not a whole `Report` throws, and the test fails.
