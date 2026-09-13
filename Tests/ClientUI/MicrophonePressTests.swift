@@ -91,6 +91,7 @@ final class MicrophonePressTests: XCTestCase {
             XCTAssertEqual(after.refusal, "no audio input", "the hold started no microphone: \(after.raw)")
         }
         XCTAssertEqual(app.state, .runningForeground)
+        XCTFail("[mic-probe] before=\(before.raw) after=\(after.raw)")
     }
 
     /// Presses handled, sessions whose microphone ran, and why the last press started none,
