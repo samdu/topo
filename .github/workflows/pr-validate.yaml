@@ -121,11 +121,12 @@ jobs:
             -destination "platform=iOS Simulator,id=$udid"
 
       # The microphone test's input-capable lane. The runner's Mac has no audio
-      # input of its own, and the simulator's microphone is the host's default
-      # input, so BlackHole (a virtual loopback device: CI tooling, never
-      # bundled) is made both the default input and output, and what the UI
-      # test plays into the output comes back through the simulator's
-      # microphone. TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to
+      # input to speak into, and the simulator's microphone is the host's
+      # default input, so BlackHole (a virtual loopback device: CI tooling,
+      # never bundled) is made both the default input and output, and the
+      # test fixture plays into it on a loop for the rest of the job, which is
+      # what the simulator's microphone hears (the simulator's own output does
+      # not reach it). TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to
       # the test runner, which then fails a hold refused for want of an input
       # instead of skipping it.
       - name: Audio loopback for the microphone test
@@ -141,6 +142,7 @@ jobs:
           SwitchAudioSource -t output -s "BlackHole 2ch"
           test "$(SwitchAudioSource -c -t input)" = "BlackHole 2ch"
           test "$(SwitchAudioSource -c -t output)" = "BlackHole 2ch"
+          nohup bash -c 'while true; do afplay Tests/Fixtures/purple-elephants.wav; done' >/dev/null 2>&1 &
           echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
 
       # Parakeet's models, for the UI test in which the real recogniser hears
