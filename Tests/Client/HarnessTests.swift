@@ -90,6 +90,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let turns = try await log(db)
         XCTAssertEqual(turns.map(\.text), ["I forgot the bins", "Put them out tonight."])
         XCTAssertEqual(turns.map(\.role), [.person, .assistant])
+        guard turns.count == 2 else { return XCTFail("expected 2 turns in the log, found \(turns.map(\.text))") }
         XCTAssertEqual(turns[0].ref.device, phone)
         XCTAssertEqual(turns[1].parents, [turns[0].ref], "the reply answers the person's turn")
         XCTAssertEqual(harness.turns.map(\.ref), turns.map(\.ref), "the screen shows what is in the log")
@@ -125,6 +126,7 @@ final class HarnessIntegrationTests: XCTestCase {
         await harness.answerPending()
         let answered = try await log(db)
         XCTAssertEqual(answered.map(\.text), ["bins?", "Here now."])
+        guard answered.count == 2 else { return XCTFail("expected 2 turns in the log, found \(answered.map(\.text))") }
         XCTAssertEqual(answered[1].parents, [answered[0].ref])
         XCTAssertNil(harness.error, "an answer clears the failure")
         XCTAssertEqual(harness.turns.map(\.text), ["bins?", "Here now."])
@@ -206,6 +208,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let turns = try await log(db.wrapped)
         XCTAssertEqual(turns.map(\.text), ["call Helen", "Calling."], "the retry found the committed turn")
+        guard turns.count == 2 else { return XCTFail("expected 2 turns in the log, found \(turns.map(\.text))") }
         XCTAssertEqual(turns[1].parents, [turns[0].ref])
         XCTAssertTrue(relaunched.waiting.isEmpty)
         XCTAssertNil(defaults.data(forKey: "topo.harness.outbox"))
@@ -268,6 +271,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let turns = try await log(db)
         XCTAssertEqual(turns.map(\.text), ["one", "one back", "two"], "the words are in the log, unanswered")
+        guard turns.count == 3 else { return XCTFail("expected 3 turns in the log, found \(turns.map(\.text))") }
         XCTAssertEqual(turns[2].ref.device, self.phone)
         XCTAssertEqual(turns[2].role, .person)
         XCTAssertEqual(phoneTransport.sent.count, 1, "a device that is not primary does not call the model")
@@ -289,6 +293,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let answered = try await log(db)
         XCTAssertEqual(answered.map(\.text), ["one", "one back", "two", "two back"])
+        guard answered.count == 4 else { return XCTFail("expected 4 turns in the log, found \(answered.map(\.text))") }
         XCTAssertEqual(answered[3].parents, [answered[2].ref])
         XCTAssertEqual(answered[3].ref.device, DeviceID("hub"))
         XCTAssertEqual(hubTransport.sent, [["one", "one back", "two"]])
@@ -382,6 +387,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let turns = try await log(db)
         XCTAssertEqual(turns.map(\.text), ["one", "one back", "two", "two back", "three", "three back"])
+        guard turns.count == 6 else { return XCTFail("expected 6 turns in the log, found \(turns.map(\.text))") }
         XCTAssertEqual(turns[5].ref.device, phone)
         XCTAssertEqual(phoneTransport.sent.count, 2)
         XCTAssertEqual(padTransport.sent.count, 1, "the demoted pad answers nothing")
