@@ -216,6 +216,28 @@ jobs:
             -destination 'generic/platform=tvOS Simulator' \
             2>&1 | tee "$RESULTS/TopoTV-build.log"
 
+      # Compilation only, with signing off. The simulator builds above never
+      # compile code excluded from the simulator — the Pocket engine and its
+      # model calls in Apps/Client/Voice.swift sit behind
+      # `!targetEnvironment(simulator)` — and nothing else builds TopoHub, which
+      # has no test target. A Release build for any iOS device and a macOS
+      # build of the hub catch compile and link errors in both. They do not
+      # prove the code runs on a GPU or a device, and they do not prove
+      # distribution signing: no certificate, profile or entitlement is
+      # checked with CODE_SIGNING_ALLOWED=NO.
+      - name: xcodebuild build (Topo Release for iOS devices, TopoHub), unsigned
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          xcodebuild build -project Topo.xcodeproj -scheme Topo \
+            -configuration Release -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RESULTS/Topo-iOS-Release-build.log"
+          xcodebuild build -project Topo.xcodeproj -scheme TopoHub \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RESULTS/TopoHub-build.log"
+
       - name: Upload logs and result bundles
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
