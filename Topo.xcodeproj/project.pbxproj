@@ -36,6 +36,7 @@
 		2AF169CA7DA76C7448A360A2 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		2DB26E2E9DD8FA0757FB7500 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC10F86563FE12BC674EFBB /* AboutView.swift */; };
 		3055E1A4768606FB6D9EF046 /* ModelDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */; };
+		30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE1B3C3847A7B4EB6616526 /* EarTests.swift */; };
 		30DF481D4769365D1072FE1B /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		30F4866307B7B7B4BD27CBF2 /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
 		33F71A8C6E2480ECFD619135 /* PocketPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A89A309D9E0482377ED73866 /* PocketPace.swift */; };
@@ -212,6 +213,7 @@
 		B82E94F64E76CD6727BEB803 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
 		BE9C965D7E36544A4F9526C9 /* TopoHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyTests.swift; sourceTree = "<group>"; };
+		BEE1B3C3847A7B4EB6616526 /* EarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarTests.swift; sourceTree = "<group>"; };
 		C29E502597377F5D2A77876B /* womble.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = womble.css; sourceTree = "<group>"; };
 		C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
@@ -413,6 +415,7 @@
 			children = (
 				F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
+				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */,
 				B5EB0F0DA44028EF600DC73F /* PocketPaceTests.swift */,
@@ -811,6 +814,7 @@
 			files = (
 				B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
+				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				7CB6A24D84137A9DC47A4A43 /* ModelDownloadsTests.swift in Sources */,
 				BD1F4E08AEC41132CA3A348C /* PocketPaceTests.swift in Sources */,
