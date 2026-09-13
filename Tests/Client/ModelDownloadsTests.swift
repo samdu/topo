@@ -20,7 +20,7 @@ final class ModelDownloadsTests: XCTestCase {
 
     func testTheBundledManifestNamesEveryModelWithADigestForEveryFile() throws {
         let manifest = try ModelManifest.bundled()
-        for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.kokoro, ModelManifest.g2p] {
+        for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.pocket] {
             let model = try XCTUnwrap(manifest.model(id), id)
             XCTAssertFalse(model.files.isEmpty, id)
             XCTAssertEqual(model.revision.count, 40, "\(id) is pinned to a commit")

@@ -38,12 +38,11 @@ packages:
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
     exactVersion: "0.15.6"
-  # MLX-Audio's Swift port, for the phone's voice (Apps/Client/Voice.swift): Kokoro synthesising
-  # replies on the device. Pinned to a revision rather than a version range because the
-  # published tags are a long way behind main and the Kokoro API the voice calls
-  # (`KokoroModel`'s refAudio/language arguments, `KokoroMultilingualProcessor`) is main's. The
-  # iOS app only: MLX wants a real Metal device, and nothing on the wrist or the television
-  # synthesises anything.
+  # MLX-Audio's Swift port, for the phone's voice (Apps/Client/Voice.swift): Pocket TTS
+  # synthesising replies on the device. Pinned to a revision rather than a version range because
+  # the published tags are a long way behind main and the Pocket port the voice calls
+  # (`PocketTTSModel.fromModelDirectory`) is main's. The iOS app only: MLX wants a real Metal
+  # device, and nothing on the wrist or the television synthesises anything.
   MLXAudio:
     url: https://github.com/Blaizzy/mlx-audio-swift
     revision: cae704f53bc32a3d0b606823828fbc5bedaaf388
@@ -67,9 +66,6 @@ targets:
       - Apps/Topo
       # What the About screen reads, rather than a copy of it in Swift.
       - path: THIRD-PARTY
-        buildPhase: resources
-      # Buddy's blended Kokoro style vector, which is not one of the model repo's own voices.
-      - path: Apps/Topo/Resources/bm_buddy.safetensors
         buildPhase: resources
       # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
       - path: Apps/Topo/Resources/models.json

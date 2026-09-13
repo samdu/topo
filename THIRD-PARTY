@@ -9,7 +9,7 @@ The format is the whole contract with the apps: a heading beginning `## ` opens 
 ## Daphne
 Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
 Where: samdu/daphne-assistant, `clients/ios`
-Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` and the sentence-streamed play queue in `Apps/Client/Speaker.swift` (from `BuddyVoice.swift`), and the rule that speaking is foreground work.
+Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift`, the gap trimmer in `Apps/Client/PocketPace.swift` and the sentence-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `BuddyVoice.swift`), and the rule that speaking is foreground work.
 
 ## FluidAudio
 Licence: Apache-2.0, © FluidInference; its own bundled pieces are fastcluster (BSD-3, © Daniel Müllner and Google), vbx (Apache-2.0) and the text-processing-rs xcframework (Apache-2.0, FluidInference)
@@ -24,12 +24,12 @@ Use: The speech-to-text model the ear runs (parakeet-tdt-0.6b-v2, 442 MB) and th
 ## mlx-audio-swift
 Licence: MIT, © Prince Canuma
 Where: https://github.com/Blaizzy/mlx-audio-swift, pinned to cae704f53bc32a3d0b606823828fbc5bedaaf388, on mlx-swift (MIT, © Apple)
-Use: Runs Kokoro on the phone for `Apps/Client/Voice.swift`: loads the model Topo has downloaded, phonemises a sentence, and synthesises it. Linked into the iOS app only.
+Use: Runs Pocket TTS on the phone for `Apps/Client/Voice.swift`: loads the model Topo has downloaded from its directory, tokenises a sentence, and synthesises it. Linked into the iOS app only.
 
-## Kokoro
-Licence: Apache-2.0, © hexgrad; the bf16 MLX conversion is mlx-community's, and the English grapheme-to-phoneme resources the port reads beside it (kitten-tts-g2p: the gold and silver dictionaries and the BART fallback model) are beshkenadze's port of hexgrad's Misaki, MIT
-Where: https://huggingface.co/mlx-community/Kokoro-82M-bf16, from https://huggingface.co/hexgrad/Kokoro-82M; https://huggingface.co/beshkenadze/kitten-tts-g2p, from https://github.com/hexgrad/misaki
-Use: The text-to-speech model the voice runs (311 MB of weights and 9 MB of G2P resources; none of the repo's own voices). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there. `Apps/Topo/Resources/bm_buddy.safetensors` is Buddy's blend of the model's British voices, Sam's own.
+## Pocket TTS
+Licence: CC-BY-4.0, © Kyutai; the bf16 MLX conversion is mlx-community's
+Where: https://huggingface.co/mlx-community/pocket-tts, from https://huggingface.co/kyutai/pocket-tts
+Use: The text-to-speech model the voice runs (236 MB of weights, the config, the tokenizer and the `eponine` speaker embedding, one of the model's eight stock speakers). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there.
 
 ## XcodeGen
 Licence: MIT, © Yonas Kolb

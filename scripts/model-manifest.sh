@@ -26,15 +26,14 @@ check=no
 # under the directory name FluidAudio derives for the repository (its loader appends that to
 # the parent of the directory it is given); the repo's other bundles are older conversions the
 # loader never reads. The CTC spotter: its
-# two bundles, the vocabulary CtcModels reads and the tokenizer CtcTokenizer reads. Kokoro: the
-# config and the weights; the repo's own voices are not fetched, since the voice is Buddy's
-# bundled blend. The English G2P: what mlx-audio-swift's Misaki processor reads for en-gb (the
-# repo has no gb_ files, so it falls back to the us_ ones by name).
+# two bundles, the vocabulary CtcModels reads and the tokenizer CtcTokenizer reads. Pocket TTS:
+# the config, the weights, the SentencePiece tokenizer its conditioner reads beside them, and
+# the one stock speaker the voice uses (`embeddings/eponine.safetensors`); the other seven
+# speakers and the tokenizer files the port never opens are left on the Hub.
 models="
 parakeet-tdt-0.6b-v2|FluidInference/parakeet-tdt-0.6b-v2-coreml|ee09c569f73759e6d44c9bd16766f477b2b36d39|Preprocessor.mlmodelc/ Encoder.mlmodelc/ Decoder.mlmodelc/ JointDecision.mlmodelc/ parakeet_vocab.json
 parakeet-ctc-110m-coreml|FluidInference/parakeet-ctc-110m-coreml|accdafd8cf8a2ff1cabe3c11e54416b405d409aa|MelSpectrogram.mlmodelc/ AudioEncoder.mlmodelc/ vocab.json tokenizer.json
-Kokoro-82M-bf16|mlx-community/Kokoro-82M-bf16|a71e4d38b236d968966a2002c4c895dbd12b1c3c|config.json kokoro-v1_0.safetensors
-hub/mlx-audio/beshkenadze_kitten-tts-g2p|beshkenadze/kitten-tts-g2p|9c692b92682d959d9013a9cfe6a49541997add18|us_bart.safetensors us_bart_config.json us_gold.json us_silver.json
+pocket-tts|mlx-community/pocket-tts|cbf71d5f6657bbc3f4bc02f85ee408261225bec7|config.json model.safetensors tokenizer.json embeddings/eponine.safetensors
 "
 
 tmp="$(mktemp -d)"

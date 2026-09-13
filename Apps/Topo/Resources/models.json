@@ -180,46 +180,29 @@
       ]
     },
     {
-      "id": "Kokoro-82M-bf16",
-      "repo": "mlx-community/Kokoro-82M-bf16",
-      "revision": "a71e4d38b236d968966a2002c4c895dbd12b1c3c",
+      "id": "pocket-tts",
+      "repo": "mlx-community/pocket-tts",
+      "revision": "cbf71d5f6657bbc3f4bc02f85ee408261225bec7",
       "files": [
         {
           "path": "config.json",
-          "size": 2351,
-          "sha256": "5abb01e2403b072bf03d04fde160443e209d7a0dad49a423be15196b9b43c17f"
+          "size": 1664,
+          "sha256": "403ff12260596fbfa348c7b07237c378b9ad8db9d8acd04d671470421954a68e"
         },
         {
-          "path": "kokoro-v1_0.safetensors",
-          "size": 327115152,
-          "sha256": "4e9ecdf03b8b6cf906070390237feda473dc13327cb8d56a43deaa374c02acd8"
-        }
-      ]
-    },
-    {
-      "id": "hub/mlx-audio/beshkenadze_kitten-tts-g2p",
-      "repo": "beshkenadze/kitten-tts-g2p",
-      "revision": "9c692b92682d959d9013a9cfe6a49541997add18",
-      "files": [
-        {
-          "path": "us_bart.safetensors",
-          "size": 3011692,
-          "sha256": "dc4a02e62d4fcb4bb4097ecf00db89b8e1a12a549a52ab6adfbba220b80a55c5"
+          "path": "model.safetensors",
+          "size": 235739497,
+          "sha256": "60ddd85019dddbe6c1d220e311ca5fc753972978a89f563c0bbe1ae943120072"
         },
         {
-          "path": "us_bart_config.json",
-          "size": 1257,
-          "sha256": "8deb3537fb29c63cd9f20d75515ae06e4c92f1b6db0703a2d45bca95b33a53a4"
+          "path": "tokenizer.json",
+          "size": 244993,
+          "sha256": "ef29c4871fd62c7beb928150edc095be1327f0924c0eab9e06b95918b39eff5f"
         },
         {
-          "path": "us_gold.json",
-          "size": 3001196,
-          "sha256": "8507f89840f0813b10cf584740942f58e9cc9ad3660e24088b442ab0a6b126be"
-        },
-        {
-          "path": "us_silver.json",
-          "size": 3105352,
-          "sha256": "ea0e1abca0c9b18fb0d3402034633a337154a3153e9a9f49f97d668c908e140c"
+          "path": "embeddings/eponine.safetensors",
+          "size": 573528,
+          "sha256": "bb31940f62da665391de139da2e57d740757df26b73d7ec24152c78a3b8ac0c5"
         }
       ]
     }
