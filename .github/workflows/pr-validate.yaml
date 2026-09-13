@@ -76,7 +76,7 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Break the tap: drop every buffer with frames before the meter or the sink sees it
+      - name: "Break the tap, dropping every buffer with frames before the meter or the sink sees it"
         run: |
           perl -0pi -e 's/(installTap\(onBus: 0, bufferSize: 1024, format: format\) \{ \@Sendable buffer, _ in\n)/$1                    if buffer.frameLength > 0 { return }\n/g' Apps/Client/VoiceInput.swift
           git diff
