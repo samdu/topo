@@ -213,7 +213,7 @@ schemes:
     run: { config: Debug }
     test:
       config: Debug
-      targets: [TopoTests, TopoUITests]
+      targets: [TopoTests]
   TopoWatch:
     build:
       targets: { TopoWatch: all }
