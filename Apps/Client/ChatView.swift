@@ -25,7 +25,13 @@ struct ChatView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                TranscriptView(turns: harness.turns, notice: harness.notice)
+                TranscriptView(turns: harness.turns, notice: harness.notice,
+                               // Holding one of Topo's turns says it again, which is how a
+                               // typed turn's reply — never read aloud as it lands — is heard.
+                               replay: Replay(speaking: speaker.speaking,
+                                              canSpeak: speaker.foreground,
+                                              say: { speaker.speak($0) },
+                                              stopSpeaking: { speaker.stop() }))
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
