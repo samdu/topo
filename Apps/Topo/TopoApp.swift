@@ -26,7 +26,13 @@ struct TopoApp: App {
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
         _audio = State(initialValue: audio)
-        _voice = State(initialValue: VoiceInput(audio: audio))
+        // A debug build launched asking for a stub ear gets one; every other launch, the real one.
+        #if DEBUG
+        let ear = DebugRun.ear()
+        #else
+        let ear = Ear()
+        #endif
+        _voice = State(initialValue: VoiceInput(audio: audio, ear: ear))
         _speaker = State(initialValue: Speaker(audio: audio))
     }
 
