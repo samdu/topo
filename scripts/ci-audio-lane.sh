@@ -12,9 +12,9 @@
 # itself on three seconds of silence or a device change, and logs each restart. It runs under a
 # loop that restarts it if it exits. `check` holds that the supervisor is alive, the feeder's
 # heartbeat is fresh, both defaults are BlackHole, and that a separate meter
-# (scripts/ci-audio-meter.swift) hears the fixture on BlackHole's input; it prints every restart
-# the feeder logged. It never makes a silent lane pass: the UI test still asserts the fixture's
-# energy at the tap.
+# (scripts/ci-audio-meter.swift) hears the fixture on BlackHole's input; it prints the feeder's
+# log, with every restart or exit as a warning. It never makes a silent lane pass: the UI test
+# still asserts the fixture's energy at the tap.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -97,7 +97,12 @@ check() {
     failures+=("the meter was never built ($meter)")
   fi
   if [ -s "$log" ]; then
-    while IFS= read -r line; do echo "::warning::audio lane: $line"; done < "$log"
+    while IFS= read -r line; do
+      case "$line" in
+        *restart*|*exited*|*"did not start"*|*"no format"*|*"could not"*) echo "::warning::audio lane: $line" ;;
+        *) echo "audio lane: $line" ;;
+      esac
+    done < "$log"
   fi
   if [ "${#failures[@]}" -gt 0 ]; then
     for failure in "${failures[@]}"; do
