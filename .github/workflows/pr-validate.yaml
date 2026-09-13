@@ -120,6 +120,43 @@ jobs:
             -scheme Womble \
             -destination "platform=iOS Simulator,id=$udid"
 
+      # The microphone test's input-capable lane. The runner's Mac has no audio
+      # input of its own, and the simulator's microphone is the host's default
+      # input, so BlackHole (a virtual loopback device: CI tooling, never
+      # bundled) is made both the default input and output, and what the UI
+      # test plays into the output comes back through the simulator's
+      # microphone. TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to
+      # the test runner, which then fails a hold refused for want of an input
+      # instead of skipping it.
+      - name: Audio loopback for the microphone test
+        run: |
+          set -euo pipefail
+          brew install --quiet blackhole-2ch switchaudio-osx
+          sudo killall coreaudiod
+          for _ in $(seq 30); do
+            SwitchAudioSource -a -t input | grep -qx "BlackHole 2ch" && break
+            sleep 1
+          done
+          SwitchAudioSource -t input -s "BlackHole 2ch"
+          SwitchAudioSource -t output -s "BlackHole 2ch"
+          test "$(SwitchAudioSource -c -t input)" = "BlackHole 2ch"
+          test "$(SwitchAudioSource -c -t output)" = "BlackHole 2ch"
+          echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
+
+      # Parakeet's models, for the UI test in which the real recogniser hears
+      # the fixture through the microphone: fetched from the manifest's pinned
+      # revisions and verified file by file, cached on the manifest's hash.
+      - name: Cache the ear's models
+        uses: actions/cache@v4
+        with:
+          path: ~/ear-models
+          key: ear-models-${{ hashFiles('Apps/Topo/Resources/models.json') }}
+      - name: The ear's models for the microphone test
+        run: |
+          set -euo pipefail
+          scripts/fetch-ear-models.sh "$HOME/ear-models"
+          echo "TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$HOME/ear-models" >> "$GITHUB_ENV"
+
       # The app targets' own suite, and the UI test that presses the
       # microphone (TopoUITests, in the scheme's test action). The suite is
       # hosted by the iOS app and covers the code the watch and TV builds

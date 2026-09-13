@@ -16,6 +16,7 @@ enum DebugRun {
     static let lifetimeVariable = "TOPO_CLAUDE_SETUP_TOKEN_DAYS"
     static let sendVariable = "TOPO_DEBUG_SEND"
     static let earVariable = "TOPO_DEBUG_EAR"
+    static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
 
     /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
     /// the app comes up past the sign-in screen. Does nothing when the variable is absent, which is
@@ -85,22 +86,52 @@ extension DebugRun {
 
     /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:
     /// a press takes the on-device branch of `VoiceInput` (the tap, the sample sink, the caption
-    /// loop, the decode at the release) over an engine that hears nothing, which is how the UI
-    /// test reaches that branch in a simulator, where Parakeet never loads for want of Metal.
-    /// Any other launch gets the real ear.
+    /// loop, the decode at the release) over an engine that hears nothing. `TOPO_DEBUG_EAR=loading`
+    /// is one whose load never finishes, so every press takes the fallback, `SFSpeechRecognizer`'s,
+    /// however fast the real models would have downloaded. `TOPO_DEBUG_EAR=` an
+    /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
+    /// real ear, loaded from there instead of the app's own download, which is how the UI test
+    /// gets Parakeet resident in a simulator without the background download. Any other launch
+    /// gets the real ear, prepared as usual.
     @MainActor
     static func ear(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Ear {
-        guard environment[earVariable] == "stub" else { return Ear() }
-        let ear = Ear(engine: StubEngine())
-        let nowhere = URL(fileURLWithPath: "/dev/null")
-        ear.load(parakeet: nowhere, ctc: nowhere)
-        say("ear: a stub, resident without a model")
+        guard let choice = environment[earVariable], !choice.isEmpty else { return Ear() }
+        if choice == "loading" {
+            let ear = Ear(engine: StubEngine(loads: false))
+            let nowhere = URL(fileURLWithPath: "/dev/null")
+            ear.load(parakeet: nowhere, ctc: nowhere)
+            say("ear: loading, and never resident")
+            return ear
+        }
+        if choice == "stub" {
+            let ear = Ear(engine: StubEngine())
+            let nowhere = URL(fileURLWithPath: "/dev/null")
+            ear.load(parakeet: nowhere, ctc: nowhere)
+            say("ear: a stub, resident without a model")
+            return ear
+        }
+        let root = URL(fileURLWithPath: choice, isDirectory: true)
+        let ear = Ear()
+        ear.load(parakeet: root.appendingPathComponent(ModelManifest.parakeet, isDirectory: true),
+                 ctc: root.appendingPathComponent(ModelManifest.ctc, isDirectory: true))
+        say("ear: Parakeet from \(root.path)")
         return ear
     }
 
-    /// Loads nothing, builds no session, hears nothing.
+    /// `TOPO_DEBUG_KEEP_SPOKEN=1`: what a press hears is printed and not sent, so a UI test
+    /// that speaks into the microphone takes no turn.
+    static func keepsSpoken(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment[keepSpokenVariable] == "1"
+    }
+
+    /// Loads nothing, builds no session, hears nothing. One that `loads: false` never returns
+    /// from its load, which holds the ear at `loading`.
     struct StubEngine: SpeechEngine {
-        func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {}
+        var loads = true
+        func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+            guard !loads else { return }
+            while true { try await Task.sleep(for: .seconds(3600)) }
+        }
         func rebuild(terms: [String], version: Int) async throws {}
         func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
     }
