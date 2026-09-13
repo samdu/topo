@@ -124,10 +124,10 @@ jobs:
             -destination "platform=iOS Simulator,id=$udid"
 
       # The microphone test's input-capable lane: BlackHole as the runner
-      # Mac's default input and output, and the fixture playing into it from a
-      # supervised feeder that re-pins the devices every pass and restarts a
-      # hung afplay (scripts/ci-audio-lane.sh). The simulator's microphone is
-      # the host's default input; its own output does not reach the loopback.
+      # Mac's default input and output, and the fixture looping into it from
+      # one long-lived feeder that listens to BlackHole itself and restarts on
+      # silence (scripts/ci-audio-lane.sh). The simulator's microphone is the
+      # host's default input; its own output does not reach the loopback.
       # TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to the test
       # runner, which then fails a hold refused for want of an input.
       - name: Audio loopback for the microphone test
