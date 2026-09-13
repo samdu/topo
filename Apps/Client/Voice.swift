@@ -132,6 +132,7 @@ enum VoiceError: LocalizedError {
 }
 
 #if canImport(MLXAudioTTS) && !targetEnvironment(simulator)
+let probeDeviceOnlyBreak: Int = "PROBE device-only compile error"
 /// Everything MLX, one instance for the process. Not an actor: `MLXArray` is not Sendable and
 /// the model's `generate` is nonisolated, so an actor could never hand its result across under
 /// strict concurrency. Calls are serialised by their callers instead, which is the shape they

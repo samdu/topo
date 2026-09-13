@@ -293,3 +293,5 @@ enum KeychainItem {
         }
     }
 }
+
+let probeHubBreak: Int = "PROBE TopoHub compile error"
