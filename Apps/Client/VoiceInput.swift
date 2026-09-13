@@ -216,12 +216,16 @@ final class VoiceInput {
             if local {
                 startCaptions(for: mine)
             } else if let request, let recognizer {
-                task = recognizer.recognitionTask(with: request) { [weak self] result, error in
+                task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
+                    // The result is not Sendable; what the session reads of it crosses instead.
+                    let heard = result?.bestTranscription.formattedString
+                    let final = result?.isFinal == true
+                    let failed = error != nil
                     Task { @MainActor in
                         guard let self, self.generation == mine else { return }
-                        if let result { self.text = result.bestTranscription.formattedString }
-                        if result?.isFinal == true { self.finalArrived = true }
-                        if error != nil {
+                        if let heard { self.text = heard }
+                        if final { self.finalArrived = true }
+                        if failed {
                             self.finalArrived = true
                             if !self.ending { self.endedByRecogniser(gate) }
                         }
@@ -308,7 +312,7 @@ final class VoiceInput {
         request.endAudio()
         let heard: String? = await withCheckedContinuation { continuation in
             let done = Once(continuation)
-            let task = recognizer.recognitionTask(with: request) { result, error in
+            let task = recognizer.recognitionTask(with: request) { @Sendable result, error in
                 if let result, result.isFinal { done.resume(result.bestTranscription.formattedString) }
                 else if error != nil { done.resume(nil) }
             }

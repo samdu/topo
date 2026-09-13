@@ -10,7 +10,9 @@ final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: ASWebAuthenticationSession?
 
     func open(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
-        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { _, _ in
+        // `@Sendable` so the completion is not main-actor-isolated by inference: the framework
+        // owns the thread it calls back on, and Swift 6 traps an isolated closure off it.
+        let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { @Sendable _, _ in
             Task { @MainActor in onDismiss() }
         }
         session.prefersEphemeralWebBrowserSession = false
