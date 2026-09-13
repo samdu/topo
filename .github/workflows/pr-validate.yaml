@@ -16,7 +16,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Host speech state, as found
         run: |
+          set +e +o pipefail
           sw_vers; xcodebuild -version
+          echo "== en-US offline dictation"; defaults read com.apple.assistant.support "Offline Dictation Status" 2>&1 | grep -A8 '"en-US"'
           for d in com.apple.assistant.support com.apple.Siri com.apple.speech.recognition.AppleSpeechServer com.apple.HIToolbox com.apple.SpeechRecognitionCore; do echo "== defaults read $d"; defaults read $d 2>&1 | head -40; done
           echo "== /System/Library/AssetsV2 (speech/siri/dictation)"; ls /System/Library/AssetsV2 | grep -i "speech\|siri\|dictation\|asr" || echo none
           echo "== ~/Library/Assets*"; ls -d ~/Library/Assets* 2>&1; ls ~/Library/Assets*/ 2>&1 | head -20
@@ -44,7 +46,11 @@ jobs:
           xcodebuild test-without-building -project Topo.xcodeproj -scheme Topo -destination "platform=iOS Simulator,id=$UDID" -derivedDataPath build/dd -only-testing:TopoTests/AppleRecogniserProbeTests 2>&1 | grep -E "\[apple-probe\]|error: -|Test Case .*(passed|failed|skipped)"
       - name: Simulator speech assets
         run: |
+          set +e +o pipefail
           D=~/Library/Developer/CoreSimulator/Devices/$UDID/data
+          A=$(dirname "$(dirname "$(find $D/private/var/MobileAsset/AssetsV2/com_apple_MobileAsset_UAF_Siri_Understanding -name Info.plist -path '*purpose_auto*' -exec grep -l asr.assistant.en_US {} \; | head -1)")/x"); echo "en_US ASR asset: $A"
+          find $D/private/var/MobileAsset/AssetsV2/com_apple_MobileAsset_UAF_Siri_Understanding -maxdepth 5 -exec ls -lad {} \; | awk '{print $5, $9}' | head -30
+          for f in $(find $D/private/var/MobileAsset/AssetsV2/com_apple_MobileAsset_UAF_Siri_Understanding -name Info.plist); do plutil -p "$f" | grep -E "CFBundleName|ContainsCryptex|RequiresPersonalization"; done
           ls $D/private/var/MobileAsset/AssetsV2 | grep -i "speech\|siri\|dictation\|asr" || echo none
           find $D/private/var/MobileAsset/AssetsV2 -name mini.json -exec ls -la {} \; 2>/dev/null | head
           f=$(find $D/private/var/MobileAsset/AssetsV2 -name mini.json | head -1); [ -n "$f" ] && { ls -la "$(dirname "$f")"; head -c 2000 "$f"; echo; }
@@ -52,6 +58,7 @@ jobs:
           echo "runtime root: $RR"; ls "$RR/System/Library/PrivateFrameworks" | grep -i "speech\|^EAR\|dictation" | tr '\n' ' '; echo
       - name: Enable Dictation and Siri on the host, restart speech daemons, install assets
         run: |
+          set +e +o pipefail
           set -x
           defaults write com.apple.assistant.support "Dictation Enabled" -bool true
           defaults write com.apple.assistant.support "Assistant Enabled" -bool true
@@ -62,6 +69,7 @@ jobs:
           defaults write com.apple.HIToolbox AppleDictationAutoEnable -int 1
           for p in assistantd localspeechrecognition corespeechd SpeechRecognitionCore speechrecognitiond siriknowledged; do killall "$p" 2>/dev/null && echo "restarted $p"; done
           sleep 5
+          defaults read com.apple.assistant.support "Offline Dictation Status" 2>&1 | grep -A8 '"en-US"'
           pgrep -lf "assistantd|localspeechrecognition|corespeechd|SpeechRecognitionCore" || echo none
           timeout 700 swift scripts/probe/host-speech.swift --install || echo "host install exited $?"
           ls /System/Library/AssetsV2 | grep -i "speech\|siri\|dictation\|asr" || echo none
