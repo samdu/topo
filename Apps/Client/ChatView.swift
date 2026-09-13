@@ -180,6 +180,10 @@ struct ChatView: View {
                     Task { await micPressed(down) }
                 }
                 .accessibilityLabel(voice.handsFree ? "Listening; press to send" : voice.listening ? "Listening; release to send" : "Hold to talk")
+                // What the UI test asserts on after a hold: that a session's microphone ran, or
+                // why none did. A debug build only, so VoiceOver on a release build hears the
+                // label alone.
+                .debugAccessibilityValue("\(voice.sessions) heard" + (voice.refusal.map { "; \($0)" } ?? ""))
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }
@@ -194,6 +198,17 @@ struct ChatView: View {
         let text = draft
         draft = ""
         Task { await harness.send(text) }
+    }
+}
+
+private extension View {
+    /// An accessibility value in a debug build and nothing in a release one.
+    @ViewBuilder func debugAccessibilityValue(_ value: String) -> some View {
+        #if DEBUG
+        accessibilityValue(value)
+        #else
+        self
+        #endif
     }
 }
 #endif

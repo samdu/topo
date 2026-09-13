@@ -47,6 +47,15 @@ final class VoiceInput {
     private(set) var handsFree = false
     /// Which recogniser the current or last session used.
     private(set) var recogniser: Recogniser?
+    /// Sessions whose microphone ran: counted when the engine starts, so a press that was
+    /// cancelled during the prompts or refused at the input is not one. The UI test reads it.
+    private(set) var sessions = 0
+    /// Why the last press started no microphone, in words; nil once one starts. The UI test
+    /// reads it too, to tell a host with no input from a refusal that is a fault.
+    private(set) var refusal: String?
+    /// The refusal on a host whose audio session has no input right now: a Mac with no
+    /// microphone running the simulator, or a session that is playback-only.
+    static let noInput = "no audio input"
     /// True when recognition ran on the device; false when it went to Apple's servers.
     var onDevice: Bool { recogniser != .appleServer }
     /// Words a session heard before the recogniser ended it on its own (server recognition's
@@ -162,7 +171,10 @@ final class VoiceInput {
         handsFree = false
         finalArrived = false
         defer { if generation == mine { starting = false } }
-        guard await AVAudioApplication.requestRecordPermission() else { denied = true; owner = nil; return }
+        guard await AVAudioApplication.requestRecordPermission() else {
+            refusal = "no microphone permission"
+            denied = true; owner = nil; return
+        }
         // Every block handed to the system from here is `@Sendable`, and it is load-bearing: TCC
         // answers this one on a global queue and the tap block below runs on the audio thread.
         // A closure formed on the main actor without `@Sendable` is main-actor-isolated by
@@ -173,11 +185,17 @@ final class VoiceInput {
         }
         // Released or cancelled while the prompts were up: start nothing.
         guard generation == mine else { return }
-        guard speech == .authorized else { denied = true; owner = nil; return }
+        guard speech == .authorized else {
+            refusal = "no speech recognition permission"
+            denied = true; owner = nil; return
+        }
         // The session's recogniser, decided here and kept.
         let local = ear.ready
         if !local {
-            guard let recognizer, recognizer.isAvailable else { denied = true; owner = nil; return }
+            guard let recognizer, recognizer.isAvailable else {
+                refusal = "the speech recogniser is unavailable"
+                denied = true; owner = nil; return
+            }
             recogniser = recognizer.supportsOnDeviceRecognition ? .appleOnDevice : .appleServer
         } else {
             recogniser = .parakeet
@@ -212,6 +230,8 @@ final class VoiceInput {
             engine.prepare()
             try engine.start()
             listening = true
+            sessions += 1
+            refusal = nil
             audio.wantScreenAwake(true, for: .listening)
             if local {
                 startCaptions(for: mine)
@@ -233,6 +253,7 @@ final class VoiceInput {
                 }
             }
         } catch {
+            refusal = error is InputUnavailable ? Self.noInput : "the engine did not start: \(error)"
             owner = nil
             tearDown()
             audio.wantRecord(false, for: gate == .chat ? .chat : .firstRun)
