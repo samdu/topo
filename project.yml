@@ -143,6 +143,8 @@ targets:
       - Tests/Client
       - path: THIRD-PARTY
         buildPhase: resources
+      - path: Tests/Fixtures
+        buildPhase: resources
     dependencies:
       - target: Topo
       - package: TopoCore

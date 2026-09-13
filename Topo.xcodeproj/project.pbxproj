@@ -59,6 +59,7 @@
 		4DCA8DB14D90096B931F7E08 /* SurfacePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631F54F3CC1F646736B81799 /* SurfacePages.swift */; };
 		4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		50B378B1C1B86503B32F9583 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
+		5100DA364E205B42FC1A7E62 /* AppleRecogniserProbeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59E6ACE33B46DD8B96233DD /* AppleRecogniserProbeTests.swift */; };
 		510B82888095A483E442BA47 /* TVRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7905C0DCB97E97379C3533 /* TVRootView.swift */; };
 		56431FC8A14E610ABACF6520 /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		56D87FA7BAFAB16DF3E30DE7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E5386B9F1DB4B3204F476074 /* Assets.xcassets */; };
@@ -70,6 +71,7 @@
 		5E1111510510B24B236906B5 /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		6322C31CF98F5ECFA3AE56D3 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
 		63B08E17DBBFD7E24926B7F0 /* PocketPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A89A309D9E0482377ED73866 /* PocketPace.swift */; };
+		651F05B7A2A58DAAEE67A09E /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
 		690E3C8230E79A06E5491FBC /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
 		6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		6D6F51A6884E7842339B80AC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */; };
@@ -219,6 +221,7 @@
 		AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoTVApp.swift; sourceTree = "<group>"; };
 		B2F92FDD0A90790863EA800E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceTokens.swift; sourceTree = "<group>"; };
+		B59E6ACE33B46DD8B96233DD /* AppleRecogniserProbeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleRecogniserProbeTests.swift; sourceTree = "<group>"; };
 		B5EB0F0DA44028EF600DC73F /* PocketPaceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PocketPaceTests.swift; sourceTree = "<group>"; };
 		B82E94F64E76CD6727BEB803 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
 		BE9C965D7E36544A4F9526C9 /* TopoHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -436,6 +439,7 @@
 			isa = PBXGroup;
 			children = (
 				F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */,
+				B59E6ACE33B46DD8B96233DD /* AppleRecogniserProbeTests.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
@@ -742,6 +746,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				07DD7564A112D8FE2FF4224F /* THIRD-PARTY in Resources */,
+				651F05B7A2A58DAAEE67A09E /* purple-elephants.wav in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -885,6 +890,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */,
+				5100DA364E205B42FC1A7E62 /* AppleRecogniserProbeTests.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
