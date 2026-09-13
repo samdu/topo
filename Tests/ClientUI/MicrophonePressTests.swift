@@ -15,7 +15,11 @@ import XCTest
 /// refused and why) as an activity with the report attached, so the result bundle says what
 /// was tested. A host with no audio input cannot run the microphone at all: the press is
 /// refused at `VoiceInput`'s input guard, before the tap, and the test ends in `XCTSkip` naming
-/// the coverage that is missing, never in a pass.
+/// the coverage that is missing, never in a pass. The fallback has two more host gaps, each
+/// matched exactly and skipped the same way: `SFSpeechRecognizer` reporting itself unavailable
+/// (a refusal before the tap), and its on-device recogniser failing to initialise
+/// (`kLSRErrorDomain` 300, a simulator without the speech assets), which ends the session before
+/// the tap delivers anything. Any other refusal or recogniser error fails.
 ///
 /// The lane is declared by the test runner's environment (`TEST_RUNNER_`-prefixed on the
 /// `xcodebuild` command line):
@@ -155,20 +159,41 @@ final class MicrophonePressTests: XCTestCase {
         let after = try waitForReport(app, timeout: 60, "the hold reached VoiceInput") { $0.presses == before.presses + 1 }
         XCTAssertEqual(app.state, .runningForeground)
 
+        if let refusal = after.refusal {
+            // Refused before the tap: the session count stands still and nothing was delivered.
+            // A host may lack an audio input, and the fallback's recogniser may be unavailable;
+            // any other refusal is a fault on the press.
+            XCTAssertEqual(after.sessions, before.sessions, "a refused hold opened no session: \(after.raw)")
+            XCTAssertEqual(after.capture, Capture(), "a refused hold delivered nothing: \(after.raw)")
+            record("\(branch.rawValue); microphone refused: \(refusal)", after)
+            switch refusal {
+            case "no audio input":
+                XCTAssertTrue(branch.recognisers.contains(after.recogniser ?? "none"),
+                              "the hold took the \(branch.rawValue) branch before its input guard: \(after.raw)")
+                if laneHasInput {
+                    XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the hold was refused for want of one: \(after.raw)")
+                }
+                throw XCTSkip("missing coverage: this host has no audio input, so the \(branch.rawValue) branch was refused at the input guard; the tap, the buffers, the sink and the decode did not run")
+            case "the speech recogniser is unavailable" where branch == .fallback:
+                // Only the fallback asks whether the recogniser is available, so this refusal is
+                // itself the branch: no recogniser was chosen.
+                throw XCTSkip("missing coverage: SFSpeechRecognizer reports itself unavailable on this host, so the fallback was refused before its tap; its buffers and recognition did not run")
+            default:
+                XCTFail("the hold was refused for a reason that is a fault: \(after.raw)")
+                return after
+            }
+        }
+
         XCTAssertTrue(branch.recognisers.contains(after.recogniser ?? "none"),
                       "the hold took the \(branch.rawValue) branch: \(after.raw)")
 
-        guard after.refusal == nil else {
-            // Refused. The one refusal a host may have is no audio input at all; the session
-            // count stands still and nothing reached the tap.
-            XCTAssertEqual(after.refusal, "no audio input", "the hold was refused for a reason that is a fault: \(after.raw)")
-            XCTAssertEqual(after.sessions, before.sessions, "a refused hold opened no session: \(after.raw)")
-            XCTAssertEqual(after.capture, Capture(), "a refused hold delivered nothing: \(after.raw)")
-            record("\(branch.rawValue); microphone refused: no audio input", after)
-            if laneHasInput {
-                XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the hold was refused for want of one: \(after.raw)")
-            }
-            throw XCTSkip("missing coverage: this host has no audio input, so the \(branch.rawValue) branch was refused at the input guard; the tap, the buffers, the sink and the decode did not run")
+        if branch == .fallback, after.capture.ended == "recogniser",
+           let error = after.capture.recogniserError, error.contains("kLSRErrorDomain Code=300") {
+            // The session opened and SFSpeechRecognizer ended it at once: its on-device
+            // recogniser could not be created on this host.
+            XCTAssertEqual(after.sessions, before.sessions + 1, "the hold's session opened the microphone: \(after.raw)")
+            record("\(branch.rawValue); the recogniser failed to initialise and ended the session", after)
+            throw XCTSkip("missing coverage: SFSpeechRecognizer could not initialise its on-device recogniser on this host (kLSRErrorDomain 300) and ended the fallback session before the tap delivered audio; the fallback's buffers and recognition did not run")
         }
 
         // The microphone ran: one new session, and audio counted inside the tap.
