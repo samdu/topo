@@ -10,7 +10,8 @@
 # profile for the team in Distribution/ExportOptions.plist; Xcode makes both
 # on its own the first time somebody signed into the account archives here.
 # The upload needs an App Store Connect API key, and docs/testflight.md says
-# where to get one.
+# where to get one. Before --upload, docs/testflight.md step 5: the fallback
+# recogniser pressed on a physical iPhone, which no automated test covers.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

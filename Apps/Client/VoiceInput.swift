@@ -89,6 +89,13 @@ final class VoiceInput {
     private var pressedAt: Date?
     private var finalArrived = false
     private var interruptionObserver: NSObjectProtocol?
+    #if DEBUG
+    /// What reached the input tap, counted on the audio thread; `capture` is its snapshot.
+    private let meter = TapMeter()
+    /// What the last session's microphone delivered and what it was heard as, for the UI
+    /// test: reset at every press, so a refused press reads as nothing delivered.
+    private(set) var capture = Capture()
+    #endif
 
     init(audio: AudioSession, ear: Ear = Ear()) {
         self.audio = audio
@@ -148,7 +155,12 @@ final class VoiceInput {
 
     /// The recogniser ended the session on its own: the words it heard are kept for the owner
     /// to send, and the microphone is released as on a release.
-    private func endedByRecogniser(_ gate: Gate) {
+    private func endedByRecogniser(_ gate: Gate, error: String?) {
+        #if DEBUG
+        capture.ended = "recogniser"
+        capture.recogniserError = error
+        capture.heard = text
+        #endif
         let heard = text
         generation += 1
         text = ""
@@ -169,6 +181,10 @@ final class VoiceInput {
     private func begin(as gate: Gate) async {
         presses += 1
         refusal = nil
+        #if DEBUG
+        capture = Capture()
+        meter.reset()
+        #endif
         generation += 1
         let mine = generation
         starting = true
@@ -215,10 +231,16 @@ final class VoiceInput {
             // an uncatchable exception on it, so refuse here and the next press works.
             guard format.sampleRate > 0, format.channelCount > 0 else { throw InputUnavailable() }
             input.removeTap(onBus: 0)
+            #if DEBUG
+            let meter = meter
+            #endif
             if local {
                 let sink = sink
                 sink.reset()
                 input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
+                    #if DEBUG
+                    meter.record(buffer)
+                    #endif
                     sink.append(buffer)
                 }
             } else {
@@ -230,6 +252,9 @@ final class VoiceInput {
                 // the one call Apple's own push-to-talk sample makes from a tap block.
                 nonisolated(unsafe) let fed = request
                 input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
+                    #if DEBUG
+                    meter.record(buffer)
+                    #endif
                     fed.append(buffer)
                 }
             }
@@ -246,13 +271,14 @@ final class VoiceInput {
                     let heard = result?.bestTranscription.formattedString
                     let final = result?.isFinal == true
                     let failed = error != nil
+                    let failure = error.map { "\($0)" }
                     Task { @MainActor in
                         guard let self, self.generation == mine else { return }
                         if let heard { self.text = heard }
                         if final { self.finalArrived = true }
                         if failed {
                             self.finalArrived = true
-                            if !self.ending { self.endedByRecogniser(gate) }
+                            if !self.ending { self.endedByRecogniser(gate, error: failure) }
                         }
                     }
                 }
@@ -296,8 +322,15 @@ final class VoiceInput {
         engine.inputNode.removeTap(onBus: 0)
         if engine.isRunning { engine.stop() }
         var heard: String
+        #if DEBUG
+        capture.ended = "release"
+        #endif
         if recogniser == .parakeet {
             let samples = sink.take()
+            #if DEBUG
+            capture.sunk = samples.count
+            capture.sinkRMS = TapMeter.rms(samples)
+            #endif
             if samples.isEmpty {
                 heard = ""
             } else {
@@ -315,6 +348,9 @@ final class VoiceInput {
             }
             heard = text
         }
+        #if DEBUG
+        capture.heard = heard
+        #endif
         guard generation == mine else { ending = false; return "" }
         generation += 1
         text = ""
@@ -370,6 +406,9 @@ final class VoiceInput {
     /// whether or not the engine ran, so the next start does not install a second one.
     private func tearDown() {
         let gate = owner
+        #if DEBUG
+        capture.delivered(meter.snapshot())
+        #endif
         captioner?.cancel()
         captioner = nil
         engine.inputNode.removeTap(onBus: 0)
@@ -391,4 +430,88 @@ final class VoiceInput {
 
     private struct InputUnavailable: Error {}
 }
+
+#if DEBUG
+extension VoiceInput {
+    /// What one session's microphone delivered. `buffers`, `frames` and `tapRMS` are counted
+    /// in the tap block itself, so they are what the input actually handed over after the
+    /// engine started, not that a tap was installed, and are taken at the teardown however the
+    /// session ended; `sunk` and `sinkRMS` are what reached the sample sink at the ear's rate
+    /// (the on-device branch only); `heard` is what the session heard; `ended` is "release" or
+    /// "recogniser" (the recogniser ended it on its own, with `recogniserError` when it failed).
+    struct Capture: Codable, Equatable {
+        var buffers = 0
+        var frames = 0
+        var rate = 0.0
+        var tapRMS = 0.0
+        var sunk = 0
+        var sinkRMS = 0.0
+        var heard = ""
+        var ended = ""
+        var recogniserError: String?
+
+        mutating func delivered(_ tap: Capture) {
+            buffers = tap.buffers
+            frames = tap.frames
+            rate = tap.rate
+            tapRMS = tap.tapRMS
+        }
+    }
+
+    /// The button's debug-only accessibility value, which the UI test decodes: the counters,
+    /// the ear's state, the branch the last press took, and what its microphone delivered.
+    struct Report: Codable, Equatable {
+        var presses: Int
+        var sessions: Int
+        var refusal: String?
+        var ear: String
+        var recogniser: String?
+        var capture: Capture
+    }
+
+    var debugReport: String {
+        let report = Report(presses: presses, sessions: sessions, refusal: refusal,
+                            ear: "\(ear.state)", recogniser: recogniser.map { "\($0)" }, capture: capture)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return (try? encoder.encode(report)).flatMap { String(data: $0, encoding: .utf8) } ?? "unencodable"
+    }
+}
+
+/// Counts what the input tap is handed, under a lock, from the audio thread.
+final class TapMeter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var capture = VoiceInput.Capture()
+    private var squares = 0.0
+
+    func record(_ buffer: AVAudioPCMBuffer) {
+        let frames = Int(buffer.frameLength)
+        var sum = 0.0
+        if let channel = buffer.floatChannelData {
+            for i in 0..<frames { sum += Double(channel[0][i] * channel[0][i]) }
+        }
+        lock.withLock {
+            capture.buffers += 1
+            capture.frames += frames
+            capture.rate = buffer.format.sampleRate
+            squares += sum
+            capture.tapRMS = capture.frames > 0 ? (squares / Double(capture.frames)).squareRoot() : 0
+        }
+    }
+
+    func snapshot() -> VoiceInput.Capture { lock.withLock { capture } }
+
+    func reset() {
+        lock.withLock {
+            capture = VoiceInput.Capture()
+            squares = 0
+        }
+    }
+
+    static func rms(_ samples: [Float]) -> Double {
+        guard !samples.isEmpty else { return 0 }
+        return (samples.reduce(0.0) { $0 + Double($1 * $1) } / Double(samples.count)).squareRoot()
+    }
+}
+#endif
 #endif
