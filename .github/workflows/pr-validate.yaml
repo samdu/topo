@@ -229,14 +229,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
+          # Both build even when the first fails, so one run reports both.
+          status=0
           xcodebuild build -project Topo.xcodeproj -scheme Topo \
             -configuration Release -destination 'generic/platform=iOS' \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee "$RESULTS/Topo-iOS-Release-build.log"
+            2>&1 | tee "$RESULTS/Topo-iOS-Release-build.log" \
+            || { echo "::error::Topo Release for iOS devices failed to build."; status=1; }
           xcodebuild build -project Topo.xcodeproj -scheme TopoHub \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
-            2>&1 | tee "$RESULTS/TopoHub-build.log"
+            2>&1 | tee "$RESULTS/TopoHub-build.log" \
+            || { echo "::error::TopoHub failed to build."; status=1; }
+          exit "$status"
 
       - name: Upload logs and result bundles
         if: ${{ always() }}
