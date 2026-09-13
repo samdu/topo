@@ -3,6 +3,9 @@ import CryptoKit
 import Foundation
 import Observation
 import UIKit
+#if canImport(FluidAudio)
+import FluidAudio
+#endif
 
 /// Every file the phone downloads for its on-device models, pinned: repository, revision, and
 /// the flattened file list with sizes and digests. `Apps/Topo/Resources/models.json`, written by
@@ -81,14 +84,44 @@ enum ModelStoreError: LocalizedError {
 /// anything less is a set to finish, file by file, not to start again.
 struct ModelStore: Sendable {
     let root: URL
+    /// The entries that live somewhere other than under `root`, by id. The CTC spotter's is the
+    /// one: FluidAudio's `VocabularyBoostingSession` reads its tokenizer from
+    /// `CtcModels.defaultCacheDirectory` whatever directory the models were loaded from, and
+    /// its init takes no other, so the spotter's files are downloaded to that path and the ear
+    /// loads them from there; one copy, agreed on by both. The ledger and the resume data sit
+    /// beside the files wherever the entry lives.
+    let homes: [String: URL]
+
+    init(root: URL, homes: [String: URL] = [:]) {
+        self.root = root
+        self.homes = homes
+    }
 
     static func standard() -> ModelStore {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return ModelStore(root: support.appendingPathComponent("Models", isDirectory: true))
+        var homes: [String: URL] = [:]
+        #if canImport(FluidAudio)
+        homes[ModelManifest.ctc] = CtcModels.defaultCacheDirectory(for: .ctc110m)
+        #endif
+        let store = ModelStore(root: support.appendingPathComponent("Models", isDirectory: true), homes: homes)
+        store.rehome()
+        return store
     }
 
     func directory(for model: ModelManifest.Model) -> URL {
-        root.appendingPathComponent(model.id, isDirectory: true)
+        homes[model.id] ?? root.appendingPathComponent(model.id, isDirectory: true)
+    }
+
+    /// An entry downloaded under `root` before its home was elsewhere is moved there, ledger
+    /// and resume data with it: a rename on one volume, not a second download.
+    func rehome() {
+        let fm = FileManager.default
+        for (id, home) in homes {
+            let old = root.appendingPathComponent(id, isDirectory: true)
+            guard fm.fileExists(atPath: old.path), !fm.fileExists(atPath: home.path) else { continue }
+            try? fm.createDirectory(at: home.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.moveItem(at: old, to: home)
+        }
     }
 
     func location(of file: ModelManifest.File, in model: ModelManifest.Model) -> URL {

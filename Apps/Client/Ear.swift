@@ -18,6 +18,10 @@ import FluidAudio
 /// from there, told to touch no network of its own. Until they are resident, or if they fail to
 /// load, `VoiceInput` uses `SFSpeechRecognizer` instead, so nothing here can leave a press deaf.
 ///
+/// The vocabulary is a layer over that, not a condition of it. Parakeet recognising bare is
+/// far better than the fallback, so a boosting session that cannot be built (and none is
+/// built for an empty list) leaves the ear ready and says so in `summary`.
+///
 /// Published state lives on the main actor; recognition itself runs in `EarEngine`, an actor,
 /// because a CoreML decode on the main thread is a visible freeze.
 @MainActor
@@ -28,7 +32,8 @@ final class Ear {
     enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
-    /// Why the ear is not available, when it is not. Cleared by the next `prepare`.
+    /// Why the ear is not available when it is not, or why the vocabulary is not applied when
+    /// the ear is ready without it. Cleared by the next `prepare`, or by the rebuild that works.
     private(set) var trouble: String?
     /// Where the load has got to: a state that just says "loading" for a minute reads as hung.
     private(set) var progress = ""
@@ -53,13 +58,24 @@ final class Ear {
     nonisolated static let minSimilarity: Float = 0.65
     nonisolated static let minTermLength = 3
 
+    private let engine: any SpeechEngine
+
     /// Counts the lists handed to the engine, so of two edits in flight the later one is the
     /// session that stands whichever finishes first.
     private var vocabularyVersion = 0
 
-    init(vocabulary: Vocabulary = Vocabulary()) {
+    init(vocabulary: Vocabulary = Vocabulary(), engine: any SpeechEngine = Ear.defaultEngine()) {
         self.vocabulary = vocabulary
+        self.engine = engine
         vocabulary.changed = { [weak self] in self?.rebuild() }
+    }
+
+    static func defaultEngine() -> any SpeechEngine {
+        #if canImport(FluidAudio)
+        return EarEngine.shared
+        #else
+        return NoEngine()
+        #endif
     }
 
     var ready: Bool { state == .ready }
@@ -70,7 +86,7 @@ final class Ear {
         case .cold: return "not loaded"
         case .fetching: return ModelDownloads.shared.describe(Self.models)
         case .loading: return progress.isEmpty ? "loading" : "loading: \(progress)"
-        case .ready: return trouble.map { "Parakeet resident; vocabulary not applied: \($0)" } ?? "Parakeet resident"
+        case .ready: return trouble.map { "Parakeet resident; vocabulary boost unavailable: \($0)" } ?? "Parakeet resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
@@ -80,88 +96,94 @@ final class Ear {
     /// the first press and a download that failed is tried again; a press that beats the load
     /// uses the fallback.
     func prepare() {
-        #if canImport(FluidAudio)
         let downloads = ModelDownloads.shared
         downloads.start(Self.models)
         guard state == .cold || state == .failed else { return }
         state = .fetching
         trouble = nil
-        downloads.whenPresent(Self.models) { [weak self] in self?.load() }
-        #else
-        state = .failed
-        trouble = "FluidAudio is not linked in this build"
-        #endif
+        downloads.whenPresent(Self.models) { [weak self] in
+            guard let self, self.state == .fetching else { return }
+            do {
+                self.load(parakeet: try downloads.directory(for: ModelManifest.parakeet),
+                          ctc: try downloads.directory(for: ModelManifest.ctc))
+            } catch {
+                self.state = .failed
+                self.trouble = error.localizedDescription
+            }
+        }
     }
 
-    /// The CoreML compile, from the store's directories, once the files are all there.
-    private func load() {
-        #if canImport(FluidAudio)
-        guard state == .fetching else { return }
+    /// The CoreML compile from the store's directories, then the vocabulary over it. The ear is
+    /// ready once the models are; the session is built after, through `rebuild`, whose failure
+    /// is `summary`'s to report and not the ear's to fall on.
+    func load(parakeet: URL, ctc: URL) {
         state = .loading
-        vocabularyVersion += 1
-        let version = vocabularyVersion
         Task {
             do {
-                let downloads = ModelDownloads.shared
-                let parakeet = try downloads.directory(for: ModelManifest.parakeet)
-                let ctc = try downloads.directory(for: ModelManifest.ctc)
-                try await EarEngine.shared.load(parakeet: parakeet, ctc: ctc, terms: vocabulary.terms,
-                                                version: version) { [weak self] line in
+                try await engine.load(parakeet: parakeet, ctc: ctc) { [weak self] line in
                     Task { @MainActor in self?.progress = line }
                 }
                 state = .ready
                 progress = ""
-                // An edit that landed during the load was refused by the engine, whose session
-                // did not exist yet; it is applied now.
-                if vocabularyVersion != version { rebuild() }
+                rebuild()
             } catch {
                 state = .failed
                 trouble = error.localizedDescription
                 progress = ""
             }
         }
-        #endif
     }
 
-    /// The spotter's session around the list as it is now: an edit landing. Nothing until the
-    /// models are resident; a load in flight reads the list when it finishes. A rebuild that
-    /// fails leaves the session that was standing and says so in `summary`.
+    /// The spotter's session around the list as it is now: an edit landing, or the load
+    /// finishing. Nothing until the models are resident; an edit during the load is read by the
+    /// rebuild that follows it. A rebuild that fails leaves the session that was standing and
+    /// says so in `summary`; one that works clears that.
     private func rebuild() {
-        #if canImport(FluidAudio)
         vocabularyVersion += 1
         let version = vocabularyVersion
         guard state == .ready else { return }
         let terms = vocabulary.terms
         Task {
             do {
-                try await EarEngine.shared.rebuild(terms: terms, version: version)
+                try await engine.rebuild(terms: terms, version: version)
                 if vocabularyVersion == version { trouble = nil }
             } catch {
                 if vocabularyVersion == version { trouble = error.localizedDescription }
             }
         }
-        #endif
     }
 
     /// A glance mid-utterance, for the caption: the audio so far, decoded bare. No rescore,
     /// because the caption is provisional by definition and the CTC pass would double the cost
     /// of something thrown away a second later.
     func glance(_ samples: [Float]) async throws -> String {
-        #if canImport(FluidAudio)
-        return try await EarEngine.shared.transcribe(samples, boosted: false)
-        #else
-        throw EarError.unavailable("FluidAudio is not linked in this build")
-        #endif
+        try await engine.transcribe(samples, boosted: false)
     }
 
     /// The whole utterance, decoded and rescored on the vocabulary: what becomes the turn.
     func hear(_ samples: [Float]) async throws -> String {
-        #if canImport(FluidAudio)
-        return try await EarEngine.shared.transcribe(samples, boosted: true)
-        #else
-        throw EarError.unavailable("FluidAudio is not linked in this build")
-        #endif
+        try await engine.transcribe(samples, boosted: true)
     }
+}
+
+/// The engine as the ear drives it: `EarEngine` in the app, a double in the tests.
+protocol SpeechEngine: Sendable {
+    /// The models from disk. Throws when they cannot be loaded, which fails the ear.
+    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws
+    /// The boosting session around `terms`, or none for an empty list. Throws when the session
+    /// cannot be built, which leaves the ear ready without it.
+    func rebuild(terms: [String], version: Int) async throws
+    func transcribe(_ samples: [Float], boosted: Bool) async throws -> String
+}
+
+/// Stands in where FluidAudio is not linked: every call fails, so `VoiceInput` uses the fallback.
+struct NoEngine: SpeechEngine {
+    private static let why = "FluidAudio is not linked in this build"
+    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+        throw EarError.unavailable(Self.why)
+    }
+    func rebuild(terms: [String], version: Int) async throws { throw EarError.unavailable(Self.why) }
+    func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { throw EarError.unavailable(Self.why) }
 }
 
 enum EarError: LocalizedError {
@@ -228,33 +250,59 @@ final class SampleSink: @unchecked Sendable {
 }
 
 #if canImport(FluidAudio)
+/// Parakeet's per-token timings, which the rescore step lines the spotter's evidence up
+/// against. Named here so a `Boost` outside this file needs no FluidAudio of its own.
+typealias EarTimings = [TokenTiming]
+
+/// The rescore step as the engine calls it: FluidAudio's session in the app, a stub in tests.
+protocol Boost: Sendable {
+    /// The text with the vocabulary's replacements applied, or nil where none were.
+    func rescored(_ text: String, timings: EarTimings, samples: [Float]) async -> String?
+}
+
+extension VocabularyBoostingSession: Boost {
+    func rescored(_ text: String, timings: EarTimings, samples: [Float]) async -> String? {
+        await rescore(text: text, tokenTimings: timings, audioSamples: samples)?.text
+    }
+}
+
 /// Everything FluidAudio, one instance for the process. Parakeet and the CTC spotter are about
 /// 120 MB resident together, and an actor because `transcribe` is a synchronous CoreML forward
 /// pass.
-actor EarEngine {
+actor EarEngine: SpeechEngine {
     static let shared = EarEngine()
 
     /// v2 explicitly: `AsrModels` defaults to v3, and the multilingual model is a different
     /// recogniser from the one every number was measured on.
     static let version: AsrModelVersion = .v2
 
+    /// The session around a list: FluidAudio's, over the resident spotter, or nil for a list
+    /// with nothing in it the spotter could look for.
+    typealias Builder = @Sendable ([String]) async throws -> (any Boost)?
+
     private var asr: AsrManager?
-    private var boost: VocabularyBoostingSession?
-    /// Kept resident so an edited list is a rebuilt context, not a second trip through the
-    /// CoreML loads.
-    private var ctcModels: CtcModels?
-    private var tokenizer: CtcTokenizer?
+    private var boost: (any Boost)?
+    /// Set by `load` over the spotter's models and tokenizer, which stay resident in it so an
+    /// edited list is a rebuilt context, not a second trip through the CoreML loads.
+    private var builder: Builder?
     /// The version of the list the session holds; an older one arriving late is dropped.
     private var applied = 0
 
-    /// Load from disk, the acoustic model then the spotter, then the vocabulary tokenised
-    /// against it. `parakeet` is the directory the manifest's Parakeet entry fills (named as
-    /// FluidAudio's loader expects, since it appends that name to the parent it is given) and
-    /// `ctc` the spotter's. The gate is constant; the list is the caller's, and `rebuild` swaps
-    /// it live.
-    func load(parakeet: URL, ctc: URL, terms: [String], version: Int,
-              onProgress: @escaping @Sendable (String) -> Void) async throws {
-        if asr != nil && boost != nil { return }
+    /// The tests hand in a builder over no models; the app's instance gets its own from `load`.
+    init(builder: Builder? = nil) {
+        self.builder = builder
+    }
+
+    /// Whether a session stands: a rescored `transcribe` differs from a bare one only then.
+    var boosted: Bool { boost != nil }
+
+    /// Load from disk, the acoustic model then the spotter. `parakeet` is the directory the
+    /// manifest's Parakeet entry fills (named as FluidAudio's loader expects, since it appends
+    /// that name to the parent it is given) and `ctc` the spotter's, which is also where
+    /// FluidAudio's boosting session will read the tokenizer from (`ModelStore.homes`). The
+    /// list is `rebuild`'s.
+    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+        if asr != nil && builder != nil { return }
         // Every file is the manifest's and verified; a load that fails is reported, and never
         // answered by FluidAudio deleting the directory and fetching afresh over a session of
         // its own.
@@ -267,24 +315,33 @@ actor EarEngine {
         asr = manager
 
         onProgress("compiling the CTC spotter")
-        ctcModels = try await CtcModels.loadDirect(from: ctc, variant: .ctc110m)
-        tokenizer = try await CtcTokenizer.load(from: ctc)
-        try await rebuild(terms: terms, version: version)
+        let ctcModels = try await CtcModels.loadDirect(from: ctc, variant: .ctc110m)
+        let tokenizer = try await CtcTokenizer.load(from: ctc)
+        builder = { terms in
+            let vterms = terms.compactMap { term -> CustomVocabularyTerm? in
+                let ids = tokenizer.encode(term)
+                guard !ids.isEmpty else { return nil }
+                return CustomVocabularyTerm(text: term, aliases: nil, ctcTokenIds: ids)
+            }
+            guard !vterms.isEmpty else { return nil }
+            let context = CustomVocabularyContext(terms: vterms, minSimilarity: Ear.minSimilarity,
+                                                  minTermLength: Ear.minTermLength)
+            return try await VocabularyBoostingSession(vocabulary: context, ctcModels: ctcModels, config: .init())
+        }
     }
 
     /// The session around a fresh list. Cheap against the loads above: tokenisation and a new
     /// context. Nothing until the spotter is resident, and a list older than the one applied
-    /// is dropped, so two edits in flight end on the later one.
+    /// is dropped, so two edits in flight end on the later one. An empty list is no session at
+    /// all, so removing the last term removes the boost: a rescorer over nothing is pure cost.
     func rebuild(terms: [String], version: Int) async throws {
-        guard let ctcModels, let tokenizer, version > applied else { return }
-        let vterms = terms.compactMap { term -> CustomVocabularyTerm? in
-            let ids = tokenizer.encode(term)
-            guard !ids.isEmpty else { return nil }
-            return CustomVocabularyTerm(text: term, aliases: nil, ctcTokenIds: ids)
+        guard let builder, version > applied else { return }
+        let session: (any Boost)?
+        if terms.isEmpty {
+            session = nil
+        } else {
+            session = try await builder(terms)
         }
-        let context = CustomVocabularyContext(terms: vterms, minSimilarity: Ear.minSimilarity,
-                                              minTermLength: Ear.minTermLength)
-        let session = try await VocabularyBoostingSession(vocabulary: context, ctcModels: ctcModels, config: .init())
         guard version > applied else { return }
         applied = version
         boost = session
@@ -300,9 +357,9 @@ actor EarEngine {
         let result = try await asr.transcribe(samples, decoderState: &state)
         var text = result.text
         if boosted, let boost {
-            let rescored = await boost.rescore(text: text, tokenTimings: result.tokenTimings ?? [],
-                                               audioSamples: samples)
-            if let rescored { text = rescored.text }
+            if let rescored = await boost.rescored(text, timings: result.tokenTimings ?? [], samples: samples) {
+                text = rescored
+            }
         }
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
