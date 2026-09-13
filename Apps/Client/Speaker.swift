@@ -6,10 +6,12 @@ import Observation
 /// a backgrounded process that does, so the scene stops it on leaving the foreground. Pressing
 /// the microphone stops it too, so the mic does not hear the speaker.
 ///
-/// Two voices. When the `Voice` (Kokoro, on the device) is resident and the scene is active, the
-/// reply is cut into sentences, each synthesised behind the one before and played the moment it
-/// exists, so what a listener waits for is the first sentence rather than the reply. Otherwise
-/// the reply goes to `AVSpeechSynthesizer`. The choice is made at `speak` and kept for the reply.
+/// Two voices. When the `Voice` (Pocket TTS, on the device) is resident and the scene is active,
+/// the reply is cut into sentences, each synthesised behind the one before, paced in two stages
+/// (`PocketPace.trimGaps` on the buffer, then the queue's time-pitch unit at `Voice.tempo`) and
+/// played the moment it exists, so what a listener waits for is the first sentence rather than
+/// the reply. Otherwise the reply goes to `AVSpeechSynthesizer`, which takes neither stage. The
+/// choice is made at `speak` and kept for the reply.
 ///
 /// Every `speak` is a generation. A clip that lands after a `stop`, or a delegate callback for
 /// an earlier utterance, belongs to no reply and changes nothing.
@@ -92,7 +94,8 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
                 do {
                     let clip = try await self.voice.synthesise(sentence)
                     guard self.generation == mine else { return }
-                    try self.queue.play(clip.samples, rate: clip.rate)
+                    // Stage one of the pacing, on the buffer; stage two is the queue's unit.
+                    try self.queue.play(PocketPace.trimGaps(clip.samples, rate: clip.rate), rate: clip.rate)
                 } catch {}
             }
         }
@@ -155,6 +158,10 @@ final class PlayQueue: @unchecked Sendable {
 
     private var engine: AVAudioEngine?
     private let node = AVAudioPlayerNode()
+    /// Between the player and the mixer: stage two of the pacing, for a voice with no pace of
+    /// its own. `rate` stretches time and leaves the pitch where it was, so at `Voice.tempo` the
+    /// words come faster without rising.
+    private let timePitch = AVAudioUnitTimePitch()
     private var format: AVAudioFormat?
     private let lock = NSLock()
     private var pending = 0
@@ -173,7 +180,10 @@ final class PlayQueue: @unchecked Sendable {
                                         channels: 1, interleaved: false) else { throw VoiceError.noPlayer }
             let e = AVAudioEngine()
             e.attach(node)
-            e.connect(node, to: e.mainMixerNode, format: f)
+            e.attach(timePitch)
+            e.connect(node, to: timePitch, format: f)
+            e.connect(timePitch, to: e.mainMixerNode, format: f)
+            timePitch.rate = Voice.tempo
             engine = e
             format = f
         }

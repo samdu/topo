@@ -6,21 +6,25 @@ import MLX
 import MLXAudioTTS
 #endif
 
-/// Text to speech on this phone: Kokoro-82M through mlx-audio-swift, speaking Buddy's blended
-/// voice. The measured reason (Daphne's voice bench): 0.45s to the first word here against 3s
-/// for a server's audio over the network the phone is on, the difference being a round trip and
-/// a download that do not exist on this path.
+/// Text to speech on this phone: Kyutai's Pocket TTS through mlx-audio-swift, speaking its stock
+/// `eponine`. The measured reason for a voice on the device (Daphne's voice bench): 0.45s to the
+/// first word here against 3s for a server's audio over the network the phone is on, the
+/// difference being a round trip and a download that do not exist on this path.
+///
+/// A stock voice rather than a blend: each person names their own mind, so the default voice
+/// is nobody's in particular. Pocket is a small language model over Mimi audio frames, which is
+/// where its prosody comes from, and it has no pace knob of its own, so `Speaker` paces every
+/// sentence on the way to the speaker (`PocketPace`, then the play queue's time-pitch unit at
+/// `Voice.tempo`).
 ///
 /// The model is not in the bundle. `ModelDownloads` fetches it through the app's background
-/// session (about 320 MB: 311 MB of weights and 9 MB for the English grapheme-to-phoneme
-/// resources, listed file by file in the manifest) into the app's Application Support, and
-/// mlx-audio-swift loads it from there. The voice itself is bundled (`bm_buddy.safetensors`,
-/// 510 KB): it is a blend, not one of the repo's voices, which is why none of those are fetched.
-/// Until the model is resident, or if it fails to load, `Speaker` uses `AVSpeechSynthesizer`
-/// instead.
+/// session (about 237 MB: the bf16 weights, the config, the tokenizer and the one speaker
+/// embedding, listed file by file in the manifest) into the app's Application Support, and
+/// mlx-audio-swift loads it from there. Until the model is resident, or if it fails to load,
+/// `Speaker` uses `AVSpeechSynthesizer` instead.
 ///
-/// Published state lives on the main actor; synthesis itself runs in `KokoroEngine`, off it,
-/// because Kokoro's forward pass runs synchronously and would freeze the screen for seconds.
+/// Published state lives on the main actor; synthesis itself runs in `PocketEngine`, off it,
+/// because the decode loop runs synchronously and would freeze the screen for seconds.
 @MainActor
 @Observable
 final class Voice {
@@ -33,11 +37,18 @@ final class Voice {
     private(set) var trouble: String?
 
     /// The manifest entries the voice needs on disk.
-    static let models = [ModelManifest.kokoro, ModelManifest.g2p]
+    static let models = [ModelManifest.pocket]
 
-    /// Buddy's pacing. Kokoro scales predicted phoneme durations rather than resampling, so
-    /// this is faster speech at the same pitch; 1.18 is the pace Sam chose by ear.
-    nonisolated static let pace: Float = 1.18
+    /// The speaker: one of the eight stock embeddings in the model repository, resolved by the
+    /// port against the model directory's `embeddings/`. The manifest fetches this one only.
+    nonisolated static let speaker = "eponine"
+
+    /// Stage two of the pacing, the rate of the play queue's `AVAudioUnitTimePitch` with the
+    /// pitch untouched; stage one is `PocketPace.trimGaps`, which is why this is a small number.
+    /// A per-speaker constant rather than a per-clip calculation: measured on one script, after
+    /// trimming, eponine articulates 4.28 words per voiced second against Kokoro at Sam's pace
+    /// on 5.32, and 1.20 brings her to about 5.02, just under his baseline rather than past it.
+    nonisolated static let tempo: Float = 1.20
 
     var ready: Bool { state == .ready }
 
@@ -47,7 +58,7 @@ final class Voice {
         case .cold: return "not loaded"
         case .fetching: return ModelDownloads.shared.describe(Self.models)
         case .loading: return "loading"
-        case .ready: return "Kokoro resident"
+        case .ready: return "Pocket resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
     }
@@ -75,16 +86,14 @@ final class Voice {
         #endif
     }
 
-    /// The read into MLX, from the store's directories, once the files are all there.
+    /// The read into MLX, from the store's directory, once the files are all there.
     private func load() {
         #if canImport(MLXAudioTTS) && !targetEnvironment(simulator)
         guard state == .fetching else { return }
         state = .loading
         Task {
             do {
-                let downloads = ModelDownloads.shared
-                try await KokoroEngine.shared.load(kokoro: downloads.directory(for: ModelManifest.kokoro),
-                                                   g2p: downloads.directory(for: ModelManifest.g2p))
+                try await PocketEngine.shared.load(from: ModelDownloads.shared.directory(for: ModelManifest.pocket))
                 state = .ready
             } catch {
                 state = .failed
@@ -98,7 +107,7 @@ final class Voice {
     /// because the caller queues them for playback the instant they exist.
     func synthesise(_ text: String) async throws -> Clip {
         #if canImport(MLXAudioTTS) && !targetEnvironment(simulator)
-        return try await KokoroEngine.shared.synthesise(text)
+        return try await PocketEngine.shared.synthesise(text)
         #else
         throw VoiceError.notLoaded
         #endif
@@ -112,88 +121,50 @@ final class Voice {
 
 enum VoiceError: LocalizedError {
     case notLoaded
-    case noVoice
     case noPlayer
 
     var errorDescription: String? {
         switch self {
-        case .notLoaded: return "Kokoro is not loaded"
-        case .noVoice: return "bm_buddy.safetensors is not in the bundle"
+        case .notLoaded: return "Pocket TTS is not loaded"
         case .noPlayer: return "no playback format"
         }
     }
 }
 
 #if canImport(MLXAudioTTS) && !targetEnvironment(simulator)
-/// Everything MLX, one instance for the process; the weights are about 160 MB resident. Not an
-/// actor: `MLXArray` is not Sendable and the model's `generate` is nonisolated, so an actor could
-/// never hand it the voice under strict concurrency. Calls are serialised by their callers
-/// instead, which is the shape they have anyway: `Voice.prepare` loads once, gated by its
-/// state, and `Speaker`'s chain synthesises one sentence at a time.
-final class KokoroEngine: @unchecked Sendable {
-    static let shared = KokoroEngine()
+/// Everything MLX, one instance for the process. Not an actor: `MLXArray` is not Sendable and
+/// the model's `generate` is nonisolated, so an actor could never hand its result across under
+/// strict concurrency. Calls are serialised by their callers instead, which is the shape they
+/// have anyway: `Voice.prepare` loads once, gated by its state, and `Speaker`'s chain
+/// synthesises one sentence at a time.
+final class PocketEngine: @unchecked Sendable {
+    static let shared = PocketEngine()
 
-    /// Buddy's blended style vector: `[510, 1, 256]` float32 under the key `voice`.
-    static let voiceResource = "bm_buddy"
-    /// A Kokoro voice picks its grapheme-to-phoneme language from the first letter of its
-    /// name (`b` is en-gb), and a reference vector arrives with no name to read, so British
-    /// has to be asked for by hand or the voice phonemises American.
-    static let language = "en-gb"
+    private var model: PocketTTSModel?
 
-    private var model: KokoroModel?
-    private var voice: MLXArray?
-
-    /// `kokoro` is the directory the manifest's Kokoro entry fills (the config and the weights)
-    /// and `g2p` the English phonemiser's, which sits where mlx-audio-swift's processor looks
-    /// for it: under the Hugging Face cache root `ModelDownloads` points at the store.
-    func load(kokoro: URL, g2p: URL) async throws {
+    /// `directory` is the one the manifest's Pocket entry fills: the config, the weights, the
+    /// tokenizer and `embeddings/<speaker>.safetensors`, which is everything the port reads.
+    /// Loaded from the directory rather than by repository name, so the port never opens a
+    /// session of its own to the Hub.
+    func load(from directory: URL) async throws {
         if model != nil { return }
         // Unbounded, MLX caches a Metal buffer for every tensor shape it has seen, and each
         // sentence length is a new set of shapes; the growth is what jetsams the app, with no
         // crash log. 64 MB keeps same-shape reuse and stops the climb.
         Memory.cacheLimit = 64 * 1024 * 1024
-        // The processor's own check for a fetched repository wants a valid `config.json`
-        // beside the weights, and this repository has none; without one it fetches the
-        // repository again over a session of its own. An empty object satisfies it.
-        let placeholder = g2p.appendingPathComponent("config.json")
-        if !FileManager.default.fileExists(atPath: placeholder.path) {
-            try "{}".write(to: placeholder, atomically: true, encoding: .utf8)
-        }
-        // `fromModelDirectory` leaves the processor nil when none is passed, and a nil
-        // processor tokenises the raw English as if it were IPA: it synthesises, badly, with
-        // no error.
-        let processor = KokoroMultilingualProcessor()
-        try await processor.prepare(for: Self.language)
-        let m = try await KokoroModel.fromModelDirectory(kokoro, textProcessor: processor)
-        m.speed = Voice.pace
-        model = m
-        voice = try Self.bundledVoice()
+        model = try await PocketTTSModel.fromModelDirectory(directory)
     }
 
     func synthesise(_ text: String) async throws -> Voice.Clip {
-        guard let model, let voice else { throw VoiceError.notLoaded }
+        guard let model else { throw VoiceError.notLoaded }
         let audio = try await model.generate(
             text: text,
-            // The voice name is what the model would look up on disk and route the G2P by; the
-            // vector goes in as the reference instead.
-            voice: nil, refAudio: voice, refText: nil,
-            language: Self.language,
+            voice: Voice.speaker,
+            refAudio: nil, refText: nil, language: nil,
             generationParameters: model.defaultGenerationParameters)
         // MLX is lazy: `generate` hands back a graph, and the decoder runs when something asks
         // for the numbers.
         return Voice.Clip(samples: audio.asArray(Float.self), rate: model.sampleRate)
-    }
-
-    private static func bundledVoice() throws -> MLXArray {
-        guard let url = Bundle.main.url(forResource: voiceResource, withExtension: "safetensors")
-        else { throw VoiceError.noVoice }
-        let arrays = try MLX.loadArrays(url: url)
-        guard var v = arrays["voice"] ?? arrays.values.first else { throw VoiceError.noVoice }
-        v = v.asType(.float32)
-        // The file is [510, 1, 256] and the model indexes [token count, style], which is what
-        // its own voice loader does to the repo's voices.
-        if v.ndim == 3 { v = v.squeezed(axis: 1) }
-        return v
     }
 }
 #endif

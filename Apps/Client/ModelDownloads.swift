@@ -40,10 +40,8 @@ struct ModelManifest: Codable, Sendable {
     /// the parent of the directory it is given.
     static let parakeet = "parakeet-tdt-0.6b-v2"
     static let ctc = "parakeet-ctc-110m-coreml"
-    static let kokoro = "Kokoro-82M-bf16"
-    /// Under `hub/` because mlx-audio-swift's English phonemiser reads its files from the
-    /// Hugging Face cache root, which `KokoroEngine` points at the store's `hub` directory.
-    static let g2p = "hub/mlx-audio/beshkenadze_kitten-tts-g2p"
+    /// The voice's directory: everything `PocketEngine` loads, the one speaker included.
+    static let pocket = "pocket-tts"
 
     static func load(from url: URL) throws -> ModelManifest {
         try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: url))
@@ -88,10 +86,6 @@ struct ModelStore: Sendable {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return ModelStore(root: support.appendingPathComponent("Models", isDirectory: true))
     }
-
-    /// The Hugging Face cache root mlx-audio-swift's processors read from; `ModelManifest.g2p`
-    /// lives under it.
-    var hubCache: URL { root.appendingPathComponent("hub", isDirectory: true) }
 
     func directory(for model: ModelManifest.Model) -> URL {
         root.appendingPathComponent(model.id, isDirectory: true)
@@ -211,7 +205,7 @@ final class ModelDownloads {
     private var failures: [String: String] = [:]
     private var waiters: [(ids: [String], body: @MainActor () -> Void)] = []
     /// The models something in this process has asked for; the rest of the manifest is left
-    /// alone (the simulator's voice never asks for Kokoro).
+    /// alone (the simulator's voice never asks for Pocket).
     private var wanted: Set<String> = []
     private var reconciling = false
     /// What iOS gave `handleEventsForBackgroundURLSession`, called once the session has
@@ -241,10 +235,6 @@ final class ModelDownloads {
             self.manifest = nil
             trouble = error.localizedDescription
         }
-        // mlx-audio-swift's processors look their files up under the Hugging Face cache root,
-        // which is Caches by default and iOS's to purge; this puts it in the store, so the files
-        // the manifest owns are the ones they find. Before anything reads `HubCache.default`.
-        setenv("HF_HUB_CACHE", store.hubCache.path, 1)
         relay = SessionRelay(store: store, manifest: self.manifest)
         session = URLSession(configuration: Self.configuration(), delegate: relay, delegateQueue: nil)
         relay.events = { [weak self] event in Task { @MainActor in self?.handle(event) } }
