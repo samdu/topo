@@ -163,6 +163,12 @@ struct ChatView: View {
     private func sendSpoken(_ heard: String) async {
         draft = ""
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        #if DEBUG
+        if DebugRun.keepsSpoken() {
+            DebugRun.say("heard, not sent: \(heard)")
+            return
+        }
+        #endif
         spokenTurns.insert(harness.willSend(heard))
         await harness.retry()
     }
@@ -180,10 +186,12 @@ struct ChatView: View {
                     Task { await micPressed(down) }
                 }
                 .accessibilityLabel(voice.handsFree ? "Listening; press to send" : voice.listening ? "Listening; release to send" : "Hold to talk")
-                // What the UI test asserts on after a hold: that a session's microphone ran, or
-                // why none did. A debug build only, so VoiceOver on a release build hears the
-                // label alone.
-                .debugAccessibilityValue("\(voice.presses) pressed, \(voice.sessions) heard" + (voice.refusal.map { "; \($0)" } ?? ""))
+                #if DEBUG
+                // What the UI test decodes after a press: the counters, the branch it took, and
+                // what the microphone delivered, as JSON (`VoiceInput.Report`). A debug build
+                // only, so VoiceOver on a release build hears the label alone.
+                .accessibilityValue(voice.debugReport)
+                #endif
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }
@@ -198,17 +206,6 @@ struct ChatView: View {
         let text = draft
         draft = ""
         Task { await harness.send(text) }
-    }
-}
-
-private extension View {
-    /// An accessibility value in a debug build and nothing in a release one.
-    @ViewBuilder func debugAccessibilityValue(_ value: String) -> some View {
-        #if DEBUG
-        accessibilityValue(value)
-        #else
-        self
-        #endif
     }
 }
 #endif

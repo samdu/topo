@@ -158,6 +158,9 @@ targets:
     platform: iOS
     sources:
       - Tests/ClientUI
+      # The phrase the microphone test plays into the host's output and expects Parakeet to hear.
+      - path: Tests/Fixtures
+        buildPhase: resources
     dependencies:
       - target: Topo
     settings:
