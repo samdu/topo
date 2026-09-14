@@ -14,7 +14,10 @@ import TopoCore
 ///
 /// The loop stays. Apple delivers a background push at the system's
 /// discretion, so this is an accelerator and never the only way a turn is
-/// noticed: with every push dropped, the app behaves exactly as it did before.
+/// noticed: with every push dropped, the app answers on the loop's interval.
+///
+/// The iOS target only. The watch and the TV read the log and never answer, so
+/// neither subscribes nor carries the push entitlement.
 enum TurnPush {
     /// Fixed, so the subscription is made once per Apple ID and every later
     /// launch finds it rather than making a second one.

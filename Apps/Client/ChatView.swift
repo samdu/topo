@@ -18,13 +18,20 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showDiagnostics = false
     @State private var showAbout = false
+    @State private var showVocabulary = false
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                TranscriptView(turns: harness.turns, notice: harness.notice)
+                TranscriptView(turns: harness.turns, notice: harness.notice,
+                               // Holding one of Topo's turns says it again, which is how a
+                               // typed turn's reply — never read aloud as it lands — is heard.
+                               replay: Replay(speaking: speaker.speaking,
+                                              canSpeak: speaker.foreground,
+                                              say: { speaker.speak($0) },
+                                              stopSpeaking: { speaker.stop() }))
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
@@ -74,6 +81,7 @@ struct ChatView: View {
                             ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
                         }
                         Toggle("Read replies aloud", isOn: $readAloud)
+                        Button("Vocabulary") { showVocabulary = true }
                         Button("Diagnostics") { showDiagnostics = true }
                         Button("About Topo") { showAbout = true }
                         Divider()
@@ -85,22 +93,9 @@ struct ChatView: View {
             }
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
             .sheet(isPresented: $showAbout) { AboutView() }
+            .sheet(isPresented: $showVocabulary) { VocabularyView() }
         }
         .task {
-            // A limb's turn wakes this screen rather than waiting for the next pass. The pass
-            // still runs underneath: a push is an accelerator, and with every push dropped the
-            // app behaves exactly as it did without one. The handler stands only as long as this
-            // task does, which is as long as this screen is the one answering — so a push
-            // arriving after a sign-out or a takeover reaches nothing.
-            PushWake.install { [harness] in
-                await harness.refresh()
-                await harness.answerPending()
-            }
-            defer { PushWake.remove() }
-            // Cheap when the subscription is already there, and a failure costs only the
-            // acceleration, so it is not the screen's to report.
-            try? await TurnPush.ensureSubscription()
-
             await harness.refresh()
             // Words on their way when the app last went away go first, under their own nonce.
             // Otherwise the first-run answer is the first turn, once, only when the log is empty;
@@ -116,8 +111,17 @@ struct ChatView: View {
                 }
             }
             // From here the screen stays current and, as primary, answers what the other devices
-            // write into the log.
-            await harness.answering(every: .seconds(5))
+            // write into the log. A limb's turn also wakes the loop by a silent push (`TurnPush`),
+            // which runs its next pass now instead of beside it; the handler stands exactly as
+            // long as the loop does, so a push after a sign-out or a takeover reaches nothing.
+            // The subscription is saved beside the loop: cheap when it is already there, and a
+            // failure costs only the acceleration, so it is not the screen's to report.
+            PushWake.install { [harness] in await harness.wake() }
+            defer { PushWake.remove() }
+            await withDiscardingTaskGroup { group in
+                group.addTask { try? await TurnPush.ensureSubscription() }
+                await harness.answering(every: .seconds(5))
+            }
         }
         .task {
             // The far end of a takeover: another device wrote this one's role as viewer, so it
@@ -168,6 +172,12 @@ struct ChatView: View {
     private func sendSpoken(_ heard: String) async {
         draft = ""
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        #if DEBUG
+        if DebugRun.keepsSpoken() {
+            DebugRun.say("heard, not sent: \(heard)")
+            return
+        }
+        #endif
         spokenTurns.insert(harness.willSend(heard))
         await harness.retry()
     }
@@ -185,6 +195,12 @@ struct ChatView: View {
                     Task { await micPressed(down) }
                 }
                 .accessibilityLabel(voice.handsFree ? "Listening; press to send" : voice.listening ? "Listening; release to send" : "Hold to talk")
+                #if DEBUG
+                // What the UI test decodes after a press: the counters, the branch it took, and
+                // what the microphone delivered, as JSON (`VoiceInput.Report`). A debug build
+                // only, so VoiceOver on a release build hears the label alone.
+                .accessibilityValue(voice.debugReport)
+                #endif
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
             }

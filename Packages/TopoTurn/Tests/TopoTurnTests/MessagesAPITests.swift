@@ -15,7 +15,7 @@ import TopoCore
         #expect(request.value(forHTTPHeaderField: "anthropic-beta") == "oauth-2025-04-20")
         #expect(request.value(forHTTPHeaderField: "anthropic-version") == "2023-06-01")
         let body = try #require(transport.lastBody)
-        #expect(body["model"] as? String == "claude-opus-5")
+        #expect(body["model"] as? String == ClaudeModel.effective(.opus5).rawValue)
         #expect(body["max_tokens"] as? Int == 16000)
         let system = try #require(body["system"] as? [[String: String]])
         #expect(system.map { $0["text"] } == [MessagesAPI.identity, "be terse"])
@@ -41,5 +41,19 @@ import TopoCore
     @Test func defaultModelIsSonnet() {
         #expect(ClaudeModel.default == .sonnet5)
         #expect(ClaudeModel.allCases.map(\.rawValue) == ["claude-sonnet-5", "claude-opus-5", "claude-fable-5-1"])
+    }
+
+    /// The pin, at the wire rather than at the picker: whatever a caller asks for, a debug build
+    /// sends Haiku. This suite is a debug build, so it can assert the pinned half directly.
+    @Test func aDebugBuildAsksHaikuWhateverTheSettingSays() async throws {
+        #expect(ClaudeModel.pinned == .haiku45)
+        #expect(!ClaudeModel.allCases.contains(.haiku45))
+        for asked in [ClaudeModel.sonnet5, .opus5, .fable51, .haiku45] {
+            #expect(ClaudeModel.effective(asked) == .haiku45)
+            let transport = RecordingTransport((200, reply("hi")))
+            let api = MessagesAPI(transport: transport, tokens: FixedToken())
+            _ = try await api.complete([ChatMessage(role: .user, content: "x")], model: asked, system: "")
+            #expect(try #require(transport.lastBody)["model"] as? String == "claude-haiku-4-5-20251001")
+        }
     }
 }

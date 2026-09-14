@@ -110,6 +110,11 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
                     page = try await database.records(matching: ckQuery, inZoneWith: zoneID)
                 }
             } catch {
+                // A type nothing has ever saved is not in the development schema, and
+                // CloudKit answers a query on it with unknownItem rather than nothing.
+                // The in-memory database answers the same question with an empty list;
+                // so does this one, or a fresh account can never take its first turn.
+                if let ck = error as? CKError, ck.code == .unknownItem { return [] }
                 throw Self.mapped(error, recordIDs: [])
             }
             for (id, result) in page.matchResults {
@@ -193,6 +198,11 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
             copy[key] = nil
         }
         for (key, value) in fields {
+            // An empty list carries no element type, and a field the schema has
+            // not seen yet cannot be created from one: the server answers the
+            // whole batch with "Syntax error in request". Every reader here
+            // treats an absent list as empty, so leave it off the wire.
+            if case .strings(let a) = value, a.isEmpty { copy[key] = nil; continue }
             copy[key] = ckValue(value)
         }
         return copy

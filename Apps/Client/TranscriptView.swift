@@ -7,6 +7,9 @@ import TopoCore
 struct TranscriptView: View {
     let turns: [Turn]
     var notice: String?
+    /// What holding a turn offers. The default offers nothing, which is what a screen with no
+    /// voice behind it — the watch, the television, a viewer — shows.
+    var replay = Replay()
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -19,7 +22,7 @@ struct TranscriptView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(turns) { turn in
-                        TurnRow(turn: turn).id(turn.ref)
+                        TurnRow(turn: turn, replay: replay).id(turn.ref)
                     }
                 }
                 .padding(.horizontal, Metrics.horizontalPadding)
@@ -47,6 +50,7 @@ struct TranscriptView: View {
 /// One turn: who said it, when, and what.
 struct TurnRow: View {
     let turn: Turn
+    var replay = Replay()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -65,11 +69,54 @@ struct TurnRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+        #if os(iOS)
+        // Held, never tapped: a turn brushed in passing must not start talking. With nothing to
+        // offer — a person's own turn, or a phone that cannot speak right now — the menu has no
+        // items and the press does nothing.
+        .contextMenu {
+            if let offer = replay.offer(for: turn) {
+                Button { offer.act() } label: { Label(offer.title, systemImage: offer.systemImage) }
+            }
+        }
+        #endif
         #if os(tvOS)
         // The remote scrolls a tvOS list by moving focus, so every turn has
         // to be somewhere focus can land.
         .focusable()
         #endif
+    }
+}
+
+/// Saying a turn again on demand. Only a spoken turn's reply is read aloud as it arrives, so a
+/// typed turn's reply is silent; holding it is how it gets heard. The speaker belongs to the
+/// chat screen and is threaded down to the rows from there, so nothing here reaches for it.
+struct Replay {
+    /// True while the speaker is reading something, whichever turn started it: the offer on
+    /// every row is then the one that stops it, since two replies over each other is noise.
+    var speaking = false
+    /// Whether the phone can say anything at all. Speaking is foreground work — synthesis
+    /// submits GPU commands and iOS kills a backgrounded process that does — so the offer is
+    /// gone while the scene is not active. Which voice would say it does not come into it: the
+    /// `AVSpeechSynthesizer` fallback is what a phone without the on-device model uses.
+    var canSpeak = false
+    var say: @MainActor (String) -> Void = { _ in }
+    var stopSpeaking: @MainActor () -> Void = {}
+
+    /// What holding `turn` offers, or nothing at all. A person's own turn offers nothing: their
+    /// words are not Topo's to say.
+    func offer(for turn: Turn) -> Offer? {
+        guard canSpeak, turn.role == .assistant else { return nil }
+        if speaking {
+            return Offer(title: "Stop", systemImage: "stop.fill", act: stopSpeaking)
+        }
+        return Offer(title: "Say again", systemImage: "speaker.wave.2", act: { say(turn.text) })
+    }
+
+    /// One menu item: what it reads and what it does.
+    struct Offer {
+        let title: String
+        let systemImage: String
+        let act: @MainActor () -> Void
     }
 }
 

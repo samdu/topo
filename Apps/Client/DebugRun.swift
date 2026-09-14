@@ -1,0 +1,181 @@
+#if DEBUG
+import Foundation
+import TopoAuth
+
+/// What a debug build takes from its launch environment, so a simulator can be signed in and made
+/// to say something without anybody touching the screen. None of it exists in a release build: the
+/// whole file is behind `#if DEBUG`, and the model every turn goes to is pinned to Haiku by
+/// `ClaudeModel.pinned`, which is behind the same flag.
+///
+/// The token arrives as an environment variable and nowhere else — not a scheme, not a file, not a
+/// build setting — because a variable lives only in the launching shell and the launched process.
+/// `scripts/simulator-run.sh` reads it from the vault and hands it to `simctl` as
+/// `SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN`; nothing writes it down.
+enum DebugRun {
+    static let tokenVariable = "TOPO_CLAUDE_SETUP_TOKEN"
+    static let lifetimeVariable = "TOPO_CLAUDE_SETUP_TOKEN_DAYS"
+    static let sendVariable = "TOPO_DEBUG_SEND"
+    static let earVariable = "TOPO_DEBUG_EAR"
+    static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
+
+    /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
+    /// the app comes up past the sign-in screen. Does nothing when the variable is absent, which is
+    /// every ordinary debug build: an engineer's own sign-in is left exactly as it was.
+    ///
+    /// A setup token has no refresh token — it is minted for a year and cannot be exchanged — so it
+    /// is written with a life short enough to be obviously wrong if it is still there next month and
+    /// long enough that no run tries to refresh it. A refresh would fail loudly rather than quietly:
+    /// the empty refresh token is rejected and the turn reports it.
+    @discardableResult
+    static func signIn(store: TokenStore = KeychainTokenStore(),
+                       environment: [String: String] = ProcessInfo.processInfo.environment,
+                       now: Date = Date()) -> Bool {
+        let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else { return false }
+        let days = environment[lifetimeVariable].flatMap(Double.init) ?? 30
+        let tokens = Tokens(accessToken: token,
+                            refreshToken: "",
+                            expiresAt: now.addingTimeInterval(days * 86_400),
+                            scopes: ClaudeOAuth.Configuration.claude.scopes)
+        do {
+            try store.save(tokens)
+            say("signed in from \(tokenVariable) for \(Int(days)) days")
+            return true
+        } catch {
+            say("could not write the token to the keychain: \(error)")
+            return false
+        }
+    }
+
+    /// What `TOPO_DEBUG_SEND` asks to be said, or nil.
+    static func words(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String? {
+        let text = (environment[sendVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
+    }
+
+    /// Every line this prints is prefixed, so a script watching `simctl launch --console` can find
+    /// them among the system's own noise.
+    static func say(_ line: String) { print("[topo-debug] \(line)") }
+}
+
+#if os(iOS)
+import TopoCore
+import TopoTurn
+
+extension DebugRun {
+    /// One turn, driven from the launch environment rather than the keyboard: the words go through
+    /// the same harness the chat screen uses — the lease, the log, the Messages API — and what came
+    /// back is printed. A script asserts on those lines; there is no other way to send a message to
+    /// a simulator from a shell without an XCUITest target and a screenful of taps.
+    ///
+    /// The reply printed is the one to the turn this run sent, found by that turn's nonce and the
+    /// reply's parents, never merely the newest reply in the log; and it carries `TOPO_DEBUG_RUN`,
+    /// the id the script launched this run under, so a line from any other launch matches nothing.
+    @MainActor
+    static func send(with harness: Harness,
+                     environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        guard let text = words(environment) else { return }
+        let run = environment[runVariable] ?? ""
+        say("model: \(ClaudeModel.effective(harness.model).rawValue) (setting: \(harness.model.rawValue))")
+        say("sending: \(text)")
+        let nonce = harness.willSend(text)
+        await harness.retry()
+        await harness.refresh()
+        if let error = harness.error {
+            say("error: \(error)")
+        }
+        say(line(for: answer(to: nonce, in: harness.turns), nonce: nonce, run: run))
+        say("turns in the log: \(harness.turns.count)")
+        say("done")
+    }
+
+    static let runVariable = "TOPO_DEBUG_RUN"
+
+    /// Where the turn sent under a nonce stands in the log.
+    enum Answer: Equatable {
+        /// No person's turn carries the nonce: the words never reached the log.
+        case notInLog
+        /// The person's turn is in the log and nothing answers it.
+        case unanswered(Turn)
+        /// The person's turn and the first reply that names it as a parent.
+        case answered(Turn, reply: Turn)
+    }
+
+    /// The reply to the person's turn appended under `nonce`: an assistant turn continuing from
+    /// that turn, whether it is its only parent (`TurnRunner.run`) or one of the heads a reply
+    /// joins (`answerPending`). A reply to any other turn, older or newer, is not an answer to it.
+    static func answer(to nonce: String, in turns: [Turn]) -> Answer {
+        guard !nonce.isEmpty,
+              let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return .notInLog }
+        guard let reply = turns.first(where: { $0.role == .assistant && $0.parents.contains(person.ref) }) else {
+            return .unanswered(person)
+        }
+        return .answered(person, reply: reply)
+    }
+
+    /// The line `scripts/simulator-run.sh` asserts on. Only `reply to <ref> in run <run>: ` passes.
+    static func line(for answer: Answer, nonce: String, run: String) -> String {
+        switch answer {
+        case .notInLog:
+            "not in the log: no turn under \(nonce) in run \(run)"
+        case .unanswered(let person):
+            "no reply to \(person.ref) in run \(run)"
+        case .answered(let person, let reply):
+            "reply to \(person.ref) in run \(run): \(reply.text.replacingOccurrences(of: "\n", with: " "))"
+        }
+    }
+
+    /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:
+    /// a press takes the on-device branch of `VoiceInput` (the tap, the sample sink, the caption
+    /// loop, the decode at the release) over an engine that hears nothing. `TOPO_DEBUG_EAR=loading`
+    /// is one whose load never finishes, so every press takes the fallback, `SFSpeechRecognizer`'s,
+    /// however fast the real models would have downloaded. `TOPO_DEBUG_EAR=` an
+    /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
+    /// real ear, loaded from there instead of the app's own download, which is how the UI test
+    /// gets Parakeet resident in a simulator without the background download. Any other launch
+    /// gets the real ear, prepared as usual.
+    @MainActor
+    static func ear(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Ear {
+        guard let choice = environment[earVariable], !choice.isEmpty else { return Ear() }
+        if choice == "loading" {
+            let ear = Ear(engine: StubEngine(loads: false))
+            let nowhere = URL(fileURLWithPath: "/dev/null")
+            ear.load(parakeet: nowhere, ctc: nowhere)
+            say("ear: loading, and never resident")
+            return ear
+        }
+        if choice == "stub" {
+            let ear = Ear(engine: StubEngine())
+            let nowhere = URL(fileURLWithPath: "/dev/null")
+            ear.load(parakeet: nowhere, ctc: nowhere)
+            say("ear: a stub, resident without a model")
+            return ear
+        }
+        let root = URL(fileURLWithPath: choice, isDirectory: true)
+        let ear = Ear()
+        ear.load(parakeet: root.appendingPathComponent(ModelManifest.parakeet, isDirectory: true),
+                 ctc: root.appendingPathComponent(ModelManifest.ctc, isDirectory: true))
+        say("ear: Parakeet from \(root.path)")
+        return ear
+    }
+
+    /// `TOPO_DEBUG_KEEP_SPOKEN=1`: what a press hears is printed and not sent, so a UI test
+    /// that speaks into the microphone takes no turn.
+    static func keepsSpoken(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        environment[keepSpokenVariable] == "1"
+    }
+
+    /// Loads nothing, builds no session, hears nothing. One that `loads: false` never returns
+    /// from its load, which holds the ear at `loading`.
+    struct StubEngine: SpeechEngine {
+        var loads = true
+        func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+            guard !loads else { return }
+            while true { try await Task.sleep(for: .seconds(3600)) }
+        }
+        func rebuild(terms: [String], version: Int) async throws {}
+        func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
+    }
+}
+#endif
+#endif
