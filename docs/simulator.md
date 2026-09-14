@@ -55,6 +55,30 @@ The lane comes from the test runner's environment, set on the `xcodebuild` comma
 
 **The simulator runs Parakeet on the CPU; a device runs it on the Neural Engine.** FluidAudio's CoreML models load and decode in the simulator (a few seconds to load, about a second and a half for the fixture), so recognition is tested there, but not its speed, the ANE's numerics, or the vocabulary rescoring on a device. Pocket TTS is MLX and never loads in a simulator — `Voice.prepare` fails with "no Metal in the simulator", so the speaker always takes `AVSpeechSynthesizer` there. `SFSpeechRecognizer`'s on-device recogniser never runs in a simulator: its en-US model is a cryptex asset that needs personalising to a real device, so recognition fails with `kLSRErrorDomain` 300. The fallback is therefore pressed on a physical iPhone before every upload (`docs/testflight.md`, step 5).
 
+## Speaking a question, answered aloud
+
+`scripts/simulator-run.sh --talk` is the one run that chains the whole voice path on a real account: a question spoken into the simulator's microphone, heard by Parakeet, sent as a spoken turn, answered by Claude, and read aloud. It runs on buddybox and nowhere else, because it needs a real setup token, the simulator's iCloud account and a loopback lane:
+
+```bash
+ssh buddybox 'sudo launchctl asuser $(id -u) sudo -u buddy bash -lc \
+  "cd ~/github/topo && DEVICE=<udid> EAR_MODELS=~/models/topo-ear scripts/simulator-run.sh --talk"'
+```
+
+The test is `SpokenTurnTests` (`Tests/ClientTalk`), the only test in the `TopoTalkTests` target and the `TopoTalk` scheme. It is not in the `Topo` scheme's test action: the PR check has no token and no iCloud account, and `scripts/ci-require-tests.sh` fails any skip there beyond its one named exception. `DEVICE` takes a UDID as well as a name, which matters on buddybox, where two simulators are called iPhone 17 and only one is signed into iCloud.
+
+What the script does, in order: reads the token as `--send` does; fetches and verifies the ear's models into `EAR_MODELS` (`build/ear-models` by default; `scripts/fetch-ear-models.sh` keeps a file that already matches); starts the loopback lane with `Tests/Fixtures/capital-of-france.wav` ("What is the capital of France? Answer in one word.", from `say`, 16 kHz mono) as `scripts/ci-audio-lane.sh start <fixture>` does on CI, saving the Mac's default input and output first; runs the test with the token and the models in the test runner's environment (`TEST_RUNNER_TOPO_TALK_SETUP_TOKEN`, `TEST_RUNNER_TOPO_UITEST_EAR_MODELS`); holds the lane with `check after`; and passes only when `scripts/ci-require-tests.sh xcresult` finds `TopoTalkTests` ran and passed. On every exit it runs `scripts/ci-audio-lane.sh stop`, which kills the feeder's supervisor and then the feeder and puts back the defaults `start` saved. On buddybox that is output "Mac mini Speakers" and no default input at all, since it has no microphone. The token reaches the test runner's environment and the app's launch environment, and no file, scheme or build setting.
+
+The test launches the app with the token, the real ear from the models directory, `-firstRunAnswered YES`, `-readAloud YES`, and an empty outbox, so no line an earlier launch left waiting goes ahead of the question. `TOPO_DEBUG_KEEP_SPOKEN` is not set, so what the microphone hears is sent. Every missing prerequisite fails by name: no token or models directory in the environment, an ear that is not resident within ten minutes, a hold refused for want of an input, an error line on the chat screen in place of a reply. The hold is two loops of the fixture and a second, so a whole question is in it wherever the loop starts, and the transcript usually holds the question more than once. On a simulator that has not answered the microphone and speech prompts, the first hold is released while they are up and starts nothing. The test answers the prompts and holds again. It then holds:
+
+- Parakeet was the recogniser and heard each of the question's words.
+- The spoken turn is in the log, under the nonce the chat sent it with, and its text is what Parakeet heard.
+- A reply naming that turn among its parents is in the log and contains "Paris".
+- The speaker was given that reply's text, started it and came to its end rather than being stopped. The report also says which engine read it.
+
+What it reads is two debug-only accessibility values, decoded strictly: the microphone's `VoiceInput.Report`, and the chat title's `DebugRun.ChatReport` (identifier `topo-debug-chat`), which carries the last spoken turn's nonce, that turn and its reply as `DebugRun.answer` finds them, the chat screen's error line, and `Speaker.Report`. The speaker's report says how many replies `speak` was given, the last one's engine (`pocket` or `system`) and text, whether audio for it started (`AVSpeechSynthesizer`'s `didStart`, or the first clip queued on Pocket's path) and whether it finished. Each step is an XCTest activity with the report attached, printed as `[talk]` lines in the log.
+
+What it does not cover: Pocket TTS never loads in a simulator, so the reply is always read by `AVSpeechSynthesizer` there; Parakeet runs on the simulator's CPU, not the Neural Engine; the voice is `say`'s through a loopback device, not a person's through a microphone; and what the speaker plays goes to the host's output, which nothing listens to.
+
 ## What a shell cannot reach
 
 `simctl` has no tap. It boots a device, installs and launches an app, and captures the screen, and there is no command in it that touches what is on that screen; System Events cannot see the Simulator's window either, so an AppleScript UI script finds nothing to click. Anything behind a gesture is out of reach from a *shell* — which is why the microphone press is an XCUITest (above) rather than a `simctl` step; screenshots are the same, so `--screenshot` captures whatever the app came up on and nothing further in.

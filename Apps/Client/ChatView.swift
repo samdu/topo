@@ -21,6 +21,10 @@ struct ChatView: View {
     @State private var showVocabulary = false
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
+    #if DEBUG
+    /// The last spoken turn's nonce, for the title's debug report.
+    @State private var spokenNonce: String?
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -73,6 +77,13 @@ struct ChatView: View {
                     Text("Topo").font(.headline)
                         .onLongPressGesture { showDiagnostics = true }
                         .accessibilityHint("Long press for diagnostics")
+                        #if DEBUG
+                        // What the spoken-turn UI test decodes: the last spoken turn, its reply,
+                        // and what the speaker did with it, as JSON (`DebugRun.ChatReport`).
+                        .accessibilityIdentifier(DebugRun.chatReportIdentifier)
+                        .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
+                                                                error: harness.error, speaker: speaker.report))
+                        #endif
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -169,7 +180,11 @@ struct ChatView: View {
             return
         }
         #endif
-        spokenTurns.insert(harness.willSend(heard))
+        let nonce = harness.willSend(heard)
+        spokenTurns.insert(nonce)
+        #if DEBUG
+        spokenNonce = nonce
+        #endif
         await harness.retry()
     }
 

@@ -166,6 +166,23 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.uitests
+  # The spoken turn end to end: a question looped into the microphone, heard by Parakeet, sent,
+  # answered by Claude and read aloud. It needs a real setup token, an iCloud account on the
+  # simulator and a loopback lane, which only buddybox has, so it is in its own scheme
+  # (TopoTalk, run by `scripts/simulator-run.sh --talk`) and never in the Topo scheme's test
+  # action, where the PR check would fail it.
+  TopoTalkTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - Tests/ClientTalk
+      - path: Tests/Fixtures/capital-of-france.wav
+        buildPhase: resources
+    dependencies:
+      - target: Topo
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.talktests
 
   TopoHub:
     type: application
@@ -217,6 +234,12 @@ schemes:
     test:
       config: Debug
       targets: [TopoTests, TopoUITests]
+  TopoTalk:
+    build:
+      targets: { Topo: all, TopoTalkTests: [test] }
+    test:
+      config: Debug
+      targets: [TopoTalkTests]
   TopoWatch:
     build:
       targets: { TopoWatch: all }
