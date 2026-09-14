@@ -72,87 +72,231 @@ jobs:
   # up therefore holds the merge — deliberately, because a reviewer round spent
   # on a build that does not compile is a round wasted, and a merge waved
   # through on a red suite is worse than a late one.
+  #
+  # Green means the named suites ran, not that nothing complained. Every
+  # package and project is named here and a missing one fails; the XcodeGen
+  # projects are generated from project.yml before anything builds, so a file
+  # on disk that the committed project does not list is still compiled; and
+  # scripts/ci-require-tests.sh reads each result — xcresult bundles per test
+  # target, Swift Testing's xunit report per package — and fails on a target
+  # that did not run, a suite with no tests, a failure or a skip. Each suite
+  # step runs after an earlier one failed (`!cancelled()`), so one red run
+  # reports every suite, and the logs and result bundles are uploaded however
+  # the job ends.
+  #
+  # The runner and compiler are pinned rather than `macos-latest`, so a new
+  # image cannot silently change what the suite is compiled with; a runner
+  # without Xcode 26.6 or the iOS 26.5 simulator runtime fails in the
+  # Toolchain step with a message saying which. Arm64 is required: FluidAudio
+  # ships an arm64-only binary and project.yml excludes x86_64 simulators.
   test:
-    runs-on: macos-latest
-    timeout-minutes: 30
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      IOS_SIMULATOR_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-5
+      # The version the committed projects are generated with locally. The
+      # release zip is checked against its hash so a replaced asset fails.
+      XCODEGEN_VERSION: 2.46.0
+      XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+      RESULTS: ${{ github.workspace }}/ci-results
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
-        run: swift --version
-      # Every package under Packages/ runs its suite; a tree with none has
-      # nothing to test, which is a notice rather than a failure.
-      - name: swift test (Packages/*)
         run: |
           set -euo pipefail
-          found=0
-          for manifest in Packages/*/Package.swift; do
-            [ -f "$manifest" ] || continue
-            found=1
-            echo "::group::$(dirname "$manifest")"
-            (cd "$(dirname "$manifest")" && swift test)
+          mkdir -p "$RESULTS"
+          [ "$(uname -m)" = arm64 ] || { echo "::error::Runner is $(uname -m), not arm64."; exit 1; }
+          [ -d "$DEVELOPER_DIR" ] || { echo "::error::$DEVELOPER_DIR is not on this runner image; pick the Xcode it has on purpose."; exit 1; }
+          sw_vers
+          xcodebuild -version
+          swift --version
+          # One iPhone from the pinned runtime, the first by name, so every run
+          # on an image uses the same device.
+          udid="$(xcrun simctl list devices available --json | jq -r --arg rt "$IOS_SIMULATOR_RUNTIME" '
+            [.devices[$rt] // [] | .[] | select(.name | startswith("iPhone"))]
+            | sort_by(.name) | .[0] | if . then "\(.udid) \(.name)" else empty end')"
+          [ -n "$udid" ] || { echo "::error::No iPhone simulator for $IOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
+          echo "Simulator: $udid ($IOS_SIMULATOR_RUNTIME)"
+          echo "SIMULATOR_UDID=${udid%% *}" >> "$GITHUB_ENV"
+
+      # scripts/simulator-run.sh against a fake xcrun: every failed run exits non-zero.
+      - name: simulator-run.sh fails closed
+        if: ${{ !cancelled() }}
+        run: scripts/tests/simulator-run-test.sh
+
+      - name: Generate Xcode projects (XcodeGen)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          xcodegen="$RUNNER_TEMP/xcodegen/bin/xcodegen"
+          "$xcodegen" --version | grep -qx "Version: $XCODEGEN_VERSION"
+          "$xcodegen" generate --spec project.yml
+          (cd Womble && "$xcodegen" generate --spec project.yml)
+          # Informational: what generation changed against the committed
+          # projects. Not a gate — Womble's generation reorders resource IDs.
+          git status --short -- '*.xcodeproj'
+
+      # Named, not globbed: a package that disappears fails here instead of
+      # leaving the loop with one fewer iteration. Every package runs even
+      # after one fails, so the log shows them all.
+      - name: swift test (TopoAuth, TopoCore, TopoLink, TopoTurn)
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          status=0
+          for package in TopoAuth TopoCore TopoLink TopoTurn; do
+            echo "::group::$package"
+            if [ ! -f "Packages/$package/Package.swift" ]; then
+              echo "::error::Packages/$package/Package.swift is missing."
+              status=1
+            elif ! swift test --package-path "Packages/$package" \
+                   --xunit-output "$RESULTS/$package.xml" 2>&1 | tee "$RESULTS/$package.log"; then
+              echo "::error::swift test failed in $package."
+              status=1
+            elif ! scripts/ci-require-tests.sh xunit "$RESULTS/$package-swift-testing.xml"; then
+              status=1
+            fi
             echo "::endgroup::"
           done
-          if [ "$found" = 0 ]; then
-            echo "::notice::No Packages/*/Package.swift in this tree; nothing to test."
-          fi
+          exit "$status"
 
       # Womble is an Xcode project, not a package, so it needs a simulator
-      # rather than `swift test`. Its deployment target is iOS 12; the
-      # simulator it runs the tests on is whatever the runner's Xcode ships,
-      # which is the same arrangement as building it on a Mac by hand.
+      # rather than `swift test`. Its deployment target is iOS 12; it runs on
+      # the same simulator as the Topo suite, as it would on a Mac by hand.
       - name: xcodebuild test (Womble)
+        if: ${{ !cancelled() && env.SIMULATOR_UDID != '' }}
         run: |
           set -euo pipefail
-          if [ ! -d Womble/Womble.xcodeproj ]; then
-            echo "::notice::No Womble/Womble.xcodeproj in this tree; nothing to test."
-            exit 0
-          fi
-          # Whichever iPhone this runner's Xcode has. Naming one pins the
-          # suite to a device the next Xcode may drop.
-          udid="$(xcrun simctl list devices available --json \
-                  | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
-          if [ -z "$udid" ]; then
-            echo "::error::No iPhone simulator available on this runner."
-            exit 1
-          fi
           xcodebuild test \
             -project Womble/Womble.xcodeproj \
             -scheme Womble \
-            -destination "platform=iOS Simulator,id=$udid"
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -resultBundlePath "$RESULTS/Womble.xcresult" \
+            2>&1 | tee "$RESULTS/Womble.log"
 
-      # The app targets' own suite, and the UI test that presses the
-      # microphone (TopoUITests, in the scheme's test action). The suite is
-      # hosted by the iOS app and covers the code the watch and TV builds
-      # share with the phone, so both run on an iPhone simulator whatever the
-      # runner's Xcode ships.
-      - name: xcodebuild test (Topo)
+      # The microphone test's input-capable lane: BlackHole as the runner
+      # Mac's default input and output, and the fixture looping into it from
+      # one long-lived feeder that listens to BlackHole itself and restarts on
+      # silence (scripts/ci-audio-lane.sh). The simulator's microphone is the
+      # host's default input; its own output does not reach the loopback.
+      # TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to the test
+      # runner, which then fails a hold refused for want of an input.
+      - name: Audio loopback for the microphone test
+        id: audio_lane
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          if [ ! -d Topo.xcodeproj ]; then
-            echo "::notice::No Topo.xcodeproj in this tree; nothing to test."
-            exit 0
-          fi
-          udid="$(xcrun simctl list devices available --json \
-                  | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid // empty')"
-          if [ -z "$udid" ]; then
-            echo "::error::No iPhone simulator available on this runner."
-            exit 1
-          fi
+          scripts/ci-audio-lane.sh start
+          echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
+
+      # Parakeet's models, for the UI test in which the real recogniser hears
+      # the fixture through the microphone: fetched from the manifest's pinned
+      # revisions and verified file by file, cached on the manifest's hash.
+      - name: Cache the ear's models
+        if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: ~/ear-models
+          key: ear-models-${{ hashFiles('Apps/Topo/Resources/models.json') }}
+      - name: The ear's models for the microphone test
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          scripts/fetch-ear-models.sh "$HOME/ear-models"
+          echo "TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$HOME/ear-models" >> "$GITHUB_ENV"
+
+      # A lane that has died fails here by name, before and after the suite,
+      # rather than only as a silent tap inside the microphone test.
+      - name: Audio lane holds before the microphone test
+        if: ${{ !cancelled() && steps.audio_lane.outcome == 'success' }}
+        run: scripts/ci-audio-lane.sh check before
+
+      # The app targets' own suite (TopoTests), and the UI test that presses
+      # the microphone (TopoUITests), both in the scheme's test action. The
+      # suite is hosted by the iOS app and covers the code the watch and TV
+      # builds share with the phone.
+      - name: xcodebuild test (Topo)
+        if: ${{ !cancelled() && env.SIMULATOR_UDID != '' }}
+        run: |
+          set -euo pipefail
           xcodebuild test \
             -project Topo.xcodeproj \
             -scheme Topo \
-            -destination "platform=iOS Simulator,id=$udid"
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -resultBundlePath "$RESULTS/Topo.xcresult" \
+            2>&1 | tee "$RESULTS/Topo.log"
+
+      - name: Audio lane holds after the microphone test
+        if: ${{ always() && steps.audio_lane.outcome == 'success' }}
+        run: scripts/ci-audio-lane.sh check after
+
+      # The exit codes above say nothing about a target the scheme dropped;
+      # this reads what actually ran. It also runs after a failed test step,
+      # where a missing result bundle is reported as such.
+      - name: Require every test target ran and passed
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          status=0
+          scripts/ci-require-tests.sh xcresult "$RESULTS/Womble.xcresult" WombleTests || status=1
+          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo.xcresult" TopoTests TopoUITests || status=1
+          exit "$status"
 
       # The watch and TV builds are not covered by that suite's host, so they
       # are built for their own simulators here.
       - name: xcodebuild build (TopoWatch, TopoTV)
+        if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          [ -d Topo.xcodeproj ] || exit 0
           xcodebuild build -project Topo.xcodeproj -scheme TopoWatch \
-            -destination 'generic/platform=watchOS Simulator'
+            -destination 'generic/platform=watchOS Simulator' \
+            2>&1 | tee "$RESULTS/TopoWatch-build.log"
           xcodebuild build -project Topo.xcodeproj -scheme TopoTV \
-            -destination 'generic/platform=tvOS Simulator'
+            -destination 'generic/platform=tvOS Simulator' \
+            2>&1 | tee "$RESULTS/TopoTV-build.log"
+
+      # Compilation only, with signing off. The simulator builds above never
+      # compile code excluded from the simulator — the Pocket engine and its
+      # model calls in Apps/Client/Voice.swift sit behind
+      # `!targetEnvironment(simulator)` — and nothing else builds TopoHub, which
+      # has no test target. A Release build for any iOS device and a macOS
+      # build of the hub catch compile and link errors in both. They do not
+      # prove the code runs on a GPU or a device, and they do not prove
+      # distribution signing: no certificate, profile or entitlement is
+      # checked with CODE_SIGNING_ALLOWED=NO.
+      - name: xcodebuild build (Topo Release for iOS devices, TopoHub), unsigned
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          # Both build even when the first fails, so one run reports both.
+          status=0
+          xcodebuild build -project Topo.xcodeproj -scheme Topo \
+            -configuration Release -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RESULTS/Topo-iOS-Release-build.log" \
+            || { echo "::error::Topo Release for iOS devices failed to build."; status=1; }
+          xcodebuild build -project Topo.xcodeproj -scheme TopoHub \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RESULTS/TopoHub-build.log" \
+            || { echo "::error::TopoHub failed to build."; status=1; }
+          exit "$status"
+
+      - name: Upload logs and result bundles
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-results
+          retention-days: 7
+          if-no-files-found: warn
 
   # Codex runs the CLI in the runner with the repo checked out, so unlike a
   # single-shot reviewer it can open the file the diff only mentions. Its

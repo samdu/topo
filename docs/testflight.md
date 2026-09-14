@@ -58,7 +58,18 @@ Do this after running the app against development at least once, so there is a s
 
 A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never promoted fails at the write, an entitlement that was never granted fails before that, at the account.
 
-## 5. Upload
+## 5. The fallback recogniser, on a phone
+
+Before every upload, press the microphone on a physical iPhone with the ear not resident, so the press takes the fallback, `SFSpeechRecognizer` on the device. No automated test covers this path. On the PR check, `MicrophonePressTests.testAPressOnTheFallbackDeliversAudioToTheRecogniser` ends in a "missing coverage:" skip, the one skip the check allows. The simulator's en-US speech model (`com.apple.siri.asr.assistant.en_US`) is a cryptex asset that needs personalising to a real device, and a simulator never unpacks it, so every on-device recognition there fails with `kLSRErrorDomain` 300 ("Failed to create recognizer"). Parakeet's branch, the tap and the sink are covered on the check; this is the one path that needs a person.
+
+The fallback is taken whenever the ear is not resident, in one of two ways:
+
+- **On the build being released:** delete Topo from the phone, install the build, sign in, and turn on Airplane Mode before the models finish downloading. The diagnostics screen's `speech` row must say anything but "Parakeet resident" at the press.
+- **On a debug build from Xcode:** add `TOPO_DEBUG_EAR=loading` to the scheme's Run environment (Edit Scheme › Run › Arguments). The ear stays loading for the life of the process, so every press takes the fallback. The scheme is generated from `project.yml` and committed, so discard that edit afterwards (`git checkout Topo.xcodeproj`).
+
+Then hold the microphone, say a short sentence with distinctive words ("purple elephants juggle seven lanterns"), and release. The check passes when the caption shows those words while you hold and the turn has them. That is audio reaching the recogniser and the words coming back. In Airplane Mode the words can only come from the recogniser on the phone, since Apple's servers are out of reach, and the turn waits in the outbox until the network is back. With no caption, or other words, do not upload.
+
+## 6. Upload
 
 ```
 scripts/archive-upload.sh --validate     # asks App Store Connect whether it would take it
@@ -67,7 +78,7 @@ scripts/archive-upload.sh --upload
 
 Processing takes a few minutes. The build then appears under **TestFlight** in the app record.
 
-## 6. Testers
+## 7. Testers
 
 TestFlight → **Internal Testing** → a group → add people from Users and Access. Internal testers need no review and get the build as soon as it finishes processing. External testers do need a review, which is a day or so, and are not needed for a house.
 
