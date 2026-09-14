@@ -78,6 +78,7 @@
 		6DDF523A0250D4A9CC22C13C /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		6EE90198EE3B1776A23FD3D0 /* PocketPace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A89A309D9E0482377ED73866 /* PocketPace.swift */; };
 		72726826FE4958249B7EFF62 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
+		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
@@ -194,6 +195,7 @@
 		10C7E3FD777A713DA6298113 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
 		113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelector.swift; sourceTree = "<group>"; };
 		11800CD3827F773B71C8B1B7 /* QRImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRImage.swift; sourceTree = "<group>"; };
+		12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudTests.swift; sourceTree = "<group>"; };
 		13ECC73FF9E6B054343D56C5 /* TopoWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		175EA8671E9C84024DDB99D4 /* VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
 		18A1A7F63DF3D04E332620C0 /* Speaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speaker.swift; sourceTree = "<group>"; };
@@ -456,6 +458,7 @@
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */,
 				B5EB0F0DA44028EF600DC73F /* PocketPaceTests.swift */,
+				12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */,
 				9C9A782EE9118805036640C7 /* ReplayTests.swift */,
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
@@ -956,6 +959,7 @@
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				7CB6A24D84137A9DC47A4A43 /* ModelDownloadsTests.swift in Sources */,
 				BD1F4E08AEC41132CA3A348C /* PocketPaceTests.swift in Sources */,
+				75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */,
 				401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */,
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
