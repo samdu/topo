@@ -92,6 +92,14 @@ if [ "$talk" = yes ]; then
   scripts/fetch-ear-models.sh "$models"
   trap 'scripts/ci-audio-lane.sh stop' EXIT
   scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav"
+  # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
+  # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input.
+  # Booting it again after the lane is up binds it to the loopback; its iCloud account and
+  # keychain survive a reboot.
+  echo "==> rebooting the simulator onto the lane's audio devices"
+  xcrun simctl shutdown "$udid" 2>/dev/null || true
+  xcrun simctl boot "$udid"
+  xcrun simctl bootstatus "$udid" -b >/dev/null
   results="$derived/TopoTalk.xcresult"
   rm -rf "$results"
   echo "==> speaking a question into the microphone (TopoTalkTests)"
