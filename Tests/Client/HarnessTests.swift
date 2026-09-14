@@ -435,6 +435,33 @@ final class HarnessIntegrationTests: XCTestCase {
                        ["first", "first back", "second", "second back", "third", "third back"])
         XCTAssertEqual(transport.sent.count, 3)
     }
+
+    /// What a silent push does: a limb writes, and the paused loop answers with no tick of its
+    /// pause, through the loop rather than beside it.
+    func testAWakeRunsTheNextPassWithoutWaitingOutThePause() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("first back")), (200, reply("second back")))
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: transport, pause: { try await beats.pause($0) })
+        try await limb(db, "first")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+
+        try await limb(db, "second")
+        await phone.wake()
+        let woken = try await log(db).map(\.text)
+        XCTAssertEqual(woken, ["first", "first back", "second", "second back"], "the wake returns once its pass has run")
+        XCTAssertEqual(phone.turns.map(\.text), woken)
+        try await eventually("the loop pausing again") { await beats.passes >= 2 }
+        XCTAssertEqual(transport.sent.count, 2, "one model call per turn: no pass ran beside the loop's")
+
+        open.cancel()
+        await open.value
+        // Nothing is answering, so a push that lands now wakes nothing and does not wait.
+        await phone.wake()
+        XCTAssertEqual(transport.sent.count, 2)
+    }
 }
 
 // MARK: - Doubles

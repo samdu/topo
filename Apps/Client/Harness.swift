@@ -35,6 +35,14 @@ final class Harness {
     private let leaseSleep: @Sendable (TimeInterval) async throws -> Void
     /// How the answering loop waits between passes.
     private let pause: @Sendable (Duration) async throws -> Void
+    /// True while `answering(every:)` runs.
+    private var answeringLoop = false
+    /// Set by `wake()`: the loop skips or ends its pause and runs the next pass now.
+    private var woken = false
+    /// The loop's pause in progress, which `wake()` cancels.
+    private var sleeping: Task<Void, any Error>?
+    /// `wake()` callers waiting for their pass to finish.
+    private var wakers: [CheckedContinuation<Void, Never>] = []
     private var runner: TurnRunner?
     private var lease: PrimaryLease?
     private var writer: TurnWriter?
@@ -305,12 +313,43 @@ final class Harness {
     /// the person's turn, and this device, as primary, answers it here. A reply that failed
     /// earlier, on this device or any other, is answered on the next pass too, so nothing said
     /// stays unanswered while a primary is awake.
+    ///
+    /// `wake()` cuts the pause short: the next pass runs now rather than at the end of the
+    /// interval. It never runs a pass of its own, so passes never overlap.
     func answering(every interval: Duration) async {
+        answeringLoop = true
+        defer {
+            answeringLoop = false
+            let left = wakers
+            wakers = []
+            left.forEach { $0.resume() }
+        }
         while !Task.isCancelled {
+            // A wake asked for before this pass began is served by it; one asked for during it
+            // may have missed what this pass read, so it gets the next.
+            woken = false
+            let served = wakers
+            wakers = []
             await refresh()
             await answerPending()
-            do { try await pause(interval) } catch { return }
+            served.forEach { $0.resume() }
+            if woken { continue }
+            let pausing = Task { [pause] in try await pause(interval) }
+            sleeping = pausing
+            let slept = await withTaskCancellationHandler { await pausing.result } onCancel: { pausing.cancel() }
+            sleeping = nil
+            if case .failure = slept, !woken { return }
         }
+    }
+
+    /// Asks the answering loop for a pass now, and returns once that pass has run: a silent push
+    /// saying the log moved lands here. Returns at once when no loop is running, since nothing is
+    /// answering to wake.
+    func wake() async {
+        guard answeringLoop else { return }
+        woken = true
+        sleeping?.cancel()
+        await withCheckedContinuation { wakers.append($0) }
     }
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.

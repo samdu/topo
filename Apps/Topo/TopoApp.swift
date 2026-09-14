@@ -3,8 +3,8 @@ import TopoAuth
 
 @main
 struct TopoApp: App {
-    /// For the one UIKit callback SwiftUI has no spelling of: iOS relaunching the app because
-    /// the models' background download finished.
+    /// For the UIKit callbacks SwiftUI has no spelling of: the models' background download
+    /// finishing, and a silent push saying the log moved. See `TopoAppDelegate`.
     @UIApplicationDelegateAdaptor(TopoAppDelegate.self) private var appDelegate
     @State private var signIn: SignIn
     @State private var harness: Harness

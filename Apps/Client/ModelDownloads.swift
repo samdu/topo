@@ -515,19 +515,4 @@ private final class SessionRelay: NSObject, URLSessionDownloadDelegate, @uncheck
         report(.finished)
     }
 }
-
-/// The app delegate the SwiftUI app adapts, for the one UIKit callback SwiftUI has no spelling
-/// of: iOS relaunching the app because its background session finished. Touching `shared`
-/// recreates the session under its identifier, which is what reconnects the delegate; the
-/// finished files are then delivered to it and admitted, and the handler is called after.
-final class TopoAppDelegate: NSObject, UIApplicationDelegate {
-    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String,
-                     completionHandler: @escaping () -> Void) {
-        guard identifier == ModelDownloads.identifier else { completionHandler(); return }
-        Task { @MainActor in
-            ModelDownloads.shared.completion = completionHandler
-            ModelDownloads.shared.start()
-        }
-    }
-}
 #endif

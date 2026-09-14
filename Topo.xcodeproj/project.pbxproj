@@ -53,6 +53,7 @@
 		442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D946D8851F96D23296B16179 /* RoleSelectorTests.swift */; };
 		443639D8481C026336CB1598 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		447E5988846796C166E2407C /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
+		454E7BD87EC59EA7652916BC /* TopoAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */; };
 		47A5DAA62699857838E4805C /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
@@ -111,6 +112,7 @@
 		AB0C7C4754391EDC4D4A7E0B /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
 		AD4F9E8277006852F3904EED /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
 		AD9E6CF1B98606CCE69DADAD /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
+		ADECDDCBA226E9262EE67313 /* TurnPushTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E657338C47DD5C2996280F04 /* TurnPushTests.swift */; };
 		AEDBC2E2814F7E6370987732 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		AF4F131F2EC3C983BC0BFBB0 /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
@@ -154,6 +156,7 @@
 		F9E31DDC84CCFFF526FA5044 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 783E689C1554D54D945E0F11 /* TopoCore */; };
 		FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */; };
 		FEE6786314BBF06C3CF8A7B8 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
+		FEE8ACFFA1125F4E7EE68BFA /* TurnPush.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80D8ACCA9AB1382E8130057F /* TurnPush.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -205,6 +208,8 @@
 		6B5D9DE746B7D268AD71B7A2 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
 		6C7E1C60D34856E30862D65D /* TopoTurn */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoTurn; path = Packages/TopoTurn; sourceTree = SOURCE_ROOT; };
 		6CC10F86563FE12BC674EFBB /* AboutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AboutView.swift; sourceTree = "<group>"; };
+		768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAppDelegate.swift; sourceTree = "<group>"; };
+		80D8ACCA9AB1382E8130057F /* TurnPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPush.swift; sourceTree = "<group>"; };
 		843B7316243F6B0BFD30D130 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8809A0CAEB64B3D22525D3DD /* HubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModel.swift; sourceTree = "<group>"; };
 		8D1F9ED3E5644D6B2C499B31 /* TopoTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -238,6 +243,7 @@
 		E4E0F75855123C685AAD8ED1 /* TopoApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoApp.swift; sourceTree = "<group>"; };
 		E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectedGlyph.swift; sourceTree = "<group>"; };
 		E5386B9F1DB4B3204F476074 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		E657338C47DD5C2996280F04 /* TurnPushTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPushTests.swift; sourceTree = "<group>"; };
 		E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloads.swift; sourceTree = "<group>"; };
 		E8BC4617024AD72D114DF8C7 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
 		F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsTests.swift; sourceTree = "<group>"; };
@@ -327,6 +333,8 @@
 			children = (
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
+				768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */,
+				80D8ACCA9AB1382E8130057F /* TurnPush.swift */,
 				6E826910F2690AB85DC11B57 /* Resources */,
 			);
 			path = Topo;
@@ -444,6 +452,7 @@
 				9C9A782EE9118805036640C7 /* ReplayTests.swift */,
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
+				E657338C47DD5C2996280F04 /* TurnPushTests.swift */,
 				BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */,
 			);
 			path = Client;
@@ -893,6 +902,7 @@
 				401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */,
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
+				ADECDDCBA226E9262EE67313 /* TurnPushTests.swift in Sources */,
 				A399F66B2B5BFE21E44EE31E /* VocabularyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -922,9 +932,11 @@
 				898DCC65F9AF024811776C52 /* Speaker.swift in Sources */,
 				FEE6786314BBF06C3CF8A7B8 /* Theme.swift in Sources */,
 				5848F2221D988D4F93698E6A /* TopoApp.swift in Sources */,
+				454E7BD87EC59EA7652916BC /* TopoAppDelegate.swift in Sources */,
 				3C6EE019F5CEBDDD755176BB /* TopoCloudKit.swift in Sources */,
 				B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */,
 				C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */,
+				FEE8ACFFA1125F4E7EE68BFA /* TurnPush.swift in Sources */,
 				F0E3735FB1184C474A985C4B /* ViewerRootView.swift in Sources */,
 				89313130AD395956115024B4 /* Vocabulary.swift in Sources */,
 				C3B19170CE0BE99580978B92 /* VocabularyView.swift in Sources */,
@@ -1002,12 +1014,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Apps/Topo.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Apps/TopoiOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Topo turns what you say into text so it can answer you.";
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1145,12 +1158,13 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				CODE_SIGN_ENTITLEMENTS = Apps/Topo.entitlements;
+				CODE_SIGN_ENTITLEMENTS = Apps/TopoiOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
 				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Topo turns what you say into text so it can answer you.";
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

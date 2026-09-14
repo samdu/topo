@@ -111,8 +111,17 @@ struct ChatView: View {
                 }
             }
             // From here the screen stays current and, as primary, answers what the other devices
-            // write into the log.
-            await harness.answering(every: .seconds(5))
+            // write into the log. A limb's turn also wakes the loop by a silent push (`TurnPush`),
+            // which runs its next pass now instead of beside it; the handler stands exactly as
+            // long as the loop does, so a push after a sign-out or a takeover reaches nothing.
+            // The subscription is saved beside the loop: cheap when it is already there, and a
+            // failure costs only the acceleration, so it is not the screen's to report.
+            PushWake.install { [harness] in await harness.wake() }
+            defer { PushWake.remove() }
+            await withDiscardingTaskGroup { group in
+                group.addTask { try? await TurnPush.ensureSubscription() }
+                await harness.answering(every: .seconds(5))
+            }
         }
         .task {
             // The far end of a takeover: another device wrote this one's role as viewer, so it

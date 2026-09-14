@@ -17,6 +17,8 @@ Automatic signing has already registered `zone.hexagon.topo` and made a team pro
 
 The entitlements name both. A container in the entitlements that does not exist for the team is a rejected upload rather than a warning.
 
+The same identifier needs **Push Notifications** ticked. The iOS target's entitlements (`Apps/TopoiOS.entitlements`) carry `aps-environment` for the silent CloudKit push that wakes the primary when a limb writes a turn, and a profile without the capability cannot sign it. The file says `development`, which is what a debug build is signed with; the App Store export signs with `production` from the distribution profile, so nothing is edited per build. CloudKit sends the push itself, so there is no APNs key or certificate to make. The watch and TV entitlements carry no push.
+
 ## 2. The App Store Connect record
 
 [App Store Connect](https://appstoreconnect.apple.com/apps) → **Apps** → **+** → **New App**.
@@ -54,7 +56,7 @@ rm ~/Downloads/AuthKey_THEKEYID.p8
 
 Records written in development do not exist in production until the schema is promoted, and TestFlight builds talk to production. [CloudKit Console](https://icloud.developer.apple.com/dashboard/) → the container → **Schema** → **Deploy Schema Changes** → **Deploy** — for `iCloud.zone.hexagon.topo` and again for `iCloud.zone.hexagon.topo.board`.
 
-Do this after running the app against development at least once, so there is a schema to promote: the record types and their fields are created by the first save of each. The reads ask by a field of ours rather than by record name, so the index that matters is the one behind `sequence`, which arrives with the field.
+Do this after running the app against development at least once, so there is a schema to promote: the record types and their fields are created by the first save of each. The reads ask by a field of ours rather than by record name, so the index that matters is the one behind `sequence`, which arrives with the field. The push subscription asks by `sequence` too, and a build on a container whose schema was never promoted cannot save it: that build answers a limb's turn on the five-second loop alone, with no error shown.
 
 A tester whose app cannot read anything, on a build that works in the simulator, is almost always this step. Womble's self-test — five taps on its title — says which call failed and what CloudKit said, which is faster than guessing: a schema that was never promoted fails at the write, an entitlement that was never granted fails before that, at the account.
 
