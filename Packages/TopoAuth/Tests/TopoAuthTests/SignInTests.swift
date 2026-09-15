@@ -57,13 +57,28 @@ extension Stubbed {
     }
 }
 
+/// A round trip through a real keychain with the store's own queries. On macOS that keychain is not
+/// the user's: `TemporaryKeychain` creates a file-based one in a temporary directory with a random
+/// password, unlocked with no timeout, and the store is pointed at it with `keychainPath`, which adds
+/// the keychain to search (`kSecMatchSearchList`) and, on an add, to write to (`kSecUseKeychain`) and
+/// changes nothing else. So the test needs no login session or unlocked login keychain, and leaves the
+/// login keychain and the search list alone. A keychain that cannot be created, set or unlocked fails
+/// the test at a `#require`; nothing here skips.
 @Suite struct KeychainTokenStoreTests {
     @Test func roundTripsThroughTheKeychain() throws {
-        let store = KeychainTokenStore(service: "zone.hexagon.topo.tests", account: UUID().uuidString)
+        var store = KeychainTokenStore(service: "zone.hexagon.topo.tests", account: UUID().uuidString)
+        #if os(macOS)
+        let keychain = try TemporaryKeychain()
+        defer { keychain.delete() }
+        store.keychainPath = keychain.path
+        #endif
         defer { try? store.clear() }
         #expect(try store.load() == nil)
         let t = Tokens(accessToken: "a", refreshToken: "r", expiresAt: Date(timeIntervalSince1970: 1), scopes: ["x"])
         try store.save(t)
+        #if os(macOS)
+        #expect(keychain.holdsItem(service: store.service, account: store.account), "the store wrote outside the keychain it was pointed at")
+        #endif
         #expect(try store.load() == t)
         var t2 = t; t2.accessToken = "b"
         try store.save(t2)

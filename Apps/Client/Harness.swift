@@ -27,6 +27,22 @@ final class Harness {
     private let log: TurnLog
     private let ensureZone: @Sendable () async throws -> Void
     private let tokens: TokenProvider
+    /// Where the unsettled turns and the model setting are kept.
+    private let defaults: UserDefaults
+    /// How the Messages API's bytes leave the process.
+    private let transport: any Transport
+    /// How the lease this harness makes waits between heartbeats.
+    private let leaseSleep: @Sendable (TimeInterval) async throws -> Void
+    /// How the answering loop waits between passes.
+    private let pause: @Sendable (Duration) async throws -> Void
+    /// True while `answering(every:)` runs.
+    private var answeringLoop = false
+    /// Set by `wake()`: the loop skips or ends its pause and runs the next pass now.
+    private var woken = false
+    /// The loop's pause in progress, which `wake()` cancels.
+    private var sleeping: Task<Void, any Error>?
+    /// `wake()` callers waiting for their pass to finish.
+    private var wakers: [CheckedContinuation<Void, Never>] = []
     private var runner: TurnRunner?
     private var lease: PrimaryLease?
     private var writer: TurnWriter?
@@ -48,30 +64,38 @@ final class Harness {
     private static let outboxKey = "topo.harness.outbox"
     private var pending: [Outgoing] = [] {
         didSet {
-            if pending.isEmpty { UserDefaults.standard.removeObject(forKey: Self.outboxKey) }
-            else { UserDefaults.standard.set(try? JSONEncoder().encode(pending), forKey: Self.outboxKey) }
+            if pending.isEmpty { defaults.removeObject(forKey: Self.outboxKey) }
+            else { defaults.set(try? JSONEncoder().encode(pending), forKey: Self.outboxKey) }
         }
     }
     private var outgoing: Outgoing? { pending.first }
 
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
-         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() }) {
+         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
+         defaults: UserDefaults = .standard,
+         transport: any Transport = URLSessionTransport(),
+         leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
+         pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.database = RecordingDatabase(database)
         self.tokens = tokens
         self.device = device
         self.ensureZone = ensureZone
+        self.defaults = defaults
+        self.transport = transport
+        self.leaseSleep = leaseSleep
+        self.pause = pause
         log = TurnLog(database: self.database)
-        if let data = UserDefaults.standard.data(forKey: Self.outboxKey),
+        if let data = defaults.data(forKey: Self.outboxKey),
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
             pending = saved
         }
         // The single unsent turn an earlier build kept under its own key heads the line.
         let singleKey = "topo.harness.outgoing"
-        if let data = UserDefaults.standard.data(forKey: singleKey) {
+        if let data = defaults.data(forKey: singleKey) {
             if let single = try? JSONDecoder().decode(Outgoing.self, from: data), !pending.contains(single) {
                 pending.insert(single, at: 0)
             }
-            UserDefaults.standard.removeObject(forKey: singleKey)
+            defaults.removeObject(forKey: singleKey)
         }
     }
 
@@ -81,8 +105,8 @@ final class Harness {
     }
 
     var model: ClaudeModel {
-        get { UserDefaults.standard.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: Self.modelKey) }
+        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
+        set { defaults.set(newValue.rawValue, forKey: Self.modelKey) }
     }
 
     /// Sign-out: the turn in flight is cancelled and its result dropped, the runner and screen
@@ -289,12 +313,43 @@ final class Harness {
     /// the person's turn, and this device, as primary, answers it here. A reply that failed
     /// earlier, on this device or any other, is answered on the next pass too, so nothing said
     /// stays unanswered while a primary is awake.
+    ///
+    /// `wake()` cuts the pause short: the next pass runs now rather than at the end of the
+    /// interval. It never runs a pass of its own, so passes never overlap.
     func answering(every interval: Duration) async {
+        answeringLoop = true
+        defer {
+            answeringLoop = false
+            let left = wakers
+            wakers = []
+            left.forEach { $0.resume() }
+        }
         while !Task.isCancelled {
+            // A wake asked for before this pass began is served by it; one asked for during it
+            // may have missed what this pass read, so it gets the next.
+            woken = false
+            let served = wakers
+            wakers = []
             await refresh()
             await answerPending()
-            do { try await Task.sleep(for: interval) } catch { return }
+            served.forEach { $0.resume() }
+            if woken { continue }
+            let pausing = Task { [pause] in try await pause(interval) }
+            sleeping = pausing
+            let slept = await withTaskCancellationHandler { await pausing.result } onCancel: { pausing.cancel() }
+            sleeping = nil
+            if case .failure = slept, !woken { return }
         }
+    }
+
+    /// Asks the answering loop for a pass now, and returns once that pass has run: a silent push
+    /// saying the log moved lands here. Returns at once when no loop is running, since nothing is
+    /// answering to wake.
+    func wake() async {
+        guard answeringLoop else { return }
+        woken = true
+        sleeping?.cancel()
+        await withCheckedContinuation { wakers.append($0) }
     }
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
@@ -332,9 +387,10 @@ final class Harness {
     private func makeRunner() async throws -> TurnRunner {
         let writer = try await log.writer(for: device)
         self.writer = writer
-        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe())
+        let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(),
+                                               sleep: leaseSleep)
         self.lease = lease
-        var api = MessagesAPI(tokens: tokens)
+        var api = MessagesAPI(transport: transport, tokens: tokens)
         api.onResponse = { [weak self] status, seconds in
             Task { @MainActor in self?.lastAPI = (status, Date(), seconds) }
         }
