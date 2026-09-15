@@ -74,7 +74,12 @@ final class VoiceInput {
 
     let ear: Ear
     private let audio: AudioSession
-    private let engine = AVAudioEngine()
+    /// Built again after a media services reset: the old one's hardware input is gone.
+    private var engine: AVAudioEngine
+    private let makeEngine: () -> AVAudioEngine
+    /// True while a tap is on the input node, so a teardown that installed none never reads
+    /// `inputNode`, which creates the hardware input on its first read.
+    private var tapped = false
     private let recognizer = SFSpeechRecognizer()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -89,6 +94,7 @@ final class VoiceInput {
     private var pressedAt: Date?
     private var finalArrived = false
     private var interruptionObserver: NSObjectProtocol?
+    private var resetObserver: NSObjectProtocol?
     #if DEBUG
     /// What reached the input tap, counted on the audio thread; `capture` is its snapshot.
     private let meter = TapMeter()
@@ -97,10 +103,13 @@ final class VoiceInput {
     private(set) var capture = Capture()
     #endif
 
-    init(audio: AudioSession, ear: Ear = Ear()) {
+    init(audio: AudioSession, ear: Ear = Ear(), center: NotificationCenter = .default,
+         makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
         self.audio = audio
         self.ear = ear
-        interruptionObserver = NotificationCenter.default.addObserver(
+        self.makeEngine = makeEngine
+        engine = makeEngine()
+        interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             // A call or Siri took the session; whatever was being said is over. Only the start
@@ -110,6 +119,21 @@ final class VoiceInput {
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in self?.cancel() }
         }
+        resetObserver = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.mediaServicesWereReset() }
+        }
+    }
+
+    /// iOS reset the media server: the engine's hardware input is gone. Whatever was being said
+    /// is dropped, as for an interruption, and the next press gets a fresh engine; nothing starts.
+    private func mediaServicesWereReset() {
+        #if DEBUG
+        DebugRun.say("media services reset: voice input cancelled and its engine rebuilt")
+        #endif
+        cancel()
+        engine = makeEngine()
     }
 
     /// Loads the ear's models, downloading them on the first run. Called on the foreground so
@@ -231,6 +255,7 @@ final class VoiceInput {
             // an uncatchable exception on it, so refuse here and the next press works.
             guard format.sampleRate > 0, format.channelCount > 0 else { throw InputUnavailable() }
             input.removeTap(onBus: 0)
+            tapped = true
             #if DEBUG
             let meter = meter
             #endif
@@ -319,7 +344,7 @@ final class VoiceInput {
         let mine = generation
         captioner?.cancel()
         captioner = nil
-        engine.inputNode.removeTap(onBus: 0)
+        removeTap()
         if engine.isRunning { engine.stop() }
         var heard: String
         #if DEBUG
@@ -402,6 +427,12 @@ final class VoiceInput {
         }
     }
 
+    private func removeTap() {
+        guard tapped else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        tapped = false
+    }
+
     /// Safe at any point, including after a start that never got going: the tap comes off
     /// whether or not the engine ran, so the next start does not install a second one.
     private func tearDown() {
@@ -411,7 +442,7 @@ final class VoiceInput {
         #endif
         captioner?.cancel()
         captioner = nil
-        engine.inputNode.removeTap(onBus: 0)
+        removeTap()
         if engine.isRunning { engine.stop() }
         request?.endAudio()
         task?.cancel()

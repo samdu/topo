@@ -15,6 +15,31 @@ final class AudioSession {
     private var recordClaims: Set<RecordClaim> = []
     private var screenClaims: Set<ScreenClaim> = []
     private var recordMode: Bool { !recordClaims.isEmpty }
+    /// Sets the session's category for record mode (true) or the quiet one (false) and activates it.
+    private let configure: (Bool) -> Void
+    /// True once the session has been configured; a reset re-applies only a session that was.
+    private var applied = false
+    private var resetObserver: NSObjectProtocol?
+
+    /// iOS resetting the media server leaves the session at its default category and inactive, so
+    /// the configuration the claims asked for is applied again; a session never configured is left
+    /// alone, since activating it is not the reset's to decide.
+    init(center: NotificationCenter = .default, configure: @escaping (Bool) -> Void = AudioSession.configureSession(record:)) {
+        self.configure = configure
+        resetObserver = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.mediaServicesWereReset() }
+        }
+    }
+
+    private func mediaServicesWereReset() {
+        guard applied else { return }
+        #if DEBUG
+        DebugRun.say("media services reset: audio session re-applied (record \(recordMode))")
+        #endif
+        apply()
+    }
 
     /// Claims or drops the record configuration for one surface. The session is touched only
     /// when the answer changes, so a press that finds it already claimed pays nothing.
@@ -42,15 +67,20 @@ final class AudioSession {
         UIApplication.shared.isIdleTimerDisabled = want
     }
 
+    private func apply() {
+        applied = true
+        configure(recordMode)
+    }
+
     /// Playback-only until the mic is actually wanted: a `playAndRecord` session prompts for the
     /// microphone the moment it activates. The quiet configuration mixes, so Topo idle does not
     /// stop what else the phone is playing; the record configuration takes the route outright.
     /// HFP is the AirPods mic; without it iOS never offers a headset's input. Deliberately
     /// without `.bluetoothHighQualityRecording`: the wideband link's input latency lands on
     /// AirPods as a press that lags and an utterance that starts clipped.
-    private func apply() {
+    nonisolated static func configureSession(record: Bool) {
         let session = AVAudioSession.sharedInstance()
-        if recordMode {
+        if record {
             try? session.setCategory(.playAndRecord, mode: .default,
                                      options: [.defaultToSpeaker, .allowBluetoothA2DP, .allowBluetoothHFP])
         } else {

@@ -22,8 +22,11 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
     let voice: Voice
     private let audio: AudioSession
-    private let synthesizer = AVSpeechSynthesizer()
+    /// Built again after a media services reset, which can swallow the old one's callbacks.
+    private var synthesizer: AVSpeechSynthesizer
+    private let makeSynthesizer: () -> AVSpeechSynthesizer
     private let queue = PlayQueue()
+    private var resetObserver: NSObjectProtocol?
     /// The utterance being read; a delegate callback for any other is an old one's and is ignored,
     /// so stopping A to say B does not drop B's claim when A's cancellation lands.
     private var current: AVSpeechUtterance?
@@ -39,12 +42,32 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     /// goes to `AVSpeechSynthesizer`, since the voice is Metal work.
     var foreground = true
 
-    init(audio: AudioSession, voice: Voice = Voice()) {
+    init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
+         makeSynthesizer: @escaping () -> AVSpeechSynthesizer = { AVSpeechSynthesizer() }) {
         self.audio = audio
         self.voice = voice
+        self.makeSynthesizer = makeSynthesizer
+        synthesizer = makeSynthesizer()
         super.init()
         synthesizer.delegate = self
         queue.onDrained = { [weak self] in Task { @MainActor in self?.drained() } }
+        resetObserver = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.mediaServicesWereReset() }
+        }
+    }
+
+    /// iOS reset the media server: the reply stops, since the callbacks that would end it may
+    /// never come, and the synthesiser and the play queue's engine are built again for the next.
+    private func mediaServicesWereReset() {
+        #if DEBUG
+        DebugRun.say("media services reset: speaker stopped, synthesiser and play queue rebuilt")
+        #endif
+        stop()
+        synthesizer = makeSynthesizer()
+        synthesizer.delegate = self
+        queue.reset()
     }
 
     /// Loads the voice's model, downloading it on the first run. Called on the foreground so it
@@ -157,11 +180,12 @@ final class PlayQueue: @unchecked Sendable {
     var onDrained: (@Sendable () -> Void)?
 
     private var engine: AVAudioEngine?
-    private let node = AVAudioPlayerNode()
+    private let makeEngine: () -> AVAudioEngine
+    private var node = AVAudioPlayerNode()
     /// Between the player and the mixer: stage two of the pacing, for a voice with no pace of
     /// its own. `rate` stretches time and leaves the pitch where it was, so at `Voice.tempo` the
     /// words come faster without rising.
-    private let timePitch = AVAudioUnitTimePitch()
+    private var timePitch = AVAudioUnitTimePitch()
     private var format: AVAudioFormat?
     private let lock = NSLock()
     private var pending = 0
@@ -171,6 +195,10 @@ final class PlayQueue: @unchecked Sendable {
 
     var isIdle: Bool { lock.withLock { pending == 0 } }
 
+    init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
+        self.makeEngine = makeEngine
+    }
+
     /// The engine is built on the first clip, because the sample rate is the synthesiser's to
     /// report, and left running between clips so no sentence after the first pays for a route.
     func play(_ samples: [Float], rate: Int) throws {
@@ -178,7 +206,7 @@ final class PlayQueue: @unchecked Sendable {
         if engine == nil {
             guard let f = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(rate),
                                         channels: 1, interleaved: false) else { throw VoiceError.noPlayer }
-            let e = AVAudioEngine()
+            let e = makeEngine()
             e.attach(node)
             e.attach(timePitch)
             e.connect(node, to: timePitch, format: f)
@@ -219,6 +247,16 @@ final class PlayQueue: @unchecked Sendable {
             epoch += 1
         }
         node.stop()
+    }
+
+    /// Stops, and drops the engine with its nodes, which cannot be attached to another: after a
+    /// media services reset the old engine will not start, so the next `play` builds afresh.
+    func reset() {
+        stop()
+        engine = nil
+        format = nil
+        node = AVAudioPlayerNode()
+        timePitch = AVAudioUnitTimePitch()
     }
 }
 #endif
