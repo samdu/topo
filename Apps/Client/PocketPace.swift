@@ -4,8 +4,9 @@ import Foundation
 /// knob mostly takes its time out of the pauses, and a uniform time-stretch takes it out of the
 /// words instead, which is audible and which Sam rejected. Measured on one script, Pocket carries
 /// 3.0s of inter-phrase pause against Kokoro's 1.2s, so most of what a listener waits for is
-/// silence. This does what the knob does: 20ms RMS windows, a window is silent below
-/// max(2% of the loudest, 1e-4); an inner run of silent windows longer than the 0.15s cap loses
+/// silence. This does what the knob does: 20ms RMS windows, a window being quiet when its RMS is
+/// below 2% of the loudest window heard so far in this reply *or* below the absolute floor of
+/// 1e-4; an inner run of silent windows longer than the 0.15s cap loses
 /// its excess from the middle of the run, so the decay of the word before and the onset of the
 /// word after both survive; and the head and tail keep up to 0.05s each, so consecutive sentences
 /// of a streamed reply meet with about 0.10s between them, Kokoro's own median gap, rather than
@@ -21,6 +22,11 @@ import Foundation
 /// that opens quietly has heard nothing louder yet, so its opening counts as speech and is kept
 /// where a cut that knew the sentence would have trimmed it, while the same quiet opening in the
 /// reply's second sentence is a gap, because the reply's peak is by then known.
+///
+/// The floor is what keeps that relative rule honest at the bottom of the scale: 2% of near
+/// silence is still near silence, and without it a reply opening on dither would be its own
+/// loudest window and kept as speech. Anything under 1e-4 is digital near silence, and silence
+/// whatever has been heard.
 ///
 /// Silence is held rather than emitted, because a gap is only known to be a gap once speech
 /// lands after it; a held run then releases its first `cap / 2` and last `cap / 2` windows,
