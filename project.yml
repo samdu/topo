@@ -60,6 +60,20 @@ targets:
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
+    # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
+    # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
+    # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
+    # app — and a background mode the product does not declare is a process iOS suspends, so it
+    # is declared here, where it lands in the bundle. A silent push wakes the primary when a limb
+    # writes a turn (see TurnPush); `audio` is the reply to a spoken turn, heard behind the lock,
+    # the process running while the play queue renders, which its keeper makes true from the
+    # release of the press (Apps/Client/Speaker.swift). Both modes and the push entitlement
+    # (`aps-environment`, in this target's own entitlements) are the iOS target's only: the watch
+    # and the TV never answer and never speak.
+    info:
+      path: Apps/Topo/Info.plist
+      properties:
+        UIBackgroundModes: [remote-notification, audio]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
@@ -67,13 +81,6 @@ targets:
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
-        # A silent push wakes the primary when a limb writes a turn; see TurnPush. The `audio`
-        # mode is the reply to a spoken turn, heard behind the lock: the process runs while the
-        # play queue is rendering, which its keeper makes true from the release of the press
-        # (Apps/Client/Speaker.swift). Both modes and the push entitlement (`aps-environment`, in
-        # this target's own entitlements) are the iOS target's only: the watch and the TV never
-        # answer and never speak.
-        INFOPLIST_KEY_UIBackgroundModes: remote-notification audio
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         CODE_SIGN_ENTITLEMENTS: Apps/TopoiOS.entitlements
         INFOPLIST_KEY_NSMicrophoneUsageDescription: Topo listens when you press the microphone, so it can hear what you forgot.

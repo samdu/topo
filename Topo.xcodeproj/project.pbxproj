@@ -202,6 +202,7 @@
 		13ECC73FF9E6B054343D56C5 /* TopoWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		175EA8671E9C84024DDB99D4 /* VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
 		18A1A7F63DF3D04E332620C0 /* Speaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speaker.swift; sourceTree = "<group>"; };
+		1DABB17BCD6602885282D24F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		255D132EA660241074B17048 /* VocabularyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyView.swift; sourceTree = "<group>"; };
 		26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctopusMark.swift; sourceTree = "<group>"; };
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
@@ -346,6 +347,7 @@
 			isa = PBXGroup;
 			children = (
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
+				1DABB17BCD6602885282D24F /* Info.plist */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
 				768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */,
 				80D8ACCA9AB1382E8130057F /* TurnPush.swift */,
@@ -1088,9 +1090,9 @@
 				CODE_SIGN_ENTITLEMENTS = Apps/TopoiOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				INFOPLIST_FILE = Apps/Topo/Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification audio";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1247,9 +1249,9 @@
 				CODE_SIGN_ENTITLEMENTS = Apps/TopoiOS.entitlements;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				INFOPLIST_FILE = Apps/Topo/Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification audio";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
