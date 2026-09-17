@@ -1,5 +1,6 @@
 import AVFoundation
 import ObjectiveC
+import TopoCore
 import UIKit
 import XCTest
 
@@ -144,6 +145,20 @@ private final class StubFormat: AVAudioFormat {
 /// 1920 samples, one Pocket frame, at `level`; a level of zero is silence.
 func toneFrame(_ level: Float) -> [Float] {
     (0 ..< 1_920).map { level * sin(Float($0) * 0.3) }
+}
+
+/// A frame of tone of an exact length, so a test can state the audio a reply made in seconds.
+func toneFrame(seconds: Double) -> [Float] {
+    (0 ..< Int(seconds * Double(Voice.rate))).map { 0.5 * sin(Float($0) * 0.3) }
+}
+
+/// The clock a test drives instead of the continuous one, so the report's measurements are read
+/// off arithmetic rather than raced: nothing here waits for time to pass.
+final class ManualClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: TimeInterval = 0
+    var now: TimeInterval { lock.withLock { value } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { value += seconds } }
 }
 
 /// A voice resident over an engine that reads a script: the frames it yields for a sentence, in
@@ -470,18 +485,15 @@ final class MediaServicesResetTests: XCTestCase {
     /// A speaker over a resident voice, which is what a reply needs: a voice that is not
     /// resident speaks nothing and reaches none of these seams.
     private func speaker(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter,
-                         engine: any VoiceEngine = ScriptedVoice(), ready: Bool = true) async -> Speaker {
+                         engine: any VoiceEngine = ScriptedVoice(), ready: Bool = true,
+                         clock: ManualClock? = nil) async -> Speaker {
         CapturingPlayerNode.scheduled = []
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == (ready ? .ready : .failed) }
         return Speaker(audio: audio, voice: voice, center: center,
-                       makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
-    }
-
-    /// The windows of audio the queue was asked to play, at 20 ms each.
-    private var scheduledWindows: Int {
-        Int(CapturingPlayerNode.scheduled.reduce(0, +)) / Int(PocketPace.frame * Double(Voice.rate))
+                       makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
+                       now: clock.map { clock in { clock.now } } ?? PrimaryLease.continuousUptime)
     }
 
     func testAReplyActivatesTheSessionBeforeItBuildsTheQueueAndScheduling() async {
@@ -592,36 +604,33 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
-    /// The trimmer's level is the reply's, carried from one sentence into the next: the second
-    /// sentence opens at 1% of the first's peak, and against the reply's own peak that is
-    /// silence, so only the edge of it survives.
-    func testAQuietOpeningLaterInAReplyIsTrimmedAgainstTheReplysOwnPeak() async {
+    /// `first` is the time from `speak` to the reply's first frame, and nothing else: the clock
+    /// moves two tenths between the two, so that is what the report says.
+    func testTheReplysFirstFrameIsTheTimeFromSpeakToIt() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = await self.speaker(seams, audio, center, engine: Self.twoSentenceVoice)
-        speaker.speak("Loud one. Quiet two.")
-        await settle("the reply's windows") { self.scheduledWindows >= 4 + PocketPace.edgeFrames + 4 }
-        await drain()
-        XCTAssertEqual(scheduledWindows, 4 + PocketPace.edgeFrames + 4,
-                       "the first sentence whole, then the edge of the second's opening and its speech")
+        let clock = ManualClock()
+        let voice = ScriptedVoice(frames: { _ in clock.advance(0.2); return [toneFrame(0.5)] })
+        let speaker = await self.speaker(seams, audio, center, engine: voice, clock: clock)
+        speaker.speak("Two tenths.")
+        await settle("the reply's frame") { CapturingPlayerNode.scheduled.count >= 1 }
+        XCTAssertEqual(speaker.report.first, 0.2, "what a listener waited, off the clock")
         speaker.stop()
     }
 
-    /// The same opening under a `speak` of its own is kept: the level starts again with the
-    /// reply, so nothing an earlier reply was loud at decides what counts as silence here.
-    func testTheSameQuietOpeningIsKeptWhenItStartsAReply() async {
+    /// `rtf` is the time the reply spent being made over the audio it made: half a second over
+    /// two seconds is a quarter, exactly, since neither number is measured against the wall.
+    func testTheReplysRealTimeFactorIsItsSynthesisOverItsAudio() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = await self.speaker(seams, audio, center, engine: Self.twoSentenceVoice)
-        speaker.speak("Loud one.")
-        await settle("the first reply's windows") { self.scheduledWindows >= 4 }
-        CapturingPlayerNode.scheduled = []
-        speaker.speak("Quiet two.")
-        await settle("the second reply's windows") { self.scheduledWindows >= 8 }
-        await drain()
-        XCTAssertEqual(scheduledWindows, 8, "the quiet opening is this reply's own loudest so far, and speech")
+        let clock = ManualClock()
+        let voice = ScriptedVoice(frames: { _ in clock.advance(0.5); return [toneFrame(seconds: 2)] })
+        let speaker = await self.speaker(seams, audio, center, engine: voice, clock: clock)
+        speaker.speak("Two seconds of it.")
+        await settle("the sentence to be measured") { speaker.report.rtf != nil }
+        XCTAssertEqual(speaker.report.rtf, 0.25, "half a second of making, two seconds made")
         speaker.stop()
     }
 
@@ -667,12 +676,6 @@ final class MediaServicesResetTests: XCTestCase {
                        "the sentence that made nothing scheduled nothing")
         speaker.stop()
     }
-
-    /// One frame of loud tone for the first sentence; for the second, a frame at 1% of it and
-    /// then a loud one. Four 20 ms windows to a frame.
-    private static let twoSentenceVoice = ScriptedVoice(frames: { sentence in
-        sentence.hasPrefix("Loud") ? [toneFrame(1)] : [toneFrame(0.01), toneFrame(1)]
-    })
 
     // MARK: PlayQueue
 

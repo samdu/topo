@@ -1,6 +1,7 @@
 #if os(iOS)
 import AVFoundation
 import Observation
+import TopoCore
 
 /// Reads a reply aloud. Speaking is foreground work: synthesis submits work to the audio engine
 /// and iOS suspends a backgrounded process, so the scene stops it on leaving the foreground.
@@ -8,10 +9,10 @@ import Observation
 ///
 /// One voice. When the `Voice` (Pocket TTS, on the device) is resident and the scene is active,
 /// the reply is cut into sentences, each synthesised behind the one before and pushed to the play
-/// queue frame by frame as it decodes, paced in two stages (`PocketPace` on the frames, then the
-/// queue's time-pitch unit at `Voice.tempo`), so what a listener waits for is the first frame of
-/// the first sentence rather than the reply. A reply given to a voice that is not resident, or to
-/// a scene that is not active, is not spoken at all; the diagnostics `voice` row says which.
+/// queue frame by frame as it decodes, paced by the queue's time-pitch unit at `Voice.tempo`, so
+/// what a listener waits for is the first frame of the first sentence rather than the reply. A
+/// reply given to a voice that is not resident, or to a scene that is not active, is not spoken
+/// at all; the diagnostics `voice` row says which.
 ///
 /// Every `speak` is a generation. A frame that lands after a `stop` belongs to no reply and
 /// changes nothing.
@@ -32,11 +33,6 @@ final class Speaker {
     private var chain: Task<Void, Never>?
     /// Sentences of the current reply not yet made.
     private var making = 0
-    /// The loudest 20 ms window of the reply being read, carried from one sentence into the next
-    /// so one voice at one level is trimmed on one scale. Its scope is the reply: `stop` starts
-    /// it again, and `speak` begins with `stop`, so a reply that was loud — or one cut short
-    /// halfway — never decides what counts as silence in the next.
-    private var loudest: Float = 0
     /// True while the scene is active; the scene sets it. A reply that starts while it is false
     /// is not spoken.
     var foreground = true
@@ -45,17 +41,23 @@ final class Speaker {
     private(set) var report = Report()
     /// When the reply being read was handed to `speak`, which is what `Report.first` is measured
     /// from: what a listener waited, not what one sentence of it took.
-    private var spokeAt = Date()
+    private var spokeAt: TimeInterval = 0
     /// The reply's audio so far and the time spent making it, summed over the sentences that
     /// made any. A sentence that scheduled no frame is in neither, so it moves no number.
     private var replySamples = 0
     private var replySynth: Double = 0
     #endif
 
+    /// Reads the clock, so a test can drive the report's measurements rather than race them. The
+    /// production clock is the continuous one, which a system-time step does not move.
+    private let now: () -> TimeInterval
+
     init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
-         makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
+         makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
+         now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime) {
         self.audio = audio
         self.voice = voice
+        self.now = now
         queue = PlayQueue(makeEngine: makeEngine)
         queue.onDrained = { [weak self] in Task { @MainActor in self?.drained() } }
         resetObserver = center.addObserver(
@@ -105,7 +107,7 @@ final class Speaker {
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
         report = Report(speaks: report.speaks + 1, engine: .pocket, text: text)
-        spokeAt = Date()
+        spokeAt = now()
         replySamples = 0
         replySynth = 0
         DebugRun.say("speak: session ok, pocket")
@@ -117,7 +119,6 @@ final class Speaker {
         generation += 1
         chain = nil
         making = 0
-        loudest = 0
         queue.stop()
         done()
     }
@@ -145,9 +146,8 @@ final class Speaker {
     /// One sentence, frame by frame. The console line is per sentence; the report is per reply,
     /// and neither number in it is written by a sentence that scheduled no frame.
     private func say(_ sentence: String, generation mine: Int) async {
-        let started = Date()
+        let started = now()
         let idle = queue.isIdle
-        var trim = PocketPace(loudest: loudest)
         var first: Double?
         var samples = 0
         var rate = Voice.rate
@@ -159,26 +159,23 @@ final class Speaker {
                 guard generation == mine else { return }
                 rate = frame.rate
                 samples += frame.samples.count
-                let out = trim.take(frame.samples, rate: frame.rate)
-                guard !out.isEmpty else { continue }
-                try queue.play(out, rate: frame.rate)
+                guard !frame.samples.isEmpty else { continue }
+                try queue.play(frame.samples, rate: frame.rate)
                 if first == nil {
-                    first = Date().timeIntervalSince(started)
+                    first = now() - started
                     #if DEBUG
                     report.started = true
                     // The reply's first frame, timed from `speak` and written once.
-                    if report.first == nil { report.first = Date().timeIntervalSince(spokeAt) }
+                    if report.first == nil { report.first = now() - spokeAt }
                     #endif
                 }
             }
             // The stream ending is not the sentence still being this reply's: a `stop` while the
-            // last frame was in flight leaves the level and the measurements below belonging to a
-            // reply nobody is hearing, and they would then judge and time the next one.
+            // last frame was in flight leaves the measurements below belonging to a reply nobody
+            // is hearing, and they would then time the next one.
             guard generation == mine else { return }
-            trim.finish()
-            loudest = trim.loudest
             #if DEBUG
-            let seconds = Date().timeIntervalSince(started)
+            let seconds = now() - started
             let audio = Double(samples) / Double(rate)
             let words = sentence.split(separator: " ").count
             guard let first else {
@@ -189,9 +186,8 @@ final class Speaker {
             replySamples += samples
             replySynth += seconds
             report.rtf = replySynth / (Double(replySamples) / Double(rate))
-            DebugRun.say(String(format: "voice: %@ synth=%.2fs first=%.2fs audio=%.2fs cut=%.2fs rtf=%.2f words=%d",
-                                idle ? "ttfa" : "next", seconds, first, audio,
-                                Double(trim.dropped) / Double(rate), seconds / audio, words))
+            DebugRun.say(String(format: "voice: %@ synth=%.2fs first=%.2fs audio=%.2fs rtf=%.2f words=%d",
+                                idle ? "ttfa" : "next", seconds, first, audio, seconds / audio, words))
             #endif
         } catch {
             #if DEBUG

@@ -13,8 +13,7 @@ import FluidAudio
 /// A stock voice rather than a blend: each person names their own mind, so the default voice
 /// is nobody's in particular. Pocket is a small language model over Mimi audio frames, which is
 /// where its prosody comes from, and it has no pace knob of its own, so `Speaker` paces every
-/// sentence on the way to the speaker (`PocketPace` frame by frame, then the play queue's
-/// time-pitch unit at `Voice.tempo`).
+/// sentence on the way to the speaker, with the play queue's time-pitch unit at `Voice.tempo`.
 ///
 /// Every stage is placed off the GPU: the conditioner, the flow-LM and the fused flow decoder on
 /// the Neural Engine (the rank-4 graphs its compiler accepts), Mimi on the CPU, where the port
@@ -54,11 +53,10 @@ final class Voice {
     /// Mimi's rate, which is every frame's rate: 80 ms of audio in 1920 samples.
     nonisolated static let rate = 24_000
 
-    /// Stage two of the pacing, the rate of the play queue's `AVAudioUnitTimePitch` with the
-    /// pitch untouched; stage one is `PocketPace`, which is why this is a small number.
-    /// A per-speaker constant rather than a per-clip calculation: measured on one script, after
-    /// trimming, eponine articulates 4.28 words per voiced second against Kokoro at Sam's pace
-    /// on 5.32, and 1.20 brings her to about 5.02, just under his baseline rather than past it.
+    /// The pacing: the rate of the play queue's `AVAudioUnitTimePitch`, with the pitch untouched.
+    /// A per-speaker constant rather than a per-clip calculation: measured on one script, eponine
+    /// articulates 4.28 words per voiced second against Kokoro at Sam's pace on 5.32, and 1.20
+    /// brings her to about 5.02, just under his baseline rather than past it.
     nonisolated static let tempo: Float = 1.20
 
     var ready: Bool { state == .ready }
