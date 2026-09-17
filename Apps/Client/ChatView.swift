@@ -207,10 +207,11 @@ struct ChatView: View {
         // The reply to this will be read aloud, so the process is held open from here: the turn
         // is written, asked and answered behind the lock. Nothing is held for a reply that could
         // not be heard anyway — the setting off, or a voice that is not resident.
-        // The wait decides both: a turn is marked spoken exactly when it is held for, so the two
-        // cannot disagree and this screen states no condition of its own.
+        // The wait says whether the reply will be read aloud, which is what marks the turn as
+        // spoken; whether the process is being kept running for it is its own answer, and this
+        // screen states no condition of its own either way.
         let nonce = harness.willSend(heard)
-        if speaker.awaitReply(nonce, readAloud: readAloud) { harness.markSpoken(nonce) }
+        if speaker.awaitReply(nonce, readAloud: readAloud).spoken { harness.markSpoken(nonce) }
         #if DEBUG
         spokenNonce = nonce
         #endif

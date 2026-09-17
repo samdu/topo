@@ -794,19 +794,24 @@ final class MediaServicesResetTests: XCTestCase {
         let speaker = await self.speaker(seams, audio, center)
         // The answer is also what makes a turn spoken, so a false here is a turn the chat does
         // not record — no later launch can read its reply aloud.
-        XCTAssertFalse(speaker.awaitReply("a-turn", readAloud: false), "replies are not read aloud")
+        XCTAssertFalse(speaker.awaitReply("a-turn", readAloud: false).spoken, "replies are not read aloud")
         XCTAssertFalse(speaker.holding)
         XCTAssertFalse(speaker.keeping)
         XCTAssertEqual(seams.lines, [], "and nothing is built for one")
 
-        let quiet = await self.speaker(seams, audio, center,
+        // Its own session: one `AudioSession` answers to one `Speaker`, as the app has one of each.
+        let quietSeams = Seams()
+        let quietAudio = AudioSession(center: center, configure: quietSeams.configure)
+        let quiet = await self.speaker(quietSeams, quietAudio, center,
                                        engine: ScriptedVoice(loads: false), ready: false)
-        XCTAssertFalse(quiet.awaitReply("a-turn", readAloud: true), "the voice is not resident")
+        XCTAssertFalse(quiet.awaitReply("a-turn", readAloud: true).spoken, "the voice is not resident")
         XCTAssertFalse(quiet.holding)
         XCTAssertFalse(quiet.keeping)
+        XCTAssertEqual(quietSeams.lines, [])
         XCTAssertEqual(seams.lines, [])
-        XCTAssertTrue(speaker.awaitReply("a-turn", readAloud: true),
-                      "with the setting on and the voice resident, held and spoken")
+        let taken = speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(taken.spoken, "with the setting on and the voice resident, a spoken turn")
+        XCTAssertTrue(taken.held, "and one the keeper is rendering for")
         speaker.stop()
     }
 
@@ -1142,6 +1147,71 @@ final class MediaServicesResetTests: XCTestCase {
         await settle("the rebuild that works") { speaker.keeping }
         XCTAssertEqual(CapturingPlayerNode.scheduled, owed + owed,
                        "the owed frame played on the engine that started")
+        speaker.stop()
+    }
+
+
+    /// A release whose keeper cannot start: the reply is still one to read aloud, so the turn is
+    /// still spoken, but nothing is rendering and nothing says otherwise. The reply is read when
+    /// it lands and the session comes back, which is also what brings the keeper up.
+    func testAReleaseWhoseKeeperCannotStartIsSpokenButNotHeld() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center)
+        seams.activationError = Seams.Refused()
+
+        let wait = speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(wait.spoken, "its reply would be read aloud, so the turn is a spoken one")
+        XCTAssertFalse(wait.held, "but nothing is rendering, so nothing is held")
+        XCTAssertFalse(speaker.keeping)
+        XCTAssertFalse(speaker.holding, "and the chat is not told the process is held")
+        XCTAssertEqual(seams.engines.count, 0, "nothing was built under a session that refused")
+
+        seams.activationError = nil
+        XCTAssertTrue(speaker.speak("Paris.", answering: "a-turn"), "the reply is taken")
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertTrue(speaker.keeping, "and reading it is what brings the keeper up")
+        XCTAssertTrue(speaker.holding)
+        speaker.stop()
+    }
+
+    /// The frames Pocket yields after a rebuild that was refused. The format is the voice's rate
+    /// and not the engine's, so a frame made while there is no engine at all is still owed; the
+    /// end that works plays the whole sentence, in order.
+    func testFramesThatArriveAfterARefusedRebuildAreOwedAndPlayedInOrder() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let voice = FramesAfterTheInterruption()
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        let lengths = FramesAfterTheInterruption.lengths.map { AVAudioFrameCount(toneFrame(seconds: $0).count) }
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled == [lengths[0]] }
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+
+        // An end while a call still holds the session: refused, and the engine goes with it.
+        seams.activationError = Seams.Refused()
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the refusal") { seams.lines.contains("activate failed") }
+
+        // Pocket yields the rest of the sentence into a queue with no engine and no session.
+        voice.releaseTheRest()
+        await settle("the rest of the sentence") { voice.yieldedTheRest }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]], "nothing reached a player")
+
+        seams.activationError = nil
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the rebuild that works") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]] + lengths,
+                       "every frame of the sentence was owed and played, in order")
         speaker.stop()
     }
 

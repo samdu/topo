@@ -116,15 +116,17 @@ final class Speaker {
     /// The hold changed hands. The keeper is the play queue's silence: starting it needs the
     /// engine, and an engine under a session that is not active is the crash, so the session
     /// comes first here as in every other audio path and a refusal is a refusal.
-    private func hold(_ held: Bool) {
-        guard held else { queue.hold(false); return }
+    @discardableResult
+    private func hold(_ held: Bool) -> Bool {
+        guard held else { return queue.hold(false) }
         do {
             try audio.ensureActive()
         } catch {
-            AudioLog.say("the hold's session did not activate: \(error)")
-            return
+            // `ensureActive` leaves the session invalid, so the next path activates afresh.
+            AudioLog.say("the play queue refused: the hold's session did not activate: \(error)")
+            return false
         }
-        queue.hold(true)
+        return queue.hold(true)
     }
 
     /// An interruption began. What it is not is the end of the wait or of the reply: iOS posts
@@ -172,24 +174,44 @@ final class Speaker {
     /// reply that could not be heard anyway — Read replies aloud off, or a voice that is not
     /// resident at the release — since those turns make no audio to keep the phone awake for.
     ///
-    /// The answer is returned because it is the same answer to whether the turn is a spoken one:
-    /// a turn recorded as spoken and never held for would be read aloud by some later launch that
-    /// turned the setting on, so the caller records the mark from this and states no condition of
-    /// its own.
+    /// The answer says both what was decided and what was achieved: `spoken` is whether the reply
+    /// will be read aloud when it lands, which is what makes the turn a spoken one — the caller
+    /// records the mark from it and states no condition of its own — and `held` is whether the
+    /// keeper is actually rendering for it. A keeper that would not start is a refusal, not a
+    /// hold, and is reported as one rather than left for the chat to believe in.
     @discardableResult
-    func awaitReply(_ nonce: String, readAloud: Bool) -> Bool {
+    func awaitReply(_ nonce: String, readAloud: Bool) -> Wait {
         guard readAloud, voice.ready else {
             AudioLog.say("no wait held for \(nonce): \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
-            return false
+            return Wait(spoken: false, held: false)
         }
         waits[nonce]?.cancel()
         audio.wantAlive(true, for: .awaitingReply(nonce))
+        guard queue.keeping else {
+            // The claim is one the process cannot honour: nothing is rendering, so nothing is
+            // keeping it running, and saying otherwise would be a hold that exists only on paper.
+            // The refusal itself is the queue's and is already logged there; what brought it down
+            // is retried by the next rebuild, and the turn stays a spoken one either way.
+            audio.wantAlive(false, for: .awaitingReply(nonce))
+            waits[nonce] = nil
+            AudioLog.say("the wait for \(nonce) is not held: nothing is rendering")
+            return Wait(spoken: true, held: false)
+        }
         waits[nonce] = Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
             self.endAwaiting(nonce, "capped at \(ceiling); the reply never landed")
         }
-        return true
+        return Wait(spoken: true, held: true)
+    }
+
+    /// What a release was answered with. The two are not the same answer: whether the reply will
+    /// be read aloud when it lands, which is what makes the turn a spoken one and is true in the
+    /// foreground whatever the audio is doing, and whether the process is actually being kept
+    /// running for it, which is only true while the keeper is rendering.
+    struct Wait {
+        let spoken: Bool
+        let held: Bool
     }
 
     /// Lets go of one turn's wait. Free when that turn holds none.
@@ -632,15 +654,21 @@ final class PlayQueue: @unchecked Sendable {
     /// the reply's first frame exists, which is the ordinary case: the wait for the reply is
     /// exactly the gap the keeper is for.
     @MainActor
-    func hold(_ on: Bool) {
-        holding = on
-        guard on else { stopKeeper(); return }
+    @discardableResult
+    func hold(_ on: Bool) -> Bool {
+        guard on else { holding = false; stopKeeper(); return false }
         do {
             try build(rate: rate)
             try startKeeper()
         } catch {
+            // Nothing is rendering, so nothing is held: the flag says so, and the refusal leaves
+            // the queue dead for the next rebuild to try again.
+            holding = false
             refuse("the keeper's engine: \(error)")
+            return false
         }
+        holding = true
+        return keeping
     }
 
     /// Stops the silence, and says so only when there was some. Both the hold being let go and
@@ -744,10 +772,17 @@ final class PlayQueue: @unchecked Sendable {
         stop()
         holding = false
         dead = false
+        // The one thing that drops the format: after a media services reset there is no telling
+        // what the next voice will report, and nothing is owed to carry over. A refusal keeps it,
+        // because a frame arriving while the engine is dead is made against the voice's rate and
+        // has to be owed rather than lost.
+        format = nil
         drop()
     }
 
-    /// Lets go of the engine and everything attached to it, leaving what is queued alone.
+    /// Lets go of the engine and everything attached to it, leaving what is queued and the
+    /// format alone: the format is the voice's rate, not the engine's, and a frame that arrives
+    /// while there is no engine is still made against it and owed.
     private func drop() {
         stopKeeper()
         node?.stop()
@@ -755,7 +790,6 @@ final class PlayQueue: @unchecked Sendable {
         if let configurationObserver { center.removeObserver(configurationObserver) }
         configurationObserver = nil
         engine = nil
-        format = nil
         node = nil
         keeper = nil
         timePitch = nil
