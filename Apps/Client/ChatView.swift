@@ -130,6 +130,8 @@ struct ChatView: View {
             // The subscription is saved beside the loop: cheap when it is already there, and a
             // failure costs only the acceleration, so it is not the screen's to report.
             PushWake.install { [harness] in await harness.wake() }
+            // A turn that ended in a failure is owed no reply, so nothing waits for one.
+            harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
             defer { PushWake.remove() }
             // A spoken question gets a spoken answer, and the decision is the log's rather than
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
@@ -140,10 +142,13 @@ struct ChatView: View {
                 harness.answeredAloud(asked)
                 speaker.speak(reply.text, answering: asked)
             }
+            // A turn that ended in a failure is owed no reply, so nothing waits for one.
+            harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
             defer {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
                 harness.onReply = nil
+                harness.onTurnFailed = nil
                 speaker.endAllWaits("the chat stopped answering")
             }
             await withDiscardingTaskGroup { group in
@@ -169,12 +174,6 @@ struct ChatView: View {
             }
         }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
-        .onChange(of: harness.error) { _, error in
-            // The turn stopped: no reply is coming, so nothing waits for one.
-            if error != nil {
-                speaker.dropWaits(keeping: harness.pendingNonces, why: "the turn failed")
-            }
-        }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
             // it, so nothing said into it was meant. A reply plays on — that is what the hold is
@@ -205,8 +204,10 @@ struct ChatView: View {
         // The reply to this will be read aloud, so the process is held open from here: the turn
         // is written, asked and answered behind the lock. Nothing is held for a reply that could
         // not be heard anyway — the setting off, or a voice that is not resident.
-        let nonce = harness.willSend(heard, spoken: true)
-        speaker.awaitReply(nonce, readAloud: readAloud)
+        // The wait decides both: a turn is marked spoken exactly when it is held for, so the two
+        // cannot disagree and this screen states no condition of its own.
+        let nonce = harness.willSend(heard)
+        if speaker.awaitReply(nonce, readAloud: readAloud) { harness.markSpoken(nonce) }
         #if DEBUG
         spokenNonce = nonce
         #endif

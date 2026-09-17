@@ -253,6 +253,39 @@ final class HeldSecondSentence: VoiceEngine, @unchecked Sendable {
     }
 }
 
+
+/// A voice whose sentence is three frames of different lengths, with the second and third held
+/// until the test lets them go: the frames Pocket is still yielding when an interruption lands.
+final class FramesAfterTheInterruption: VoiceEngine, @unchecked Sendable {
+    static let lengths = [0.1, 0.2, 0.3]
+    private let lock = NSLock()
+    private var released = false
+    private var delivered = false
+
+    /// True once the frames behind the gate have been yielded.
+    var yieldedTheRest: Bool { lock.withLock { delivered } }
+    func releaseTheRest() { lock.withLock { released = true } }
+
+    func load(base: URL) async throws {}
+
+    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(Voice.Frame(samples: toneFrame(seconds: Self.lengths[0]), rate: Voice.rate))
+                while !self.lock.withLock({ self.released }) {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                for seconds in Self.lengths.dropFirst() {
+                    continuation.yield(Voice.Frame(samples: toneFrame(seconds: seconds), rate: Voice.rate))
+                }
+                self.lock.withLock { self.delivered = true }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
+}
+
 /// Recovery from a media services reset, against notifications posted on a private centre and
 /// engines, synthesisers and formats from injected seams. No real reset happens here: a simulator
 /// cannot trigger one, and none of these tests reaches an audio device.
@@ -740,17 +773,22 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply("a-turn", readAloud: false)
-        XCTAssertFalse(speaker.holding, "replies are not read aloud")
+        // The answer is also what makes a turn spoken, so a false here is a turn the chat does
+        // not record — no later launch can read its reply aloud.
+        XCTAssertFalse(speaker.awaitReply("a-turn", readAloud: false), "replies are not read aloud")
+        XCTAssertFalse(speaker.holding)
         XCTAssertFalse(speaker.keeping)
         XCTAssertEqual(seams.lines, [], "and nothing is built for one")
 
         let quiet = await self.speaker(seams, audio, center,
                                        engine: ScriptedVoice(loads: false), ready: false)
-        quiet.awaitReply("a-turn", readAloud: true)
-        XCTAssertFalse(quiet.holding, "the voice is not resident")
+        XCTAssertFalse(quiet.awaitReply("a-turn", readAloud: true), "the voice is not resident")
+        XCTAssertFalse(quiet.holding)
         XCTAssertFalse(quiet.keeping)
         XCTAssertEqual(seams.lines, [])
+        XCTAssertTrue(speaker.awaitReply("a-turn", readAloud: true),
+                      "with the setting on and the voice resident, held and spoken")
+        speaker.stop()
     }
 
     /// The handover between the two owners: the reply arrives, `.speaking` is taken and the wait
@@ -981,6 +1019,41 @@ final class MediaServicesResetTests: XCTestCase {
         await settle("the reply to end") { !speaker.speaking }
         XCTAssertFalse(speaker.holding, "both owners let go")
         XCTAssertFalse(speaker.keeping, "and the keeper went with the engine")
+    }
+
+
+    /// The frames Pocket was still yielding when the interruption landed. Playing them would mean
+    /// restarting a dead engine, and that throw reads to the voice as the sentence's end, so the
+    /// rest of the sentence would be lost. They are owed instead, and the rebuild plays the lot.
+    func testFramesThatArriveWhileTheEngineIsDeadAreOwedAndPlayedByTheRebuild() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let voice = FramesAfterTheInterruption()
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        let lengths = FramesAfterTheInterruption.lengths.map { AVAudioFrameCount(toneFrame(seconds: $0).count) }
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled == [lengths[0]] }
+        let engine = seams.engines.last
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+
+        // Pocket yields the rest of the sentence into a queue with no engine under it.
+        voice.releaseTheRest()
+        await settle("the rest of the sentence") { voice.yieldedTheRest }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]],
+                       "nothing was played on the dead engine")
+        XCTAssertTrue(speaker.speaking, "and the sentence did not end at a throw")
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the rebuild") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]] + lengths,
+                       "every frame of the sentence reached the new player, in order")
+        speaker.stop()
     }
 
     // MARK: PlayQueue

@@ -31,6 +31,10 @@ final class Harness {
             turns.forEach(seen)
         }
     }
+    /// Told the nonce of a turn that ended in a failure rather than a reply, as it ends: no reply
+    /// is coming for it, and the screen's error line is not a place to work out whose. Not called
+    /// for a turn another primary is answering, whose reply is still on its way.
+    var onTurnFailed: (@MainActor (String) -> Void)?
     /// The refs already handed to a handler, so a reply both paths see is offered once. Nothing
     /// is recorded while no handler stands, which is what leaves those replies to be replayed.
     private var offered: Set<TurnRef> = []
@@ -214,18 +218,23 @@ final class Harness {
     /// Puts the words on the line without sending yet, and returns the nonce the turn will carry,
     /// which is how a caller recognises the turn once it is in the log. `retry()` sends.
     @discardableResult
-    func willSend(_ text: String, spoken: Bool = false) -> String {
+    func willSend(_ text: String) -> String {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
         pending.append(outgoing)
-        if spoken {
-            spokenNonces.append(outgoing.nonce)
-            if spokenNonces.count > Self.spokenLimit {
-                spokenNonces.removeFirst(spokenNonces.count - Self.spokenLimit)
-            }
-        }
         return outgoing.nonce
+    }
+
+    /// That turn was said into the microphone and its reply is one to read aloud, which is what
+    /// makes it spoken; the mark outlives the screen, so the reply to what was said before a
+    /// relaunch is still an answer to something spoken.
+    func markSpoken(_ nonce: String) {
+        guard !spokenNonces.contains(nonce) else { return }
+        spokenNonces.append(nonce)
+        if spokenNonces.count > Self.spokenLimit {
+            spokenNonces.removeFirst(spokenNonces.count - Self.spokenLimit)
+        }
     }
 
     /// The spoken turn `reply` answers, or nil when it answers none. Spoken-ness is the harness's
@@ -240,9 +249,6 @@ final class Harness {
         spokenNonces.removeAll { $0 == nonce }
     }
 
-    /// The nonces still on the line, which is how a failure tells a wait that is still coming
-    /// from one that is not.
-    var pendingNonces: Set<String> { Set(pending.map(\.nonce)) }
 
     /// Sends the line from its head, after a turn that stopped it or a launch that found it.
     func retry() async {
@@ -299,9 +305,11 @@ final class Harness {
         } catch is CancellationError {
             return false
         } catch TurnRunnerError.replyFailed(_, let underlying) {
-            // The person's turn is in the log; only the reply is owed.
+            // The person's turn is in the log; only the reply is owed, and nothing is going to
+            // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
             error = Self.describe(underlying)
+            onTurnFailed?(attempt.nonce)
             await refresh()
             status = nil
             return true
@@ -320,13 +328,16 @@ final class Harness {
                 return true
             } catch {
                 self.error = Self.describe(error)
+                onTurnFailed?(attempt.nonce)
             }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
             error = "Signed out. Sign in again to continue."
+            onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
             self.error = Self.describe(error)
+            onTurnFailed?(attempt.nonce)
             await refresh()
         }
         status = nil

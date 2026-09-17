@@ -552,7 +552,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         // The launch that said it and went away before it could be sent.
         let before = harness(db, defaults: defaults, transport: ScriptedTransport())
-        before.willSend("what is the capital of France", spoken: true)
+        before.markSpoken(before.willSend("what is the capital of France"))
 
         // The launch that finds it: a new harness over the same defaults and the same log.
         let after = harness(db, defaults: defaults,
@@ -573,6 +573,52 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(heard.texts, ["Paris."], "and it is owed no second reading")
     }
 
+    /// A turn that ends in a failure says so as it ends, naming itself: the screen's error line
+    /// cannot say whose turn stopped, and a wait that reads it would hold the phone awake to its
+    /// ceiling for a reply nothing is bringing. A turn still going is not named.
+    func testAFailedTurnNamesItselfAndOneStillGoingDoesNot() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport(
+            (500, #"{"type":"error","error":{"type":"api_error","message":"Internal"}}"#),
+            (200, reply("Rome.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let failed = Said()
+        harness.onTurnFailed = { failed.add($0) }
+
+        let first = harness.willSend("what is the capital of France")
+        let second = harness.willSend("and of Italy")
+        await harness.retry()
+
+        XCTAssertEqual(failed.texts, [first], "the turn that stopped, as it stopped")
+        XCTAssertFalse(failed.texts.contains(second), "the one behind it was answered")
+        XCTAssertNotNil(harness.error)
+    }
+
+    /// Read replies aloud off at the release: the turn is not one whose reply is read, so nothing
+    /// records it as spoken. A launch that turns the setting on afterwards would otherwise speak
+    /// a reply from last week.
+    func testATurnSentWithRepliesNotReadAloudIsNotSpokenAfterARelaunch() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let before = harness(db, defaults: defaults,
+                             transport: ScriptedTransport((200, reply("Paris."))))
+        // Nothing marks it: the wait refused, so the chat recorded no mark.
+        before.willSend("what is the capital of France")
+        await before.retry()
+
+        // A later launch, with the setting turned on: the reply is history, not an answer to
+        // anything this phone is waiting to hear.
+        let after = harness(db, defaults: defaults, transport: ScriptedTransport())
+        await after.refresh()
+        let heard = Said()
+        after.onReply = { reply in
+            guard let asked = after.spokenTurn(answeredBy: reply) else { return }
+            after.answeredAloud(asked)
+            heard.add(reply.text)
+        }
+        XCTAssertEqual(heard.texts, [], "nothing spoken was owed a reading")
+    }
+
     /// What the chat installs there, end to end: a reply continuing from a turn the microphone
     /// sent is spoken, and one continuing from a typed turn is not.
     func testOnlyTheReplyToASpokenTurnIsSpokenFromTheReplyHandler() async throws {
@@ -587,7 +633,7 @@ final class HarnessIntegrationTests: XCTestCase {
         }
 
         // Spoken: the press said so when it put the words on the line.
-        harness.willSend("what is the capital of France", spoken: true)
+        harness.markSpoken(harness.willSend("what is the capital of France"))
         await harness.retry()
         XCTAssertEqual(said.texts, ["Paris."])
 

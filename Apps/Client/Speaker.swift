@@ -170,10 +170,16 @@ final class Speaker {
     /// reply is being read, the turn fails, or anything ends the reply. Nothing is held for a
     /// reply that could not be heard anyway — Read replies aloud off, or a voice that is not
     /// resident at the release — since those turns make no audio to keep the phone awake for.
-    func awaitReply(_ nonce: String, readAloud: Bool) {
+    ///
+    /// The answer is returned because it is the same answer to whether the turn is a spoken one:
+    /// a turn recorded as spoken and never held for would be read aloud by some later launch that
+    /// turned the setting on, so the caller records the mark from this and states no condition of
+    /// its own.
+    @discardableResult
+    func awaitReply(_ nonce: String, readAloud: Bool) -> Bool {
         guard readAloud, voice.ready else {
-            AudioLog.say("no wait held: \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
-            return
+            AudioLog.say("no wait held for \(nonce): \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
+            return false
         }
         waits[nonce]?.cancel()
         audio.wantAlive(true, for: .awaitingReply(nonce))
@@ -182,6 +188,7 @@ final class Speaker {
             guard !Task.isCancelled else { return }
             self.endAwaiting(nonce, "capped at \(ceiling); the reply never landed")
         }
+        return true
     }
 
     /// Lets go of one turn's wait. Free when that turn holds none.
@@ -195,14 +202,6 @@ final class Speaker {
     /// Lets go of every wait: the chat has stopped answering, or something ended things.
     func endAllWaits(_ why: String) {
         waits.keys.forEach { endAwaiting($0, why) }
-    }
-
-    /// Lets go of the waits whose turns have left the line, which is what a failure leaves
-    /// behind: the turn that stopped is settled or dropped, and what is still on the line is
-    /// still coming. A wait for a turn another primary is answering is not on the line either,
-    /// and is bounded by its own ceiling instead.
-    func dropWaits(keeping pending: Set<String>, why: String) {
-        waits.keys.filter { !pending.contains($0) }.forEach { endAwaiting($0, why) }
     }
 
     /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
@@ -244,6 +243,10 @@ final class Speaker {
             nonce.map { endAwaiting($0, "the audio session did not activate") }
             return
         }
+        // A reply beginning on a queue nothing has rebuilt since an interruption: the session is
+        // active again as of the line above, so this is where it comes back. Without it the
+        // frames would be owed to a rebuild that may never come and the reply heard as silence.
+        if queue.dead { queue.rebuild() }
         speaking = true
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
@@ -472,6 +475,9 @@ final class PlayQueue: @unchecked Sendable {
     private var keeper: AVAudioPlayerNode?
     /// True while something wants the process kept alive; the count itself is `AudioSession`'s.
     private var holding = false
+    /// True from an interruption's `.began` until the queue is built again: iOS has stopped the
+    /// engine, so a frame that arrives meanwhile is owed rather than played.
+    private(set) var dead = false
     /// Between the player and the mixer: stage two of the pacing, for a voice with no pace of
     /// its own. `rate` stretches time and leaves the pitch where it was, so at `Voice.tempo` the
     /// words come faster without rising.
@@ -506,21 +512,27 @@ final class PlayQueue: @unchecked Sendable {
     /// the lock, which counts what is scheduled for the audio thread.
     func play(_ samples: [Float], rate: Int) throws {
         guard !samples.isEmpty else { return }
-        try build(rate: rate)
-        guard let engine, let node, let format, format.sampleRate == Double(rate),
+        // While the engine is dead — from an interruption's `.began` until something rebuilds —
+        // the frame is owed rather than played. Restarting a dead engine here throws, and the
+        // throw reads to the voice as the sentence's end, so the rest of a sentence Pocket was
+        // still yielding would be lost to an interruption nobody asked for.
+        if !dead { try build(rate: rate) }
+        guard let format, format.sampleRate == Double(rate),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
         else { throw VoiceError.noPlayer }
-        if !engine.isRunning {
-            engine.prepare()
-            try engine.start()
-        }
-        if !node.isPlaying { node.play() }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
         let era: Int = lock.withLock {
             queued.append((epoch, buffer))
             return epoch
         }
+        guard !dead else { return }
+        guard let engine, let node else { throw VoiceError.noPlayer }
+        if !engine.isRunning {
+            engine.prepare()
+            try engine.start()
+        }
+        if !node.isPlaying { node.play() }
         schedule(buffer, era: era)
     }
 
@@ -563,6 +575,7 @@ final class PlayQueue: @unchecked Sendable {
         keeper = silence
         timePitch = unit
         format = f
+        dead = false
         // The audio category flipping (the warm record claim going as the phone locks), a route
         // change, a call: each reconfigures the hardware, stops every engine in the process and
         // takes the buffers on its node with it. What was not heard is put back below.
@@ -640,6 +653,7 @@ final class PlayQueue: @unchecked Sendable {
             queued = queued.map { (epoch, $0.buffer) }
             return queued.count
         }
+        dead = true
         stopKeeper()
         node?.stop()
         engine?.stop()
@@ -694,6 +708,7 @@ final class PlayQueue: @unchecked Sendable {
     func reset() {
         stop()
         holding = false
+        dead = false
         drop()
     }
 
