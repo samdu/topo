@@ -60,7 +60,7 @@ jobs:
           for pr in $prs; do
             echo "::group::PR #$pr"
 
-            info="$(gh pr view "$pr" --json state,isDraft,labels,headRefOid,baseRefName)"
+            info="$(gh pr view "$pr" --json state,isDraft,labels,headRefOid,baseRefName,body)"
             state="$(jq -r .state <<<"$info")"
             draft="$(jq -r .isDraft <<<"$info")"
             sha="$(jq -r .headRefOid <<<"$info")"
@@ -69,6 +69,13 @@ jobs:
 
             if [ "$state" != "OPEN" ] || [ "$draft" = "true" ] || [ "$base" != "main" ]; then
               echo "skip: state=$state draft=$draft base=$base"
+              echo "::endgroup::"; continue
+            fi
+            # An unchecked box in the description is a claim not yet proved —
+            # by convention a device test the PM runs with Sam before ticking
+            # it (docs/process.md, step 4). Nothing unproved merges unattended.
+            if jq -r .body <<<"$info" | grep -qE '^\s*[-*] \[ \]'; then
+              echo "skip: the description has an unchecked box; a claim is still unproved"
               echo "::endgroup::"; continue
             fi
             if [ "$REQUIRE_LABEL" = "true" ] && [ "$labelled" != "true" ]; then

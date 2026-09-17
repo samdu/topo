@@ -24,16 +24,22 @@ One always-on mind per person, every Apple device a limb. The design is `docs/de
 
 ## Working here
 
-- Every change lands as a PR on a branch named `<role>/<topic>`: `lead/…`, `senior/…`, `junior/…`. The status pane assigns PRs to engineers by that prefix, so a branch without it belongs to nobody.
-- Never force push.
+The process — who plans, who builds, who reviews, and in what order — is `docs/process.md`. The short form:
+
+- Every change lands as a PR on a `buddy/<topic>` branch from its own worktree, opened as a draft. The description is the contract: what was done, and a **Proof** section as a checklist of what was verified. A test only a physical device can show is an unchecked `- [ ] device: …` box; auto-merge waits until it is ticked.
+- Never force push. One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
 - Prefer what exists: stdlib, then a platform framework, then an already-linked dependency, before new code or a new dependency. Nothing GPL from others ships in a bundle (App Store distribution); every borrowed piece is attributed in `THIRD-PARTY`.
 - Docs describe the present state. When you change behaviour, change the doc to match; do not narrate the change.
+- An engineer reports to the Topo PM at every task boundary (PR opened, blocked, finished) with `SendMessage`: what, where (branch, commit, PR), what it waits on. It never merges, never reads or answers a review, and never polls with background shells — the PM does all three.
 
-## Working here (engineers)
+## Where the risk lives
 
-Three engineers (lead, senior, junior) each work in their own clone on buddybox, dispatched by buddy-prime. These are the standing instructions; a brief adds the task, never replaces these.
+The CI reviewer reads this section before the diff. Keep it current: it names where a serious defect is likely *now*, and it moves as the work does.
 
-- **Branches.** The `<role>/` prefix is required on every branch you push. Never touch another engineer's branch: no commits, no rebases, no pushes, no reviews-by-edit. If their work blocks yours, say so in your status and wait.
-- **PRs.** One concern per PR, kept small; split rather than grow. Never open a second PR for the same work; a finding on an open PR is fixed on that PR's branch.
-- **Review loop.** After every push, wait for the Codex review comment on the PR and read it (`gh pr view <n> --comments`; it arrives within about five minutes). Fix every blocking finding on the same branch and push again, which re-runs the review. A PR that passes merges by automerge on its own; you never merge. That merge does not fire GitHub's closing keywords, so `Closes #n` in the body leaves the issue open and its author closes it by hand afterwards. The gate has no round limit: Codex reviews every push. A file that draws a new blocking fault every round, none a regression of the last, is the design being wrong rather than the code (seven rounds on one file is the record): stop and write the design bullet instead of pushing the next fix. The githubpr channel stops *notifying* you after four rounds on one PR, so from then on read the PR with `gh` after each push. A finding you believe is wrong, or one about files your PR does not touch, goes to buddy-prime in your status with the reasoning; do not argue it on the PR and do not push a change you think is wrong.
-- **Status.** At every task boundary (PR opened, PR merged, blocked, finished, or a question you cannot answer from the repo) send one paragraph to buddy-prime with `SendMessage` to `buddy-prime` (it is on the mesh roster; `ListAgents` shows it): what you did, where it is (branch, commit, PR number), and what you are waiting on. Then stop and wait for the next brief. Do not poll for merges or reviews with background shells; the githubpr channel reports them to you.
+- **Audio lifecycle.** The audio session, the engines, the tap and the synthesiser are handles into mediaserverd; a media services reset, an interruption, or a route change invalidates them at once. Anything that installs a tap, starts an engine or reads `inputNode.outputFormat` without a session configured and active can throw an uncatchable `NSException` — a crash, not an error. A rebuilt engine reads the same dead format until the session is reactivated.
+- **The press path.** Every press is a session with a generation; a late result, a second release, or a press while another surface holds the microphone must reach nothing. Two gates on one input answer twice.
+- **The transcript log** is append-only: one record per turn, per-device sequence numbers, create-only saves with a compare-and-set on the change tag. Anything that can overwrite, skip or duplicate a turn.
+- **The primary lease**: two devices believing they are primary past the lease duration, a heartbeat that keeps a lost lease alive, a claim that is not atomic.
+- **CloudKit is truth, sockets are speed**: a path that only works when a socket is up.
+- **The test doubles**: `InMemoryRecordDatabase` reproducing weaker semantics than CloudKit's, so the suite passes on behaviour the real store rejects. A test that cannot fail.
+- **Licensing**: GPL code from others reaching a bundle; a borrowed piece with no entry in `THIRD-PARTY`.
