@@ -374,6 +374,64 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(seams.lines, ["activate ok", "activate ok"])
     }
 
+    func testAClaimChangeWhileAHoldStandsTouchesNothingAndIsAppliedWhenTheHoldDrops() throws {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        // `warmRecord` is this claim with the permission gate in front of it, which a unit test
+        // has no answer for; what the lock changes is the claim.
+        audio.wantRecord(true, for: .warm)
+        XCTAssertEqual(seams.records, [true], "the warm claim configures in the foreground")
+        audio.wantAlive(true, for: .awaitingReply("n1"))
+        seams.forget()
+
+        // The lock: the warm claim goes, and with a hold standing the session is left exactly as
+        // it is. Reconfiguring it here is what iOS refuses from the background.
+        audio.wantRecord(false, for: .warm)
+        XCTAssertEqual(seams.lines, [], "a claim change while a hold stands configures nothing")
+        try audio.ensureActive()
+        XCTAssertEqual(seams.lines, [], "the session is still valid, so the reply's path is free")
+
+        audio.wantAlive(false, for: .awaitingReply("n1"))
+        XCTAssertEqual(seams.records, [false], "the deferred claim is applied once, when the last hold goes")
+        XCTAssertEqual(seams.lines, ["activate ok"])
+    }
+
+    func testAClaimChangeWithNoHoldIsAppliedAtOnce() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        audio.wantRecord(true, for: .warm)
+        audio.wantRecord(false, for: .warm)
+        XCTAssertEqual(seams.records, [true, false])
+    }
+
+    func testTheDeferredClaimIsAppliedOnlyWhenTheLastHoldGoes() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .awaitingReply("n1"))
+        audio.wantAlive(true, for: .speaking)
+        seams.forget()
+        audio.wantRecord(false, for: .warm)
+        audio.wantAlive(false, for: .awaitingReply("n1"))
+        XCTAssertEqual(seams.lines, [], "a hold still stands; the session is not touched")
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.lines, ["activate ok"], "applied once, at the last hold")
+        XCTAssertEqual(seams.records, [false])
+    }
+
+    func testAClaimDeferredThroughAHoldIsAppliedEvenWhenItsConfigureFails() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        audio.wantAlive(true, for: .speaking)
+        audio.wantRecord(true, for: .warm)
+        seams.activationError = Seams.Refused()
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.lines, ["activate failed"], "the failure is kept, not thrown")
+        seams.activationError = nil
+        XCTAssertNoThrow(try audio.ensureActive())
+        XCTAssertEqual(seams.lines, ["activate failed", "activate ok"], "the next audio path tries again")
+    }
+
     func testAConfigureThatThrowsLeavesTheSessionInvalidAndTheNextEnsureRetries() throws {
         let seams = Seams()
         let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
@@ -905,6 +963,29 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertTrue(speaker.holding)
         await settle("the ceiling to run out") { !speaker.holding }
         XCTAssertFalse(speaker.keeping)
+    }
+
+    /// A reply that is refused every pass ends the same wait as one that never comes, so the
+    /// ceiling's line says which: a run that read "the reply never landed" while the reply was in
+    /// fact landing and being turned away sent the reading somewhere else entirely.
+    func testTheCapSaysWhetherTheReplyLandedAndWasRefused() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertEqual(speaker.capped("no-reply"), "capped at 120.0 seconds; the reply never landed")
+
+        // What the phone met: a session something had invalidated, and a configure the system
+        // refuses, so every pass offers the reply and every pass turns it away.
+        seams.activationError = Seams.Refused()
+        audio.invalidate()
+        XCTAssertFalse(speaker.speak("Paris.", answering: "a-turn"))
+        audio.invalidate()
+        XCTAssertFalse(speaker.speak("Paris.", answering: "a-turn"))
+        XCTAssertEqual(speaker.capped("a-turn"),
+                       "capped at 120.0 seconds; the reply landed and was not taken, 2 times")
+        XCTAssertFalse(speaker.holding, "the cap lets the wait go either way")
     }
 
     /// iOS posts an interruption at the lock screen with no call and no Siri in it. Dropping the

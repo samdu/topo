@@ -42,6 +42,15 @@ final class AudioSession {
     private let configure: (Bool) throws -> Void
     /// True once the session has been configured; a reset re-applies only a session that was.
     private var applied = false
+    /// A claim change that came in while a hold stood, waiting for the last hold to drop. The
+    /// session a reply is being waited for on is not reconfigured underneath it: activating or
+    /// reconfiguring a non-mixable session from the background is refused
+    /// (`cannotInterruptOthers`), which would leave the session invalid and every later
+    /// `ensureActive` trying the same refused call from behind the lock. The session that was
+    /// active at the release stays active and untouched, whatever category it was in, until the
+    /// reply has been heard — the keeper is already rendering on it, and an already-active session
+    /// goes on rendering in the background under the `audio` mode.
+    private var deferredClaims = false
     /// True only between a configuration that activated the session and the next reset or failure.
     private var valid = false
     private var resetObserver: NSObjectProtocol?
@@ -61,18 +70,20 @@ final class AudioSession {
 
     private func mediaServicesWereReset() {
         valid = false
-        #if DEBUG
-        DebugRun.say("media services reset: audio session invalidated (record \(recordMode))")
-        #endif
+        AudioLog.say("media services reset: audio session invalidated (record \(recordMode))")
         guard applied else { return }
         // Remembered rather than swallowed: a failure here leaves the session invalid and the
-        // next `ensureActive` tries again, from the path that actually wants the audio.
-        try? apply()
+        // next `ensureActive` tries again, from the path that actually wants the audio. Logged,
+        // so a run says when a configure failed and with what.
+        applyOrRemember()
     }
 
     /// The first call of every audio path. Free on a session that is already active; otherwise it
     /// configures for the claims as they stand and throws whatever that throws, so the caller
-    /// refuses rather than touching a dead session.
+    /// refuses rather than touching a dead session. Behind the lock it is free, because a hold
+    /// defers the claim changes that would have invalidated the session; what can still ask for a
+    /// configuration there is an interruption that took the session, and the end of one is
+    /// exactly when iOS allows the session back.
     func ensureActive() throws {
         guard !valid else { return }
         try apply()
@@ -90,7 +101,12 @@ final class AudioSession {
         let was = recordMode
         if on { recordClaims.insert(who) } else { recordClaims.remove(who) }
         guard recordMode != was else { return }
-        try? apply()
+        guard !holding else {
+            deferredClaims = true
+            AudioLog.say("record \(recordMode ? "claimed" : "dropped") while a hold stands; the session is left as it is")
+            return
+        }
+        applyOrRemember()
     }
 
     /// Brings the record configuration up before the thumb needs it, from the foreground: the
@@ -114,6 +130,14 @@ final class AudioSession {
         let by = holds.isEmpty ? "nobody" : holds.map { "\($0)" }.sorted().joined(separator: ", ")
         AudioLog.say("hold \(on ? "taken" : "dropped") by \(who); held by \(by)")
         guard holding != wasHolding else { return }
+        // The claim changes the hold stood in the way of, applied once now that nothing is being
+        // kept alive — the foreground is where a reconfiguration is allowed, and the app is back
+        // in it or done with the reply by the time the last hold goes.
+        if !holding, deferredClaims {
+            deferredClaims = false
+            AudioLog.say("the last hold is gone; the claims are applied (record \(recordMode))")
+            applyOrRemember()
+        }
         onHoldChanged?(holding)
     }
 
@@ -123,6 +147,16 @@ final class AudioSession {
         let want = !screenClaims.isEmpty
         guard UIApplication.shared.isIdleTimerDisabled != want else { return }
         UIApplication.shared.isIdleTimerDisabled = want
+    }
+
+    /// Applies the claims as they stand, keeping a failure rather than throwing it: the caller is
+    /// a claim or a reset, neither of which is an audio path. The next `ensureActive` meets it.
+    private func applyOrRemember() {
+        do {
+            try apply()
+        } catch {
+            AudioLog.say("the session did not configure for record \(recordMode): \(error)")
+        }
     }
 
     private func apply() throws {

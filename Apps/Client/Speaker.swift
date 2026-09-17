@@ -42,6 +42,9 @@ final class Speaker {
     /// the process open in a pocket; one slower than this is heard on the next foreground instead.
     /// The model call's own timeout is longer, so nothing is lost, only made to wait.
     private let ceiling: Duration
+    /// How many times a reply for this turn landed and was not taken, by nonce. Kept only so the
+    /// ceiling's line can say what happened; forgotten with the wait.
+    private var refusals: [String: Int] = [:]
     /// One wait per spoken turn outstanding, by that turn's nonce, each counting down `ceiling`
     /// from its own release: a second thing said while the first is in flight is held for too,
     /// and the first being answered does not let go of the second.
@@ -200,7 +203,7 @@ final class Speaker {
         waits[nonce] = Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
-            self.endAwaiting(nonce, "capped at \(ceiling); the reply never landed")
+            self.capped(nonce)
         }
         return Wait(spoken: true, held: true)
     }
@@ -214,8 +217,24 @@ final class Speaker {
         let held: Bool
     }
 
+    /// The ceiling reached with the wait still standing. The line says which of the two ways that
+    /// happens this was: a reply that never came, and one that landed every pass and was refused
+    /// every pass, end the same wait, and only the count tells a run's log them apart. It is the
+    /// ceiling's own path, and returns its line so a test reads what a run would.
+    @discardableResult
+    func capped(_ nonce: String) -> String {
+        let refused = refusals[nonce] ?? 0
+        let what = refused == 0
+            ? "the reply never landed"
+            : "the reply landed and was not taken, \(refused) time\(refused == 1 ? "" : "s")"
+        let line = "capped at \(ceiling); \(what)"
+        endAwaiting(nonce, line)
+        return line
+    }
+
     /// Lets go of one turn's wait. Free when that turn holds none.
     func endAwaiting(_ nonce: String, _ why: String) {
+        refusals[nonce] = nil
         guard let counting = waits.removeValue(forKey: nonce) else { return }
         counting.cancel()
         AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
@@ -257,6 +276,7 @@ final class Speaker {
             DebugRun.say("speak: not spoken — \(voice.summary)")
             #endif
             AudioLog.say("the reply was not taken: \(voice.summary)")
+            nonce.map { refusals[$0, default: 0] += 1 }
             return false
         }
         do {
@@ -266,6 +286,7 @@ final class Speaker {
             DebugRun.say("speak: the audio session did not activate: \(error)")
             #endif
             AudioLog.say("the reply was not taken: the session did not activate: \(error)")
+            nonce.map { refusals[$0, default: 0] += 1 }
             done()
             return false
         }
