@@ -171,6 +171,48 @@ extension DebugRun {
         return Voice.stalledVoice()
     }
 
+    /// The chat screen's report for the spoken-turn UI test, on the title's accessibility value.
+    struct ChatReport: Codable, Equatable {
+        /// The nonce of the last turn the chat sent from the microphone; nil before one.
+        var spoken: String?
+        /// That turn in the log, and the first reply naming it among its parents.
+        var person: TurnReport?
+        var reply: TurnReport?
+        /// The error line on the chat screen, if any.
+        var error: String?
+        var speaker: Speaker.Report
+    }
+
+    struct TurnReport: Codable, Equatable {
+        var ref: String
+        var parents: [String]
+        var text: String
+
+        init(_ turn: Turn) {
+            ref = turn.ref.description
+            parents = turn.parents.map(\.description)
+            text = turn.text
+        }
+    }
+
+    static let chatReportIdentifier = "topo-debug-chat"
+
+    static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report) -> String {
+        var report = ChatReport(spoken: spoken, error: error, speaker: speaker)
+        switch spoken.map({ answer(to: $0, in: turns) }) {
+        case .unanswered(let person):
+            report.person = TurnReport(person)
+        case .answered(let person, let reply):
+            report.person = TurnReport(person)
+            report.reply = TurnReport(reply)
+        case .notInLog, nil:
+            break
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        return (try? encoder.encode(report)).flatMap { String(data: $0, encoding: .utf8) } ?? "unencodable"
+    }
+
     /// `TOPO_DEBUG_KEEP_SPOKEN=1`: what a press hears is printed and not sent, so a UI test
     /// that speaks into the microphone takes no turn.
     static func keepsSpoken(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {

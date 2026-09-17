@@ -42,6 +42,10 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     /// True while the scene is active; the scene sets it. A reply that starts while it is false
     /// goes to `AVSpeechSynthesizer`, since the voice is Metal work.
     var foreground = true
+    #if DEBUG
+    /// What the last reply was and whether it was heard to the end, for the UI test.
+    private(set) var report = Report()
+    #endif
 
     init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
          makeSynthesizer: @escaping () -> AVSpeechSynthesizer = { AVSpeechSynthesizer() }) {
@@ -89,15 +93,14 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
         }
         speaking = true
         audio.wantScreenAwake(true, for: .speaking)
-        if voice.ready, foreground {
-            #if DEBUG
-            DebugRun.say("speak: session ok, pocket")
-            #endif
+        let local = voice.ready && foreground
+        #if DEBUG
+        report = Report(speaks: report.speaks + 1, engine: local ? .pocket : .system, text: text)
+        DebugRun.say("speak: session ok, \(local ? "pocket" : "fallback")")
+        #endif
+        if local {
             speakLocally(text)
         } else {
-            #if DEBUG
-            DebugRun.say("speak: session ok, fallback")
-            #endif
             let synthesizer = self.synthesizer ?? {
                 let made = makeSynthesizer()
                 made.delegate = self
@@ -142,6 +145,9 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
                     guard self.generation == mine else { return }
                     // Stage one of the pacing, on the buffer; stage two is the queue's unit.
                     try self.queue.play(PocketPace.trimGaps(clip.samples, rate: clip.rate), rate: clip.rate)
+                    #if DEBUG
+                    self.report.started = true
+                    #endif
                 } catch {}
             }
         }
@@ -152,11 +158,19 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     /// two sentences and the last sentence is made while the queue is still full.
     private func made() {
         making -= 1
-        if making == 0, queue.isIdle { done() }
+        if making == 0, queue.isIdle { finished() }
     }
 
     private func drained() {
-        if making == 0 { done() }
+        if making == 0 { finished() }
+    }
+
+    /// The reply on the voice's path came to its end, rather than being stopped.
+    private func finished() {
+        #if DEBUG
+        report.finished = report.started
+        #endif
+        done()
     }
 
     /// The cut: sentence-final punctuation followed by whitespace, or a line break. Deliberately
@@ -185,14 +199,49 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         let id = ObjectIdentifier(utterance)
-        Task { @MainActor in self.done(id) }
+        Task { @MainActor in
+            #if DEBUG
+            if self.isCurrent(id) { self.report.finished = self.report.started }
+            #endif
+            self.done(id)
+        }
     }
 
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
         let id = ObjectIdentifier(utterance)
         Task { @MainActor in self.done(id) }
     }
+
+    #if DEBUG
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didStart utterance: AVSpeechUtterance) {
+        let id = ObjectIdentifier(utterance)
+        Task { @MainActor in if self.isCurrent(id) { self.report.started = true } }
+    }
+
+    private func isCurrent(_ id: ObjectIdentifier) -> Bool {
+        current.map { ObjectIdentifier($0) == id } ?? false
+    }
+    #endif
 }
+
+#if DEBUG
+extension Speaker {
+    enum Engine: String, Codable { case pocket, system }
+
+    /// The chat title's debug-only report of the last reply: how many replies `speak` has been
+    /// given, which engine the last one took (`pocket`, the on-device voice, or `system`,
+    /// `AVSpeechSynthesizer`), its text, whether audio for it started (the synthesiser's
+    /// `didStart`, or the first clip queued on the voice's path) and whether it came to its end
+    /// rather than being stopped.
+    struct Report: Codable, Equatable {
+        var speaks = 0
+        var engine: Engine?
+        var text = ""
+        var started = false
+        var finished = false
+    }
+}
+#endif
 
 /// Whatever the voice has made, in the order it was made, on one player node. A player node
 /// with nothing scheduled renders silence rather than stopping and picks up the moment a buffer
