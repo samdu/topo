@@ -169,6 +169,15 @@ struct ScriptedVoice: VoiceEngine {
     }
 }
 
+/// Counts the sentences a voice was asked for, so a test can wait on one that makes no audio
+/// and so leaves no other trace.
+final class SentenceCount: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func bump() { lock.withLock { value += 1 } }
+    var count: Int { lock.withLock { value } }
+}
+
 /// A voice whose second frame waits for the test to let it go, and which records having yielded
 /// it: the frame a media services reset lands in the middle of. Breaking out of the stream
 /// cancels the task behind it, which is what the sleep returns on, so the held frame is always
@@ -618,6 +627,50 @@ final class MediaServicesResetTests: XCTestCase {
         await settle { self.scheduledWindows >= 8 }
         await drain()
         XCTAssertEqual(scheduledWindows, 8, "the quiet opening is this reply's own loudest so far, and speech")
+        speaker.stop()
+    }
+
+    /// The measurements are the reply's, and made rather than defaulted: a stream that ends with
+    /// no frame times nothing, so a reply nobody heard reports no number at all.
+    func testASentenceThatSchedulesNoFrameLeavesTheReplyUnmeasured() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let asked = SentenceCount()
+        let voice = ScriptedVoice(frames: { _ in asked.bump(); return [] })
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        speaker.speak("Nothing comes of this.")
+        await settle { asked.count == 1 }
+        await drain()
+        XCTAssertNil(speaker.report.first, "no frame was scheduled, so nothing was timed")
+        XCTAssertNil(speaker.report.rtf)
+        XCTAssertFalse(speaker.report.started)
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 0)
+        speaker.stop()
+    }
+
+    /// And it is written once: a later sentence that makes nothing moves neither number.
+    func testALaterSentenceThatSchedulesNoFrameMovesNeitherNumber() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let asked = SentenceCount()
+        let voice = ScriptedVoice(frames: { sentence in
+            asked.bump()
+            return sentence.hasPrefix("Loud") ? [toneFrame(0.5)] : []
+        })
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        speaker.speak("Loud one. Nothing two.")
+        await settle { speaker.report.first != nil }
+        let first = speaker.report.first
+        let rtf = speaker.report.rtf
+        XCTAssertNotNil(first, "the first sentence's frame was timed")
+        XCTAssertNotNil(rtf)
+        await settle { asked.count == 2 }
+        await drain()
+        XCTAssertEqual(speaker.report.first, first, "the first frame's time is the first sentence's")
+        XCTAssertEqual(speaker.report.rtf, rtf, "and a sentence that made no audio is in neither")
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 1)
         speaker.stop()
     }
 

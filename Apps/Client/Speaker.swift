@@ -43,6 +43,13 @@ final class Speaker {
     #if DEBUG
     /// What the last reply was and whether it was heard to the end, for the UI test.
     private(set) var report = Report()
+    /// When the reply being read was handed to `speak`, which is what `Report.first` is measured
+    /// from: what a listener waited, not what one sentence of it took.
+    private var spokeAt = Date()
+    /// The reply's audio so far and the time spent making it, summed over the sentences that
+    /// made any. A sentence that scheduled no frame is in neither, so it moves no number.
+    private var replySamples = 0
+    private var replySynth: Double = 0
     #endif
 
     init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
@@ -98,6 +105,9 @@ final class Speaker {
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
         report = Report(speaks: report.speaks + 1, engine: .pocket, text: text)
+        spokeAt = Date()
+        replySamples = 0
+        replySynth = 0
         DebugRun.say("speak: session ok, pocket")
         #endif
         speakLocally(text)
@@ -132,8 +142,8 @@ final class Speaker {
         }
     }
 
-    /// One sentence, frame by frame. The log line keeps `first`, the first frame's arrival, and
-    /// `rtf`, the synthesis time over the audio made — the two numbers a device run is read on.
+    /// One sentence, frame by frame. The console line is per sentence; the report is per reply,
+    /// and neither number in it is written by a sentence that scheduled no frame.
     private func say(_ sentence: String, generation mine: Int) async {
         let started = Date()
         let idle = queue.isIdle
@@ -156,6 +166,8 @@ final class Speaker {
                     first = Date().timeIntervalSince(started)
                     #if DEBUG
                     report.started = true
+                    // The reply's first frame, timed from `speak` and written once.
+                    if report.first == nil { report.first = Date().timeIntervalSince(spokeAt) }
                     #endif
                 }
             }
@@ -164,12 +176,18 @@ final class Speaker {
             #if DEBUG
             let seconds = Date().timeIntervalSince(started)
             let audio = Double(samples) / Double(rate)
-            report.first = first ?? seconds
-            report.rtf = seconds / max(audio, 0.01)
+            let words = sentence.split(separator: " ").count
+            guard let first else {
+                DebugRun.say(String(format: "voice: %@ synth=%.2fs made no audio words=%d",
+                                    idle ? "ttfa" : "next", seconds, words))
+                return
+            }
+            replySamples += samples
+            replySynth += seconds
+            report.rtf = replySynth / (Double(replySamples) / Double(rate))
             DebugRun.say(String(format: "voice: %@ synth=%.2fs first=%.2fs audio=%.2fs cut=%.2fs rtf=%.2f words=%d",
-                                idle ? "ttfa" : "next", seconds, report.first ?? seconds, audio,
-                                Double(trim.dropped) / Double(rate), report.rtf ?? 0,
-                                sentence.split(separator: " ").count))
+                                idle ? "ttfa" : "next", seconds, first, audio,
+                                Double(trim.dropped) / Double(rate), seconds / audio, words))
             #endif
         } catch {
             #if DEBUG
@@ -228,9 +246,12 @@ extension Speaker {
     /// The chat title's debug-only report of the last reply: how many replies `speak` has been
     /// given, which engine the last one took (`pocket`, the only one there is), its text, whether
     /// audio for it started (the first frame queued) and whether it came to its end rather than
-    /// being stopped. `first` and `rtf` are the last sentence's: seconds to its first frame, and
-    /// its synthesis time over the audio it made — the same two numbers the `voice:` console
-    /// line carries, so a lane that cannot read the console reads them here.
+    /// being stopped. `first` and `rtf` are the reply's, not a sentence's: seconds from `speak`
+    /// to the reply's first frame being scheduled, and the time spent synthesising over the
+    /// audio that made. Neither is ever a stand-in — `first` is written once, when that frame is
+    /// scheduled, and is nil when no frame ever was; `rtf` is nil until then and counts only the
+    /// sentences that scheduled one. The `voice:` console line carries the same two numbers per
+    /// sentence, for a run that can read the console.
     struct Report: Codable, Equatable {
         var speaks = 0
         var engine: Engine?
