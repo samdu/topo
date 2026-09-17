@@ -35,6 +35,9 @@ final class Speaker {
     /// that holds the silence never stopped between two owners of the hold.
     var keeping: Bool { queue.keeping }
     var keeperTransitions: [String] { queue.keeperTransitions }
+    /// Whether the play queue's engine is running: what holds the process, the keeper being only
+    /// what it renders.
+    var running: Bool { queue.running }
     #endif
     private var resetObserver: NSObjectProtocol?
     private var interruptionObserver: NSObjectProtocol?
@@ -553,6 +556,8 @@ final class PlayQueue: @unchecked Sendable {
     var needsRebuild: Bool { dead || !isIdle }
     /// True while the silence is rendering, which is what a backgrounded process runs on.
     var keeping: Bool { keeper?.isPlaying ?? false }
+    /// Whether an engine of this queue's is running, which is what iOS counts as audio.
+    var running: Bool { engine?.isRunning ?? false }
 
     init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          center: NotificationCenter = .default) {
@@ -677,7 +682,7 @@ final class PlayQueue: @unchecked Sendable {
     @MainActor
     @discardableResult
     func hold(_ on: Bool) -> Bool {
-        guard on else { holding = false; stopKeeper(); return false }
+        guard on else { holding = false; stopKeeper(); stopEngine(); return false }
         do {
             try build(rate: rate)
             try startKeeper()
@@ -701,6 +706,16 @@ final class PlayQueue: @unchecked Sendable {
         keeperTransitions.append("stopped")
         #endif
         AudioLog.say("keeper stopped")
+    }
+
+    /// The process is held by a running engine; the keeper only gives it something to render, and
+    /// an engine left running with its keeper stopped is a phone that never suspends. With no hold
+    /// nothing runs: the engine is stopped and its nodes left attached, so the next hold or frame
+    /// starts it again through `start()`, where a refusal is a refusal like anywhere else.
+    private func stopEngine() {
+        guard let engine, engine.isRunning else { return }
+        engine.stop()
+        AudioLog.say("engine stopped: nothing is held")
     }
 
     private func startKeeper() throws {

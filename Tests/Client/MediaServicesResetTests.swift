@@ -355,7 +355,7 @@ final class MediaServicesResetTests: XCTestCase {
 
     func testEnsureActiveConfiguresOnceAndIsFreeWhileValid() throws {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         try audio.ensureActive()
         try audio.ensureActive()
         try audio.ensureActive()
@@ -365,7 +365,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetInvalidatesTheSessionSoTheNextPathConfiguresItAgain() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         try audio.ensureActive()
         center.post(name: reset, object: nil)
         // The reset re-applies a session that had been configured, and the next path finds it valid.
@@ -376,7 +376,7 @@ final class MediaServicesResetTests: XCTestCase {
 
     func testAClaimChangeWhileAHoldStandsTouchesNothingAndIsAppliedWhenTheHoldDrops() throws {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         // `warmRecord` is this claim with the permission gate in front of it, which a unit test
         // has no answer for; what the lock changes is the claim.
         audio.wantRecord(true, for: .warm)
@@ -396,9 +396,31 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(seams.lines, ["activate ok"])
     }
 
+    /// The last hold going is as likely to be a reply ending behind the lock as the app coming
+    /// back, and a configure from there is refused every time — which is the refusal that left
+    /// the session invalid for every pass after it.
+    func testAClaimDeferredThroughAHoldIsNotAppliedFromTheBackground() throws {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure,
+                                 isActive: { false })
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .speaking)
+        seams.forget()
+
+        audio.wantRecord(false, for: .warm)
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.lines, [], "nothing is configured from behind the lock")
+
+        // The session is marked as needing configuring, so the next path that wants audio applies
+        // the claims as they stand — from the foreground, where iOS allows it.
+        try audio.ensureActive()
+        XCTAssertEqual(seams.records, [false], "the next audio path applies the claims")
+        XCTAssertEqual(seams.lines, ["activate ok"])
+    }
+
     func testAClaimChangeWithNoHoldIsAppliedAtOnce() {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         audio.wantRecord(true, for: .warm)
         audio.wantRecord(false, for: .warm)
         XCTAssertEqual(seams.records, [true, false])
@@ -406,7 +428,7 @@ final class MediaServicesResetTests: XCTestCase {
 
     func testTheDeferredClaimIsAppliedOnlyWhenTheLastHoldGoes() {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         audio.wantRecord(true, for: .warm)
         audio.wantAlive(true, for: .awaitingReply("n1"))
         audio.wantAlive(true, for: .speaking)
@@ -421,7 +443,7 @@ final class MediaServicesResetTests: XCTestCase {
 
     func testAClaimDeferredThroughAHoldIsAppliedEvenWhenItsConfigureFails() {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         audio.wantAlive(true, for: .speaking)
         audio.wantRecord(true, for: .warm)
         seams.activationError = Seams.Refused()
@@ -434,7 +456,7 @@ final class MediaServicesResetTests: XCTestCase {
 
     func testAConfigureThatThrowsLeavesTheSessionInvalidAndTheNextEnsureRetries() throws {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         seams.activationError = Seams.Refused()
         XCTAssertThrowsError(try audio.ensureActive())
         seams.activationError = nil
@@ -445,7 +467,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetLeavesANeverConfiguredSessionAlone() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         center.post(name: reset, object: nil)
         await drain()
         XCTAssertEqual(seams.lines, [], "a reset does not activate a session nobody configured")
@@ -455,7 +477,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetAppliesTheClaimedRecordConfigurationAgain() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         audio.wantRecord(true, for: .chat)
         XCTAssertEqual(seams.records, [true])
         center.post(name: reset, object: nil)
@@ -465,7 +487,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAFailedReapplicationAfterAResetIsRememberedRatherThanSwallowed() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         try audio.ensureActive()
         seams.activationError = Seams.Refused()
         center.post(name: reset, object: nil)
@@ -495,7 +517,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAPressActivatesTheSessionBeforeItBuildsAnEngineOrReadsAFormat() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         XCTAssertEqual(seams.engines.count, 0, "nothing is built in the handler")
@@ -510,7 +532,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheTapCarriesTheVeryFormatTheGuardJudged() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         CapturingInputNode.installed = nil
@@ -527,7 +549,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAPressWhoseSessionWillNotActivateBuildsNothingAndRefuses() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         seams.activationError = Seams.Refused()
         voice.press(as: .chat, mine: 1)
@@ -572,7 +594,7 @@ final class MediaServicesResetTests: XCTestCase {
         for (name, client, hardware) in Self.deadInputs {
             let seams = Seams()
             let center = NotificationCenter()
-            let audio = AudioSession(center: center, configure: seams.configure)
+            let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
             let voice = await voiceInput(seams, audio, center)
             audio.wantRecord(true, for: .warm)
             seams.forget()
@@ -596,7 +618,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetCancelsThePressAndDropsTheEngineWithoutBuildingOne() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         audio.wantRecord(true, for: .warm)
         seams.forget()
@@ -619,7 +641,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testATeardownWithNoTapDoesNotReadTheInput() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         voice.cancel()
         center.post(name: AVAudioSession.interruptionNotification, object: nil,
@@ -650,7 +672,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyActivatesTheSessionBeforeItBuildsTheQueueAndScheduling() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
         XCTAssertTrue(speaker.speaking)
@@ -666,7 +688,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyAfterAResetActivatesTheSessionAgainAndBuildsAFreshQueue() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
         await settle { speaker.report.started }
@@ -690,7 +712,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAFrameTheVoiceYieldsAfterAResetIsNeverScheduled() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let held = HeldVoice()
         let speaker = await self.speaker(seams, audio, center, engine: held)
         speaker.speak("Hello there.")
@@ -709,7 +731,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyWhoseSessionWillNotActivateBuildsNothing() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         seams.activationError = Seams.Refused()
         speaker.speak("Hello there.")
@@ -723,7 +745,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyToAVoiceThatIsNotResidentIsNotSpoken() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center,
                                          engine: ScriptedVoice(loads: false), ready: false)
         speaker.speak("Hello there.")
@@ -738,7 +760,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyIsSpokenWithNoSceneToBeInAndHoldsTheProcessOpen() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
         await settle { speaker.report.started }
@@ -756,7 +778,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheReplysFirstFrameIsTheTimeFromSpeakToIt() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let clock = ManualClock()
         let voice = ScriptedVoice(frames: { _ in clock.advance(0.2); return [toneFrame(0.5)] })
         let speaker = await self.speaker(seams, audio, center, engine: voice, clock: clock)
@@ -771,7 +793,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheReplysRealTimeFactorIsItsSynthesisOverItsAudio() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let clock = ManualClock()
         let voice = ScriptedVoice(frames: { _ in clock.advance(0.5); return [toneFrame(seconds: 2)] })
         let speaker = await self.speaker(seams, audio, center, engine: voice, clock: clock)
@@ -786,7 +808,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testASentenceThatSchedulesNoFrameLeavesTheReplyUnmeasured() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center,
                                          engine: ScriptedVoice(frames: { _ in [] }))
         speaker.speak("Nothing comes of this.")
@@ -805,7 +827,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testALaterSentenceThatSchedulesNoFrameLeavesTheReplysFirstFrame() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = ScriptedVoice(frames: { $0.hasPrefix("Loud") ? [toneFrame(0.5)] : [] })
         let speaker = await self.speaker(seams, audio, center, engine: voice)
         speaker.speak("Loud one. Nothing two. Loud three.")
@@ -832,7 +854,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testASpokenReleaseHoldsTheProcessOpenAndTheKeeperPlays() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.holding)
@@ -848,7 +870,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testNothingIsHeldForAReplyThatCouldNotBeHeard() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         // The answer is also what makes a turn spoken, so a false here is a turn the chat does
         // not record — no later launch can read its reply aloud.
@@ -859,7 +881,7 @@ final class MediaServicesResetTests: XCTestCase {
 
         // Its own session: one `AudioSession` answers to one `Speaker`, as the app has one of each.
         let quietSeams = Seams()
-        let quietAudio = AudioSession(center: center, configure: quietSeams.configure)
+        let quietAudio = AudioSession(center: center, configure: quietSeams.configure, isActive: { true })
         let quiet = await self.speaker(quietSeams, quietAudio, center,
                                        engine: ScriptedVoice(loads: false), ready: false)
         XCTAssertFalse(quiet.awaitReply("a-turn", readAloud: true).spoken, "the voice is not resident")
@@ -879,7 +901,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheKeeperDoesNotStopBetweenTheWaitAndTheReply() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertEqual(speaker.keeperTransitions, ["playing"])
@@ -893,13 +915,37 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertFalse(speaker.holding)
     }
 
+    /// What iOS counts as audio under the `audio` background mode is a running engine, not a
+    /// playing node: a keeper stopped on an engine left running is a process that never suspends,
+    /// which is a phone awake in a pocket for as long as the app lives.
+    func testNothingRunsWhenNothingIsHeld() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.running, "the hold is a running engine")
+
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle { speaker.report.started }
+        speaker.stop()
+        XCTAssertEqual(speaker.keeperTransitions, ["playing", "stopped"])
+        XCTAssertFalse(speaker.holding)
+        XCTAssertFalse(speaker.running, "the engine stops with the last hold")
+
+        // And the nodes are still attached, so the next hold is the engine started again.
+        speaker.awaitReply("another-turn", readAloud: true)
+        XCTAssertTrue(speaker.running)
+        XCTAssertTrue(speaker.keeping)
+    }
+
     /// Two things said before the first is answered: the chat lets a second press append while
     /// the harness is busy, and each turn holds for itself. The first being answered and heard to
     /// its end does not let go of the second's wait, and the keeper never stops between them.
     func testASecondSpokenTurnIsStillHeldForWhenTheFirstIsAnswered() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         // A voice that makes no audio: the reply is over the moment its sentence is made, which
         // is the drain this is about.
         let speaker = await self.speaker(seams, audio, center,
@@ -925,7 +971,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheHoldOutlastsAQueueThatIsIdleWhileASentenceIsStillBeingMade() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let held = HeldSecondSentence()
         let speaker = await self.speaker(seams, audio, center, engine: held)
         speaker.speak("One. Two.")
@@ -944,7 +990,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheWaitIsLetGoWhenTheTurnFails() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.keeping)
@@ -957,7 +1003,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheWaitIsCappedSoAReplyThatNeverComesLetsGo() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center, ceiling: .milliseconds(20))
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.holding)
@@ -971,7 +1017,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheCapSaysWhetherTheReplyLandedAndWasRefused() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertEqual(speaker.capped("no-reply"), "capped at 120.0 seconds; the reply never landed")
@@ -994,7 +1040,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAnInterruptionWhileAwaitingKeepsTheHoldAndTheRebuildBringsTheKeeperBack() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.keeping)
@@ -1019,7 +1065,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAnInterruptionMidReplyKeepsWhatWasOwedAndAConfigurationChangePutsItBack() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         speaker.speak("Hello there.")
@@ -1047,7 +1093,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testARebuildThatCannotActivateLeavesTheHoldUpUntilTheCeiling() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center, ceiling: .seconds(2))
         speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.keeping)
@@ -1070,7 +1116,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyThatStopsMakingProgressIsEndedByTheCeiling() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let held = HeldSecondSentence()
         let speaker = await self.speaker(seams, audio, center, engine: held, ceiling: .milliseconds(100))
         speaker.speak("One. Two.")
@@ -1088,7 +1134,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testStoppingMidReplyEndsTheReplyAndBothHolds() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let held = HeldVoice()
         let speaker = await self.speaker(seams, audio, center, engine: held)
         speaker.awaitReply("a-turn", readAloud: true)
@@ -1114,7 +1160,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetWhileAHoldStandsDropsBothOwnersAndTheKeeper() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.awaitReply("a-turn", readAloud: true)
         speaker.speak("Hello there.")
@@ -1133,7 +1179,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testFramesThatArriveWhileTheEngineIsDeadAreOwedAndPlayedByTheRebuild() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = FramesAfterTheInterruption()
         let speaker = await self.speaker(seams, audio, center, engine: voice)
         let lengths = FramesAfterTheInterruption.lengths.map { AVAudioFrameCount(toneFrame(seconds: $0).count) }
@@ -1168,7 +1214,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAnEndAfterARefusedRebuildStillPlaysWhatWasOwed() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         CapturingPlayerNode.scheduled = []
         speaker.awaitReply("a-turn", readAloud: true)
@@ -1204,7 +1250,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testARebuildWhoseEngineWillNotStartKeepsWhatWasOwedForTheNextOne() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         CapturingPlayerNode.scheduled = []
         speaker.awaitReply("a-turn", readAloud: true)
@@ -1238,7 +1284,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReleaseWhoseKeeperCannotStartIsSpokenButNotHeld() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         seams.activationError = Seams.Refused()
 
@@ -1263,7 +1309,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testFramesThatArriveAfterARefusedRebuildAreOwedAndPlayedInOrder() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = FramesAfterTheInterruption()
         let speaker = await self.speaker(seams, audio, center, engine: voice)
         let lengths = FramesAfterTheInterruption.lengths.map { AVAudioFrameCount(toneFrame(seconds: $0).count) }
@@ -1305,7 +1351,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAConfigurationChangeRebuildsTheQueueAndReschedulesWhatWasNotHeard() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
         queue.ensureActive = { try audio.ensureActive() }
         CapturingPlayerNode.scheduled = []
@@ -1337,7 +1383,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheStaleCompletionsOfARebuildMoveTheCountNowhere() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
         queue.ensureActive = { try audio.ensureActive() }
         let drained = Drains()
@@ -1356,7 +1402,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testARebuildBringsTheKeeperBackWhenAHoldStands() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
         queue.ensureActive = { try audio.ensureActive() }
         queue.hold(true)
@@ -1376,7 +1422,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAConfigurationChangeForAnotherEngineChangesNothing() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
         queue.ensureActive = { try audio.ensureActive() }
         try queue.play(toneFrame(0.1), rate: Voice.rate)

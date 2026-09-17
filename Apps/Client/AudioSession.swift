@@ -40,6 +40,9 @@ final class AudioSession {
     /// it, throwing when either refuses: activation is commonly refused while another app is in
     /// front, which is exactly where a media services reset is asked for.
     private let configure: (Bool) throws -> Void
+    /// Whether the app is in front, which is the only place a configuration is worth attempting:
+    /// iOS refuses one from the background for a non-mixable session.
+    private let isActive: @MainActor () -> Bool
     /// True once the session has been configured; a reset re-applies only a session that was.
     private var applied = false
     /// A claim change that came in while a hold stood, waiting for the last hold to drop. The
@@ -59,8 +62,10 @@ final class AudioSession {
     /// the configuration the claims asked for is applied again; a session never configured is left
     /// alone, since activating it is not the reset's to decide.
     init(center: NotificationCenter = .default,
-         configure: @escaping (Bool) throws -> Void = AudioSession.configureSession(record:)) {
+         configure: @escaping (Bool) throws -> Void = AudioSession.configureSession(record:),
+         isActive: @escaping @MainActor () -> Bool = AudioSession.appIsActive) {
         self.configure = configure
+        self.isActive = isActive
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -130,13 +135,21 @@ final class AudioSession {
         let by = holds.isEmpty ? "nobody" : holds.map { "\($0)" }.sorted().joined(separator: ", ")
         AudioLog.say("hold \(on ? "taken" : "dropped") by \(who); held by \(by)")
         guard holding != wasHolding else { return }
-        // The claim changes the hold stood in the way of, applied once now that nothing is being
-        // kept alive — the foreground is where a reconfiguration is allowed, and the app is back
-        // in it or done with the reply by the time the last hold goes.
+        // The claim changes the hold stood in the way of. The last hold going is as likely to be
+        // a reply ending behind the lock as the app coming back, and a configure from there is
+        // refused every time, so it is attempted only in the foreground; otherwise the session is
+        // marked as needing configuring and the claims are left for the next path that wants
+        // audio — the next `ensureActive`, or the foreground's own warm claim, which applies them
+        // as it changes.
         if !holding, deferredClaims {
             deferredClaims = false
-            AudioLog.say("the last hold is gone; the claims are applied (record \(recordMode))")
-            applyOrRemember()
+            if isActive() {
+                AudioLog.say("the last hold is gone; the claims are applied (record \(recordMode))")
+                applyOrRemember()
+            } else {
+                valid = false
+                AudioLog.say("the last hold is gone with the app away; the claims wait for the next audio path (record \(recordMode))")
+            }
         }
         onHoldChanged?(holding)
     }
@@ -172,6 +185,8 @@ final class AudioSession {
     /// HFP is the AirPods mic; without it iOS never offers a headset's input. Deliberately
     /// without `.bluetoothHighQualityRecording`: the wideband link's input latency lands on
     /// AirPods as a press that lags and an utterance that starts clipped.
+    static func appIsActive() -> Bool { UIApplication.shared.applicationState == .active }
+
     nonisolated static func configureSession(record: Bool) throws {
         let session = AVAudioSession.sharedInstance()
         if record {
