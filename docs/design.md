@@ -53,7 +53,7 @@ From scratch, not a fork: the current app is a Daphne client with a Buddy screen
 
 What is built: sign in with Claude, the CloudKit log and lease, the phone harness, push to talk with the on-device ear and voice, and the push that wakes the primary. What follows, in order; each step is the next thing the one before it makes possible.
 
-1. **Finish the phone.** The voice survives a media services reset (#76); the fallback is pressed on a real phone before every upload.
+1. **Finish the phone.** The voice survives a media services reset (#76); one ear and one voice, both FluidAudio on the device, no fallback.
 2. **TestFlight with the production schema** — the second milestone, so App Store constraints surface early.
 3. **Memory.** The Obsidian vault as designed above: the mirror, Files on the phone, revisions and conflict copies.
 4. **The phone's own tools.** Reminders and the calendar through EventKit, the home through HomeKit, the device itself (battery, location, the clock, the network it is on), the share sheet as the way things arrive. OpenMinis is the map for which tools a phone agent needs and how they are shaped; the code is native Swift against the platform frameworks, because OpenMinis is GPL and nothing of it ships in a bundle.
