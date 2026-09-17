@@ -13,12 +13,14 @@ import Foundation
 /// this is a small stretch rather than a large one.
 ///
 /// It runs on the frames as they decode, so a trimmer is a value with state rather than a
-/// function over a finished clip, and `loudest` is the loudest window *heard so far* rather than
-/// the loudest in the sentence. That makes it a different function from a cut over the whole
-/// clip, not an approximation of one: a quiet opening followed by loud speech is judged against
-/// the opening's own loudest window, so it counts as speech and is kept where a cut that knew
-/// the whole sentence would have trimmed it. The caller carries `loudest` from one sentence to
-/// the next, so a reply settles on its own scale after its first phrase.
+/// function over a finished clip, and `loudest` is the loudest window heard so far rather than
+/// the loudest in the sentence. Its scope is one reply: `Speaker` carries `loudest` from each
+/// sentence into the next and starts it again at every `speak`, so one voice at one level is
+/// judged on one scale and nothing an earlier reply was loud at judges a later one. That makes
+/// it a different function from a cut over the whole clip, not an approximation of one: a reply
+/// that opens quietly has heard nothing louder yet, so its opening counts as speech and is kept
+/// where a cut that knew the sentence would have trimmed it, while the same quiet opening in the
+/// reply's second sentence is a gap, because the reply's peak is by then known.
 ///
 /// Silence is held rather than emitted, because a gap is only known to be a gap once speech
 /// lands after it; a held run then releases its first `cap / 2` and last `cap / 2` windows,

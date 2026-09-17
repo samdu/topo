@@ -32,8 +32,10 @@ final class Speaker {
     private var chain: Task<Void, Never>?
     /// Sentences of the current reply not yet made.
     private var making = 0
-    /// The loudest 20ms window the voice has made since launch, carried from one sentence to the
-    /// next so a reply settles on one scale rather than judging each sentence on its own.
+    /// The loudest 20 ms window of the reply being read, carried from one sentence into the next
+    /// so one voice at one level is trimmed on one scale. Its scope is the reply: `stop` starts
+    /// it again, and `speak` begins with `stop`, so a reply that was loud — or one cut short
+    /// halfway — never decides what counts as silence in the next.
     private var loudest: Float = 0
     /// True while the scene is active; the scene sets it. A reply that starts while it is false
     /// is not spoken.
@@ -105,6 +107,7 @@ final class Speaker {
         generation += 1
         chain = nil
         making = 0
+        loudest = 0
         queue.stop()
         done()
     }
