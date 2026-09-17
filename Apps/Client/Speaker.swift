@@ -171,6 +171,10 @@ final class Speaker {
                     #endif
                 }
             }
+            // The stream ending is not the sentence still being this reply's: a `stop` while the
+            // last frame was in flight leaves the level and the measurements below belonging to a
+            // reply nobody is hearing, and they would then judge and time the next one.
+            guard generation == mine else { return }
             trim.finish()
             loudest = trim.loudest
             #if DEBUG
