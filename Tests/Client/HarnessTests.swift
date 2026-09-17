@@ -522,6 +522,27 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(heard.texts, ["Paris."])
     }
 
+    /// The gap at the start: the screen reads the log and sends what an earlier launch left owed
+    /// before it installs the handler, so a reply can land with nothing listening. It is offered
+    /// when the handler arrives, and once.
+    func testAReplyThatLandedBeforeTheHandlerWasInstalledIsOfferedOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("Paris.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+
+        // No handler yet: the chat is still doing what it does before it installs one.
+        await harness.send("what is the capital of France")
+        await harness.refresh()
+
+        let heard = Said()
+        harness.onReply = { heard.add($0.text) }
+        XCTAssertEqual(heard.texts, ["Paris."], "the reply that arrived unheard is offered on install")
+
+        await harness.refresh()
+        harness.onReply = { heard.add($0.text) }
+        XCTAssertEqual(heard.texts, ["Paris."], "and not again, by either path")
+    }
+
     /// What the chat installs there, end to end: a reply continuing from a turn the microphone
     /// sent is spoken, and one continuing from a typed turn is not.
     func testOnlyTheReplyToASpokenTurnIsSpokenFromTheReplyHandler() async throws {

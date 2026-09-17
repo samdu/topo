@@ -97,7 +97,10 @@ struct ChatView: View {
                         Button("Diagnostics") { showDiagnostics = true }
                         Button("About Topo") { showAbout = true }
                         Divider()
-                        Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
+                        // The reply in the ear goes with the login: a reply still being read
+                        // would otherwise carry on, holding the process open, for an account the
+                        // app has just let go of.
+                        Button("Sign out", role: .destructive) { speaker.stop(); harness.forget(); signIn.signOut() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -161,6 +164,8 @@ struct ChatView: View {
                     // still stand; the role flips after, and the login goes last.
                     await harness.demote()
                     roleSelector.acceptDemotion()
+                    // The login goes, so the reply being read goes with it, as at a sign-out.
+                    speaker.stop()
                     signIn.signOut()
                     return
                 }

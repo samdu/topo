@@ -912,6 +912,34 @@ final class MediaServicesResetTests: XCTestCase {
         held.releaseTheSecondSentence()
     }
 
+    /// Signing out mid-reply: the login goes, so the reply goes with it. What the chat calls is
+    /// `stop`, and a reply that had begun must not carry on reading for an account that is gone,
+    /// nor leave `.speaking` standing until a drain nobody is waiting for.
+    func testStoppingMidReplyEndsTheReplyAndBothHolds() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let held = HeldVoice()
+        let speaker = await self.speaker(seams, audio, center, engine: held)
+        speaker.awaitReply(readAloud: true)
+        speaker.speak("Hello there.")
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertTrue(speaker.speaking)
+        XCTAssertTrue(speaker.holding)
+
+        speaker.stop()
+
+        XCTAssertFalse(speaker.speaking, "the reply is over")
+        XCTAssertFalse(speaker.holding, "and neither owner is still holding the process open")
+        XCTAssertFalse(speaker.keeping)
+        // The frame that was in flight belongs to a reply nobody is hearing.
+        held.releaseTheHeldFrame()
+        await settle("the held frame") { held.yieldedTheHeldFrame }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 1, "nothing was queued after the stop")
+        XCTAssertFalse(speaker.holding)
+    }
+
     /// A reset takes the engine, so it takes the keeper too; both owners go with the reply.
     func testAResetWhileAHoldStandsDropsBothOwnersAndTheKeeper() async {
         let seams = Seams()

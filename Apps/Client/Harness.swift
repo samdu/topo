@@ -22,9 +22,17 @@ final class Harness {
     /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
     /// rather than a view's observer, because behind the lock nothing is drawn and whether a
     /// SwiftUI body is evaluated is the framework's to decide. Each reply is offered once.
-    var onReply: (@MainActor (Turn) -> Void)?
-    /// The refs already offered, so a reply both paths see is offered once. Every turn the
-    /// harness has seen goes in, the replies among them offered on the way.
+    var onReply: (@MainActor (Turn) -> Void)? {
+        didSet {
+            guard onReply != nil else { return }
+            // A reply can land between the screen's first read of the log and the handler being
+            // installed — the relaunch that sends what was owed takes a whole turn in that gap —
+            // and it is still the one to read aloud, so what arrived unheard is offered now.
+            turns.forEach(seen)
+        }
+    }
+    /// The refs already handed to a handler, so a reply both paths see is offered once. Nothing
+    /// is recorded while no handler stands, which is what leaves those replies to be replayed.
     private var offered: Set<TurnRef> = []
     /// Turns said and not yet settled, oldest first: the head is the one in flight or the one
     /// that stopped the line, the rest wait behind it.
@@ -306,11 +314,12 @@ final class Harness {
         seen(turn)
     }
 
-    /// A turn the harness had not seen before. A reply among them is offered to `onReply` once,
-    /// whichever path brought it.
+    /// A reply the handler has not been given. Offered once, whichever path brought it; with no
+    /// handler installed it is left unoffered, for whichever one is installed next.
     private func seen(_ turn: Turn) {
-        guard offered.insert(turn.ref).inserted, turn.role == .assistant else { return }
-        onReply?(turn)
+        guard turn.role == .assistant, let onReply else { return }
+        guard offered.insert(turn.ref).inserted else { return }
+        onReply(turn)
     }
 
     static func describe(_ error: any Error) -> String {
