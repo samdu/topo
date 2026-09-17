@@ -9,7 +9,7 @@ import XCTest
 /// observed rather than inferred: the audio session's configure step, the engine factory, the
 /// synthesiser factory, and the reader of the input node's two formats.
 @MainActor
-private final class Seams {
+final class Seams {
     /// What ran, in the order it ran.
     private(set) var lines: [String] = []
     /// The record flag each configure was asked for, which is how a released claim is seen.
@@ -115,7 +115,7 @@ private final class StubFormat: AVAudioFormat {
 
 /// A synthesiser that never makes a sound and so never calls its delegate back: the state a
 /// reset that swallowed the callbacks leaves behind.
-private final class SilentSynthesizer: AVSpeechSynthesizer {
+final class SilentSynthesizer: AVSpeechSynthesizer {
     private(set) var spoken: [String] = []
     override func speak(_ utterance: AVSpeechUtterance) { spoken.append(utterance.speechString) }
 }
@@ -146,10 +146,18 @@ final class MediaServicesResetTests: XCTestCase {
         super.tearDown()
     }
 
-    private func voiceInput(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter) -> VoiceInput {
-        VoiceInput(audio: audio, ear: Ear(engine: NoEngine()), center: center,
-                   makeEngine: { seams.makeEngine() },
-                   formats: { seams.readFormats($0) })
+    /// A `VoiceInput` over a resident ear, which is what a press needs: an ear that is not
+    /// resident is refused before any of these seams is reached.
+    private func voiceInput(_ seams: Seams, _ audio: AudioSession,
+                            _ center: NotificationCenter) async -> VoiceInput {
+        let ear = Ear(vocabulary: Vocabulary(defaults: UserDefaults(suiteName: "topo.tests.\(UUID().uuidString)")!),
+                      engine: ScriptedEngine())
+        let nowhere = URL(fileURLWithPath: "/dev/null")
+        ear.load(parakeet: nowhere, ctc: nowhere)
+        await settle { ear.ready }
+        return VoiceInput(audio: audio, ear: ear, center: center,
+                          makeEngine: { seams.makeEngine() },
+                          formats: { seams.readFormats($0) })
     }
 
     // MARK: AudioSession
@@ -239,10 +247,10 @@ final class MediaServicesResetTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let voice = voiceInput(seams, audio, center)
+        let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         XCTAssertEqual(seams.engines.count, 0, "nothing is built in the handler")
-        voice.press(as: .chat, local: true, mine: 1)
+        voice.press(as: .chat, mine: 1)
         XCTAssertEqual(seams.lines, ["activate ok", "engine made", "formats read"])
         XCTAssertNil(voice.refusal)
         XCTAssertTrue(voice.tapped, "the tap is installed only after all three")
@@ -254,10 +262,10 @@ final class MediaServicesResetTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let voice = voiceInput(seams, audio, center)
+        let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         CapturingInputNode.installed = nil
-        voice.press(as: .chat, local: true, mine: 1)
+        voice.press(as: .chat, mine: 1)
         XCTAssertTrue(voice.tapped)
         XCTAssertEqual(seams.formatReads, 1, "the input node's format is read once and no more")
         XCTAssertTrue(CapturingInputNode.installed === seams.lastClient,
@@ -267,13 +275,13 @@ final class MediaServicesResetTests: XCTestCase {
 
     // MARK: VoiceInput — activation refused
 
-    func testAPressWhoseSessionWillNotActivateBuildsNothingAndRefuses() {
+    func testAPressWhoseSessionWillNotActivateBuildsNothingAndRefuses() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let voice = voiceInput(seams, audio, center)
+        let voice = await voiceInput(seams, audio, center)
         seams.activationError = Seams.Refused()
-        voice.press(as: .chat, local: true, mine: 1)
+        voice.press(as: .chat, mine: 1)
         XCTAssertEqual(seams.engines.count, 0, "no engine is built under a dead session")
         XCTAssertEqual(seams.formatReads, 0, "no format is read from one either")
         XCTAssertFalse(voice.tapped)
@@ -282,7 +290,7 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertFalse(voice.listening)
         XCTAssertEqual(seams.records.last, false, "the record claim is released")
         let tried = seams.lines.count
-        voice.press(as: .chat, local: true, mine: 2)
+        voice.press(as: .chat, mine: 2)
         XCTAssertGreaterThan(seams.lines.count, tried, "the next press configures again")
         XCTAssertEqual(seams.engines.count, 0)
     }
@@ -311,23 +319,23 @@ final class MediaServicesResetTests: XCTestCase {
         ]
     }()
 
-    func testADeadInputInstallsNoTapAndDropsTheEngineAndTheSession() {
+    func testADeadInputInstallsNoTapAndDropsTheEngineAndTheSession() async {
         for (name, client, hardware) in Self.deadInputs {
             let seams = Seams()
             let center = NotificationCenter()
             let audio = AudioSession(center: center, configure: seams.configure)
-            let voice = voiceInput(seams, audio, center)
+            let voice = await voiceInput(seams, audio, center)
             audio.wantRecord(true, for: .warm)
             seams.forget()
             seams.stubFormats = (client, hardware)
-            voice.press(as: .chat, local: true, mine: 1)
+            voice.press(as: .chat, mine: 1)
             XCTAssertFalse(voice.tapped, name)
             XCTAssertEqual(voice.refusal, VoiceInput.noInput, name)
             XCTAssertNil(voice.owner, name)
             XCTAssertFalse(voice.listening, name)
             XCTAssertEqual(seams.lines, ["engine made", "formats read"], name)
             // The next press finds neither the engine nor the session it just refused on.
-            voice.press(as: .chat, local: true, mine: 2)
+            voice.press(as: .chat, mine: 2)
             XCTAssertEqual(seams.lines, ["engine made", "formats read",
                                          "activate ok", "engine made", "formats read"],
                            "\(name): the engine was dropped and the session invalidated")
@@ -340,10 +348,10 @@ final class MediaServicesResetTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let voice = voiceInput(seams, audio, center)
+        let voice = await voiceInput(seams, audio, center)
         audio.wantRecord(true, for: .warm)
         seams.forget()
-        voice.press(as: .chat, local: true, mine: 1)
+        voice.press(as: .chat, mine: 1)
         XCTAssertTrue(voice.listening)
         XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
         XCTAssertEqual(seams.engines.count, 1)
@@ -354,7 +362,7 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertFalse(voice.handsFree)
         XCTAssertFalse(voice.tapped)
         XCTAssertEqual(seams.engines.count, 1, "no engine is built in the handler")
-        voice.press(as: .chat, local: true, mine: 2)
+        voice.press(as: .chat, mine: 2)
         XCTAssertEqual(seams.engines.count, 2, "the next press builds one")
         voice.cancel()
     }
@@ -363,7 +371,7 @@ final class MediaServicesResetTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let voice = voiceInput(seams, audio, center)
+        let voice = await voiceInput(seams, audio, center)
         voice.cancel()
         let began = AVAudioSession.InterruptionType.began.rawValue
         center.post(name: AVAudioSession.interruptionNotification, object: nil,

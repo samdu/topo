@@ -150,11 +150,6 @@ struct ChatView: View {
             }
         }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
-        .onChange(of: voice.unsent) { _, _ in
-            // The recogniser ended the session itself; what it heard goes as a spoken turn.
-            guard let heard = voice.takeUnsent(for: .chat) else { return }
-            Task { await sendSpoken(heard) }
-        }
         .onChange(of: harness.turns.last?.ref) { _, _ in
             // A spoken question gets a spoken answer; a typed one stays quiet.
             guard readAloud, let last = harness.turns.last,
@@ -205,7 +200,9 @@ struct ChatView: View {
                 .onSubmit(send)
             Image(systemName: voice.listening && voice.owner == .chat ? "waveform.circle.fill" : "mic.circle.fill")
                 .font(.title)
-                .foregroundStyle(voice.denied ? .secondary : Theme.teal)
+                // Dimmed while a press would be refused: the microphone denied, or an ear that
+                // is not resident yet. The diagnostics `speech` row is what says which.
+                .foregroundStyle(voice.canListen ? Theme.teal : .secondary)
                 .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                     Task { await micPressed(down) }
                 }

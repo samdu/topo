@@ -16,11 +16,11 @@ import FluidAudio
 /// session (about 540 MB of CoreML: 442 MB for Parakeet, 98 MB for the CTC spotter, listed
 /// file by file in the manifest) into the app's Application Support, and FluidAudio loads them
 /// from there, told to touch no network of its own. Until they are resident, or if they fail to
-/// load, `VoiceInput` uses `SFSpeechRecognizer` instead, so nothing here can leave a press deaf.
+/// load, `VoiceInput` refuses a press with `summary`: this is the phone's one ear.
 ///
 /// The vocabulary is a layer over that, not a condition of it. Parakeet recognising bare is
-/// far better than the fallback, so a boosting session that cannot be built (and none is
-/// built for an empty list) leaves the ear ready and says so in `summary`.
+/// still the ear, so a boosting session that cannot be built (and none is built for an empty
+/// list) leaves the ear ready and says so in `summary`.
 ///
 /// Published state lives on the main actor; recognition itself runs in `EarEngine`, an actor,
 /// because a CoreML decode on the main thread is a visible freeze.
@@ -94,7 +94,8 @@ final class Ear {
     /// Asks for the models, downloading whatever this phone lacks, and loads them once every
     /// file is on disk. Idempotent, and called on every foreground so that they are resident by
     /// the first press and a download that failed is tried again; a press that beats the load
-    /// uses the fallback. An ear that is loading or resident has its files and asks for nothing.
+    /// is refused with `summary`. An ear that is loading or resident has its files and asks for
+    /// nothing.
     func prepare() {
         guard state != .loading, state != .ready else { return }
         let downloads = ModelDownloads.shared
@@ -177,7 +178,8 @@ protocol SpeechEngine: Sendable {
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String
 }
 
-/// Stands in where FluidAudio is not linked: every call fails, so `VoiceInput` uses the fallback.
+/// Stands in where FluidAudio is not linked: every call fails, so the ear never becomes ready
+/// and `VoiceInput` refuses every press.
 struct NoEngine: SpeechEngine {
     private static let why = "FluidAudio is not linked in this build"
     func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {

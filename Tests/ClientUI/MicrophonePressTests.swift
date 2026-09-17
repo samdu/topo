@@ -11,15 +11,19 @@ import XCTest
 /// `VoiceInput.Report`, decoded strictly. A crash on the press is an app that is no longer
 /// running, whatever the cause: an Objective-C exception out of `installTap`, or a runtime trap.
 ///
-/// Every success records its branch (the ear or the fallback; the microphone ran, or was
-/// refused and why) as an activity with the report attached, so the result bundle says what
-/// was tested. A host with no audio input cannot run the microphone at all: the press is
-/// refused at `VoiceInput`'s input guard, before the tap, and the test ends in `XCTSkip` naming
-/// the coverage that is missing, never in a pass. The fallback has two more host gaps, each
-/// matched exactly and skipped the same way: `SFSpeechRecognizer` reporting itself unavailable
-/// (a refusal before the tap), and its on-device recogniser failing to initialise
-/// (`kLSRErrorDomain` 300, a simulator without the speech assets), which ends the session before
-/// the tap delivers anything. Any other refusal or recogniser error fails.
+/// Every success records what the press did (the microphone ran, or was refused and why) as an
+/// activity with the report attached, so the result bundle says what was tested. A host with no
+/// audio input cannot run the microphone at all: the press is refused at `VoiceInput`'s input
+/// guard, before the tap, and the test ends in `XCTSkip` naming the coverage that is missing,
+/// never in a pass. Any other refusal fails.
+///
+/// The first press is also where the permission prompts are counted, and the count is a running
+/// total across this class's tests, which share one process. The microphone is the only
+/// permission Topo asks for, so one press in the run raises one alert and every press after it
+/// raises none. On a lane that cleared the app's grants (`TOPO_UITEST_PRIVACY_RESET=1`) each test
+/// that pressed holds the total is exactly one, so a reset that did not happen fails as loudly as
+/// a permission that should not be asked for; elsewhere it holds at most one. Every alert
+/// answered has to carry the microphone usage description.
 ///
 /// The lane is declared by the test runner's environment (`TEST_RUNNER_`-prefixed on the
 /// `xcodebuild` command line):
@@ -34,15 +38,23 @@ import XCTest
 /// The app is launched signed in with a placeholder token (`DebugRun.signIn` takes it from the
 /// environment) and past the first-run question, which is the chat screen with its microphone,
 /// and with `TOPO_DEBUG_KEEP_SPOKEN`, so what a press hears is never sent and the token never
-/// reaches the API. The two permission prompts of a fresh simulator are answered through
-/// SpringBoard.
+/// reaches the API. The permission prompt of a fresh simulator is answered through SpringBoard.
 @MainActor
 final class MicrophonePressTests: XCTestCase {
     /// The words spoken in `purple-elephants.wav`.
     static let phrase = ["purple", "elephants", "juggle", "seven", "lanterns"]
+    /// `INFOPLIST_KEY_NSMicrophoneUsageDescription` in `project.yml`, which is the body of the
+    /// one alert a first press raises.
+    static let microphoneUsage = "Topo listens when you press the microphone"
 
     private var environment: [String: String] { ProcessInfo.processInfo.environment }
     private var laneHasInput: Bool { environment["TOPO_UITEST_AUDIO_INPUT"] == "1" }
+    /// True on a lane that cleared the app's privacy grants before the suite, where the number of
+    /// prompts a run raises is exact rather than a ceiling.
+    private var laneResetPrivacy: Bool { environment["TOPO_UITEST_PRIVACY_RESET"] == "1" }
+    /// Every permission alert this run has answered, across the class's tests: the runner keeps
+    /// one process for them, and the grant one test gives stands for the rest.
+    private static var promptsAnswered: [String] = []
 
     override func setUp() {
         continueAfterFailure = false
@@ -56,12 +68,29 @@ final class MicrophonePressTests: XCTestCase {
         try tapHoldAndRelease(app, branch: .stubEar)
     }
 
-    /// The fallback branch, `SFSpeechRecognizer`'s, over `TOPO_DEBUG_EAR=loading`: an ear whose
-    /// load never finishes. Without it a host with a fast network downloads and loads Parakeet
-    /// before the hold, and the press takes the on-device branch instead.
-    func testAPressOnTheFallbackDeliversAudioToTheRecogniser() throws {
+    /// A press the ear cannot hear, over `TOPO_DEBUG_EAR=loading`: an ear whose load never
+    /// finishes, so it is never resident. The refusal comes before the audio session and before
+    /// the input guard, so this test runs on every host, one with no microphone included.
+    func testAPressWhileTheEarIsNotResidentIsRefusedWithItsReason() throws {
         let app = launch(environment: ["TOPO_DEBUG_EAR": "loading"])
-        try tapHoldAndRelease(app, branch: .fallback)
+        let mic = microphone(in: app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        let before = try waitForReport(app, timeout: 30, "the ear is loading") { $0.ear == "loading" }
+
+        // The first press meets the microphone prompt, and its release while the prompt is up
+        // starts nothing; answer it, then hold for real.
+        mic.press(forDuration: 0.5)
+        answerOnePrompt()
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompt")
+
+        mic.press(forDuration: 1.5)
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the hold")
+        let after = try waitForReport(app, timeout: 30, "the hold reached VoiceInput") { $0.refusal != nil }
+        XCTAssertEqual(after.refusal, "loading", "the refusal is the ear's own words: \(after.raw)")
+        XCTAssertEqual(after.sessions, before.sessions, "a refused hold opened no session: \(after.raw)")
+        XCTAssertEqual(after.capture, Capture(), "a refused hold delivered nothing: \(after.raw)")
+        XCTAssertEqual(app.state, .runningForeground)
+        record("the ear is not resident; the press was refused: \(after.refusal ?? "")", after)
     }
 
     /// The whole path: fixture audio looping on the host's input, captured by the simulator's
@@ -87,16 +116,8 @@ final class MicrophonePressTests: XCTestCase {
     // MARK: - The press
 
     enum Branch: String {
-        case stubEar = "on-device ear (stub engine)"
-        case parakeet = "on-device ear (Parakeet)"
-        case fallback = "fallback (SFSpeechRecognizer)"
-
-        var recognisers: Set<String> {
-            switch self {
-            case .stubEar, .parakeet: return ["parakeet"]
-            case .fallback: return ["appleOnDevice", "appleServer"]
-            }
-        }
+        case stubEar = "the ear (stub engine)"
+        case parakeet = "the ear (Parakeet)"
     }
 
     private func launch(environment: [String: String]) -> XCUIApplication {
@@ -120,24 +141,22 @@ final class MicrophonePressTests: XCTestCase {
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
 
         // The ear the launch asked for is resident before the first press, or the press would
-        // take the fallback and the branch would not be the one under test.
+        // be refused for want of one.
         switch branch {
         case .stubEar:
             try waitForReport(app, timeout: 30, "the stub ear is resident") { $0.ear == "ready" }
         case .parakeet:
             try waitForReport(app, timeout: 600, "Parakeet is resident") { $0.ear == "ready" || $0.ear == "failed" }
             XCTAssertEqual(try report(app).ear, "ready", "Parakeet loaded from the models directory")
-        case .fallback:
-            XCTAssertEqual(try report(app).ear, "loading", "the ear is still loading, so the press takes the fallback")
         }
 
-        // The first press on a fresh simulator meets the microphone and speech prompts, and its
-        // release while they are up starts nothing (`VoiceInput.pressUp` during `starting`).
-        // On a simulator that has answered them, the press opens the microphone, and a press
-        // whose release lands inside the tap limit leaves it open hands-free: close it.
+        // The first press on a fresh simulator meets the microphone prompt, and its release
+        // while it is up starts nothing (`VoiceInput.pressUp` during `starting`). On a simulator
+        // that has answered it, the press opens the microphone, and a press whose release lands
+        // inside the tap limit leaves it open hands-free: close it.
         mic.press(forDuration: 0.5)
-        allowPrompts()
-        XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompts")
+        answerOnePrompt()
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompt")
         closeHandsFree(app, mic)
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the tap")
 
@@ -161,39 +180,18 @@ final class MicrophonePressTests: XCTestCase {
 
         if let refusal = after.refusal {
             // Refused before the tap: the session count stands still and nothing was delivered.
-            // A host may lack an audio input, and the fallback's recogniser may be unavailable;
-            // any other refusal is a fault on the press.
+            // A host may lack an audio input; any other refusal is a fault on the press.
             XCTAssertEqual(after.sessions, before.sessions, "a refused hold opened no session: \(after.raw)")
             XCTAssertEqual(after.capture, Capture(), "a refused hold delivered nothing: \(after.raw)")
             record("\(branch.rawValue); microphone refused: \(refusal)", after)
-            switch refusal {
-            case "no audio input":
-                XCTAssertTrue(branch.recognisers.contains(after.recogniser ?? "none"),
-                              "the hold took the \(branch.rawValue) branch before its input guard: \(after.raw)")
-                if laneHasInput {
-                    XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the hold was refused for want of one: \(after.raw)")
-                }
-                throw XCTSkip("missing coverage: this host has no audio input, so the \(branch.rawValue) branch was refused at the input guard; the tap, the buffers, the sink and the decode did not run")
-            case "the speech recogniser is unavailable" where branch == .fallback:
-                // Only the fallback asks whether the recogniser is available, so this refusal is
-                // itself the branch: no recogniser was chosen.
-                throw XCTSkip("missing coverage: SFSpeechRecognizer reports itself unavailable on this host, so the fallback was refused before its tap; its buffers and recognition did not run")
-            default:
+            guard refusal == "no audio input" else {
                 XCTFail("the hold was refused for a reason that is a fault: \(after.raw)")
                 return after
             }
-        }
-
-        XCTAssertTrue(branch.recognisers.contains(after.recogniser ?? "none"),
-                      "the hold took the \(branch.rawValue) branch: \(after.raw)")
-
-        if branch == .fallback, after.capture.ended == "recogniser",
-           let error = after.capture.recogniserError, error.contains("kLSRErrorDomain Code=300") {
-            // The session opened and SFSpeechRecognizer ended it at once: its on-device
-            // recogniser could not be created on this host.
-            XCTAssertEqual(after.sessions, before.sessions + 1, "the hold's session opened the microphone: \(after.raw)")
-            record("\(branch.rawValue); the recogniser failed to initialise and ended the session", after)
-            throw XCTSkip("missing coverage: SFSpeechRecognizer could not initialise its on-device recogniser on this host (kLSRErrorDomain 300) and ended the fallback session before the tap delivered audio; the fallback's buffers and recognition did not run")
+            if laneHasInput {
+                XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the hold was refused for want of one: \(after.raw)")
+            }
+            throw XCTSkip("missing coverage: this host has no audio input, so the press over \(branch.rawValue) was refused at the input guard; the tap, the buffers, the sink and the decode did not run")
         }
 
         // The microphone ran: one new session, and audio counted inside the tap.
@@ -203,11 +201,9 @@ final class MicrophonePressTests: XCTestCase {
         XCTAssertGreaterThan(capture.rate, 0, "the tap's buffers had a sample rate: \(after.raw)")
         let seconds = Double(capture.frames) / max(capture.rate, 1)
         XCTAssertGreaterThan(seconds, 0.5, "the tap was fed for most of the hold, not a buffer or two: \(after.raw)")
-        if branch != .fallback {
-            let expected = Double(capture.frames) * 16_000 / max(capture.rate, 1)
-            XCTAssertEqual(Double(capture.sunk), expected, accuracy: max(expected * 0.1, 2_048),
-                           "the sink holds what the tap delivered, at the ear's rate: \(after.raw)")
-        }
+        let expected = Double(capture.frames) * 16_000 / max(capture.rate, 1)
+        XCTAssertEqual(Double(capture.sunk), expected, accuracy: max(expected * 0.1, 2_048),
+                       "the sink holds what the tap delivered, at the ear's rate: \(after.raw)")
         record(String(format: "%@; microphone ran: %d buffers, %.2f s at %.0f Hz, tap RMS %.4f, %d samples sunk, ended by %@%@, heard \"%@\"",
                       branch.rawValue, capture.buffers, seconds, capture.rate, capture.tapRMS, capture.sunk, capture.ended,
                       capture.recogniserError.map { " (\($0))" } ?? "", capture.heard), after)
@@ -223,11 +219,10 @@ final class MicrophonePressTests: XCTestCase {
         var sessions: UInt
         var refusal: String?
         var ear: String
-        var recogniser: String?
         var capture: Capture
         var raw = ""
 
-        enum CodingKeys: String, CodingKey { case presses, sessions, refusal, ear, recogniser, capture }
+        enum CodingKeys: String, CodingKey { case presses, sessions, refusal, ear, capture }
     }
 
     struct Capture: Decodable, Equatable {
@@ -314,13 +309,35 @@ final class MicrophonePressTests: XCTestCase {
             .map { $0 == "7" ? "seven" : $0 }
     }
 
-    /// Taps through whatever permission prompts are up, microphone then speech. Nothing to do on
-    /// a simulator that has already answered them.
-    private func allowPrompts() {
+    /// Answers the permission prompts a first press raises, and holds that there is at most one
+    /// of them and that it is the microphone's. On a simulator whose grants the lane cleared
+    /// there is exactly one; on a later test in the same run, none, the grant already given. A
+    /// second prompt is a permission Topo asks for and should not.
+    private func answerOnePrompt() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let allow = springboard.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch
-        for _ in 0..<2 where allow.waitForExistence(timeout: 3) {
+        var answered: [String] = []
+        for _ in 0..<3 {
+            let alert = springboard.alerts.firstMatch
+            guard alert.waitForExistence(timeout: 5) else { break }
+            let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label))
+                .filter { !$0.isEmpty }.joined(separator: " — ")
+            let allow = alert.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch
+            guard allow.waitForExistence(timeout: 3) else { break }
             allow.tap()
+            answered.append(text)
+        }
+        Self.promptsAnswered += answered
+        let total = Self.promptsAnswered
+        XCTContext.runActivity(named: "permission prompts: \(answered.count) here, \(total.count) in this run") { _ in }
+        if laneResetPrivacy {
+            XCTAssertEqual(total.count, 1,
+                           "this lane cleared the app's grants (TOPO_UITEST_PRIVACY_RESET=1), so one press in the run raises the microphone prompt and nothing raises another: \(total)")
+        } else {
+            XCTAssertLessThanOrEqual(total.count, 1, "a press asks for one permission: \(total)")
+        }
+        for prompt in total {
+            XCTAssertTrue(prompt.contains(Self.microphoneUsage),
+                          "the only prompt a press raises is the microphone's: \(prompt)")
         }
     }
 }

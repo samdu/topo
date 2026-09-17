@@ -62,6 +62,7 @@
 		4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		50B378B1C1B86503B32F9583 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		510B82888095A483E442BA47 /* TVRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7905C0DCB97E97379C3533 /* TVRootView.swift */; };
+		51836B7F6FB4BD51CBA11825 /* PressRefusalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */; };
 		5580D93D5A0D00C7C1E8A95C /* SpokenTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9217F79B47B4554A5839E32D /* SpokenTurnTests.swift */; };
 		56431FC8A14E610ABACF6520 /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
 		56D87FA7BAFAB16DF3E30DE7 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = E5386B9F1DB4B3204F476074 /* Assets.xcassets */; };
@@ -217,6 +218,7 @@
 		5990B1776EC4BC101510B22E /* TopoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoAuth; path = Packages/TopoAuth; sourceTree = SOURCE_ROOT; };
 		5BC384737CD70F66D0AB8921 /* TopoCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoCore; path = Packages/TopoCore; sourceTree = SOURCE_ROOT; };
 		5FA3798B7F6069020E5A4DA0 /* womble.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = womble.js; sourceTree = "<group>"; };
+		61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressRefusalTests.swift; sourceTree = "<group>"; };
 		631F54F3CC1F646736B81799 /* SurfacePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacePages.swift; sourceTree = "<group>"; };
 		654D33CC62A8C821EACD662C /* TopoHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoHubApp.swift; sourceTree = "<group>"; };
 		681C38D7D6494813315D4051 /* TopoWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWatchApp.swift; sourceTree = "<group>"; };
@@ -469,6 +471,7 @@
 				07CEEB7CCB0CBAF9BBB7D520 /* MediaServicesResetTests.swift */,
 				D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */,
 				B5EB0F0DA44028EF600DC73F /* PocketPaceTests.swift */,
+				61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */,
 				12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */,
 				9C9A782EE9118805036640C7 /* ReplayTests.swift */,
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
@@ -972,6 +975,7 @@
 				DD64D1E2A148897696D8D976 /* MediaServicesResetTests.swift in Sources */,
 				7CB6A24D84137A9DC47A4A43 /* ModelDownloadsTests.swift in Sources */,
 				BD1F4E08AEC41132CA3A348C /* PocketPaceTests.swift in Sources */,
+				51836B7F6FB4BD51CBA11825 /* PressRefusalTests.swift in Sources */,
 				75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */,
 				401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */,
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
@@ -1098,7 +1102,6 @@
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Topo turns what you say into text so it can answer you.";
 				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1258,7 +1261,6 @@
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
-				INFOPLIST_KEY_NSSpeechRecognitionUsageDescription = "Topo turns what you say into text so it can answer you.";
 				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

@@ -55,13 +55,13 @@ final class SpokenTurnTests: XCTestCase {
         XCTAssertEqual(try voice(app).ear, "ready", "Parakeet loaded from \(models)")
 
         // The hold spans two loops and a second, so a whole question is in it wherever the loop
-        // starts. On a simulator that has not answered the microphone and speech prompts, the
-        // first hold is released while they are up and starts nothing; answer them and hold again.
+        // starts. On a simulator that has not answered the microphone prompt, the first hold is
+        // released while it is up and starts nothing; answer it and hold again.
         let hold = 2 * (try fixtureDuration()) + 1
         var before = try voice(app)
         var after = try holdAndRelease(app, mic, hold: hold, after: before)
         if after.sessions == before.sessions, after.refusal == nil {
-            record("the first hold met the permission prompts and started nothing", after.raw)
+            record("the first hold met the permission prompt and started nothing", after.raw)
             before = after
             after = try holdAndRelease(app, mic, hold: hold, after: before)
         }
@@ -69,7 +69,6 @@ final class SpokenTurnTests: XCTestCase {
             XCTFail("the hold was refused (\(refusal)); this test needs a loopback lane playing the question into the host's default input: \(after.raw)")
         }
         XCTAssertEqual(after.sessions, before.sessions + 1, "the hold ran the microphone: \(after.raw)")
-        XCTAssertEqual(after.recogniser, "parakeet", "Parakeet heard the hold: \(after.raw)")
         let heard = after.capture.heard.trimmingCharacters(in: .whitespacesAndNewlines)
         record("heard: \"\(heard)\"", after.raw)
         let words = Self.words(heard)
@@ -112,13 +111,11 @@ final class SpokenTurnTests: XCTestCase {
         }
     }
 
-    /// Taps through whatever permission prompts are up, microphone then speech.
+    /// Taps through the microphone prompt, if it is up.
     private func allowPrompts() {
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let allow = springboard.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch
-        for _ in 0..<2 where allow.waitForExistence(timeout: 3) {
-            allow.tap()
-        }
+        if allow.waitForExistence(timeout: 3) { allow.tap() }
     }
 
     // MARK: - The reports
@@ -131,7 +128,6 @@ final class SpokenTurnTests: XCTestCase {
         var sessions: UInt
         var refusal: String?
         var ear: String
-        var recogniser: String?
         var capture: Capture
         var raw = ""
 
@@ -139,7 +135,7 @@ final class SpokenTurnTests: XCTestCase {
             var heard: String
         }
 
-        enum CodingKeys: String, CodingKey { case presses, sessions, refusal, ear, recogniser, capture }
+        enum CodingKeys: String, CodingKey { case presses, sessions, refusal, ear, capture }
     }
 
     /// `DebugRun.ChatReport`.
