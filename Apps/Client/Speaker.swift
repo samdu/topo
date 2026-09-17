@@ -22,14 +22,18 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
     let voice: Voice
     private let audio: AudioSession
-    private let synthesizer = AVSpeechSynthesizer()
+    /// Built at the first reply that needs it and dropped by a media services reset, which can
+    /// swallow the old one's callbacks; nothing is built until the session is active again.
+    private var synthesizer: AVSpeechSynthesizer?
+    private let makeSynthesizer: () -> AVSpeechSynthesizer
     private let queue = PlayQueue()
+    private var resetObserver: NSObjectProtocol?
     /// The utterance being read; a delegate callback for any other is an old one's and is ignored,
     /// so stopping A to say B does not drop B's claim when A's cancellation lands.
     private var current: AVSpeechUtterance?
     /// Counts replies on the voice's path. A forward pass in flight does not notice a
     /// cancellation, so a clip carrying an older number is made and dropped.
-    private var generation = 0
+    private(set) var generation = 0
     /// The tail of the synthesis chain: each sentence waits on the one in front of it, which is
     /// what keeps a reply in the order it was written though the clips are made one at a time.
     private var chain: Task<Void, Never>?
@@ -43,29 +47,66 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
     private(set) var report = Report()
     #endif
 
-    init(audio: AudioSession, voice: Voice = Voice()) {
+    init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
+         makeSynthesizer: @escaping () -> AVSpeechSynthesizer = { AVSpeechSynthesizer() }) {
         self.audio = audio
         self.voice = voice
+        self.makeSynthesizer = makeSynthesizer
         super.init()
-        synthesizer.delegate = self
         queue.onDrained = { [weak self] in Task { @MainActor in self?.drained() } }
+        resetObserver = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.mediaServicesWereReset() }
+        }
+    }
+
+    /// iOS reset the media server: the reply stops, since the callbacks that would end it may
+    /// never come, and the synthesiser and the play queue's nodes go with it. Nothing is built
+    /// here; the next `speak` activates the session and builds what its path needs, which is how
+    /// Say it again works after a reset with no press before it.
+    private func mediaServicesWereReset() {
+        #if DEBUG
+        DebugRun.say("media services reset: speaker stopped, synthesiser and play queue dropped")
+        #endif
+        stop()
+        synthesizer = nil
+        queue.reset()
     }
 
     /// Loads the voice's model, downloading it on the first run. Called on the foreground so it
     /// is resident by the first reply; idempotent.
     func prepare() { voice.prepare() }
 
+    /// Reads `text` aloud. The session comes first, before either path exists: a synthesiser or
+    /// a play queue spoken to under a session that is not active is the crash, not a silence.
     func speak(_ text: String) {
         stop()
+        do {
+            try audio.ensureActive()
+        } catch {
+            #if DEBUG
+            DebugRun.say("speak: the audio session did not activate: \(error)")
+            #endif
+            done()
+            return
+        }
         speaking = true
         audio.wantScreenAwake(true, for: .speaking)
         let local = voice.ready && foreground
         #if DEBUG
         report = Report(speaks: report.speaks + 1, engine: local ? .pocket : .system, text: text)
+        DebugRun.say("speak: session ok, \(local ? "pocket" : "fallback")")
         #endif
         if local {
             speakLocally(text)
         } else {
+            let synthesizer = self.synthesizer ?? {
+                let made = makeSynthesizer()
+                made.delegate = self
+                self.synthesizer = made
+                return made
+            }()
             let utterance = AVSpeechUtterance(string: text)
             utterance.voice = AVSpeechSynthesisVoice(language: Locale.current.identifier)
                 ?? AVSpeechSynthesisVoice(language: "en-GB")
@@ -76,7 +117,7 @@ final class Speaker: NSObject, AVSpeechSynthesizerDelegate {
 
     func stop() {
         current = nil
-        if synthesizer.isSpeaking { synthesizer.stopSpeaking(at: .immediate) }
+        if synthesizer?.isSpeaking == true { synthesizer?.stopSpeaking(at: .immediate) }
         generation += 1
         chain = nil
         making = 0
@@ -211,11 +252,12 @@ final class PlayQueue: @unchecked Sendable {
     var onDrained: (@Sendable () -> Void)?
 
     private var engine: AVAudioEngine?
-    private let node = AVAudioPlayerNode()
+    private let makeEngine: () -> AVAudioEngine
+    private(set) var node: AVAudioPlayerNode?
     /// Between the player and the mixer: stage two of the pacing, for a voice with no pace of
     /// its own. `rate` stretches time and leaves the pitch where it was, so at `Voice.tempo` the
     /// words come faster without rising.
-    private let timePitch = AVAudioUnitTimePitch()
+    private(set) var timePitch: AVAudioUnitTimePitch?
     private var format: AVAudioFormat?
     private let lock = NSLock()
     private var pending = 0
@@ -225,23 +267,34 @@ final class PlayQueue: @unchecked Sendable {
 
     var isIdle: Bool { lock.withLock { pending == 0 } }
 
-    /// The engine is built on the first clip, because the sample rate is the synthesiser's to
-    /// report, and left running between clips so no sentence after the first pays for a route.
+    init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
+        self.makeEngine = makeEngine
+    }
+
+    /// The engine, the player and the time-pitch unit are built on the first clip, because the
+    /// sample rate is the synthesiser's to report, and left running between clips so no sentence
+    /// after the first pays for a route. Called on the main actor, as `reset()` is: the chain's
+    /// tasks inherit `Speaker`'s, and these three and the format are guarded by that and not by
+    /// the lock, which counts what is scheduled for the audio thread.
     func play(_ samples: [Float], rate: Int) throws {
         guard !samples.isEmpty else { return }
         if engine == nil {
             guard let f = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(rate),
                                         channels: 1, interleaved: false) else { throw VoiceError.noPlayer }
-            let e = AVAudioEngine()
-            e.attach(node)
-            e.attach(timePitch)
-            e.connect(node, to: timePitch, format: f)
-            e.connect(timePitch, to: e.mainMixerNode, format: f)
-            timePitch.rate = Voice.tempo
+            let e = makeEngine()
+            let player = AVAudioPlayerNode()
+            let unit = AVAudioUnitTimePitch()
+            e.attach(player)
+            e.attach(unit)
+            e.connect(player, to: unit, format: f)
+            e.connect(unit, to: e.mainMixerNode, format: f)
+            unit.rate = Voice.tempo
             engine = e
+            node = player
+            timePitch = unit
             format = f
         }
-        guard let engine, let format, format.sampleRate == Double(rate),
+        guard let engine, let node, let format, format.sampleRate == Double(rate),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
         else { throw VoiceError.noPlayer }
         if !engine.isRunning {
@@ -272,7 +325,18 @@ final class PlayQueue: @unchecked Sendable {
             pending = 0
             epoch += 1
         }
-        node.stop()
+        node?.stop()
+    }
+
+    /// Stops, and drops the engine with its nodes, which cannot be attached to another: after a
+    /// media services reset the old engine will not start, so the next `play` builds afresh.
+    /// Called on the main actor, as `play` is.
+    func reset() {
+        stop()
+        engine = nil
+        format = nil
+        node = nil
+        timePitch = nil
     }
 }
 #endif

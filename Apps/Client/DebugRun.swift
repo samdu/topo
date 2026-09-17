@@ -16,6 +16,7 @@ enum DebugRun {
     static let lifetimeVariable = "TOPO_CLAUDE_SETUP_TOKEN_DAYS"
     static let sendVariable = "TOPO_DEBUG_SEND"
     static let earVariable = "TOPO_DEBUG_EAR"
+    static let voiceVariable = "TOPO_DEBUG_VOICE"
     static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
 
     /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
@@ -157,6 +158,17 @@ extension DebugRun {
                  ctc: root.appendingPathComponent(ModelManifest.ctc, isDirectory: true))
         say("ear: Parakeet from \(root.path)")
         return ear
+    }
+
+    /// The voice a debug build starts with. `TOPO_DEBUG_VOICE=loading` is one that never becomes
+    /// resident, so every reply is read by `AVSpeechSynthesizer` however much of Pocket is on the
+    /// phone: it is how the fallback's recovery from a media services reset is pressed on a
+    /// device that has the model. Any other launch gets the real voice, prepared as usual.
+    @MainActor
+    static func voice(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Voice {
+        guard environment[voiceVariable] == "loading" else { return Voice() }
+        say("voice: loading, and never resident")
+        return Voice.stalledVoice()
     }
 
     /// The chat screen's report for the spoken-turn UI test, on the title's accessibility value.

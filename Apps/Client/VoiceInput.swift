@@ -74,7 +74,18 @@ final class VoiceInput {
 
     let ear: Ear
     private let audio: AudioSession
-    private let engine = AVAudioEngine()
+    /// Built at the press, once the session is active, and dropped by a media services reset or
+    /// by a press that found the input dead: an engine outlives neither, and reading its input
+    /// node before the session is active is what raises inside `installTap`.
+    private var engine: AVAudioEngine?
+    private let makeEngine: () -> AVAudioEngine
+    /// The two formats the guard judges and the tap is installed with, read from the engine's
+    /// input node in production and injected by the suite, which has no audio device to read one
+    /// from.
+    private let formats: (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
+    /// True while a tap is on the input node, so a teardown that installed none never reads
+    /// `inputNode`, which creates the hardware input on its first read.
+    private(set) var tapped = false
     private let recognizer = SFSpeechRecognizer()
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
@@ -89,6 +100,7 @@ final class VoiceInput {
     private var pressedAt: Date?
     private var finalArrived = false
     private var interruptionObserver: NSObjectProtocol?
+    private var resetObserver: NSObjectProtocol?
     #if DEBUG
     /// What reached the input tap, counted on the audio thread; `capture` is its snapshot.
     private let meter = TapMeter()
@@ -97,10 +109,15 @@ final class VoiceInput {
     private(set) var capture = Capture()
     #endif
 
-    init(audio: AudioSession, ear: Ear = Ear()) {
+    init(audio: AudioSession, ear: Ear = Ear(), center: NotificationCenter = .default,
+         makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
+         formats: @escaping (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
+             = VoiceInput.readFormats) {
         self.audio = audio
         self.ear = ear
-        interruptionObserver = NotificationCenter.default.addObserver(
+        self.makeEngine = makeEngine
+        self.formats = formats
+        interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
             // A call or Siri took the session; whatever was being said is over. Only the start
@@ -110,6 +127,23 @@ final class VoiceInput {
                   AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
             Task { @MainActor in self?.cancel() }
         }
+        resetObserver = center.addObserver(
+            forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.mediaServicesWereReset() }
+        }
+    }
+
+    /// iOS reset the media server: the engine's hardware input is gone. Whatever was being said
+    /// is dropped, as for an interruption, and the engine goes with it. Nothing is built here —
+    /// the next press reactivates the session and builds one, so recovery does not depend on a
+    /// press coming before a reply.
+    private func mediaServicesWereReset() {
+        #if DEBUG
+        DebugRun.say("media services reset: voice input cancelled and its engine dropped")
+        #endif
+        cancel()
+        engine = nil
     }
 
     /// Loads the ear's models, downloading them on the first run. Called on the foreground so
@@ -223,71 +257,120 @@ final class VoiceInput {
             recogniser = .parakeet
         }
         denied = false
-        audio.wantRecord(true, for: gate == .chat ? .chat : .firstRun)
+        press(as: gate, local: local, mine: mine)
+    }
+
+    /// Everything after the permission prompts: the microphone if it can be opened, the refusal
+    /// if it cannot. Internal rather than private so the suite can drive a press without TCC.
+    func press(as gate: Gate, local: Bool, mine: Int) {
         do {
-            let input = engine.inputNode
-            let format = input.outputFormat(forBus: 0)
-            // A dead input format means the session is playback-only right now; installTap raises
-            // an uncatchable exception on it, so refuse here and the next press works.
-            guard format.sampleRate > 0, format.channelCount > 0 else { throw InputUnavailable() }
-            input.removeTap(onBus: 0)
-            #if DEBUG
-            let meter = meter
-            #endif
-            if local {
-                let sink = sink
-                sink.reset()
-                input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
-                    #if DEBUG
-                    meter.record(buffer)
-                    #endif
-                    sink.append(buffer)
-                }
-            } else {
-                let request = SFSpeechAudioBufferRecognitionRequest()
-                request.shouldReportPartialResults = true
-                request.requiresOnDeviceRecognition = recogniser == .appleOnDevice
-                self.request = request
-                // The request is not Sendable, but `append` is made for the tap's thread: it is
-                // the one call Apple's own push-to-talk sample makes from a tap block.
-                nonisolated(unsafe) let fed = request
-                input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
-                    #if DEBUG
-                    meter.record(buffer)
-                    #endif
-                    fed.append(buffer)
-                }
-            }
-            engine.prepare()
-            try engine.start()
-            listening = true
-            sessions += 1
-            audio.wantScreenAwake(true, for: .listening)
-            if local {
-                startCaptions(for: mine)
-            } else if let request, let recognizer {
-                task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
-                    // The result is not Sendable; what the session reads of it crosses instead.
-                    let heard = result?.bestTranscription.formattedString
-                    let final = result?.isFinal == true
-                    let failed = error != nil
-                    let failure = error.map { "\($0)" }
-                    Task { @MainActor in
-                        guard let self, self.generation == mine else { return }
-                        if let heard { self.text = heard }
-                        if final { self.finalArrived = true }
-                        if failed {
-                            self.finalArrived = true
-                            if !self.ending { self.endedByRecogniser(gate, error: failure) }
-                        }
-                    }
-                }
-            }
+            try startMicrophone(as: gate, local: local, mine: mine)
         } catch {
-            refusal = error is InputUnavailable ? Self.noInput : "the engine did not start: \(error)"
+            // A session that would not activate and an input node whose formats are dead are both
+            // the same situation: the handles this press holds are no good and must not be reused.
+            let dead: Bool
+            switch error {
+            case is InputUnavailable:
+                refusal = Self.noInput
+                dead = true
+            case let inactive as SessionInactive:
+                refusal = "the audio session did not activate: \(inactive.underlying)"
+                dead = true
+            default:
+                refusal = "the engine did not start: \(error)"
+                dead = false
+            }
+            #if DEBUG
+            DebugRun.say("press: \(refusal ?? "refused")")
+            #endif
             owner = nil
             tearDown()
             audio.wantRecord(false, for: gate == .chat ? .chat : .firstRun)
+            if dead {
+                engine = nil
+                audio.invalidate()
+            }
+        }
+    }
+
+    /// The press proper, once both permissions are in: everything that is a handle into
+    /// mediaserverd, in the one order that is safe. The session is claimed and activated before
+    /// an engine exists, the engine before its input node is read, and the formats before a tap
+    /// is installed on them; a throw anywhere leaves the press refused with nothing running.
+    private func startMicrophone(as gate: Gate, local: Bool, mine: Int) throws {
+        audio.wantRecord(true, for: gate == .chat ? .chat : .firstRun)
+        do { try audio.ensureActive() } catch { throw SessionInactive(underlying: error) }
+        let engine = engine ?? {
+            let made = makeEngine()
+            self.engine = made
+            return made
+        }()
+        let input = engine.inputNode
+        // Read once. The format the tap is installed with is the very object the guard judged:
+        // a route change between two reads would pass the guard on the first numbers and raise
+        // on the second, which is the crash this guard exists to answer.
+        let (format, hardware) = formats(engine)
+        let client = Format(format)
+        #if DEBUG
+        DebugRun.say("press: session ok, client \(client.rate)/\(client.channels), " +
+                     "hardware \(hardware.sampleRate)/\(hardware.channelCount)")
+        #endif
+        // A dead format means the session has no input right now, and a tap rate that is not the
+        // hardware's is the other way `installTap` raises; both are uncatchable, so refuse here.
+        guard Self.inputIsUsable(client: client, hardware: Format(hardware)) else { throw InputUnavailable() }
+        input.removeTap(onBus: 0)
+        tapped = true
+        #if DEBUG
+        let meter = meter
+        #endif
+        if local {
+            let sink = sink
+            sink.reset()
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
+                #if DEBUG
+                meter.record(buffer)
+                #endif
+                sink.append(buffer)
+            }
+        } else {
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.shouldReportPartialResults = true
+            request.requiresOnDeviceRecognition = recogniser == .appleOnDevice
+            self.request = request
+            // The request is not Sendable, but `append` is made for the tap's thread: it is
+            // the one call Apple's own push-to-talk sample makes from a tap block.
+            nonisolated(unsafe) let fed = request
+            input.installTap(onBus: 0, bufferSize: 1024, format: format) { @Sendable buffer, _ in
+                #if DEBUG
+                meter.record(buffer)
+                #endif
+                fed.append(buffer)
+            }
+        }
+        engine.prepare()
+        try engine.start()
+        listening = true
+        sessions += 1
+        audio.wantScreenAwake(true, for: .listening)
+        if local {
+            startCaptions(for: mine)
+        } else if let request, let recognizer {
+            task = recognizer.recognitionTask(with: request) { @Sendable [weak self] result, error in
+                // The result is not Sendable; what the session reads of it crosses instead.
+                let heard = result?.bestTranscription.formattedString
+                let final = result?.isFinal == true
+                let failed = error != nil
+                let failure = error.map { "\($0)" }
+                Task { @MainActor in
+                    guard let self, self.generation == mine else { return }
+                    if let heard { self.text = heard }
+                    if final { self.finalArrived = true }
+                    if failed {
+                        self.finalArrived = true
+                        if !self.ending { self.endedByRecogniser(gate, error: failure) }
+                    }
+                }
+            }
         }
     }
 
@@ -319,8 +402,8 @@ final class VoiceInput {
         let mine = generation
         captioner?.cancel()
         captioner = nil
-        engine.inputNode.removeTap(onBus: 0)
-        if engine.isRunning { engine.stop() }
+        removeTap()
+        if engine?.isRunning == true { engine?.stop() }
         var heard: String
         #if DEBUG
         capture.ended = "release"
@@ -402,6 +485,12 @@ final class VoiceInput {
         }
     }
 
+    private func removeTap() {
+        guard tapped else { return }
+        tapped = false
+        engine?.inputNode.removeTap(onBus: 0)
+    }
+
     /// Safe at any point, including after a start that never got going: the tap comes off
     /// whether or not the engine ran, so the next start does not install a second one.
     private func tearDown() {
@@ -411,8 +500,8 @@ final class VoiceInput {
         #endif
         captioner?.cancel()
         captioner = nil
-        engine.inputNode.removeTap(onBus: 0)
-        if engine.isRunning { engine.stop() }
+        removeTap()
+        if engine?.isRunning == true { engine?.stop() }
         request?.endAudio()
         task?.cancel()
         task = nil
@@ -429,6 +518,42 @@ final class VoiceInput {
     }
 
     private struct InputUnavailable: Error {}
+    /// `AudioSession.ensureActive` refused, carrying what it threw for the refusal line.
+    private struct SessionInactive: Error { let underlying: Error }
+
+    /// The numbers one side of an input node reports, which is all the guard judges on.
+    struct Format: Equatable {
+        var rate: Double
+        var channels: UInt32
+
+        init(rate: Double, channels: UInt32) {
+            self.rate = rate
+            self.channels = channels
+        }
+
+        init(_ format: AVAudioFormat) {
+            self.init(rate: format.sampleRate, channels: format.channelCount)
+        }
+    }
+
+    /// The input node's two formats, the client one a tap is installed with and the hardware one
+    /// behind it, as the objects themselves so the press hands the tap what the guard judged.
+    /// Production reads them off the node; the suite injects them, since a test host has no audio
+    /// device and a dead node is what the guard exists for.
+    static let readFormats: (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat) = { engine in
+        let input = engine.inputNode
+        return (input.outputFormat(forBus: 0), input.inputFormat(forBus: 0))
+    }
+
+    /// Whether a tap may be installed, as a function of the four numbers alone. A zero sample
+    /// rate or no channel on either side is a session with no input; a client rate that is not
+    /// the hardware's is a conversion `installTap` refuses. Both refusals are raised as
+    /// Objective-C exceptions no `catch` here would see, so they are answered before the call.
+    static func inputIsUsable(client: Format, hardware: Format) -> Bool {
+        client.rate > 0 && client.channels > 0
+            && hardware.rate > 0 && hardware.channels > 0
+            && client.rate == hardware.rate
+    }
 }
 
 #if DEBUG

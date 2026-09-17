@@ -52,6 +52,20 @@ final class Voice {
 
     var ready: Bool { state == .ready }
 
+    #if DEBUG
+    /// True on a voice a debug build asked to stay unloaded; `prepare` then does nothing.
+    private var stalled = false
+
+    /// A voice that never becomes resident (`TOPO_DEBUG_VOICE=loading`), so a phone with Pocket
+    /// on disk can be made to read a reply through `AVSpeechSynthesizer` from a launch argument.
+    static func stalledVoice() -> Voice {
+        let voice = Voice()
+        voice.stalled = true
+        voice.state = .loading
+        return voice
+    }
+    #endif
+
     /// One line for the diagnostics screen.
     var summary: String {
         switch state {
@@ -67,6 +81,9 @@ final class Voice {
     /// is on disk. Idempotent, and called on every foreground so it is resident by the first
     /// reply and a download that failed is tried again.
     func prepare() {
+        #if DEBUG
+        if stalled { return }
+        #endif
         #if targetEnvironment(simulator)
         // MLX wants a real Metal device, so the simulator asks for nothing.
         if state == .cold {
