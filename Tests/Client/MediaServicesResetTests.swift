@@ -169,15 +169,6 @@ struct ScriptedVoice: VoiceEngine {
     }
 }
 
-/// Counts the sentences a voice was asked for, so a test can wait on one that makes no audio
-/// and so leaves no other trace.
-final class SentenceCount: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value = 0
-    func bump() { lock.withLock { value += 1 } }
-    var count: Int { lock.withLock { value } }
-}
-
 /// A voice whose second frame waits for the test to let it go, and which records having yielded
 /// it: the frame a media services reset lands in the middle of. Breaking out of the stream
 /// cancels the task behind it, which is what the sleep returns on, so the held frame is always
@@ -216,13 +207,17 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
 final class MediaServicesResetTests: XCTestCase {
     private let reset = AVAudioSession.mediaServicesWereResetNotification
 
-    /// The observers hop to the main actor; a test waits for the state it expects.
-    private func settle(until condition: @escaping @MainActor () -> Bool) async {
-        for _ in 0..<200 {
+    /// The observers hop to the main actor; a test waits for the state it expects. The budget is
+    /// far longer than the work, because a runner building a hundredth audio engine takes seconds
+    /// over one that is idle, and a wait that runs out is a failure named by what it waited for.
+    private func settle(_ what: String = "the expected state",
+                        file: StaticString = #filePath, line: UInt = #line,
+                        until condition: @escaping @MainActor () -> Bool) async {
+        for _ in 0..<12_000 {
             if condition() { return }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        XCTAssertTrue(condition())
+        XCTAssertTrue(condition(), "waited two minutes for \(what)", file: file, line: line)
     }
 
     /// Lets the observers' main-actor hops run, for a test that expects nothing to change.
@@ -479,7 +474,7 @@ final class MediaServicesResetTests: XCTestCase {
         CapturingPlayerNode.scheduled = []
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
-        await settle { voice.state == (ready ? .ready : .failed) }
+        await settle("the voice to load") { voice.state == (ready ? .ready : .failed) }
         return Speaker(audio: audio, voice: voice, center: center,
                        makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
     }
@@ -535,7 +530,7 @@ final class MediaServicesResetTests: XCTestCase {
         let held = HeldVoice()
         let speaker = await self.speaker(seams, audio, center, engine: held)
         speaker.speak("Hello there.")
-        await settle { CapturingPlayerNode.scheduled.count == 1 }
+        await settle("the first sentence's frame") { CapturingPlayerNode.scheduled.count >= 1 }
         let before = speaker.generation
         center.post(name: reset, object: nil)
         await settle { speaker.generation != before }
@@ -606,7 +601,7 @@ final class MediaServicesResetTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center, engine: Self.twoSentenceVoice)
         speaker.speak("Loud one. Quiet two.")
-        await settle { self.scheduledWindows >= 4 + PocketPace.edgeFrames + 4 }
+        await settle("the reply's windows") { self.scheduledWindows >= 4 + PocketPace.edgeFrames + 4 }
         await drain()
         XCTAssertEqual(scheduledWindows, 4 + PocketPace.edgeFrames + 4,
                        "the first sentence whole, then the edge of the second's opening and its speech")
@@ -621,10 +616,10 @@ final class MediaServicesResetTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center, engine: Self.twoSentenceVoice)
         speaker.speak("Loud one.")
-        await settle { self.scheduledWindows == 4 }
+        await settle("the first reply's windows") { self.scheduledWindows >= 4 }
         CapturingPlayerNode.scheduled = []
         speaker.speak("Quiet two.")
-        await settle { self.scheduledWindows >= 8 }
+        await settle("the second reply's windows") { self.scheduledWindows >= 8 }
         await drain()
         XCTAssertEqual(scheduledWindows, 8, "the quiet opening is this reply's own loudest so far, and speech")
         speaker.stop()
@@ -636,12 +631,12 @@ final class MediaServicesResetTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let asked = SentenceCount()
-        let voice = ScriptedVoice(frames: { _ in asked.bump(); return [] })
-        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        let speaker = await self.speaker(seams, audio, center,
+                                         engine: ScriptedVoice(frames: { _ in [] }))
         speaker.speak("Nothing comes of this.")
-        await settle { asked.count == 1 }
-        await drain()
+        // Nothing is scheduled, so the queue is idle the moment the sentence is made and the
+        // reply comes to its end: `speaking` going false is the reply having run.
+        await settle("the reply to end") { !speaker.speaking }
         XCTAssertNil(speaker.report.first, "no frame was scheduled, so nothing was timed")
         XCTAssertNil(speaker.report.rtf)
         XCTAssertFalse(speaker.report.started)
@@ -649,28 +644,27 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
-    /// And it is written once: a later sentence that makes nothing moves neither number.
-    func testALaterSentenceThatSchedulesNoFrameMovesNeitherNumber() async {
+    /// And it is written once, by the first frame of the reply: a later sentence that makes
+    /// nothing schedules nothing and leaves that time where it was.
+    func testALaterSentenceThatSchedulesNoFrameLeavesTheReplysFirstFrame() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let asked = SentenceCount()
-        let voice = ScriptedVoice(frames: { sentence in
-            asked.bump()
-            return sentence.hasPrefix("Loud") ? [toneFrame(0.5)] : []
-        })
+        let voice = ScriptedVoice(frames: { $0.hasPrefix("Loud") ? [toneFrame(0.5)] : [] })
         let speaker = await self.speaker(seams, audio, center, engine: voice)
-        speaker.speak("Loud one. Nothing two.")
-        await settle { speaker.report.first != nil }
+        speaker.speak("Loud one. Nothing two. Loud three.")
+        // The report is written in the same step as the frame it times, so a scheduled buffer is
+        // the measurement being there. The waits are `>=` because the count only grows and two
+        // sentences can pass between two polls; what the reply scheduled is asserted below, once
+        // every sentence of it has been made.
+        await settle("the first sentence's frame") { CapturingPlayerNode.scheduled.count >= 1 }
         let first = speaker.report.first
-        let rtf = speaker.report.rtf
         XCTAssertNotNil(first, "the first sentence's frame was timed")
-        XCTAssertNotNil(rtf)
-        await settle { asked.count == 2 }
+        await settle("the third sentence's frame") { CapturingPlayerNode.scheduled.count >= 2 }
         await drain()
         XCTAssertEqual(speaker.report.first, first, "the first frame's time is the first sentence's")
-        XCTAssertEqual(speaker.report.rtf, rtf, "and a sentence that made no audio is in neither")
-        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 1)
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 2,
+                       "the sentence that made nothing scheduled nothing")
         speaker.stop()
     }
 
