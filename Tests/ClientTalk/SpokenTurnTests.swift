@@ -104,9 +104,13 @@ final class SpokenTurnTests: XCTestCase {
         XCTAssertTrue(spoken.speaker.started, "the speaker started the reply: \(spoken.raw)")
         XCTAssertTrue(spoken.speaker.finished, "the speaker finished the reply: \(spoken.raw)")
         XCTAssertEqual(spoken.speaker.engine, .pocket, "the reply was read by Pocket: \(spoken.raw)")
+        // The measurements the device run is read on: made, not merely reported as absent.
+        let first = try XCTUnwrap(spoken.speaker.first, "the reply's first frame was timed: \(spoken.raw)")
+        let rtf = try XCTUnwrap(spoken.speaker.rtf, "the reply's real-time factor was measured: \(spoken.raw)")
+        XCTAssertGreaterThan(first, 0, "the first frame took some time to arrive: \(spoken.raw)")
+        XCTAssertGreaterThan(rtf, 0, "the reply took some time to synthesise: \(spoken.raw)")
         record(String(format: "spoken by %@, started and finished; first frame %.2fs, rtf %.2f",
-                      spoken.speaker.engine.map(\.rawValue) ?? "nothing",
-                      spoken.speaker.first ?? -1, spoken.speaker.rtf ?? -1), spoken.raw)
+                      spoken.speaker.engine.map(\.rawValue) ?? "nothing", first, rtf), spoken.raw)
         XCTAssertEqual(app.state, .runningForeground)
     }
 

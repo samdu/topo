@@ -64,19 +64,15 @@ final class Seams {
     }
 
     /// The play queue's engine: offline manual rendering, so it starts and plays on a host with
-    /// no audio device, and every buffer scheduled on it is counted.
+    /// no audio device, and its player reclassed so every buffer scheduled on it is counted.
     func makePlayEngine(rate: Int) -> AVAudioEngine {
         lines.append("engine made")
-        let engine = AVAudioEngine()
+        let engine = CapturingPlayEngine()
         let format = AVAudioFormat(standardFormatWithSampleRate: Double(rate), channels: 1)!
         try? engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
         engines.append(engine)
         return engine
     }
-
-    /// Called from the play queue when a frame is scheduled, so the order a reply reached the
-    /// speaker in is in the same log as its session and its engine.
-    func scheduled() { lines.append("frame scheduled") }
 }
 
 /// An input node that remembers the format each tap was installed with. The engine's own node is
@@ -90,6 +86,31 @@ private final class CapturingInputNode: AVAudioInputNode {
                              format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) {
         CapturingInputNode.installed = format
         super.installTap(onBus: bus, bufferSize: bufferSize, format: format, block: block)
+    }
+}
+
+/// A player node that remembers every buffer it was asked to schedule, which is the audio the
+/// queue actually let through. Reclassed on the way through `attach`, as the input node is: the
+/// play queue constructs its own player, and this subclass adds no storage, so the instance's
+/// layout is the one it already had.
+final class CapturingPlayerNode: AVAudioPlayerNode {
+    /// The frame count of every buffer scheduled, anywhere, in order. The suite is serial on the
+    /// main actor; a test that reads it clears it first.
+    nonisolated(unsafe) static var scheduled: [AVAudioFrameCount] = []
+
+    override func scheduleBuffer(_ buffer: AVAudioPCMBuffer,
+                                 completionCallbackType: AVAudioPlayerNodeCompletionCallbackType,
+                                 completionHandler: AVAudioPlayerNodeCompletionHandler?) {
+        CapturingPlayerNode.scheduled.append(buffer.frameLength)
+        super.scheduleBuffer(buffer, completionCallbackType: completionCallbackType,
+                             completionHandler: completionHandler)
+    }
+}
+
+private final class CapturingPlayEngine: AVAudioEngine {
+    override func attach(_ node: AVAudioNode) {
+        if node is AVAudioPlayerNode { object_setClass(node, CapturingPlayerNode.self) }
+        super.attach(node)
     }
 }
 
@@ -120,21 +141,61 @@ private final class StubFormat: AVAudioFormat {
     override var channelCount: AVAudioChannelCount { stubChannels }
 }
 
-/// A voice resident over an engine that makes one frame of quiet tone per sentence: enough for
-/// the queue to build, schedule and drain, and it needs no model.
-struct ToneVoice: VoiceEngine {
+/// 1920 samples, one Pocket frame, at `level`; a level of zero is silence.
+func toneFrame(_ level: Float) -> [Float] {
+    (0 ..< 1_920).map { level * sin(Float($0) * 0.3) }
+}
+
+/// A voice resident over an engine that reads a script: the frames it yields for a sentence, in
+/// the order the speaker asks for them. It needs no model.
+struct ScriptedVoice: VoiceEngine {
     /// Set to fail the load, which leaves the voice at `failed`.
     var loads = true
+    /// The frames of each sentence; one frame of quiet tone by default.
+    var frames: @Sendable (String) -> [[Float]] = { _ in [toneFrame(0.5)] }
 
     func load(base: URL) async throws {
         guard loads else { throw VoiceError.unavailable("no models here") }
     }
 
     func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
-        AsyncThrowingStream { continuation in
-            let samples = (0 ..< 1_920).map { 0.5 * sin(Float($0) * 0.3) }
-            continuation.yield(Voice.Frame(samples: samples, rate: Voice.rate))
+        let script = frames(text)
+        return AsyncThrowingStream { continuation in
+            for samples in script {
+                continuation.yield(Voice.Frame(samples: samples, rate: Voice.rate))
+            }
             continuation.finish()
+        }
+    }
+}
+
+/// A voice whose second frame waits for the test to let it go, and which records having yielded
+/// it: the frame a media services reset lands in the middle of. Breaking out of the stream
+/// cancels the task behind it, which is what the sleep returns on, so the held frame is always
+/// produced — into a stream nobody is reading any more.
+final class HeldVoice: VoiceEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var released = false
+    private var delivered = false
+
+    /// True once the second frame has been yielded.
+    var yieldedTheHeldFrame: Bool { lock.withLock { delivered } }
+    func releaseTheHeldFrame() { lock.withLock { released = true } }
+
+    func load(base: URL) async throws {}
+
+    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
+                while !self.lock.withLock({ self.released }) {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                continuation.yield(Voice.Frame(samples: toneFrame(0.5), rate: Voice.rate))
+                self.lock.withLock { self.delivered = true }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
         }
     }
 }
@@ -402,15 +463,21 @@ final class MediaServicesResetTests: XCTestCase {
 
     // MARK: Speaker
 
-    /// A speaker over a voice resident on `ToneVoice`, which is what a reply needs: a voice that
-    /// is not resident speaks nothing and reaches none of these seams.
-    private func speaker(_ seams: Seams, _ audio: AudioSession,
-                         _ center: NotificationCenter, loads: Bool = true) async -> Speaker {
-        let voice = Voice(engine: ToneVoice(loads: loads))
+    /// A speaker over a resident voice, which is what a reply needs: a voice that is not
+    /// resident speaks nothing and reaches none of these seams.
+    private func speaker(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter,
+                         engine: any VoiceEngine = ScriptedVoice(), ready: Bool = true) async -> Speaker {
+        CapturingPlayerNode.scheduled = []
+        let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
-        await settle { voice.state == (loads ? .ready : .failed) }
+        await settle { voice.state == (ready ? .ready : .failed) }
         return Speaker(audio: audio, voice: voice, center: center,
                        makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+    }
+
+    /// The windows of audio the queue was asked to play, at 20 ms each.
+    private var scheduledWindows: Int {
+        Int(CapturingPlayerNode.scheduled.reduce(0, +)) / Int(PocketPace.frame * Double(Voice.rate))
     }
 
     func testAReplyActivatesTheSessionBeforeItBuildsTheQueueAndScheduling() async {
@@ -450,15 +517,25 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
-    func testAResetBumpsTheGenerationSoAFrameMadeBeforeItIsNeverPlayed() async {
+    /// A frame the voice yields after the reset is never heard: what it lands on is a queue the
+    /// handler has already dropped, and the reply it belonged to is over.
+    func testAFrameTheVoiceYieldsAfterAResetIsNeverScheduled() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = await self.speaker(seams, audio, center)
+        let held = HeldVoice()
+        let speaker = await self.speaker(seams, audio, center, engine: held)
         speaker.speak("Hello there.")
+        await settle { CapturingPlayerNode.scheduled.count == 1 }
         let before = speaker.generation
         center.post(name: reset, object: nil)
         await settle { speaker.generation != before }
+        // The frame that was in flight when the reset landed, delivered before anything is read.
+        held.releaseTheHeldFrame()
+        await settle { held.yieldedTheHeldFrame }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 1, "the held frame reached no player")
+        XCTAssertEqual(seams.engines.count, 1, "and built no queue to reach one on")
     }
 
     func testAReplyWhoseSessionWillNotActivateBuildsNothing() async {
@@ -479,7 +556,8 @@ final class MediaServicesResetTests: XCTestCase {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = await self.speaker(seams, audio, center, loads: false)
+        let speaker = await self.speaker(seams, audio, center,
+                                         engine: ScriptedVoice(loads: false), ready: false)
         speaker.speak("Hello there.")
         await drain()
         XCTAssertEqual(seams.lines, [], "the session is not even activated for a voice there is not")
@@ -509,6 +587,45 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(speaker.report.speaks, 1)
         speaker.stop()
     }
+
+    /// The trimmer's level is the reply's, carried from one sentence into the next: the second
+    /// sentence opens at 1% of the first's peak, and against the reply's own peak that is
+    /// silence, so only the edge of it survives.
+    func testAQuietOpeningLaterInAReplyIsTrimmedAgainstTheReplysOwnPeak() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center, engine: Self.twoSentenceVoice)
+        speaker.speak("Loud one. Quiet two.")
+        await settle { self.scheduledWindows >= 4 + PocketPace.edgeFrames + 4 }
+        await drain()
+        XCTAssertEqual(scheduledWindows, 4 + PocketPace.edgeFrames + 4,
+                       "the first sentence whole, then the edge of the second's opening and its speech")
+        speaker.stop()
+    }
+
+    /// The same opening under a `speak` of its own is kept: the level starts again with the
+    /// reply, so nothing an earlier reply was loud at decides what counts as silence here.
+    func testTheSameQuietOpeningIsKeptWhenItStartsAReply() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center, engine: Self.twoSentenceVoice)
+        speaker.speak("Loud one.")
+        await settle { self.scheduledWindows == 4 }
+        CapturingPlayerNode.scheduled = []
+        speaker.speak("Quiet two.")
+        await settle { self.scheduledWindows >= 8 }
+        await drain()
+        XCTAssertEqual(scheduledWindows, 8, "the quiet opening is this reply's own loudest so far, and speech")
+        speaker.stop()
+    }
+
+    /// One frame of loud tone for the first sentence; for the second, a frame at 1% of it and
+    /// then a loud one. Four 20 ms windows to a frame.
+    private static let twoSentenceVoice = ScriptedVoice(frames: { sentence in
+        sentence.hasPrefix("Loud") ? [toneFrame(1)] : [toneFrame(0.01), toneFrame(1)]
+    })
 
     // MARK: PlayQueue
 
