@@ -49,6 +49,20 @@ A design page, not a build. The question: what would it take for someone like He
 
 From scratch, not a fork: the current app is a Daphne client with a Buddy screen, and its skeleton assumes buddybox, the turn server and one speaker. Build clean around the roles and the CloudKit log, then lift the proven modules across: the audio pipeline, on-device speech models, the lock-screen hold, barge-in. The CloudKit log and the primary lease are `Packages/TopoCore`, with no UI: a protocol over the few CloudKit calls used, an adapter onto `CKDatabase`, and an in-memory database with CloudKit's conflict semantics that the tests run against. The current app is the first thing to port onto it, which is also the test of the design.
 
+## Order of build
+
+What is built: sign in with Claude, the CloudKit log and lease, the phone harness, push to talk with the on-device ear and voice, and the push that wakes the primary. What follows, in order; each step is the next thing the one before it makes possible.
+
+1. **Finish the phone.** The voice survives a media services reset (#76); the fallback is pressed on a real phone before every upload.
+2. **TestFlight with the production schema** — the second milestone, so App Store constraints surface early.
+3. **Memory.** The Obsidian vault as designed above: the mirror, Files on the phone, revisions and conflict copies.
+4. **The phone's own tools.** Reminders and the calendar through EventKit, the home through HomeKit, the device itself (battery, location, the clock, the network it is on), the share sheet as the way things arrive. OpenMinis is the map for which tools a phone agent needs and how they are shaped; the code is native Swift against the platform frameworks, because OpenMinis is GPL and nothing of it ships in a bundle.
+5. **The hub.** The Mac app with the CLI, pairing, the lease taken from a live holder, the lid opening after a week.
+6. **Womble and the board.** Old iPads on the wall, the household container, the house agent.
+7. **Watch and TV** as viewers.
+8. **Away from home.** The punched tunnel over CloudKit signalling; a direct LAN socket only if the push proves too slow to feel live.
+9. **Two Buddies meeting** under the contract.
+
 ## Identity
 
 - **Name: Topo.** Buddy is what Sam named his; each person names their own. The product is the octopus, the mind is the head and every device is an arm; Womble is the arm that picks up old kit. Topo is Aquaman's octopus sidekick from the Silver Age, first seen in Adventure Comics #229 (1956), credited to Jack Miller (writer) and Ramona Fradon (artist); credit them wherever the name is explained (about screen, README).
