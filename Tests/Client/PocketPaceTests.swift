@@ -37,7 +37,7 @@ final class PocketPaceTests: XCTestCase {
     }
 
     func testTheWindowCountsRoundUpToWholeWindows() {
-        XCTAssertEqual(PocketPace.capFrames, 8, "0.15 s is 7.5 windows; the cap is the next whole one")
+        XCTAssertEqual(PocketPace.capFrames, 8, "the cap is eight windows, 0.16 s: 0.15 s is 7.5, rounded up")
         XCTAssertEqual(PocketPace.edgeFrames, 3, "0.05 s is 2.5 windows; the edge is the next whole one")
     }
 

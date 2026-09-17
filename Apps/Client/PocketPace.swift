@@ -6,7 +6,7 @@ import Foundation
 /// 3.0s of inter-phrase pause against Kokoro's 1.2s, so most of what a listener waits for is
 /// silence. This does what the knob does: 20ms RMS windows, a window being quiet when its RMS is
 /// below 2% of the loudest window heard so far in this reply *or* below the absolute floor of
-/// 1e-4; an inner run of silent windows longer than the 0.15s cap loses
+/// 1e-4; an inner run of silent windows longer than the cap of eight windows, 0.16s, loses
 /// its excess from the middle of the run, so the decay of the word before and the onset of the
 /// word after both survive; and the head and tail keep up to 0.05s each, so consecutive sentences
 /// of a streamed reply meet with about 0.10s between them, Kokoro's own median gap, rather than
@@ -34,8 +34,9 @@ import Foundation
 /// delayed — the window that ends a gap goes out in the same frame it arrived in — so the hold
 /// costs nothing a listener can hear.
 ///
-/// The counts round up to whole windows: `0.05 / 0.02` is 2.5, so the edge is three windows
-/// (0.06s) and the cap eight (0.16s).
+/// The counts are whole windows, rounded up from the durations they are written as: `0.05 / 0.02`
+/// is 2.5, so the edge is three windows, 0.06s, and `0.15 / 0.02` is 7.5, so the cap is eight,
+/// 0.16s. What the trimmer cuts to is the window count, which is what these say.
 struct PocketPace {
     static let frame = 0.02
     static let cap = 0.15
