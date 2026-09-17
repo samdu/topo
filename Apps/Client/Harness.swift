@@ -21,8 +21,13 @@ final class Harness {
     /// Told about every reply the log has brought, however it arrived: one this device wrote, or
     /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
     /// rather than a view's observer, because behind the lock nothing is drawn and whether a
-    /// SwiftUI body is evaluated is the framework's to decide. Each reply is offered once.
-    var onReply: (@MainActor (Turn) -> Void)? {
+    /// SwiftUI body is evaluated is the framework's to decide.
+    ///
+    /// It answers whether it is done with that reply. A reply it could not take — the speaker
+    /// refused it, a call still holding the session — is not recorded, so the next pass offers it
+    /// again; every other reply, read aloud or not this screen's to read, is recorded and offered
+    /// once.
+    var onReply: (@MainActor (Turn) -> Bool)? {
         didSet {
             guard onReply != nil else { return }
             // A reply can land between the screen's first read of the log and the handler being
@@ -35,8 +40,9 @@ final class Harness {
     /// is coming for it, and the screen's error line is not a place to work out whose. Not called
     /// for a turn another primary is answering, whose reply is still on its way.
     var onTurnFailed: (@MainActor (String) -> Void)?
-    /// The refs already handed to a handler, so a reply both paths see is offered once. Nothing
-    /// is recorded while no handler stands, which is what leaves those replies to be replayed.
+    /// The refs a handler has taken, so a reply both paths see is offered once. Nothing is
+    /// recorded while no handler stands, nor for a reply a handler could not take, which is what
+    /// leaves those replies to be offered again.
     private var offered: Set<TurnRef> = []
     /// Turns said and not yet settled, oldest first: the head is the one in flight or the one
     /// that stopped the line, the rest wait behind it.
@@ -367,9 +373,8 @@ final class Harness {
     /// A reply the handler has not been given. Offered once, whichever path brought it; with no
     /// handler installed it is left unoffered, for whichever one is installed next.
     private func seen(_ turn: Turn) {
-        guard turn.role == .assistant, let onReply else { return }
-        guard offered.insert(turn.ref).inserted else { return }
-        onReply(turn)
+        guard turn.role == .assistant, let onReply, !offered.contains(turn.ref) else { return }
+        if onReply(turn) { offered.insert(turn.ref) }
     }
 
     static func describe(_ error: any Error) -> String {

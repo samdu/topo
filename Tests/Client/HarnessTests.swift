@@ -481,7 +481,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let transport = ScriptedTransport((200, reply("Put them out tonight.")))
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
         let heard = Said()
-        harness.onReply = { heard.add($0.text) }
+        harness.onReply = { heard.add($0.text); return true }
 
         await harness.send("I forgot the bins")
         await harness.refresh()
@@ -496,7 +496,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         let heard = Said()
-        harness.onReply = { heard.add($0.text) }
+        harness.onReply = { heard.add($0.text); return true }
 
         try await limb(db, "what is the capital of France")
         try await elsewhere(db, "Paris.")
@@ -513,7 +513,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let transport = ScriptedTransport((200, reply("Paris.")))
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
         let heard = Said()
-        harness.onReply = { heard.add($0.text) }
+        harness.onReply = { heard.add($0.text); return true }
 
         await harness.send("what is the capital of France")
         await harness.refresh()
@@ -535,11 +535,11 @@ final class HarnessIntegrationTests: XCTestCase {
         await harness.refresh()
 
         let heard = Said()
-        harness.onReply = { heard.add($0.text) }
+        harness.onReply = { heard.add($0.text); return true }
         XCTAssertEqual(heard.texts, ["Paris."], "the reply that arrived unheard is offered on install")
 
         await harness.refresh()
-        harness.onReply = { heard.add($0.text) }
+        harness.onReply = { heard.add($0.text); return true }
         XCTAssertEqual(heard.texts, ["Paris."], "and not again, by either path")
     }
 
@@ -563,9 +563,10 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let heard = Said()
         after.onReply = { reply in
-            guard let asked = after.spokenTurn(answeredBy: reply) else { return }
+            guard let asked = after.spokenTurn(answeredBy: reply) else { return true }
             after.answeredAloud(asked)
             heard.add(reply.text)
+            return true
         }
         XCTAssertEqual(heard.texts, ["Paris."], "the reply to what was said before the relaunch")
 
@@ -612,11 +613,59 @@ final class HarnessIntegrationTests: XCTestCase {
         await after.refresh()
         let heard = Said()
         after.onReply = { reply in
-            guard let asked = after.spokenTurn(answeredBy: reply) else { return }
+            guard let asked = after.spokenTurn(answeredBy: reply) else { return true }
             after.answeredAloud(asked)
             heard.add(reply.text)
+            return true
         }
         XCTAssertEqual(heard.texts, [], "nothing spoken was owed a reading")
+    }
+
+    /// A reply the speaker could not take — a call still holding the session at the moment it
+    /// landed — is not done with: the turn stays marked spoken, the reply is offered again on the
+    /// next pass, and when the session comes back it is read once and the mark cleared once.
+    func testAReplyTheSpeakerRefusedIsOfferedAgainAndSpokenOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let voice = Voice(engine: ScriptedVoice())
+        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        try await eventually("the voice to load") { voice.state == .ready }
+        let speaker = Speaker(audio: audio, voice: voice, center: center,
+                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+
+        // What the chat installs: only a reply the speaker took is done with.
+        let said = Said()
+        harness.onReply = { [harness] reply in
+            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+            guard speaker.speak(reply.text, answering: asked) else { return false }
+            harness.answeredAloud(asked)
+            said.add(reply.text)
+            return true
+        }
+
+        // The session will not activate while the reply lands.
+        seams.activationError = Seams.Refused()
+        harness.markSpoken(harness.willSend("what is the capital of France"))
+        await harness.retry()
+        XCTAssertEqual(said.texts, [], "the speaker refused it")
+        XCTAssertEqual(speaker.report.speaks, 0)
+
+        // The call ends, and the next pass offers the same reply again.
+        seams.activationError = nil
+        await harness.refresh()
+        XCTAssertEqual(said.texts, ["Paris."], "read when the session came back")
+        XCTAssertEqual(speaker.report.speaks, 1)
+
+        // And it is done with now: neither offered nor spoken again.
+        await harness.refresh()
+        XCTAssertEqual(said.texts, ["Paris."])
+        XCTAssertEqual(speaker.report.speaks, 1, "spoken once")
+        speaker.stop()
     }
 
     /// What the chat installs there, end to end: a reply continuing from a turn the microphone
@@ -627,9 +676,10 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
         let said = Said()
         harness.onReply = { [harness] reply in
-            guard let asked = harness.spokenTurn(answeredBy: reply) else { return }
+            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
             harness.answeredAloud(asked)
             said.add(reply.text)
+            return true
         }
 
         // Spoken: the press said so when it put the words on the line.

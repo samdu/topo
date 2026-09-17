@@ -89,6 +89,7 @@ final class Speaker {
         // session that is not active is the crash rather than the silence, so the session is the
         // queue's first call there as it is everywhere else.
         queue.ensureActive = { [weak self] in try self?.audio.ensureActive() }
+        queue.sessionFailed = { [weak self] in self?.audio.invalidate() }
         audio.onHoldChanged = { [weak self] held in self?.hold(held) }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
@@ -147,9 +148,9 @@ final class Speaker {
     /// is what answers for it.
     private func resumeAudio(_ why: String) {
         AudioLog.say(why)
-        if queue.hasEngine {
-            queue.rebuild()
-        }
+        // Whether an engine exists is not the question: a rebuild refused earlier left none, and
+        // what it owed is owed still. Anything owed or dead is rebuilt from nothing if need be.
+        if queue.needsRebuild { queue.rebuild() }
         if audio.holding, !queue.keeping { hold(true) }
     }
 
@@ -221,17 +222,20 @@ final class Speaker {
     /// is resident by the first reply; idempotent.
     func prepare() { voice.prepare() }
 
-    /// Reads `text` aloud. A voice that is not resident speaks nothing and builds nothing. The
-    /// session comes first, before the queue exists: a player node spoken to under a session that
-    /// is not active is the crash, not a silence.
-    func speak(_ text: String, answering nonce: String? = nil) {
+    /// Reads `text` aloud, and says whether it took the reply. A voice that is not resident, and
+    /// a session that will not activate, each speak nothing, build nothing and answer false: the
+    /// reply is still owed, its turn's wait still stands, and whoever holds the reply offers it
+    /// again. The session comes first, before the queue exists: a player node spoken to under a
+    /// session that is not active is the crash, not a silence.
+    @discardableResult
+    func speak(_ text: String, answering nonce: String? = nil) -> Bool {
         cancel()
         guard voice.ready else {
             #if DEBUG
             DebugRun.say("speak: not spoken — \(voice.summary)")
             #endif
-            nonce.map { endAwaiting($0, "the voice is not resident") }
-            return
+            AudioLog.say("the reply was not taken: \(voice.summary)")
+            return false
         }
         do {
             try audio.ensureActive()
@@ -239,9 +243,9 @@ final class Speaker {
             #if DEBUG
             DebugRun.say("speak: the audio session did not activate: \(error)")
             #endif
+            AudioLog.say("the reply was not taken: the session did not activate: \(error)")
             done()
-            nonce.map { endAwaiting($0, "the audio session did not activate") }
-            return
+            return false
         }
         // A reply beginning on a queue nothing has rebuilt since an interruption: the session is
         // active again as of the line above, so this is where it comes back. Without it the
@@ -261,6 +265,7 @@ final class Speaker {
         DebugRun.say("speak: session ok, pocket")
         #endif
         speakLocally(text)
+        return true
     }
 
     /// Ends things: a press, the Stop item, a sign-out, a reset, a reply that stopped making
@@ -458,6 +463,9 @@ final class PlayQueue: @unchecked Sendable {
     /// The session, before anything here touches a handle into mediaserverd. `Speaker` sets it;
     /// a rebuild that cannot activate the session builds nothing.
     var ensureActive: (@MainActor () throws -> Void)?
+    /// Says the session is not what this object believed it was, after a refusal here. `Speaker`
+    /// sets it; the next path activates rather than trusting what last worked.
+    var sessionFailed: (@MainActor () -> Void)?
     #if DEBUG
     /// What the last rebuild put back, for a test that wants the number rather than the log.
     private(set) var rescheduled: Int?
@@ -483,6 +491,9 @@ final class PlayQueue: @unchecked Sendable {
     /// words come faster without rising.
     private(set) var timePitch: AVAudioUnitTimePitch?
     private var format: AVAudioFormat?
+    /// What the engine is built at. Remembered past a drop, so a rebuild with no engine left to
+    /// read a format from still knows what to build.
+    private var rate = Voice.rate
     private let lock = NSLock()
     /// What is scheduled and not yet heard, in the order it was scheduled, so a rebuild puts back
     /// what the dead engine forgot rather than only knowing how much there was.
@@ -493,9 +504,10 @@ final class PlayQueue: @unchecked Sendable {
     private var epoch = 0
 
     var isIdle: Bool { lock.withLock { queued.isEmpty } }
-    /// True once an engine has been built and not yet dropped, so a caller knows whether there is
-    /// anything to rebuild or whether one has to be made from nothing.
-    var hasEngine: Bool { engine != nil }
+    /// True while there is something a rebuild would put right: frames owed, or an engine marked
+    /// dead. Whether an engine exists does not come into it — a refused rebuild drops the engine
+    /// and keeps the owed frames, and the next attempt has to build one from nothing.
+    var needsRebuild: Bool { dead || !isIdle }
     /// True while the silence is rendering, which is what a backgrounded process runs on.
     var keeping: Bool { keeper?.isPlaying ?? false }
 
@@ -510,6 +522,7 @@ final class PlayQueue: @unchecked Sendable {
     /// after the first pays for a route. Called on the main actor, as `reset()` is: the chain's
     /// tasks inherit `Speaker`'s, and these three and the format are guarded by that and not by
     /// the lock, which counts what is scheduled for the audio thread.
+    @MainActor
     func play(_ samples: [Float], rate: Int) throws {
         guard !samples.isEmpty else { return }
         // While the engine is dead — from an interruption's `.began` until something rebuilds —
@@ -527,13 +540,36 @@ final class PlayQueue: @unchecked Sendable {
             return epoch
         }
         guard !dead else { return }
-        guard let engine, let node else { throw VoiceError.noPlayer }
-        if !engine.isRunning {
-            engine.prepare()
-            try engine.start()
+        do {
+            try start()
+            guard let node else { throw VoiceError.noPlayer }
+            if !node.isPlaying { node.play() }
+            schedule(buffer, era: era)
+        } catch {
+            // The frame is already owed, so the reply is not lost with the engine: a refusal here
+            // leaves it for the rebuild rather than reading to the voice as the sentence's end.
+            refuse("a frame could not be played: \(error)")
         }
-        if !node.isPlaying { node.play() }
-        schedule(buffer, era: era)
+    }
+
+    /// The engine, running. The one place it is started, so a start that throws is a refusal
+    /// everywhere rather than a `try?` on one path and a throw on another.
+    private func start() throws {
+        guard let engine else { throw VoiceError.noPlayer }
+        guard !engine.isRunning else { return }
+        engine.prepare()
+        try engine.start()
+    }
+
+    /// Whatever went wrong, the answer is the same: no engine under a session that may be gone,
+    /// the frames still owed, the queue still dead, and the session marked as needing activating
+    /// again. The next `.ended`, configuration change or reply tries the whole thing afresh.
+    @MainActor
+    private func refuse(_ why: String) {
+        AudioLog.say("the play queue refused: \(why)")
+        drop()
+        dead = true
+        sessionFailed?()
     }
 
     private func schedule(_ buffer: AVAudioPCMBuffer, era: Int) {
@@ -570,6 +606,7 @@ final class PlayQueue: @unchecked Sendable {
         e.connect(silence, to: e.mainMixerNode, format: f)
         unit.rate = Voice.tempo
         silence.volume = 0
+        self.rate = rate
         engine = e
         node = player
         keeper = silence
@@ -598,11 +635,12 @@ final class PlayQueue: @unchecked Sendable {
     func hold(_ on: Bool) {
         holding = on
         guard on else { stopKeeper(); return }
-        do { try build(rate: Voice.rate) } catch {
-            AudioLog.say("the keeper has no engine: \(error)")
-            return
+        do {
+            try build(rate: rate)
+            try startKeeper()
+        } catch {
+            refuse("the keeper's engine: \(error)")
         }
-        startKeeper()
     }
 
     /// Stops the silence, and says so only when there was some. Both the hold being let go and
@@ -616,15 +654,9 @@ final class PlayQueue: @unchecked Sendable {
         AudioLog.say("keeper stopped")
     }
 
-    private func startKeeper() {
-        guard let engine, let keeper, let format else { return }
-        if !engine.isRunning {
-            engine.prepare()
-            do { try engine.start() } catch {
-                AudioLog.say("the keeper's engine did not start: \(error)")
-                return
-            }
-        }
+    private func startKeeper() throws {
+        try start()
+        guard let keeper, let format else { throw VoiceError.noPlayer }
         guard !keeper.isPlaying,
               let quiet = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(format.sampleRate * 0.2))
         else { return }
@@ -637,11 +669,44 @@ final class PlayQueue: @unchecked Sendable {
         AudioLog.say("keeper playing")
     }
 
-    /// The engine stopped underneath and its node forgot what it held. Everything is built afresh
-    /// at the same format and what was not heard is scheduled again, in the order it was
-    /// scheduled, under a new epoch so the discarded buffers' completions — which fire as if they
-    /// had played — move nothing. The session comes first, as it does on every other audio path:
-    /// a new engine under a session that is not active is a crash, not a silence.
+    /// The engine stopped underneath and its node forgot what it held, or a refusal left no
+    /// engine at all. Everything is built afresh at the rate it was built at, and what was not
+    /// heard is scheduled again, in the order it was scheduled, under a new epoch so the
+    /// discarded buffers' completions — which fire as if they had played — move nothing. The
+    /// session comes first, as on every other audio path: a new engine under a session that is
+    /// not active is a crash, not a silence. Every way this can fail ends at `refuse`, which
+    /// keeps the owed frames and the dead mark, so nothing is stranded by a rebuild that could
+    /// not happen yet — the next `.ended`, configuration change or reply tries again.
+    @MainActor
+    func rebuild() {
+        let again: [AVAudioPCMBuffer] = lock.withLock {
+            epoch += 1
+            queued = queued.map { (epoch, $0.buffer) }
+            return queued.map(\.buffer)
+        }
+        drop()
+        dead = true
+        do {
+            try ensureActive?()
+            try build(rate: rate)
+            if !again.isEmpty {
+                try start()
+                guard let node else { throw VoiceError.noPlayer }
+                node.play()
+                let era = lock.withLock { epoch }
+                for buffer in again { schedule(buffer, era: era) }
+            }
+            if holding { try startKeeper() }
+        } catch {
+            refuse("\(again.count) owed: \(error)")
+            return
+        }
+        #if DEBUG
+        rescheduled = again.count
+        #endif
+        AudioLog.say("play queue rebuilt: \(again.count) rescheduled, keeper \(holding ? "playing" : "idle")")
+    }
+
     /// An interruption began: iOS has stopped the engine, and what it was playing is lost. The
     /// player and the keeper stop, the engine is left where it is so its configuration change
     /// still reaches this queue, and every buffer nobody has heard is carried into a new epoch,
@@ -660,40 +725,9 @@ final class PlayQueue: @unchecked Sendable {
         AudioLog.say("the play queue's engine is dead: \(owed) owed, waiting to be rebuilt")
     }
 
-    @MainActor
-    func rebuild() {
-        guard let rate = format.map({ Int($0.sampleRate) }) else { return }
-        let again: [AVAudioPCMBuffer] = lock.withLock {
-            epoch += 1
-            queued = queued.map { (epoch, $0.buffer) }
-            return queued.map(\.buffer)
-        }
-        drop()
-        do {
-            try ensureActive?()
-            try build(rate: rate)
-        } catch {
-            AudioLog.say("the play queue could not be rebuilt: \(error)")
-            return
-        }
-        if !again.isEmpty, let engine, let node {
-            if !engine.isRunning {
-                engine.prepare()
-                try? engine.start()
-            }
-            node.play()
-            let era = lock.withLock { epoch }
-            for buffer in again { schedule(buffer, era: era) }
-        }
-        if holding { startKeeper() }
-        #if DEBUG
-        rescheduled = again.count
-        #endif
-        AudioLog.say("play queue rebuilt: \(again.count) rescheduled, keeper \(holding ? "playing" : "idle")")
-    }
-
     /// Cuts what is playing and drops everything behind it. The keeper plays on: what it holds
     /// open is the wait, not the reply.
+    @MainActor
     func stop() {
         lock.withLock {
             queued.removeAll()
@@ -705,6 +739,7 @@ final class PlayQueue: @unchecked Sendable {
     /// Stops, and drops the engine with its nodes, which cannot be attached to another: after a
     /// media services reset the old engine will not start, so the next `play` or hold builds
     /// afresh. Called on the main actor, as `play` is; the holds have been dropped before it.
+    @MainActor
     func reset() {
         stop()
         holding = false

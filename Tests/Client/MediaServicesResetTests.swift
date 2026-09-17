@@ -64,11 +64,19 @@ final class Seams {
         return read
     }
 
+    /// How many of the next play engines refuse to start, which is the media server saying no to
+    /// an engine built under a session something else still holds.
+    var playEngineRefusals = 0
+
     /// The play queue's engine: offline manual rendering, so it starts and plays on a host with
     /// no audio device, and its player reclassed so every buffer scheduled on it is counted.
     func makePlayEngine(rate: Int) -> AVAudioEngine {
         lines.append("engine made")
         let engine = CapturingPlayEngine()
+        if playEngineRefusals > 0 {
+            playEngineRefusals -= 1
+            engine.refusesToStart = true
+        }
         let format = AVAudioFormat(standardFormatWithSampleRate: Double(rate), channels: 1)!
         try? engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
         engines.append(engine)
@@ -109,9 +117,20 @@ final class CapturingPlayerNode: AVAudioPlayerNode {
 }
 
 private final class CapturingPlayEngine: AVAudioEngine {
+    /// Set by the seams: `start()` throws, as the media server refuses one under a session
+    /// another app is holding.
+    var refusesToStart = false
+
+    struct WillNotStart: Error {}
+
     override func attach(_ node: AVAudioNode) {
         if node is AVAudioPlayerNode { object_setClass(node, CapturingPlayerNode.self) }
         super.attach(node)
+    }
+
+    override func start() throws {
+        if refusesToStart { throw WillNotStart() }
+        try super.start()
     }
 }
 
@@ -1053,6 +1072,76 @@ final class MediaServicesResetTests: XCTestCase {
         await settle("the rebuild") { speaker.keeping }
         XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]] + lengths,
                        "every frame of the sentence reached the new player, in order")
+        speaker.stop()
+    }
+
+
+    /// A rebuild refused earlier leaves no engine at all, and what it owed is owed still. The end
+    /// that comes after does not read "no engine" as "nothing to do": it builds one from nothing
+    /// and plays what was owed.
+    func testAnEndAfterARefusedRebuildStillPlaysWhatWasOwed() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center)
+        CapturingPlayerNode.scheduled = []
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled.count == 1 }
+        let owed = CapturingPlayerNode.scheduled
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+
+        // The end that arrives while a call still has the session: nothing is built.
+        seams.activationError = Seams.Refused()
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the refusal") { seams.lines.contains("activate failed") }
+        XCTAssertFalse(speaker.keeping, "no engine, and the frame still owed")
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed)
+        XCTAssertTrue(speaker.holding)
+
+        // The call ends: the second end builds from nothing and plays what was owed.
+        seams.activationError = nil
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the keeper to come back") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed + owed,
+                       "the owed frame reached the engine built after the refusal")
+        speaker.stop()
+    }
+
+    /// A start that throws is a refused rebuild, not a rebuild: buffers left scheduled on a
+    /// stopped engine are a reply nobody hears reported as playing.
+    func testARebuildWhoseEngineWillNotStartKeepsWhatWasOwedForTheNextOne() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center)
+        CapturingPlayerNode.scheduled = []
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled.count == 1 }
+        let owed = CapturingPlayerNode.scheduled
+        let engine = seams.engines.last
+
+        // The next engine built will not start.
+        seams.playEngineRefusals = 1
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the engine that will not start") { seams.engines.count == 2 }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed,
+                       "nothing was scheduled on an engine that would not start")
+        XCTAssertFalse(speaker.keeping)
+        XCTAssertTrue(speaker.holding, "and the reply is still owed")
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the rebuild that works") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed + owed,
+                       "the owed frame played on the engine that started")
         speaker.stop()
     }
 
