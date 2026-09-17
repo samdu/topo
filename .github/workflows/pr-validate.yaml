@@ -8,11 +8,11 @@
 # `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
 # `codex login`, written into a private codex-home for the run, and the CLI
 # authenticates from that file. Store it as ONE line (`jq -c . auth.json |
-# gh secret set CODEX_AUTH_JSON`): the runner masks every line of a multi-line
-# secret, and a pretty-printed file's `{` and `}` lines then get every JSON
-# verdict flagged as "may contain secret" and dropped from the job outputs.
-# Refresh it with a new `codex login` when the reviewer starts failing with
-# 401s.
+# gh secret set CODEX_AUTH_JSON`): the runner registers every line of a
+# multi-line secret as a secret value of its own, so a pretty-printed file's
+# `{` and `}` lines become values the log mask and the verdict's sanitise step
+# both rewrite. Refresh it with a new `codex login` when the reviewer starts
+# failing with 401s.
 #
 # That login is a reusable credential on a runner that also holds PR content,
 # and Codex reads that content. The exposure is bounded, not removed: the
@@ -35,6 +35,22 @@
 # non-blocking. A finding that cites no repo file at all keeps whatever Codex
 # decided, and an answer that is not a valid verdict passes through untouched
 # so review_gate's no-verdict handling still sees it.
+#
+# The verdict then travels as an artifact rather than a job output. GitHub
+# drops a job output wholesale when its text contains the value of any
+# registered secret, so a review that happened to quote one was discarded after
+# it had been paid for. The codex job sanitises the scoped verdict instead —
+# every registered secret's value replaced with `***` in `summary`, `findings`
+# and `demoted`, the structural fields untouched — uploads that one file as the
+# `codex-verdict` artifact, and its only job output is the boolean
+# `has_verdict`, which no secret's value can match. Anyone who can read the
+# repository can download an artifact, so nothing unsanitised is uploaded.
+# post_feedback and review_gate read that file: post_feedback is gated on
+# `has_verdict`, while review_gate's guard stays `!cancelled()` and the flag
+# decides only whether it downloads, so a false or absent flag still reaches
+# the fail-closed checks, where a missing or unusable file is no verdict.
+# scripts/tests/review-verdict-test.sh runs the sanitise and gate snippets out
+# of this file and holds all of that.
 name: PR validate
 
 on:
@@ -127,6 +143,13 @@ jobs:
       - name: simulator-run.sh fails closed
         if: ${{ !cancelled() }}
         run: scripts/tests/simulator-run-test.sh
+
+      # This workflow's own sanitise and gate snippets against fake verdicts and
+      # a fake secret: no secret value survives into the uploaded file, and no
+      # missing file reads as a pass.
+      - name: The review verdict sanitises and fails closed
+        if: ${{ !cancelled() }}
+        run: scripts/tests/review-verdict-test.sh
 
       - name: Generate Xcode projects (XcodeGen)
         run: |
@@ -326,7 +349,7 @@ jobs:
       # Read-only, for the PR's changed-file list in the scoping step.
       pull-requests: read
     outputs:
-      final_message: ${{ steps.scope.outputs.final-message }}
+      has_verdict: ${{ steps.sanitise.outputs.has_verdict }}
     steps:
       - name: Join the tailnet, to reach the status pane
         if: ${{ env.TS_OAUTH_CLIENT_ID != '' }}
@@ -487,11 +510,11 @@ jobs:
             --output-last-message "$RUNNER_TEMP/verdict.json" \
             -
 
-      # The diff-scope rule from the header. Owns the job's `final-message`
-      # output: a valid verdict leaves here with its findings split into
-      # `findings` (kept) and `demoted` (cite only unchanged files), plus
-      # `codex_blocking` recording what Codex itself said; anything that is
-      # not a valid verdict leaves here verbatim.
+      # The diff-scope rule from the header. Writes `scoped.json`, which the
+      # sanitise step below is the only reader of: a valid verdict leaves here
+      # with its findings split into `findings` (kept) and `demoted` (cite only
+      # unchanged files), plus `codex_blocking` recording what Codex itself
+      # said; anything that is not a valid verdict leaves here verbatim.
       - name: Scope the verdict to the diff
         id: scope
         env:
@@ -563,9 +586,76 @@ jobs:
               print("every finding cites only unchanged files; verdict is now non-blocking", file=sys.stderr)
           json.dump(out, sys.stdout)
           PY
-          # Multi-line output, so a heredoc delimiter the verdict cannot contain.
-          d="verdict-$RANDOM$RANDOM"
-          { echo "final-message<<$d"; cat "$RUNNER_TEMP/scoped.json"; echo; echo "$d"; } >> "$GITHUB_OUTPUT"
+
+      # Anyone who can read the repository can download an artifact, so every
+      # registered secret's value is replaced with `***` in the verdict's text
+      # fields before the file leaves this job. The structural fields are left
+      # alone — no secret's value is a boolean — so the gate decides the same on
+      # the sanitised file as on the one the scoping step wrote. A verdict that
+      # is not JSON is sanitised as text and leaves `has_verdict` false, which
+      # is the no-verdict path.
+      - name: Sanitise the verdict
+        id: sanitise
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_SECRET: ${{ secrets.TS_OAUTH_SECRET }}
+          GITHUB_TOKEN: ${{ github.token }}
+          SCOPED_PATH: ${{ runner.temp }}/scoped.json
+          VERDICT_OUT: ${{ runner.temp }}/codex-verdict/verdict.json
+        run: |
+          set -euo pipefail
+          mkdir -p "$(dirname "$VERDICT_OUT")"
+          python3 - "$SCOPED_PATH" "$VERDICT_OUT" <<'PY'
+          import json, os, sys
+
+          # The secrets this workflow registers. A name with no value in the
+          # environment contributes nothing.
+          NAMES = ("CODEX_AUTH_JSON", "TS_OAUTH_CLIENT_ID", "TS_OAUTH_SECRET", "GITHUB_TOKEN")
+
+          src, dst = sys.argv[1:3]
+          raw = open(src).read()
+          values = [v for v in (os.environ.get(n, "") for n in NAMES) if v]
+
+          def clean(s):
+              for v in values:
+                  s = s.replace(v, "***")
+              return s
+
+          try:
+              v = json.loads(raw)
+          except ValueError:
+              v = None
+          if isinstance(v, dict):
+              if isinstance(v.get("summary"), str):
+                  v["summary"] = clean(v["summary"])
+              for key in ("findings", "demoted"):
+                  if isinstance(v.get(key), list):
+                      v[key] = [clean(f) if isinstance(f, str) else f for f in v[key]]
+              text = json.dumps(v)
+          else:
+              text = clean(raw)
+          with open(dst, "w") as out:
+              out.write(text)
+          PY
+          if [ -s "$VERDICT_OUT" ] && jq -e . "$VERDICT_OUT" >/dev/null 2>&1; then
+            echo "has_verdict=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_verdict=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::The reviewer answered with nothing usable as a verdict; review_gate will fail closed. What it said, sanitised:"
+            head -c 2000 "$VERDICT_OUT" || true
+          fi
+
+      # `overwrite` so a re-run of this job alone replaces the last attempt's
+      # file rather than being refused for a name that already exists.
+      - name: Upload the verdict
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-verdict
+          path: ${{ runner.temp }}/codex-verdict/verdict.json
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
 
       - name: Delete the Codex login
         if: ${{ always() }}
@@ -574,19 +664,26 @@ jobs:
   post_feedback:
     runs-on: ubuntu-latest
     needs: codex
-    if: needs.codex.outputs.final_message != ''
+    if: needs.codex.outputs.has_verdict == 'true'
     permissions:
+      # Read-only on Actions, for the verdict artifact from this same run.
+      actions: read
       issues: write
       pull-requests: write
     steps:
+      - name: Download the verdict
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-verdict
+          path: ${{ runner.temp }}/codex-verdict
       - name: Report Codex feedback
         uses: actions/github-script@v7
         env:
-          CODEX_FINAL_MESSAGE: ${{ needs.codex.outputs.final_message }}
+          CODEX_VERDICT_PATH: ${{ runner.temp }}/codex-verdict/verdict.json
         with:
           github-token: ${{ github.token }}
           script: |
-            const v = JSON.parse(process.env.CODEX_FINAL_MESSAGE)
+            const v = JSON.parse(require('fs').readFileSync(process.env.CODEX_VERDICT_PATH, 'utf8'))
             const lines = [v.summary, ...(v.findings ?? []).map(f => `- ${f}`)]
             if (v.blocking) {
               lines.unshift('**Blocking — this merge is held until these are addressed or overridden.**', '')
@@ -657,11 +754,11 @@ jobs:
 
           # Past this point the reviewer ran, so whatever it returned — a
           # verdict or nothing usable — is review_gate's to judge. A *skipped*
-          # post_feedback is not a failure here: the job is gated on a
-          # non-empty final_message, so skipped means the reviewer answered
-          # with nothing, and an empty answer is a review outcome this job must
-          # not relabel as infrastructure. Only an outright failure or
-          # cancellation is: a verdict existed and never reached the PR.
+          # post_feedback is not a failure here: the job is gated on
+          # `has_verdict`, so skipped means the reviewer answered with nothing
+          # usable, and that is a review outcome this job must not relabel as
+          # infrastructure. Only an outright failure or cancellation is: a
+          # verdict existed and never reached the PR.
           case "$FEEDBACK_RESULT" in
             failure | cancelled)
               echo "::error::No verdict delivered: the reviewer answered but post_feedback did not post it (result: $FEEDBACK_RESULT). Re-run the failed jobs — nothing here is a review decision."
@@ -687,15 +784,41 @@ jobs:
     needs: [reviewer_ran, test, codex, post_feedback]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Read-only on Actions, for the verdict artifact from this same run.
+      actions: read
     steps:
+      # Only when there is one to download. The job's own guard stays
+      # `!cancelled()`, so a false or absent flag still reaches the checks
+      # below with no verdict in hand, which is what they fail closed on.
+      - name: Download the verdict
+        if: ${{ needs.codex.outputs.has_verdict == 'true' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: codex-verdict
+          path: ${{ runner.temp }}/codex-verdict
       - name: Enforce the review verdict
         id: verdict
         env:
           PRECHECK_RESULT: ${{ needs.reviewer_ran.result }}
           CODEX_RESULT: ${{ needs.codex.result }}
-          VERDICT: ${{ needs.codex.outputs.final_message }}
+          HAS_VERDICT: ${{ needs.codex.outputs.has_verdict }}
+          VERDICT_FILE: ${{ runner.temp }}/codex-verdict/verdict.json
         run: |
           set -euo pipefail
+
+          # The verdict is the artifact's one file. No flag, or a flag with no
+          # readable file behind it, leaves this empty — which is no verdict,
+          # and falls into the fail-closed case at the bottom.
+          VERDICT=""
+          if [ "${HAS_VERDICT:-}" = "true" ]; then
+            if [ -s "$VERDICT_FILE" ]; then
+              VERDICT="$(cat "$VERDICT_FILE")"
+            else
+              echo "::error::The reviewer reported a verdict but $VERDICT_FILE is missing or empty."
+            fi
+          fi
 
           # Everything below records the outcome for the status-pane step, then
           # exits with it; `state` is pass|block, `summary` is one line.
