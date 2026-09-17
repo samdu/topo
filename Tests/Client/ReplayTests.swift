@@ -36,10 +36,10 @@ final class ReplayTests: XCTestCase {
                      "their words are not Topo's to say")
     }
 
-    func testNothingIsOfferedWhileTheSceneIsNotActive() {
+    func testNothingIsOfferedWhileTheVoiceIsNotResident() {
         let (replay, _) = replay(canSpeak: false)
         XCTAssertNil(replay.offer(for: turn(.assistant, "Hello.")),
-                     "speaking is foreground work, so there is nothing to offer in the background")
+                     "an item that would be heard as nothing is not offered")
     }
 
     func testTheOfferReadsStopWhileTheSpeakerIsSpeaking() {

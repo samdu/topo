@@ -58,6 +58,7 @@
 		497C393EF26B6D7CA05F3AF0 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		4DCA8DB14D90096B931F7E08 /* SurfacePages.swift in Sources */ = {isa = PBXBuildFile; fileRef = 631F54F3CC1F646736B81799 /* SurfacePages.swift */; };
 		4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
+		4FFF92184855CF46623E033B /* AudioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D3BE114E74EF949FD68B7B /* AudioLog.swift */; };
 		50B378B1C1B86503B32F9583 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		510B82888095A483E442BA47 /* TVRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7905C0DCB97E97379C3533 /* TVRootView.swift */; };
 		51836B7F6FB4BD51CBA11825 /* PressRefusalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */; };
@@ -102,6 +103,7 @@
 		9033B137D8B8028A45CDB059 /* TopoLink in Frameworks */ = {isa = PBXBuildFile; productRef = 05964D437C17D363B9B1006F /* TopoLink */; };
 		9040B9EE59A3C73B93E3DE32 /* index.html in Resources */ = {isa = PBXBuildFile; fileRef = B82E94F64E76CD6727BEB803 /* index.html */; };
 		94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		99B40888DAC3C3C3D6159522 /* AudioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D3BE114E74EF949FD68B7B /* AudioLog.swift */; };
 		9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		9F9AF8D67A6810562B2D9225 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = AF1BDBBDAB883F52D9800C0C /* TopoCore */; };
 		A2A14D2B8C4B246D6F1E5C84 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
@@ -143,6 +145,7 @@
 		D671E7599D8A068B094ADFD9 /* QRImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11800CD3827F773B71C8B1B7 /* QRImage.swift */; };
 		D7D4A4D582A7379655220F68 /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		DB34E4B8FA07C21A5EF33159 /* capital-of-france.wav in Resources */ = {isa = PBXBuildFile; fileRef = 8D9560A4BB990698B0D1E786 /* capital-of-france.wav */; };
+		DB8B2F79E4A4B850B271D1FA /* AudioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D3BE114E74EF949FD68B7B /* AudioLog.swift */; };
 		DD64D1E2A148897696D8D976 /* MediaServicesResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07CEEB7CCB0CBAF9BBB7D520 /* MediaServicesResetTests.swift */; };
 		DDAF0AAE6CDED176CD2FCEA2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 57BE8636EBBD805D555F974A /* Assets.xcassets */; };
 		E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
@@ -228,6 +231,7 @@
 		91354032F5443E868316550B /* MicrophonePressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophonePressTests.swift; sourceTree = "<group>"; };
 		9217F79B47B4554A5839E32D /* SpokenTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenTurnTests.swift; sourceTree = "<group>"; };
 		94DA9AB030655FE57E305922 /* TopoCloudKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoCloudKit.swift; sourceTree = "<group>"; };
+		98D3BE114E74EF949FD68B7B /* AudioLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLog.swift; sourceTree = "<group>"; };
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9A03F8DA19F37B857BA8F079 /* Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harness.swift; sourceTree = "<group>"; };
 		9C9A782EE9118805036640C7 /* ReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayTests.swift; sourceTree = "<group>"; };
@@ -393,6 +397,7 @@
 			isa = PBXGroup;
 			children = (
 				6CC10F86563FE12BC674EFBB /* AboutView.swift */,
+				98D3BE114E74EF949FD68B7B /* AudioLog.swift */,
 				FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */,
 				E8BC4617024AD72D114DF8C7 /* ChatView.swift */,
 				0E7E379AAFA416610DDB0D94 /* DebugRun.swift */,
@@ -859,6 +864,7 @@
 			files = (
 				D1AB32C42A4B5C1FFDE0849A /* AboutView.swift in Sources */,
 				81C4725975A6BE77B65E080C /* Acknowledgements.swift in Sources */,
+				4FFF92184855CF46623E033B /* AudioLog.swift in Sources */,
 				447E5988846796C166E2407C /* AudioSession.swift in Sources */,
 				9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */,
 				CBF883802BF44C4DE1D6B5C9 /* ConnectedGlyph.swift in Sources */,
@@ -915,6 +921,7 @@
 			files = (
 				2DB26E2E9DD8FA0757FB7500 /* AboutView.swift in Sources */,
 				BE2E77872613825E0A6215B5 /* Acknowledgements.swift in Sources */,
+				DB8B2F79E4A4B850B271D1FA /* AudioLog.swift in Sources */,
 				82075D4210ACA6AB8D3FC0E4 /* AudioSession.swift in Sources */,
 				08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */,
 				B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */,
@@ -972,6 +979,7 @@
 			files = (
 				8C031FE613E8A808216E049D /* AboutView.swift in Sources */,
 				CC1BB7C2FF4CA8DFAD2E8157 /* Acknowledgements.swift in Sources */,
+				99B40888DAC3C3C3D6159522 /* AudioLog.swift in Sources */,
 				BDAC31A885ADB3E134011054 /* AudioSession.swift in Sources */,
 				47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */,
 				C9EBB675F20EA85264A72BA6 /* ConnectedGlyph.swift in Sources */,
@@ -1082,7 +1090,7 @@
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification audio";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -1241,7 +1249,7 @@
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
-				INFOPLIST_KEY_UIBackgroundModes = "remote-notification";
+				INFOPLIST_KEY_UIBackgroundModes = "remote-notification audio";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";

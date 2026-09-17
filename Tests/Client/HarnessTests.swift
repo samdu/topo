@@ -462,9 +462,109 @@ final class HarnessIntegrationTests: XCTestCase {
         await phone.wake()
         XCTAssertEqual(transport.sent.count, 2)
     }
+
+    // MARK: The reply that is read aloud
+
+    /// A reply written by another primary — the hub, or a phone holding the lease.
+    @discardableResult
+    private func elsewhere(_ database: any RecordDatabase, _ text: String,
+                           device: String = "hub") async throws -> Turn {
+        let log = TurnLog(database: database)
+        let writer = try await log.writer(for: DeviceID(device))
+        return try await writer.append(.assistant, text, continuing: try await log.read())
+    }
+
+    /// The decision to read a reply aloud is the harness's own path, not a view's: behind the
+    /// lock nothing is drawn. A reply this phone wrote reaches it once.
+    func testAReplyThisPhoneWroteReachesTheReplyHandlerOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("Put them out tonight.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let heard = Said()
+        harness.onReply = { heard.add($0.text) }
+
+        await harness.send("I forgot the bins")
+        await harness.refresh()
+
+        XCTAssertEqual(heard.texts, ["Put them out tonight."],
+                       "the person's own turn is not a reply, and the reply comes once")
+    }
+
+    /// The log's shared path: another primary answered, and a pass brought the reply here. It
+    /// reaches the same one decision point, once, though no turn of it was written on this phone.
+    func testAReplyAnotherDeviceWroteReachesTheReplyHandlerOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        let heard = Said()
+        harness.onReply = { heard.add($0.text) }
+
+        try await limb(db, "what is the capital of France")
+        try await elsewhere(db, "Paris.")
+        await harness.refresh()
+        await harness.refresh()
+
+        XCTAssertEqual(heard.texts, ["Paris."], "read once, however many passes read the log")
+    }
+
+    /// Both paths see a reply this phone wrote: `show` as it lands and `refresh` on the next
+    /// pass. It is offered once.
+    func testAReplyBothPathsSeeIsOfferedOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("Paris.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let heard = Said()
+        harness.onReply = { heard.add($0.text) }
+
+        await harness.send("what is the capital of France")
+        await harness.refresh()
+        await harness.answerPending()
+
+        XCTAssertEqual(heard.texts, ["Paris."])
+    }
+
+    /// What the chat installs there, end to end: a reply continuing from a turn the microphone
+    /// sent is spoken, and one continuing from a typed turn is not.
+    func testOnlyTheReplyToASpokenTurnIsSpokenFromTheReplyHandler() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("Paris.")), (200, reply("Rome.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let spoken = Spoken()
+        let said = Said()
+        harness.onReply = { [harness] reply in
+            guard let asked = ReadAloud.spokenTurn(answeredBy: reply, in: harness.turns,
+                                                   spoken: spoken.nonces) else { return }
+            spoken.remove(asked)
+            said.add(reply.text)
+        }
+
+        // Spoken: the nonce the press recorded.
+        spoken.add(harness.willSend("what is the capital of France"))
+        await harness.retry()
+        XCTAssertEqual(said.texts, ["Paris."])
+
+        // Typed: nothing is recorded, so nothing is read aloud.
+        await harness.send("and of Italy")
+        XCTAssertEqual(said.texts, ["Paris."], "a typed turn's reply stays quiet")
+    }
+
 }
 
 // MARK: - Doubles
+
+/// What the reply handler was given, in order.
+@MainActor
+private final class Said {
+    private(set) var texts: [String] = []
+    func add(_ text: String) { texts.append(text) }
+}
+
+/// The chat's set of spoken turns, as the handler reads and clears it.
+@MainActor
+private final class Spoken {
+    private(set) var nonces: Set<String> = []
+    func add(_ nonce: String) { nonces.insert(nonce) }
+    func remove(_ nonce: String) { nonces.remove(nonce) }
+}
 
 /// The Messages API's far end: answers from a queue and records what each request carried.
 private final class ScriptedTransport: Transport, @unchecked Sendable {

@@ -89,6 +89,13 @@ What it does not cover: Parakeet and Pocket run on the simulator's CPU, not the 
 
 That is the shape of the whole shell path: what a run can exercise from a shell is what the launch environment can drive — the sign-in `DebugRun` writes, the one turn `TOPO_DEBUG_SEND` takes — and the gestures are the XCUITest's or a person's at the Simulator on buddybox.
 
+## Behind the lock, on a phone
+
+A simulator cannot lock, so the reply heard behind the lock screen is shown on a phone. Two things make that run readable:
+
+- **No debugger.** Xcode's debugger keeps a backgrounded app alive, so anything it shows about the background is wrong ([Apple DTS](https://developer.apple.com/forums/thread/75468)). The build is installed and launched over `devicectl` (`xcrun devicectl device install app` and `device process launch`), and the evidence is unified logging: every hold and keeper transition, every rebuild of the play queue, and — in a debug build — a heartbeat every five seconds go to `os_log` under subsystem `zone.hexagon.topo`, category `audio` (`Apps/Client/AudioLog.swift`). Read them back after the run with `log collect --device` and `log show --predicate 'subsystem == "zone.hexagon.topo"'`. The heartbeat stopping is the process being suspended.
+- **A reply that lands late.** `TOPO_DEBUG_REPLY_DELAY=<seconds>` (`DebugRun.delayReply`, a debug build only) makes the harness wait that long before the model call, so the reply arrives well past iOS's ordinary background grace of about thirty seconds and only a working hold carries it.
+
 ## What needs a person
 
 - **The iCloud sign-in on the simulator device**, once per device: Settings › Sign in to your iPhone, `buddy.durose@icloud.com` and its two-factor code. It is a gesture, so it is done at the Simulator rather than from a shell. Without an account CloudKit answers `noAccount`, the log cannot be written, and a `--send` run fails at "Reaching iCloud…" rather than at the model.

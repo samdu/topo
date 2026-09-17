@@ -3,10 +3,10 @@ import AVFoundation
 import UIKit
 
 /// The process-wide audio resources, counted rather than assigned: the record configuration of
-/// the audio session and the warm microphone it buys, and the idle timer. Two surfaces reach for
-/// each (the first-run screen and the chat), and the one leaving must not hand the route or
-/// auto-lock back under the one arriving. The pattern is Daphne's `TurnController` (Sam's own
-/// iOS app, `clients/ios` in samdu/daphne-assistant).
+/// the audio session and the warm microphone it buys, the idle timer, and the hold that keeps the
+/// process running in the background. More than one caller reaches for each, and the one leaving
+/// must not hand the route, auto-lock or the background back under the one arriving. The pattern
+/// is Daphne's `TurnController` (Sam's own iOS app, `clients/ios` in samdu/daphne-assistant).
 ///
 /// It is also the gate on every handle into mediaserverd. Nothing reads an input node, installs a
 /// tap, starts an engine or speaks until `ensureActive()` has returned: a configuration that
@@ -16,9 +16,21 @@ import UIKit
 final class AudioSession {
     enum RecordClaim: Hashable { case firstRun, chat, warm }
     enum ScreenClaim: Hashable { case listening, speaking }
+    /// Who is keeping the process running behind the lock: the wait for a spoken turn's reply,
+    /// and the reading of it. Counted like the other two, so the one letting go cannot cut what
+    /// the other is still paying for — a reply handed to the speaker drops `.awaitingReply` with
+    /// `.speaking` already taken, and the keeper never stops between them.
+    enum Hold: Hashable { case awaitingReply, speaking }
 
     private var recordClaims: Set<RecordClaim> = []
     private var screenClaims: Set<ScreenClaim> = []
+    private var holds: Set<Hold> = []
+    /// Told the answer whenever it changes. The count is the session's; the engine that renders
+    /// the silence is the play queue's, so `Speaker` — the one object holding both — is what
+    /// starts and stops the keeper.
+    var onHoldChanged: ((Bool) -> Void)?
+    /// True while anything wants the process kept alive.
+    var holding: Bool { !holds.isEmpty }
     private var recordMode: Bool { !recordClaims.isEmpty }
     /// Sets the session's category for record mode (true) or the quiet one (false) and activates
     /// it, throwing when either refuses: activation is commonly refused while another app is in
@@ -84,6 +96,21 @@ final class AudioSession {
     func warmRecord(_ on: Bool) {
         if on, AVAudioApplication.shared.recordPermission != .granted { return }
         wantRecord(on, for: .warm)
+    }
+
+    /// Claims or drops the hold that keeps the process running when the phone is locked or Topo
+    /// is behind another app. Under the `audio` background mode iOS runs a backgrounded process
+    /// only while audio is actually rendering, and between the release of a press and the first
+    /// frame of the reply nothing is, so the hold is what the play queue's keeper answers.
+    func wantAlive(_ on: Bool, for who: Hold) {
+        let was = holds
+        let wasHolding = holding
+        if on { holds.insert(who) } else { holds.remove(who) }
+        guard holds != was else { return }
+        let by = holds.isEmpty ? "nobody" : holds.map { "\($0)" }.sorted().joined(separator: ", ")
+        AudioLog.say("hold \(on ? "taken" : "dropped") by \(who); held by \(by)")
+        guard holding != wasHolding else { return }
+        onHoldChanged?(holding)
     }
 
     /// Holds auto-lock off while someone is listening or speaking; process-wide, so counted.

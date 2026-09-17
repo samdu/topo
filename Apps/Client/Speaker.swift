@@ -3,16 +3,18 @@ import AVFoundation
 import Observation
 import TopoCore
 
-/// Reads a reply aloud. Speaking is foreground work: synthesis submits work to the audio engine
-/// and iOS suspends a backgrounded process, so the scene stops it on leaving the foreground.
-/// Pressing the microphone stops it too, so the mic does not hear the speaker.
+/// Reads a reply aloud, wherever the process is: a reply to a spoken turn is heard whether the
+/// phone is locked, pocketed or showing another app. What keeps the process there is the hold —
+/// `AudioSession.Hold`, counted, answered by the play queue's keeper — which stands from the
+/// release of the press until the reply has been read. Pressing the microphone stops a reply, so
+/// the mic does not hear the speaker; so does the Stop item, a sign-out, an interruption and a
+/// media services reset.
 ///
-/// One voice. When the `Voice` (Pocket TTS, on the device) is resident and the scene is active,
-/// the reply is cut into sentences, each synthesised behind the one before and pushed to the play
-/// queue frame by frame as it decodes, paced by the queue's time-pitch unit at `Voice.tempo`, so
-/// what a listener waits for is the first frame of the first sentence rather than the reply. A
-/// reply given to a voice that is not resident, or to a scene that is not active, is not spoken
-/// at all; the diagnostics `voice` row says which.
+/// One voice. When the `Voice` (Pocket TTS, on the device) is resident, the reply is cut into
+/// sentences, each synthesised behind the one before and pushed to the play queue frame by frame
+/// as it decodes, paced by the queue's time-pitch unit at `Voice.tempo`, so what a listener waits
+/// for is the first frame of the first sentence rather than the reply. A reply given to a voice
+/// that is not resident is not spoken at all; the diagnostics `voice` row says why.
 ///
 /// Every `speak` is a generation. A frame that lands after a `stop` belongs to no reply and
 /// changes nothing.
@@ -24,7 +26,25 @@ final class Speaker {
     let voice: Voice
     private let audio: AudioSession
     private let queue: PlayQueue
+    /// True while the process is being held open for a reply, by either owner.
+    var holding: Bool { audio.holding }
+    #if DEBUG
+    /// Whether the keeper's silence is rendering, and every transition it has made, for a test
+    /// that holds the silence never stopped between two owners of the hold.
+    var keeping: Bool { queue.keeping }
+    var keeperTransitions: [String] { queue.keeperTransitions }
+    #endif
     private var resetObserver: NSObjectProtocol?
+    private var interruptionObserver: NSObjectProtocol?
+    /// How long a wait for a reply may keep the phone awake. A reply that never comes cannot hold
+    /// the process open in a pocket; one slower than this is heard on the next foreground instead.
+    /// The model call's own timeout is longer, so nothing is lost, only made to wait.
+    private let ceiling: Duration
+    /// Counts down `ceiling` from the release, and drops `.awaitingReply` when it runs out.
+    private var awaiting: Task<Void, Never>?
+    /// True while this object holds `.awaitingReply`, so letting go of a wait nobody took says
+    /// and does nothing.
+    private var awaitingHeld = false
     /// Counts replies. A forward pass in flight does not notice a cancellation, so a frame
     /// carrying an older number is made and dropped.
     private(set) var generation = 0
@@ -33,9 +53,6 @@ final class Speaker {
     private var chain: Task<Void, Never>?
     /// Sentences of the current reply not yet made.
     private var making = 0
-    /// True while the scene is active; the scene sets it. A reply that starts while it is false
-    /// is not spoken.
-    var foreground = true
     #if DEBUG
     /// What the last reply was and whether it was heard to the end, for the UI test.
     private(set) var report = Report()
@@ -54,23 +71,88 @@ final class Speaker {
 
     init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
+         ceiling: Duration = .seconds(120),
          now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime) {
         self.audio = audio
         self.voice = voice
+        self.ceiling = ceiling
         self.now = now
-        queue = PlayQueue(makeEngine: makeEngine)
+        queue = PlayQueue(makeEngine: makeEngine, center: center)
         queue.onDrained = { [weak self] in Task { @MainActor in self?.drained() } }
+        // The queue rebuilds its engine on a configuration change, and a rebuilt engine under a
+        // session that is not active is the crash rather than the silence, so the session is the
+        // queue's first call there as it is everywhere else.
+        queue.ensureActive = { [weak self] in try self?.audio.ensureActive() }
+        audio.onHoldChanged = { [weak self] held in self?.hold(held) }
         resetObserver = center.addObserver(
             forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in self?.mediaServicesWereReset() }
         }
+        interruptionObserver = center.addObserver(
+            forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            // A call or Siri took the session: the reply is over and so is the hold, which would
+            // otherwise outlive the reply it exists for. Only the start of an interruption;
+            // resuming at its end is not built.
+            guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+            Task { @MainActor in
+                AudioLog.say("interruption began: the reply and its hold end")
+                self?.stop()
+            }
+        }
     }
 
-    /// iOS reset the media server: the reply stops, and the play queue's nodes go with it, since
-    /// an engine that was running when the server went down will not start again. Nothing is
-    /// built here; the next `speak` activates the session and the first frame builds the queue,
-    /// which is how Say it again works after a reset with no press before it.
+    /// The hold changed hands. The keeper is the play queue's silence: starting it needs the
+    /// engine, and an engine under a session that is not active is the crash, so the session
+    /// comes first here as in every other audio path and a refusal is a refusal.
+    private func hold(_ held: Bool) {
+        guard held else { queue.hold(false); return }
+        do {
+            try audio.ensureActive()
+        } catch {
+            AudioLog.say("the hold's session did not activate: \(error)")
+            return
+        }
+        queue.hold(true)
+    }
+
+    /// The release of a spoken press: hold the process open for the reply that is coming, so the
+    /// turn is written, asked and answered behind the lock. Capped, and dropped the moment the
+    /// reply is being read, the turn fails, or anything ends the reply. Nothing is held for a
+    /// reply that could not be heard anyway — Read replies aloud off, or a voice that is not
+    /// resident at the release — since those turns make no audio to keep the phone awake for.
+    func awaitReply(readAloud: Bool) {
+        guard readAloud, voice.ready else {
+            AudioLog.say("no wait held: \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
+            return
+        }
+        awaitingHeld = true
+        audio.wantAlive(true, for: .awaitingReply)
+        awaiting?.cancel()
+        awaiting = Task { [ceiling] in
+            try? await Task.sleep(for: ceiling)
+            guard !Task.isCancelled else { return }
+            self.endAwaiting("capped at \(ceiling); the reply never landed")
+        }
+    }
+
+    /// Lets go of the wait. Free when none stands.
+    func endAwaiting(_ why: String) {
+        awaiting?.cancel()
+        awaiting = nil
+        guard awaitingHeld else { return }
+        awaitingHeld = false
+        AudioLog.say("the wait for a reply ends — \(why)")
+        audio.wantAlive(false, for: .awaitingReply)
+    }
+
+    /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
+    /// nodes go too, since an engine that was running when the server went down will not start
+    /// again. Nothing is built here; the next `speak` activates the session and the first frame
+    /// builds the queue, which is how Say it again works after a reset with no press before it.
+    /// A turn that was still awaited is answered on the next pass the app runs, on the foreground.
     private func mediaServicesWereReset() {
         #if DEBUG
         DebugRun.say("media services reset: speaker stopped, play queue dropped")
@@ -83,15 +165,16 @@ final class Speaker {
     /// is resident by the first reply; idempotent.
     func prepare() { voice.prepare() }
 
-    /// Reads `text` aloud. A voice that is not resident and a scene that is not active each
-    /// speak nothing and build nothing. The session comes first, before the queue exists: a
-    /// player node spoken to under a session that is not active is the crash, not a silence.
+    /// Reads `text` aloud. A voice that is not resident speaks nothing and builds nothing. The
+    /// session comes first, before the queue exists: a player node spoken to under a session that
+    /// is not active is the crash, not a silence.
     func speak(_ text: String) {
-        stop()
-        guard voice.ready, foreground else {
+        cancel()
+        guard voice.ready else {
             #if DEBUG
-            DebugRun.say("speak: not spoken — \(voice.ready ? "the scene is not active" : voice.summary)")
+            DebugRun.say("speak: not spoken — \(voice.summary)")
             #endif
+            endAwaiting("the voice is not resident")
             return
         }
         do {
@@ -101,9 +184,13 @@ final class Speaker {
             DebugRun.say("speak: the audio session did not activate: \(error)")
             #endif
             done()
+            endAwaiting("the audio session did not activate")
             return
         }
         speaking = true
+        // Taken before the wait is let go, so the keeper never stops between the two.
+        audio.wantAlive(true, for: .speaking)
+        endAwaiting("the reply is being read")
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
         report = Report(speaks: report.speaks + 1, engine: .pocket, text: text)
@@ -115,7 +202,16 @@ final class Speaker {
         speakLocally(text)
     }
 
+    /// Ends things: a press, the Stop item, a sign-out, an interruption, a reset. Both holds go,
+    /// since whatever was being waited for is not going to be heard now either.
     func stop() {
+        cancel()
+        endAwaiting("stopped")
+    }
+
+    /// Ends the reply in flight and leaves any wait standing, which is what `speak` needs: the
+    /// reply about to be read replaces the one before it without the keeper stopping between them.
+    private func cancel() {
         generation += 1
         chain = nil
         making = 0
@@ -137,7 +233,6 @@ final class Speaker {
                 await previous?.value
                 guard let self, self.generation == mine else { return }
                 defer { if self.generation == mine { self.made() } }
-                guard self.foreground else { return }
                 await self.say(sentence, generation: mine)
             }
         }
@@ -233,9 +328,13 @@ final class Speaker {
         return out.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
 
+    /// The reply is over, however it ended: nothing is being made and nothing is left to hear, so
+    /// the screen and the process are let go. The queue draining between two sentences is not
+    /// this — `made` and `drained` both have to agree before either calls it.
     private func done() {
         speaking = false
         audio.wantScreenAwake(false, for: .speaking)
+        audio.wantAlive(false, for: .speaking)
     }
 }
 
@@ -268,28 +367,57 @@ extension Speaker {
 /// with nothing scheduled renders silence rather than stopping and picks up the moment a buffer
 /// arrives, so a frame appended behind a playing one is seamless and one appended into an
 /// empty queue simply starts talking.
+///
+/// It also renders the silence that keeps the process running in the background: a second player
+/// on the same engine, at no volume, looping a fifth of a second of zeroes for as long as a hold
+/// stands. Under the `audio` background mode iOS runs a backgrounded process only while audio is
+/// actually rendering, and between the release of a press and the first frame of the reply
+/// nothing is. Lifted, with the rebuild below, from Daphne's `AudioIO` and `VoiceQueue`.
 final class PlayQueue: @unchecked Sendable {
     /// Fires, on the audio thread, when every scheduled buffer has been heard.
     var onDrained: (@Sendable () -> Void)?
+    /// The session, before anything here touches a handle into mediaserverd. `Speaker` sets it;
+    /// a rebuild that cannot activate the session builds nothing.
+    var ensureActive: (@MainActor () throws -> Void)?
+    #if DEBUG
+    /// What the last rebuild put back, for a test that wants the number rather than the log.
+    private(set) var rescheduled: Int?
+    /// Every keeper transition, in the order it happened.
+    private(set) var keeperTransitions: [String] = []
+    #endif
 
     private var engine: AVAudioEngine?
     private let makeEngine: () -> AVAudioEngine
+    private let center: NotificationCenter
+    private var configurationObserver: NSObjectProtocol?
     private(set) var node: AVAudioPlayerNode?
+    /// The silence. A second node rather than a quiet buffer on the first: what it renders must
+    /// not come between two frames of the reply.
+    private var keeper: AVAudioPlayerNode?
+    /// True while something wants the process kept alive; the count itself is `AudioSession`'s.
+    private var holding = false
     /// Between the player and the mixer: stage two of the pacing, for a voice with no pace of
     /// its own. `rate` stretches time and leaves the pitch where it was, so at `Voice.tempo` the
     /// words come faster without rising.
     private(set) var timePitch: AVAudioUnitTimePitch?
     private var format: AVAudioFormat?
     private let lock = NSLock()
-    private var pending = 0
-    /// Bumped by `stop`. Stopping the node fires the completion of every buffer it discards,
-    /// and without this the count would run negative and the queue never read as drained.
+    /// What is scheduled and not yet heard, in the order it was scheduled, so a rebuild puts back
+    /// what the dead engine forgot rather than only knowing how much there was.
+    private var queued: [(era: Int, buffer: AVAudioPCMBuffer)] = []
+    /// Bumped by `stop` and by a rebuild. Stopping the node fires the completion of every buffer
+    /// it discards, and without this the count would run negative and the queue never read as
+    /// drained — or a rebuild's rescheduled buffers would be cancelled by their own predecessors.
     private var epoch = 0
 
-    var isIdle: Bool { lock.withLock { pending == 0 } }
+    var isIdle: Bool { lock.withLock { queued.isEmpty } }
+    /// True while the silence is rendering, which is what a backgrounded process runs on.
+    var keeping: Bool { keeper?.isPlaying ?? false }
 
-    init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() }) {
+    init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
+         center: NotificationCenter = .default) {
         self.makeEngine = makeEngine
+        self.center = center
     }
 
     /// The engine, the player and the time-pitch unit are built on the first frame, because the
@@ -299,22 +427,7 @@ final class PlayQueue: @unchecked Sendable {
     /// the lock, which counts what is scheduled for the audio thread.
     func play(_ samples: [Float], rate: Int) throws {
         guard !samples.isEmpty else { return }
-        if engine == nil {
-            guard let f = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(rate),
-                                        channels: 1, interleaved: false) else { throw VoiceError.noPlayer }
-            let e = makeEngine()
-            let player = AVAudioPlayerNode()
-            let unit = AVAudioUnitTimePitch()
-            e.attach(player)
-            e.attach(unit)
-            e.connect(player, to: unit, format: f)
-            e.connect(unit, to: e.mainMixerNode, format: f)
-            unit.rate = Voice.tempo
-            engine = e
-            node = player
-            timePitch = unit
-            format = f
-        }
+        try build(rate: rate)
         guard let engine, let node, let format, format.sampleRate == Double(rate),
               let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count))
         else { throw VoiceError.noPlayer }
@@ -326,37 +439,177 @@ final class PlayQueue: @unchecked Sendable {
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
         let era: Int = lock.withLock {
-            pending += 1
+            queued.append((epoch, buffer))
             return epoch
         }
-        node.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+        schedule(buffer, era: era)
+    }
+
+    private func schedule(_ buffer: AVAudioPCMBuffer, era: Int) {
+        node?.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             guard let self else { return }
             let done: Bool = self.lock.withLock {
                 guard era == self.epoch else { return false }
-                self.pending -= 1
-                return self.pending == 0
+                if let index = self.queued.firstIndex(where: { $0.buffer === buffer }) {
+                    self.queued.remove(at: index)
+                }
+                return self.queued.isEmpty
             }
             if done { self.onDrained?() }
         }
     }
 
-    /// Cuts what is playing and drops everything behind it.
+    /// Builds the engine and its nodes if there are none, at `rate`. The one place they are made,
+    /// so a frame and a hold build the same thing.
+    private func build(rate: Int) throws {
+        guard engine == nil else { return }
+        guard let f = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(rate),
+                                    channels: 1, interleaved: false) else { throw VoiceError.noPlayer }
+        let e = makeEngine()
+        let player = AVAudioPlayerNode()
+        let silence = AVAudioPlayerNode()
+        let unit = AVAudioUnitTimePitch()
+        e.attach(player)
+        e.attach(unit)
+        e.attach(silence)
+        e.connect(player, to: unit, format: f)
+        e.connect(unit, to: e.mainMixerNode, format: f)
+        e.connect(silence, to: e.mainMixerNode, format: f)
+        unit.rate = Voice.tempo
+        silence.volume = 0
+        engine = e
+        node = player
+        keeper = silence
+        timePitch = unit
+        format = f
+        // The audio category flipping (the warm record claim going as the phone locks), a route
+        // change, a call: each reconfigures the hardware, stops every engine in the process and
+        // takes the buffers on its node with it. What was not heard is put back below.
+        configurationObserver = center.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: e, queue: .main
+        ) { [weak self, mine = ObjectIdentifier(e)] _ in
+            Task { @MainActor in
+                // The engine this observer was registered for, and not one dropped since: a
+                // notification already on the queue when it went reaches nothing.
+                guard let self, let engine = self.engine, ObjectIdentifier(engine) == mine else { return }
+                self.rebuild()
+            }
+        }
+    }
+
+    /// Keeps the process alive, or lets it go. The engine is built here if the hold begins before
+    /// the reply's first frame exists, which is the ordinary case: the wait for the reply is
+    /// exactly the gap the keeper is for.
+    @MainActor
+    func hold(_ on: Bool) {
+        holding = on
+        guard on else { stopKeeper(); return }
+        do { try build(rate: Voice.rate) } catch {
+            AudioLog.say("the keeper has no engine: \(error)")
+            return
+        }
+        startKeeper()
+    }
+
+    /// Stops the silence, and says so only when there was some. Both the hold being let go and
+    /// the engine being dropped come through here, so the transitions read in order.
+    private func stopKeeper() {
+        guard keeper?.isPlaying == true else { return }
+        keeper?.stop()
+        #if DEBUG
+        keeperTransitions.append("stopped")
+        #endif
+        AudioLog.say("keeper stopped")
+    }
+
+    private func startKeeper() {
+        guard let engine, let keeper, let format else { return }
+        if !engine.isRunning {
+            engine.prepare()
+            do { try engine.start() } catch {
+                AudioLog.say("the keeper's engine did not start: \(error)")
+                return
+            }
+        }
+        guard !keeper.isPlaying,
+              let quiet = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(format.sampleRate * 0.2))
+        else { return }
+        quiet.frameLength = quiet.frameCapacity
+        keeper.scheduleBuffer(quiet, at: nil, options: .loops, completionHandler: nil)
+        keeper.play()
+        #if DEBUG
+        keeperTransitions.append("playing")
+        #endif
+        AudioLog.say("keeper playing")
+    }
+
+    /// The engine stopped underneath and its node forgot what it held. Everything is built afresh
+    /// at the same format and what was not heard is scheduled again, in the order it was
+    /// scheduled, under a new epoch so the discarded buffers' completions — which fire as if they
+    /// had played — move nothing. The session comes first, as it does on every other audio path:
+    /// a new engine under a session that is not active is a crash, not a silence.
+    @MainActor
+    private func rebuild() {
+        guard let rate = format.map({ Int($0.sampleRate) }) else { return }
+        let again: [AVAudioPCMBuffer] = lock.withLock {
+            epoch += 1
+            queued = queued.map { (epoch, $0.buffer) }
+            return queued.map(\.buffer)
+        }
+        drop()
+        do {
+            try ensureActive?()
+            try build(rate: rate)
+        } catch {
+            AudioLog.say("the play queue could not be rebuilt: \(error)")
+            return
+        }
+        if !again.isEmpty, let engine, let node {
+            if !engine.isRunning {
+                engine.prepare()
+                try? engine.start()
+            }
+            node.play()
+            let era = lock.withLock { epoch }
+            for buffer in again { schedule(buffer, era: era) }
+        }
+        if holding { startKeeper() }
+        #if DEBUG
+        rescheduled = again.count
+        #endif
+        AudioLog.say("play queue rebuilt: \(again.count) rescheduled, keeper \(holding ? "playing" : "idle")")
+    }
+
+    /// Cuts what is playing and drops everything behind it. The keeper plays on: what it holds
+    /// open is the wait, not the reply.
     func stop() {
         lock.withLock {
-            pending = 0
+            queued.removeAll()
             epoch += 1
         }
         node?.stop()
     }
 
     /// Stops, and drops the engine with its nodes, which cannot be attached to another: after a
-    /// media services reset the old engine will not start, so the next `play` builds afresh.
-    /// Called on the main actor, as `play` is.
+    /// media services reset the old engine will not start, so the next `play` or hold builds
+    /// afresh. Called on the main actor, as `play` is; the holds have been dropped before it.
     func reset() {
         stop()
+        holding = false
+        drop()
+    }
+
+    /// Lets go of the engine and everything attached to it, leaving what is queued alone.
+    private func drop() {
+        stopKeeper()
+        node?.stop()
+        engine?.stop()
+        if let configurationObserver { center.removeObserver(configurationObserver) }
+        configurationObserver = nil
         engine = nil
         format = nil
         node = nil
+        keeper = nil
         timePitch = nil
     }
 }

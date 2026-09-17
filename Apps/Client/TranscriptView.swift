@@ -94,10 +94,9 @@ struct Replay {
     /// True while the speaker is reading something, whichever turn started it: the offer on
     /// every row is then the one that stops it, since two replies over each other is noise.
     var speaking = false
-    /// Whether the phone can say anything at all. Speaking is foreground work — iOS suspends a
-    /// backgrounded process — so the offer is gone while the scene is not active. Whether the
-    /// voice is resident does not come into it: a phone that has not finished downloading Pocket
-    /// is offered the item and hears nothing, which the diagnostics `voice` row explains.
+    /// Whether the phone can say anything at all: the voice is resident. A phone still
+    /// downloading Pocket is offered nothing rather than offered an item it would hear nothing
+    /// from, and the diagnostics `voice` row says how far along it is.
     var canSpeak = false
     var say: @MainActor (String) -> Void = { _ in }
     var stopSpeaking: @MainActor () -> Void = {}

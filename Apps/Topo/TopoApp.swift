@@ -36,6 +36,10 @@ struct TopoApp: App {
         #endif
         _voice = State(initialValue: VoiceInput(audio: audio, ear: ear))
         _speaker = State(initialValue: Speaker(audio: audio, voice: spoken))
+        // What says, on a device run with no debugger attached, when iOS suspended the process.
+        #if DEBUG
+        AudioLog.startHeartbeat()
+        #endif
     }
 
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.
@@ -55,7 +59,6 @@ struct TopoApp: App {
                 // them, so they are resident by the first press.
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     audio.warmRecord(phase == .active)
-                    speaker.foreground = phase == .active
                     if phase == .active {
                         voice.prepare()
                         speaker.prepare()

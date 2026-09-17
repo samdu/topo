@@ -18,6 +18,14 @@ final class Harness {
     private(set) var error: String?
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// Told about every reply the log has brought, however it arrived: one this device wrote, or
+    /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
+    /// rather than a view's observer, because behind the lock nothing is drawn and whether a
+    /// SwiftUI body is evaluated is the framework's to decide. Each reply is offered once.
+    var onReply: (@MainActor (Turn) -> Void)?
+    /// The refs already offered, so a reply both paths see is offered once. Every turn the
+    /// harness has seen goes in, the replies among them offered on the way.
+    private var offered: Set<TurnRef> = []
     /// Turns said and not yet settled, oldest first: the head is the one in flight or the one
     /// that stopped the line, the rest wait behind it.
     var waiting: [String] { pending.map(\.text) }
@@ -161,6 +169,7 @@ final class Harness {
         do {
             let transcript = try await log.read()
             turns = transcript.ordered
+            turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
         } catch {
             guard !TopoCloudKit.meansNoLogYet(error) else { turns = []; return }
@@ -228,6 +237,9 @@ final class Harness {
                 runner = try await makeRunner()
             }
             guard let runner else { return false }
+            #if DEBUG
+            await DebugRun.delayReply()
+            #endif
             let result = try await runner.run(text, model: model, nonce: attempt.nonce) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
@@ -291,6 +303,14 @@ final class Harness {
     private func show(_ turn: Turn) {
         guard !turns.contains(where: { $0.ref == turn.ref }) else { return }
         turns.append(turn)
+        seen(turn)
+    }
+
+    /// A turn the harness had not seen before. A reply among them is offered to `onReply` once,
+    /// whichever path brought it.
+    private func seen(_ turn: Turn) {
+        guard offered.insert(turn.ref).inserted, turn.role == .assistant else { return }
+        onReply?(turn)
     }
 
     static func describe(_ error: any Error) -> String {
