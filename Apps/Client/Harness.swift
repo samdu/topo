@@ -32,7 +32,14 @@ final class Harness {
             guard onReply != nil else { return }
             // A reply can land between the screen's first read of the log and the handler being
             // installed — the relaunch that sends what was owed takes a whole turn in that gap —
-            // and it is still the one to read aloud, so what arrived unheard is offered now.
+            // and it is still the one to read aloud, so what arrived unheard is offered now. Of
+            // more than one owed reply only the newest is: a person coming back is owed the
+            // answer to the last thing they said, not a backlog read at them, and each reply
+            // spoken cuts off the one before it anyway. The older ones are done with here.
+            for turn in owedAloud.dropLast() {
+                spokenTurn(answeredBy: turn).map(answeredAloud)
+                offered.insert(turn.ref)
+            }
             turns.forEach(seen)
         }
     }
@@ -40,6 +47,11 @@ final class Harness {
     /// is coming for it, and the screen's error line is not a place to work out whose. Not called
     /// for a turn another primary is answering, whose reply is still on its way.
     var onTurnFailed: (@MainActor (String) -> Void)?
+    /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
+    /// owed, and what the install above reads the newest of.
+    private var owedAloud: [Turn] {
+        turns.filter { $0.role == .assistant && !offered.contains($0.ref) && spokenTurn(answeredBy: $0) != nil }
+    }
     /// The refs a handler has taken, so a reply both paths see is offered once. Nothing is
     /// recorded while no handler stands, nor for a reply a handler could not take, which is what
     /// leaves those replies to be offered again.

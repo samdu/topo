@@ -308,6 +308,15 @@ final class Speaker {
         speaking = true
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
+        // And a hold that could not be honoured is a refused reply, like a rebuild that refuses:
+        // an engine that would not start renders nothing, so taking the reply here would clear
+        // its turn's mark and end its wait for a reading that never happens.
+        guard queue.keeping else {
+            AudioLog.say("the reply was not taken: nothing is rendering for it")
+            nonce.map { refusals[$0, default: 0] += 1 }
+            done()
+            return false
+        }
         progressed()
         nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)

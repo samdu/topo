@@ -138,7 +138,10 @@ struct ChatView: View {
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
             harness.onReply = { reply in
-                guard readAloud, let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+                // The mark is the decision, made at the release: a reply whose turn is marked is
+                // read whatever the setting says now, since the setting governs what the next
+                // release decides and not what a turn already released is owed.
+                guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
                 // Only a reply the speaker took is read: one it refused is still owed, so the
                 // turn stays marked spoken and the next pass offers the reply again.
                 guard speaker.speak(reply.text, answering: asked) else { return false }

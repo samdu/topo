@@ -622,9 +622,132 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(heard.texts, [], "nothing spoken was owed a reading")
     }
 
-    /// A reply the speaker could not take — a call still holding the session at the moment it
-    /// landed — is not done with: the turn stays marked spoken, the reply is offered again on the
-    /// next pass, and when the session comes back it is read once and the mark cleared once.
+    /// The chat's own handler, as the screen installs it: the mark is the decision, so a reply
+    /// whose turn is marked is read whatever the setting reads now.
+    @MainActor
+    private func install(_ harness: Harness, _ speaker: Speaker, _ said: Said) {
+        harness.onReply = { reply in
+            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+            guard speaker.speak(reply.text, answering: asked) else { return false }
+            harness.answeredAloud(asked)
+            said.add(reply.text)
+            return true
+        }
+    }
+
+    /// The setting governs what a release decides, not what a turn already released is owed: a
+    /// question asked aloud and answered after Read replies aloud was turned off is still that
+    /// question's answer, and leaving it unread would strand its mark and its hold. What ends the
+    /// hold is `speak` taking the reply, which is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
+    func testAReplyIsReadWhenItsTurnIsMarkedWhateverTheSettingReadsNow() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        let said = Said()
+        install(harness, speaker, said)
+
+        // The release, with the setting on: the wait is held and the turn marked.
+        let nonce = harness.willSend("what is the capital of France")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
+        harness.markSpoken(nonce)
+
+        // The setting goes off before the reply lands. What it governs is the next release.
+        await harness.retry()
+        XCTAssertEqual(said.texts, ["Paris."], "the turn was marked, so its reply is read")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "and the mark is cleared")
+        XCTAssertEqual(speaker.report.speaks, 1)
+    }
+
+    /// Two things asked aloud and left unanswered by an app that went away: what a person coming
+    /// back is owed is the answer to the last thing they said, not a backlog read at them — and
+    /// each reply spoken cuts off the one before it anyway, so a backlog offered in order is only
+    /// the last one heard with the others clipped.
+    func testARelaunchOwedTwoRepliesReadsTheNewestAndClearsTheRest() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let before = harness(db, defaults: defaults,
+                             transport: ScriptedTransport((200, reply("Paris.")), (200, reply("Rome."))))
+        before.markSpoken(before.willSend("what is the capital of France"))
+        await before.retry()
+        before.markSpoken(before.willSend("and of Italy"))
+        await before.retry()
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken")?.count, 2,
+                       "both turns went away owed a reading")
+
+        // The relaunch: the log read, then the handler installed.
+        let after = harness(db, defaults: defaults, transport: ScriptedTransport())
+        await after.refresh()
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        let said = Said()
+        install(after, speaker, said)
+
+        XCTAssertEqual(said.texts, ["Rome."], "the newest is read, and the older never reaches the speaker")
+        XCTAssertEqual(speaker.report.speaks, 1)
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "both marks are cleared")
+        XCTAssertEqual(speaker.report.text, "Rome.", "and it is the one being read, not one cut off")
+    }
+
+    /// The keeper refusing on a fresh queue is the same refusal as a rebuild that will not come
+    /// back: nothing renders, so nothing is read, and the reply is still owed.
+    func testAReplyWhoseHoldCannotStartIsOfferedAgainAndSpokenOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        let said = Said()
+        install(harness, speaker, said)
+
+        // The first engine this reply's hold builds will not start.
+        seams.playEngineRefusals = 1
+        harness.markSpoken(harness.willSend("what is the capital of France"))
+        await harness.retry()
+        XCTAssertEqual(said.texts, [], "nothing rendered for it, so nothing was read")
+        XCTAssertEqual(speaker.report.speaks, 0)
+        XCTAssertFalse(speaker.holding, "and nothing is held for a reply that was not taken")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken")?.count, 1, "the mark stays")
+
+        // The next pass builds an engine that starts.
+        await harness.refresh()
+        XCTAssertEqual(said.texts, ["Paris."])
+        XCTAssertEqual(speaker.report.speaks, 1)
+        await harness.refresh()
+        XCTAssertEqual(said.texts, ["Paris."], "spoken once")
+    }
+
+    /// A typed turn asks for no hold: the chat never calls `awaitReply` for one, so the phone
+    /// suspends behind the lock as it always did while its reply is on its way.
+    func testATypedSendHoldsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Rome."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        let said = Said()
+        install(harness, speaker, said)
+
+        // Typed: nothing marks it and nothing waits for it.
+        harness.willSend("and of Italy")
+        XCTAssertFalse(speaker.holding, "a typed send holds nothing while its reply is pending")
+        await harness.retry()
+        XCTAssertEqual(said.texts, [], "a typed turn's reply stays quiet")
+        XCTAssertFalse(speaker.holding)
+    }
+
     /// The other half of the refusal: the session activates, but the queue the reply would be read
     /// on will not come back. Taking the reply there would clear its mark and end its wait for a
     /// reading that never happens, and the turn would be silent for good.
@@ -678,6 +801,9 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(said.texts, ["Paris."], "spoken once")
     }
 
+    /// A reply the speaker could not take — a call still holding the session at the moment it
+    /// landed — is not done with: the turn stays marked spoken, the reply is offered again on the
+    /// next pass, and when the session comes back it is read once and the mark cleared once.
     func testAReplyTheSpeakerRefusedIsOfferedAgainAndSpokenOnce() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
@@ -746,6 +872,16 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(said.texts, ["Paris."], "a typed turn's reply stays quiet")
     }
 
+}
+
+/// A speaker over the seams, with a voice that is ready.
+@MainActor
+private func makeSpeaker(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter) async throws -> Speaker {
+    let voice = Voice(engine: ScriptedVoice())
+    voice.load(base: URL(fileURLWithPath: "/dev/null"))
+    try await eventually("the voice to load") { voice.state == .ready }
+    return Speaker(audio: audio, voice: voice, center: center,
+                   makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
 }
 
 // MARK: - Doubles
