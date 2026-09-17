@@ -915,6 +915,26 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertFalse(speaker.holding)
     }
 
+    /// A second turn's claim arriving while the first's hold still stands is the moment to bring
+    /// back a keeper that is down: nothing else is coming for it, since the hold's answer has not
+    /// changed, and a hold nothing renders for is a hold on paper.
+    func testAClaimTakenWhileAHoldStandsBringsBackAKeeperThatIsDown() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+        XCTAssertTrue(speaker.holding, "the first turn's wait stands, with nothing rendering for it")
+
+        XCTAssertTrue(speaker.awaitReply("another-turn", readAloud: true).held)
+        XCTAssertTrue(speaker.keeping, "the second claim brought the keeper back")
+    }
+
     /// What iOS counts as audio under the `audio` background mode is a running engine, not a
     /// playing node: a keeper stopped on an engine left running is a process that never suspends,
     /// which is a phone awake in a pocket for as long as the app lives.

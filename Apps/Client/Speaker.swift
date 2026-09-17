@@ -296,7 +296,15 @@ final class Speaker {
         // A reply beginning on a queue nothing has rebuilt since an interruption: the session is
         // active again as of the line above, so this is where it comes back. Without it the
         // frames would be owed to a rebuild that may never come and the reply heard as silence.
-        if queue.dead { queue.rebuild() }
+        // A rebuild that refuses is a refused reply, like an activation that throws: an engine
+        // that would not start renders nothing, and taking the reply here would clear its mark
+        // and end its wait for a reading that never happens.
+        if queue.dead, !queue.rebuild() {
+            AudioLog.say("the reply was not taken: the play queue could not be rebuilt")
+            nonce.map { refusals[$0, default: 0] += 1 }
+            done()
+            return false
+        }
         speaking = true
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
@@ -740,9 +748,11 @@ final class PlayQueue: @unchecked Sendable {
     /// session comes first, as on every other audio path: a new engine under a session that is
     /// not active is a crash, not a silence. Every way this can fail ends at `refuse`, which
     /// keeps the owed frames and the dead mark, so nothing is stranded by a rebuild that could
-    /// not happen yet — the next `.ended`, configuration change or reply tries again.
+    /// not happen yet — the next `.ended`, configuration change or reply tries again. Says whether
+    /// it happened, so a caller with a reply in its hands refuses rather than speaking to nothing.
     @MainActor
-    func rebuild() {
+    @discardableResult
+    func rebuild() -> Bool {
         let again: [AVAudioPCMBuffer] = lock.withLock {
             epoch += 1
             queued = queued.map { (epoch, $0.buffer) }
@@ -763,12 +773,13 @@ final class PlayQueue: @unchecked Sendable {
             if holding { try startKeeper() }
         } catch {
             refuse("\(again.count) owed: \(error)")
-            return
+            return false
         }
         #if DEBUG
         rescheduled = again.count
         #endif
         AudioLog.say("play queue rebuilt: \(again.count) rescheduled, keeper \(holding ? "playing" : "idle")")
+        return true
     }
 
     /// An interruption began: iOS has stopped the engine, and what it was playing is lost. The

@@ -29,9 +29,10 @@ final class AudioSession {
     private var recordClaims: Set<RecordClaim> = []
     private var screenClaims: Set<ScreenClaim> = []
     private var holds: Set<Hold> = []
-    /// Told the answer whenever it changes. The count is the session's; the engine that renders
-    /// the silence is the play queue's, so `Speaker` — the one object holding both — is what
-    /// starts and stops the keeper.
+    /// Told the answer on every claim taken or dropped, not only when it changes: the count is the
+    /// session's, the engine that renders the silence is the play queue's, and `Speaker` — the one
+    /// object holding both — is what starts and stops the keeper, so a claim arriving while
+    /// another already stands is its chance to start a keeper an earlier refusal left down.
     var onHoldChanged: ((Bool) -> Void)?
     /// True while anything wants the process kept alive.
     var holding: Bool { !holds.isEmpty }
@@ -134,7 +135,10 @@ final class AudioSession {
         guard holds != was else { return }
         let by = holds.isEmpty ? "nobody" : holds.map { "\($0)" }.sorted().joined(separator: ", ")
         AudioLog.say("hold \(on ? "taken" : "dropped") by \(who); held by \(by)")
-        guard holding != wasHolding else { return }
+        // Told on every claim while anything is held, not only when the answer changes: a claim
+        // taken while another already stands is the moment to retry a keeper an earlier refusal
+        // left down, and a hold nothing renders for is a hold on paper.
+        guard holding != wasHolding else { onHoldChanged?(holding); return }
         // The claim changes the hold stood in the way of. The last hold going is as likely to be
         // a reply ending behind the lock as the app coming back, and a configure from there is
         // refused every time, so it is attempted only in the foreground; otherwise the session is

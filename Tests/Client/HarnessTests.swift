@@ -1,3 +1,4 @@
+import AVFoundation
 import TopoAuth
 import TopoCore
 import TopoCoreTesting
@@ -624,6 +625,59 @@ final class HarnessIntegrationTests: XCTestCase {
     /// A reply the speaker could not take — a call still holding the session at the moment it
     /// landed — is not done with: the turn stays marked spoken, the reply is offered again on the
     /// next pass, and when the session comes back it is read once and the mark cleared once.
+    /// The other half of the refusal: the session activates, but the queue the reply would be read
+    /// on will not come back. Taking the reply there would clear its mark and end its wait for a
+    /// reading that never happens, and the turn would be silent for good.
+    func testAReplyWhoseQueueWillNotRebuildIsOfferedAgainAndSpokenOnce() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let voice = Voice(engine: ScriptedVoice())
+        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        try await eventually("the voice to load") { voice.state == .ready }
+        let speaker = Speaker(audio: audio, voice: voice, center: center,
+                              makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+
+        let said = Said()
+        harness.onReply = { [harness] reply in
+            guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+            guard speaker.speak(reply.text, answering: asked) else { return false }
+            harness.answeredAloud(asked)
+            said.add(reply.text)
+            return true
+        }
+
+        // The release: the wait stands and the keeper is rendering for it.
+        let nonce = harness.willSend("what is the capital of France")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).held)
+        harness.markSpoken(nonce)
+
+        // An interruption leaves the queue dead, and the engine the reply's rebuild would be read
+        // on will not start.
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: AVAudioSession.InterruptionType.began.rawValue])
+        try await eventually("the engine to be marked dead") { !speaker.keeping }
+        seams.playEngineRefusals = 1
+
+        await harness.retry()
+        XCTAssertEqual(said.texts, [], "the queue would not come back, so the reply was not taken")
+        XCTAssertEqual(speaker.report.speaks, 0)
+        XCTAssertTrue(speaker.holding, "the wait for that turn stands")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), [nonce],
+                       "and its mark stays, so the reply is still owed")
+
+        // The next pass, with an engine that starts: the same reply, read once.
+        await harness.refresh()
+        XCTAssertEqual(said.texts, ["Paris."])
+        XCTAssertEqual(speaker.report.speaks, 1)
+        await harness.refresh()
+        XCTAssertEqual(said.texts, ["Paris."], "spoken once")
+    }
+
     func testAReplyTheSpeakerRefusedIsOfferedAgainAndSpokenOnce() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
