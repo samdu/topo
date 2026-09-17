@@ -30,31 +30,16 @@ packages:
     path: Packages/TopoAuth
   TopoTurn:
     path: Packages/TopoTurn
-  # NVIDIA Parakeet as CoreML, with its CTC keyword spotter for the vocabulary rescoring, for
-  # the phone's ear (Apps/Client/Ear.swift). Pinned exactly: the vocabulary-boosting API the
-  # ear drives by hand (VocabularyBoostingSession) is not the version-stable part of the
-  # package, and a floating minor could move it. The iOS app only: nothing on the wrist or the
-  # television transcribes, and the models are half a gigabyte.
+  # The phone's ear and its voice: NVIDIA Parakeet as CoreML with its CTC keyword spotter for
+  # the vocabulary rescoring (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
+  # (Apps/Client/Voice.swift). Pinned exactly: neither the vocabulary-boosting API the ear
+  # drives by hand (VocabularyBoostingSession) nor the per-stage compute units the voice sets
+  # (PocketTtsComputeUnits) is the version-stable part of the package, and a floating minor
+  # could move either. The iOS app only: nothing on the wrist or the television transcribes or
+  # speaks, and the models are the better part of a gigabyte.
   FluidAudio:
     url: https://github.com/FluidInference/FluidAudio
-    exactVersion: "0.15.6"
-  # MLX-Audio's Swift port, for the phone's voice (Apps/Client/Voice.swift): Pocket TTS
-  # synthesising replies on the device. Pinned to a revision rather than a version range because
-  # the published tags are a long way behind main and the Pocket port the voice calls
-  # (`PocketTTSModel.fromModelDirectory`) is main's. The iOS app only: MLX wants a real Metal
-  # device, and nothing on the wrist or the television synthesises anything.
-  MLXAudio:
-    url: https://github.com/Blaizzy/mlx-audio-swift
-    revision: cae704f53bc32a3d0b606823828fbc5bedaaf388
-  # MLXAudioTTS vends MLXArray across its own API, so the voice names the array type and the
-  # safetensors loader directly. Declared rather than relied on as a transitive import, and
-  # pinned exactly inside the range MLXAudio asks for (0.30.6 up to the next major), so SPM
-  # resolves one copy: 0.31.4 is the last release without the CudaBuild build-tool plugin,
-  # which 0.31.5 adds and which xcodebuild refuses to run unvalidated, on the CI runner
-  # included.
-  mlx-swift:
-    url: https://github.com/ml-explore/mlx-swift
-    exactVersion: "0.31.4"
+    exactVersion: "0.15.7"
 targets:
   Topo:
     type: application
@@ -75,10 +60,6 @@ targets:
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
-      - package: MLXAudio
-        product: MLXAudioTTS
-      - package: mlx-swift
-        product: MLX
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo

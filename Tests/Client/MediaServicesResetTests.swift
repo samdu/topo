@@ -6,8 +6,8 @@ import XCTest
 @testable import Topo
 
 /// The seams the audio paths are built from, all writing to one log so the order they ran in is
-/// observed rather than inferred: the audio session's configure step, the engine factory, the
-/// synthesiser factory, and the reader of the input node's two formats.
+/// observed rather than inferred: the audio session's configure step, the engine factory (the
+/// microphone's and the play queue's alike), and the reader of the input node's two formats.
 @MainActor
 final class Seams {
     /// What ran, in the order it ran.
@@ -22,7 +22,6 @@ final class Seams {
     /// The client format the reader last handed over, which is the object the tap must carry.
     private(set) var lastClient: AVAudioFormat?
     private(set) var engines: [AVAudioEngine] = []
-    private(set) var synthesizers: [SilentSynthesizer] = []
     private(set) var formatReads = 0
 
     struct Refused: Error {}
@@ -64,12 +63,20 @@ final class Seams {
         return read
     }
 
-    func makeSynthesizer() -> AVSpeechSynthesizer {
-        lines.append("synthesiser made")
-        let synthesizer = SilentSynthesizer()
-        synthesizers.append(synthesizer)
-        return synthesizer
+    /// The play queue's engine: offline manual rendering, so it starts and plays on a host with
+    /// no audio device, and every buffer scheduled on it is counted.
+    func makePlayEngine(rate: Int) -> AVAudioEngine {
+        lines.append("engine made")
+        let engine = AVAudioEngine()
+        let format = AVAudioFormat(standardFormatWithSampleRate: Double(rate), channels: 1)!
+        try? engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
+        engines.append(engine)
+        return engine
     }
+
+    /// Called from the play queue when a frame is scheduled, so the order a reply reached the
+    /// speaker in is in the same log as its session and its engine.
+    func scheduled() { lines.append("frame scheduled") }
 }
 
 /// An input node that remembers the format each tap was installed with. The engine's own node is
@@ -113,11 +120,23 @@ private final class StubFormat: AVAudioFormat {
     override var channelCount: AVAudioChannelCount { stubChannels }
 }
 
-/// A synthesiser that never makes a sound and so never calls its delegate back: the state a
-/// reset that swallowed the callbacks leaves behind.
-final class SilentSynthesizer: AVSpeechSynthesizer {
-    private(set) var spoken: [String] = []
-    override func speak(_ utterance: AVSpeechUtterance) { spoken.append(utterance.speechString) }
+/// A voice resident over an engine that makes one frame of quiet tone per sentence: enough for
+/// the queue to build, schedule and drain, and it needs no model.
+struct ToneVoice: VoiceEngine {
+    /// Set to fail the load, which leaves the voice at `failed`.
+    var loads = true
+
+    func load(base: URL) async throws {
+        guard loads else { throw VoiceError.unavailable("no models here") }
+    }
+
+    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+        AsyncThrowingStream { continuation in
+            let samples = (0 ..< 1_920).map { 0.5 * sin(Float($0) * 0.3) }
+            continuation.yield(Voice.Frame(samples: samples, rate: Voice.rate))
+            continuation.finish()
+        }
+    }
 }
 
 /// Recovery from a media services reset, against notifications posted on a private centre and
@@ -383,57 +402,112 @@ final class MediaServicesResetTests: XCTestCase {
 
     // MARK: Speaker
 
-    func testAReplyAfterAResetActivatesTheSessionBeforeItBuildsASynthesiser() async {
+    /// A speaker over a voice resident on `ToneVoice`, which is what a reply needs: a voice that
+    /// is not resident speaks nothing and reaches none of these seams.
+    private func speaker(_ seams: Seams, _ audio: AudioSession,
+                         _ center: NotificationCenter, loads: Bool = true) async -> Speaker {
+        let voice = Voice(engine: ToneVoice(loads: loads))
+        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        await settle { voice.state == (loads ? .ready : .failed) }
+        return Speaker(audio: audio, voice: voice, center: center,
+                       makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+    }
+
+    func testAReplyActivatesTheSessionBeforeItBuildsTheQueueAndScheduling() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = Speaker(audio: audio, voice: Voice(), center: center,
-                              makeSynthesizer: { seams.makeSynthesizer() })
+        let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
-        XCTAssertEqual(seams.lines, ["activate ok", "synthesiser made"],
-                       "with no voice model the synthesiser reads it")
         XCTAssertTrue(speaker.speaking)
         XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled)
-        seams.activationError = Seams.Refused()
-        center.post(name: reset, object: nil)
-        await settle { !speaker.speaking && seams.lines.count == 3 }
-        XCTAssertEqual(seams.lines.last, "activate failed")
-        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "the speaking claim is released")
-        seams.activationError = nil
-        seams.forget()
-        // No press anywhere: Say it again is what reactivates the session and rebuilds.
-        speaker.speak("Again then.")
-        XCTAssertEqual(seams.lines, ["activate ok", "synthesiser made"])
-        XCTAssertEqual(seams.synthesizers.count, 2)
-        XCTAssertEqual(seams.synthesizers.last?.spoken, ["Again then."])
-        XCTAssertTrue(seams.synthesizers.last?.delegate === speaker, "the fresh synthesiser reports to the speaker")
-        XCTAssertTrue(speaker.speaking)
+        await settle { speaker.report.started }
+        XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
+                       "the session is active before the queue exists")
+        XCTAssertEqual(speaker.report.engine, .pocket, "there is one voice")
         speaker.stop()
     }
 
-    func testAResetBumpsTheGenerationSoAClipMadeBeforeItIsNeverPlayed() async {
+    /// No press anywhere: Say it again is what reactivates the session and rebuilds the queue.
+    func testAReplyAfterAResetActivatesTheSessionAgainAndBuildsAFreshQueue() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = Speaker(audio: audio, voice: Voice(), center: center,
-                              makeSynthesizer: { seams.makeSynthesizer() })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.speak("Hello there.")
+        await settle { speaker.report.started }
+        seams.activationError = Seams.Refused()
+        center.post(name: reset, object: nil)
+        await settle { !speaker.speaking && seams.lines.last == "activate failed" }
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "the speaking claim is released")
+        seams.activationError = nil
+        seams.forget()
+        speaker.speak("Again then.")
+        await settle { seams.lines == ["activate ok", "engine made"] }
+        XCTAssertEqual(seams.engines.count, 2, "the engine the reset dropped is not reused")
+        XCTAssertEqual(speaker.report.text, "Again then.")
+        XCTAssertTrue(speaker.report.started)
+        speaker.stop()
+    }
+
+    func testAResetBumpsTheGenerationSoAFrameMadeBeforeItIsNeverPlayed() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
         let before = speaker.generation
         center.post(name: reset, object: nil)
         await settle { speaker.generation != before }
     }
 
-    func testAReplyWhoseSessionWillNotActivateSpeaksNothing() {
+    func testAReplyWhoseSessionWillNotActivateBuildsNothing() async {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
-        let speaker = Speaker(audio: audio, voice: Voice(), center: center,
-                              makeSynthesizer: { seams.makeSynthesizer() })
+        let speaker = await self.speaker(seams, audio, center)
         seams.activationError = Seams.Refused()
         speaker.speak("Hello there.")
-        XCTAssertEqual(seams.synthesizers.count, 0, "no synthesiser is built under a dead session")
+        await drain()
+        XCTAssertEqual(seams.engines.count, 0, "no play queue is built under a dead session")
         XCTAssertFalse(speaker.speaking)
+        XCTAssertFalse(speaker.report.started)
         XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled, "the speaking claim is released")
+    }
+
+    func testAReplyToAVoiceThatIsNotResidentIsNotSpoken() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center, loads: false)
+        speaker.speak("Hello there.")
+        await drain()
+        XCTAssertEqual(seams.lines, [], "the session is not even activated for a voice there is not")
+        XCTAssertFalse(speaker.speaking)
+        XCTAssertEqual(speaker.report.speaks, 0)
+    }
+
+    /// Speaking is foreground work, and the scene's flag is the gate: a reply that lands after
+    /// the scene has stopped speech starts nothing, and the next one after it returns does.
+    func testAReplyOutsideTheForegroundBuildsNothingAndOneInsideItDoes() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.foreground = false
+        speaker.speak("Hello there.")
+        await drain()
+        XCTAssertEqual(seams.lines, [], "nothing is activated and no engine is built")
+        XCTAssertEqual(seams.engines.count, 0)
+        XCTAssertFalse(speaker.speaking)
+        XCTAssertEqual(speaker.report.speaks, 0)
+
+        speaker.foreground = true
+        speaker.speak("Hello there.")
+        await settle { speaker.report.started }
+        XCTAssertEqual(seams.lines, ["activate ok", "engine made"])
+        XCTAssertEqual(speaker.report.speaks, 1)
+        speaker.stop()
     }
 
     // MARK: PlayQueue

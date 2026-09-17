@@ -124,6 +124,9 @@ final class MicrophonePressTests: XCTestCase {
         let app = XCUIApplication()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
+        // This lane presses the microphone and speaks nothing, so the voice is held at loading
+        // and asks for none of its 351 MB. What reads a reply aloud is the talk lane's to prove.
+        app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
         app.launchEnvironment.merge(environment) { _, new in new }
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()

@@ -82,7 +82,8 @@ struct ChatView: View {
                         // and what the speaker did with it, as JSON (`DebugRun.ChatReport`).
                         .accessibilityIdentifier(DebugRun.chatReportIdentifier)
                         .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
-                                                                error: harness.error, speaker: speaker.report))
+                                                                error: harness.error, speaker: speaker.report,
+                                                                voice: speaker.voice.state))
                         #endif
                 }
                 ToolbarItem(placement: .topBarTrailing) {

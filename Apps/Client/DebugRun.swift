@@ -161,14 +161,23 @@ extension DebugRun {
     }
 
     /// The voice a debug build starts with. `TOPO_DEBUG_VOICE=loading` is one that never becomes
-    /// resident, so every reply is read by `AVSpeechSynthesizer` however much of Pocket is on the
-    /// phone: it is how the fallback's recovery from a media services reset is pressed on a
-    /// device that has the model. Any other launch gets the real voice, prepared as usual.
+    /// resident, so no reply is read aloud however much of Pocket is on the phone.
+    /// `TOPO_DEBUG_VOICE=` an absolute directory holding the pack under
+    /// `Models/pocket-tts/v2.1/english` is the real voice, loaded from there instead of the
+    /// app's own download, which is how a lane gets Pocket resident in a simulator without the
+    /// background download. Any other launch gets the real voice, prepared as usual.
     @MainActor
     static func voice(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Voice {
-        guard environment[voiceVariable] == "loading" else { return Voice() }
-        say("voice: loading, and never resident")
-        return Voice.stalledVoice()
+        guard let choice = environment[voiceVariable], !choice.isEmpty else { return Voice() }
+        if choice == "loading" {
+            say("voice: loading, and never resident")
+            return Voice.stalledVoice()
+        }
+        let base = URL(fileURLWithPath: choice, isDirectory: true)
+        let voice = Voice()
+        voice.load(base: base)
+        say("voice: Pocket from \(base.path)")
+        return voice
     }
 
     /// The chat screen's report for the spoken-turn UI test, on the title's accessibility value.
@@ -181,6 +190,9 @@ extension DebugRun {
         /// The error line on the chat screen, if any.
         var error: String?
         var speaker: Speaker.Report
+        /// The voice's state, so a lane waits for Pocket to be resident rather than sending a
+        /// question the speaker would have nothing to read it with.
+        var voice: String
     }
 
     struct TurnReport: Codable, Equatable {
@@ -197,8 +209,9 @@ extension DebugRun {
 
     static let chatReportIdentifier = "topo-debug-chat"
 
-    static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report) -> String {
-        var report = ChatReport(spoken: spoken, error: error, speaker: speaker)
+    static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report,
+                           voice: Voice.State) -> String {
+        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)")
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

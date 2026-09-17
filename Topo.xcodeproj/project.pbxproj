@@ -31,7 +31,6 @@
 		20F2A0B4C6E8592CD1F27954 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
 		23BF8C9AB0A659820195042C /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */; };
-		250B656BBEC3CA81673470FE /* MLXAudioTTS in Frameworks */ = {isa = PBXBuildFile; productRef = 9A23AAE8D73D6B2959B0ECA0 /* MLXAudioTTS */; };
 		263E7336197C616811DD2E21 /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
 		2908E979E18FAFFBCBBA3F5C /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		2AF169CA7DA76C7448A360A2 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
@@ -123,7 +122,6 @@
 		B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
 		B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
-		B63B6F52C265588ADE976B9B /* MLX in Frameworks */ = {isa = PBXBuildFile; productRef = 11BFD456B9384FC5F303ABF1 /* MLX */; };
 		B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D33CC62A8C821EACD662C /* TopoHubApp.swift */; };
 		B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */; };
 		B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 45B7067577746DC49D3FFD8F /* TopoAuth */; };
@@ -321,8 +319,6 @@
 				B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */,
 				3FD6601DD9ABAC3CC53FD7B5 /* TopoTurn in Frameworks */,
 				1B7B2F193C4455E96A95552E /* FluidAudio in Frameworks */,
-				250B656BBEC3CA81673470FE /* MLXAudioTTS in Frameworks */,
-				B63B6F52C265588ADE976B9B /* MLX in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -619,8 +615,6 @@
 				45B7067577746DC49D3FFD8F /* TopoAuth */,
 				FE39E35328B7F68962D1C4D7 /* TopoTurn */,
 				B3BA0E084B64DA5739DA87CC /* FluidAudio */,
-				9A23AAE8D73D6B2959B0ECA0 /* MLXAudioTTS */,
-				11BFD456B9384FC5F303ABF1 /* MLX */,
 			);
 			productName = Topo;
 			productReference = 99296C045628A368812315E3 /* Topo.app */;
@@ -758,8 +752,6 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				103CF933AED6235CE3C80367 /* XCRemoteSwiftPackageReference "FluidAudio" */,
-				6BD0512D4DC64AD8EA22CF23 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */,
-				12861F3E822291E2CF72CD0B /* XCRemoteSwiftPackageReference "mlx-swift" */,
 				44BFC1A6FFE8F646066FC6D3 /* XCLocalSwiftPackageReference "Packages/TopoAuth" */,
 				1E536CC259DF31745E68DDFA /* XCLocalSwiftPackageReference "Packages/TopoCore" */,
 				B799C97BE3650B1621A9547D /* XCLocalSwiftPackageReference "Packages/TopoLink" */,
@@ -1536,23 +1528,7 @@
 			repositoryURL = "https://github.com/FluidInference/FluidAudio";
 			requirement = {
 				kind = exactVersion;
-				version = 0.15.6;
-			};
-		};
-		12861F3E822291E2CF72CD0B /* XCRemoteSwiftPackageReference "mlx-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/ml-explore/mlx-swift";
-			requirement = {
-				kind = exactVersion;
-				version = 0.31.4;
-			};
-		};
-		6BD0512D4DC64AD8EA22CF23 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Blaizzy/mlx-audio-swift";
-			requirement = {
-				kind = revision;
-				revision = cae704f53bc32a3d0b606823828fbc5bedaaf388;
+				version = 0.15.7;
 			};
 		};
 /* End XCRemoteSwiftPackageReference section */
@@ -1565,11 +1541,6 @@
 		07E2FAB72874D49A25065E45 /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoCore;
-		};
-		11BFD456B9384FC5F303ABF1 /* MLX */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 12861F3E822291E2CF72CD0B /* XCRemoteSwiftPackageReference "mlx-swift" */;
-			productName = MLX;
 		};
 		3F87D19718887EBA98EA56FA /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -1594,11 +1565,6 @@
 		7C22D3C31068651AA320F6FC /* TopoAuth */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoAuth;
-		};
-		9A23AAE8D73D6B2959B0ECA0 /* MLXAudioTTS */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 6BD0512D4DC64AD8EA22CF23 /* XCRemoteSwiftPackageReference "mlx-audio-swift" */;
-			productName = MLXAudioTTS;
 		};
 		AF1BDBBDAB883F52D9800C0C /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
