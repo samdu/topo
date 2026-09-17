@@ -127,10 +127,10 @@ extension DebugRun {
     }
 
     /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:
-    /// a press takes the on-device branch of `VoiceInput` (the tap, the sample sink, the caption
-    /// loop, the decode at the release) over an engine that hears nothing. `TOPO_DEBUG_EAR=loading`
-    /// is one whose load never finishes, so every press takes the fallback, `SFSpeechRecognizer`'s,
-    /// however fast the real models would have downloaded. `TOPO_DEBUG_EAR=` an
+    /// a press runs the whole of `VoiceInput` (the tap, the sample sink, the caption loop, the
+    /// decode at the release) over an engine that hears nothing. `TOPO_DEBUG_EAR=loading` is one
+    /// whose load never finishes, so every press is refused with the ear's reason, however fast
+    /// the real models would have downloaded. `TOPO_DEBUG_EAR=` an
     /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
     /// real ear, loaded from there instead of the app's own download, which is how the UI test
     /// gets Parakeet resident in a simulator without the background download. Any other launch
@@ -142,7 +142,7 @@ extension DebugRun {
             let ear = Ear(engine: StubEngine(loads: false))
             let nowhere = URL(fileURLWithPath: "/dev/null")
             ear.load(parakeet: nowhere, ctc: nowhere)
-            say("ear: loading, and never resident")
+            say("ear: loading, and never resident, so every press is refused")
             return ear
         }
         if choice == "stub" {

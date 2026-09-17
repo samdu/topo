@@ -1,9 +1,9 @@
 #if os(iOS) || os(macOS)
 import SwiftUI
 
-/// The first ten minutes: one question, with the microphone and speech recognition asked for at
-/// the first press and nothing before it. The answer is kept in `firstRunAnswer` until the turn
-/// log takes it as the first turn; nothing said here is dropped.
+/// The first ten minutes: one question, with the microphone asked for at the first press and
+/// nothing before it. The answer is kept in `firstRunAnswer` until the turn log takes it as the
+/// first turn; nothing said here is dropped.
 struct FirstRunView: View {
     @AppStorage("firstRunAnswer") private var storedAnswer = ""
     @State private var answer = ""
@@ -37,7 +37,7 @@ struct FirstRunView: View {
             Text("or just start talking")
                 .foregroundStyle(.secondary)
             Spacer()
-            // Hold to talk, release to answer. The two permissions are asked here and nowhere earlier.
+            // Hold to talk, release to answer. The microphone is asked for here and nowhere earlier.
             Image(systemName: listening ? "waveform" : "mic.fill")
                 .font(.system(size: 36))
                 .frame(width: 96, height: 96)
@@ -68,12 +68,6 @@ struct FirstRunView: View {
         .padding()
         #if os(iOS)
         .onDisappear { voice.cancel(.firstRun) }
-        .onChange(of: voice.unsent) { _, _ in
-            // The recogniser ended the session itself; what it heard is the answer.
-            guard let heard = voice.takeUnsent(for: .firstRun) else { return }
-            answer = heard
-            submit()
-        }
         #endif
     }
 
