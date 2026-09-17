@@ -79,9 +79,10 @@ final class VoiceInput {
     /// node before the session is active is what raises inside `installTap`.
     private var engine: AVAudioEngine?
     private let makeEngine: () -> AVAudioEngine
-    /// The two formats the guard judges, read from the engine's input node in production and
-    /// injected by the suite, which has no audio device to read one from.
-    private let formats: (AVAudioEngine) -> (client: Format, hardware: Format)
+    /// The two formats the guard judges and the tap is installed with, read from the engine's
+    /// input node in production and injected by the suite, which has no audio device to read one
+    /// from.
+    private let formats: (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
     /// True while a tap is on the input node, so a teardown that installed none never reads
     /// `inputNode`, which creates the hardware input on its first read.
     private(set) var tapped = false
@@ -110,7 +111,8 @@ final class VoiceInput {
 
     init(audio: AudioSession, ear: Ear = Ear(), center: NotificationCenter = .default,
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
-         formats: @escaping (AVAudioEngine) -> (client: Format, hardware: Format) = VoiceInput.readFormats) {
+         formats: @escaping (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
+             = VoiceInput.readFormats) {
         self.audio = audio
         self.ear = ear
         self.makeEngine = makeEngine
@@ -304,15 +306,18 @@ final class VoiceInput {
             return made
         }()
         let input = engine.inputNode
-        let read = formats(engine)
+        // Read once. The format the tap is installed with is the very object the guard judged:
+        // a route change between two reads would pass the guard on the first numbers and raise
+        // on the second, which is the crash this guard exists to answer.
+        let (format, hardware) = formats(engine)
+        let client = Format(format)
         #if DEBUG
-        DebugRun.say("press: session ok, client \(read.client.rate)/\(read.client.channels), " +
-                     "hardware \(read.hardware.rate)/\(read.hardware.channels)")
+        DebugRun.say("press: session ok, client \(client.rate)/\(client.channels), " +
+                     "hardware \(hardware.sampleRate)/\(hardware.channelCount)")
         #endif
         // A dead format means the session has no input right now, and a tap rate that is not the
         // hardware's is the other way `installTap` raises; both are uncatchable, so refuse here.
-        guard Self.inputIsUsable(client: read.client, hardware: read.hardware) else { throw InputUnavailable() }
-        let format = input.outputFormat(forBus: 0)
+        guard Self.inputIsUsable(client: client, hardware: Format(hardware)) else { throw InputUnavailable() }
         input.removeTap(onBus: 0)
         tapped = true
         #if DEBUG
@@ -516,21 +521,28 @@ final class VoiceInput {
     /// `AudioSession.ensureActive` refused, carrying what it threw for the refusal line.
     private struct SessionInactive: Error { let underlying: Error }
 
-    /// One side of an input node: what `outputFormat(forBus:)` or `inputFormat(forBus:)` says.
+    /// The numbers one side of an input node reports, which is all the guard judges on.
     struct Format: Equatable {
         var rate: Double
         var channels: UInt32
+
+        init(rate: Double, channels: UInt32) {
+            self.rate = rate
+            self.channels = channels
+        }
+
+        init(_ format: AVAudioFormat) {
+            self.init(rate: format.sampleRate, channels: format.channelCount)
+        }
     }
 
-    /// The input node's two formats, the client one a tap is installed against and the hardware
-    /// one behind it. Production reads them off the node; the suite injects them, since a test
-    /// host has no audio device and a dead node is what the guard exists for.
-    static let readFormats: (AVAudioEngine) -> (client: Format, hardware: Format) = { engine in
+    /// The input node's two formats, the client one a tap is installed with and the hardware one
+    /// behind it, as the objects themselves so the press hands the tap what the guard judged.
+    /// Production reads them off the node; the suite injects them, since a test host has no audio
+    /// device and a dead node is what the guard exists for.
+    static let readFormats: (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat) = { engine in
         let input = engine.inputNode
-        let client = input.outputFormat(forBus: 0)
-        let hardware = input.inputFormat(forBus: 0)
-        return (Format(rate: client.sampleRate, channels: client.channelCount),
-                Format(rate: hardware.sampleRate, channels: hardware.channelCount))
+        return (input.outputFormat(forBus: 0), input.inputFormat(forBus: 0))
     }
 
     /// Whether a tap may be installed, as a function of the four numbers alone. A zero sample

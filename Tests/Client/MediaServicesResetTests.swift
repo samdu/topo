@@ -1,4 +1,5 @@
 import AVFoundation
+import ObjectiveC
 import UIKit
 import XCTest
 
@@ -15,9 +16,11 @@ private final class Seams {
     private(set) var records: [Bool] = []
     /// Set to make the configure step throw, as an activation refused behind Settings does.
     var activationError: Error?
-    /// What the format reader reports. A live 48 kHz mono input by default.
-    var client = VoiceInput.Format(rate: 48_000, channels: 1)
-    var hardware = VoiceInput.Format(rate: 48_000, channels: 1)
+    /// What the format reader reports in place of the engine's own formats; nil leaves it
+    /// reading the node, which is how a test that installs a tap gets a format the node accepts.
+    var stubFormats: (client: AVAudioFormat, hardware: AVAudioFormat)?
+    /// The client format the reader last handed over, which is the object the tap must carry.
+    private(set) var lastClient: AVAudioFormat?
     private(set) var engines: [AVAudioEngine] = []
     private(set) var synthesizers: [SilentSynthesizer] = []
     private(set) var formatReads = 0
@@ -41,20 +44,24 @@ private final class Seams {
     }
 
     /// An engine in offline manual rendering: it starts, and its input node hands over a format
-    /// and takes a tap, on a host with no audio device at all.
+    /// and takes a tap, on a host with no audio device at all. Its input node records the format
+    /// each tap is installed with.
     func makeEngine() -> AVAudioEngine {
         lines.append("engine made")
-        let engine = AVAudioEngine()
+        let engine = CapturingEngine()
         let format = AVAudioFormat(standardFormatWithSampleRate: 48_000, channels: 1)!
         try? engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
         engines.append(engine)
         return engine
     }
 
-    func readFormats(_ engine: AVAudioEngine) -> (client: VoiceInput.Format, hardware: VoiceInput.Format) {
+    func readFormats(_ engine: AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat) {
         lines.append("formats read")
         formatReads += 1
-        return (client, hardware)
+        let read = stubFormats ?? (engine.inputNode.outputFormat(forBus: 0),
+                                   engine.inputNode.inputFormat(forBus: 0))
+        lastClient = read.client
+        return read
     }
 
     func makeSynthesizer() -> AVSpeechSynthesizer {
@@ -63,6 +70,47 @@ private final class Seams {
         synthesizers.append(synthesizer)
         return synthesizer
     }
+}
+
+/// An input node that remembers the format each tap was installed with. The engine's own node is
+/// reclassed into this on the way out of `inputNode`: `AVAudioInputNode` cannot be constructed, and
+/// this subclass adds no storage, so the instance's layout is the one it already had.
+private final class CapturingInputNode: AVAudioInputNode {
+    /// The last format a tap was installed with, anywhere. The suite is serial on the main actor.
+    nonisolated(unsafe) static var installed: AVAudioFormat?
+
+    override func installTap(onBus bus: AVAudioNodeBus, bufferSize: AVAudioFrameCount,
+                             format: AVAudioFormat?, block: @escaping AVAudioNodeTapBlock) {
+        CapturingInputNode.installed = format
+        super.installTap(onBus: bus, bufferSize: bufferSize, format: format, block: block)
+    }
+}
+
+private final class CapturingEngine: AVAudioEngine {
+    override var inputNode: AVAudioInputNode {
+        let node = super.inputNode
+        object_setClass(node, CapturingInputNode.self)
+        return node
+    }
+}
+
+/// A format that reports whatever numbers a test asks for, including the ones no real format
+/// carries: `AVAudioFormat` refuses to be built with a zero sample rate or no channel, and those
+/// are exactly the two an input node reports when the session has no input.
+private final class StubFormat: AVAudioFormat {
+    private let stubRate: Double
+    private let stubChannels: AVAudioChannelCount
+
+    init?(rate: Double, channels: AVAudioChannelCount) {
+        stubRate = rate
+        stubChannels = channels
+        super.init(standardFormatWithSampleRate: 48_000, channels: 1)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not decoded") }
+
+    override var sampleRate: Double { stubRate }
+    override var channelCount: AVAudioChannelCount { stubChannels }
 }
 
 /// A synthesiser that never makes a sound and so never calls its delegate back: the state a
@@ -202,6 +250,21 @@ final class MediaServicesResetTests: XCTestCase {
         voice.cancel()
     }
 
+    func testTheTapCarriesTheVeryFormatTheGuardJudged() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let voice = voiceInput(seams, audio, center)
+        await behindSettings(seams, audio, center)
+        CapturingInputNode.installed = nil
+        voice.press(as: .chat, local: true, mine: 1)
+        XCTAssertTrue(voice.tapped)
+        XCTAssertEqual(seams.formatReads, 1, "the input node's format is read once and no more")
+        XCTAssertTrue(CapturingInputNode.installed === seams.lastClient,
+                      "a second read could be a route change later, which is what installTap raises on")
+        voice.cancel()
+    }
+
     // MARK: VoiceInput — activation refused
 
     func testAPressWhoseSessionWillNotActivateBuildsNothingAndRefuses() {
@@ -230,19 +293,21 @@ final class MediaServicesResetTests: XCTestCase {
         let live = VoiceInput.Format(rate: 48_000, channels: 1)
         XCTAssertTrue(VoiceInput.inputIsUsable(client: live, hardware: live))
         for (name, client, hardware) in Self.deadInputs {
-            XCTAssertFalse(VoiceInput.inputIsUsable(client: client, hardware: hardware), name)
+            XCTAssertFalse(VoiceInput.inputIsUsable(client: VoiceInput.Format(client),
+                                                    hardware: VoiceInput.Format(hardware)), name)
         }
     }
 
-    /// Every way the input node can be reported that `installTap` raises on.
-    private static let deadInputs: [(String, VoiceInput.Format, VoiceInput.Format)] = {
-        let live = VoiceInput.Format(rate: 48_000, channels: 1)
+    /// Every way the input node can be reported that `installTap` raises on, as the formats a
+    /// press would be handed.
+    private static let deadInputs: [(String, AVAudioFormat, AVAudioFormat)] = {
+        let live = StubFormat(rate: 48_000, channels: 1)!
         return [
-            ("client rate 0", VoiceInput.Format(rate: 0, channels: 1), live),
-            ("client channels 0", VoiceInput.Format(rate: 48_000, channels: 0), live),
-            ("hardware rate 0", live, VoiceInput.Format(rate: 0, channels: 1)),
-            ("hardware channels 0", live, VoiceInput.Format(rate: 48_000, channels: 0)),
-            ("rates differ", VoiceInput.Format(rate: 44_100, channels: 1), live),
+            ("client rate 0", StubFormat(rate: 0, channels: 1)!, live),
+            ("client channels 0", StubFormat(rate: 48_000, channels: 0)!, live),
+            ("hardware rate 0", live, StubFormat(rate: 0, channels: 1)!),
+            ("hardware channels 0", live, StubFormat(rate: 48_000, channels: 0)!),
+            ("rates differ", StubFormat(rate: 44_100, channels: 1)!, live),
         ]
     }()
 
@@ -254,8 +319,7 @@ final class MediaServicesResetTests: XCTestCase {
             let voice = voiceInput(seams, audio, center)
             audio.wantRecord(true, for: .warm)
             seams.forget()
-            seams.client = client
-            seams.hardware = hardware
+            seams.stubFormats = (client, hardware)
             voice.press(as: .chat, local: true, mine: 1)
             XCTAssertFalse(voice.tapped, name)
             XCTAssertEqual(voice.refusal, VoiceInput.noInput, name)
