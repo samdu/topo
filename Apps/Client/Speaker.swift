@@ -7,8 +7,10 @@ import TopoCore
 /// phone is locked, pocketed or showing another app. What keeps the process there is the hold —
 /// `AudioSession.Hold`, counted, answered by the play queue's keeper — which stands from the
 /// release of the press until the reply has been read. Pressing the microphone stops a reply, so
-/// the mic does not hear the speaker; so does the Stop item, a sign-out, an interruption and a
-/// media services reset.
+/// the mic does not hear the speaker; so does the Stop item, a sign-out and a media services
+/// reset. An interruption does not: iOS posts one at the lock screen with nothing in it, so a
+/// `.began` marks the engine dead and leaves the hold standing, and the rebuild at `.ended` or at
+/// the configuration change carries the reply on. No hold outlives its ceiling either way.
 ///
 /// One voice. When the `Voice` (Pocket TTS, on the device) is resident, the reply is cut into
 /// sentences, each synthesised behind the one before and pushed to the play queue frame by frame
@@ -42,6 +44,10 @@ final class Speaker {
     private let ceiling: Duration
     /// Counts down `ceiling` from the release, and drops `.awaitingReply` when it runs out.
     private var awaiting: Task<Void, Never>?
+    /// The same bound on the other owner, measured from the last frame scheduled or played back:
+    /// a reply that is being heard keeps resetting it, and one that has stopped making progress
+    /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
+    private var reading: Task<Void, Never>?
     /// True while this object holds `.awaitingReply`, so letting go of a wait nobody took says
     /// and does nothing.
     private var awaitingHeld = false
@@ -79,6 +85,7 @@ final class Speaker {
         self.now = now
         queue = PlayQueue(makeEngine: makeEngine, center: center)
         queue.onDrained = { [weak self] in Task { @MainActor in self?.drained() } }
+        queue.onPlayed = { [weak self] in Task { @MainActor in self?.progressed() } }
         // The queue rebuilds its engine on a configuration change, and a rebuilt engine under a
         // session that is not active is the crash rather than the silence, so the session is the
         // queue's first call there as it is everywhere else.
@@ -92,14 +99,16 @@ final class Speaker {
         interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
-            // A call or Siri took the session: the reply is over and so is the hold, which would
-            // otherwise outlive the reply it exists for. Only the start of an interruption;
-            // resuming at its end is not built.
             guard let raw = note.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
-                  AVAudioSession.InterruptionType(rawValue: raw) == .began else { return }
+                  let type = AVAudioSession.InterruptionType(rawValue: raw) else { return }
+            let described = Self.describe(note)
             Task { @MainActor in
-                AudioLog.say("interruption began: the reply and its hold end")
-                self?.stop()
+                guard let self else { return }
+                switch type {
+                case .began: self.interrupted(described)
+                case .ended: self.resumeAudio("the interruption ended: \(described)")
+                @unknown default: break
+                }
             }
         }
     }
@@ -116,6 +125,45 @@ final class Speaker {
             return
         }
         queue.hold(true)
+    }
+
+    /// An interruption began. What it is not is the end of the wait or of the reply: iOS posts
+    /// one at the lock screen with no call and no Siri in it, and a hold dropped there is the
+    /// process suspended with the reply unheard. It is the engine being dead — the player stops
+    /// and the buffers nobody has heard are kept — and the hold stands until something rebuilds
+    /// (`.ended`, or the configuration change a real interruption's end posts) or the ceiling
+    /// runs out. Daphne's semantics, plus that bound.
+    private func interrupted(_ described: String) {
+        AudioLog.say("interruption began: \(described); the engine is dead, the hold stands")
+        // Whoever interrupted took the session with the engine, so the next path configures and
+        // activates it again rather than trusting the one this object last saw work.
+        audio.invalidate()
+        queue.interrupted()
+    }
+
+    /// Something says the audio can run again. The queue puts back what it owed on a fresh engine
+    /// over a session activated first; a hold with no engine at all — a rebuild that was refused
+    /// while a call was still up — gets one for its keeper. A refusal here leaves the hold
+    /// standing and the keeper down, and the next `.ended`, configuration change or the ceiling
+    /// is what answers for it.
+    private func resumeAudio(_ why: String) {
+        AudioLog.say(why)
+        if queue.hasEngine {
+            queue.rebuild()
+        }
+        if audio.holding, !queue.keeping { hold(true) }
+    }
+
+    /// Everything the notification carries, since what iOS calls an interruption at the lock
+    /// screen is what the next device run has to name.
+    private nonisolated static func describe(_ note: Notification) -> String {
+        let info = note.userInfo ?? [:]
+        let type = (info[AVAudioSessionInterruptionTypeKey] as? UInt)
+            .map { $0 == AVAudioSession.InterruptionType.began.rawValue ? "began" : "ended" } ?? "unknown"
+        let reason = (info[AVAudioSessionInterruptionReasonKey] as? UInt).map { "\($0)" } ?? "none"
+        let suspended = (info[AVAudioSessionInterruptionWasSuspendedKey] as? Bool).map { "\($0)" } ?? "none"
+        let options = (info[AVAudioSessionInterruptionOptionKey] as? UInt).map { "\($0)" } ?? "none"
+        return "type \(type), reason \(reason), wasSuspended \(suspended), options \(options)"
     }
 
     /// The release of a spoken press: hold the process open for the reply that is coming, so the
@@ -190,6 +238,7 @@ final class Speaker {
         speaking = true
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
+        progressed()
         endAwaiting("the reply is being read")
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
@@ -202,8 +251,9 @@ final class Speaker {
         speakLocally(text)
     }
 
-    /// Ends things: a press, the Stop item, a sign-out, an interruption, a reset. Both holds go,
-    /// since whatever was being waited for is not going to be heard now either.
+    /// Ends things: a press, the Stop item, a sign-out, a reset, a reply that stopped making
+    /// progress. Both holds go, since whatever was being waited for is not going to be heard now
+    /// either.
     func stop() {
         cancel()
         endAwaiting("stopped")
@@ -256,6 +306,7 @@ final class Speaker {
                 samples += frame.samples.count
                 guard !frame.samples.isEmpty else { continue }
                 try queue.play(frame.samples, rate: frame.rate)
+                progressed()
                 if first == nil {
                     first = now() - started
                     #if DEBUG
@@ -303,6 +354,18 @@ final class Speaker {
         if making == 0 { finished() }
     }
 
+    /// A frame was scheduled or heard: the reply is getting somewhere, so its bound starts again.
+    private func progressed() {
+        guard speaking else { return }
+        reading?.cancel()
+        reading = Task { [ceiling] in
+            try? await Task.sleep(for: ceiling)
+            guard !Task.isCancelled else { return }
+            AudioLog.say("the reply made no progress for \(ceiling); it and its hold end")
+            self.stop()
+        }
+    }
+
     /// The reply came to its end, rather than being stopped.
     private func finished() {
         #if DEBUG
@@ -333,6 +396,8 @@ final class Speaker {
     /// this — `made` and `drained` both have to agree before either calls it.
     private func done() {
         speaking = false
+        reading?.cancel()
+        reading = nil
         audio.wantScreenAwake(false, for: .speaking)
         audio.wantAlive(false, for: .speaking)
     }
@@ -376,6 +441,8 @@ extension Speaker {
 final class PlayQueue: @unchecked Sendable {
     /// Fires, on the audio thread, when every scheduled buffer has been heard.
     var onDrained: (@Sendable () -> Void)?
+    /// Fires, on the audio thread, as each buffer is heard: the reply making progress.
+    var onPlayed: (@Sendable () -> Void)?
     /// The session, before anything here touches a handle into mediaserverd. `Speaker` sets it;
     /// a rebuild that cannot activate the session builds nothing.
     var ensureActive: (@MainActor () throws -> Void)?
@@ -411,6 +478,9 @@ final class PlayQueue: @unchecked Sendable {
     private var epoch = 0
 
     var isIdle: Bool { lock.withLock { queued.isEmpty } }
+    /// True once an engine has been built and not yet dropped, so a caller knows whether there is
+    /// anything to rebuild or whether one has to be made from nothing.
+    var hasEngine: Bool { engine != nil }
     /// True while the silence is rendering, which is what a backgrounded process runs on.
     var keeping: Bool { keeper?.isPlaying ?? false }
 
@@ -448,14 +518,16 @@ final class PlayQueue: @unchecked Sendable {
     private func schedule(_ buffer: AVAudioPCMBuffer, era: Int) {
         node?.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
             guard let self else { return }
+            var played = false
             let done: Bool = self.lock.withLock {
                 guard era == self.epoch else { return false }
+                played = true
                 if let index = self.queued.firstIndex(where: { $0.buffer === buffer }) {
                     self.queued.remove(at: index)
                 }
                 return self.queued.isEmpty
             }
-            if done { self.onDrained?() }
+            if done { self.onDrained?() } else if played { self.onPlayed?() }
         }
     }
 
@@ -548,8 +620,25 @@ final class PlayQueue: @unchecked Sendable {
     /// scheduled, under a new epoch so the discarded buffers' completions — which fire as if they
     /// had played — move nothing. The session comes first, as it does on every other audio path:
     /// a new engine under a session that is not active is a crash, not a silence.
+    /// An interruption began: iOS has stopped the engine, and what it was playing is lost. The
+    /// player and the keeper stop, the engine is left where it is so its configuration change
+    /// still reaches this queue, and every buffer nobody has heard is carried into a new epoch,
+    /// so the completions the stop fires move nothing and the rebuild has them to put back.
     @MainActor
-    private func rebuild() {
+    func interrupted() {
+        let owed: Int = lock.withLock {
+            epoch += 1
+            queued = queued.map { (epoch, $0.buffer) }
+            return queued.count
+        }
+        stopKeeper()
+        node?.stop()
+        engine?.stop()
+        AudioLog.say("the play queue's engine is dead: \(owed) owed, waiting to be rebuilt")
+    }
+
+    @MainActor
+    func rebuild() {
         guard let rate = format.map({ Int($0.sampleRate) }) else { return }
         let again: [AVAudioPCMBuffer] = lock.withLock {
             epoch += 1
