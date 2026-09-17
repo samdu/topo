@@ -543,27 +543,55 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(heard.texts, ["Paris."], "and not again, by either path")
     }
 
+    /// The words said before the app went away survive the relaunch in the outbox, and what made
+    /// them a spoken turn survives with them: a fresh harness over the same store and log sends
+    /// them, and the reply is still one to read aloud though no press happened on this run.
+    func testASpokenTurnPersistedAcrossARelaunchIsStillReadAloud() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+
+        // The launch that said it and went away before it could be sent.
+        let before = harness(db, defaults: defaults, transport: ScriptedTransport())
+        before.willSend("what is the capital of France", spoken: true)
+
+        // The launch that finds it: a new harness over the same defaults and the same log.
+        let after = harness(db, defaults: defaults,
+                            transport: ScriptedTransport((200, reply("Paris."))))
+        await after.retry()
+        let landed = try await log(db).map(\.text)
+        XCTAssertEqual(landed, ["what is the capital of France", "Paris."])
+
+        let heard = Said()
+        after.onReply = { reply in
+            guard let asked = after.spokenTurn(answeredBy: reply) else { return }
+            after.answeredAloud(asked)
+            heard.add(reply.text)
+        }
+        XCTAssertEqual(heard.texts, ["Paris."], "the reply to what was said before the relaunch")
+
+        await after.refresh()
+        XCTAssertEqual(heard.texts, ["Paris."], "and it is owed no second reading")
+    }
+
     /// What the chat installs there, end to end: a reply continuing from a turn the microphone
     /// sent is spoken, and one continuing from a typed turn is not.
     func testOnlyTheReplyToASpokenTurnIsSpokenFromTheReplyHandler() async throws {
         let db = InMemoryRecordDatabase()
         let transport = ScriptedTransport((200, reply("Paris.")), (200, reply("Rome.")))
         let harness = harness(db, defaults: makeDefaults(), transport: transport)
-        let spoken = Spoken()
         let said = Said()
         harness.onReply = { [harness] reply in
-            guard let asked = ReadAloud.spokenTurn(answeredBy: reply, in: harness.turns,
-                                                   spoken: spoken.nonces) else { return }
-            spoken.remove(asked)
+            guard let asked = harness.spokenTurn(answeredBy: reply) else { return }
+            harness.answeredAloud(asked)
             said.add(reply.text)
         }
 
-        // Spoken: the nonce the press recorded.
-        spoken.add(harness.willSend("what is the capital of France"))
+        // Spoken: the press said so when it put the words on the line.
+        harness.willSend("what is the capital of France", spoken: true)
         await harness.retry()
         XCTAssertEqual(said.texts, ["Paris."])
 
-        // Typed: nothing is recorded, so nothing is read aloud.
+        // Typed: nothing said so, so nothing is read aloud.
         await harness.send("and of Italy")
         XCTAssertEqual(said.texts, ["Paris."], "a typed turn's reply stays quiet")
     }
@@ -577,14 +605,6 @@ final class HarnessIntegrationTests: XCTestCase {
 private final class Said {
     private(set) var texts: [String] = []
     func add(_ text: String) { texts.append(text) }
-}
-
-/// The chat's set of spoken turns, as the handler reads and clears it.
-@MainActor
-private final class Spoken {
-    private(set) var nonces: Set<String> = []
-    func add(_ nonce: String) { nonces.insert(nonce) }
-    func remove(_ nonce: String) { nonces.remove(nonce) }
 }
 
 /// The Messages API's far end: answers from a queue and records what each request carried.

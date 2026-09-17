@@ -19,8 +19,6 @@ struct ChatView: View {
     @State private var showDiagnostics = false
     @State private var showAbout = false
     @State private var showVocabulary = false
-    /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
-    @State private var spokenTurns: Set<String> = []
     #if DEBUG
     /// The last spoken turn's nonce, for the title's debug report.
     @State private var spokenNonce: String?
@@ -138,17 +136,15 @@ struct ChatView: View {
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
             harness.onReply = { reply in
-                guard readAloud,
-                      let asked = ReadAloud.spokenTurn(answeredBy: reply, in: harness.turns,
-                                                       spoken: spokenTurns) else { return }
-                spokenTurns.remove(asked)
-                speaker.speak(reply.text)
+                guard readAloud, let asked = harness.spokenTurn(answeredBy: reply) else { return }
+                harness.answeredAloud(asked)
+                speaker.speak(reply.text, answering: asked)
             }
             defer {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
                 harness.onReply = nil
-                speaker.endAwaiting("the chat stopped answering")
+                speaker.endAllWaits("the chat stopped answering")
             }
             await withDiscardingTaskGroup { group in
                 group.addTask { try? await TurnPush.ensureSubscription() }
@@ -175,7 +171,9 @@ struct ChatView: View {
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
         .onChange(of: harness.error) { _, error in
             // The turn stopped: no reply is coming, so nothing waits for one.
-            if error != nil { speaker.endAwaiting("the turn failed") }
+            if error != nil {
+                speaker.dropWaits(keeping: harness.pendingNonces, why: "the turn failed")
+            }
         }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
@@ -207,9 +205,8 @@ struct ChatView: View {
         // The reply to this will be read aloud, so the process is held open from here: the turn
         // is written, asked and answered behind the lock. Nothing is held for a reply that could
         // not be heard anyway — the setting off, or a voice that is not resident.
-        speaker.awaitReply(readAloud: readAloud)
-        let nonce = harness.willSend(heard)
-        spokenTurns.insert(nonce)
+        let nonce = harness.willSend(heard, spoken: true)
+        speaker.awaitReply(nonce, readAloud: readAloud)
         #if DEBUG
         spokenNonce = nonce
         #endif

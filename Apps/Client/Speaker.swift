@@ -6,7 +6,7 @@ import TopoCore
 /// Reads a reply aloud, wherever the process is: a reply to a spoken turn is heard whether the
 /// phone is locked, pocketed or showing another app. What keeps the process there is the hold —
 /// `AudioSession.Hold`, counted, answered by the play queue's keeper — which stands from the
-/// release of the press until the reply has been read. Pressing the microphone stops a reply, so
+/// release of the press until the reply has been read, one wait per turn said and not answered. Pressing the microphone stops a reply, so
 /// the mic does not hear the speaker; so does the Stop item, a sign-out and a media services
 /// reset. An interruption does not: iOS posts one at the lock screen with nothing in it, so a
 /// `.began` marks the engine dead and leaves the hold standing, and the rebuild at `.ended` or at
@@ -42,15 +42,14 @@ final class Speaker {
     /// the process open in a pocket; one slower than this is heard on the next foreground instead.
     /// The model call's own timeout is longer, so nothing is lost, only made to wait.
     private let ceiling: Duration
-    /// Counts down `ceiling` from the release, and drops `.awaitingReply` when it runs out.
-    private var awaiting: Task<Void, Never>?
+    /// One wait per spoken turn outstanding, by that turn's nonce, each counting down `ceiling`
+    /// from its own release: a second thing said while the first is in flight is held for too,
+    /// and the first being answered does not let go of the second.
+    private var waits: [String: Task<Void, Never>] = [:]
     /// The same bound on the other owner, measured from the last frame scheduled or played back:
     /// a reply that is being heard keeps resetting it, and one that has stopped making progress
     /// — a dead engine nothing came back to rebuild — outlives its audio by `ceiling` at most.
     private var reading: Task<Void, Never>?
-    /// True while this object holds `.awaitingReply`, so letting go of a wait nobody took says
-    /// and does nothing.
-    private var awaitingHeld = false
     /// Counts replies. A forward pass in flight does not notice a cancellation, so a frame
     /// carrying an older number is made and dropped.
     private(set) var generation = 0
@@ -171,29 +170,39 @@ final class Speaker {
     /// reply is being read, the turn fails, or anything ends the reply. Nothing is held for a
     /// reply that could not be heard anyway — Read replies aloud off, or a voice that is not
     /// resident at the release — since those turns make no audio to keep the phone awake for.
-    func awaitReply(readAloud: Bool) {
+    func awaitReply(_ nonce: String, readAloud: Bool) {
         guard readAloud, voice.ready else {
             AudioLog.say("no wait held: \(readAloud ? "the voice is not resident" : "replies are not read aloud")")
             return
         }
-        awaitingHeld = true
-        audio.wantAlive(true, for: .awaitingReply)
-        awaiting?.cancel()
-        awaiting = Task { [ceiling] in
+        waits[nonce]?.cancel()
+        audio.wantAlive(true, for: .awaitingReply(nonce))
+        waits[nonce] = Task { [ceiling] in
             try? await Task.sleep(for: ceiling)
             guard !Task.isCancelled else { return }
-            self.endAwaiting("capped at \(ceiling); the reply never landed")
+            self.endAwaiting(nonce, "capped at \(ceiling); the reply never landed")
         }
     }
 
-    /// Lets go of the wait. Free when none stands.
-    func endAwaiting(_ why: String) {
-        awaiting?.cancel()
-        awaiting = nil
-        guard awaitingHeld else { return }
-        awaitingHeld = false
-        AudioLog.say("the wait for a reply ends — \(why)")
-        audio.wantAlive(false, for: .awaitingReply)
+    /// Lets go of one turn's wait. Free when that turn holds none.
+    func endAwaiting(_ nonce: String, _ why: String) {
+        guard let counting = waits.removeValue(forKey: nonce) else { return }
+        counting.cancel()
+        AudioLog.say("the wait for \(nonce)'s reply ends — \(why)")
+        audio.wantAlive(false, for: .awaitingReply(nonce))
+    }
+
+    /// Lets go of every wait: the chat has stopped answering, or something ended things.
+    func endAllWaits(_ why: String) {
+        waits.keys.forEach { endAwaiting($0, why) }
+    }
+
+    /// Lets go of the waits whose turns have left the line, which is what a failure leaves
+    /// behind: the turn that stopped is settled or dropped, and what is still on the line is
+    /// still coming. A wait for a turn another primary is answering is not on the line either,
+    /// and is bounded by its own ceiling instead.
+    func dropWaits(keeping pending: Set<String>, why: String) {
+        waits.keys.filter { !pending.contains($0) }.forEach { endAwaiting($0, why) }
     }
 
     /// iOS reset the media server: the reply stops, both holds go with it, and the play queue's
@@ -216,13 +225,13 @@ final class Speaker {
     /// Reads `text` aloud. A voice that is not resident speaks nothing and builds nothing. The
     /// session comes first, before the queue exists: a player node spoken to under a session that
     /// is not active is the crash, not a silence.
-    func speak(_ text: String) {
+    func speak(_ text: String, answering nonce: String? = nil) {
         cancel()
         guard voice.ready else {
             #if DEBUG
             DebugRun.say("speak: not spoken — \(voice.summary)")
             #endif
-            endAwaiting("the voice is not resident")
+            nonce.map { endAwaiting($0, "the voice is not resident") }
             return
         }
         do {
@@ -232,14 +241,14 @@ final class Speaker {
             DebugRun.say("speak: the audio session did not activate: \(error)")
             #endif
             done()
-            endAwaiting("the audio session did not activate")
+            nonce.map { endAwaiting($0, "the audio session did not activate") }
             return
         }
         speaking = true
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
         progressed()
-        endAwaiting("the reply is being read")
+        nonce.map { endAwaiting($0, "the reply is being read") }
         audio.wantScreenAwake(true, for: .speaking)
         #if DEBUG
         report = Report(speaks: report.speaks + 1, engine: .pocket, text: text)
@@ -256,7 +265,7 @@ final class Speaker {
     /// either.
     func stop() {
         cancel()
-        endAwaiting("stopped")
+        endAllWaits("stopped")
     }
 
     /// Ends the reply in flight and leaves any wait standing, which is what `speak` needs: the

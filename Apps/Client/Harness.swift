@@ -78,6 +78,21 @@ final class Harness {
         var nonce: String
     }
     private static let outboxKey = "topo.harness.outbox"
+    private static let spokenKey = "topo.harness.spoken"
+    /// The most spoken turns kept waiting for a reply at once. A turn whose reply never comes
+    /// would otherwise sit here for good; the oldest go first, and each is only a nonce.
+    private static let spokenLimit = 20
+    /// The nonces of turns said into the microphone whose replies have not been read aloud yet,
+    /// oldest first. On disk, so a relaunch still knows that the reply to what was said before
+    /// the app went away is an answer to something spoken: the words survive the relaunch in the
+    /// outbox, and what makes them a spoken turn has to survive with them. Cleared per turn as
+    /// its reply is read, and by a sign-out.
+    private var spokenNonces: [String] = [] {
+        didSet {
+            if spokenNonces.isEmpty { defaults.removeObject(forKey: Self.spokenKey) }
+            else { defaults.set(spokenNonces, forKey: Self.spokenKey) }
+        }
+    }
     private var pending: [Outgoing] = [] {
         didSet {
             if pending.isEmpty { defaults.removeObject(forKey: Self.outboxKey) }
@@ -101,6 +116,7 @@ final class Harness {
         self.leaseSleep = leaseSleep
         self.pause = pause
         log = TurnLog(database: self.database)
+        spokenNonces = defaults.stringArray(forKey: Self.spokenKey) ?? []
         if let data = defaults.data(forKey: Self.outboxKey),
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
             pending = saved
@@ -141,6 +157,7 @@ final class Harness {
         status = nil
         busy = false
         pending = []
+        spokenNonces = []
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
     }
@@ -197,13 +214,35 @@ final class Harness {
     /// Puts the words on the line without sending yet, and returns the nonce the turn will carry,
     /// which is how a caller recognises the turn once it is in the log. `retry()` sends.
     @discardableResult
-    func willSend(_ text: String) -> String {
+    func willSend(_ text: String, spoken: Bool = false) -> String {
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         let outgoing = Outgoing(text: text, nonce: UUID().uuidString)
         guard !text.isEmpty else { return outgoing.nonce }
         pending.append(outgoing)
+        if spoken {
+            spokenNonces.append(outgoing.nonce)
+            if spokenNonces.count > Self.spokenLimit {
+                spokenNonces.removeFirst(spokenNonces.count - Self.spokenLimit)
+            }
+        }
         return outgoing.nonce
     }
+
+    /// The spoken turn `reply` answers, or nil when it answers none. Spoken-ness is the harness's
+    /// because it outlives the screen: the reply to what was said before a relaunch lands on a
+    /// fresh view with no memory of the press.
+    func spokenTurn(answeredBy reply: Turn) -> String? {
+        ReadAloud.spokenTurn(answeredBy: reply, in: turns, spoken: Set(spokenNonces))
+    }
+
+    /// That turn's reply has been read aloud; it is owed no other.
+    func answeredAloud(_ nonce: String) {
+        spokenNonces.removeAll { $0 == nonce }
+    }
+
+    /// The nonces still on the line, which is how a failure tells a wait that is still coming
+    /// from one that is not.
+    var pendingNonces: Set<String> { Set(pending.map(\.nonce)) }
 
     /// Sends the line from its head, after a turn that stopped it or a launch that found it.
     func retry() async {

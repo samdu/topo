@@ -724,7 +724,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.holding)
         XCTAssertTrue(speaker.keeping)
         XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
@@ -740,14 +740,14 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: false)
+        speaker.awaitReply("a-turn", readAloud: false)
         XCTAssertFalse(speaker.holding, "replies are not read aloud")
         XCTAssertFalse(speaker.keeping)
         XCTAssertEqual(seams.lines, [], "and nothing is built for one")
 
         let quiet = await self.speaker(seams, audio, center,
                                        engine: ScriptedVoice(loads: false), ready: false)
-        quiet.awaitReply(readAloud: true)
+        quiet.awaitReply("a-turn", readAloud: true)
         XCTAssertFalse(quiet.holding, "the voice is not resident")
         XCTAssertFalse(quiet.keeping)
         XCTAssertEqual(seams.lines, [])
@@ -761,9 +761,9 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertEqual(speaker.keeperTransitions, ["playing"])
-        speaker.speak("Hello there.")
+        speaker.speak("Hello there.", answering: "a-turn")
         await settle { speaker.report.started }
         XCTAssertTrue(speaker.holding)
         XCTAssertEqual(speaker.keeperTransitions, ["playing"],
@@ -771,6 +771,33 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
         XCTAssertEqual(speaker.keeperTransitions, ["playing", "stopped"])
         XCTAssertFalse(speaker.holding)
+    }
+
+    /// Two things said before the first is answered: the chat lets a second press append while
+    /// the harness is busy, and each turn holds for itself. The first being answered and heard to
+    /// its end does not let go of the second's wait, and the keeper never stops between them.
+    func testASecondSpokenTurnIsStillHeldForWhenTheFirstIsAnswered() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        // A voice that makes no audio: the reply is over the moment its sentence is made, which
+        // is the drain this is about.
+        let speaker = await self.speaker(seams, audio, center,
+                                         engine: ScriptedVoice(frames: { _ in [] }))
+        speaker.awaitReply("A", readAloud: true)
+        speaker.awaitReply("B", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+
+        speaker.speak("Paris.", answering: "A")
+        await settle("A's reply to end") { !speaker.speaking }
+        XCTAssertTrue(speaker.holding, "B was said too, and nothing has answered it")
+        XCTAssertTrue(speaker.keeping)
+        XCTAssertEqual(speaker.keeperTransitions, ["playing"], "the silence never stopped")
+
+        speaker.speak("Rome.", answering: "B")
+        await settle("B's reply to end") { !speaker.speaking }
+        XCTAssertFalse(speaker.holding, "both are answered")
+        XCTAssertFalse(speaker.keeping)
     }
 
     /// The reply coming to its end is what lets go, and the reply is over only when every
@@ -799,9 +826,9 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.keeping)
-        speaker.endAwaiting("the turn failed")
+        speaker.endAwaiting("a-turn", "the turn failed")
         XCTAssertFalse(speaker.holding)
         XCTAssertFalse(speaker.keeping)
     }
@@ -812,7 +839,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center, ceiling: .milliseconds(20))
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.holding)
         await settle("the ceiling to run out") { !speaker.holding }
         XCTAssertFalse(speaker.keeping)
@@ -826,7 +853,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.keeping)
 
         center.post(name: AVAudioSession.interruptionNotification, object: nil,
@@ -851,7 +878,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         speaker.speak("Hello there.")
         await settle { speaker.report.started }
         let scheduled = CapturingPlayerNode.scheduled.count
@@ -879,7 +906,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center, ceiling: .seconds(2))
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         XCTAssertTrue(speaker.keeping)
 
         seams.activationError = Seams.Refused()
@@ -921,7 +948,7 @@ final class MediaServicesResetTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure)
         let held = HeldVoice()
         let speaker = await self.speaker(seams, audio, center, engine: held)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         speaker.speak("Hello there.")
         await settle("the reply to start") { speaker.report.started }
         XCTAssertTrue(speaker.speaking)
@@ -946,7 +973,7 @@ final class MediaServicesResetTests: XCTestCase {
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure)
         let speaker = await self.speaker(seams, audio, center)
-        speaker.awaitReply(readAloud: true)
+        speaker.awaitReply("a-turn", readAloud: true)
         speaker.speak("Hello there.")
         await settle { speaker.report.started }
         XCTAssertTrue(speaker.keeping)
@@ -969,9 +996,13 @@ final class MediaServicesResetTests: XCTestCase {
         let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
         queue.ensureActive = { try audio.ensureActive() }
         CapturingPlayerNode.scheduled = []
-        try queue.play(toneFrame(0.1), rate: Voice.rate)
-        try queue.play(toneFrame(0.2), rate: Voice.rate)
-        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 2)
+        // Two lengths, so the order they come back in is readable and a reversed reschedule fails.
+        let short = toneFrame(seconds: 0.1)
+        let long = toneFrame(seconds: 0.2)
+        try queue.play(short, rate: Voice.rate)
+        try queue.play(long, rate: Voice.rate)
+        let lengths = [AVAudioFrameCount(short.count), AVAudioFrameCount(long.count)]
+        XCTAssertEqual(CapturingPlayerNode.scheduled, lengths)
         let engine = try XCTUnwrap(seams.engines.last)
         seams.forget()
 
@@ -981,8 +1012,8 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
                        "the session is active before the new engine exists")
         XCTAssertEqual(seams.engines.count, 2, "the dead engine is not reused")
-        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 4,
-                       "and what was not heard was scheduled again, and nothing else")
+        XCTAssertEqual(CapturingPlayerNode.scheduled, lengths + lengths,
+                       "what was not heard was scheduled again, in the order it was scheduled")
         XCTAssertFalse(queue.isIdle, "the same two buffers are owed, not four")
         XCTAssertFalse(queue.keeping, "no hold stood, so no keeper came back")
     }

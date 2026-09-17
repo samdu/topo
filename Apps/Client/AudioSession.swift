@@ -17,10 +17,14 @@ final class AudioSession {
     enum RecordClaim: Hashable { case firstRun, chat, warm }
     enum ScreenClaim: Hashable { case listening, speaking }
     /// Who is keeping the process running behind the lock: the wait for a spoken turn's reply,
-    /// and the reading of it. Counted like the other two, so the one letting go cannot cut what
-    /// the other is still paying for — a reply handed to the speaker drops `.awaitingReply` with
-    /// `.speaking` already taken, and the keeper never stops between them.
-    enum Hold: Hashable { case awaitingReply, speaking }
+    /// one claim per turn outstanding, and the reading of a reply. Counted like the other two, so
+    /// the one letting go cannot cut what the other is still paying for — a reply handed to the
+    /// speaker drops its own turn's wait with `.speaking` already taken, the keeper never stops
+    /// between them, and a second thing said while the first is in flight is still held for.
+    enum Hold: Hashable {
+        case awaitingReply(String)
+        case speaking
+    }
 
     private var recordClaims: Set<RecordClaim> = []
     private var screenClaims: Set<ScreenClaim> = []
