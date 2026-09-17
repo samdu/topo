@@ -6,10 +6,15 @@
 # generates from build settings, so a declaration in the wrong place reaches the
 # project and no bundle. This reads the product.
 #
-#   scripts/check-background-modes.sh <path to Topo.app>
+# The version keys are read the same way and for the same reason: `CURRENT_PROJECT_VERSION` is
+# passed on the command line for a TestFlight upload (docs/testflight.md), and a literal in the
+# Info.plist would beat it silently, so every build would carry the same number.
+#
+#   scripts/check-built-plist.sh <path to Topo.app> [expected CFBundleVersion]
 set -euo pipefail
 
-app="${1:?usage: check-background-modes.sh <Topo.app>}"
+app="${1:?usage: check-built-plist.sh <Topo.app> [expected CFBundleVersion]}"
+build="${2:-}"
 plist="$app/Info.plist"
 
 if [ ! -f "$plist" ]; then
@@ -29,5 +34,13 @@ for mode in remote-notification audio; do
     esac
 done
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes"
+if [ -n "$build" ]; then
+    got="$(plutil -extract CFBundleVersion raw -o - -- "$plist" 2>/dev/null || true)"
+    if [ "$got" != "$build" ]; then
+        echo "$app/Info.plist has CFBundleVersion '${got:-absent}', not the '$build' the build was given" >&2
+        status=1
+    fi
+fi
+
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes${build:+, CFBundleVersion $build}"
 exit "$status"

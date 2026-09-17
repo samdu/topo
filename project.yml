@@ -74,6 +74,11 @@ targets:
       path: Apps/Topo/Info.plist
       properties:
         UIBackgroundModes: [remote-notification, audio]
+        # The version keys are the settings' to answer, not this file's: a literal here beats the
+        # `CURRENT_PROJECT_VERSION` that `scripts/archive-upload.sh` passes on the command line,
+        # and every TestFlight upload would carry the same build number (docs/testflight.md).
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo

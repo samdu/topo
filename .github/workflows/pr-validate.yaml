@@ -317,14 +317,16 @@ jobs:
           xcodebuild build -project Topo.xcodeproj -scheme Topo \
             -configuration Release -destination 'generic/platform=iOS' \
             -derivedDataPath build/device \
-            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=999 \
             2>&1 | tee "$RESULTS/Topo-iOS-Release-build.log" \
             || { echo "::error::Topo Release for iOS devices failed to build."; status=1; }
-          # The device build is the one product this check has, so the background
-          # modes are read off it: a mode declared where Xcode drops it is a
-          # process iOS suspends, and nothing else here would say so.
-          scripts/check-background-modes.sh build/device/Build/Products/Release-iphoneos/Topo.app \
-            || { echo "::error::The built app is missing a background mode."; status=1; }
+          # The device build is the one product this check has, so the Info.plist is
+          # read off it: a background mode declared where Xcode drops it is a
+          # process iOS suspends, and a version key a build setting cannot reach
+          # is every TestFlight upload carrying the same build number. The build
+          # above is given 999, the way archive-upload.sh gives it a real one.
+          scripts/check-built-plist.sh build/device/Build/Products/Release-iphoneos/Topo.app 999 \
+            || { echo "::error::The built app's Info.plist is wrong."; status=1; }
           xcodebuild build -project Topo.xcodeproj -scheme TopoHub \
             -destination 'platform=macOS' \
             CODE_SIGNING_ALLOWED=NO \
