@@ -14,6 +14,7 @@ import XCTest
 /// - `TOPO_TALK_SETUP_TOKEN`: a Claude Code setup token, handed to the app's launch environment
 ///   and nowhere else.
 /// - `TOPO_UITEST_EAR_MODELS`: a directory `scripts/fetch-ear-models.sh` filled.
+/// - `TOPO_UITEST_VOICE_MODELS`: a directory `scripts/fetch-voice-models.sh` filled.
 /// - a loopback lane playing the fixture into the host's default input, and an iCloud account on
 ///   the simulator; neither is declared, and both fail by name when absent (a refused press, an
 ///   error line on the chat screen).
@@ -36,10 +37,13 @@ final class SpokenTurnTests: XCTestCase {
                                   "a Claude setup token in TEST_RUNNER_TOPO_TALK_SETUP_TOKEN")
         let models = try XCTUnwrap(environment["TOPO_UITEST_EAR_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
                                    "Parakeet's models in TEST_RUNNER_TOPO_UITEST_EAR_MODELS")
+        let voiceModels = try XCTUnwrap(environment["TOPO_UITEST_VOICE_MODELS"].flatMap { $0.isEmpty ? nil : $0 },
+                                        "Pocket's models in TEST_RUNNER_TOPO_UITEST_VOICE_MODELS")
 
         let app = XCUIApplication()
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = token
         app.launchEnvironment["TOPO_DEBUG_EAR"] = models
+        app.launchEnvironment["TOPO_DEBUG_VOICE"] = voiceModels
         // Past the first-run question, replies read aloud whatever this simulator was left set
         // to, and no line left waiting by an earlier launch riding ahead of the question.
         app.launchArguments += ["-firstRunAnswered", "YES", "-readAloud", "YES", "-topo.harness.outbox", ""]
@@ -53,6 +57,11 @@ final class SpokenTurnTests: XCTestCase {
 
         try waitFor(timeout: 600, "Parakeet is resident", { try self.voice(app) }) { $0.ear == "ready" || $0.ear == "failed" }
         XCTAssertEqual(try voice(app).ear, "ready", "Parakeet loaded from \(models)")
+
+        // Pocket compiles its models on the first load, so the question waits for it: a reply
+        // that landed before it is resident would be answered in silence.
+        try waitFor(timeout: 600, "Pocket is resident", { try self.chat(app) }) { $0.voice == "ready" || $0.voice == "failed" }
+        XCTAssertEqual(try chat(app).voice, "ready", "Pocket loaded from \(voiceModels)")
 
         // The hold spans two loops and a second, so a whole question is in it wherever the loop
         // starts. On a simulator that has not answered the microphone prompt, the first hold is
@@ -94,7 +103,10 @@ final class SpokenTurnTests: XCTestCase {
         XCTAssertEqual(spoken.speaker.text, reply.text, "the speaker was given the reply: \(spoken.raw)")
         XCTAssertTrue(spoken.speaker.started, "the speaker started the reply: \(spoken.raw)")
         XCTAssertTrue(spoken.speaker.finished, "the speaker finished the reply: \(spoken.raw)")
-        record("spoken by \(spoken.speaker.engine.map(\.rawValue) ?? "nothing"), started and finished", spoken.raw)
+        XCTAssertEqual(spoken.speaker.engine, .pocket, "the reply was read by Pocket: \(spoken.raw)")
+        record(String(format: "spoken by %@, started and finished; first frame %.2fs, rtf %.2f",
+                      spoken.speaker.engine.map(\.rawValue) ?? "nothing",
+                      spoken.speaker.first ?? -1, spoken.speaker.rtf ?? -1), spoken.raw)
         XCTAssertEqual(app.state, .runningForeground)
     }
 
@@ -145,9 +157,10 @@ final class SpokenTurnTests: XCTestCase {
         var reply: TurnReport?
         var error: String?
         var speaker: SpeakerReport
+        var voice: String
         var raw = ""
 
-        enum CodingKeys: String, CodingKey { case spoken, person, reply, error, speaker }
+        enum CodingKeys: String, CodingKey { case spoken, person, reply, error, speaker, voice }
     }
 
     struct TurnReport: Decodable {
@@ -158,12 +171,14 @@ final class SpokenTurnTests: XCTestCase {
 
     /// `Speaker.Report`.
     struct SpeakerReport: Decodable {
-        enum Engine: String, Decodable { case pocket, system }
+        enum Engine: String, Decodable { case pocket }
         var speaks: UInt
         var engine: Engine?
         var text: String
         var started: Bool
         var finished: Bool
+        var first: Double?
+        var rtf: Double?
     }
 
     private func voice(_ app: XCUIApplication) throws -> VoiceReport {

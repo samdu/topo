@@ -9,27 +9,22 @@ The format is the whole contract with the apps: a heading beginning `## ` opens 
 ## Daphne
 Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
 Where: samdu/daphne-assistant, `clients/ios`
-Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift`, the gap trimmer in `Apps/Client/PocketPace.swift` and the sentence-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `BuddyVoice.swift`), and the rule that speaking is foreground work.
+Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` (the Pocket manager, its measured `.ane` placement and per-stage compute units, from `FluidPocketEngine`), the streaming gap trimmer in `Apps/Client/PocketPace.swift` (from `GapTrimmer`) and the frame-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `VoiceQueue`), and the rule that speaking is foreground work.
 
 ## FluidAudio
 Licence: Apache-2.0, © FluidInference; its own bundled pieces are fastcluster (BSD-3, © Daniel Müllner and Google), vbx (Apache-2.0) and the text-processing-rs xcframework (Apache-2.0, FluidInference)
-Where: https://github.com/FluidInference/FluidAudio, pinned to 0.15.6
-Use: Runs Parakeet on the phone for `Apps/Client/Ear.swift`: loads the CoreML models Topo has downloaded, decodes an utterance, and rescores the transcript against the vocabulary with its CTC keyword spotter. Linked into the iOS app only.
+Where: https://github.com/FluidInference/FluidAudio, pinned to 0.15.7
+Use: Runs Parakeet and Pocket TTS on the phone. For `Apps/Client/Ear.swift`: loads the CoreML models Topo has downloaded, decodes an utterance, and rescores the transcript against the vocabulary with its CTC keyword spotter. For `Apps/Client/Voice.swift`: loads the Pocket language pack Topo has downloaded and synthesises a sentence as a stream of 80 ms frames, every stage placed off the GPU. Linked into the iOS app only.
 
 ## Parakeet
 Licence: CC-BY-4.0, © NVIDIA; the CoreML conversions are FluidInference's
 Where: https://huggingface.co/FluidInference/parakeet-tdt-0.6b-v2-coreml and https://huggingface.co/FluidInference/parakeet-ctc-110m-coreml, from NVIDIA's parakeet-tdt-0.6b-v2 and parakeet-ctc-110m
 Use: The speech-to-text model the ear runs (parakeet-tdt-0.6b-v2, 442 MB) and the CTC model that spots the vocabulary in the audio (parakeet-ctc-110m, 98 MB). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there.
 
-## mlx-audio-swift
-Licence: MIT, © Prince Canuma
-Where: https://github.com/Blaizzy/mlx-audio-swift, pinned to cae704f53bc32a3d0b606823828fbc5bedaaf388, on mlx-swift (MIT, © Apple)
-Use: Runs Pocket TTS on the phone for `Apps/Client/Voice.swift`: loads the model Topo has downloaded from its directory, tokenises a sentence, and synthesises it. Linked into the iOS app only.
-
 ## Pocket TTS
-Licence: CC-BY-4.0, © Kyutai; the bf16 MLX conversion is mlx-community's
-Where: https://huggingface.co/mlx-community/pocket-tts, from https://huggingface.co/kyutai/pocket-tts
-Use: The text-to-speech model the voice runs (236 MB of weights, the config, the tokenizer and the `eponine` speaker embedding, one of the model's eight stock speakers). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there.
+Licence: CC-BY-4.0, © Kyutai; the CoreML conversion is FluidInference's
+Where: https://huggingface.co/FluidInference/pocket-tts-coreml, from https://huggingface.co/kyutai/pocket-tts
+Use: The text-to-speech model the voice runs (351 MB: the four bundles of the English pack that the Neural Engine placement loads, the constants and the tokenizer beside them, and the `eponine` speaker, one of the pack's stock voices). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there.
 
 ## XcodeGen
 Licence: MIT, © Yonas Kolb

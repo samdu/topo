@@ -180,29 +180,119 @@
       ]
     },
     {
-      "id": "pocket-tts",
-      "repo": "mlx-community/pocket-tts",
-      "revision": "cbf71d5f6657bbc3f4bc02f85ee408261225bec7",
+      "id": "pocket-tts-coreml",
+      "repo": "FluidInference/pocket-tts-coreml",
+      "revision": "91748676fe3c8b2eb3007b3125253bcd898202c3",
       "files": [
         {
-          "path": "config.json",
-          "size": 1664,
-          "sha256": "403ff12260596fbfa348c7b07237c378b9ad8db9d8acd04d671470421954a68e"
+          "path": "v2.1/english/cond_prefill_ane.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "1c9d0f384e454921a66cdd1a9fb8fa59fa0c5cd3703ca32a9792a97e67e8a1c2"
         },
         {
-          "path": "model.safetensors",
-          "size": 235739497,
-          "sha256": "60ddd85019dddbe6c1d220e311ca5fc753972978a89f563c0bbe1ae943120072"
+          "path": "v2.1/english/cond_prefill_ane.mlmodelc/coremldata.bin",
+          "size": 1388,
+          "sha256": "39d79bbbf366dca5fb7339c461952d79484e12da2b3642e45881afd4ddf82e7b"
         },
         {
-          "path": "tokenizer.json",
-          "size": 244993,
-          "sha256": "ef29c4871fd62c7beb928150edc095be1327f0924c0eab9e06b95918b39eff5f"
+          "path": "v2.1/english/cond_prefill_ane.mlmodelc/model.mil",
+          "size": 136093,
+          "sha256": "6013f10e803c50b3819610edc218662b9ad768d3f1c86a20ec37230c3c49a553"
         },
         {
-          "path": "embeddings/eponine.safetensors",
-          "size": 573528,
-          "sha256": "bb31940f62da665391de139da2e57d740757df26b73d7ec24152c78a3b8ac0c5"
+          "path": "v2.1/english/cond_prefill_ane.mlmodelc/weights/weight.bin",
+          "size": 132187392,
+          "sha256": "b8bbefa5799ee581561d7a28a21a42f9ea9b7e73ca7bc1339330ea4cff24806d"
+        },
+        {
+          "path": "v2.1/english/flowlm_step_ane.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "5718b06291735fe6e648b6980fb07209b5bbda339ecc8fb2c8a0dfa87fbaf54f"
+        },
+        {
+          "path": "v2.1/english/flowlm_step_ane.mlmodelc/coremldata.bin",
+          "size": 1414,
+          "sha256": "18e49a8e73db70da25caddcaac36bc77245d6bea30754a23df3b10c27fa4de73"
+        },
+        {
+          "path": "v2.1/english/flowlm_step_ane.mlmodelc/model.mil",
+          "size": 156945,
+          "sha256": "6880224e71de99e394323ec706fbbe28af9fb2b5eb8d8698d43ecaec33a6ff38"
+        },
+        {
+          "path": "v2.1/english/flowlm_step_ane.mlmodelc/weights/weight.bin",
+          "size": 151136960,
+          "sha256": "fdd40be8edecea51035dfa91beada8e74de2634eab266b85f329bf85b344d271"
+        },
+        {
+          "path": "v2.1/english/flow_decoder_fused.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "17cf344fd2be66e934982944a7a252da17087efbc9daac0d3dfb4e8e95797264"
+        },
+        {
+          "path": "v2.1/english/flow_decoder_fused.mlmodelc/coremldata.bin",
+          "size": 413,
+          "sha256": "69ff9affa07e38b1a511ac8d71c594eeeb236389ddbe74f4fabdfa45db4edf7a"
+        },
+        {
+          "path": "v2.1/english/flow_decoder_fused.mlmodelc/model.mil",
+          "size": 333331,
+          "sha256": "0257898b9a6ce06c961959aae993bb27c558f509fbea7407d094b879f872ec3f"
+        },
+        {
+          "path": "v2.1/english/flow_decoder_fused.mlmodelc/weights/weight.bin",
+          "size": 19012608,
+          "sha256": "f28a1bd0af940a195802e9d702c9e050f3e69d265e582f3d0fdf4001709eb30c"
+        },
+        {
+          "path": "v2.1/english/mimi_decoder.mlmodelc/analytics/coremldata.bin",
+          "size": 243,
+          "sha256": "be4199b44838e2fb199bb44b7649531d28fe847a1a6633fd9f8ca89576c5a7f8"
+        },
+        {
+          "path": "v2.1/english/mimi_decoder.mlmodelc/coremldata.bin",
+          "size": 1777,
+          "sha256": "9d8644e2caad1513153ac28f1ba8090fcd2facdbd5d2621bf8016186fa932bf8"
+        },
+        {
+          "path": "v2.1/english/mimi_decoder.mlmodelc/metadata.json",
+          "size": 16844,
+          "sha256": "aaca1b55b078095e72ee4826a94297fc070526d9f4cd3507464e7f2afaa73376"
+        },
+        {
+          "path": "v2.1/english/mimi_decoder.mlmodelc/model.mil",
+          "size": 107403,
+          "sha256": "f7176b3b3d800de308ac01cb83d1f3e9b555e70b44d299efd4a21c9c27eecc16"
+        },
+        {
+          "path": "v2.1/english/mimi_decoder.mlmodelc/weights/weight.bin",
+          "size": 41768256,
+          "sha256": "c93d182f9ad8c1042ec8302093aabb4e310d76616932dd12720e03b5d07f7c64"
+        },
+        {
+          "path": "v2.1/english/constants_bin/bos_emb.bin",
+          "size": 128,
+          "sha256": "52f1a157fa35fc100213e6e0fafa74703be99db8faa42de3e99feda607ac7b63"
+        },
+        {
+          "path": "v2.1/english/constants_bin/bos_before_voice.bin",
+          "size": 4096,
+          "sha256": "6ac530a104e3f3d2b2ff15f3fad63540f2619b31db78b159c0595a108f142caf"
+        },
+        {
+          "path": "v2.1/english/constants_bin/text_embed_table.bin",
+          "size": 16388096,
+          "sha256": "2512f9edd82ab0c68bb42a5fcd329a371eaf63ee6fb5275dfb1bc9536592bb0e"
+        },
+        {
+          "path": "v2.1/english/constants_bin/tokenizer.model",
+          "size": 59339,
+          "sha256": "d461765ae179566678c93091c5fa6f2984c31bbe990bf1aa62d92c64d91bc3f6"
+        },
+        {
+          "path": "v2.1/english/constants_bin/eponine.safetensors",
+          "size": 6931704,
+          "sha256": "bda3b76a384ff355fe0350736387765946304ae8ca16e59f60ea3296a1c99cc6"
         }
       ]
     }

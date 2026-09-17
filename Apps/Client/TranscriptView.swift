@@ -94,10 +94,10 @@ struct Replay {
     /// True while the speaker is reading something, whichever turn started it: the offer on
     /// every row is then the one that stops it, since two replies over each other is noise.
     var speaking = false
-    /// Whether the phone can say anything at all. Speaking is foreground work — synthesis
-    /// submits GPU commands and iOS kills a backgrounded process that does — so the offer is
-    /// gone while the scene is not active. Which voice would say it does not come into it: the
-    /// `AVSpeechSynthesizer` fallback is what a phone without the on-device model uses.
+    /// Whether the phone can say anything at all. Speaking is foreground work — iOS suspends a
+    /// backgrounded process — so the offer is gone while the scene is not active. Whether the
+    /// voice is resident does not come into it: a phone that has not finished downloading Pocket
+    /// is offered the item and hears nothing, which the diagnostics `voice` row explains.
     var canSpeak = false
     var say: @MainActor (String) -> Void = { _ in }
     var stopSpeaking: @MainActor () -> Void = {}

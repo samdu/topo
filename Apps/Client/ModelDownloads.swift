@@ -43,8 +43,9 @@ struct ModelManifest: Codable, Sendable {
     /// the parent of the directory it is given.
     static let parakeet = "parakeet-tdt-0.6b-v2"
     static let ctc = "parakeet-ctc-110m-coreml"
-    /// The voice's directory: everything `PocketEngine` loads, the one speaker included.
-    static let pocket = "pocket-tts"
+    /// The voice's repository. Its paths are repository-relative (`v2.1/english/…`), because
+    /// FluidAudio's Pocket loader reads the language pack from beneath the repository root.
+    static let pocket = "pocket-tts-coreml"
 
     static func load(from url: URL) throws -> ModelManifest {
         try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: url))
@@ -84,12 +85,13 @@ enum ModelStoreError: LocalizedError {
 /// anything less is a set to finish, file by file, not to start again.
 struct ModelStore: Sendable {
     let root: URL
-    /// The entries that live somewhere other than under `root`, by id. The CTC spotter's is the
-    /// one: FluidAudio's `VocabularyBoostingSession` reads its tokenizer from
-    /// `CtcModels.defaultCacheDirectory` whatever directory the models were loaded from, and
-    /// its init takes no other, so the spotter's files are downloaded to that path and the ear
-    /// loads them from there; one copy, agreed on by both. The ledger and the resume data sit
-    /// beside the files wherever the entry lives.
+    /// The entries that live somewhere other than under `root`, by id, because the library that
+    /// reads them reads one path and no other. Two: the CTC spotter, whose tokenizer
+    /// `VocabularyBoostingSession` reads from `CtcModels.defaultCacheDirectory` whatever
+    /// directory the models were loaded from; and the voice's pack, which `PocketTtsManager`
+    /// reads from `<base>/Models/pocket-tts` beneath the base directory it is given. One copy
+    /// each, agreed on by both sides. The ledger and the resume data sit beside the files
+    /// wherever the entry lives.
     let homes: [String: URL]
 
     init(root: URL, homes: [String: URL] = [:]) {
@@ -102,11 +104,25 @@ struct ModelStore: Sendable {
         var homes: [String: URL] = [:]
         #if canImport(FluidAudio)
         homes[ModelManifest.ctc] = CtcModels.defaultCacheDirectory(for: .ctc110m)
+        homes[ModelManifest.pocket] = Self.pocketHome(under: support)
         #endif
         let store = ModelStore(root: support.appendingPathComponent("Models", isDirectory: true), homes: homes)
         store.rehome()
         return store
     }
+
+    /// The base directory `PocketTtsManager` is handed. It appends `Models/pocket-tts` to reach
+    /// the repository root, which is `pocketHome(under:)` — so the manifest's repository-relative
+    /// paths land exactly where the loader looks and the pack is spelt once.
+    var pocketBase: URL { root.deletingLastPathComponent() }
+
+    #if canImport(FluidAudio)
+    /// Where the voice's pack lives under a base directory, in FluidAudio's own terms.
+    static func pocketHome(under base: URL) -> URL {
+        base.appendingPathComponent(PocketTtsConstants.defaultModelsSubdirectory, isDirectory: true)
+            .appendingPathComponent(Repo.pocketTts.folderName, isDirectory: true)
+    }
+    #endif
 
     func directory(for model: ModelManifest.Model) -> URL {
         homes[model.id] ?? root.appendingPathComponent(model.id, isDirectory: true)
@@ -238,7 +254,7 @@ final class ModelDownloads {
     private var failures: [String: String] = [:]
     private var waiters: [(ids: [String], body: @MainActor () -> Void)] = []
     /// The models something in this process has asked for; the rest of the manifest is left
-    /// alone (the simulator's voice never asks for Pocket).
+    /// alone (a debug build given its models on the command line asks for none).
     private var wanted: Set<String> = []
     private var reconciling = false
     /// What iOS gave `handleEventsForBackgroundURLSession`, called once the session has
@@ -282,6 +298,10 @@ final class ModelDownloads {
         guard let model = manifest?.model(id) else { throw ModelStoreError.unknownModel(id) }
         return store.directory(for: model)
     }
+
+    /// The base directory the voice's loader takes, which is not its model's directory: it
+    /// derives that itself.
+    var pocketBase: URL { store.pocketBase }
 
     /// Starts, or carries on, the download of the named models where they are not yet present.
     /// Idempotent and called on every foreground: tasks the session already holds (from before a

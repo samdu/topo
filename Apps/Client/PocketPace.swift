@@ -1,68 +1,109 @@
 import Foundation
 
-/// Stage one of pacing a Pocket clip: shorten the gaps, leave the speech alone. Kokoro's pace
+/// Stage one of pacing a Pocket sentence: shorten the gaps, leave the speech alone. Kokoro's pace
 /// knob mostly takes its time out of the pauses, and a uniform time-stretch takes it out of the
 /// words instead, which is audible and which Sam rejected. Measured on one script, Pocket carries
 /// 3.0s of inter-phrase pause against Kokoro's 1.2s, so most of what a listener waits for is
-/// silence. This does what the knob does: 20ms RMS frames, a frame is silent below
-/// max(2% of the loudest frame, 1e-4); an inner run of silent frames longer than the 0.15s cap
-/// loses its excess from the middle of the run, so the decay of the word before and the onset
-/// of the word after both survive; and the head and tail keep up to 0.05s each, so consecutive
-/// sentences of a streamed reply meet with about 0.10s between them, Kokoro's own median gap,
-/// rather than butting together. Stage two is the play queue's time-pitch unit at `Voice.tempo`,
-/// which after this is a small stretch rather than a large one.
+/// silence. This does what the knob does: 20ms RMS windows, a window is silent below
+/// max(2% of the loudest, 1e-4); an inner run of silent windows longer than the 0.15s cap loses
+/// its excess from the middle of the run, so the decay of the word before and the onset of the
+/// word after both survive; and the head and tail keep up to 0.05s each, so consecutive sentences
+/// of a streamed reply meet with about 0.10s between them, Kokoro's own median gap, rather than
+/// butting together. Stage two is the play queue's time-pitch unit at `Voice.tempo`, which after
+/// this is a small stretch rather than a large one.
 ///
-/// Same arithmetic as the reference `trim.py`, except at the edges. `0.05 / 0.02` is 2.5 frames,
-/// and Python's `round` gives 2 where Swift's `.rounded()` gives 3, so the reference keeps 0.04s;
-/// here the counts round up to whole frames, so the edge is three frames (0.06s, the first whole
-/// number of frames covering 0.05s) and the cap eight (0.16s). A clip trimmed here is one frame
-/// longer at each edge than the reference's, which is intended.
-enum PocketPace {
+/// It runs on the frames as they decode, so a trimmer is a value with state rather than a
+/// function over a finished clip, and `loudest` is the loudest window *heard so far* rather than
+/// the loudest in the sentence. That makes it a different function from a cut over the whole
+/// clip, not an approximation of one: a quiet opening followed by loud speech is judged against
+/// the opening's own loudest window, so it counts as speech and is kept where a cut that knew
+/// the whole sentence would have trimmed it. The caller carries `loudest` from one sentence to
+/// the next, so a reply settles on its own scale after its first phrase.
+///
+/// Silence is held rather than emitted, because a gap is only known to be a gap once speech
+/// lands after it; a held run then releases its first `cap / 2` and last `cap / 2` windows,
+/// which is the middle cut, or all of it when there was no middle to cut. Speech is never
+/// delayed — the window that ends a gap goes out in the same frame it arrived in — so the hold
+/// costs nothing a listener can hear.
+///
+/// The counts round up to whole windows: `0.05 / 0.02` is 2.5, so the edge is three windows
+/// (0.06s) and the cap eight (0.16s).
+struct PocketPace {
     static let frame = 0.02
     static let cap = 0.15
     static let edge = 0.05
-    /// In frames: the cap is 8 and the edge 3.
+    /// In windows: the cap is 8 and the edge 3.
     static let capFrames = Int((cap / frame).rounded(.up))
     static let edgeFrames = Int((edge / frame).rounded(.up))
 
-    static func trimGaps(_ y: [Float], rate: Int) -> [Float] {
-        let win = Int(frame * Double(rate))
-        guard win > 0, y.count >= win else { return y }
-        let n = y.count / win
-        var rms = [Float](repeating: 0, count: n)
-        for f in 0 ..< n {
-            var acc: Float = 0
-            for i in f * win ..< (f + 1) * win { acc += y[i] * y[i] }
-            rms[f] = (acc / Float(win)).squareRoot()
-        }
-        let threshold = max((rms.max() ?? 0) * 0.02, 1e-4)
-        let quiet = rms.map { $0 < threshold }
-        guard let head = quiet.firstIndex(of: false),
-              let tail = quiet.lastIndex(of: false) else { return y }
+    /// The loudest window seen, carried across sentences by the caller.
+    private(set) var loudest: Float
+    /// Samples cut, for the log line.
+    private(set) var dropped = 0
 
-        var keep = [Bool](repeating: false, count: n)
-        for f in head ... tail { keep[f] = true }
-        var i = head
-        while i <= tail {
-            guard quiet[i] else { i += 1; continue }
-            var j = i
-            while j <= tail && quiet[j] { j += 1 }
-            let run = j - i
-            if run > capFrames {
-                let cut = run - capFrames
-                let start = i + (run - cut) / 2
-                for f in start ..< start + cut { keep[f] = false }
-            }
-            i = j
-        }
+    private var started = false
+    /// Silent windows behind the last speech that have not gone out.
+    private var held: [[Float]] = []
+    /// Silent windows already sent from the current run.
+    private var sent = 0
+    /// Samples left over from a frame that was not a whole number of windows.
+    private var rest: [Float] = []
 
+    init(loudest: Float = 0) { self.loudest = loudest }
+
+    /// The part of this frame that goes to the speaker now.
+    mutating func take(_ samples: [Float], rate: Int) -> [Float] {
+        let win = Int(Self.frame * Double(rate))
+        guard win > 0 else { return samples }
         var out: [Float] = []
-        out.reserveCapacity(y.count)
-        out.append(contentsOf: y[max(0, head - edgeFrames) * win ..< head * win])
-        for f in head ... tail where keep[f] {
-            out.append(contentsOf: y[f * win ..< (f + 1) * win])
+        out.reserveCapacity(samples.count + rest.count)
+        let buf = rest + samples
+        var i = 0
+        while i + win <= buf.count {
+            let window = Array(buf[i ..< i + win])
+            i += win
+            var acc: Float = 0
+            for x in window { acc += x * x }
+            let rms = (acc / Float(win)).squareRoot()
+            loudest = max(loudest, rms)
+            if rms < max(loudest * 0.02, 1e-4) {
+                if !started {
+                    // Leading silence: only the last `edge` windows survive.
+                    held.append(window)
+                    if held.count > Self.edgeFrames { dropped += held.removeFirst().count }
+                } else if sent < Self.edgeFrames {
+                    sent += 1
+                    out.append(contentsOf: window)
+                } else {
+                    held.append(window)
+                }
+            } else {
+                started = true
+                out.append(contentsOf: release())
+                out.append(contentsOf: window)
+            }
         }
-        out.append(contentsOf: y[(tail + 1) * win ..< min(n, tail + 1 + edgeFrames) * win])
+        rest = Array(buf[i...])
         return out
+    }
+
+    /// The gap ended: what survives of it. The `edge` windows already sent plus these make the
+    /// first `cap / 2` and the last `cap / 2` of a long run, and every window of a short one.
+    private mutating func release() -> [Float] {
+        defer { held.removeAll(); sent = 0 }
+        let head = Self.capFrames / 2 - Self.edgeFrames
+        let tail = Self.capFrames / 2
+        guard held.count > head + tail else { return held.flatMap { $0 } }
+        for window in held[head ..< held.count - tail] { dropped += window.count }
+        return (held[..<head] + held[(held.count - tail)...]).flatMap { $0 }
+    }
+
+    /// The sentence is over. The tail keeps the `edge` windows that have already gone out; the
+    /// held remainder and whatever sample fragment was waiting for a whole window are dropped.
+    mutating func finish() {
+        for window in held { dropped += window.count }
+        held.removeAll()
+        dropped += rest.count
+        rest.removeAll()
     }
 }

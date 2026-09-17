@@ -26,7 +26,8 @@
 # ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/MessagesAPI.swift.
 #
 # --talk runs the TopoTalk scheme's one UI test (Tests/ClientTalk) and nothing else: it fetches
-# and verifies the ear's models into EAR_MODELS (build/ear-models), starts the loopback lane with
+# and verifies the ear's models into EAR_MODELS (build/ear-models) and the voice's into
+# VOICE_MODELS (build/voice-models), starts the loopback lane with
 # Tests/Fixtures/capital-of-france.wav (scripts/ci-audio-lane.sh; BlackHole as the Mac's default
 # input and output), hands the token to the test runner as TEST_RUNNER_TOPO_TALK_SETUP_TOKEN, and
 # passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
@@ -59,7 +60,7 @@ while [ $# -gt 0 ]; do
     --erase) erase=yes; shift ;;
     --no-build) build=no; shift ;;
     --talk) talk=yes; shift ;;
-    -h|--help) sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -89,7 +90,9 @@ read_token() {
 if [ "$talk" = yes ]; then
   read_token
   models="${EAR_MODELS:-$root/build/ear-models}"
+  voice_models="${VOICE_MODELS:-$root/build/voice-models}"
   scripts/fetch-ear-models.sh "$models"
+  scripts/fetch-voice-models.sh "$voice_models"
   trap 'scripts/ci-audio-lane.sh stop' EXIT
   scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav"
   # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
@@ -105,6 +108,7 @@ if [ "$talk" = yes ]; then
   echo "==> speaking a question into the microphone (TopoTalkTests)"
   status=0
   TEST_RUNNER_TOPO_TALK_SETUP_TOKEN="$token" TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
+  TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models" \
     xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -resultBundlePath "$results" || status=$?
