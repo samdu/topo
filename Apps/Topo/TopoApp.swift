@@ -29,11 +29,13 @@ struct TopoApp: App {
         // A debug build launched asking for a stub ear gets one; every other launch, the real one.
         #if DEBUG
         let ear = DebugRun.ear()
+        let spoken = DebugRun.voice()
         #else
         let ear = Ear()
+        let spoken = Voice()
         #endif
         _voice = State(initialValue: VoiceInput(audio: audio, ear: ear))
-        _speaker = State(initialValue: Speaker(audio: audio))
+        _speaker = State(initialValue: Speaker(audio: audio, voice: spoken))
     }
 
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.
