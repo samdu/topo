@@ -21,6 +21,10 @@ struct ChatView: View {
     @State private var showVocabulary = false
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
+    #if DEBUG
+    /// The last spoken turn's nonce, for the title's debug report.
+    @State private var spokenNonce: String?
+    #endif
 
     var body: some View {
         NavigationStack {
@@ -73,6 +77,13 @@ struct ChatView: View {
                     Text("Topo").font(.headline)
                         .onLongPressGesture { showDiagnostics = true }
                         .accessibilityHint("Long press for diagnostics")
+                        #if DEBUG
+                        // What the spoken-turn UI test decodes: the last spoken turn, its reply,
+                        // and what the speaker did with it, as JSON (`DebugRun.ChatReport`).
+                        .accessibilityIdentifier(DebugRun.chatReportIdentifier)
+                        .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
+                                                                error: harness.error, speaker: speaker.report))
+                        #endif
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
@@ -146,9 +157,9 @@ struct ChatView: View {
         }
         .onChange(of: harness.turns.last?.ref) { _, _ in
             // A spoken question gets a spoken answer; a typed one stays quiet.
-            guard readAloud, let last = harness.turns.last, last.role == .assistant,
-                  let asked = last.parents.first.flatMap({ ref in harness.turns.first { $0.ref == ref } }),
-                  spokenTurns.remove(asked.nonce) != nil else { return }
+            guard readAloud, let last = harness.turns.last,
+                  let asked = ReadAloud.spokenTurn(answeredBy: last, in: harness.turns, spoken: spokenTurns) else { return }
+            spokenTurns.remove(asked)
             speaker.speak(last.text)
         }
         .onChange(of: scenePhase) { _, phase in
@@ -178,7 +189,11 @@ struct ChatView: View {
             return
         }
         #endif
-        spokenTurns.insert(harness.willSend(heard))
+        let nonce = harness.willSend(heard)
+        spokenTurns.insert(nonce)
+        #if DEBUG
+        spokenNonce = nonce
+        #endif
         await harness.retry()
     }
 
@@ -215,6 +230,20 @@ struct ChatView: View {
         let text = draft
         draft = ""
         Task { await harness.send(text) }
+    }
+}
+
+/// Which replies are read aloud as they land: one continuing from a turn this screen sent from
+/// the microphone. A reply names that turn among its parents, not necessarily first: `answerPending`
+/// joins every head of a forked log, sorted by ref, so another device's turn can come before it.
+enum ReadAloud {
+    /// The nonce of the spoken turn `reply` answers, or nil when it answers none.
+    static func spokenTurn(answeredBy reply: Turn, in turns: [Turn], spoken: Set<String>) -> String? {
+        guard reply.role == .assistant, !spoken.isEmpty else { return nil }
+        return reply.parents.lazy
+            .compactMap { ref in turns.first { $0.ref == ref } }
+            .first { $0.role == .person && spoken.contains($0.nonce) }?
+            .nonce
     }
 }
 #endif
