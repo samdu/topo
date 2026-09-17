@@ -19,6 +19,12 @@ final class PocketPaceTests: XCTestCase {
         (0 ..< windows * win).map { level * sin(Float($0) * 0.3) }
     }
 
+    /// `windows` windows whose RMS is exactly `rms`: every sample is ±`rms`, so a case that
+    /// brackets a threshold states the number the trimmer actually compares.
+    private func steady(_ windows: Int, rms: Float) -> [Float] {
+        (0 ..< windows * win).map { $0.isMultiple(of: 2) ? rms : -rms }
+    }
+
     /// The whole of `clip` through the trimmer in 1920-sample frames, as the voice delivers it.
     private func trimmed(_ clip: [Float], loudest: Float = 0) -> [Float] {
         var trim = PocketPace(loudest: loudest)
@@ -91,6 +97,40 @@ final class PocketPaceTests: XCTestCase {
     func testAQuietOpeningFollowedByLoudSpeechIsKept() {
         let clip = region(8, level: 0.01) + region(8, level: 1)
         XCTAssertEqual(trimmed(clip), clip)
+    }
+
+    /// The absolute floor, which is what keeps the relative rule honest at the bottom of the
+    /// scale: an opening this quiet is its own loudest window, and 2% of it is quieter still, so
+    /// without the floor a reply opening on dither would be kept whole as speech.
+    func testAnOpeningUnderTheAbsoluteFloorIsSilenceHoweverQuietTheReplyIs() {
+        let dither = trimmed(steady(8, rms: 5e-5) + steady(8, rms: 0.5))
+        XCTAssertEqual(dither.count, (PocketPace.edgeFrames + 8) * win,
+                       "under the floor: the edge of the opening and the speech behind it")
+        // A hair above the floor, and the loudest window so far, so it is speech and is kept.
+        let quiet = steady(8, rms: 1e-3) + steady(8, rms: 0.5)
+        XCTAssertEqual(trimmed(quiet).count, quiet.count, "above the floor: the opening is kept whole")
+        XCTAssertTrue(trimmed(quiet) == quiet)
+    }
+
+    /// The 2% line itself, bracketed: against a peak of 1, 1.9% is silence and 2.1% is speech,
+    /// so no other constant passes. The loudest is well clear of the floor's reach here, which
+    /// is what makes this line the binding one.
+    func testTheTwoPerCentLineIsBracketed() {
+        let under = steady(8, rms: 1) + steady(20, rms: 0.019) + steady(8, rms: 1)
+        XCTAssertEqual(trimmed(under).count, (8 + PocketPace.capFrames + 8) * win)
+        let over = steady(8, rms: 1) + steady(20, rms: 0.021) + steady(8, rms: 1)
+        XCTAssertEqual(trimmed(over).count, over.count, "2.1% of the loudest is speech")
+        XCTAssertTrue(trimmed(over) == over)
+    }
+
+    /// The floor itself, bracketed, with the loudest so far below the 2% line's reach (2% of
+    /// 1.1e-4 is 2.2e-6), so the floor is the binding rule: 0.9e-4 is silence and 1.1e-4 speech.
+    func testTheAbsoluteFloorIsBracketed() {
+        let under = trimmed(steady(8, rms: 0.9e-4) + steady(8, rms: 0.5))
+        XCTAssertEqual(under.count, (PocketPace.edgeFrames + 8) * win)
+        let over = steady(8, rms: 1.1e-4) + steady(8, rms: 0.5)
+        XCTAssertEqual(trimmed(over).count, over.count, "1.1e-4 is above the floor, and speech")
+        XCTAssertTrue(trimmed(over) == over)
     }
 
     func testTheThresholdFollowsTheLoudestWindow() {
