@@ -30,6 +30,25 @@ struct StallingEngine: SpeechEngine {
     func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
 }
 
+/// An engine whose load waits to be let go, so a test sees the ear at `loading` and then ready.
+final class LoadOnCue: SpeechEngine, @unchecked Sendable {
+    private let done = DispatchSemaphore(value: 0)
+
+    func finish() { done.signal() }
+
+    func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
+        let done = done
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async {
+                done.wait()
+                continuation.resume()
+            }
+        }
+    }
+    func rebuild(terms: [String], version: Int) async throws {}
+    func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
+}
+
 /// An engine whose load fails, which is the ear at `failed`.
 struct BrokenEngine: SpeechEngine {
     static let why = "the models did not compile"
@@ -129,6 +148,36 @@ final class PressRefusalTests: XCTestCase {
         XCTAssertTrue(voice.tapped)
         XCTAssertTrue(voice.listening)
         voice.cancel()
+    }
+
+    /// The button dims from the state as it is, not from the last press: an ear that is loading
+    /// has the microphone dimmed from launch, and the load finishing undims it with no press in
+    /// between.
+    func testTheMicrophoneReadsTheEarAsItIsRatherThanTheLastPress() async {
+        let engine = LoadOnCue()
+        let ear = loaded(engine)
+        await settle("the ear is loading") { ear.state == .loading }
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let voice = voiceInput(seams, audio, center, ear: ear)
+        XCTAssertFalse(voice.canListen, "a loading ear dims the microphone before any press")
+        XCTAssertNil(voice.refusal, "nothing has been pressed")
+        engine.finish()
+        await settle("the ear is resident") { ear.ready }
+        XCTAssertTrue(voice.canListen, "the load finishing undims it, with no press in between")
+    }
+
+    func testADeniedMicrophoneDimsAResidentEar() async {
+        let ear = loaded(ScriptedEngine())
+        await settle("the ear is resident") { ear.ready }
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure)
+        let voice = voiceInput(seams, audio, center, ear: ear)
+        XCTAssertTrue(voice.canListen)
+        voice.microphoneDenied()
+        XCTAssertFalse(voice.canListen, "a denied microphone dims the button whatever the ear is doing")
     }
 
     // MARK: A decode that throws

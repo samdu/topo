@@ -52,6 +52,10 @@ final class VoiceInput {
     /// The refusal on a host whose audio session has no input right now: a Mac with no
     /// microphone running the simulator, or a session that is playback-only.
     static let noInput = "no audio input"
+    /// Whether a press would open the microphone, read from the state as it is now rather than
+    /// from what the last press did: the ear becoming resident undims the button with no press
+    /// in between. `refusal` is the record of the last press and says why one was refused.
+    var canListen: Bool { !denied && ear.ready }
 
     let ear: Ear
     private let audio: AudioSession
@@ -184,13 +188,22 @@ final class VoiceInput {
         defer { if generation == mine { starting = false } }
         // The microphone, and nothing else: the words are turned into text on this phone.
         guard await AVAudioApplication.requestRecordPermission() else {
-            refusal = "no microphone permission"
-            denied = true; owner = nil; return
+            microphoneDenied()
+            return
         }
         // Released or cancelled while the prompt was up: start nothing.
         guard generation == mine else { return }
         denied = false
         press(as: gate, mine: mine)
+    }
+
+    /// The microphone was refused at the prompt: the press is over, and the button stays dimmed
+    /// until the person grants it in Settings and presses again. Internal rather than private so
+    /// the suite can drive a denial without TCC.
+    func microphoneDenied() {
+        refusal = "no microphone permission"
+        denied = true
+        owner = nil
     }
 
     /// Everything after the permission prompt: the microphone if it can be opened, the refusal

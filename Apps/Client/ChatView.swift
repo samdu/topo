@@ -202,7 +202,7 @@ struct ChatView: View {
                 .font(.title)
                 // Dimmed while a press would be refused: the microphone denied, or an ear that
                 // is not resident yet. The diagnostics `speech` row is what says which.
-                .foregroundStyle(voice.denied || voice.refusal != nil ? .secondary : Theme.teal)
+                .foregroundStyle(voice.canListen ? Theme.teal : .secondary)
                 .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                     Task { await micPressed(down) }
                 }

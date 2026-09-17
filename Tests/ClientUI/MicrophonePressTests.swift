@@ -17,10 +17,13 @@ import XCTest
 /// guard, before the tap, and the test ends in `XCTSkip` naming the coverage that is missing,
 /// never in a pass. Any other refusal fails.
 ///
-/// The first press is also where the permission prompts are counted: the microphone is the only
-/// one Topo asks for, so the press answers exactly one alert on a simulator whose grants were
-/// cleared, and none on a later test in the same run that meets the grant already given. A
-/// second alert, or one that is not the microphone's, fails.
+/// The first press is also where the permission prompts are counted, and the count is a running
+/// total across this class's tests, which share one process. The microphone is the only
+/// permission Topo asks for, so one press in the run raises one alert and every press after it
+/// raises none. On a lane that cleared the app's grants (`TOPO_UITEST_PRIVACY_RESET=1`) each test
+/// that pressed holds the total is exactly one, so a reset that did not happen fails as loudly as
+/// a permission that should not be asked for; elsewhere it holds at most one. Every alert
+/// answered has to carry the microphone usage description.
 ///
 /// The lane is declared by the test runner's environment (`TEST_RUNNER_`-prefixed on the
 /// `xcodebuild` command line):
@@ -46,6 +49,12 @@ final class MicrophonePressTests: XCTestCase {
 
     private var environment: [String: String] { ProcessInfo.processInfo.environment }
     private var laneHasInput: Bool { environment["TOPO_UITEST_AUDIO_INPUT"] == "1" }
+    /// True on a lane that cleared the app's privacy grants before the suite, where the number of
+    /// prompts a run raises is exact rather than a ceiling.
+    private var laneResetPrivacy: Bool { environment["TOPO_UITEST_PRIVACY_RESET"] == "1" }
+    /// Every permission alert this run has answered, across the class's tests: the runner keeps
+    /// one process for them, and the grant one test gives stands for the rest.
+    private static var promptsAnswered: [String] = []
 
     override func setUp() {
         continueAfterFailure = false
@@ -317,9 +326,16 @@ final class MicrophonePressTests: XCTestCase {
             allow.tap()
             answered.append(text)
         }
-        XCTContext.runActivity(named: "permission prompts: \(answered.count)") { _ in }
-        XCTAssertLessThanOrEqual(answered.count, 1, "the first press asks for one permission: \(answered)")
-        for prompt in answered {
+        Self.promptsAnswered += answered
+        let total = Self.promptsAnswered
+        XCTContext.runActivity(named: "permission prompts: \(answered.count) here, \(total.count) in this run") { _ in }
+        if laneResetPrivacy {
+            XCTAssertEqual(total.count, 1,
+                           "this lane cleared the app's grants (TOPO_UITEST_PRIVACY_RESET=1), so one press in the run raises the microphone prompt and nothing raises another: \(total)")
+        } else {
+            XCTAssertLessThanOrEqual(total.count, 1, "a press asks for one permission: \(total)")
+        }
+        for prompt in total {
             XCTAssertTrue(prompt.contains(Self.microphoneUsage),
                           "the only prompt a press raises is the microphone's: \(prompt)")
         }

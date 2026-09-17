@@ -130,13 +130,14 @@ if [ "$pressmic" = yes ]; then
   # It launches the app signed in with a placeholder token, which the launch below replaces with
   # the real one; docs/simulator.md says what the press reaches and what it cannot.
   echo "==> pressing the microphone"
-  # The test counts the permission prompts a first press raises, so the app's grants go first:
-  # a simulator that answered the microphone on an earlier run would raise none.
+  # The test counts the permission prompts the run raises, so the app's grants go first, and the
+  # flag says the reset happened: the count is exact only on a simulator that has answered nothing.
   xcrun simctl bootstatus "$udid" -b >/dev/null
   xcrun simctl privacy "$udid" reset all "$bundle"
-  xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
-    -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
-    -only-testing:TopoUITests
+  TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1 \
+    xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
+      -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
+      -only-testing:TopoUITests
 fi
 
 read_token

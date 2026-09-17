@@ -241,16 +241,19 @@ jobs:
         if: ${{ !cancelled() && steps.audio_lane.outcome == 'success' }}
         run: scripts/ci-audio-lane.sh check before
 
-      # The microphone test counts the permission prompts a first press
-      # raises, and holds that there is one and that it is the microphone's.
-      # A simulator that answered the prompt on an earlier run would raise
-      # none, so the app's grants are cleared before the suite.
+      # The microphone test counts the permission prompts the run raises, and
+      # holds that there is exactly one and that it is the microphone's. That
+      # count is only exact on a simulator that has answered nothing, so the
+      # app's grants are cleared first and the flag tells the test so: without
+      # it the test would take a reset that silently did not happen for a
+      # permission that was never asked for.
       - name: Clear Topo's privacy grants on the simulator
         if: ${{ !cancelled() && env.SIMULATOR_UDID != '' }}
         run: |
           set -euo pipefail
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
           xcrun simctl privacy "$SIMULATOR_UDID" reset all zone.hexagon.topo
+          echo "TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1" >> "$GITHUB_ENV"
 
       # The app targets' own suite (TopoTests), and the UI test that presses
       # the microphone (TopoUITests), both in the scheme's test action. The
