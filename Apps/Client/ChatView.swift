@@ -127,6 +127,14 @@ struct ChatView: View {
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
         }
         .task {
+            // The mirror runs on every pass of the loop below, which is what makes the folder
+            // current with no push and no turn. It is installed before the first turn of all,
+            // not after it: the first-run answer is a turn like any other, and a screen that
+            // installed this after sending would leave that one turn's work for whatever cue
+            // came next. What a revision's push wakes is put up with the login rather than with
+            // this screen (`MemoryWake`, from `TopoApp`).
+            harness.onPass = { [memory] in await memory.sync() }
+            defer { harness.onPass = nil }
             await harness.refresh()
             // Words on their way when the app last went away go first, under their own nonce.
             // Otherwise the first-run answer is the first turn, once, only when the log is empty;
@@ -148,16 +156,9 @@ struct ChatView: View {
             // The subscription is saved beside the loop: cheap when it is already there, and a
             // failure costs only the acceleration, so it is not the screen's to report.
             PushWake.install { [harness] in await harness.wake() }
-            // The mirror runs on every pass of this loop, which is what makes the folder
-            // current with no push and no turn. What a revision's push wakes is put up with
-            // the login rather than with this screen (`MemoryWake`, from `TopoApp`).
-            harness.onPass = { [memory] in await memory.sync() }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
-            defer {
-                PushWake.remove()
-                harness.onPass = nil
-            }
+            defer { PushWake.remove() }
             // A spoken question gets a spoken answer, and the decision is the log's rather than
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
             // is the framework's to decide. It fires for a reply this phone wrote and for one

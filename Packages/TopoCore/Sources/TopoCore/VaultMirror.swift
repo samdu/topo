@@ -368,7 +368,8 @@ public actor VaultMirror {
             // app's access can take as long as that app likes, and a sync abandoned during
             // that wait has no business writing when its turn comes.
             try cancellation.check()
-            guard self.place(Data(text.utf8), as: name, in: folder) else { return DiskOutcome.blocked }
+            guard try Self.place(Data(text.utf8), as: name, in: folder, check: cancellation.check)
+            else { return DiskOutcome.blocked }
             return DiskOutcome.done
         }
     }
@@ -483,7 +484,8 @@ public actor VaultMirror {
     /// written whole beside it and renamed over it, so nobody ever reads half of it. Both
     /// steps are made through the folder's descriptor, so no part of the way to the file is
     /// resolved again at the moment it is written.
-    private nonisolated func place(_ data: Data, as name: String, in folder: Int32) -> Bool {
+    static func place(_ data: Data, as name: String, in folder: Int32,
+                      check: () throws -> Void = {}) rethrows -> Bool {
         let temporary = Self.scratchPrefix + UUID().uuidString
         let descriptor = openat(folder, temporary, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard descriptor >= 0 else { return false }
@@ -499,6 +501,14 @@ public actor VaultMirror {
         }
         if wrote { wrote = fsync(descriptor) == 0 }
         close(descriptor)
+        // The rename is the write: until it, nothing of the person's has changed and the
+        // scratch is this mirror's own, swept by the next pass. So the cancellation is read
+        // here too, and not only before the bytes were made.
+        // Left where it is rather than tidied away, because tidying is a change to the folder
+        // too and this pass is over: the scratch is this mirror's own and the next pass sweeps
+        // it, which is the one place that takes anything away for a reason other than the
+        // store.
+        try check()
         guard wrote, renameat(folder, temporary, folder, name) == 0 else {
             _ = unlinkat(folder, temporary, 0)
             return false
@@ -883,7 +893,8 @@ public actor VaultMirror {
             guard let folder = try self.openFolder(of: url, creating: true, check: cancellation.check)
             else { throw CocoaError(.fileWriteUnknown) }
             defer { close(folder) }
-            guard self.place(data, as: "mirror.json", in: folder) else { throw CocoaError(.fileWriteUnknown) }
+            guard try Self.place(data, as: "mirror.json", in: folder, check: cancellation.check)
+            else { throw CocoaError(.fileWriteUnknown) }
             return true
         }
     }

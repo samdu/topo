@@ -714,6 +714,35 @@ import TopoCoreTesting
         }
     }
 
+    /// The rename is the write, so a cancellation between the bytes and the rename leaves the
+    /// person's file as it was. What the pass wrote is its own scratch, and the next pass sweeps
+    /// it — nothing else in the folder is taken away for a reason other than the store.
+    @Test func aCancellationBeforeTheRenameLeavesTheFileAsItWasAndIsSweptAfter() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            _ = try await mirror.sync(at: t0 + 1)
+
+            let folder = open(directory.path(percentEncoded: false), O_RDONLY | O_DIRECTORY)
+            #expect(folder >= 0)
+            #expect(throws: CancellationError.self) {
+                // The sign-out lands with the bytes down and the rename still to come.
+                _ = try VaultMirror.place(Data("half a thought".utf8), as: "Meeting notes.md",
+                                          in: folder) { throw CancellationError() }
+            }
+            close(folder)
+            #expect(read("Meeting notes.md", in: directory) == "from the hub", "their file is as it was")
+            let left = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .filter { $0.hasPrefix(".topo-writing-") }
+            #expect(left.count == 1, "and what the stopped pass wrote is its own")
+
+            _ = try await mirror.sync(at: t0 + 2)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .filter { $0.hasPrefix(".topo-writing-") }.isEmpty, "swept by the next pass")
+        }
+    }
+
     /// A way down of more than one name is more than one change to the person's folder, so the
     /// cancellation is read before each of them and not only before the first.
     @Test func aCancellationPartWayDownMakesNoFolderAfterIt() async throws {
