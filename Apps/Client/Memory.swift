@@ -100,6 +100,7 @@ final class Memory {
     /// than this call has finished. One at a time: a call arriving during a pass asks for one
     /// more after it, and however many arrive they ask for the same one.
     func sync() async {
+        let asked = generation
         guard isSignedIn() else {
             // A cue can reach a phone with no login — the foreground after a sign-out, a
             // launch as a viewer — and nothing of the memory belongs on one. A folder a
@@ -113,6 +114,21 @@ final class Memory {
         while let winding = stopping {
             await winding.value
             if stopping == winding { stopping = nil }
+        }
+        // That wait is as long as the pass it waits for, and a sign-out can happen twice in
+        // it: the login checked at the door is not the login this pass would run under, and
+        // a sign-out that found no pass to cancel left its cleanup to whatever woke next.
+        // So the door is checked again here, after every wait and before anything is made.
+        guard isSignedIn() else {
+            removeFolder()
+            return
+        }
+        guard generation == asked else {
+            // Something moved under this request while it waited. A sign-out's own cleanup
+            // owns the folder now; a pass another cue began answers this request too, and
+            // asks for one more after it if it is still running.
+            if running != nil { queued = true }
+            return
         }
         if let running {
             queued = true
@@ -179,7 +195,11 @@ final class Memory {
         let running = self.running
         running?.cancel()
         self.running = nil
-        stopping = running
+        // A sign-out with no pass of its own to stop still has one to wait out when an
+        // earlier sign-out's is still stopping: taking that away would leave every request
+        // parked behind it free to run as this sign-out's cleanup makes the folder go.
+        let winding = running ?? stopping
+        stopping = winding
         queued = false
         mirror = nil
         zoneReady = false
@@ -196,9 +216,9 @@ final class Memory {
         // new login owns the folder now, so taking it away here would be one login deleting
         // the next one's memory.
         Task { @MainActor [weak self] in
-            _ = await running?.value
+            _ = await winding?.value
             guard let self, self.generation == generation else { return }
-            if self.stopping == running { self.stopping = nil }
+            if self.stopping == winding { self.stopping = nil }
             self.removeFolder()
         }
     }

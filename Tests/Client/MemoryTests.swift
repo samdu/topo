@@ -308,6 +308,44 @@ final class MemoryTests: XCTestCase {
                       "the sign-out's cleanup took away the folder the new login made")
     }
 
+    /// Sign out, back in, and out again, all while the first pass is still parked in the
+    /// store. The sign-out that finds no pass of its own to stop is still a sign-out: the
+    /// request waiting behind the first pass wakes under no login, and a phone with no login
+    /// keeps no folder.
+    func testASignOutWhileARequestWaitsLeavesNoFolderBehindIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let gate = GatedDatabase(db)
+        let directory = makeDirectory()
+        let login = Login()
+        let memory = memory(gate, at: directory, signedIn: login)
+        try await write("from the hub", to: note, in: db, as: hub, at: t0)
+
+        let before = Task { await memory.sync() }
+        try await eventually("the first sync to reach the store") { await gate.waiting == 1 }
+
+        // Out, in, and the new login's cue — which waits for the pass that has not stopped.
+        login.holds = false
+        memory.forget()
+        login.holds = true
+        await gate.permit()
+        let after = Task { await memory.sync() }
+        try await eventually("the second sync to ask") { memory.requests == 2 }
+
+        // And out again, with nothing of its own in flight to cancel: what it signs out is
+        // the request parked behind the first pass.
+        login.holds = false
+        memory.forget()
+
+        await gate.release()
+        await before.value
+        await after.value
+        await settle()
+
+        XCTAssertNil(text("Meeting notes.md", in: directory))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path),
+                       "a pass woke under a login that had gone and built the folder anyway")
+    }
+
     // MARK: A failure at each stage
 
     /// The store cannot be read: nothing is on disk, no state is left behind, and the error
