@@ -428,6 +428,56 @@ import TopoCoreTesting
         }
     }
 
+    /// The same compare, on the other kind of mutation: a file the store no longer holds
+    /// is taken off disk only if the folder still holds what the scan saw. Somebody's edit
+    /// of it, landing while the store was being read, is kept and becomes a revision
+    /// instead — the removal would otherwise take their words with it.
+    @Test func aFileEditedWhileTheStoreIsReadIsNotTakenAwayByARemoval() async throws {
+        try await inTemporaryDirectory { directory in
+            // The folder and the store agree, and then the store's copy is deleted
+            // elsewhere, so the next sync's job is to take the file off disk.
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try write("what I remember", to: "Meeting notes.md", in: directory)
+            try await mirror.sync(at: t0)
+            let elsewhere = try await store.writer(for: hub)
+            try await elsewhere.delete(note, continuing: store.read(), at: t0 + 1)
+
+            let interrupted = InterruptedFeedDatabase(inner: db)
+            let file = directory.appendingPathComponent("Meeting notes.md")
+            await interrupted.onFirstFeedRead {
+                try? Data("second thoughts".utf8).write(to: file)
+            }
+            let racing = VaultMirror(directory: directory, store: MemoryStore(database: interrupted), device: phone)
+            // The same folder, so it carries the state the first sync left.
+            let report = try await racing.sync(at: t0 + 10)
+
+            #expect(report.removed.isEmpty, "the file was not the one the scan saw")
+            #expect(report.pushed == [note])
+            #expect(read("Meeting notes.md", in: directory) == "second thoughts")
+            #expect(try await store.read().text(at: note) == "second thoughts")
+        }
+    }
+
+    /// Cancelled after the first fence, in the middle of making a writer: the revision it
+    /// was about to write is not written, and the folder is left as the person left it.
+    @Test func aSyncCancelledAfterTheFirstFenceWritesNoRevision() async throws {
+        try await inTemporaryDirectory { directory in
+            try write("what I remember", to: "Meeting notes.md", in: directory)
+            let interrupted = InterruptedQueryDatabase(inner: db)
+            let mirror = VaultMirror(directory: directory, store: MemoryStore(database: interrupted), device: phone)
+
+            let sync = Task { try await mirror.sync(at: t0) }
+            // The writer's own query, which is past the fence after the store was read
+            // and before any revision is written.
+            await interrupted.onFirstQuery { sync.cancel() }
+            await #expect(throws: CancellationError.self) { try await sync.value }
+
+            #expect(try await store.read().knownPaths.isEmpty, "no revision was written")
+            #expect(read("Meeting notes.md", in: directory) == "what I remember")
+            #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent(".topo").path) == false)
+        }
+    }
+
     /// A sync whose task is cancelled while it waits on the store — a sign-out,
     /// most of all — writes nothing to the folder.
     @Test func aCancelledSyncLeavesTheFolderAsItFoundIt() async throws {
@@ -507,5 +557,25 @@ actor HeldFeedDatabase: RecordDatabase {
             await withCheckedContinuation { parked = $0 }
         }
         return try await inner.records(ofType: type)
+    }
+}
+
+/// A database that runs a hook inside the first query, which is what making a writer does:
+/// past the sync's first cancellation fence and before any revision is written.
+actor InterruptedQueryDatabase: RecordDatabase {
+    let inner: InMemoryRecordDatabase
+    private var hook: (@Sendable () -> Void)?
+
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func onFirstQuery(_ body: @escaping @Sendable () -> Void) { hook = body }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        if let hook { self.hook = nil; hook() }
+        return try await inner.query(query)
     }
 }

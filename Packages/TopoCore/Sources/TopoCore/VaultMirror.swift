@@ -39,9 +39,10 @@ import Foundation
 /// what the store holds lands beside it as a conflict copy or as the file, by
 /// the ordinary rule. Nothing a person wrote is overwritten by a download.
 ///
-/// Cancellation is honoured before the store is written and again before the
-/// disk is: a sync outliving what asked for it — a sign-out, most of all —
-/// leaves the folder exactly as it found it.
+/// Cancellation is honoured before every mutation, not at a fence or two: before
+/// each revision written to the store, before each file written or taken off disk,
+/// and before the state is saved. A sync outliving what asked for it — a sign-out,
+/// most of all — stops at the last thing it did rather than finishing the round.
 public actor VaultMirror {
     public struct Report: Sendable, Equatable {
         /// Files created or changed on disk from the store.
@@ -135,16 +136,26 @@ public actor VaultMirror {
             report.deleted += push.deleted
         }
 
-        // The folder is shared, and the scan above is only as current as the store read
-        // that followed it was quick. Every file about to be written or taken away is
-        // read again here; text that is not what the scan saw is somebody's edit, and an
-        // edit becomes a revision rather than something to overwrite. A round of that can
-        // itself be overtaken, so it is a bounded loop rather than a single look.
-        for _ in 0..<4 {
-            let late = try lateEdits(onDisk: onDisk, vault: vault)
-            guard !late.isEmpty else { break }
-            for (path, text) in late { onDisk[path] = text }
-            wanted = resolutions(onDisk: onDisk, previous: previous, vault: vault, only: Set(late.keys))
+        // Writing the store back is where somebody else's save is lost, so the check that
+        // the folder still holds what the scan saw is made inside the same coordinated
+        // write that would replace it, never before it: a save landing between a look and
+        // a write is exactly the case, and only the coordinator can hold that window shut.
+        // What the write finds instead is somebody's edit — or their deletion — and both
+        // are theirs to keep, so the round is spent making a revision of it and the next
+        // one writes the store back around it.
+        var state = State()
+        for round in 0...4 {
+            let applied = try applyToDisk(vault: vault, onDisk: onDisk)
+            onDisk = applied.onDisk
+            state = applied.state
+            report.written += applied.written
+            report.removed += applied.removed
+            report.skipped += applied.skipped
+            let late = Set(applied.lateEdits.keys).union(applied.lateRemovals)
+            guard round < 4, !late.isEmpty else { break }
+            for (path, text) in applied.lateEdits { onDisk[path] = text }
+            for path in applied.lateRemovals { onDisk[path] = nil }
+            wanted = resolutions(onDisk: onDisk, previous: previous, vault: vault, only: late)
             guard !wanted.isEmpty else { break }
             let push = try await push(wanted, seen: seen, at: now)
             (vault, seen) = (push.vault, push.seen)
@@ -152,21 +163,61 @@ public actor VaultMirror {
             report.deleted += push.deleted
         }
 
-        // The last thing before the disk is touched. What the store holds is already in
-        // it, so a sync abandoned here loses nothing.
+        synced = state
         try Task.checkCancellation()
+        try save(state)
+        // A link both scanned and written to is one thing in the way, and a file a round
+        // wrote and the round after left alone is one thing written.
+        report.skipped = Array(Set(report.skipped)).sorted()
+        report.written = Array(Set(report.written)).sorted()
+        report.removed = Array(Set(report.removed)).sorted()
+        report.pushed = Array(Set(report.pushed)).sorted()
+        report.deleted = Array(Set(report.deleted)).sorted()
+        return report
+    }
 
+    /// One pass over the disk: what the store holds written into the folder, what it no
+    /// longer holds taken out, and what somebody else did to the folder meanwhile found
+    /// rather than flattened.
+    private struct Applied {
         var state = State()
-        for path in vault.knownPaths { state.heads[path] = vault.heads(of: path) }
+        var onDisk: [VaultPath: String]
+        var written: [VaultPath] = []
+        var removed: [VaultPath] = []
+        var skipped: [String] = []
+        /// Text found where the scan's text should have been.
+        var lateEdits: [VaultPath: String] = [:]
+        /// Files somebody took away while this sync was running.
+        var lateRemovals: [VaultPath] = []
+    }
+
+    private func applyToDisk(vault: Vault, onDisk startingDisk: [VaultPath: String]) throws -> Applied {
+        var out = Applied(onDisk: startingDisk)
+        for path in vault.knownPaths { out.state.heads[path] = vault.heads(of: path) }
+
         // Taking away what has gone comes first: a file the store no longer
         // holds may be standing exactly where a folder is now needed.
-        for (path, _) in onDisk.sorted(by: { $0.key < $1.key }) where vault.files[path] == nil {
-            try remove(at: url(of: path))
-            report.removed.append(path)
+        for (path, _) in startingDisk.sorted(by: { $0.key < $1.key }) where vault.files[path] == nil {
+            try Task.checkCancellation()
+            let url = url(of: path)
+            guard !isLink(url), isInsideVault(url.deletingLastPathComponent()) else {
+                out.skipped.append(path.string)
+                continue
+            }
+            switch try coordinatedRemove(url, expecting: out.onDisk[path]) {
+            case .done:
+                out.onDisk[path] = nil
+                out.removed.append(path)
+            case .gone:
+                out.onDisk[path] = nil
+            case .different(let text):
+                out.lateEdits[path] = text
+            }
         }
+
         for file in vault.ordered {
-            if onDisk[file.path] == file.text {
-                state.files[file.path] = digest(file.text)
+            if out.onDisk[file.path] == file.text {
+                out.state.files[file.path] = digest(file.text)
                 continue
             }
             let url = url(of: file.path)
@@ -176,9 +227,8 @@ public actor VaultMirror {
             // to resolve back inside the vault before anything is written.
             // Leave it, and leave the path out of the state so the next
             // sync tries again.
-            if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
-                || !isInsideVault(url.deletingLastPathComponent()) {
-                report.skipped.append(file.path.string)
+            if isLink(url) || !isInsideVault(url.deletingLastPathComponent()) {
+                out.skipped.append(file.path.string)
                 continue
             }
             // A folder left where this file goes, emptied by the removals
@@ -187,28 +237,79 @@ public actor VaultMirror {
             var isFolder: ObjCBool = false
             if disk.fileExists(atPath: url.path, isDirectory: &isFolder), isFolder.boolValue {
                 guard (try? disk.contentsOfDirectory(atPath: url.path))?.isEmpty == true else {
-                    report.skipped.append(file.path.string)
+                    out.skipped.append(file.path.string)
                     continue
                 }
-                try remove(at: url)
+                try Task.checkCancellation()
+                try removeItem(at: url)
             }
+            try Task.checkCancellation()
             try disk.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try coordinatedWrite(url, options: .forReplacing) { url in
-                try Data(file.text.utf8).write(to: url, options: .atomic)
+            switch try coordinatedReplace(url, expecting: out.onDisk[file.path], with: file.text) {
+            case .done:
+                out.onDisk[file.path] = file.text
+                out.state.files[file.path] = digest(file.text)
+                out.written.append(file.path)
+            case .gone:
+                // Nothing was there and nothing is: the write was refused by the guard
+                // above only in the cases it names, so this is somebody's deletion.
+                out.onDisk[file.path] = nil
+                out.lateRemovals.append(file.path)
+            case .different(let text):
+                out.onDisk[file.path] = text
+                out.lateEdits[file.path] = text
             }
-            state.files[file.path] = digest(file.text)
-            report.written.append(file.path)
         }
+        return out
+    }
 
-        synced = state
-        try save(state)
-        // A link both scanned and written to is one thing in the way.
-        report.skipped = Array(Set(report.skipped)).sorted()
-        report.written.sort()
-        report.removed.sort()
-        report.pushed.sort()
-        report.deleted.sort()
-        return report
+    /// What a coordinated mutation found where the scan had left something.
+    private enum DiskOutcome {
+        /// The folder held what the scan saw, so the mutation was made.
+        case done
+        /// The file is not there at all.
+        case gone
+        /// Somebody else's text is there.
+        case different(String)
+    }
+
+    /// Replaces a file with what the store holds — but only if the folder still holds what
+    /// the scan saw. The comparison is made inside the coordinated write, so an editor's
+    /// save either lands before this block and is found by it, or waits behind it and is
+    /// what the next sync reads.
+    private func coordinatedReplace(_ url: URL, expecting: String?, with text: String) throws -> DiskOutcome {
+        try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url in
+            let current = self.textAt(url)
+            guard current == expecting else {
+                if let current { return DiskOutcome.different(current) }
+                return DiskOutcome.gone
+            }
+            try Data(text.utf8).write(to: url, options: .atomic)
+            return DiskOutcome.done
+        }
+    }
+
+    /// Takes a file away, on the same terms: what is there has to be what the scan saw.
+    private func coordinatedRemove(_ url: URL, expecting: String?) throws -> DiskOutcome {
+        try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url in
+            let current = self.textAt(url)
+            guard let current else { return DiskOutcome.gone }
+            guard current == expecting else { return DiskOutcome.different(current) }
+            try self.disk.removeItem(at: url)
+            return DiskOutcome.done
+        }
+    }
+
+    /// A file's text as it stands, read inside a coordination this actor already holds —
+    /// which is why it coordinates nothing of its own: a second coordination of the same
+    /// item from inside the first is a deadlock.
+    private func textAt(_ url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func isLink(_ url: URL) -> Bool {
+        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
     }
 
     /// What the folder is asking the store for, by path: an edit, an answer
@@ -270,6 +371,9 @@ public actor VaultMirror {
             // the person did here.
             let parents = out.seen[path] ?? []
             vault = try await read()
+            // Before each write of its own, not once for the lot: a sync abandoned
+            // between two revisions writes only the ones it had already written.
+            try Task.checkCancellation()
             switch wanted[path]! {
             case .edited(let text), .editedCopy(let text), .copyRemoved(.some(let text)):
                 // A revision that says what the store already says, from
@@ -290,44 +394,13 @@ public actor VaultMirror {
         return out
     }
 
-    /// Every file the write-back is about to change, read again: what is not
-    /// what the scan saw was written by somebody else while the store was
-    /// being read. A file that has gone from disk in that window is left out
-    /// — there is nothing of the person's to keep there, and the next sync's
-    /// scan is what judges a removal.
-    private func lateEdits(onDisk: [VaultPath: String], vault: Vault) throws -> [VaultPath: String] {
-        var atRisk: Set<VaultPath> = []
-        for (path, _) in onDisk where vault.files[path] == nil { atRisk.insert(path) }
-        for file in vault.ordered where onDisk[file.path] != file.text { atRisk.insert(file.path) }
-        var late: [VaultPath: String] = [:]
-        for path in atRisk {
-            guard let text = try currentText(at: url(of: path)), text != onDisk[path] else { continue }
-            late[path] = text
-        }
-        return late
-    }
-
-    /// One file as it stands on disk right now, or nil when it is not there,
-    /// is a link, or is not text. Coordinated, so a save half-written by
-    /// another app is waited out rather than read.
-    ///
-    /// Only what is really in this folder counts, checked exactly as the scan
-    /// checks it: neither the file nor any folder above it may be a link, or
-    /// this second look would carry a file from wherever the link points into
-    /// the memory — the leak the scan refuses at the front door.
-    private func currentText(at url: URL) throws -> String? {
-        guard (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink != true,
-              isInsideVault(url.deletingLastPathComponent()),
-              url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(realRoot + "/") else { return nil }
-        return try coordinatedRead(url) { url in
-            guard let data = try? Data(contentsOf: url) else { return nil }
-            return String(data: data, encoding: .utf8)
-        }
-    }
-
-    private func remove(at url: URL) throws {
-        try coordinatedWrite(url, options: .forDeleting) { url in
+    /// A folder standing where a file has to go, taken away under coordination like
+    /// anything else in the folder.
+    private func removeItem(at url: URL) throws {
+        _ = try coordinated(url, reading: false,
+                            options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url -> Bool in
             try disk.removeItem(at: url)
+            return true
         }
     }
 
@@ -337,14 +410,6 @@ public actor VaultMirror {
     /// announced to whoever has the file open.
     private func coordinatedRead<T>(_ url: URL, _ body: (URL) throws -> T) throws -> T {
         try coordinated(url, reading: true, options: 0, body: body)
-    }
-
-    private func coordinatedWrite(_ url: URL, options: NSFileCoordinator.WritingOptions,
-                                  _ body: (URL) throws -> Void) throws {
-        _ = try coordinated(url, reading: false, options: options.rawValue) { url -> Bool in
-            try body(url)
-            return true
-        }
     }
 
     private func coordinated<T>(_ url: URL, reading: Bool, options: UInt, body: (URL) throws -> T) throws -> T {

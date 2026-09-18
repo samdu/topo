@@ -27,8 +27,10 @@ final class MemoryTests: XCTestCase {
         return url.appendingPathComponent("Vault", isDirectory: true)
     }
 
-    private func memory(_ database: any RecordDatabase, at directory: URL) -> Memory {
-        Memory(directory: directory, store: MemoryStore(database: database), device: phone, ensureZone: {})
+    private func memory(_ database: any RecordDatabase, at directory: URL,
+                        signedIn: Login = Login()) -> Memory {
+        Memory(directory: directory, store: MemoryStore(database: database), device: phone,
+               isSignedIn: { signedIn.holds }, ensureZone: {})
     }
 
     private func text(_ name: String, in directory: URL) -> String? {
@@ -141,6 +143,45 @@ final class MemoryTests: XCTestCase {
         let seen = await order.entries
         XCTAssertEqual(seen, ["sync", "model", "sync"])
         XCTAssertEqual(memory.passes, 2)
+    }
+
+    // MARK: Only while signed in
+
+    /// The cue that arrives whether or not anybody is signed in: a foreground. A phone with
+    /// no login keeps no memory, so it makes no folder and runs no pass.
+    func testACueOnAPhoneWithNoLoginMakesNoFolder() async throws {
+        let db = InMemoryRecordDatabase()
+        let directory = makeDirectory()
+        let signedOut = Login(false)
+        let memory = memory(db, at: directory, signedIn: signedOut)
+        try await write("from the hub", to: note, in: db, as: hub, at: t0)
+
+        await memory.sync()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertEqual(memory.passes, 0)
+        XCTAssertNil(memory.lastSync)
+        XCTAssertNil(memory.lastError, "nothing was attempted, so nothing failed")
+    }
+
+    /// A sign-out that did not get to the end of itself — the app killed between the login
+    /// going and the folder going — settles at the next cue rather than standing, and the
+    /// cue does not fill it up first.
+    func testACueAfterTheLoginWentTakesTheFolderAway() async throws {
+        let db = InMemoryRecordDatabase()
+        let directory = makeDirectory()
+        let login = Login()
+        let memory = memory(db, at: directory, signedIn: login)
+        try await write("from the hub", to: note, in: db, as: hub, at: t0)
+
+        await memory.sync()
+        XCTAssertEqual(text("Meeting notes.md", in: directory), "from the hub")
+
+        login.holds = false
+        await memory.sync()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+        XCTAssertEqual(memory.passes, 1, "no pass ran without a login")
     }
 
     // MARK: Sign-out
@@ -351,6 +392,12 @@ private struct UnreachableDatabase: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { throw RecordDatabaseError.unavailable(underlying: Offline()) }
     func query(_ query: RecordQuery) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Offline()) }
     func records(ofType type: String) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Offline()) }
+}
+
+/// Whether this device holds a login, which a test moves under the mirror's feet.
+final class Login: @unchecked Sendable {
+    var holds: Bool
+    init(_ holds: Bool = true) { self.holds = holds }
 }
 
 /// What happened, in order.

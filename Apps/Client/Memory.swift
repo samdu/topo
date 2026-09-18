@@ -1,6 +1,7 @@
 #if os(iOS)
 import Foundation
 import Observation
+import TopoAuth
 import TopoCore
 
 /// The memory as the phone keeps it: a folder of markdown in the app's Documents, mirrored both
@@ -18,7 +19,10 @@ import TopoCore
 /// Sign-out takes the folder away. The memory is the person's and lives in their iCloud; a phone
 /// that is signed out keeps no copy of it. A sync still in flight at that moment is cancelled and
 /// writes nothing, and the folder goes once that sync has stopped, so a pass cannot put a file
-/// back after the folder was taken away.
+/// back after the folder was taken away. Nor can a later cue: the mirror runs only while this
+/// device holds a login, the same condition the harness answers under, and a cue arriving without
+/// one — a foreground, a launch as a viewer — takes away any folder it finds instead of filling
+/// one, so an interrupted sign-out settles at the next cue rather than standing.
 @MainActor
 @Observable
 final class Memory {
@@ -46,6 +50,7 @@ final class Memory {
 
     private let store: MemoryStore
     private let device: DeviceID
+    private let isSignedIn: @Sendable () -> Bool
     private let ensureZone: @Sendable () async throws -> Void
     private let now: @Sendable () -> Date
     private var mirror: VaultMirror?
@@ -59,19 +64,22 @@ final class Memory {
     private var generation = 0
 
     init(directory: URL, store: MemoryStore, device: DeviceID = DeviceIdentity.current,
+         isSignedIn: @escaping @Sendable () -> Bool,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          now: @escaping @Sendable () -> Date = { Date() }) {
         self.directory = directory
         self.store = store
         self.device = device
+        self.isSignedIn = isSignedIn
         self.ensureZone = ensureZone
         self.now = now
     }
 
     /// The app's memory: the folder Files shows, over the same CloudKit database the harness
     /// uses and under the same device identity.
-    static func standard() -> Memory {
-        Memory(directory: Memory.standardDirectory, store: MemoryStore(database: TopoCloudKit.database()))
+    static func standard(tokens: TokenStore = KeychainTokenStore()) -> Memory {
+        Memory(directory: Memory.standardDirectory, store: MemoryStore(database: TopoCloudKit.database()),
+               isSignedIn: { (try? tokens.load()) != nil })
     }
 
     static var standardDirectory: URL {
@@ -85,6 +93,13 @@ final class Memory {
     /// than this call has finished. One at a time: a call arriving during a pass asks for one
     /// more after it, and however many arrive they ask for the same one.
     func sync() async {
+        guard isSignedIn() else {
+            // A cue can reach a phone with no login — the foreground after a sign-out, a
+            // launch as a viewer — and nothing of the memory belongs on one. A folder a
+            // sign-out did not get to the end of goes here instead of filling up.
+            removeFolder()
+            return
+        }
         requests += 1
         if let running {
             queued = true
@@ -168,6 +183,7 @@ final class Memory {
     }
 
     private func removeFolder() {
+        guard FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return }
         var error: NSError?
         NSFileCoordinator().coordinate(writingItemAt: directory, options: .forDeleting, error: &error) { url in
             try? FileManager.default.removeItem(at: url)
