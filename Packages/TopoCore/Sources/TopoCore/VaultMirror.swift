@@ -122,7 +122,8 @@ public actor VaultMirror {
         var report = Report()
         let scan = try await scan()
         report.skipped = scan.skipped
-        let previous = try synced ?? loadState()
+        let previous: State
+        if let synced { previous = synced } else { previous = try await loadState() }
         var onDisk = scan.files
         // The heads this folder has been shown, which is what a local change continues
         // from. A push of its own moves them on: the revision it just wrote from them
@@ -167,8 +168,12 @@ public actor VaultMirror {
             report.deleted += push.deleted
         }
 
+        // The last thing a pass does, and the first thing the next one stands on: a baseline
+        // written for work a cancellation stopped is a pass claiming to have shown the folder
+        // what it never wrote.
+        try Task.checkCancellation()
         synced = state
-        try save(state)
+        try await save(state)
         // A link both scanned and written to is one thing in the way, and a file a round
         // wrote and the round after left alone is one thing written.
         report.skipped = Array(Set(report.skipped)).sorted()
@@ -776,8 +781,12 @@ public actor VaultMirror {
         var heads: [String: [String]]
     }
 
-    private func loadState() throws -> State {
-        guard case .text(let json) = reading(".topo/mirror.json"),
+    /// Coordinated like everything else in the folder: this file is the mirror's own, but it
+    /// stands where every app that can open a document folder can reach it, and a read taken
+    /// while somebody else is halfway through writing it is half a file.
+    private func loadState() async throws -> State {
+        let json = try await coordinatedRead(stateURL) { _ in self.reading(".topo/mirror.json") }
+        guard case .text(let json) = json,
               let stored = try? JSONDecoder().decode(StoredState.self, from: Data(json.utf8)),
               stored.version == 1 else { return State() }
         var state = State()
@@ -790,17 +799,26 @@ public actor VaultMirror {
         return state
     }
 
-    private func save(_ state: State) throws {
+    private func save(_ state: State) async throws {
         var stored = StoredState(version: 1, files: [:], heads: [:])
         for (path, digest) in state.files { stored.files[path.string] = digest }
         for (path, heads) in state.heads { stored.heads[path.string] = heads.map(\.description) }
         let data = try JSONEncoder().encode(stored)
-        // Through the folder's own descriptor, like everything else this writes: `.topo` is
-        // this mirror's own, but it stands in a folder every app on the phone can reach, and
-        // a name swapped for a link there would put this state wherever it points.
-        guard let folder = openFolder(of: stateURL, creating: true) else { throw CocoaError(.fileWriteUnknown) }
-        defer { close(folder) }
-        guard place(data, as: "mirror.json", in: folder) else { throw CocoaError(.fileWriteUnknown) }
+        // Coordinated, and through the folder's own descriptor: `.topo` is this mirror's own
+        // file, but it stands in a folder every app on the phone can reach, so anybody holding
+        // it is waited out and told of the replacement, and a name swapped for a link there
+        // would otherwise put this state wherever it points.
+        _ = try await Self.coordinated(stateURL, reading: false,
+                                       options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url, cancellation -> Bool in
+            // Inside the coordination, like every other mutation: the wait for whoever holds
+            // this file is as long as they like, and a baseline written after a sign-out says
+            // this folder was shown things nobody will now put in it.
+            try cancellation.check()
+            guard let folder = self.openFolder(of: url, creating: true) else { throw CocoaError(.fileWriteUnknown) }
+            defer { close(folder) }
+            guard self.place(data, as: "mirror.json", in: folder) else { throw CocoaError(.fileWriteUnknown) }
+            return true
+        }
     }
 
     private func digest(_ text: String) -> String {

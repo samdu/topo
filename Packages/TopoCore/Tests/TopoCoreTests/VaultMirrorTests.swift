@@ -666,6 +666,91 @@ import TopoCoreTesting
         }
     }
 
+    /// The window the whole design is about, driven end to end: the compare against what the
+    /// scan saw and the replacement are one coordinated write, so a save that lands while the
+    /// sync waits for the file is found by the compare rather than flattened by the write.
+    @Test func aSaveThatLandsWhileTheWriteWaitsBecomesARevisionRatherThanBeingOverwritten() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+            try await w.write("from the hub, again", to: note, continuing: store.read(), at: t0 + 2)
+
+            // The person's editor has the file, and saves into it while the sync waits.
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent("Meeting notes.md"))
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 3) }
+            try await Task.sleep(for: .milliseconds(200))
+            try Data("what I typed".utf8).write(to: directory.appendingPathComponent("Meeting notes.md"))
+            holder.release()
+
+            let report = try await sync.value
+            #expect(report.pushed == [note], "their save is a revision of their own")
+            #expect(read("Meeting notes.md", in: directory) == "what I typed", "and stands where they left it")
+            let copies = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .filter { $0.contains("Conflicted copy") }
+            #expect(copies.count == 1, "the hub's words are beside it, not on top of it")
+            #expect(copies.first.flatMap { read($0, in: directory) } == "from the hub, again")
+            #expect(try await store.read().text(at: note) == "what I typed")
+        }
+    }
+
+    /// The baseline is written under coordination too: somebody holding the mirror's own state
+    /// file is waited out, and the save lands when they let go.
+    @Test func theStateIsWrittenUnderCoordinationAndWaitsForWhoeverHoldsIt() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+            let before = read(".topo/mirror.json", in: directory)
+            let second = VaultPath("people/helen.md")!
+            try await w.write("# Helen", to: second, continuing: store.read(), at: t0 + 2)
+
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent(".topo/mirror.json"))
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 3) }
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(read("people/helen.md", in: directory) == "# Helen", "the file went down first")
+            #expect(read(".topo/mirror.json", in: directory) == before, "and the save is waiting for them")
+            holder.release()
+
+            _ = try await sync.value
+            #expect(read(".topo/mirror.json", in: directory)?.contains("helen.md") == true)
+            #expect(read("Meeting notes.md", in: directory) == "from the hub", "and nothing else moved")
+        }
+    }
+
+    /// Cancelled at the last thing a pass does. The baseline says what this folder has been
+    /// shown, so writing one for a pass that stopped is a claim about a folder nobody filled.
+    @Test func aSyncCancelledAtTheStateSaveLeavesTheBaselineAsItWas() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+            let before = read(".topo/mirror.json", in: directory)
+            #expect(before?.contains("Meeting notes.md") == true)
+
+            // A second note, so the pass has something to write before it reaches the save.
+            let second = VaultPath("people/helen.md")!
+            try await w.write("# Helen", to: second, continuing: store.read(), at: t0 + 2)
+
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent(".topo/mirror.json"))
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 3) }
+            try await Task.sleep(for: .milliseconds(200))
+            sync.cancel()
+            holder.release()
+
+            await #expect(throws: CancellationError.self) { try await sync.value }
+            #expect(read(".topo/mirror.json", in: directory) == before,
+                    "a pass that stopped wrote a baseline for what it did not finish")
+            #expect(read("people/helen.md", in: directory) == "# Helen", "what it did write stands")
+        }
+    }
+
     /// Cancelled while the coordinator holds the sync waiting on another app's access to
     /// the very file it is about to write. That wait is as long as the other app likes,
     /// and a sync abandoned during it has nothing to write when its turn comes.
