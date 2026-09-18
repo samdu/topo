@@ -93,8 +93,15 @@ struct MemoryView: View {
                 Button("Keep memory on this iPhone") { Task { await memory.keepOnThisPhone() } }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("The files come back into Topo's own folder, where Files shows them. "
-                     + "Obsidian stops seeing them.")
+                // A lost home has no folder to read, so nothing is carried out of it: the
+                // revisions are in the person's iCloud and the folder fills from them.
+                Text(isLost
+                     ? "The folder Topo was given cannot be reached, so nothing is carried out "
+                        + "of it. Your memory is in your iCloud and fills Topo's own folder "
+                        + "again; whatever is in the folder that cannot be reached stays where "
+                        + "it is, in your iCloud Drive."
+                     : "The files come back into Topo's own folder, where Files shows them. "
+                        + "Obsidian stops seeing them.")
             }
         }
     }

@@ -34,6 +34,15 @@ public enum ConflictCopy {
         return candidate
     }
 
+    /// Whether `candidate` is a conflict copy of `origin` — a name this made, in the same folder,
+    /// for the same file. Read by a transfer running again after one that stopped partway, to
+    /// tell the copy it wrote itself from one of the person's own files.
+    public static func isCopy(_ candidate: VaultPath, of origin: VaultPath) -> Bool {
+        guard candidate.components.dropLast() == origin.components.dropLast() else { return false }
+        let (stem, ext) = origin.stemAndExtension
+        return candidate.name.hasPrefix("\(stem) (Conflicted copy ") && candidate.name.hasSuffix(")\(ext)")
+    }
+
     static func stamp(_ date: Date) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
@@ -60,6 +69,12 @@ public enum ConflictCopy {
 /// do, and a different one keeps its name while the file being carried lands beside it under a
 /// conflict copy's name. Nothing in the destination is overwritten, except the baseline, which
 /// describes the files being carried and not the ones that were there.
+///
+/// Running again after one that stopped partway writes over what it wrote, file by file, and that
+/// holds for a conflict copy too: a copy of this very file already standing there with these very
+/// bytes is this transfer's own work from the attempt before, so it is left as it is rather than
+/// written again under the next free name. Two copies of one file is what a retry would otherwise
+/// leave, and the source is removed after the commit, so nobody would be able to tell them apart.
 public enum VaultTransfer {
     /// What a transfer did, as paths relative to the destination.
     public struct Outcome: Sendable, Equatable {
@@ -128,6 +143,12 @@ public enum VaultTransfer {
                     outcome.identical.append(relative)
                     continue
                 }
+                if let already = copyAlreadyThere(of: path, holding: data, among: taken,
+                                                  under: destination) {
+                    outcome.conflicted[relative] = already.string
+                    outcome.identical.append(relative)
+                    continue
+                }
                 landing = ConflictCopy.path(of: path, device: device, at: now, avoiding: taken)
                 outcome.conflicted[relative] = landing.string
             }
@@ -139,6 +160,17 @@ public enum VaultTransfer {
         outcome.copied.sort()
         outcome.identical.sort()
         return outcome
+    }
+
+    /// A conflict copy of `origin` already in the destination whose bytes are the ones being
+    /// carried: this transfer's own work from an attempt that stopped before the commit.
+    private static func copyAlreadyThere(of origin: VaultPath, holding data: Data,
+                                         among taken: Set<VaultPath>, under destination: URL) -> VaultPath? {
+        taken.sorted().first { candidate in
+            guard ConflictCopy.isCopy(candidate, of: origin) else { return false }
+            return FileManager.default.contents(atPath: url(of: candidate.string, under: destination)
+                .path(percentEncoded: false)) == data
+        }
     }
 
     /// Writes one file and reads it back, so the bytes that are there are the bytes that were

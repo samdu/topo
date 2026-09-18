@@ -82,9 +82,16 @@ final class Memory {
     struct Stranded: Equatable {
         /// The folder the move carried the vault out of.
         var folder: URL
-        /// What is still in it.
+        /// The URL access has to be started on to reach it, which is the one the grant was given
+        /// on. Carried here and not read off the home, because by the time this stands the home
+        /// is the *other* folder: the way back leaves a stranded folder in iCloud Drive and a
+        /// home with no scope at all, so a retry that asked the home would reach nothing.
+        var scope: URL?
+        /// Files the move carried and could not take away — never a name it skipped on purpose,
+        /// which was the person's and is not the memory's to remove.
         var names: [String]
-        /// Whether that folder is the app's own, which is what the line says.
+        /// Whether that folder is the app's own, which is what the line says and what decides
+        /// whether the folder itself may go once it is empty.
         var isLocal: Bool
     }
 
@@ -123,6 +130,11 @@ final class Memory {
     /// Set while a move is running: every cue answers with no pass, because the folder the pass
     /// would run against is the one being carried.
     private var paused = false
+    /// Who is waiting for the move in flight. A sign-out during a move has to wait it out before
+    /// it takes anything away: its cleanup clears the bookmark and removes the folder, and doing
+    /// either between the copy and the commit is a move committing a home the sign-out has just
+    /// dropped.
+    private var moveWaiters: [CheckedContinuation<Void, Never>] = []
     private var zoneReady = false
     private var running: Task<Void, Never>?
     /// A pass a sign-out cancelled, still winding down. Nothing new touches the folder until
@@ -348,6 +360,7 @@ final class Memory {
         // let through in the middle of it would make the folder this is still deleting.
         stopping = Task { @MainActor [weak self] in
             _ = await winding?.value
+            await self?.awaitMove()
             guard let self, self.generation == generation else { return }
             await self.removeFolder()
         }
@@ -457,9 +470,30 @@ final class Memory {
             return moveError
         }
         let destination = VaultHome.folder(for: pick, picked: picked)
-        return await move(from: localDirectory, to: destination, wasLocal: true,
-                          removingSourceFolder: true) { [bookmarks] in
-            try bookmarks.save(bookmark)
+        // From wherever the memory is now, which is not always this phone: picking a second
+        // folder while the memory already lives in a first one is a move between them, and one
+        // that read the source off `localDirectory` would carry an empty folder and leave the
+        // memory in the first.
+        switch home {
+        case .local:
+            return await move(from: localDirectory, to: destination, scope: nil, wasLocal: true,
+                              removingSourceFolder: true) { [bookmarks] in
+                try bookmarks.save(bookmark)
+            }
+        case .iCloudDrive(let from, let folder):
+            guard folder != destination else { return nil }
+            let started = from.startAccessingSecurityScopedResource()
+            defer { if started { from.stopAccessingSecurityScopedResource() } }
+            return await move(from: folder, to: destination, scope: from, wasLocal: false,
+                              removingSourceFolder: false) { [bookmarks] in
+                try bookmarks.save(bookmark)
+            }
+        case .lost:
+            // The memory is in a folder this phone cannot reach, so there is nothing to carry
+            // out of it and nothing here may say where it went.
+            moveError = "the folder the memory is in cannot be reached, so there is nothing to "
+                + "move out of it: keep the memory on this iPhone first, and pick again after"
+            return moveError
         }
     }
 
@@ -467,21 +501,50 @@ final class Memory {
     /// swapped, and the baseline coming back with the files.
     @discardableResult
     func keepOnThisPhone() async -> String? {
-        guard case .iCloudDrive(let picked, let folder) = home else { return nil }
-        let started = picked.startAccessingSecurityScopedResource()
-        defer { if started { picked.stopAccessingSecurityScopedResource() } }
-        // The folder the person picked is theirs and stays; what goes out of it is what the
-        // memory put there.
-        return await move(from: folder, to: localDirectory, wasLocal: false,
-                          removingSourceFolder: false) { [bookmarks] in
-            try bookmarks.clear()
+        switch home {
+        case .local:
+            return nil
+        case .iCloudDrive(let picked, let folder):
+            let started = picked.startAccessingSecurityScopedResource()
+            defer { if started { picked.stopAccessingSecurityScopedResource() } }
+            // The folder the person picked is theirs and stays; what goes out of it is what the
+            // memory put there.
+            return await move(from: folder, to: localDirectory, scope: picked, wasLocal: false,
+                              removingSourceFolder: false) { [bookmarks] in
+                try bookmarks.clear()
+            }
+        case .lost:
+            // A lost home is the one way back that carries nothing: there is no folder to read,
+            // which is what lost means. Dropping the bookmark is the whole of it, and the pass
+            // that follows fills this phone's folder from the store, which is where every
+            // revision is. Whatever is in the folder that could not be reached is in the
+            // person's iCloud Drive still, and is theirs.
+            guard !moving else { return "a move is already running" }
+            do {
+                try bookmarks.clear()
+            } catch {
+                moveError = "the keychain would not let the folder go: \(error)"
+                return moveError
+            }
+            moveError = nil
+            stranded = nil
+            mirror = nil
+            mirrorFolder = nil
+            dropPresenter()
+            home = readHome()
+            lastReport = nil
+            lastSync = nil
+            lastError = nil
+            lastDownloads = nil
+            await sync()
+            return nil
         }
     }
 
     /// The move, either way. The mirror is stopped and every cue answers with no pass until it is
     /// over, the folders are carried under one coordinated write, and the commit is `commit` —
     /// the one write that says where the vault is.
-    private func move(from source: URL, to destination: URL, wasLocal: Bool,
+    private func move(from source: URL, to destination: URL, scope: URL?, wasLocal: Bool,
                       removingSourceFolder: Bool,
                       commit: @escaping @Sendable () throws -> Void) async -> String? {
         guard !moving else { return "a move is already running" }
@@ -491,6 +554,9 @@ final class Memory {
         defer {
             moving = false
             paused = false
+            let waiting = moveWaiters
+            moveWaiters = []
+            for waiter in waiting { waiter.resume() }
         }
         // The pass in flight is waited out rather than cancelled: it is halfway through writing
         // the folder this move is about to carry, and a cancelled one leaves the baseline saying
@@ -510,7 +576,7 @@ final class Memory {
                                                         commit: commit)
             home = readHome()
             stranded = outcome.left.isEmpty ? nil
-                : Stranded(folder: source, names: outcome.left, isLocal: wasLocal)
+                : Stranded(folder: source, scope: scope, names: outcome.left, isLocal: wasLocal)
             // The folder has moved, so what the last pass said about the old one is not about
             // this one; the sync below is what fills these in again.
             lastReport = nil
@@ -530,21 +596,40 @@ final class Memory {
         return nil
     }
 
-    /// Tries again to empty the folder a move left something in. Never a rollback: the home has
-    /// moved, and this is only the old copy going.
+    /// Tries again to take away what the move carried and could not. Never a rollback: the home
+    /// moved at the commit, and this is only the old copy going.
+    ///
+    /// The same cleanup the move ran, name by name, and never a removal of the folder itself
+    /// unless it is the app's own and it ends up empty. A folder in the person's iCloud Drive
+    /// holds their Obsidian settings and whatever else they keep beside their notes, and a
+    /// control that took a whole folder away would take those with it.
     func removeStranded() async {
-        guard let stranded else { return }
-        let scope = home.scope
-        var started = false
-        if !stranded.isLocal, let scope { started = scope.startAccessingSecurityScopedResource() }
-        defer { if started, let scope { scope.stopAccessingSecurityScopedResource() } }
+        guard let stranded, !moving else { return }
+        let started = stranded.scope?.startAccessingSecurityScopedResource() == true
+        defer { if started, let scope = stranded.scope { scope.stopAccessingSecurityScopedResource() } }
         do {
-            try await VaultMirror.removeFolder(at: stranded.folder)
-            self.stranded = nil
+            let outcome = try await VaultMigration.emptyAgain(stranded.folder, of: stranded.names,
+                                                              removingFolder: stranded.isLocal)
+            if outcome.left.isEmpty {
+                self.stranded = nil
+                moveError = nil
+            } else {
+                self.stranded = Stranded(folder: stranded.folder, scope: stranded.scope,
+                                         names: outcome.left, isLocal: stranded.isLocal)
+                moveError = "\(outcome.left.count) of the old copy would still not go"
+            }
         } catch {
-            self.stranded = Stranded(folder: stranded.folder,
-                                     names: stranded.names, isLocal: stranded.isLocal)
             moveError = Self.describe(error)
+        }
+    }
+
+    /// Waits out a move in flight. A sign-out's cleanup clears the bookmark and takes the folder
+    /// away, and either between a move's copy and its commit is a move committing a home the
+    /// sign-out has just dropped.
+    private func awaitMove() async {
+        guard moving else { return }
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            moveWaiters.append(continuation)
         }
     }
 

@@ -91,6 +91,16 @@ final class VaultMigrationTests: XCTestCase {
         try await writer.write(text, to: path, continuing: store.read(), at: when)
     }
 
+    /// Waits for something the test can observe, failing rather than hanging when it never comes.
+    private func eventually(_ what: String, within seconds: TimeInterval = 10,
+                            _ condition: @MainActor () throws -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(seconds)
+        while !(try condition()) {
+            guard Date() < deadline else { return XCTFail("timed out waiting for \(what)") }
+            await Task.yield()
+        }
+    }
+
     private func put(_ text: String, at relative: String, in root: URL) {
         let file = relative.split(separator: "/").reduce(root) { $0.appendingPathComponent(String($1)) }
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
@@ -167,31 +177,97 @@ final class VaultMigrationTests: XCTestCase {
         XCTAssertEqual(text("notes/today.md", in: device.local), "eggs")
     }
 
-    /// After the commit the home has moved, and a source that will not empty is something to say
-    /// rather than a reason to put the memory back.
-    func testASourceThatWillNotEmptyLeavesTheHomeMovedAndSaysSo() async throws {
+    /// After the commit the home has moved, and a file the cleanup carried and could not take
+    /// away is something to say rather than a reason to put the memory back.
+    func testAFileTheCleanupCannotTakeAwayLeavesTheHomeMovedAndSaysSo() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: VaultPath("notes/today.md")!, in: database, as: hub, at: t0)
+        let memory = memory(database, on: device)
+        await memory.sync()
+        // A folder the file can be read out of and not unlinked from: read and execute, no write.
+        let shut = device.local.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: shut.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        }
+
+        let moved = await memory.keepInICloudDrive(device.obsidianVault)
+
+        XCTAssertNil(moved)
+        XCTAssertEqual(memory.home.folder, device.obsidianVault)
+        XCTAssertEqual(text("notes/today.md", in: device.obsidianVault), "eggs")
+        let stranded = try XCTUnwrap(memory.stranded)
+        XCTAssertTrue(stranded.isLocal)
+        XCTAssertEqual(stranded.names, ["notes/today.md"])
+        XCTAssertTrue(memory.summary.contains("the old copy is still on this iPhone"))
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        await memory.removeStranded()
+        XCTAssertNil(memory.stranded)
+        XCTAssertNil(contents(of: device.local))
+    }
+
+    /// A name the transfer skipped on purpose was never the memory's to move, so it does not
+    /// strand the folder. Reported as left behind it would say the old copy is still there when
+    /// the memory has entirely gone — and offer a control to delete the person's own files.
+    func testObsidiansOwnFolderDoesNotStrandTheSource() async throws {
         let device = makeDevice()
         let database = InMemoryRecordDatabase()
         try await write("eggs", to: groceries, in: database, as: hub, at: t0)
         let memory = memory(database, on: device)
         await memory.sync()
-        // Something in the source that is not the memory's and is never carried.
         put("{}", at: ".obsidian/appearance.json", in: device.local)
 
-        let refusal = await memory.keepInICloudDrive(device.obsidianVault)
+        let moved = await memory.keepInICloudDrive(device.obsidianVault)
 
-        XCTAssertNil(refusal)
-        XCTAssertEqual(memory.home.folder, device.obsidianVault)
-        XCTAssertEqual(text("Groceries.md", in: device.obsidianVault), "eggs")
-        XCTAssertNil(text("Groceries.md", in: device.local))
-        let stranded = try XCTUnwrap(memory.stranded)
-        XCTAssertTrue(stranded.isLocal)
-        XCTAssertEqual(stranded.names, [".obsidian"])
-        XCTAssertTrue(memory.summary.contains("the old copy is still on this iPhone"))
-
-        await memory.removeStranded()
+        XCTAssertNil(moved)
         XCTAssertNil(memory.stranded)
-        XCTAssertNil(contents(of: device.local))
+        XCTAssertFalse(memory.summary.contains("the old copy"))
+        // The folder is not taken away while something of somebody's is still in it.
+        XCTAssertEqual(text(".obsidian/appearance.json", in: device.local), "{}")
+        XCTAssertNil(text("Groceries.md", in: device.local))
+    }
+
+    /// The way back empties the folder the person picked and takes nothing else out of it — and
+    /// the retry behind "Remove the old copy" does exactly the same, so a control offered for a
+    /// folder in the person's iCloud Drive can never take their Obsidian settings with it.
+    func testTheRetryTakesAwayWhatWasCarriedAndNothingElse() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: VaultPath("notes/today.md")!, in: database, as: hub, at: t0)
+        let memory = memory(database, on: device)
+        await memory.sync()
+        let moved = await memory.keepInICloudDrive(device.obsidianVault)
+        XCTAssertNil(moved)
+        // The person's own things, beside their notes, in the folder they picked.
+        put("{}", at: ".obsidian/appearance.json", in: device.obsidianVault)
+        let shut = device.obsidianVault.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: shut.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        }
+
+        let back = await memory.keepOnThisPhone()
+
+        XCTAssertNil(back)
+        XCTAssertEqual(memory.home, .local)
+        XCTAssertEqual(text("notes/today.md", in: device.local), "eggs")
+        let stranded = try XCTUnwrap(memory.stranded)
+        XCTAssertFalse(stranded.isLocal)
+        XCTAssertEqual(stranded.names, ["notes/today.md"])
+        // The grant the retry needs, carried on the stranded folder — the home has no scope now.
+        XCTAssertEqual(stranded.scope, device.obsidianVault)
+        XCTAssertNil(memory.home.scope)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        await memory.removeStranded()
+
+        XCTAssertNil(memory.stranded)
+        XCTAssertNil(text("notes/today.md", in: device.obsidianVault))
+        // Theirs, untouched, and the folder they picked is still there.
+        XCTAssertEqual(text(".obsidian/appearance.json", in: device.obsidianVault), "{}")
+        XCTAssertEqual(contents(of: device.obsidianVault), [".obsidian/appearance.json"])
     }
 
     /// The source is held under a coordinated write from before the first file is read until the
@@ -318,6 +394,121 @@ final class VaultMigrationTests: XCTestCase {
         XCTAssertNotNil(text(".topo/mirror.json", in: device.local))
         // The picked folder is the person's and stays; what was carried out of it is gone.
         XCTAssertEqual(contents(of: device.obsidianVault), [])
+    }
+
+    // MARK: Every control against every home
+
+    /// A lost home's one way back. There is no folder to read — that is what lost means — so
+    /// nothing is carried: the bookmark goes and the folder fills from the store, where every
+    /// revision is. Before this, the control the screen offers for a lost home did nothing at
+    /// all and said nothing.
+    func testALostHomeComesBackToThisPhone() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: groceries, in: database, as: hub, at: t0)
+        let bookmarks = InMemoryBookmarkStore(Data("not a bookmark".utf8))
+        let memory = memory(database, on: device, bookmarks: bookmarks)
+        await memory.sync()
+        guard case .lost = memory.home else { return XCTFail("the home is \(memory.home)") }
+
+        let back = await memory.keepOnThisPhone()
+
+        XCTAssertNil(back)
+        XCTAssertEqual(memory.home, .local)
+        XCTAssertNil(try bookmarks.load())
+        XCTAssertEqual(text("Groceries.md", in: device.local), "eggs")
+        XCTAssertNil(memory.stranded)
+        XCTAssertNil(memory.moveError)
+    }
+
+    /// Picking a second folder while the memory already lives in a first one is a move between
+    /// them. One that read the source off this app's own folder would carry an empty folder and
+    /// leave the memory in the first.
+    func testPickingASecondFolderMovesTheMemoryOutOfTheFirst() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: groceries, in: database, as: hub, at: t0)
+        let memory = memory(database, on: device)
+        await memory.sync()
+        let first = await memory.keepInICloudDrive(device.obsidianVault)
+        XCTAssertNil(first)
+
+        let second = await memory.keepInICloudDrive(device.iCloudDriveRoot)
+
+        XCTAssertNil(second)
+        let made = device.iCloudDriveRoot
+            .appendingPathComponent("Obsidian/\(VaultHome.vaultName)", isDirectory: true)
+        XCTAssertEqual(memory.home.folder, made)
+        XCTAssertEqual(text("Groceries.md", in: made), "eggs")
+        XCTAssertNotNil(text(".topo/mirror.json", in: made))
+        // The first folder is the person's and stays, emptied of what the memory put in it.
+        XCTAssertEqual(contents(of: device.obsidianVault), [])
+        XCTAssertNil(memory.stranded)
+    }
+
+    /// There is nothing to carry out of a folder that cannot be reached, and nothing here may
+    /// say where the memory went. The refusal names the control that does work.
+    func testAPickWhileTheHomeIsLostIsRefused() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        let bookmarks = InMemoryBookmarkStore(Data("not a bookmark".utf8))
+        let memory = memory(database, on: device, bookmarks: bookmarks)
+        await memory.sync()
+
+        let refusal = await memory.keepInICloudDrive(device.obsidianVault)
+
+        XCTAssertEqual(refusal, "the folder the memory is in cannot be reached, so there is "
+                       + "nothing to move out of it: keep the memory on this iPhone first, and "
+                       + "pick again after")
+        guard case .lost = memory.home else { return XCTFail("the home is \(memory.home)") }
+        XCTAssertEqual(try bookmarks.load(), Data("not a bookmark".utf8))
+        XCTAssertNil(contents(of: device.obsidianVault.appendingPathComponent("Groceries.md")))
+    }
+
+    /// A sign-out during a move waits the move out. Its cleanup clears the bookmark and takes
+    /// the folder away, and either between the copy and the commit is a move committing a home
+    /// the sign-out has just dropped — a signed-out phone holding a live grant on the person's
+    /// iCloud Drive folder.
+    func testASignOutDuringAMoveWaitsItOutAndStillTakesEverything() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: groceries, in: database, as: hub, at: t0)
+        let login = Login()
+        let bookmarks = InMemoryBookmarkStore()
+        let memory = Memory(directory: device.local, store: MemoryStore(database: database),
+                            device: phone, isSignedIn: { login.holds }, bookmarks: bookmarks,
+                            ubiquityRoot: device.ubiquityRoot,
+                            isUbiquitous: { [ubiquity = device.ubiquityRoot.standardizedFileURL.path] in
+                                $0.standardizedFileURL.path.hasPrefix(ubiquity)
+                            },
+                            warm: { _ in VaultDownloads.Report() }, ensureZone: {},
+                            now: { [t0] in t0 })
+        await memory.sync()
+
+        let held = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async { [local = device.local] in
+            var failure: NSError?
+            NSFileCoordinator().coordinate(writingItemAt: local, options: [], error: &failure) { _ in
+                held.signal()
+                _ = release.wait(timeout: .now() + 10)
+            }
+        }
+        XCTAssertEqual(held.wait(timeout: .now() + 10), .success)
+
+        let move = Task { await memory.keepInICloudDrive(device.obsidianVault) }
+        for _ in 0..<200 { await Task.yield() }
+        login.holds = false
+        memory.forget()
+        release.signal()
+        _ = await move.value
+        // The sign-out's cleanup runs after the move, whatever the move committed.
+        try await eventually("the sign-out to finish") { try bookmarks.load() == nil }
+        await memory.sync()
+
+        XCTAssertNil(try bookmarks.load())
+        XCTAssertEqual(memory.home, .local)
+        XCTAssertNil(contents(of: device.local))
     }
 
     // MARK: Picks the app will not take

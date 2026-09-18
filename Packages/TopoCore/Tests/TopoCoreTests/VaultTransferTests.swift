@@ -203,3 +203,64 @@ final class VaultTransferTests: XCTestCase {
         XCTAssertEqual(read("notes/today.md", in: source), "# Today")
     }
 }
+
+/// Running a transfer again after one that stopped before the commit. The move's promise is that
+/// the next attempt writes over what the last one wrote, file by file, and a conflict copy is a
+/// file like any other: one already standing there with these very bytes is this transfer's own
+/// work, not a second file to make room for.
+final class VaultTransferRetryTests: XCTestCase {
+    private let device = DeviceID("phone")
+    private let now = Date(timeIntervalSince1970: 1_756_000_000)
+
+    private func makeFolder(_ name: String) -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("topo-retry-\(name)-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    private func write(_ text: String, to relative: String, in root: URL) {
+        let file = relative.split(separator: "/").reduce(root) { $0.appendingPathComponent(String($1)) }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(),
+                                                 withIntermediateDirectories: true)
+        try? Data(text.utf8).write(to: file)
+    }
+
+    private func read(_ relative: String, in root: URL) -> String? {
+        let file = relative.split(separator: "/").reduce(root) { $0.appendingPathComponent(String($1)) }
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    func testARetryAfterAPartialConflictedTransferLeavesOneCopy() throws {
+        let source = makeFolder("source")
+        let destination = makeFolder("destination")
+        write("what the phone had", to: "A.md", in: source)
+        write("# Today", to: "notes/B.md", in: source)
+        write("what Obsidian had", to: "A.md", in: destination)
+        // The first attempt writes A's conflict copy and then cannot write B.
+        let shut = destination.appendingPathComponent("notes", isDirectory: true)
+        try FileManager.default.createDirectory(at: shut, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: shut.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        }
+        XCTAssertThrowsError(try VaultTransfer.copy(from: source, to: destination,
+                                                    device: device, at: now))
+        let copy = "A (Conflicted copy phone 202508240146).md"
+        XCTAssertEqual(read(copy, in: destination), "what the phone had")
+
+        // The way is clear; the whole thing runs again.
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: shut.path)
+        let outcome = try VaultTransfer.copy(from: source, to: destination, device: device, at: now)
+
+        XCTAssertEqual(outcome.conflicted["A.md"], copy)
+        XCTAssertEqual(read(copy, in: destination), "what the phone had")
+        XCTAssertEqual(read("A.md", in: destination), "what Obsidian had")
+        XCTAssertEqual(read("notes/B.md", in: destination), "# Today")
+        // One copy of A, not one per attempt.
+        let names = VaultTransfer.entries(in: destination).files.sorted()
+        XCTAssertEqual(names, ["A (Conflicted copy phone 202508240146).md", "A.md", "notes/B.md"])
+    }
+}
