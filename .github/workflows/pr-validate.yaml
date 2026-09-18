@@ -176,8 +176,9 @@ jobs:
         # coordinated file access waiting out another app, a semaphore — stops
         # every other task too, and on a runner or a phone there are few threads
         # to spare. Pinned, that is a suite that hangs rather than one that is
-        # slow on a laptop with cores to hide it; the timeout turns the hang into
-        # a failure with a log, minutes in rather than at the job's own cap.
+        # slow on a laptop with cores to hide it; the step's own bound turns the
+        # hang into a failure with a log, minutes in rather than at the job's cap.
+        timeout-minutes: 10
         env:
           LIBDISPATCH_COOPERATIVE_POOL_STRICT: "1"
         run: |
@@ -188,7 +189,7 @@ jobs:
             if [ ! -f "Packages/$package/Package.swift" ]; then
               echo "::error::Packages/$package/Package.swift is missing."
               status=1
-            elif ! timeout 600 swift test --package-path "Packages/$package" \
+            elif ! swift test --package-path "Packages/$package" \
                    --xunit-output "$RESULTS/$package.xml" 2>&1 | tee "$RESULTS/$package.log"; then
               echo "::error::swift test failed in $package."
               status=1
