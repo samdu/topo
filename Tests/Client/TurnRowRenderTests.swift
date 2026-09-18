@@ -136,6 +136,21 @@ final class TurnRowRenderTests: XCTestCase {
                           Look(.tv).bubble.horizontalPadding)
     }
 
+    /// Topo's side is a look value of the same type as the bubble, set to nothing — so a look
+    /// that encloses Topo draws an enclosure, with no view changed. A view that decided Topo's
+    /// side for itself, with a literal or a branch, fails this.
+    func testToposSideIsDrawnFromTheLookToo() throws {
+        var look = Look()
+        look.plain.accent = Color(red: 1, green: 0, blue: 1)
+        look.plain.strokeWidth = 2
+        look.plain.cornerRadius = 12
+        look.plain.horizontalPadding = 12
+        look.plain.verticalPadding = 8
+        let raster = try render(turn(.assistant, "Paris."), look: look)
+        XCTAssertFalse(raster.columns(matching: UIColor.magenta).isEmpty,
+                       "Topo's side ignored the look, so the view is deciding it")
+    }
+
     /// Every value the bubble draws with is the look's, so a look with another accent in it is a
     /// bubble in that accent and none of the shipped one. A literal in the view fails this.
     func testTheBubbleIsDrawnInTheLooksAccent() throws {

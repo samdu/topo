@@ -62,19 +62,23 @@ struct TurnRow: View {
 
     private var mine: Bool { turn.role == .person }
 
+    /// What the words are drawn on. The view chooses the side and the look chooses everything
+    /// drawn on it, Topo's side included, which is why there is no number here.
+    private var enclosure: Look.Enclosure { mine ? look.bubble : look.plain }
+
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
             Text(turn.text)
                 .font(look.transcript.bodyFont)
                 .foregroundStyle(look.transcript.text)
                 .fixedSize(horizontal: false, vertical: true)
-                .padding(.horizontal, mine ? look.bubble.horizontalPadding : 0)
-                .padding(.vertical, mine ? look.bubble.verticalPadding : 0)
-                .background { if mine { Bubble.fill(look.bubble) } }
+                .padding(.horizontal, enclosure.horizontalPadding)
+                .padding(.vertical, enclosure.verticalPadding)
+                .background { TurnShape.fill(enclosure) }
             Text(turn.at, format: .dateTime.hour().minute())
                 .font(look.transcript.labelFont)
                 .foregroundStyle(look.transcript.caption)
-                .padding(.horizontal, mine ? look.bubble.horizontalPadding : 0)
+                .padding(.horizontal, enclosure.horizontalPadding)
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
@@ -100,11 +104,12 @@ struct TurnRow: View {
     }
 }
 
-/// The person's bubble: an outline in their side's colour over a faint tint of the same, so it
-/// reads as an enclosure rather than a block of colour. Every value is the look's.
-enum Bubble {
+/// What a turn's words sit on, drawn entirely from the look: a tint under an outline, over one
+/// of the system's backdrops or over nothing. The person's enclosure draws a bubble; Topo's is
+/// the same shape with no outline, no tint and no backdrop, so it draws nothing at all.
+enum TurnShape {
     @ViewBuilder
-    static func fill(_ look: Look.Bubble) -> some View {
+    static func fill(_ look: Look.Enclosure) -> some View {
         let shape = RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
         ZStack {
             switch look.surface {

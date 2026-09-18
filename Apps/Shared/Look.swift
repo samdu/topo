@@ -16,11 +16,17 @@ import SwiftUI
 /// look, in a preview or in a render.
 struct Look: Equatable, Sendable {
     var transcript: Transcript
-    var bubble: Bubble
+    /// The person's own turn, which is enclosed.
+    var bubble: Enclosure
+    /// Topo's turn, which is not: the same fields set to nothing, so the words sit in the column
+    /// as plain text. It is a field rather than a branch in the view, so a look that wants Topo's
+    /// side drawn differently says so here and no view changes.
+    var plain: Enclosure
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
-        bubble = Bubble(screen)
+        bubble = .bubble(screen)
+        plain = .plain
     }
 
     /// The three screens the client is drawn on.
@@ -90,34 +96,39 @@ struct Look: Equatable, Sendable {
         }
     }
 
-    /// The person's own turn. Topo's turns are drawn as plain text with none of this: one side of
-    /// the transcript is enclosed and the other is not, which is what says who said what now that
-    /// no caption does.
-    struct Bubble: Equatable, Sendable {
-        /// The outline, and the tint under it. `secondary` is the person's side of the palette.
-        var accent: Color = Theme.secondary
+    /// What a turn's words are drawn on. The person's is an outline in their side's colour over
+    /// a faint tint of the same, so it reads as an enclosure rather than a block of colour;
+    /// Topo's is nothing at all. One type, so which side a turn is on is all the view decides.
+    struct Enclosure: Equatable, Sendable {
+        /// The outline, and the tint under it.
+        var accent: Color
         /// The tint's alpha. The fill is a wash under the outline rather than a block of colour.
-        var fillOpacity: Double = 0.12
-        var strokeWidth: CGFloat = 1.5
-        var cornerRadius: CGFloat = 18
+        var fillOpacity: Double
+        var strokeWidth: CGFloat
+        var cornerRadius: CGFloat
         var horizontalPadding: CGFloat
         var verticalPadding: CGFloat
         /// What sits under the tint.
-        var surface: Surface = .flat
+        var surface: Surface
 
-        init(_ screen: Screen = .current) {
+        /// The person's side. `secondary` is the person's colour in the palette.
+        static func bubble(_ screen: Screen) -> Enclosure {
+            let padding: (CGFloat, CGFloat)
             switch screen {
-            case .watch:
-                horizontalPadding = 8
-                verticalPadding = 6
-            case .tv:
-                horizontalPadding = 20
-                verticalPadding = 14
-            case .phone:
-                horizontalPadding = 14
-                verticalPadding = 10
+            case .watch: padding = (8, 6)
+            case .tv: padding = (20, 14)
+            case .phone: padding = (14, 10)
             }
+            return Enclosure(accent: Theme.secondary, fillOpacity: 0.12, strokeWidth: 1.5,
+                             cornerRadius: 18, horizontalPadding: padding.0,
+                             verticalPadding: padding.1, surface: .flat)
         }
+
+        /// Topo's side: no outline, no tint, no room taken around the words. The same on every
+        /// screen, because there is nothing of it to size.
+        static let plain = Enclosure(accent: .clear, fillOpacity: 0, strokeWidth: 0,
+                                     cornerRadius: 0, horizontalPadding: 0, verticalPadding: 0,
+                                     surface: .flat)
     }
 
     /// What a surface is made of. `flat` is the tint alone over whatever is behind it; the other
