@@ -17,13 +17,10 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("readAloud") private var readAloud = true
     @State private var draft = ""
+    @State private var showSettings = false
     @State private var showDiagnostics = false
-    @State private var showAbout = false
-    @State private var showVocabulary = false
     #if DEBUG
-    /// The vault's other home, asked about rather than built: see `VaultProbe`.
-    @State private var showVaultProbe = false
-    /// The last spoken turn's nonce, for the title's debug report.
+    /// The last spoken turn's nonce, for the badge's debug report.
     @State private var spokenNonce: String?
     #endif
 
@@ -85,13 +82,13 @@ struct ChatView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) { composer }
-            .navigationTitle("Topo")
+            // The mark says the name, so the title says it twice.
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Topo").font(.headline)
-                        .onLongPressGesture { showDiagnostics = true }
-                        .accessibilityHint("Long press for diagnostics")
+                ToolbarItem(placement: .topBarTrailing) {
+                    TopoBadge(openSettings: { showSettings = true },
+                              openDiagnostics: { showDiagnostics = true })
                         #if DEBUG
                         // What the spoken-turn UI test decodes: the last spoken turn, its reply,
                         // and what the speaker did with it, as JSON (`DebugRun.ChatReport`).
@@ -101,46 +98,11 @@ struct ChatView: View {
                                                                 voice: speaker.voice.state))
                         #endif
                 }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        @Bindable var harness = harness
-                        Picker("Model", selection: $harness.model) {
-                            ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
-                        }
-                        Toggle("Read replies aloud", isOn: $readAloud)
-                        Button("Vocabulary") { showVocabulary = true }
-                        Button("Diagnostics") { showDiagnostics = true }
-                        Button("About Topo") { showAbout = true }
-                        #if DEBUG
-                        // Whether a folder in iCloud Drive › Obsidian, granted by the picker
-                        // alone, is one this app can read and write on a later launch. Nothing
-                        // it does reaches the memory; it moves into the settings sheet's Memory
-                        // section, or goes, when that answer is in.
-                        Button("Probe iCloud Drive…") { showVaultProbe = true }
-                        #endif
-                        Divider()
-                        // The reply in the ear goes with the login: a reply still being read
-                        // would otherwise carry on, holding the process open, for an account the
-                        // app has just let go of.
-                        Button("Sign out", role: .destructive) {
-                            speaker.stop()
-                            harness.forget()
-                            // The memory is the person's and stays in their iCloud; the copy of
-                            // it on this phone goes with the login.
-                            memory.forget()
-                            signIn.signOut()
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
             }
+            .sheet(isPresented: $showSettings) { SettingsView(signOut: signOut) }
+            // The diagnostics are the badge's own, held rather than tapped, so they open from
+            // here as well as from the sheet: a screen that will not draw is still reachable.
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
-            .sheet(isPresented: $showAbout) { AboutView() }
-            .sheet(isPresented: $showVocabulary) { VocabularyView() }
-            #if DEBUG
-            .sheet(isPresented: $showVaultProbe) { VaultProbeView() }
-            #endif
         }
         .task {
             // The mirror runs on every pass of the loop below, which is what makes the folder
@@ -231,6 +193,14 @@ struct ChatView: View {
             if phase != .active { voice.cancel(.chat) }
         }
         .onDisappear { voice.cancel(.chat) }
+    }
+
+    /// The way out, built here because this is where the four things it ends are in scope, and
+    /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
+    /// its own path, since a demotion writes what is waiting into the log first.
+    private var signOut: SignOut {
+        SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { harness.forget() },
+                forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
     }
 
     /// Hold to talk and release to send; a tap opens the microphone until the next press. The

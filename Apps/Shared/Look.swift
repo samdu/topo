@@ -22,11 +22,21 @@ struct Look: Equatable, Sendable {
     /// as plain text. It is a field rather than a branch in the view, so a look that wants Topo's
     /// side drawn differently says so here and no view changes.
     var plain: Enclosure
+    /// The glass a cabochon is cut from. One value, so the mark in the navigation bar and the
+    /// microphone are poured from the same slab.
+    var jewel: Jewel
+    /// The mark at the trailing edge of the navigation bar.
+    var badge: Badge
+    /// The sheet the badge opens.
+    var settings: Settings
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
         bubble = .bubble(screen)
         plain = .plain
+        jewel = Jewel()
+        badge = Badge()
+        settings = Settings()
     }
 
     /// The three screens the client is drawn on.
@@ -136,6 +146,84 @@ struct Look: Equatable, Sendable {
     /// thinnest.
     enum Surface: String, Equatable, Sendable, CaseIterable {
         case glass, material, flat
+    }
+
+    /// A shadow, cast or cut: the same four values whichever way `StainedGlass` uses it.
+    struct Shadow: Equatable, Sendable {
+        var color: Color
+        var radius: CGFloat
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+    }
+
+    /// A cabochon cut from a slab of poured glass: a domed body paler where the glass is thinner,
+    /// a milky drift across it, a darker band on the diagonal, a sheen off the top and a
+    /// jeweller's bevel around a true circle. The whole slab is these values, so a jewel of
+    /// another colour is another `Jewel` and not another view.
+    ///
+    /// The lengths are the ones the glass is poured at rather than fractions of the disc it is
+    /// drawn in, so the same slab read at 30pt and at 64pt is a different part of the same pour.
+    struct Jewel: Equatable, Sendable {
+        /// The four glasses, darkest first.
+        var deep = Color(red: 0.05, green: 0.24, blue: 0.36)
+        var mid = Color(red: 0.08, green: 0.42, blue: 0.53)
+        var pale = Color(red: 0.55, green: 0.80, blue: 0.84)
+        var milk = Color(red: 0.80, green: 0.92, blue: 0.93)
+
+        /// The body: a radial gradient centred low and right, where the glass is thinnest.
+        var bodyCenter = UnitPoint(x: 0.62, y: 0.72)
+        var bodyEndRadius: CGFloat = 46
+        /// Cut into the body from the top, and the light caught under its lower edge.
+        var bodyShade = Shadow(color: .black.opacity(0.45), radius: 5, y: 3)
+        var bodyCatch = Shadow(color: .white.opacity(0.3), radius: 2, y: -2)
+
+        /// The milky drift, an off-centre swirl of thinner glass.
+        var driftSize = CGSize(width: 44, height: 30)
+        var driftEndRadius: CGFloat = 22
+        var driftOpacity = 0.55
+        var driftHaloOpacity = 0.25
+        var driftAngle = Angle.degrees(-28)
+        var driftOffset = CGSize(width: 6, height: 8)
+        var driftBlur: CGFloat = 2
+
+        /// The dark band across the diagonal.
+        var bandSize = CGSize(width: 14, height: 90)
+        var bandOpacity = 0.6
+        var bandAngle = Angle.degrees(24)
+        var bandOffset = CGSize(width: 4, height: -4)
+        var bandBlur: CGFloat = 1.5
+
+        /// The sheen off the top of the slab, and the shade off its foot.
+        var sheenOpacity = 0.35
+        var sheenShadeOpacity = 0.15
+        var sheenStart = UnitPoint(x: 0.3, y: 0)
+        var sheenEnd = UnitPoint(x: 0.7, y: 1)
+
+        /// The cut: a true circle with a bright bevel at the top and a dark one at the foot.
+        var bevelWidth: CGFloat = 1.5
+        var bevelHighlightOpacity = 0.8
+        var bevelMidOpacity = 0.15
+        var bevelShadeOpacity = 0.35
+
+        /// What the jewel casts on what is behind it.
+        var dropShadow = Shadow(color: .black.opacity(0.5), radius: 4, y: 3)
+    }
+
+    /// The mark at the trailing edge of the navigation bar: a small cabochon carrying the
+    /// octopus, which is the way to the settings and, held, to the diagnostics.
+    struct Badge: Equatable, Sendable {
+        var size: CGFloat = 30
+        var markSize: CGFloat = 19
+        /// The mark is white on the glass whatever the appearance, because the glass it sits on
+        /// is the same colour in both.
+        var markColor = Color.white
+        var markShadow = Shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+    }
+
+    /// The sheet the badge opens.
+    struct Settings: Equatable, Sendable {
+        /// Its controls address Topo, so they take Topo's colour.
+        var tint = Theme.primary
     }
 }
 
