@@ -55,6 +55,10 @@ public actor VaultMirror {
         public var deleted: [VaultPath] = []
         /// Things in the directory a vault cannot hold, left where they are.
         public var skipped: [String] = []
+        /// How many of the memory's files the folder holds at the end of the pass — the ones
+        /// this pass wrote or found already saying what the store says, so a file it was
+        /// refused is not counted. What "the vault has more than a handful in it" is read from.
+        public var files = 0
 
         public var isEmpty: Bool {
             written.isEmpty && removed.isEmpty && pushed.isEmpty && deleted.isEmpty
@@ -184,6 +188,7 @@ public actor VaultMirror {
         report.removed = Array(Set(report.removed)).sorted()
         report.pushed = Array(Set(report.pushed)).sorted()
         report.deleted = Array(Set(report.deleted)).sorted()
+        report.files = state.files.count
         return report
     }
 

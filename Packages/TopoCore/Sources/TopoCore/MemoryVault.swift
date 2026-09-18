@@ -330,41 +330,13 @@ public struct Vault: Sendable {
         (a.at, a.ref) > (b.at, b.ref)
     }
 
-    /// `Meeting notes (Conflicted copy hub 202609051930).md`, beside the
-    /// file it is a copy of: what Obsidian Sync names one, so a vault full
-    /// of them reads the way its own do. The stamp is UTC, since every
-    /// device derives this name and they agree on no other clock.
-    ///
-    /// A name already in use is somebody's file, and a copy never takes a
-    /// name off a file that is really there, so it keeps looking: the
-    /// revision's own sequence number first, since that is stable for as
-    /// long as the revision exists, and then a count. Every device reads
-    /// the same records in the same order and lands on the same name.
+    /// The name Obsidian Sync gives a conflict copy, which is `ConflictCopy`'s rule: the
+    /// revision's sequence number is the discriminator, since that is stable for as long as the
+    /// revision exists, so every device reads the same records and lands on the same name.
     private static func conflictCopyPath(of origin: VaultPath, for note: Note,
                                          avoiding taken: some Collection<VaultPath>) -> VaultPath {
-        // A name differing only in case is the same name on the ordinary
-        // Mac disk, so it counts as taken.
-        let held = Set(taken.map { $0.string.lowercased() })
-        func free(_ path: VaultPath) -> Bool { !held.contains(path.string.lowercased()) }
-        let (stem, ext) = origin.stemAndExtension
-        let name = "\(stem) (Conflicted copy \(note.ref.device.rawValue) \(stamp(note.at))"
-        var candidate = origin.sibling(named: name + ")" + ext)
-        if free(candidate) { return candidate }
-        candidate = origin.sibling(named: "\(name) \(note.ref.sequence))\(ext)")
-        var count = 2
-        while !free(candidate) {
-            candidate = origin.sibling(named: "\(name) \(note.ref.sequence) \(count))\(ext)")
-            count += 1
-        }
-        return candidate
-    }
-
-    private static func stamp(_ date: Date) -> String {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
-        let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-        return String(format: "%04d%02d%02d%02d%02d", parts.year ?? 0, parts.month ?? 0,
-                      parts.day ?? 0, parts.hour ?? 0, parts.minute ?? 0)
+        ConflictCopy.path(of: origin, device: note.ref.device, at: note.at,
+                          discriminator: "\(note.ref.sequence)", avoiding: taken)
     }
 }
 
