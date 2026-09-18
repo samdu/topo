@@ -2,12 +2,14 @@
 import SwiftUI
 
 /// Why a turn did or did not go: the lease, the last CloudKit error, the last API answer, the
-/// token, and whether the ear's and the voice's models are resident. Opened by a long press on the title, or
+/// token, whether the ear's and the voice's models are resident, and when the memory's folder was
+/// last in step with the store. Opened by a long press on the title, or
 /// from the menu. Reads everything afresh each time it appears and on Refresh; changes nothing.
 struct DiagnosticsView: View {
     @Environment(Harness.self) private var harness
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
+    @Environment(Memory.self) private var memory
     @Environment(\.dismiss) private var dismiss
     @State private var rows: [(String, String)] = []
 
@@ -34,7 +36,8 @@ struct DiagnosticsView: View {
     }
 
     private func load() async {
-        rows = await harness.diagnostics().rows + [("speech", voice.ear.summary), ("voice", speaker.voice.summary)]
+        rows = await harness.diagnostics().rows
+            + [("speech", voice.ear.summary), ("voice", speaker.voice.summary), ("memory", memory.summary)]
     }
 }
 #endif

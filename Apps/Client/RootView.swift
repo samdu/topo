@@ -8,6 +8,7 @@ struct RootView: View {
     @Environment(SignIn.self) private var signIn
     #if os(iOS)
     @Environment(Harness.self) private var harness
+    @Environment(Memory.self) private var memory
     #endif
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     /// Set once the first answer is in the log, so the question is not asked twice.
@@ -29,6 +30,8 @@ struct RootView: View {
             ViewerRootView().task {
                 if signIn.phase == .signedIn || harness.hasWaiting {
                     await harness.demote()
+                    // A viewer holds no login, and with no login it keeps no copy of the memory.
+                    memory.forget()
                     signIn.signOut()
                 }
             }

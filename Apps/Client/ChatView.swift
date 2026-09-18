@@ -9,6 +9,7 @@ struct ChatView: View {
     @Environment(Harness.self) private var harness
     @Environment(SignIn.self) private var signIn
     @Environment(RoleSelector.self) private var roleSelector
+    @Environment(Memory.self) private var memory
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     @AppStorage("firstRunAnswered") private var answered = false
     @Environment(VoiceInput.self) private var voice
@@ -23,6 +24,16 @@ struct ChatView: View {
     /// The last spoken turn's nonce, for the title's debug report.
     @State private var spokenNonce: String?
     #endif
+
+    /// How long the answering loop waits between passes. Five seconds, except in a debug build
+    /// launched with `TOPO_DEBUG_LOOP_SECONDS`, which is how a device test tells a revision that
+    /// arrived by push from one the loop would have fetched anyway.
+    static var loopInterval: Duration {
+        #if DEBUG
+        if let seconds = DebugRun.loopSeconds() { return .seconds(seconds) }
+        #endif
+        return .seconds(5)
+    }
 
     var body: some View {
         NavigationStack {
@@ -98,7 +109,14 @@ struct ChatView: View {
                         // The reply in the ear goes with the login: a reply still being read
                         // would otherwise carry on, holding the process open, for an account the
                         // app has just let go of.
-                        Button("Sign out", role: .destructive) { speaker.stop(); harness.forget(); signIn.signOut() }
+                        Button("Sign out", role: .destructive) {
+                            speaker.stop()
+                            harness.forget()
+                            // The memory is the person's and stays in their iCloud; the copy of
+                            // it on this phone goes with the login.
+                            memory.forget()
+                            signIn.signOut()
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -109,6 +127,14 @@ struct ChatView: View {
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
         }
         .task {
+            // The mirror runs on every pass of the loop below, which is what makes the folder
+            // current with no push and no turn. It is installed before the first turn of all,
+            // not after it: the first-run answer is a turn like any other, and a screen that
+            // installed this after sending would leave that one turn's work for whatever cue
+            // came next. What a revision's push wakes is put up with the login rather than with
+            // this screen (`MemoryWake`, from `TopoApp`).
+            harness.onPass = { [memory] in await memory.sync() }
+            defer { harness.onPass = nil }
             await harness.refresh()
             // Words on their way when the app last went away go first, under their own nonce.
             // Otherwise the first-run answer is the first turn, once, only when the log is empty;
@@ -159,7 +185,7 @@ struct ChatView: View {
             }
             await withDiscardingTaskGroup { group in
                 group.addTask { try? await TurnPush.ensureSubscription() }
-                await harness.answering(every: .seconds(5))
+                await harness.answering(every: Self.loopInterval)
             }
         }
         .task {
@@ -171,8 +197,10 @@ struct ChatView: View {
                     // still stand; the role flips after, and the login goes last.
                     await harness.demote()
                     roleSelector.acceptDemotion()
-                    // The login goes, so the reply being read goes with it, as at a sign-out.
+                    // The login goes, so the reply being read goes with it, as at a sign-out,
+                    // and so does the folder: a viewer holds no login and keeps no memory.
                     speaker.stop()
+                    memory.forget()
                     signIn.signOut()
                     return
                 }

@@ -75,6 +75,13 @@ final class Harness {
     private let pause: @Sendable (Duration) async throws -> Void
     /// True while `answering(every:)` runs.
     private var answeringLoop = false
+    /// The memory's mirror, where the loop is what drives it. Called at the top of every
+    /// answering pass, before the log is read, so a revision written on another device reaches
+    /// the folder within the interval with no push and no turn; and again after a reply is in
+    /// the log, whoever's turn it answered — one this device typed or one a limb wrote — since
+    /// that is where anything a turn leaves in the memory goes out from. Nil on a screen that is
+    /// not answering.
+    var onPass: (@MainActor () async -> Void)?
     /// Set by `wake()`: the loop skips or ends its pause and runs the next pass now.
     private var woken = false
     /// The loop's pause in progress, which `wake()` cancels.
@@ -319,6 +326,9 @@ final class Harness {
             show(result.person)
             show(result.assistant)
             status = nil
+            // The reply is in the log, as it is at the end of a pass, and anything the turn
+            // left in the memory goes out from the same place whoever's turn it was.
+            await onPass?()
             return true
         } catch is CancellationError {
             return false
@@ -426,6 +436,7 @@ final class Harness {
             woken = false
             let served = wakers
             wakers = []
+            await onPass?()
             await refresh()
             await answerPending()
             served.forEach { $0.resume() }
@@ -461,6 +472,8 @@ final class Harness {
                 show(reply)
                 error = nil
                 await refresh()
+                // The reply is in the log, so anything the turn left in the memory goes out now.
+                await onPass?()
             }
         } catch TurnRunnerError.notPrimary {
             // Another device holds the lease and this one has yielded to it; that device answers.

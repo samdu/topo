@@ -6,6 +6,11 @@
 # generates from build settings, so a declaration in the wrong place reaches the
 # project and no bundle. This reads the product.
 #
+# `UIFileSharingEnabled` and `LSSupportsOpeningDocumentsInPlace` are read the same way and for
+# the same reason. They are what puts the memory's mirror folder in Files and lets an editor open
+# it in place; neither is a key Xcode generates, and without them the app builds, runs and
+# mirrors while the person can reach none of it.
+#
 # The version keys are read the same way and for the same reason: `CURRENT_PROJECT_VERSION` is
 # passed on the command line for a TestFlight upload (docs/testflight.md), and a literal in the
 # Info.plist would beat it silently, so every build would carry the same number.
@@ -34,6 +39,14 @@ for mode in remote-notification audio; do
     esac
 done
 
+for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
+    value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+    if [ "$value" != "true" ] && [ "$value" != "1" ]; then
+        echo "$app/Info.plist does not set $key ( ${value:-absent} ); the vault would not appear in Files" >&2
+        status=1
+    fi
+done
+
 if [ -n "$build" ]; then
     got="$(plutil -extract CFBundleVersion raw -o - -- "$plist" 2>/dev/null || true)"
     if [ "$got" != "$build" ]; then
@@ -42,5 +55,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace${build:+, CFBundleVersion $build}"
 exit "$status"

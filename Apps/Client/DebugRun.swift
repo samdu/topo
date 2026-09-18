@@ -19,6 +19,16 @@ enum DebugRun {
     static let voiceVariable = "TOPO_DEBUG_VOICE"
     static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
     static let replyDelayVariable = "TOPO_DEBUG_REPLY_DELAY"
+    static let loopVariable = "TOPO_DEBUG_LOOP_SECONDS"
+
+    /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
+    /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be
+    /// what carried a revision to the folder, so what arrives in the meantime arrived by push.
+    /// Nil when the variable is absent, which is every ordinary run.
+    static func loopSeconds(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Double? {
+        guard let seconds = environment[loopVariable].flatMap(Double.init), seconds > 0 else { return nil }
+        return seconds
+    }
 
     /// `TOPO_DEBUG_REPLY_DELAY=<seconds>`: how long the harness waits before it asks the model,
     /// so the reply lands well past iOS's ordinary background grace and only a working hold

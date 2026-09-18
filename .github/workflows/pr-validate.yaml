@@ -171,6 +171,16 @@ jobs:
       # after one fails, so the log shows them all.
       - name: swift test (TopoAuth, TopoCore, TopoLink, TopoTurn)
         if: ${{ !cancelled() }}
+        # The cooperative pool is pinned to one thread. A task's thread is one of
+        # a handful the whole process shares, so anything that blocks one — a
+        # coordinated file access waiting out another app, a semaphore — stops
+        # every other task too, and on a runner or a phone there are few threads
+        # to spare. Pinned, that is a suite that hangs rather than one that is
+        # slow on a laptop with cores to hide it; the step's own bound turns the
+        # hang into a failure with a log, minutes in rather than at the job's cap.
+        timeout-minutes: 10
+        env:
+          LIBDISPATCH_COOPERATIVE_POOL_STRICT: "1"
         run: |
           set -euo pipefail
           status=0

@@ -13,13 +13,16 @@ import TopoCoreTesting
         #expect(b - a < 5)
     }
 
+    /// The only test here on the real clocks, so its lease has to be longer than a loaded
+    /// machine takes to claim one: at fifty milliseconds the claim itself could eat the lease
+    /// and the holder was no longer primary by the line after it (#94).
     @Test func aLeaseOnTheDefaultClocksLapsesInRealTime() async throws {
         let db = InMemoryRecordDatabase()
         let p = PrimaryLease(database: db, device: phone, endpoint: nil, probe: StubProbe.allDead,
-                             timing: LeaseTiming(duration: 0.05, heartbeat: 60), sleep: Ticker().sleep)
+                             timing: LeaseTiming(duration: 1, heartbeat: 60), sleep: Ticker().sleep)
         _ = try await p.acquire()
         #expect(await p.isPrimary())
-        try await Task.sleep(for: .milliseconds(80))
+        try await Task.sleep(for: .milliseconds(1_200))
         #expect(!(await p.isPrimary()))
     }
 }
