@@ -48,9 +48,9 @@ enum Theme {
     /// A hairline between two of them.
     static let border = systemBorder
     /// Body text.
-    static let text = Color.primary
+    static let text = systemText
     /// Text that supports it: a timestamp, a caption.
-    static let textMuted = Color.secondary
+    static let textMuted = systemTextMuted
 
     /// One colour that follows the appearance. The watch has one appearance, so it takes the
     /// dark value and asks the system for nothing.
@@ -72,23 +72,38 @@ enum Theme {
     }
 }
 
-// The semantic neutrals each platform actually has: iOS names its background tiers, the hub takes
-// AppKit's, and the other two have none to name.
+// The semantic neutrals each platform actually has, aliased rather than copied: a token here is
+// the system colour object itself, so it carries that colour's alpha and its answer under an
+// increased-contrast setting. iOS names its background tiers, the hub takes AppKit's, and the
+// television and the watch name none.
 private extension Theme {
     #if os(iOS) || os(visionOS)
     static let systemBackground = Color(uiColor: .systemBackground)
     static let systemSurface = Color(uiColor: .secondarySystemBackground)
     static let systemBorder = Color(uiColor: .separator)
+    static let systemText = Color(uiColor: .label)
+    static let systemTextMuted = Color(uiColor: .secondaryLabel)
     #elseif os(macOS)
     static let systemBackground = Color(nsColor: .windowBackgroundColor)
     static let systemSurface = Color(nsColor: .controlBackgroundColor)
     static let systemBorder = Color(nsColor: .separatorColor)
+    static let systemText = Color(nsColor: .labelColor)
+    static let systemTextMuted = Color(nsColor: .secondaryLabelColor)
+    #elseif os(tvOS)
+    // The television names its labels and its separator, and no background tier, so the ground is
+    // the black it is drawn on.
+    static let systemBackground = Color.black
+    static let systemSurface = Color(uiColor: .label).opacity(0.08)
+    static let systemBorder = Color(uiColor: .separator)
+    static let systemText = Color(uiColor: .label)
+    static let systemTextMuted = Color(uiColor: .secondaryLabel)
     #else
-    // The television and the watch name no background tier, so the ground is the black they are
-    // drawn on and what sits over it is the system's own ink at a panel's weight.
+    // The watch names none of them; SwiftUI's own two are the system ink it does have.
     static let systemBackground = Color.black
     static let systemSurface = Color.primary.opacity(0.08)
     static let systemBorder = Color.primary.opacity(0.2)
+    static let systemText = Color.primary
+    static let systemTextMuted = Color.secondary
     #endif
 }
 

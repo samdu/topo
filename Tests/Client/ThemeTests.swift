@@ -11,6 +11,7 @@ import XCTest
 /// colour it claims to alias rather than a value of ours that merely resembles it. Everything here
 /// is read off the resolved components, so it fails on the colour that ships and not on the
 /// literal in the source.
+@MainActor
 final class ThemeTests: XCTestCase {
     private let light = UITraitCollection(userInterfaceStyle: .light)
     private let dark = UITraitCollection(userInterfaceStyle: .dark)
@@ -109,23 +110,39 @@ final class ThemeTests: XCTestCase {
         }
     }
 
-    /// The neutrals are Apple's, not ours: each is the system colour it names, in both
-    /// appearances, so a surface follows the person's settings rather than a literal of ours.
+    /// The neutrals are Apple's, not ours: each token *is* the system colour object it names, so
+    /// it carries everything that colour carries — its alpha, and its answer under an
+    /// accessibility contrast setting — rather than a value of ours that matches it in the two
+    /// appearances a test happens to ask about. A hand-made dynamic colour with the right RGB is
+    /// exactly what this refuses: an alias is the thing or it is a copy that will drift.
     func testNeutralsAreTheSystemColoursTheyName() {
-        let aliases: [(String, Color, UIColor)] = [
-            ("background", Theme.background, .systemBackground),
-            ("surface", Theme.surface, .secondarySystemBackground),
-            ("border", Theme.border, .separator),
-            ("text", Theme.text, .label),
-            ("textMuted", Theme.textMuted, .secondaryLabel),
-        ]
-        for (name, token, system) in aliases {
-            for (appearance, traits) in [("light", light), ("dark", dark)] {
-                XCTAssertEqual(hex(token, traits), hex(Color(uiColor: system), traits),
-                               "\(name) is not \(system) in \(appearance)")
+        for (name, token, system) in neutrals {
+            XCTAssertEqual(UIColor(token), system, "\(name) is not the system colour it names")
+            for (appearance, traits) in appearances {
+                XCTAssertTrue(components(token, traits) == components(Color(uiColor: system), traits),
+                              "\(name) does not resolve as \(system) in \(appearance)")
             }
         }
     }
+
+    private let neutrals: [(name: String, color: Color, system: UIColor)] = [
+        ("background", Theme.background, .systemBackground),
+        ("surface", Theme.surface, .secondarySystemBackground),
+        ("border", Theme.border, .separator),
+        ("text", Theme.text, .label),
+        ("textMuted", Theme.textMuted, .secondaryLabel),
+    ]
+
+    /// The appearances a neutral has to answer in, the accessibility contrast setting included:
+    /// a system colour changes under it, and a copy of one does not.
+    private let appearances: [(String, UITraitCollection)] = [
+        ("light", UITraitCollection(userInterfaceStyle: .light)),
+        ("dark", UITraitCollection(userInterfaceStyle: .dark)),
+        ("light, increased contrast", UITraitCollection { $0.userInterfaceStyle = .light
+                                                          $0.accessibilityContrast = .high }),
+        ("dark, increased contrast", UITraitCollection { $0.userInterfaceStyle = .dark
+                                                         $0.accessibilityContrast = .high }),
+    ]
 
     /// The seed is fixed: the mark and the icon gradient are the same teal whatever the
     /// appearance, which is the one thing about it that is not a palette decision.
