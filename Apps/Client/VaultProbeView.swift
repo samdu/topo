@@ -2,7 +2,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The probe's screen, opened from the chat menu in a debug build. It says where the bookmark
+/// The probe's screen, opened from the settings sheet in a debug build. It says where the bookmark
 /// resolves to on this launch, and gives the three buttons whose answers are the thing being
 /// probed: Read (list the folder and read a file, waiting for one iCloud Drive has evicted),
 /// Write (a coordinated write of `topo-probe.md`), Forget (drop the bookmark).

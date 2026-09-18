@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import Security
 
-/// The probe behind "Probe iCloud Drive…" in the chat menu: a folder the person picks with the
+/// The probe behind "Probe iCloud Drive…" in the settings sheet: a folder the person picks with the
 /// document picker, kept as a security-scoped bookmark, and the three things the vault's other
 /// home would need of it — resolve it after a relaunch, read a file out of it, write a file into
 /// it. Nothing here touches the vault or the mirror; `Memory` does not read it and does not know
