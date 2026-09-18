@@ -114,11 +114,14 @@ public actor VaultMirror {
     /// store does hold. Sync again once the read is whole.
     @discardableResult
     public func sync(at now: Date = Date()) async throws -> Report {
-        // Before the folder is made, because making it is already a change to the person's
-        // device: a sync cancelled before it ran — a sign-out between the cue and the pass —
-        // leaves a phone with no folder rather than an empty one nothing will fill.
+        // Before anything is made, because making the folder is already a change to the
+        // person's device: a sync cancelled before it ran — a sign-out between the cue and the
+        // pass — leaves a phone with no folder rather than an empty one nothing will fill.
         try Task.checkCancellation()
-        try disk.createDirectory(at: directory, withIntermediateDirectories: true)
+        try await makeFolder()
+        // And then what a killed pass left behind, which is this mirror's own mess and nobody
+        // else's, taken away before a look at the folder that would not see it.
+        try await sweepScratch()
         var report = Report()
         let scan = try await scan()
         report.skipped = scan.skipped
@@ -182,6 +185,53 @@ public actor VaultMirror {
         report.pushed = Array(Set(report.pushed)).sorted()
         report.deleted = Array(Set(report.deleted)).sorted()
         return report
+    }
+
+    /// The folder itself, made if it is not there. Coordinated like every other change to it:
+    /// an editor holding the vault path — a folder it has open, or is making itself — is waited
+    /// out and told, rather than having a folder appear underneath it.
+    private func makeFolder() async throws {
+        // A folder that is already there is nothing to make, and the look that says so decides
+        // only whether to ask for the coordination — never what happens inside it. Making one
+        // is still a coordinated write, and one made and taken away between this look and the
+        // next pass is made by that pass.
+        guard !FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return }
+        _ = try await Self.coordinated(directory, reading: false,
+                                       options: NSFileCoordinator.WritingOptions.forMerging.rawValue) { url, cancellation -> Bool in
+            try cancellation.check()
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return true
+        }
+    }
+
+    /// Takes away the scratch names a killed pass left behind. Its own coordinated write, not
+    /// something done inside the scan's read: taking a name out of the folder is a change to it
+    /// whoever else has it open is owed, and every one of them is a mutation with the
+    /// cancellation read immediately before it. Hidden names are what the scan skips, so nothing
+    /// else would ever take these away.
+    private func sweepScratch() async throws {
+        _ = try await Self.coordinated(directory, reading: false,
+                                       options: NSFileCoordinator.WritingOptions.forMerging.rawValue) { url, cancellation -> Bool in
+            guard let walk = FileManager.default.enumerator(at: url,
+                                                            includingPropertiesForKeys: [.isDirectoryKey],
+                                                            options: []) else { return true }
+            for case let found as URL in walk {
+                let name = found.lastPathComponent
+                guard name.hasPrefix(".") else { continue }
+                guard name.hasPrefix(Self.scratchPrefix) else {
+                    if (try? found.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                        walk.skipDescendants()
+                    }
+                    continue
+                }
+                try cancellation.check()
+                if let folder = self.openFolder(of: found) {
+                    _ = unlinkat(folder, name, 0)
+                    close(folder)
+                }
+            }
+            return true
+        }
     }
 
     /// One pass over the disk: what the store holds written into the folder, what it no
@@ -590,7 +640,8 @@ public actor VaultMirror {
     /// phone that signed out and still holds the memory has something to say.
     public static func removeFolder(at directory: URL) async throws {
         _ = try await coordinated(directory, reading: false,
-                                  options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, _ -> Bool in
+                                  options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, cancellation -> Bool in
+            try cancellation.check()
             do {
                 try FileManager.default.removeItem(at: url)
             } catch let error as CocoaError where error.code == .fileNoSuchFile {
@@ -728,15 +779,9 @@ public actor VaultMirror {
             let name = url.lastPathComponent
             if name.hasPrefix(".") {
                 // A hidden name is somebody else's business — `.obsidian` is the vault's own
-                // and never this mirror's — with one exception: a scratch name this mirror
-                // wrote and never got to rename. Nothing else will ever take it away, since
-                // nothing else looks at hidden names, so this walk does.
-                if name.hasPrefix(Self.scratchPrefix) {
-                    if let folder = openFolder(of: url) {
-                        _ = unlinkat(folder, name, 0)
-                        close(folder)
-                    }
-                } else if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                // and never this mirror's, and this mirror's own `.topo` is nobody else's — so
+                // the scan reads none of it, and takes none of it away either.
+                if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
                     walk.skipDescendants()
                 }
                 continue

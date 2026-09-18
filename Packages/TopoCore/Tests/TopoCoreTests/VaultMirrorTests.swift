@@ -666,6 +666,54 @@ import TopoCoreTesting
         }
     }
 
+    /// The folder itself is made under coordination: an editor holding the vault path — one it
+    /// has open, or is making itself — is waited for rather than having a folder appear under it.
+    @Test func theFolderIsMadeUnderCoordinationAndWaitsForWhoeverHoldsIt() async throws {
+        try await inTemporaryDirectory { parent in
+            let directory = parent.appendingPathComponent("Vault", isDirectory: true)
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+
+            let holder = CoordinatedHolder(url: directory)
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 1) }
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(FileManager.default.fileExists(atPath: directory.path) == false,
+                    "the folder was made under somebody who was holding that name")
+            holder.release()
+
+            _ = try await sync.value
+            #expect(read("Meeting notes.md", in: directory) == "from the hub")
+        }
+    }
+
+    /// The scratch a killed pass left is swept under its own coordinated write, and a sweep the
+    /// sign-out cancelled takes nothing away: the folder is the person's until the folder goes.
+    @Test func aSyncCancelledBeforeTheScratchSweepTakesNothingAway() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            _ = try await mirror.sync(at: t0 + 1)
+
+            let scratch = ".topo-writing-\(UUID().uuidString)"
+            try Data("half written".utf8).write(to: directory.appendingPathComponent(scratch))
+
+            // The sweep is the pass's first coordinated write, so this is what it waits behind.
+            let holder = CoordinatedHolder(url: directory)
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 2) }
+            try await Task.sleep(for: .milliseconds(200))
+            sync.cancel()
+            holder.release()
+
+            await #expect(throws: CancellationError.self) { try await sync.value }
+            #expect(read(scratch, in: directory) == "half written",
+                    "a cancelled pass took something out of the folder anyway")
+        }
+    }
+
     /// The window the whole design is about, driven end to end: the compare against what the
     /// scan saw and the replacement are one coordinated write, so a save that lands while the
     /// sync waits for the file is found by the compare rather than flattened by the write.
@@ -682,7 +730,9 @@ import TopoCoreTesting
             holder.take()
             let sync = Task { try await mirror.sync(at: t0 + 3) }
             try await Task.sleep(for: .milliseconds(200))
-            try Data("what I typed".utf8).write(to: directory.appendingPathComponent("Meeting notes.md"))
+            // Their save is a coordinated write of their own, made while the mirror waits for
+            // the same file: an editor's save, not bytes dropped in behind the coordinator.
+            holder.save("what I typed")
             holder.release()
 
             let report = try await sync.value
@@ -954,8 +1004,11 @@ final class CoordinatedHolder: @unchecked Sendable {
     private let url: URL
     private let lock = NSLock()
     private var holding = false
+    private var pending: [String] = []
+    private var leaving = false
     private let entered = DispatchSemaphore(value: 0)
-    private let leave = DispatchSemaphore(value: 0)
+    private let work = DispatchSemaphore(value: 0)
+    private let saved = DispatchSemaphore(value: 0)
 
     init(url: URL) { self.url = url }
 
@@ -964,17 +1017,34 @@ final class CoordinatedHolder: @unchecked Sendable {
     func take() {
         DispatchQueue.global().async { [self] in
             var error: NSError?
-            NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &error) { _ in
+            NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &error) { url in
                 lock.withLock { holding = true }
                 entered.signal()
-                leave.wait()
+                while true {
+                    work.wait()
+                    if lock.withLock({ leaving }) { return }
+                    guard let text = lock.withLock({ pending.isEmpty ? nil : pending.removeFirst() }) else { continue }
+                    try? Data(text.utf8).write(to: url)
+                    saved.signal()
+                }
             }
             lock.withLock { holding = false }
         }
         entered.wait()
     }
 
-    func release() { leave.signal() }
+    /// The save an editor makes, made where an editor makes it: inside this coordinated write,
+    /// while whoever is waiting for the file is still waiting. Returns once the bytes are down.
+    func save(_ text: String) {
+        lock.withLock { pending.append(text) }
+        work.signal()
+        saved.wait()
+    }
+
+    func release() {
+        lock.withLock { leaving = true }
+        work.signal()
+    }
 }
 
 /// Holds a task at its first line until it is opened, which is how a test cancels one
