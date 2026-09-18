@@ -18,6 +18,22 @@ enum DebugRun {
     static let earVariable = "TOPO_DEBUG_EAR"
     static let voiceVariable = "TOPO_DEBUG_VOICE"
     static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
+    static let replyDelayVariable = "TOPO_DEBUG_REPLY_DELAY"
+
+    /// `TOPO_DEBUG_REPLY_DELAY=<seconds>`: how long the harness waits before it asks the model,
+    /// so the reply lands well past iOS's ordinary background grace and only a working hold
+    /// carries it. Nil when the variable is absent, which is every ordinary run.
+    static func replyDelay(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> Double? {
+        guard let seconds = environment[replyDelayVariable].flatMap(Double.init), seconds > 0 else { return nil }
+        return seconds
+    }
+
+    /// Waits it out, and says so. Nothing at all when the variable is absent.
+    static func delayReply(_ environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        guard let seconds = replyDelay(environment) else { return }
+        say("holding the reply \(seconds)s before the model call")
+        try? await Task.sleep(for: .seconds(seconds))
+    }
 
     /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
     /// the app comes up past the sign-in screen. Does nothing when the variable is absent, which is

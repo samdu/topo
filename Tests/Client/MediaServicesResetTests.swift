@@ -64,11 +64,19 @@ final class Seams {
         return read
     }
 
+    /// How many of the next play engines refuse to start, which is the media server saying no to
+    /// an engine built under a session something else still holds.
+    var playEngineRefusals = 0
+
     /// The play queue's engine: offline manual rendering, so it starts and plays on a host with
     /// no audio device, and its player reclassed so every buffer scheduled on it is counted.
     func makePlayEngine(rate: Int) -> AVAudioEngine {
         lines.append("engine made")
         let engine = CapturingPlayEngine()
+        if playEngineRefusals > 0 {
+            playEngineRefusals -= 1
+            engine.refusesToStart = true
+        }
         let format = AVAudioFormat(standardFormatWithSampleRate: Double(rate), channels: 1)!
         try? engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: 4_096)
         engines.append(engine)
@@ -109,9 +117,20 @@ final class CapturingPlayerNode: AVAudioPlayerNode {
 }
 
 private final class CapturingPlayEngine: AVAudioEngine {
+    /// Set by the seams: `start()` throws, as the media server refuses one under a session
+    /// another app is holding.
+    var refusesToStart = false
+
+    struct WillNotStart: Error {}
+
     override func attach(_ node: AVAudioNode) {
         if node is AVAudioPlayerNode { object_setClass(node, CapturingPlayerNode.self) }
         super.attach(node)
+    }
+
+    override func start() throws {
+        if refusesToStart { throw WillNotStart() }
+        try super.start()
     }
 }
 
@@ -150,6 +169,14 @@ func toneFrame(_ level: Float) -> [Float] {
 /// A frame of tone of an exact length, so a test can state the audio a reply made in seconds.
 func toneFrame(seconds: Double) -> [Float] {
     (0 ..< Int(seconds * Double(Voice.rate))).map { 0.5 * sin(Float($0) * 0.3) }
+}
+
+/// Counts the queue's drains, which fire on the audio thread.
+final class Drains: @unchecked Sendable {
+    private let lock = NSLock()
+    private var drains = 0
+    var value: Int { lock.withLock { drains } }
+    func count() { lock.withLock { drains += 1 } }
 }
 
 /// The clock a test drives instead of the continuous one, so the report's measurements are read
@@ -215,12 +242,77 @@ final class HeldVoice: VoiceEngine, @unchecked Sendable {
     }
 }
 
+
+/// A voice whose second sentence is held until the test lets it go, and whose sentences make no
+/// audio at all: the queue is idle while a sentence is still being made, which is the gap that
+/// must not read as the reply's end.
+final class HeldSecondSentence: VoiceEngine, @unchecked Sendable {
+    private let lock = NSLock()
+    private var released = false
+    private var asked = 0
+
+    /// How many sentences have been asked for; two means the first is made and the second is in
+    /// flight, with nothing in the queue behind it.
+    var sentencesAsked: Int { lock.withLock { asked } }
+    func releaseTheSecondSentence() { lock.withLock { released = true } }
+
+    func load(base: URL) async throws {}
+
+    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+        let mine = lock.withLock { asked += 1; return asked }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                while mine > 1, !self.lock.withLock({ self.released }) {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
+}
+
+
+/// A voice whose sentence is three frames of different lengths, with the second and third held
+/// until the test lets them go: the frames Pocket is still yielding when an interruption lands.
+final class FramesAfterTheInterruption: VoiceEngine, @unchecked Sendable {
+    static let lengths = [0.1, 0.2, 0.3]
+    private let lock = NSLock()
+    private var released = false
+    private var delivered = false
+
+    /// True once the frames behind the gate have been yielded.
+    var yieldedTheRest: Bool { lock.withLock { delivered } }
+    func releaseTheRest() { lock.withLock { released = true } }
+
+    func load(base: URL) async throws {}
+
+    func stream(_ text: String) async throws -> AsyncThrowingStream<Voice.Frame, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                continuation.yield(Voice.Frame(samples: toneFrame(seconds: Self.lengths[0]), rate: Voice.rate))
+                while !self.lock.withLock({ self.released }) {
+                    try? await Task.sleep(for: .milliseconds(5))
+                }
+                for seconds in Self.lengths.dropFirst() {
+                    continuation.yield(Voice.Frame(samples: toneFrame(seconds: seconds), rate: Voice.rate))
+                }
+                self.lock.withLock { self.delivered = true }
+                continuation.finish()
+            }
+            continuation.onTermination = { @Sendable _ in task.cancel() }
+        }
+    }
+}
+
 /// Recovery from a media services reset, against notifications posted on a private centre and
 /// engines, synthesisers and formats from injected seams. No real reset happens here: a simulator
 /// cannot trigger one, and none of these tests reaches an audio device.
 @MainActor
 final class MediaServicesResetTests: XCTestCase {
     private let reset = AVAudioSession.mediaServicesWereResetNotification
+    private let began = AVAudioSession.InterruptionType.began.rawValue
+    private let ended = AVAudioSession.InterruptionType.ended.rawValue
 
     /// The observers hop to the main actor; a test waits for the state it expects. The budget is
     /// far longer than the work, because a runner building a hundredth audio engine takes seconds
@@ -263,7 +355,7 @@ final class MediaServicesResetTests: XCTestCase {
 
     func testEnsureActiveConfiguresOnceAndIsFreeWhileValid() throws {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         try audio.ensureActive()
         try audio.ensureActive()
         try audio.ensureActive()
@@ -273,7 +365,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetInvalidatesTheSessionSoTheNextPathConfiguresItAgain() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         try audio.ensureActive()
         center.post(name: reset, object: nil)
         // The reset re-applies a session that had been configured, and the next path finds it valid.
@@ -282,9 +374,89 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(seams.lines, ["activate ok", "activate ok"])
     }
 
+    func testAClaimChangeWhileAHoldStandsTouchesNothingAndIsAppliedWhenTheHoldDrops() throws {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
+        // `warmRecord` is this claim with the permission gate in front of it, which a unit test
+        // has no answer for; what the lock changes is the claim.
+        audio.wantRecord(true, for: .warm)
+        XCTAssertEqual(seams.records, [true], "the warm claim configures in the foreground")
+        audio.wantAlive(true, for: .awaitingReply("n1"))
+        seams.forget()
+
+        // The lock: the warm claim goes, and with a hold standing the session is left exactly as
+        // it is. Reconfiguring it here is what iOS refuses from the background.
+        audio.wantRecord(false, for: .warm)
+        XCTAssertEqual(seams.lines, [], "a claim change while a hold stands configures nothing")
+        try audio.ensureActive()
+        XCTAssertEqual(seams.lines, [], "the session is still valid, so the reply's path is free")
+
+        audio.wantAlive(false, for: .awaitingReply("n1"))
+        XCTAssertEqual(seams.records, [false], "the deferred claim is applied once, when the last hold goes")
+        XCTAssertEqual(seams.lines, ["activate ok"])
+    }
+
+    /// The last hold going is as likely to be a reply ending behind the lock as the app coming
+    /// back, and a configure from there is refused every time — which is the refusal that left
+    /// the session invalid for every pass after it.
+    func testAClaimDeferredThroughAHoldIsNotAppliedFromTheBackground() throws {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure,
+                                 isActive: { false })
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .speaking)
+        seams.forget()
+
+        audio.wantRecord(false, for: .warm)
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.lines, [], "nothing is configured from behind the lock")
+
+        // The session is marked as needing configuring, so the next path that wants audio applies
+        // the claims as they stand — from the foreground, where iOS allows it.
+        try audio.ensureActive()
+        XCTAssertEqual(seams.records, [false], "the next audio path applies the claims")
+        XCTAssertEqual(seams.lines, ["activate ok"])
+    }
+
+    func testAClaimChangeWithNoHoldIsAppliedAtOnce() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
+        audio.wantRecord(true, for: .warm)
+        audio.wantRecord(false, for: .warm)
+        XCTAssertEqual(seams.records, [true, false])
+    }
+
+    func testTheDeferredClaimIsAppliedOnlyWhenTheLastHoldGoes() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
+        audio.wantRecord(true, for: .warm)
+        audio.wantAlive(true, for: .awaitingReply("n1"))
+        audio.wantAlive(true, for: .speaking)
+        seams.forget()
+        audio.wantRecord(false, for: .warm)
+        audio.wantAlive(false, for: .awaitingReply("n1"))
+        XCTAssertEqual(seams.lines, [], "a hold still stands; the session is not touched")
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.lines, ["activate ok"], "applied once, at the last hold")
+        XCTAssertEqual(seams.records, [false])
+    }
+
+    func testAClaimDeferredThroughAHoldIsAppliedEvenWhenItsConfigureFails() {
+        let seams = Seams()
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
+        audio.wantAlive(true, for: .speaking)
+        audio.wantRecord(true, for: .warm)
+        seams.activationError = Seams.Refused()
+        audio.wantAlive(false, for: .speaking)
+        XCTAssertEqual(seams.lines, ["activate failed"], "the failure is kept, not thrown")
+        seams.activationError = nil
+        XCTAssertNoThrow(try audio.ensureActive())
+        XCTAssertEqual(seams.lines, ["activate failed", "activate ok"], "the next audio path tries again")
+    }
+
     func testAConfigureThatThrowsLeavesTheSessionInvalidAndTheNextEnsureRetries() throws {
         let seams = Seams()
-        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure)
+        let audio = AudioSession(center: NotificationCenter(), configure: seams.configure, isActive: { true })
         seams.activationError = Seams.Refused()
         XCTAssertThrowsError(try audio.ensureActive())
         seams.activationError = nil
@@ -295,7 +467,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetLeavesANeverConfiguredSessionAlone() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         center.post(name: reset, object: nil)
         await drain()
         XCTAssertEqual(seams.lines, [], "a reset does not activate a session nobody configured")
@@ -305,7 +477,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetAppliesTheClaimedRecordConfigurationAgain() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         audio.wantRecord(true, for: .chat)
         XCTAssertEqual(seams.records, [true])
         center.post(name: reset, object: nil)
@@ -315,7 +487,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAFailedReapplicationAfterAResetIsRememberedRatherThanSwallowed() async throws {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         try audio.ensureActive()
         seams.activationError = Seams.Refused()
         center.post(name: reset, object: nil)
@@ -345,7 +517,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAPressActivatesTheSessionBeforeItBuildsAnEngineOrReadsAFormat() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         XCTAssertEqual(seams.engines.count, 0, "nothing is built in the handler")
@@ -360,7 +532,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheTapCarriesTheVeryFormatTheGuardJudged() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         await behindSettings(seams, audio, center)
         CapturingInputNode.installed = nil
@@ -377,7 +549,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAPressWhoseSessionWillNotActivateBuildsNothingAndRefuses() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         seams.activationError = Seams.Refused()
         voice.press(as: .chat, mine: 1)
@@ -422,7 +594,7 @@ final class MediaServicesResetTests: XCTestCase {
         for (name, client, hardware) in Self.deadInputs {
             let seams = Seams()
             let center = NotificationCenter()
-            let audio = AudioSession(center: center, configure: seams.configure)
+            let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
             let voice = await voiceInput(seams, audio, center)
             audio.wantRecord(true, for: .warm)
             seams.forget()
@@ -446,7 +618,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAResetCancelsThePressAndDropsTheEngineWithoutBuildingOne() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         audio.wantRecord(true, for: .warm)
         seams.forget()
@@ -469,10 +641,9 @@ final class MediaServicesResetTests: XCTestCase {
     func testATeardownWithNoTapDoesNotReadTheInput() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = await voiceInput(seams, audio, center)
         voice.cancel()
-        let began = AVAudioSession.InterruptionType.began.rawValue
         center.post(name: AVAudioSession.interruptionNotification, object: nil,
                     userInfo: [AVAudioSessionInterruptionTypeKey: began])
         await drain()
@@ -486,6 +657,7 @@ final class MediaServicesResetTests: XCTestCase {
     /// resident speaks nothing and reaches none of these seams.
     private func speaker(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter,
                          engine: any VoiceEngine = ScriptedVoice(), ready: Bool = true,
+                         ceiling: Duration = .seconds(120),
                          clock: ManualClock? = nil) async -> Speaker {
         CapturingPlayerNode.scheduled = []
         let voice = Voice(engine: engine)
@@ -493,13 +665,14 @@ final class MediaServicesResetTests: XCTestCase {
         await settle("the voice to load") { voice.state == (ready ? .ready : .failed) }
         return Speaker(audio: audio, voice: voice, center: center,
                        makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
+                       ceiling: ceiling,
                        now: clock.map { clock in { clock.now } } ?? PrimaryLease.continuousUptime)
     }
 
     func testAReplyActivatesTheSessionBeforeItBuildsTheQueueAndScheduling() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
         XCTAssertTrue(speaker.speaking)
@@ -515,7 +688,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyAfterAResetActivatesTheSessionAgainAndBuildsAFreshQueue() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         speaker.speak("Hello there.")
         await settle { speaker.report.started }
@@ -526,7 +699,8 @@ final class MediaServicesResetTests: XCTestCase {
         seams.activationError = nil
         seams.forget()
         speaker.speak("Again then.")
-        await settle { seams.lines == ["activate ok", "engine made"] }
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertEqual(seams.lines, ["activate ok", "engine made"])
         XCTAssertEqual(seams.engines.count, 2, "the engine the reset dropped is not reused")
         XCTAssertEqual(speaker.report.text, "Again then.")
         XCTAssertTrue(speaker.report.started)
@@ -538,7 +712,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAFrameTheVoiceYieldsAfterAResetIsNeverScheduled() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let held = HeldVoice()
         let speaker = await self.speaker(seams, audio, center, engine: held)
         speaker.speak("Hello there.")
@@ -557,7 +731,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyWhoseSessionWillNotActivateBuildsNothing() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
         seams.activationError = Seams.Refused()
         speaker.speak("Hello there.")
@@ -571,7 +745,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testAReplyToAVoiceThatIsNotResidentIsNotSpoken() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center,
                                          engine: ScriptedVoice(loads: false), ready: false)
         speaker.speak("Hello there.")
@@ -581,27 +755,22 @@ final class MediaServicesResetTests: XCTestCase {
         XCTAssertEqual(speaker.report.speaks, 0)
     }
 
-    /// Speaking is foreground work, and the scene's flag is the gate: a reply that lands after
-    /// the scene has stopped speech starts nothing, and the next one after it returns does.
-    func testAReplyOutsideTheForegroundBuildsNothingAndOneInsideItDoes() async {
+    /// There is no scene in it: a reply is spoken wherever the process is, and the hold it takes
+    /// is what keeps the process there.
+    func testAReplyIsSpokenWithNoSceneToBeInAndHoldsTheProcessOpen() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center)
-        speaker.foreground = false
-        speaker.speak("Hello there.")
-        await drain()
-        XCTAssertEqual(seams.lines, [], "nothing is activated and no engine is built")
-        XCTAssertEqual(seams.engines.count, 0)
-        XCTAssertFalse(speaker.speaking)
-        XCTAssertEqual(speaker.report.speaks, 0)
-
-        speaker.foreground = true
         speaker.speak("Hello there.")
         await settle { speaker.report.started }
         XCTAssertEqual(seams.lines, ["activate ok", "engine made"])
         XCTAssertEqual(speaker.report.speaks, 1)
+        XCTAssertTrue(speaker.holding, "the reply holds the process open while it is read")
+        XCTAssertTrue(speaker.keeping, "and the keeper is what holds it")
         speaker.stop()
+        XCTAssertFalse(speaker.holding, "a stopped reply lets go")
+        XCTAssertFalse(speaker.keeping)
     }
 
     /// `first` is the time from `speak` to the reply's first frame, and nothing else: the clock
@@ -609,7 +778,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheReplysFirstFrameIsTheTimeFromSpeakToIt() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let clock = ManualClock()
         let voice = ScriptedVoice(frames: { _ in clock.advance(0.2); return [toneFrame(0.5)] })
         let speaker = await self.speaker(seams, audio, center, engine: voice, clock: clock)
@@ -624,7 +793,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testTheReplysRealTimeFactorIsItsSynthesisOverItsAudio() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let clock = ManualClock()
         let voice = ScriptedVoice(frames: { _ in clock.advance(0.5); return [toneFrame(seconds: 2)] })
         let speaker = await self.speaker(seams, audio, center, engine: voice, clock: clock)
@@ -639,7 +808,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testASentenceThatSchedulesNoFrameLeavesTheReplyUnmeasured() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center,
                                          engine: ScriptedVoice(frames: { _ in [] }))
         speaker.speak("Nothing comes of this.")
@@ -658,7 +827,7 @@ final class MediaServicesResetTests: XCTestCase {
     func testALaterSentenceThatSchedulesNoFrameLeavesTheReplysFirstFrame() async {
         let seams = Seams()
         let center = NotificationCenter()
-        let audio = AudioSession(center: center, configure: seams.configure)
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let voice = ScriptedVoice(frames: { $0.hasPrefix("Loud") ? [toneFrame(0.5)] : [] })
         let speaker = await self.speaker(seams, audio, center, engine: voice)
         speaker.speak("Loud one. Nothing two. Loud three.")
@@ -677,7 +846,615 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
+
+    // MARK: The hold behind the lock
+
+    /// A release that will be answered aloud holds the process open from there, and the keeper is
+    /// what holds it: the silence is rendering before the turn has even been written.
+    func testASpokenReleaseHoldsTheProcessOpenAndTheKeeperPlays() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.holding)
+        XCTAssertTrue(speaker.keeping)
+        XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
+                       "the session is active before the engine the keeper needs")
+        speaker.stop()
+    }
+
+    /// Nothing is held for a reply that could not be heard: the setting off, or a voice that is
+    /// not resident at the release. A typed turn takes no hold because the chat never asks for
+    /// one; what is held here is the ask itself.
+    func testNothingIsHeldForAReplyThatCouldNotBeHeard() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        // The answer is also what makes a turn spoken, so a false here is a turn the chat does
+        // not record — no later launch can read its reply aloud.
+        XCTAssertFalse(speaker.awaitReply("a-turn", readAloud: false).spoken, "replies are not read aloud")
+        XCTAssertFalse(speaker.holding)
+        XCTAssertFalse(speaker.keeping)
+        XCTAssertEqual(seams.lines, [], "and nothing is built for one")
+
+        // Its own session: one `AudioSession` answers to one `Speaker`, as the app has one of each.
+        let quietSeams = Seams()
+        let quietAudio = AudioSession(center: center, configure: quietSeams.configure, isActive: { true })
+        let quiet = await self.speaker(quietSeams, quietAudio, center,
+                                       engine: ScriptedVoice(loads: false), ready: false)
+        XCTAssertFalse(quiet.awaitReply("a-turn", readAloud: true).spoken, "the voice is not resident")
+        XCTAssertFalse(quiet.holding)
+        XCTAssertFalse(quiet.keeping)
+        XCTAssertEqual(quietSeams.lines, [])
+        XCTAssertEqual(seams.lines, [])
+        let taken = speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(taken.spoken, "with the setting on and the voice resident, a spoken turn")
+        XCTAssertTrue(taken.held, "and one the keeper is rendering for")
+        speaker.stop()
+    }
+
+    /// The handover between the two owners: the reply arrives, `.speaking` is taken and the wait
+    /// is let go, and the keeper never stops in between — a gap there is the process suspended
+    /// with the reply half read.
+    func testTheKeeperDoesNotStopBetweenTheWaitAndTheReply() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertEqual(speaker.keeperTransitions, ["playing"])
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle { speaker.report.started }
+        XCTAssertTrue(speaker.holding)
+        XCTAssertEqual(speaker.keeperTransitions, ["playing"],
+                       "the silence carried on from the wait into the reply")
+        speaker.stop()
+        XCTAssertEqual(speaker.keeperTransitions, ["playing", "stopped"])
+        XCTAssertFalse(speaker.holding)
+    }
+
+    /// A second turn's claim arriving while the first's hold still stands is the moment to bring
+    /// back a keeper that is down: nothing else is coming for it, since the hold's answer has not
+    /// changed, and a hold nothing renders for is a hold on paper.
+    func testAClaimTakenWhileAHoldStandsBringsBackAKeeperThatIsDown() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+        XCTAssertTrue(speaker.holding, "the first turn's wait stands, with nothing rendering for it")
+
+        XCTAssertTrue(speaker.awaitReply("another-turn", readAloud: true).held)
+        XCTAssertTrue(speaker.keeping, "the second claim brought the keeper back")
+    }
+
+    /// What iOS counts as audio under the `audio` background mode is a running engine, not a
+    /// playing node: a keeper stopped on an engine left running is a process that never suspends,
+    /// which is a phone awake in a pocket for as long as the app lives.
+    func testNothingRunsWhenNothingIsHeld() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.running, "the hold is a running engine")
+
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle { speaker.report.started }
+        speaker.stop()
+        XCTAssertEqual(speaker.keeperTransitions, ["playing", "stopped"])
+        XCTAssertFalse(speaker.holding)
+        XCTAssertFalse(speaker.running, "the engine stops with the last hold")
+
+        // And the nodes are still attached, so the next hold is the engine started again.
+        speaker.awaitReply("another-turn", readAloud: true)
+        XCTAssertTrue(speaker.running)
+        XCTAssertTrue(speaker.keeping)
+    }
+
+    /// Two things said before the first is answered: the chat lets a second press append while
+    /// the harness is busy, and each turn holds for itself. The first being answered and heard to
+    /// its end does not let go of the second's wait, and the keeper never stops between them.
+    func testASecondSpokenTurnIsStillHeldForWhenTheFirstIsAnswered() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        // A voice that makes no audio: the reply is over the moment its sentence is made, which
+        // is the drain this is about.
+        let speaker = await self.speaker(seams, audio, center,
+                                         engine: ScriptedVoice(frames: { _ in [] }))
+        speaker.awaitReply("A", readAloud: true)
+        speaker.awaitReply("B", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+
+        speaker.speak("Paris.", answering: "A")
+        await settle("A's reply to end") { !speaker.speaking }
+        XCTAssertTrue(speaker.holding, "B was said too, and nothing has answered it")
+        XCTAssertTrue(speaker.keeping)
+        XCTAssertEqual(speaker.keeperTransitions, ["playing"], "the silence never stopped")
+
+        speaker.speak("Rome.", answering: "B")
+        await settle("B's reply to end") { !speaker.speaking }
+        XCTAssertFalse(speaker.holding, "both are answered")
+        XCTAssertFalse(speaker.keeping)
+    }
+
+    /// The reply coming to its end is what lets go, and the reply is over only when every
+    /// sentence is made and the queue is empty: a queue idle between two sentences is not it.
+    func testTheHoldOutlastsAQueueThatIsIdleWhileASentenceIsStillBeingMade() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let held = HeldSecondSentence()
+        let speaker = await self.speaker(seams, audio, center, engine: held)
+        speaker.speak("One. Two.")
+        await settle("the second sentence to be asked for") { held.sentencesAsked == 2 }
+        XCTAssertTrue(speaker.speaking, "one sentence is made and the queue is empty; the reply is not over")
+        XCTAssertTrue(speaker.holding)
+        XCTAssertTrue(speaker.keeping)
+        held.releaseTheSecondSentence()
+        await settle("the reply to end") { !speaker.speaking }
+        XCTAssertFalse(speaker.holding, "the last sentence made, and nothing left to hear")
+        XCTAssertFalse(speaker.keeping)
+    }
+
+    /// The wait is let go when the turn it was taken for cannot land: the chat calls this on a
+    /// failure and when it stops answering at all.
+    func testTheWaitIsLetGoWhenTheTurnFails() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+        speaker.endAwaiting("a-turn", "the turn failed")
+        XCTAssertFalse(speaker.holding)
+        XCTAssertFalse(speaker.keeping)
+    }
+
+    /// An uncapped wait would keep a pocketed phone awake for as long as nothing came back.
+    func testTheWaitIsCappedSoAReplyThatNeverComesLetsGo() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center, ceiling: .milliseconds(20))
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.holding)
+        await settle("the ceiling to run out") { !speaker.holding }
+        XCTAssertFalse(speaker.keeping)
+    }
+
+    /// A reply that is refused every pass ends the same wait as one that never comes, so the
+    /// ceiling's line says which: a run that read "the reply never landed" while the reply was in
+    /// fact landing and being turned away sent the reading somewhere else entirely.
+    func testTheCapSaysWhetherTheReplyLandedAndWasRefused() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertEqual(speaker.capped("no-reply"), "capped at 120.0 seconds; the reply never landed")
+
+        // What the phone met: a session something had invalidated, and a configure the system
+        // refuses, so every pass offers the reply and every pass turns it away.
+        seams.activationError = Seams.Refused()
+        audio.invalidate()
+        XCTAssertFalse(speaker.speak("Paris.", answering: "a-turn"))
+        audio.invalidate()
+        XCTAssertFalse(speaker.speak("Paris.", answering: "a-turn"))
+        XCTAssertEqual(speaker.capped("a-turn"),
+                       "capped at 120.0 seconds; the reply landed and was not taken, 2 times")
+        XCTAssertFalse(speaker.holding, "the cap lets the wait go either way")
+    }
+
+    /// iOS posts an interruption at the lock screen with no call and no Siri in it. Dropping the
+    /// hold there is the process suspended with the reply unheard, so a `.began` ends nothing: it
+    /// marks the engine dead, and the rebuild that follows brings the keeper back.
+    func testAnInterruptionWhileAwaitingKeepsTheHoldAndTheRebuildBringsTheKeeperBack() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+        XCTAssertTrue(speaker.holding, "the wait stands: nothing said the reply was not coming")
+
+        seams.forget()
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the keeper to come back") { speaker.keeping }
+        XCTAssertTrue(speaker.holding)
+        XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
+                       "the session is active before the engine that was rebuilt for it")
+        speaker.stop()
+    }
+
+    /// The same mid-reply, recovered by the configuration change a real interruption's end posts:
+    /// what nobody had heard is scheduled again and the reply carries on.
+    func testAnInterruptionMidReplyKeepsWhatWasOwedAndAConfigurationChangePutsItBack() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.")
+        await settle { speaker.report.started }
+        let scheduled = CapturingPlayerNode.scheduled.count
+        XCTAssertGreaterThan(scheduled, 0)
+        let engine = try? XCTUnwrap(seams.engines.last)
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+        XCTAssertTrue(speaker.holding, "both owners stand")
+        XCTAssertTrue(speaker.speaking, "and the reply is not over")
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the keeper to come back") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, scheduled * 2,
+                       "what nobody heard was scheduled again")
+        XCTAssertTrue(speaker.holding)
+        speaker.stop()
+    }
+
+    /// A call still up when the end arrives: activation is refused, so nothing is rebuilt and the
+    /// keeper stays down — but the hold is not dropped by that, it is dropped by its ceiling.
+    func testARebuildThatCannotActivateLeavesTheHoldUpUntilTheCeiling() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center, ceiling: .seconds(2))
+        speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(speaker.keeping)
+
+        seams.activationError = Seams.Refused()
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the refused activation") { seams.lines.contains("activate failed") }
+        XCTAssertFalse(speaker.keeping, "nothing is built under a session that will not activate")
+        XCTAssertTrue(speaker.holding, "and the refusal is not the reply's end")
+
+        await settle("the ceiling to run out") { !speaker.holding }
+    }
+
+    /// The other owner's bound: a reply whose audio stopped and whose engine nothing rebuilt is
+    /// over when the ceiling says so, so a hold cannot outlive its reply by more than that.
+    func testAReplyThatStopsMakingProgressIsEndedByTheCeiling() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let held = HeldSecondSentence()
+        let speaker = await self.speaker(seams, audio, center, engine: held, ceiling: .milliseconds(100))
+        speaker.speak("One. Two.")
+        await settle("the reply to be held up") { held.sentencesAsked == 2 }
+        XCTAssertTrue(speaker.speaking)
+        await settle("the ceiling to end it") { !speaker.speaking }
+        XCTAssertFalse(speaker.holding, "no hold stands past the ceiling without progress")
+        XCTAssertFalse(speaker.keeping)
+        held.releaseTheSecondSentence()
+    }
+
+    /// Signing out mid-reply: the login goes, so the reply goes with it. What the chat calls is
+    /// `stop`, and a reply that had begun must not carry on reading for an account that is gone,
+    /// nor leave `.speaking` standing until a drain nobody is waiting for.
+    func testStoppingMidReplyEndsTheReplyAndBothHolds() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let held = HeldVoice()
+        let speaker = await self.speaker(seams, audio, center, engine: held)
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.")
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertTrue(speaker.speaking)
+        XCTAssertTrue(speaker.holding)
+
+        speaker.stop()
+
+        XCTAssertFalse(speaker.speaking, "the reply is over")
+        XCTAssertFalse(speaker.holding, "and neither owner is still holding the process open")
+        XCTAssertFalse(speaker.keeping)
+        // The frame that was in flight belongs to a reply nobody is hearing.
+        held.releaseTheHeldFrame()
+        await settle("the held frame") { held.yieldedTheHeldFrame }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled.count, 1, "nothing was queued after the stop")
+        XCTAssertFalse(speaker.holding)
+    }
+
+    /// A reset takes the engine, so it takes the keeper too; both owners go with the reply.
+    func testAResetWhileAHoldStandsDropsBothOwnersAndTheKeeper() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.")
+        await settle { speaker.report.started }
+        XCTAssertTrue(speaker.keeping)
+        center.post(name: reset, object: nil)
+        await settle("the reply to end") { !speaker.speaking }
+        XCTAssertFalse(speaker.holding, "both owners let go")
+        XCTAssertFalse(speaker.keeping, "and the keeper went with the engine")
+    }
+
+
+    /// The frames Pocket was still yielding when the interruption landed. Playing them would mean
+    /// restarting a dead engine, and that throw reads to the voice as the sentence's end, so the
+    /// rest of the sentence would be lost. They are owed instead, and the rebuild plays the lot.
+    func testFramesThatArriveWhileTheEngineIsDeadAreOwedAndPlayedByTheRebuild() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let voice = FramesAfterTheInterruption()
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        let lengths = FramesAfterTheInterruption.lengths.map { AVAudioFrameCount(toneFrame(seconds: $0).count) }
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled == [lengths[0]] }
+        let engine = seams.engines.last
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+
+        // Pocket yields the rest of the sentence into a queue with no engine under it.
+        voice.releaseTheRest()
+        await settle("the rest of the sentence") { voice.yieldedTheRest }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]],
+                       "nothing was played on the dead engine")
+        XCTAssertTrue(speaker.speaking, "and the sentence did not end at a throw")
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the rebuild") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]] + lengths,
+                       "every frame of the sentence reached the new player, in order")
+        speaker.stop()
+    }
+
+
+    /// A rebuild refused earlier leaves no engine at all, and what it owed is owed still. The end
+    /// that comes after does not read "no engine" as "nothing to do": it builds one from nothing
+    /// and plays what was owed.
+    func testAnEndAfterARefusedRebuildStillPlaysWhatWasOwed() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        CapturingPlayerNode.scheduled = []
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled.count == 1 }
+        let owed = CapturingPlayerNode.scheduled
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+
+        // The end that arrives while a call still has the session: nothing is built.
+        seams.activationError = Seams.Refused()
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the refusal") { seams.lines.contains("activate failed") }
+        XCTAssertFalse(speaker.keeping, "no engine, and the frame still owed")
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed)
+        XCTAssertTrue(speaker.holding)
+
+        // The call ends: the second end builds from nothing and plays what was owed.
+        seams.activationError = nil
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the keeper to come back") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed + owed,
+                       "the owed frame reached the engine built after the refusal")
+        speaker.stop()
+    }
+
+    /// A start that throws is a refused rebuild, not a rebuild: buffers left scheduled on a
+    /// stopped engine are a reply nobody hears reported as playing.
+    func testARebuildWhoseEngineWillNotStartKeepsWhatWasOwedForTheNextOne() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        CapturingPlayerNode.scheduled = []
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled.count == 1 }
+        let owed = CapturingPlayerNode.scheduled
+        let engine = seams.engines.last
+
+        // The next engine built will not start.
+        seams.playEngineRefusals = 1
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the engine that will not start") { seams.engines.count == 2 }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed,
+                       "nothing was scheduled on an engine that would not start")
+        XCTAssertFalse(speaker.keeping)
+        XCTAssertTrue(speaker.holding, "and the reply is still owed")
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the rebuild that works") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, owed + owed,
+                       "the owed frame played on the engine that started")
+        speaker.stop()
+    }
+
+
+    /// A release whose keeper cannot start: the reply is still one to read aloud, so the turn is
+    /// still spoken, but nothing is rendering and nothing says otherwise. The reply is read when
+    /// it lands and the session comes back, which is also what brings the keeper up.
+    func testAReleaseWhoseKeeperCannotStartIsSpokenButNotHeld() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center)
+        seams.activationError = Seams.Refused()
+
+        let wait = speaker.awaitReply("a-turn", readAloud: true)
+        XCTAssertTrue(wait.spoken, "its reply would be read aloud, so the turn is a spoken one")
+        XCTAssertFalse(wait.held, "but nothing is rendering, so nothing is held")
+        XCTAssertFalse(speaker.keeping)
+        XCTAssertFalse(speaker.holding, "and the chat is not told the process is held")
+        XCTAssertEqual(seams.engines.count, 0, "nothing was built under a session that refused")
+
+        seams.activationError = nil
+        XCTAssertTrue(speaker.speak("Paris.", answering: "a-turn"), "the reply is taken")
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertTrue(speaker.keeping, "and reading it is what brings the keeper up")
+        XCTAssertTrue(speaker.holding)
+        speaker.stop()
+    }
+
+    /// The frames Pocket yields after a rebuild that was refused. The format is the voice's rate
+    /// and not the engine's, so a frame made while there is no engine at all is still owed; the
+    /// end that works plays the whole sentence, in order.
+    func testFramesThatArriveAfterARefusedRebuildAreOwedAndPlayedInOrder() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let voice = FramesAfterTheInterruption()
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        let lengths = FramesAfterTheInterruption.lengths.map { AVAudioFrameCount(toneFrame(seconds: $0).count) }
+        speaker.awaitReply("a-turn", readAloud: true)
+        speaker.speak("Hello there.", answering: "a-turn")
+        await settle("the first frame") { CapturingPlayerNode.scheduled == [lengths[0]] }
+
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: began])
+        await settle("the engine to be marked dead") { !speaker.keeping }
+
+        // An end while a call still holds the session: refused, and the engine goes with it.
+        seams.activationError = Seams.Refused()
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the refusal") { seams.lines.contains("activate failed") }
+
+        // Pocket yields the rest of the sentence into a queue with no engine and no session.
+        voice.releaseTheRest()
+        await settle("the rest of the sentence") { voice.yieldedTheRest }
+        await drain()
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]], "nothing reached a player")
+
+        seams.activationError = nil
+        center.post(name: AVAudioSession.interruptionNotification, object: nil,
+                    userInfo: [AVAudioSessionInterruptionTypeKey: ended])
+        await settle("the rebuild that works") { speaker.keeping }
+        XCTAssertEqual(CapturingPlayerNode.scheduled, [lengths[0]] + lengths,
+                       "every frame of the sentence was owed and played, in order")
+        speaker.stop()
+    }
+
     // MARK: PlayQueue
+
+
+    /// The category flipping as the phone locks, or a route change: the engine stops and posts a
+    /// configuration change, taking what was scheduled on its node with it. What had not been
+    /// heard is put back, in order, on a fresh engine over a session activated first.
+    func testAConfigurationChangeRebuildsTheQueueAndReschedulesWhatWasNotHeard() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
+        queue.ensureActive = { try audio.ensureActive() }
+        CapturingPlayerNode.scheduled = []
+        // Two lengths, so the order they come back in is readable and a reversed reschedule fails.
+        let short = toneFrame(seconds: 0.1)
+        let long = toneFrame(seconds: 0.2)
+        try queue.play(short, rate: Voice.rate)
+        try queue.play(long, rate: Voice.rate)
+        let lengths = [AVAudioFrameCount(short.count), AVAudioFrameCount(long.count)]
+        XCTAssertEqual(CapturingPlayerNode.scheduled, lengths)
+        let engine = try XCTUnwrap(seams.engines.last)
+        seams.forget()
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the rebuild") { queue.rescheduled != nil }
+        XCTAssertEqual(queue.rescheduled, 2, "both buffers were still owed")
+        XCTAssertEqual(seams.lines, ["activate ok", "engine made"],
+                       "the session is active before the new engine exists")
+        XCTAssertEqual(seams.engines.count, 2, "the dead engine is not reused")
+        XCTAssertEqual(CapturingPlayerNode.scheduled, lengths + lengths,
+                       "what was not heard was scheduled again, in the order it was scheduled")
+        XCTAssertFalse(queue.isIdle, "the same two buffers are owed, not four")
+        XCTAssertFalse(queue.keeping, "no hold stood, so no keeper came back")
+    }
+
+    /// The buffers the dead node discards fire their completions as if they had played. Under a
+    /// new epoch they move nothing: after the rebuild the frame is owed on the new engine and
+    /// nothing has announced a drain, so a reply is not ended by the engine it lost.
+    func testTheStaleCompletionsOfARebuildMoveTheCountNowhere() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
+        queue.ensureActive = { try audio.ensureActive() }
+        let drained = Drains()
+        queue.onDrained = { drained.count() }
+        try queue.play(toneFrame(0.1), rate: Voice.rate)
+        let engine = try XCTUnwrap(seams.engines.last)
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the rebuild") { queue.rescheduled != nil }
+        await drain()
+        XCTAssertEqual(drained.value, 0, "the discarded buffer's completion drained nothing")
+        XCTAssertFalse(queue.isIdle, "the frame is still owed on the new engine")
+    }
+
+    /// A hold that stood through the rebuild is still standing after it, on the new engine.
+    func testARebuildBringsTheKeeperBackWhenAHoldStands() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
+        queue.ensureActive = { try audio.ensureActive() }
+        queue.hold(true)
+        XCTAssertTrue(queue.keeping)
+        let engine = try XCTUnwrap(seams.engines.last)
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: engine)
+        await settle("the rebuild") { queue.rescheduled != nil }
+        XCTAssertEqual(queue.rescheduled, 0, "nothing was owed")
+        XCTAssertTrue(queue.keeping, "the silence came back with the engine")
+        XCTAssertEqual(queue.keeperTransitions, ["playing", "stopped", "playing"])
+        queue.hold(false)
+    }
+
+    /// One engine's configuration change is not another's: a queue told about a change in the
+    /// microphone's engine rebuilds nothing.
+    func testAConfigurationChangeForAnotherEngineChangesNothing() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let queue = PlayQueue(makeEngine: { seams.makePlayEngine(rate: Voice.rate) }, center: center)
+        queue.ensureActive = { try audio.ensureActive() }
+        try queue.play(toneFrame(0.1), rate: Voice.rate)
+        seams.forget()
+        let somebodyElse = AVAudioEngine()
+
+        center.post(name: .AVAudioEngineConfigurationChange, object: somebodyElse)
+        await drain()
+        XCTAssertNil(queue.rescheduled, "nothing was rebuilt")
+        XCTAssertEqual(seams.lines, [])
+        XCTAssertEqual(seams.engines.count, 1)
+    }
 
     func testAResetQueueBuildsANewEngineAndNewNodesOnTheNextPlay() throws {
         var built = 0

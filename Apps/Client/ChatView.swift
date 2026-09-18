@@ -19,8 +19,6 @@ struct ChatView: View {
     @State private var showDiagnostics = false
     @State private var showAbout = false
     @State private var showVocabulary = false
-    /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
-    @State private var spokenTurns: Set<String> = []
     #if DEBUG
     /// The last spoken turn's nonce, for the title's debug report.
     @State private var spokenNonce: String?
@@ -33,7 +31,7 @@ struct ChatView: View {
                                // Holding one of Topo's turns says it again, which is how a
                                // typed turn's reply — never read aloud as it lands — is heard.
                                replay: Replay(speaking: speaker.speaking,
-                                              canSpeak: speaker.foreground,
+                                              canSpeak: speaker.voice.ready,
                                               say: { speaker.speak($0) },
                                               stopSpeaking: { speaker.stop() }))
                 if harness.busy {
@@ -97,7 +95,10 @@ struct ChatView: View {
                         Button("Diagnostics") { showDiagnostics = true }
                         Button("About Topo") { showAbout = true }
                         Divider()
-                        Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
+                        // The reply in the ear goes with the login: a reply still being read
+                        // would otherwise carry on, holding the process open, for an account the
+                        // app has just let go of.
+                        Button("Sign out", role: .destructive) { speaker.stop(); harness.forget(); signIn.signOut() }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -129,7 +130,33 @@ struct ChatView: View {
             // The subscription is saved beside the loop: cheap when it is already there, and a
             // failure costs only the acceleration, so it is not the screen's to report.
             PushWake.install { [harness] in await harness.wake() }
+            // A turn that ended in a failure is owed no reply, so nothing waits for one.
+            harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
             defer { PushWake.remove() }
+            // A spoken question gets a spoken answer, and the decision is the log's rather than
+            // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
+            // is the framework's to decide. It fires for a reply this phone wrote and for one
+            // another primary wrote that the log brought, once for either.
+            harness.onReply = { reply in
+                // The mark is the decision, made at the release: a reply whose turn is marked is
+                // read whatever the setting says now, since the setting governs what the next
+                // release decides and not what a turn already released is owed.
+                guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+                // Only a reply the speaker took is read: one it refused is still owed, so the
+                // turn stays marked spoken and the next pass offers the reply again.
+                guard speaker.speak(reply.text, answering: asked) else { return false }
+                harness.answeredAloud(asked)
+                return true
+            }
+            // A turn that ended in a failure is owed no reply, so nothing waits for one.
+            harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
+            defer {
+                // Sign-out, a takeover, the screen going: nothing here is going to read a reply
+                // aloud any more, so nothing keeps the process awake for one.
+                harness.onReply = nil
+                harness.onTurnFailed = nil
+                speaker.endAllWaits("the chat stopped answering")
+            }
             await withDiscardingTaskGroup { group in
                 group.addTask { try? await TurnPush.ensureSubscription() }
                 await harness.answering(every: .seconds(5))
@@ -144,6 +171,8 @@ struct ChatView: View {
                     // still stand; the role flips after, and the login goes last.
                     await harness.demote()
                     roleSelector.acceptDemotion()
+                    // The login goes, so the reply being read goes with it, as at a sign-out.
+                    speaker.stop()
                     signIn.signOut()
                     return
                 }
@@ -151,18 +180,11 @@ struct ChatView: View {
             }
         }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
-        .onChange(of: harness.turns.last?.ref) { _, _ in
-            // A spoken question gets a spoken answer; a typed one stays quiet.
-            guard readAloud, let last = harness.turns.last,
-                  let asked = ReadAloud.spokenTurn(answeredBy: last, in: harness.turns, spoken: spokenTurns) else { return }
-            spokenTurns.remove(asked)
-            speaker.speak(last.text)
-        }
         .onChange(of: scenePhase) { _, phase in
-            // Speaking is foreground work; a backgrounded process submitting GPU commands is
-            // killed. A microphone open when the scene goes is dropped, words and all: nobody is
-            // holding it, so nothing said into it was meant.
-            if phase != .active { speaker.stop(); voice.cancel(.chat) }
+            // A microphone open when the scene goes is dropped, words and all: nobody is holding
+            // it, so nothing said into it was meant. A reply plays on — that is what the hold is
+            // for — and the press that starts the next one is what stops it.
+            if phase != .active { voice.cancel(.chat) }
         }
         .onDisappear { voice.cancel(.chat) }
     }
@@ -185,8 +207,14 @@ struct ChatView: View {
             return
         }
         #endif
+        // The reply to this will be read aloud, so the process is held open from here: the turn
+        // is written, asked and answered behind the lock. Nothing is held for a reply that could
+        // not be heard anyway — the setting off, or a voice that is not resident.
+        // The wait says whether the reply will be read aloud, which is what marks the turn as
+        // spoken; whether the process is being kept running for it is its own answer, and this
+        // screen states no condition of its own either way.
         let nonce = harness.willSend(heard)
-        spokenTurns.insert(nonce)
+        if speaker.awaitReply(nonce, readAloud: readAloud).spoken { harness.markSpoken(nonce) }
         #if DEBUG
         spokenNonce = nonce
         #endif

@@ -18,6 +18,44 @@ final class Harness {
     private(set) var error: String?
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// Told about every reply the log has brought, however it arrived: one this device wrote, or
+    /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
+    /// rather than a view's observer, because behind the lock nothing is drawn and whether a
+    /// SwiftUI body is evaluated is the framework's to decide.
+    ///
+    /// It answers whether it is done with that reply. A reply it could not take — the speaker
+    /// refused it, a call still holding the session — is not recorded, so the next pass offers it
+    /// again; every other reply, read aloud or not this screen's to read, is recorded and offered
+    /// once.
+    var onReply: (@MainActor (Turn) -> Bool)? {
+        didSet {
+            guard onReply != nil else { return }
+            // A reply can land between the screen's first read of the log and the handler being
+            // installed — the relaunch that sends what was owed takes a whole turn in that gap —
+            // and it is still the one to read aloud, so what arrived unheard is offered now. Of
+            // more than one owed reply only the newest is: a person coming back is owed the
+            // answer to the last thing they said, not a backlog read at them, and each reply
+            // spoken cuts off the one before it anyway. The older ones are done with here.
+            for turn in owedAloud.dropLast() {
+                spokenTurn(answeredBy: turn).map(answeredAloud)
+                offered.insert(turn.ref)
+            }
+            turns.forEach(seen)
+        }
+    }
+    /// Told the nonce of a turn that ended in a failure rather than a reply, as it ends: no reply
+    /// is coming for it, and the screen's error line is not a place to work out whose. Not called
+    /// for a turn another primary is answering, whose reply is still on its way.
+    var onTurnFailed: (@MainActor (String) -> Void)?
+    /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
+    /// owed, and what the install above reads the newest of.
+    private var owedAloud: [Turn] {
+        turns.filter { $0.role == .assistant && !offered.contains($0.ref) && spokenTurn(answeredBy: $0) != nil }
+    }
+    /// The refs a handler has taken, so a reply both paths see is offered once. Nothing is
+    /// recorded while no handler stands, nor for a reply a handler could not take, which is what
+    /// leaves those replies to be offered again.
+    private var offered: Set<TurnRef> = []
     /// Turns said and not yet settled, oldest first: the head is the one in flight or the one
     /// that stopped the line, the rest wait behind it.
     var waiting: [String] { pending.map(\.text) }
@@ -62,6 +100,21 @@ final class Harness {
         var nonce: String
     }
     private static let outboxKey = "topo.harness.outbox"
+    private static let spokenKey = "topo.harness.spoken"
+    /// The most spoken turns kept waiting for a reply at once. A turn whose reply never comes
+    /// would otherwise sit here for good; the oldest go first, and each is only a nonce.
+    private static let spokenLimit = 20
+    /// The nonces of turns said into the microphone whose replies have not been read aloud yet,
+    /// oldest first. On disk, so a relaunch still knows that the reply to what was said before
+    /// the app went away is an answer to something spoken: the words survive the relaunch in the
+    /// outbox, and what makes them a spoken turn has to survive with them. Cleared per turn as
+    /// its reply is read, and by a sign-out.
+    private var spokenNonces: [String] = [] {
+        didSet {
+            if spokenNonces.isEmpty { defaults.removeObject(forKey: Self.spokenKey) }
+            else { defaults.set(spokenNonces, forKey: Self.spokenKey) }
+        }
+    }
     private var pending: [Outgoing] = [] {
         didSet {
             if pending.isEmpty { defaults.removeObject(forKey: Self.outboxKey) }
@@ -85,6 +138,7 @@ final class Harness {
         self.leaseSleep = leaseSleep
         self.pause = pause
         log = TurnLog(database: self.database)
+        spokenNonces = defaults.stringArray(forKey: Self.spokenKey) ?? []
         if let data = defaults.data(forKey: Self.outboxKey),
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
             pending = saved
@@ -125,6 +179,7 @@ final class Harness {
         status = nil
         busy = false
         pending = []
+        spokenNonces = []
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
     }
@@ -161,6 +216,7 @@ final class Harness {
         do {
             let transcript = try await log.read()
             turns = transcript.ordered
+            turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
         } catch {
             guard !TopoCloudKit.meansNoLogYet(error) else { turns = []; return }
@@ -187,6 +243,30 @@ final class Harness {
         pending.append(outgoing)
         return outgoing.nonce
     }
+
+    /// That turn was said into the microphone and its reply is one to read aloud, which is what
+    /// makes it spoken; the mark outlives the screen, so the reply to what was said before a
+    /// relaunch is still an answer to something spoken.
+    func markSpoken(_ nonce: String) {
+        guard !spokenNonces.contains(nonce) else { return }
+        spokenNonces.append(nonce)
+        if spokenNonces.count > Self.spokenLimit {
+            spokenNonces.removeFirst(spokenNonces.count - Self.spokenLimit)
+        }
+    }
+
+    /// The spoken turn `reply` answers, or nil when it answers none. Spoken-ness is the harness's
+    /// because it outlives the screen: the reply to what was said before a relaunch lands on a
+    /// fresh view with no memory of the press.
+    func spokenTurn(answeredBy reply: Turn) -> String? {
+        ReadAloud.spokenTurn(answeredBy: reply, in: turns, spoken: Set(spokenNonces))
+    }
+
+    /// That turn's reply has been read aloud; it is owed no other.
+    func answeredAloud(_ nonce: String) {
+        spokenNonces.removeAll { $0 == nonce }
+    }
+
 
     /// Sends the line from its head, after a turn that stopped it or a launch that found it.
     func retry() async {
@@ -228,6 +308,9 @@ final class Harness {
                 runner = try await makeRunner()
             }
             guard let runner else { return false }
+            #if DEBUG
+            await DebugRun.delayReply()
+            #endif
             let result = try await runner.run(text, model: model, nonce: attempt.nonce) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
@@ -240,9 +323,11 @@ final class Harness {
         } catch is CancellationError {
             return false
         } catch TurnRunnerError.replyFailed(_, let underlying) {
-            // The person's turn is in the log; only the reply is owed.
+            // The person's turn is in the log; only the reply is owed, and nothing is going to
+            // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
             error = Self.describe(underlying)
+            onTurnFailed?(attempt.nonce)
             await refresh()
             status = nil
             return true
@@ -261,13 +346,16 @@ final class Harness {
                 return true
             } catch {
                 self.error = Self.describe(error)
+                onTurnFailed?(attempt.nonce)
             }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
             error = "Signed out. Sign in again to continue."
+            onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
             self.error = Self.describe(error)
+            onTurnFailed?(attempt.nonce)
             await refresh()
         }
         status = nil
@@ -291,6 +379,14 @@ final class Harness {
     private func show(_ turn: Turn) {
         guard !turns.contains(where: { $0.ref == turn.ref }) else { return }
         turns.append(turn)
+        seen(turn)
+    }
+
+    /// A reply the handler has not been given. Offered once, whichever path brought it; with no
+    /// handler installed it is left unoffered, for whichever one is installed next.
+    private func seen(_ turn: Turn) {
+        guard turn.role == .assistant, let onReply, !offered.contains(turn.ref) else { return }
+        if onReply(turn) { offered.insert(turn.ref) }
     }
 
     static func describe(_ error: any Error) -> String {
