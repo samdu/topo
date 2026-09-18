@@ -21,6 +21,8 @@ struct ChatView: View {
     @State private var showAbout = false
     @State private var showVocabulary = false
     #if DEBUG
+    /// The vault's other home, asked about rather than built: see `VaultProbe`.
+    @State private var showVaultProbe = false
     /// The last spoken turn's nonce, for the title's debug report.
     @State private var spokenNonce: String?
     #endif
@@ -105,6 +107,13 @@ struct ChatView: View {
                         Button("Vocabulary") { showVocabulary = true }
                         Button("Diagnostics") { showDiagnostics = true }
                         Button("About Topo") { showAbout = true }
+                        #if DEBUG
+                        // Whether a folder in iCloud Drive › Obsidian, granted by the picker
+                        // alone, is one this app can read and write on a later launch. Nothing
+                        // it does reaches the memory; it moves into the settings sheet's Memory
+                        // section, or goes, when that answer is in.
+                        Button("Probe iCloud Drive…") { showVaultProbe = true }
+                        #endif
                         Divider()
                         // The reply in the ear goes with the login: a reply still being read
                         // would otherwise carry on, holding the process open, for an account the
@@ -125,6 +134,9 @@ struct ChatView: View {
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
+            #if DEBUG
+            .sheet(isPresented: $showVaultProbe) { VaultProbeView() }
+            #endif
         }
         .task {
             // The mirror runs on every pass of the loop below, which is what makes the folder
