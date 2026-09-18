@@ -40,6 +40,20 @@ struct TopoApp: App {
         #if DEBUG
         AudioLog.startHeartbeat()
         #endif
+        Self.makeVaultFolder()
+    }
+
+    /// The memory's folder, made on launch so Files has something to show under On My iPhone ›
+    /// Topo before a single revision exists. One placeholder note, written only when the folder
+    /// is not there, so an editor opening it in place finds a vault rather than nothing.
+    private static func makeVaultFolder() {
+        guard let documents = try? FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
+                                                           appropriateFor: nil, create: true) else { return }
+        let vault = documents.appending(path: "Vault", directoryHint: .isDirectory)
+        guard !FileManager.default.fileExists(atPath: vault.path(percentEncoded: false)) else { return }
+        try? FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try? Data("Topo's memory lives here.\n".utf8)
+            .write(to: vault.appending(path: "hello.md", directoryHint: .notDirectory))
     }
 
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.

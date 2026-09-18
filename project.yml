@@ -74,6 +74,13 @@ targets:
       path: Apps/Topo/Info.plist
       properties:
         UIBackgroundModes: [remote-notification, audio]
+        # The memory is an Obsidian vault, and the folder it mirrors is `<Documents>/Vault` in
+        # this container. These two keys are what put that folder in Files under On My iPhone ›
+        # Topo and let an editor open it in place, which is how the person reads and writes the
+        # memory; neither is a key Xcode generates from a build setting, so both live here beside
+        # the background modes, and `scripts/check-built-plist.sh` reads them off the product.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         # The version keys are the settings' to answer, not this file's: a literal here beats the
         # `CURRENT_PROJECT_VERSION` that `scripts/archive-upload.sh` passes on the command line,
         # and every TestFlight upload would carry the same build number (docs/testflight.md).
