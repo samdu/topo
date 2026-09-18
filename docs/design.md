@@ -51,17 +51,16 @@ From scratch, not a fork: the current app is a Daphne client with a Buddy screen
 
 ## Order of build
 
-What is built: sign in with Claude, the CloudKit log and lease, the phone harness, push to talk with the on-device ear and voice, and the push that wakes the primary. What follows, in order; each step is the next thing the one before it makes possible.
+What is built: sign in with Claude, the CloudKit log and lease, the phone harness, push to talk with the on-device ear and voice (one of each, both FluidAudio on the device, no fallback), a spoken reply heard behind the lock under a bounded audio hold, the voice surviving a media services reset, and the push that wakes the primary. What follows, in order; each step is the next thing the one before it makes possible.
 
-1. **Finish the phone.** The voice survives a media services reset (#76); one ear and one voice, both FluidAudio on the device, no fallback.
-2. **TestFlight with the production schema** — the second milestone, so App Store constraints surface early.
-3. **Memory.** The Obsidian vault as designed above: the mirror, Files on the phone, revisions and conflict copies.
-4. **The phone's own tools.** Reminders and the calendar through EventKit, the home through HomeKit, the device itself (battery, location, the clock, the network it is on), the share sheet as the way things arrive. OpenMinis is the map for which tools a phone agent needs and how they are shaped; the code is native Swift against the platform frameworks, because OpenMinis is GPL and nothing of it ships in a bundle.
-5. **The hub.** The Mac app with the CLI, pairing, the lease taken from a live holder, the lid opening after a week.
-6. **Womble and the board.** Old iPads on the wall, the household container, the house agent.
-7. **Watch and TV** as viewers.
-8. **Away from home.** The punched tunnel over CloudKit signalling; a direct LAN socket only if the push proves too slow to feel live.
-9. **Two Buddies meeting** under the contract.
+1. **TestFlight with the production schema** — the second milestone, so App Store constraints surface early.
+2. **Memory.** The Obsidian vault as designed above: the mirror, Files on the phone, revisions and conflict copies.
+3. **The phone's own tools.** Reminders and the calendar through EventKit, the home through HomeKit, the device itself (battery, location, the clock, the network it is on), the share sheet as the way things arrive. OpenMinis is the map for which tools a phone agent needs and how they are shaped; the code is native Swift against the platform frameworks, because OpenMinis is GPL and nothing of it ships in a bundle.
+4. **The hub.** The Mac app with the CLI, pairing, the lease taken from a live holder, the lid opening after a week.
+5. **Womble and the board.** Old iPads on the wall, the household container, the house agent.
+6. **Watch and TV** as viewers.
+7. **Away from home.** The punched tunnel over CloudKit signalling; a direct LAN socket only if the push proves too slow to feel live.
+8. **Two Buddies meeting** under the contract.
 
 ## Identity
 
