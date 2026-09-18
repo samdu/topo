@@ -266,9 +266,12 @@ final class VaultPresenter: NSObject, NSFilePresenter {
 
 /// Who a silent push about a revision wakes.
 ///
-/// The same shape as `PushWake`, and for the same reason: the screen that is syncing installs a
-/// handler while it stands and takes it away when it goes, so a push arriving after a sign-out
-/// reaches nothing.
+/// `PushWake`'s shape, with a different owner. A turn is answered by the screen that is
+/// answering, so that handler stands exactly as long as the answering loop does; the memory is
+/// mirrored by any phone that holds a login, whatever screen it happens to be showing — a first
+/// run, a sign-in that has not been answered yet — so this one follows the login instead.
+/// `TopoApp` is where it is put up and taken down, and at a sign-out it is gone, so a push
+/// arriving after reaches nothing.
 @MainActor
 enum MemoryWake {
     static var handler: (@MainActor () async -> Void)?
@@ -279,6 +282,15 @@ enum MemoryWake {
 
     static func remove() {
         handler = nil
+    }
+
+    /// Installed exactly while this device holds a login.
+    static func follow(signedIn: Bool, memory: Memory) {
+        if signedIn {
+            install { [memory] in await memory.sync() }
+        } else {
+            remove()
+        }
     }
 }
 #endif

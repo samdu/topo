@@ -148,16 +148,14 @@ struct ChatView: View {
             // The subscription is saved beside the loop: cheap when it is already there, and a
             // failure costs only the acceleration, so it is not the screen's to report.
             PushWake.install { [harness] in await harness.wake() }
-            // A revision written on another device wakes the mirror the same way a limb's turn
-            // wakes the loop, and the mirror runs on every pass of that loop besides, so a
-            // dropped push costs the folder latency rather than currency.
-            MemoryWake.install { [memory] in await memory.sync() }
+            // The mirror runs on every pass of this loop, which is what makes the folder
+            // current with no push and no turn. What a revision's push wakes is put up with
+            // the login rather than with this screen (`MemoryWake`, from `TopoApp`).
             harness.onPass = { [memory] in await memory.sync() }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
             defer {
                 PushWake.remove()
-                MemoryWake.remove()
                 harness.onPass = nil
             }
             // A spoken question gets a spoken answer, and the decision is the log's rather than
@@ -186,7 +184,6 @@ struct ChatView: View {
             }
             await withDiscardingTaskGroup { group in
                 group.addTask { try? await TurnPush.ensureSubscription() }
-                group.addTask { try? await NotePush.ensureSubscription() }
                 await harness.answering(every: Self.loopInterval)
             }
         }

@@ -59,6 +59,16 @@ struct TopoApp: App {
                 // what pays for the route change; permission-gated inside. The ear's and the
                 // voice's models are asked for on the same cue, downloaded if the phone lacks
                 // them, so they are resident by the first press.
+                // The memory is mirrored by whatever phone holds a login, so what a revision's
+                // push wakes follows the login and not the chat: a phone sitting on the first
+                // run, or on a sign-in it has already answered, mirrors like any other. The
+                // subscription is saved from here for the same reason, and a failure costs only
+                // the acceleration, so it is not the screen's to report.
+                .onChange(of: signIn.phase, initial: true) { _, phase in
+                    MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
+                    guard phase == .signedIn else { return }
+                    Task { try? await NotePush.ensureSubscription() }
+                }
                 .onChange(of: scenePhase, initial: true) { _, phase in
                     audio.warmRecord(phase == .active)
                     if phase == .active {

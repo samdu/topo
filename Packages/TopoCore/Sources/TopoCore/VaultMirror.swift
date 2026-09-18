@@ -289,7 +289,9 @@ public actor VaultMirror {
     /// Replaces a file with what the store holds — but only if the folder still holds what
     /// the scan saw. The comparison is made inside the coordinated write, so an editor's
     /// save either lands before this block and is found by it, or waits behind it and is
-    /// what the next sync reads.
+    /// what the next sync reads. Cancellation is judged in there too, next to the write
+    /// itself: the wait for the coordinator is unbounded, and a sign-out during it is the
+    /// case the check exists for.
     private func coordinatedReplace(_ url: URL, expecting: String?, with text: String) throws -> DiskOutcome {
         try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url in
             switch self.reading(at: url) {
@@ -304,6 +306,10 @@ public actor VaultMirror {
             case .text:
                 break
             }
+            // Inside the coordination, with the bytes about to go down: waiting for another
+            // app's access can take as long as that app likes, and a sync abandoned during
+            // that wait has no business writing when its turn comes.
+            try Task.checkCancellation()
             try Data(text.utf8).write(to: url, options: .atomic)
             return DiskOutcome.done
         }
@@ -318,6 +324,7 @@ public actor VaultMirror {
             case .text(let current) where current != expecting: return DiskOutcome.different(current)
             case .text: break
             }
+            try Task.checkCancellation()
             try self.disk.removeItem(at: url)
             return DiskOutcome.done
         }

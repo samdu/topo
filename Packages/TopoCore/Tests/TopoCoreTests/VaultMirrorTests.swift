@@ -499,6 +499,57 @@ import TopoCoreTesting
 
     /// Cancelled after the first fence, in the middle of making a writer: the revision it
     /// was about to write is not written, and the folder is left as the person left it.
+    /// Cancelled while the coordinator holds the sync waiting on another app's access to
+    /// the very file it is about to write. That wait is as long as the other app likes,
+    /// and a sync abandoned during it has nothing to write when its turn comes.
+    @Test func aSyncCancelledWhileItWaitsForAnotherAccessorWritesNothing() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+
+            // Somebody else has the file open for writing, so the mirror's write waits.
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent("Meeting notes.md"))
+            holder.take()
+            #expect(holder.isHolding)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let sync = Task { try await mirror.sync(at: t0 + 1) }
+            // Long enough for the sync to be past its fences and inside the coordinator,
+            // which is where this test wants it: nothing here waits on iCloud or on time,
+            // and the holder is what it is waiting for.
+            try await Task.sleep(for: .milliseconds(200))
+            #expect(read("Meeting notes.md", in: directory) == nil, "the write is waiting, not done")
+
+            sync.cancel()
+            holder.release()
+
+            await #expect(throws: CancellationError.self) { try await sync.value }
+            #expect(read("Meeting notes.md", in: directory) == nil, "and it stayed waiting-and-gone")
+        }
+    }
+
+    /// And the same where the file is to be taken away: the removal waits behind another
+    /// app's access too, and a cancelled sync takes nothing away when it is let through.
+    @Test func aSyncCancelledWhileItWaitsToRemoveAFileTakesNothingAway() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            _ = try await mirror.sync(at: t0 + 1)
+            try await w.delete(note, continuing: store.read(), at: t0 + 2)
+
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent("Meeting notes.md"))
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 3) }
+            try await Task.sleep(for: .milliseconds(200))
+            sync.cancel()
+            holder.release()
+
+            await #expect(throws: CancellationError.self) { try await sync.value }
+            #expect(read("Meeting notes.md", in: directory) == "from the hub")
+        }
+    }
+
     @Test func aSyncCancelledAfterTheFirstFenceWritesNoRevision() async throws {
         try await inTemporaryDirectory { directory in
             try write("what I remember", to: "Meeting notes.md", in: directory)
@@ -617,4 +668,33 @@ actor InterruptedQueryDatabase: RecordDatabase {
         if let hook { self.hook = nil; hook() }
         return try await inner.query(query)
     }
+}
+
+/// Holds a coordinated write on one file until it is let go, which is what another app
+/// editing that file looks like from here.
+final class CoordinatedHolder: @unchecked Sendable {
+    private let url: URL
+    private let lock = NSLock()
+    private var holding = false
+    private let entered = DispatchSemaphore(value: 0)
+    private let leave = DispatchSemaphore(value: 0)
+
+    init(url: URL) { self.url = url }
+
+    var isHolding: Bool { lock.withLock { holding } }
+
+    func take() {
+        DispatchQueue.global().async { [self] in
+            var error: NSError?
+            NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &error) { _ in
+                lock.withLock { holding = true }
+                entered.signal()
+                leave.wait()
+            }
+            lock.withLock { holding = false }
+        }
+        entered.wait()
+    }
+
+    func release() { leave.signal() }
 }

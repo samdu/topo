@@ -152,6 +152,60 @@ final class MemoryTests: XCTestCase {
         XCTAssertEqual(memory.passes, 2)
     }
 
+    /// And around a turn this phone typed: the reply lands in `run`, not in a pass, so the same
+    /// order has to hold for it — the memory out before the model is asked, and again once the
+    /// reply is in the log.
+    func testATypedTurnSyncsTheMemoryOnceItsReplyIsInTheLog() async throws {
+        let db = InMemoryRecordDatabase()
+        let directory = makeDirectory()
+        let memory = memory(db, at: directory)
+        let order = Order()
+
+        let transport = ScriptedTransport((200, reply("and hello to you")))
+        transport.duringRequest = { await order.add("model") }
+        let beats = Beats()
+        let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
+                              defaults: makeDefaults(), transport: transport,
+                              leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
+                              pause: { try await beats.pause($0) })
+        harness.onPass = { [memory] in
+            await order.add("sync")
+            await memory.sync()
+        }
+
+        let loop = Task { await harness.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        await harness.send("hello")
+        loop.cancel()
+        await loop.value
+
+        let seen = await order.entries
+        XCTAssertEqual(seen, ["sync", "model", "sync"])
+    }
+
+    /// The wake follows the login, not the chat: a signed-in phone that never got as far as the
+    /// chat screen — a data reset with the keychain login intact — still answers a note push.
+    /// Delivering a real one is beyond any suite, since a hand-made push carries no subscription
+    /// id; what is held here is that the handler is up while the login is, and that it is this
+    /// device's memory it syncs.
+    @MainActor
+    func testTheNoteWakeIsUpWhileTheLoginIsAndSyncsTheMemory() async throws {
+        let db = InMemoryRecordDatabase()
+        let directory = makeDirectory()
+        let memory = memory(db, at: directory)
+        try await write("from the hub", to: note, in: db, as: hub, at: t0)
+        defer { MemoryWake.remove() }
+
+        MemoryWake.follow(signedIn: true, memory: memory)
+        let handler = try XCTUnwrap(MemoryWake.handler, "the login is held, so the wake is up")
+        await handler()
+        try await eventually("the pass") { memory.passes >= 1 }
+        XCTAssertEqual(text("Meeting notes.md", in: directory), "from the hub")
+
+        MemoryWake.follow(signedIn: false, memory: memory)
+        XCTAssertNil(MemoryWake.handler, "the login went, so a push now reaches nothing")
+    }
+
     // MARK: Only while signed in
 
     /// The cue that arrives whether or not anybody is signed in: a foreground. A phone with
