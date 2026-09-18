@@ -25,14 +25,24 @@ final class TopoAppDelegate: NSObject, UIApplicationDelegate {
         }
     }
 
-    /// `TurnPush`'s subscription firing: the answering screen's handler, if one stands, runs the
-    /// loop's next pass now, and the result is reported once that pass has run.
+    /// A subscription of ours firing, matched by its id and handed to whoever owns it: `TurnPush`
+    /// to the answering screen, which runs the loop's next pass now, and `NotePush` to the
+    /// memory, which syncs the folder. Each reaches nothing when no screen has installed its
+    /// handler, and neither ever reaches the other's.
     @MainActor
     func application(_ application: UIApplication,
                      didReceiveRemoteNotification userInfo: [AnyHashable: Any]) async -> UIBackgroundFetchResult {
-        guard TurnPush.isOurs(userInfo), let handler = PushWake.handler else { return .noData }
-        await handler()
-        return .newData
+        if TurnPush.isOurs(userInfo) {
+            guard let handler = PushWake.handler else { return .noData }
+            await handler()
+            return .newData
+        }
+        if NotePush.isOurs(userInfo) {
+            guard let handler = MemoryWake.handler else { return .noData }
+            await handler()
+            return .newData
+        }
+        return .noData
     }
 
     func application(_ application: UIApplication,

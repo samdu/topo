@@ -8,6 +8,7 @@ struct TopoApp: App {
     @UIApplicationDelegateAdaptor(TopoAppDelegate.self) private var appDelegate
     @State private var signIn: SignIn
     @State private var harness: Harness
+    @State private var memory: Memory
     @State private var roleSelector: RoleSelector
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
@@ -22,6 +23,7 @@ struct TopoApp: App {
         #endif
         _signIn = State(initialValue: SignIn())
         _harness = State(initialValue: Harness.standard())
+        _memory = State(initialValue: Memory.standard())
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
@@ -40,20 +42,6 @@ struct TopoApp: App {
         #if DEBUG
         AudioLog.startHeartbeat()
         #endif
-        Self.makeVaultFolder()
-    }
-
-    /// The memory's folder, made on launch so Files has something to show under On My iPhone ›
-    /// Topo before a single revision exists. One placeholder note, written only when the folder
-    /// is not there, so an editor opening it in place finds a vault rather than nothing.
-    private static func makeVaultFolder() {
-        guard let documents = try? FileManager.default.url(for: .documentDirectory, in: .userDomainMask,
-                                                           appropriateFor: nil, create: true) else { return }
-        let vault = documents.appending(path: "Vault", directoryHint: .isDirectory)
-        guard !FileManager.default.fileExists(atPath: vault.path(percentEncoded: false)) else { return }
-        try? FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
-        try? Data("Topo's memory lives here.\n".utf8)
-            .write(to: vault.appending(path: "hello.md", directoryHint: .notDirectory))
     }
 
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.
@@ -66,7 +54,7 @@ struct TopoApp: App {
     var body: some Scene {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
-                .environment(voice).environment(speaker)
+                .environment(voice).environment(speaker).environment(memory)
                 // The record configuration is brought up on the foreground so the press is not
                 // what pays for the route change; permission-gated inside. The ear's and the
                 // voice's models are asked for on the same cue, downloaded if the phone lacks
@@ -76,6 +64,10 @@ struct TopoApp: App {
                     if phase == .active {
                         voice.prepare()
                         speaker.prepare()
+                        // The memory catches up with what the other devices wrote while this
+                        // phone was away, and anything edited in Files here goes out, before
+                        // the person has typed anything.
+                        Task { await memory.sync() }
                     }
                 }
                 // Nothing unless a debug build was launched asking for a turn; the screen
