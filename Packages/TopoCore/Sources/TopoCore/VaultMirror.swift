@@ -200,7 +200,10 @@ public actor VaultMirror {
         for (path, _) in startingDisk.sorted(by: { $0.key < $1.key }) where vault.files[path] == nil {
             try Task.checkCancellation()
             let url = url(of: path)
-            guard !isLink(url), isInsideVault(url.deletingLastPathComponent()) else {
+            // A link anywhere above this file would carry the removal out of the vault, and
+            // no open can refuse that for us. A link *at* the path is refused by the read
+            // inside the coordination, which is the only place it can be refused honestly.
+            guard isInsideVault(url.deletingLastPathComponent()) else {
                 out.skipped.append(path.string)
                 continue
             }
@@ -212,6 +215,8 @@ public actor VaultMirror {
                 out.onDisk[path] = nil
             case .different(let text):
                 out.lateEdits[path] = text
+            case .blocked:
+                out.skipped.append(path.string)
             }
         }
 
@@ -221,13 +226,13 @@ public actor VaultMirror {
                 continue
             }
             let url = url(of: file.path)
-            // A link where a file should be is somebody else's business,
-            // and writing to it writes wherever it points — as does a link
-            // anywhere above it, which is why the folder this goes in has
-            // to resolve back inside the vault before anything is written.
-            // Leave it, and leave the path out of the state so the next
-            // sync tries again.
-            if isLink(url) || !isInsideVault(url.deletingLastPathComponent()) {
+            // A link anywhere above this file writes wherever it points, and the folder it
+            // goes in has to resolve back inside the vault before anything is written. A
+            // link standing at the path itself is refused by the read inside the coordinated
+            // write rather than here: a look taken now is a look at a path the write opens
+            // again, and what stands there can change in between. Either way the path is
+            // left out of the state, so the next sync looks again.
+            if !isInsideVault(url.deletingLastPathComponent()) {
                 out.skipped.append(file.path.string)
                 continue
             }
@@ -258,6 +263,10 @@ public actor VaultMirror {
             case .different(let text):
                 out.onDisk[file.path] = text
                 out.lateEdits[file.path] = text
+            case .blocked:
+                // A link, or bytes nobody can read as text, standing where this file goes.
+                // Somebody else's business, left alone and left out of the state.
+                out.skipped.append(file.path.string)
             }
         }
         return out
@@ -271,6 +280,10 @@ public actor VaultMirror {
         case gone
         /// Somebody else's text is there.
         case different(String)
+        /// Something that is not this vault's file to act on: a link, or bytes that are
+        /// not text. Left exactly as it is, and left out of the state, so the next sync
+        /// looks again.
+        case blocked
     }
 
     /// Replaces a file with what the store holds — but only if the folder still holds what
@@ -279,10 +292,17 @@ public actor VaultMirror {
     /// what the next sync reads.
     private func coordinatedReplace(_ url: URL, expecting: String?, with text: String) throws -> DiskOutcome {
         try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url in
-            let current = self.textAt(url)
-            guard current == expecting else {
-                if let current { return DiskOutcome.different(current) }
+            switch self.reading(at: url) {
+            case .blocked:
+                return DiskOutcome.blocked
+            case .missing where expecting != nil:
                 return DiskOutcome.gone
+            case .missing:
+                break
+            case .text(let current) where current != expecting:
+                return DiskOutcome.different(current)
+            case .text:
+                break
             }
             try Data(text.utf8).write(to: url, options: .atomic)
             return DiskOutcome.done
@@ -292,24 +312,47 @@ public actor VaultMirror {
     /// Takes a file away, on the same terms: what is there has to be what the scan saw.
     private func coordinatedRemove(_ url: URL, expecting: String?) throws -> DiskOutcome {
         try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url in
-            let current = self.textAt(url)
-            guard let current else { return DiskOutcome.gone }
-            guard current == expecting else { return DiskOutcome.different(current) }
+            switch self.reading(at: url) {
+            case .blocked: return DiskOutcome.blocked
+            case .missing: return DiskOutcome.gone
+            case .text(let current) where current != expecting: return DiskOutcome.different(current)
+            case .text: break
+            }
             try self.disk.removeItem(at: url)
             return DiskOutcome.done
         }
     }
 
+    /// What is at a path right now.
+    private enum Reading {
+        case text(String)
+        case missing
+        /// A link, or bytes that are not text.
+        case blocked
+    }
+
     /// A file's text as it stands, read inside a coordination this actor already holds —
     /// which is why it coordinates nothing of its own: a second coordination of the same
     /// item from inside the first is a deadlock.
-    private func textAt(_ url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
-
-    private func isLink(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
+    ///
+    /// Opened `O_NOFOLLOW`, and that is the whole point of it: the guard the scan makes is
+    /// made again here, on the very path this read opens and in the same breath as opening
+    /// it. A link swapped in where the scan saw a file is refused by the open itself, so a
+    /// file from wherever it points can never be read as this folder's and written into the
+    /// memory — which a check made before the coordination, on a URL the read looks up
+    /// again, cannot promise.
+    private func reading(at url: URL) -> Reading {
+        let descriptor = open(url.path(percentEncoded: false), O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            // ELOOP is the link; ENOENT and ENOTDIR are nothing there. Anything else — no
+            // permission, a device that has gone — is not this folder's file either.
+            return errno == ENOENT || errno == ENOTDIR ? .missing : .blocked
+        }
+        defer { close(descriptor) }
+        let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
+        guard let data = try? handle.readToEnd() else { return .blocked }
+        guard let text = String(data: data ?? Data(), encoding: .utf8) else { return .blocked }
+        return .text(text)
     }
 
     /// What the folder is asking the store for, by path: an edit, an answer

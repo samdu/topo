@@ -45,6 +45,13 @@ final class MemoryTests: XCTestCase {
         try await writer.write(text, to: path, continuing: store.read(), at: when)
     }
 
+    /// Lets everything that can run, run. Nothing here waits on time or on iCloud, so a
+    /// handful of turns is the whole of what any of it needs; this asserts nothing, because
+    /// what it is used for is to give a wrong answer its chance to appear.
+    private func settle(_ turns: Int = 400) async {
+        for _ in 0..<turns { await Task.yield() }
+    }
+
     /// Waits for something the test can observe, failing rather than hanging when it never comes.
     private func eventually(_ what: String, within seconds: TimeInterval = 10,
                             _ condition: @MainActor () async -> Bool) async throws {
@@ -73,10 +80,10 @@ final class MemoryTests: XCTestCase {
         let third = Task { await memory.sync() }
         try await eventually("both requests to be in") { memory.requests == 3 }
 
-        await gate.admit()
+        await gate.release()
         try await eventually("the pass they asked for") { await gate.waiting == 1 }
         XCTAssertEqual(memory.passes, 2, "two requests during one pass ask for one more pass")
-        await gate.admit()
+        await gate.release()
         await first.value
         await second.value
         await third.value
@@ -200,7 +207,7 @@ final class MemoryTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path), "the folder is made up front")
 
         memory.forget()
-        await gate.admit()
+        await gate.release()
         await sync.value
 
         try await eventually("the folder to go") { !FileManager.default.fileExists(atPath: directory.path) }
@@ -208,6 +215,43 @@ final class MemoryTests: XCTestCase {
         XCTAssertNil(memory.lastReport)
         XCTAssertNil(memory.lastSync)
         XCTAssertNil(memory.lastError, "an abandoned sync is not a failure to report")
+    }
+
+    /// Sign out and straight back in while a pass is still stopping. The new login's sync
+    /// waits for the old one to stop rather than running beside it — so the folder it makes
+    /// is made after the sign-out's cleanup, not before it, and stands.
+    func testASyncFromBeforeASignOutNeitherRunsBesideNorDeletesTheOneAfterIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let gate = GatedDatabase(db)
+        let directory = makeDirectory()
+        let login = Login()
+        let memory = memory(gate, at: directory, signedIn: login)
+        try await write("from the hub", to: note, in: db, as: hub, at: t0)
+
+        let before = Task { await memory.sync() }
+        try await eventually("the first sync to reach the store") { await gate.waiting == 1 }
+
+        login.holds = false
+        memory.forget()
+        login.holds = true
+
+        // The store is open to whoever asks next, so nothing but the mirror itself keeps the
+        // new login's sync from running right now, beside the one that has not stopped.
+        await gate.permit()
+        let after = Task { await memory.sync() }
+        try await eventually("the second sync to ask") { memory.requests == 2 }
+        await settle()
+        XCTAssertNil(text("Meeting notes.md", in: directory),
+                     "the sync after the sign-in ran beside the one before it, over the same folder")
+
+        // The old pass stops here, and the sign-out's cleanup follows it.
+        await gate.release()
+        await before.value
+        await after.value
+
+        XCTAssertEqual(text("Meeting notes.md", in: directory), "from the hub")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.path),
+                      "the sign-out's cleanup took away the folder the new login made")
     }
 
     // MARK: A failure at each stage
@@ -352,22 +396,23 @@ final class NotePushTests: XCTestCase {
 // MARK: - Doubles
 
 /// A database that parks every read of the change feed until it is let through, so a test can
-/// hold a sync at the moment it is waiting on the store.
+/// hold a sync at the moment it is waiting on the store. `release` lets a read that is already
+/// parked go on; `permit` lets the next read to arrive pass without parking at all, which is
+/// how one sync is held while another is let run.
 private actor GatedDatabase: RecordDatabase {
     private let inner: InMemoryRecordDatabase
     private var parked: [CheckedContinuation<Void, Never>] = []
-    private var admitted = 0
+    private var permits = 0
     private(set) var waiting = 0
 
     init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
 
-    func admit() {
-        admitted += 1
-        if !parked.isEmpty {
-            waiting -= 1
-            admitted -= 1
-            parked.removeFirst().resume()
-        }
+    func permit() { permits += 1 }
+
+    func release() {
+        guard !parked.isEmpty else { return }
+        waiting -= 1
+        parked.removeFirst().resume()
     }
 
     func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
@@ -375,8 +420,8 @@ private actor GatedDatabase: RecordDatabase {
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 
     func records(ofType type: String) async throws -> [Record] {
-        if admitted > 0 {
-            admitted -= 1
+        if permits > 0 {
+            permits -= 1
         } else {
             waiting += 1
             await withCheckedContinuation { parked.append($0) }

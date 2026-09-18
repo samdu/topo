@@ -458,6 +458,45 @@ import TopoCoreTesting
         }
     }
 
+    /// A link swapped in where the scan saw a file, while the store was being read. The
+    /// read that decides whether to overwrite opens the path itself and refuses a link, so
+    /// what the link points at is never read as this folder's and never becomes a revision.
+    @Test func aLinkSwappedInBeforeTheWriteIsRefusedRatherThanReadThrough() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                let outside = elsewhere.appendingPathComponent("theirs.md")
+                try Data("not ours to read".utf8).write(to: outside)
+
+                // The folder and the store agree, and then the store moves on, so the next
+                // sync's job is to write the newer text over the file.
+                let w = try await store.writer(for: hub)
+                try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                try await mirror.sync(at: t0 + 1)
+                try await w.write("from the hub, again", to: note, continuing: store.read(), at: t0 + 2)
+
+                let interrupted = InterruptedFeedDatabase(inner: db)
+                let file = directory.appendingPathComponent("Meeting notes.md")
+                await interrupted.onFirstFeedRead {
+                    try? FileManager.default.removeItem(at: file)
+                    try? FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+                }
+                let racing = VaultMirror(directory: directory, store: MemoryStore(database: interrupted),
+                                         device: phone)
+                let report = try await racing.sync(at: t0 + 3)
+
+                #expect(report.skipped == ["Meeting notes.md"])
+                #expect(report.written.isEmpty)
+                #expect(report.pushed.isEmpty)
+                let vault = try await store.read()
+                #expect(vault.notes.values.contains { $0.text.contains("not ours") } == false,
+                        "nothing from outside the vault reached the store")
+                #expect(vault.text(at: note) == "from the hub, again")
+                #expect(read("theirs.md", in: elsewhere) == "not ours to read")
+            }
+        }
+    }
+
     /// Cancelled after the first fence, in the middle of making a writer: the revision it
     /// was about to write is not written, and the folder is left as the person left it.
     @Test func aSyncCancelledAfterTheFirstFenceWritesNoRevision() async throws {

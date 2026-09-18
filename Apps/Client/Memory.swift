@@ -57,10 +57,17 @@ final class Memory {
     private var presenter: VaultPresenter?
     private var zoneReady = false
     private var running: Task<Void, Never>?
+    /// A pass a sign-out cancelled, still winding down. Nothing new touches the folder until
+    /// it has stopped: a sign-in landing in that moment would otherwise have its first sync
+    /// running beside the old one, over the same folder.
+    private var stopping: Task<Void, Never>?
     private var queued = false
-    /// Bumped by a sign-out, so a pass that was already in flight records nothing when its
-    /// database call finally returns. The mirror's own fence is what stops it writing to disk;
-    /// this is what stops a stale report and a stale error reaching the screen.
+    /// Advanced by a sign-out and by every pass that begins, so anything left over from before
+    /// — a report whose database call has only now returned, a sign-out's folder cleanup that
+    /// waited for it — can tell that it is no longer the newest thing to have happened. The
+    /// mirror's own cancellation is what stops a stale pass writing to disk; this is what stops
+    /// it writing to the screen, and stops one login's cleanup taking away the next one's
+    /// folder.
     private var generation = 0
 
     init(directory: URL, store: MemoryStore, device: DeviceID = DeviceIdentity.current,
@@ -101,6 +108,12 @@ final class Memory {
             return
         }
         requests += 1
+        // Whatever a sign-out cancelled is still stopping; wait it out rather than start a
+        // second sync over one folder.
+        while let winding = stopping {
+            await winding.value
+            if stopping == winding { stopping = nil }
+        }
         if let running {
             queued = true
             await running.value
@@ -121,14 +134,18 @@ final class Memory {
 
     private func onePass() async {
         passes += 1
-        let generation = self.generation
+        // A pass beginning is this device holding a login and using it, which changes hands
+        // as much as a sign-out does: a cleanup left over from before this pass takes nothing
+        // away, and a report from before it reaches nothing.
+        generation += 1
+        let mine = generation
         do {
             if !zoneReady {
                 try await ensureZone()
                 zoneReady = true
             }
             let report = try await vault().sync()
-            guard generation == self.generation else { return }
+            guard mine == generation else { return }
             lastReport = report
             lastSync = now()
             lastError = nil
@@ -136,7 +153,7 @@ final class Memory {
             // Sign-out, or the screen going: the mirror stopped before it wrote anything, and
             // there is nothing about that to tell anyone.
         } catch {
-            guard generation == self.generation else { return }
+            guard mine == generation else { return }
             lastError = Failure(at: now(), message: Self.describe(error))
         }
     }
@@ -162,6 +179,7 @@ final class Memory {
         let running = self.running
         running?.cancel()
         self.running = nil
+        stopping = running
         queued = false
         mirror = nil
         zoneReady = false
@@ -173,11 +191,14 @@ final class Memory {
             self.presenter = nil
         }
         // After the pass in flight has stopped, never during it: a folder taken away mid-write
-        // is one a half-finished pass puts back. A sign-in since, which bumps nothing but makes
-        // a new mirror, keeps its own folder.
+        // is one a half-finished pass puts back. And only while this is still the newest thing
+        // that happened — a later sign-out has a cleanup of its own, and a pass begun under a
+        // new login owns the folder now, so taking it away here would be one login deleting
+        // the next one's memory.
         Task { @MainActor [weak self] in
             _ = await running?.value
             guard let self, self.generation == generation else { return }
+            if self.stopping == running { self.stopping = nil }
             self.removeFolder()
         }
     }
