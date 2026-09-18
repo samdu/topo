@@ -16,9 +16,12 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("readAloud") private var readAloud = true
     @State private var draft = ""
+    @State private var typing = false
+    /// The nonce of the draft on its way to the log; the draft row shows it as sending until
+    /// the turn with that nonce lands, then clears.
+    @State private var sentNonce: String?
     @State private var showDiagnostics = false
-    @State private var showAbout = false
-    @State private var showVocabulary = false
+    @State private var showSettings = false
     /// The person's turns that were spoken, so their replies are read aloud and typed ones not.
     @State private var spokenTurns: Set<String> = []
     #if DEBUG
@@ -35,7 +38,11 @@ struct ChatView: View {
                                replay: Replay(speaking: speaker.speaking,
                                               canSpeak: speaker.foreground,
                                               say: { speaker.speak($0) },
-                                              stopSpeaking: { speaker.stop() }))
+                                              stopSpeaking: { speaker.stop() }),
+                               actions: TurnActions(edit: { turn in draft = turn.text; typing = true }),
+                               // Typing, and a live caption, are the person's next turn in
+                               // progress, drawn where it will land.
+                               draft: Draft(text: $draft, active: $typing, sending: sentNonce != nil, send: send))
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
@@ -70,42 +77,10 @@ struct ChatView: View {
                 }
             }
             .safeAreaInset(edge: .bottom) { composer }
-            .navigationTitle("Topo")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Text("Topo").font(.headline)
-                        .onLongPressGesture { showDiagnostics = true }
-                        .accessibilityHint("Long press for diagnostics")
-                        #if DEBUG
-                        // What the spoken-turn UI test decodes: the last spoken turn, its reply,
-                        // and what the speaker did with it, as JSON (`DebugRun.ChatReport`).
-                        .accessibilityIdentifier(DebugRun.chatReportIdentifier)
-                        .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
-                                                                error: harness.error, speaker: speaker.report,
-                                                                voice: speaker.voice.state))
-                        #endif
-                }
-                ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        @Bindable var harness = harness
-                        Picker("Model", selection: $harness.model) {
-                            ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
-                        }
-                        Toggle("Read replies aloud", isOn: $readAloud)
-                        Button("Vocabulary") { showVocabulary = true }
-                        Button("Diagnostics") { showDiagnostics = true }
-                        Button("About Topo") { showAbout = true }
-                        Divider()
-                        Button("Sign out", role: .destructive) { harness.forget(); signIn.signOut() }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                }
-            }
+            .navigationTitle("")
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { badge } }
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
-            .sheet(isPresented: $showAbout) { AboutView() }
-            .sheet(isPresented: $showVocabulary) { VocabularyView() }
+            .sheet(isPresented: $showSettings) { SettingsView() }
         }
         .task {
             await harness.refresh()
@@ -151,7 +126,15 @@ struct ChatView: View {
             }
         }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
+        // The keyboard mutes the microphone: a hands-free session ends, and what it heard so far
+        // stays in the draft to be finished by hand.
+        .onChange(of: typing) { _, typing in if typing { voice.cancel(.chat) } }
         .onChange(of: harness.turns.last?.ref) { _, _ in
+            // The draft on its way has landed: the log shows it now, so the row goes.
+            if let sentNonce, harness.turns.contains(where: { $0.nonce == sentNonce }) {
+                draft = ""
+                self.sentNonce = nil
+            }
             // A spoken question gets a spoken answer; a typed one stays quiet.
             guard readAloud, let last = harness.turns.last,
                   let asked = ReadAloud.spokenTurn(answeredBy: last, in: harness.turns, spoken: spokenTurns) else { return }
@@ -167,6 +150,20 @@ struct ChatView: View {
         .onDisappear { voice.cancel(.chat) }
     }
 
+    private var badge: some View {
+        TopoBadge(status: .primary,
+                  openSettings: { showSettings = true },
+                  openDiagnostics: { showDiagnostics = true })
+            #if DEBUG
+            // What the spoken-turn UI test decodes: the last spoken turn, its reply, and what
+            // the speaker did with it, as JSON (`DebugRun.ChatReport`).
+            .accessibilityIdentifier(DebugRun.chatReportIdentifier)
+            .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
+                                                    error: harness.error, speaker: speaker.report,
+                                                    voice: speaker.voice.state))
+            #endif
+    }
+
     /// Hold to talk and release to send; a tap opens the microphone until the next press. The
     /// session logic is `VoiceInput`'s; this only sends what a press hands back.
     private func micPressed(_ down: Bool) async {
@@ -177,7 +174,7 @@ struct ChatView: View {
     }
 
     private func sendSpoken(_ heard: String) async {
-        draft = ""
+        draft = heard
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         #if DEBUG
         if DebugRun.keepsSpoken() {
@@ -187,6 +184,7 @@ struct ChatView: View {
         #endif
         let nonce = harness.willSend(heard)
         spokenTurns.insert(nonce)
+        sentNonce = nonce
         #if DEBUG
         spokenNonce = nonce
         #endif
@@ -194,40 +192,32 @@ struct ChatView: View {
     }
 
     private var composer: some View {
-        HStack(spacing: 8) {
-            TextField("Say something", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...5)
-                .onSubmit(send)
-            Image(systemName: voice.listening && voice.owner == .chat ? "waveform.circle.fill" : "mic.circle.fill")
-                .font(.title)
-                // Dimmed while a press would be refused: the microphone denied, or an ear that
-                // is not resident yet. The diagnostics `speech` row is what says which.
-                .foregroundStyle(voice.canListen ? Theme.teal : .secondary)
-                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
-                    Task { await micPressed(down) }
-                }
-                .accessibilityLabel(voice.handsFree ? "Listening; press to send" : voice.listening ? "Listening; release to send" : "Hold to talk")
-                #if DEBUG
-                // What the UI test decodes after a press: the counters, the branch it took, and
-                // what the microphone delivered, as JSON (`VoiceInput.Report`). A debug build
-                // only, so VoiceOver on a release build hears the label alone.
-                .accessibilityValue(voice.debugReport)
-                #endif
-            Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
-            }
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .padding()
-        .background(.bar)
+        Composer(typing: $typing,
+                 mic: .init(canListen: voice.canListen,
+                            listening: voice.listening && voice.owner == .chat,
+                            handsFree: voice.handsFree),
+                 micPressed: { down in Task { await micPressed(down) } },
+                 micReport: micReport)
+    }
+
+    /// What the UI test decodes after a press: the counters, the branch it took, and what the
+    /// microphone delivered, as JSON (`VoiceInput.Report`). A debug build only, so VoiceOver on
+    /// a release build hears the label alone.
+    private var micReport: String? {
+        #if DEBUG
+        voice.debugReport
+        #else
+        nil
+        #endif
     }
 
     private func send() {
         voice.cancel(.chat)
-        let text = draft
-        draft = ""
-        Task { await harness.send(text) }
+        typing = false
+        guard !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        // The words stay in the draft row, as sending, until the turn is in the log.
+        sentNonce = harness.willSend(draft)
+        Task { await harness.retry() }
     }
 }
 
