@@ -499,6 +499,47 @@ import TopoCoreTesting
 
     /// Cancelled after the first fence, in the middle of making a writer: the revision it
     /// was about to write is not written, and the folder is left as the person left it.
+    /// A folder swapped for a link *above* the file, after the way down has been judged and
+    /// while the sync waits for another app's access to the file itself. An open of the file
+    /// alone refuses a link standing at its own name and nothing above it, so this is the way
+    /// out of the vault that the folder's own descriptor is opened to refuse.
+    @Test func aFolderSwappedForALinkWhileTheWriteWaitsIsRefusedRatherThanFollowed() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                let outside = elsewhere.appendingPathComponent("today.md")
+                try Data("not ours to read".utf8).write(to: outside)
+
+                let inside = VaultPath("notes/today.md")!
+                let w = try await store.writer(for: hub)
+                try await w.write("from the hub", to: inside, continuing: store.read(), at: t0)
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                try await mirror.sync(at: t0 + 1)
+                try await w.write("from the hub, again", to: inside, continuing: store.read(), at: t0 + 2)
+
+                // The sync waits for the file, which is past every look it took at the way
+                // down to it; the folder it looked at is a link by the time it is let through.
+                let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes/today.md"))
+                holder.take()
+                let sync = Task { try await mirror.sync(at: t0 + 3) }
+                try await Task.sleep(for: .milliseconds(200))
+                try FileManager.default.removeItem(at: directory.appendingPathComponent("notes"))
+                try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("notes"),
+                                                           withDestinationURL: elsewhere)
+                holder.release()
+
+                let report = try await sync.value
+                #expect(report.skipped == ["notes/today.md"])
+                #expect(report.written.isEmpty)
+                #expect(report.pushed.isEmpty)
+                #expect(read("today.md", in: elsewhere) == "not ours to read", "not written")
+                let vault = try await store.read()
+                #expect(vault.notes.values.contains { $0.text.contains("not ours") } == false,
+                        "and not read: nothing from outside the vault reached the store")
+                #expect(vault.text(at: inside) == "from the hub, again")
+            }
+        }
+    }
+
     /// Cancelled while the coordinator holds the sync waiting on another app's access to
     /// the very file it is about to write. That wait is as long as the other app likes,
     /// and a sync abandoned during it has nothing to write when its turn comes.
@@ -568,10 +609,34 @@ import TopoCoreTesting
         }
     }
 
+    /// Cancelled before the actor ran it at all — a sign-out between the cue and the pass.
+    /// Making the folder is already a change to the person's phone, so a phone that is not
+    /// to have one is left without one rather than with an empty folder nothing will fill.
+    @Test func aSyncCancelledBeforeItRunsMakesNoFolder() async throws {
+        try await inTemporaryDirectory { parent in
+            let directory = parent.appendingPathComponent("Vault", isDirectory: true)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+
+            let gate = Gate()
+            let sync = Task {
+                await gate.wait()
+                return try await mirror.sync(at: t0)
+            }
+            sync.cancel()
+            await gate.open()
+
+            await #expect(throws: CancellationError.self) { try await sync.value }
+            #expect(FileManager.default.fileExists(atPath: directory.path) == false)
+        }
+    }
+
     /// A sync whose task is cancelled while it waits on the store — a sign-out,
     /// most of all — writes nothing to the folder.
     @Test func aCancelledSyncLeavesTheFolderAsItFoundIt() async throws {
-        try await inTemporaryDirectory { directory in
+        try await inTemporaryDirectory { parent in
+            // The folder the mirror is given, not one a test made for it: what a cancelled
+            // sync leaves behind includes whether there is a folder at all.
+            let directory = parent.appendingPathComponent("Vault", isDirectory: true)
             let w = try await store.writer(for: hub)
             try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
 
@@ -583,6 +648,8 @@ import TopoCoreTesting
             await held.release()
             await #expect(throws: CancellationError.self) { try await sync.value }
             #expect(read("Meeting notes.md", in: directory) == nil)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == [],
+                    "the folder it made is empty, and nothing of the person's was touched")
         }
     }
 
@@ -697,4 +764,23 @@ final class CoordinatedHolder: @unchecked Sendable {
     }
 
     func release() { leave.signal() }
+}
+
+/// Holds a task at its first line until it is opened, which is how a test cancels one
+/// before the work it wraps has begun. The wait is not cancellable, or a cancellation would
+/// be answered here rather than by what is being tested.
+actor Gate {
+    private var waiter: CheckedContinuation<Void, Never>?
+    private var opened = false
+
+    func wait() async {
+        guard !opened else { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+
+    func open() {
+        opened = true
+        waiter?.resume()
+        waiter = nil
+    }
 }

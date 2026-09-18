@@ -114,6 +114,10 @@ public actor VaultMirror {
     /// store does hold. Sync again once the read is whole.
     @discardableResult
     public func sync(at now: Date = Date()) async throws -> Report {
+        // Before the folder is made, because making it is already a change to the person's
+        // device: a sync cancelled before it ran — a sign-out between the cue and the pass —
+        // leaves a phone with no folder rather than an empty one nothing will fill.
+        try Task.checkCancellation()
         try disk.createDirectory(at: directory, withIntermediateDirectories: true)
         var report = Report()
         let (scanned, skipped) = try scan()
@@ -292,9 +296,17 @@ public actor VaultMirror {
     /// what the next sync reads. Cancellation is judged in there too, next to the write
     /// itself: the wait for the coordinator is unbounded, and a sign-out during it is the
     /// case the check exists for.
+    ///
+    /// Everything in the block is done through a descriptor for the folder the file goes
+    /// in, opened with no link resolved anywhere under the vault, so the comparison, the
+    /// write and the file it lands as are all the same folder — the one that stood there
+    /// when the block opened it, not whatever a path lookup would find each time.
     private func coordinatedReplace(_ url: URL, expecting: String?, with text: String) throws -> DiskOutcome {
         try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url in
-            switch self.reading(at: url) {
+            guard let folder = self.openFolder(of: url) else { return DiskOutcome.blocked }
+            defer { close(folder) }
+            let name = url.lastPathComponent
+            switch self.reading(name, in: folder) {
             case .blocked:
                 return DiskOutcome.blocked
             case .missing where expecting != nil:
@@ -310,24 +322,104 @@ public actor VaultMirror {
             // app's access can take as long as that app likes, and a sync abandoned during
             // that wait has no business writing when its turn comes.
             try Task.checkCancellation()
-            try Data(text.utf8).write(to: url, options: .atomic)
+            guard self.place(text, as: name, in: folder) else { return DiskOutcome.blocked }
             return DiskOutcome.done
         }
     }
 
-    /// Takes a file away, on the same terms: what is there has to be what the scan saw.
+    /// Takes a file away, on the same terms: what is there has to be what the scan saw,
+    /// and the name is taken out of the folder this block opened rather than off a path.
     private func coordinatedRemove(_ url: URL, expecting: String?) throws -> DiskOutcome {
         try coordinated(url, reading: false, options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url in
-            switch self.reading(at: url) {
+            guard let folder = self.openFolder(of: url) else { return DiskOutcome.blocked }
+            defer { close(folder) }
+            let name = url.lastPathComponent
+            switch self.reading(name, in: folder) {
             case .blocked: return DiskOutcome.blocked
             case .missing: return DiskOutcome.gone
             case .text(let current) where current != expecting: return DiskOutcome.different(current)
             case .text: break
             }
             try Task.checkCancellation()
-            try self.disk.removeItem(at: url)
+            guard unlinkat(folder, name, 0) == 0 else { return DiskOutcome.blocked }
             return DiskOutcome.done
         }
+    }
+
+    /// A descriptor for the folder a file goes in, opened from the vault root with
+    /// `O_NOFOLLOW_ANY`, which refuses a link at any component of the way down — not only
+    /// at the last one. A folder swapped for a link above the file is the way out of the
+    /// vault that an open of the file alone cannot refuse, and a path checked before the
+    /// coordination is a path looked up again by every call after it; a descriptor is the
+    /// folder itself, so what the block compares, writes and lands in cannot change under
+    /// it. The root is opened by its own path — the way to it is the app's, and on a Mac
+    /// it runs through links of the system's own — but never through a link standing where
+    /// the vault goes. `nil` is a way down that is not the vault's, and the caller leaves
+    /// the path alone.
+    private func openFolder(of url: URL) -> Int32? {
+        let root = open(directory.path(percentEncoded: false), O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard root >= 0 else { return nil }
+        guard let relative = wayDown(to: url.deletingLastPathComponent()) else {
+            close(root)
+            return nil
+        }
+        guard !relative.isEmpty else { return root }
+        let folder = openat(root, relative, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY)
+        close(root)
+        return folder >= 0 ? folder : nil
+    }
+
+    /// The way from the vault root down to a folder, as the names to open one after another,
+    /// or `nil` for a folder that is not under the root at all. The names are taken as they
+    /// are written, never as they resolve, since resolving is exactly what the open below
+    /// refuses to do; only when a path does not read as the vault's at all are both resolved
+    /// and compared, because the coordinator can hand the same folder back under another
+    /// name — `/private/var` for `/var` — and that is not a link anybody put there.
+    private func wayDown(to folder: URL) -> String? {
+        func under(_ inside: String, _ root: String) -> String? {
+            if inside == root { return "" }
+            guard inside.hasPrefix(root + "/") else { return nil }
+            return String(inside.dropFirst(root.count + 1))
+        }
+        if let plain = under(plainPath(folder), plainPath(directory)) { return plain }
+        return under(plainPath(folder.resolvingSymlinksInPath()),
+                     plainPath(directory.resolvingSymlinksInPath()))
+    }
+
+    /// A URL's path with nothing dressing it up: no percent escapes, no trailing slash a
+    /// directory URL carries, so one path is a prefix of another exactly when its folder
+    /// holds the other.
+    private func plainPath(_ url: URL) -> String {
+        var path = url.standardizedFileURL.path(percentEncoded: false)
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        return path
+    }
+
+    /// The text as a file of that name in that folder, landed the way an editor's save is:
+    /// written whole beside it and renamed over it, so nobody ever reads half of it. Both
+    /// steps are made through the folder's descriptor, so no part of the way to the file is
+    /// resolved again at the moment it is written.
+    private func place(_ text: String, as name: String, in folder: Int32) -> Bool {
+        let temporary = ".topo-writing-\(UUID().uuidString)"
+        let descriptor = openat(folder, temporary, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard descriptor >= 0 else { return false }
+        var bytes = Array(text.utf8)
+        var written = 0
+        var wrote = true
+        while written < bytes.count && wrote {
+            let count = bytes.withUnsafeMutableBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return 0 }
+                return write(descriptor, base.advanced(by: written), buffer.count - written)
+            }
+            if count > 0 { written += count } else { wrote = false }
+        }
+        if wrote { wrote = fsync(descriptor) == 0 }
+        close(descriptor)
+        guard wrote, renameat(folder, temporary, folder, name) == 0 else {
+            _ = unlinkat(folder, temporary, 0)
+            return false
+        }
+        return true
     }
 
     /// What is at a path right now.
@@ -342,14 +434,15 @@ public actor VaultMirror {
     /// which is why it coordinates nothing of its own: a second coordination of the same
     /// item from inside the first is a deadlock.
     ///
-    /// Opened `O_NOFOLLOW`, and that is the whole point of it: the guard the scan makes is
-    /// made again here, on the very path this read opens and in the same breath as opening
-    /// it. A link swapped in where the scan saw a file is refused by the open itself, so a
-    /// file from wherever it points can never be read as this folder's and written into the
-    /// memory — which a check made before the coordination, on a URL the read looks up
-    /// again, cannot promise.
-    private func reading(at url: URL) -> Reading {
-        let descriptor = open(url.path(percentEncoded: false), O_RDONLY | O_NOFOLLOW)
+    /// Opened from the folder's own descriptor with `O_NOFOLLOW`, and that is the whole
+    /// point of it: the guard the scan makes is made again here, in the same breath as
+    /// opening the file, and the way down to it was refused a link of its own when the
+    /// folder was opened. A link swapped in where the scan saw a file is refused by this
+    /// open, so a file from wherever it points can never be read as this folder's and
+    /// written into the memory — which a check made before the coordination, on a path
+    /// every call after it looks up again, cannot promise.
+    private func reading(_ name: String, in folder: Int32) -> Reading {
+        let descriptor = openat(folder, name, O_RDONLY | O_NOFOLLOW)
         guard descriptor >= 0 else {
             // ELOOP is the link; ENOENT and ENOTDIR are nothing there. Anything else — no
             // permission, a device that has gone — is not this folder's file either.
@@ -358,7 +451,7 @@ public actor VaultMirror {
         defer { close(descriptor) }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
         guard let data = try? handle.readToEnd() else { return .blocked }
-        guard let text = String(data: data ?? Data(), encoding: .utf8) else { return .blocked }
+        guard let text = String(data: data, encoding: .utf8) else { return .blocked }
         return .text(text)
     }
 
