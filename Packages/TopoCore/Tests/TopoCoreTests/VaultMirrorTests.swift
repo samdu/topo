@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import TopoCore
+@testable import TopoCore
 import TopoCoreTesting
 
 @Suite struct VaultMirrorTests {
@@ -711,6 +711,26 @@ import TopoCoreTesting
             await #expect(throws: CancellationError.self) { try await sync.value }
             #expect(read(scratch, in: directory) == "half written",
                     "a cancelled pass took something out of the folder anyway")
+        }
+    }
+
+    /// A way down of more than one name is more than one change to the person's folder, so the
+    /// cancellation is read before each of them and not only before the first.
+    @Test func aCancellationPartWayDownMakesNoFolderAfterIt() async throws {
+        try await inTemporaryDirectory { directory in
+            let root = open(directory.path(percentEncoded: false), O_RDONLY | O_DIRECTORY)
+            #expect(root >= 0)
+            var reads = 0
+            #expect(throws: CancellationError.self) {
+                _ = try VaultMirror.makeWayDown("one/two", from: root) {
+                    reads += 1
+                    // The sign-out lands after the first folder is made.
+                    if reads > 1 { throw CancellationError() }
+                }
+            }
+            #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("one").path))
+            #expect(FileManager.default.fileExists(atPath: directory.appendingPathComponent("one/two").path) == false,
+                    "a folder was made after the pass making it had stopped")
         }
     }
 

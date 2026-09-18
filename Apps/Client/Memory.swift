@@ -236,8 +236,10 @@ final class Memory {
             lastError = nil
         } catch {
             // A folder that would not go is a phone that signed out and still holds the
-            // person's memory, which is worth saying on the screen rather than leaving it
-            // reading as a phone that has simply not synced yet.
+            // person's memory. Nothing is shown for it there and then — a signed-out phone
+            // shows the sign-in screen, which has no diagnostics — so it is recorded here: the
+            // next cue that finds no login tries the removal again, and until one succeeds the
+            // failure is what the diagnostics memory row says on the next sign-in.
             lastError = Failure(at: now(), message: Self.describe(error))
         }
     }

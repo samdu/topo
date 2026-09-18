@@ -225,7 +225,7 @@ public actor VaultMirror {
                     continue
                 }
                 try cancellation.check()
-                if let folder = self.openFolder(of: found) {
+                if let folder = try self.openFolder(of: found) {
                     _ = unlinkat(folder, name, 0)
                     close(folder)
                 }
@@ -337,8 +337,8 @@ public actor VaultMirror {
             // Before the way down is made, which is a change to the person's folder like any
             // other: the coordinator's wait is unbounded and the sign-out may have happened
             // in it.
-            try cancellation.check()
-            guard let folder = self.openFolder(of: url, creating: true) else { return DiskOutcome.blocked }
+            guard let folder = try self.openFolder(of: url, creating: true, check: cancellation.check)
+            else { return DiskOutcome.blocked }
             defer { close(folder) }
             let name = url.lastPathComponent
             switch self.reading(name, in: folder) {
@@ -378,7 +378,7 @@ public actor VaultMirror {
     private func coordinatedRemove(_ url: URL, expecting: String?) async throws -> DiskOutcome {
         try await Self.coordinated(url, reading: false,
                                    options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, cancellation in
-            guard let folder = self.openFolder(of: url) else { return DiskOutcome.blocked }
+            guard let folder = try self.openFolder(of: url) else { return DiskOutcome.blocked }
             defer { close(folder) }
             let name = url.lastPathComponent
             switch self.reading(name, in: folder) {
@@ -403,7 +403,8 @@ public actor VaultMirror {
     /// it runs through links of the system's own — but never through a link standing where
     /// the vault goes. `nil` is a way down that is not the vault's, and the caller leaves
     /// the path alone.
-    private nonisolated func openFolder(of url: URL, creating: Bool = false) -> Int32? {
+    private nonisolated func openFolder(of url: URL, creating: Bool = false,
+                                       check: () throws -> Void = {}) rethrows -> Int32? {
         let root = open(directory.path(percentEncoded: false), O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         guard root >= 0 else { return nil }
         guard let relative = wayDown(to: url.deletingLastPathComponent()) else {
@@ -416,19 +417,40 @@ public actor VaultMirror {
             // that a folder somebody has swapped for a link is never the folder a name is
             // made in: `mkdir -p` on a path would make the missing ones wherever the link
             // points, outside the vault, and then this open would refuse to use them.
-            var above = root
-            for name in relative.split(separator: "/").map(String.init) {
-                _ = mkdirat(above, name, 0o700)
-                let next = openat(above, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
-                close(above)
-                guard next >= 0 else { return nil }
-                above = next
+            do {
+                return try Self.makeWayDown(relative, from: root, check: check)
+            } catch {
+                close(root)
+                throw error
             }
-            return above
         }
         let folder = openat(root, relative, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY)
         close(root)
         return folder >= 0 ? folder : nil
+    }
+
+    /// Makes and opens each name of a way down in turn, through the descriptor above it, so
+    /// that a folder somebody has swapped for a link is never the folder a name is made in:
+    /// `mkdir -p` on a path would make the missing ones wherever the link points, outside the
+    /// vault, and then the open after it would refuse to use them. `check` is read before every
+    /// one of them, since each is a change to the person's folder and there may be several.
+    /// Takes `root` over, closing it on the way whether it gets there or not.
+    static func makeWayDown(_ relative: String, from root: Int32, check: () throws -> Void) rethrows -> Int32? {
+        var above = root
+        for name in relative.split(separator: "/").map(String.init) {
+            do {
+                try check()
+            } catch {
+                close(above)
+                throw error
+            }
+            _ = mkdirat(above, name, 0o700)
+            let next = openat(above, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+            close(above)
+            guard next >= 0 else { return nil }
+            above = next
+        }
+        return above
     }
 
     /// The way from the vault root down to a folder, as the names to open one after another,
@@ -858,8 +880,8 @@ public actor VaultMirror {
             // Inside the coordination, like every other mutation: the wait for whoever holds
             // this file is as long as they like, and a baseline written after a sign-out says
             // this folder was shown things nobody will now put in it.
-            try cancellation.check()
-            guard let folder = self.openFolder(of: url, creating: true) else { throw CocoaError(.fileWriteUnknown) }
+            guard let folder = try self.openFolder(of: url, creating: true, check: cancellation.check)
+            else { throw CocoaError(.fileWriteUnknown) }
             defer { close(folder) }
             guard self.place(data, as: "mirror.json", in: folder) else { throw CocoaError(.fileWriteUnknown) }
             return true
