@@ -1,3 +1,5 @@
+import CryptoKit
+import Foundation
 import SwiftUI
 import UIKit
 import XCTest
@@ -10,8 +12,9 @@ import XCTest
 /// whole point of the type.
 @MainActor
 final class BadgeRenderTests: XCTestCase {
-    /// A view as bytes, at the size the badge is drawn.
-    private func raster<V: View>(_ view: V, look: Look = Look(), size: CGFloat? = nil) throws -> [UInt8] {
+    /// A view's pixels, as a digest at the size the badge is drawn: what a failure here has to
+    /// say is that two pictures are the same, and the bytes themselves are not worth printing.
+    private func raster<V: View>(_ view: V, look: Look = Look(), size: CGFloat? = nil) throws -> String {
         let side = size ?? look.badge.size
         let renderer = ImageRenderer(content: view
             .environment(\.look, look)
@@ -26,7 +29,7 @@ final class BadgeRenderTests: XCTestCase {
             bytesPerRow: cgImage.width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
-        return bytes
+        return SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }
 
     /// A jewel poured from another glass entirely, so a picture drawn with it cannot match the
