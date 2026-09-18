@@ -20,7 +20,7 @@ import XCTest
 ///   error line on the chat screen).
 ///
 /// Everything read is debug-only accessibility values, decoded strictly: the microphone's
-/// `VoiceInput.Report` and the chat title's `DebugRun.ChatReport`.
+/// `VoiceInput.Report` and the badge's `DebugRun.ChatReport`.
 @MainActor
 final class SpokenTurnTests: XCTestCase {
     /// The words spoken in `capital-of-france.wav`.
@@ -51,8 +51,11 @@ final class SpokenTurnTests: XCTestCase {
 
         let mic = app.images.matching(NSPredicate(format: "label == 'Hold to talk' OR label BEGINSWITH 'Listening'")).firstMatch
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
-        let title = app.descendants(matching: .any)[Self.chatReportIdentifier]
-        XCTAssertTrue(title.waitForExistence(timeout: 10), "the chat title carries its report")
+        // The report is on the badge, which is a button. A toolbar item's container carries its
+        // one child's identifier too, so an any-descendant query matches two elements and
+        // resolves to neither; the type is what names the one that is the badge.
+        let badge = app.buttons[Self.chatReportIdentifier]
+        XCTAssertTrue(badge.waitForExistence(timeout: 10), "the badge carries its report")
         XCTAssertNil(try chat(app).spoken, "no turn spoken before the press")
 
         try waitFor(timeout: 600, "Parakeet is resident", { try self.voice(app) }) { $0.ear == "ready" || $0.ear == "failed" }
@@ -193,8 +196,8 @@ final class SpokenTurnTests: XCTestCase {
     }
 
     private func chat(_ app: XCUIApplication) throws -> ChatReport {
-        let raw = app.descendants(matching: .any)[Self.chatReportIdentifier].value as? String ?? ""
-        var report: ChatReport = try Self.decode(raw, "the chat title")
+        let raw = app.buttons[Self.chatReportIdentifier].value as? String ?? ""
+        var report: ChatReport = try Self.decode(raw, "the badge")
         report.raw = raw
         return report
     }
