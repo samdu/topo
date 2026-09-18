@@ -15,6 +15,7 @@ struct TVRootView: View {
 
     @State private var store = TranscriptStore(database: TopoCloudKit.database())
     @State private var primary = PrimaryReader(database: TopoCloudKit.database())
+    @Environment(\.look) private var look
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -43,10 +44,10 @@ struct TVRootView: View {
         }
         .font(.callout)
         .foregroundStyle(.secondary)
-        .padding(.horizontal, Metrics.horizontalPadding)
+        .padding(.horizontal, look.transcript.horizontalPadding)
         .padding(.vertical, 20)
         // The same column the turns are in, so the line sits over them.
-        .frame(maxWidth: Metrics.maximumLineWidth, alignment: .leading)
+        .frame(maxWidth: look.transcript.maximumLineWidth, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .center)
     }
 

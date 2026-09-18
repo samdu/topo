@@ -49,7 +49,11 @@ struct ChatView: View {
                                replay: Replay(speaking: speaker.speaking,
                                               canSpeak: speaker.voice.ready,
                                               say: { speaker.speak($0) },
-                                              stopSpeaking: { speaker.stop() }))
+                                              stopSpeaking: { speaker.stop() }),
+                               // Holding one of their own turns puts its words back into the
+                               // draft. The log is append-only, so this edits what is said next
+                               // and never the turn that was said.
+                               actions: TurnActions(edit: { draft = $0.text }))
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {

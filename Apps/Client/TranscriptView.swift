@@ -3,31 +3,35 @@ import TopoCore
 
 /// The transcript, read-only, on whatever screen it is given. The phone, the
 /// watch and the TV all show the same turns in the same order; what changes
-/// between them is the type size and how far the turns are from the edges.
+/// between them is the `Look` each platform defaults to.
 struct TranscriptView: View {
     let turns: [Turn]
     var notice: String?
     /// What holding a turn offers. The default offers nothing, which is what a screen with no
     /// voice behind it — the watch, the television, a viewer — shows.
     var replay = Replay()
+    /// What holding one of the person's own turns offers beyond copy. The default offers
+    /// nothing, which is what a screen with no draft to put the words back into shows.
+    var actions = TurnActions()
+    @Environment(\.look) private var look
 
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: Metrics.spacing) {
+                LazyVStack(alignment: .leading, spacing: look.transcript.spacing) {
                     if let notice {
                         Text(notice)
-                            .font(Metrics.noticeFont)
-                            .foregroundStyle(.secondary)
+                            .font(look.transcript.noticeFont)
+                            .foregroundStyle(look.transcript.caption)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(turns) { turn in
-                        TurnRow(turn: turn, replay: replay).id(turn.ref)
+                        TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
                     }
                 }
-                .padding(.horizontal, Metrics.horizontalPadding)
-                .padding(.vertical, Metrics.spacing)
-                .frame(maxWidth: Metrics.maximumLineWidth, alignment: .leading)
+                .padding(.horizontal, look.transcript.horizontalPadding)
+                .padding(.vertical, look.transcript.spacing)
+                .frame(maxWidth: look.transcript.maximumLineWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
             .onAppear { scroll(proxy, animated: false) }
@@ -47,35 +51,48 @@ struct TranscriptView: View {
     }
 }
 
-/// One turn: who said it, when, and what.
+/// One turn: the person's on the right in a bubble, Topo's on the left as plain text. Which side
+/// a turn is on and whether it is enclosed is what says who said it; there is no caption over it.
+/// The time sits under the words, on the turn's own side.
 struct TurnRow: View {
     let turn: Turn
     var replay = Replay()
+    var actions = TurnActions()
+    @Environment(\.look) private var look
+
+    private var mine: Bool { turn.role == .person }
+
+    /// What the words are drawn on. The view chooses the side and the look chooses everything
+    /// drawn on it, Topo's side included, which is why there is no number here.
+    private var enclosure: Look.Enclosure { mine ? look.bubble : look.plain }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(turn.role == .assistant ? "TOPO" : "YOU")
-                    .font(Metrics.labelFont)
-                    .foregroundStyle(turn.role == .assistant ? AnyShapeStyle(Theme.teal) : AnyShapeStyle(.secondary))
-                Spacer(minLength: 8)
-                Text(turn.at, format: .dateTime.hour().minute())
-                    .font(Metrics.labelFont)
-                    .foregroundStyle(.secondary)
-            }
+        VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
             Text(turn.text)
-                .font(Metrics.bodyFont)
-                .foregroundStyle(.primary)
+                .font(look.transcript.bodyFont)
+                .foregroundStyle(look.transcript.text)
                 .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, enclosure.horizontalPadding)
+                .padding(.vertical, enclosure.verticalPadding)
+                .background { TurnShape.fill(enclosure) }
+            Text(turn.at, format: .dateTime.hour().minute())
+                .font(look.transcript.labelFont)
+                .foregroundStyle(look.transcript.caption)
+                .padding(.horizontal, enclosure.horizontalPadding)
         }
+        .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
-        // Held, never tapped: a turn brushed in passing must not start talking. With nothing to
-        // offer — a person's own turn, or a phone that cannot speak right now — the menu has no
-        // items and the press does nothing.
+        // Held, never tapped: a turn brushed in passing must not start talking. Topo's turns
+        // offer saying them again (or stopping) and copy; the person's own offer edit and copy.
         .contextMenu {
             if let offer = replay.offer(for: turn) {
                 Button { offer.act() } label: { Label(offer.title, systemImage: offer.systemImage) }
+            }
+            if mine, let edit = actions.edit {
+                Button { edit(turn) } label: { Label("Edit", systemImage: "pencil") }
+            }
+            Button { UIPasteboard.general.string = turn.text } label: {
+                Label("Copy", systemImage: "doc.on.doc")
             }
         }
         #endif
@@ -85,6 +102,33 @@ struct TurnRow: View {
         .focusable()
         #endif
     }
+}
+
+/// What a turn's words sit on, drawn entirely from the look: a tint under an outline, over one
+/// of the system's backdrops or over nothing. The person's enclosure draws a bubble; Topo's is
+/// the same shape with no outline, no tint and no backdrop, so it draws nothing at all.
+enum TurnShape {
+    @ViewBuilder
+    static func fill(_ look: Look.Enclosure) -> some View {
+        let shape = RoundedRectangle(cornerRadius: look.cornerRadius, style: .continuous)
+        ZStack {
+            switch look.surface {
+            case .flat: Color.clear
+            case .material: shape.fill(.regularMaterial)
+            case .glass: shape.fill(.ultraThinMaterial)
+            }
+            shape.fill(look.accent.opacity(look.fillOpacity))
+            shape.strokeBorder(look.accent, lineWidth: look.strokeWidth)
+        }
+    }
+}
+
+/// What holding one of the person's own turns offers beyond copy. Nil where the screen has
+/// nothing behind it, and the item is then not shown.
+struct TurnActions {
+    /// The turn's words go back into the chat's draft, to be changed and said again. The log is
+    /// append-only, so this edits what will be said next and never the turn that was.
+    var edit: (@MainActor (Turn) -> Void)?
 }
 
 /// Saying a turn again on demand. Only a spoken turn's reply is read aloud as it arrives, so a
@@ -117,31 +161,4 @@ struct Replay {
         let systemImage: String
         let act: @MainActor () -> Void
     }
-}
-
-/// What differs between a watch, a phone and a television is the size of the
-/// type and how much room the turns get. The transcript itself does not.
-enum Metrics {
-    #if os(watchOS)
-    static let spacing: CGFloat = 8
-    static let horizontalPadding: CGFloat = 2
-    static let maximumLineWidth: CGFloat = .infinity
-    static let labelFont = Font.system(.caption2).weight(.semibold)
-    static let bodyFont = Font.system(.footnote)
-    static let noticeFont = Font.system(.caption2)
-    #elseif os(tvOS)
-    static let spacing: CGFloat = 24
-    static let horizontalPadding: CGFloat = 48
-    static let maximumLineWidth: CGFloat = 1100
-    static let labelFont = Font.system(.caption).weight(.semibold)
-    static let bodyFont = Font.system(.title3)
-    static let noticeFont = Font.system(.caption)
-    #else
-    static let spacing: CGFloat = 14
-    static let horizontalPadding: CGFloat = 16
-    static let maximumLineWidth: CGFloat = 672
-    static let labelFont = Font.system(.caption).weight(.semibold)
-    static let bodyFont = Font.system(.body)
-    static let noticeFont = Font.system(.caption)
-    #endif
 }
