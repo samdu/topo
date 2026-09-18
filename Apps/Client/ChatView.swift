@@ -86,17 +86,13 @@ struct ChatView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    TopoBadge(openSettings: { showSettings = true },
-                              openDiagnostics: { showDiagnostics = true })
-                        #if DEBUG
-                        // What the spoken-turn UI test decodes: the last spoken turn, its reply,
-                        // and what the speaker did with it, as JSON (`DebugRun.ChatReport`).
-                        .accessibilityIdentifier(DebugRun.chatReportIdentifier)
-                        .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
-                                                                error: harness.error, speaker: speaker.report,
-                                                                voice: speaker.voice.state))
-                        #endif
+                // The jewel is the glass here, so from iOS 26 on the bar puts none of its own
+                // behind it. That is a shape the bar draws rather than a value the badge does,
+                // so it is an availability branch and not a `Look` field.
+                if #available(iOS 26, *) {
+                    badgeItem.sharedBackgroundVisibility(.hidden)
+                } else {
+                    badgeItem
                 }
             }
             .sheet(isPresented: $showSettings) { SettingsView(signOut: signOut) }
@@ -193,6 +189,22 @@ struct ChatView: View {
             if phase != .active { voice.cancel(.chat) }
         }
         .onDisappear { voice.cancel(.chat) }
+    }
+
+    /// The mark at the trailing edge, and what the spoken-turn test reads off it.
+    private var badgeItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            TopoBadge(openSettings: { showSettings = true },
+                      openDiagnostics: { showDiagnostics = true })
+                #if DEBUG
+                // What the spoken-turn UI test decodes: the last spoken turn, its reply, and
+                // what the speaker did with it, as JSON (`DebugRun.ChatReport`).
+                .accessibilityIdentifier(DebugRun.chatReportIdentifier)
+                .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
+                                                        error: harness.error, speaker: speaker.report,
+                                                        voice: speaker.voice.state))
+                #endif
+        }
     }
 
     /// The way out, built here because this is where the four things it ends are in scope, and
