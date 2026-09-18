@@ -36,6 +36,26 @@ final class VaultDownloadsTests: XCTestCase {
         XCTAssertFalse(pending.contains("notes"))
     }
 
+    /// `.notDownloaded` is the one status that says the bytes are not here. A file with no
+    /// status at all is not a ubiquitous item — a note just written on this phone, which iCloud
+    /// has not taken up yet — and `startDownloadingUbiquitousItem` on one throws, so a pass that
+    /// asked would report a refusal about a file that is perfectly readable.
+    func testAFileWithNoDownloadingStatusIsNotAskedFor() {
+        let folder = makeFolder()
+        write("# Today", to: "notes/today.md", in: folder)
+
+        XCTAssertEqual(VaultDownloads.pending(in: folder, status: { _ in nil }), [])
+    }
+
+    /// `.downloaded` is a local copy that is merely out of date. The bytes read as text either
+    /// way, and the next pass sees the newer of them, so nothing waits for it.
+    func testAStaleLocalCopyIsNotWaitedFor() {
+        let folder = makeFolder()
+        write("# Today", to: "notes/today.md", in: folder)
+
+        XCTAssertEqual(VaultDownloads.pending(in: folder, status: { _ in .downloaded }), [])
+    }
+
     func testFilesAlreadyDownloadedAreNotAskedFor() {
         let folder = makeFolder()
         write("# Today", to: "notes/today.md", in: folder)

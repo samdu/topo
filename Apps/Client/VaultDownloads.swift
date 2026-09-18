@@ -11,9 +11,13 @@ import Foundation
 /// asks for what is not downloaded and waits for it, with a bound, and what has not arrived by
 /// then is left for the next pass.
 ///
-/// Only a regular file is asked for. A folder in iCloud Drive has a downloading status of its own
-/// and is never bytes to wait for; asking for one is a wait that answers nothing, and counting one
-/// as still missing is a pass that reports files it never needed.
+/// Only a regular file whose status is `.notDownloaded` is asked for, because that is the one
+/// status that says the bytes are not here. A folder in iCloud Drive has a downloading status of
+/// its own and is never bytes to wait for. A file with no status at all is not a ubiquitous item —
+/// a note just written on this phone, before iCloud has taken it up — and asking for one throws;
+/// `.downloaded` is a local copy that is merely out of date, which reads as text either way and
+/// which the next pass sees the newer of. Waiting on any of those is a wait that answers nothing
+/// about a file that is perfectly readable.
 enum VaultDownloads {
     /// How long the files a pass asked for are waited for. A bound, because the wait is a pass of
     /// the mirror not running and the next cue is seconds away.
@@ -67,7 +71,7 @@ enum VaultDownloads {
             // A folder is a way down, never bytes to wait for, and anything that is not a plain
             // file is not this folder's file either.
             guard values?.isDirectory != true, values?.isRegularFile == true else { continue }
-            guard status(found) != .current else { continue }
+            guard status(found) == .notDownloaded else { continue }
             let full = plainPath(found)
             guard full.hasPrefix(base + "/") else { continue }
             out.append(String(full.dropFirst(base.count + 1)))

@@ -573,6 +573,11 @@ final class Memory {
             parts.append("written \(report.written.count), removed \(report.removed.count), "
                 + "pushed \(report.pushed.count), deleted \(report.deleted.count), "
                 + "skipped \(report.skipped.count)")
+            // A count alone says a file of the person's is not syncing and nothing about which
+            // or why, which is a device run that has to be repeated to learn anything.
+            for name in report.skipped.prefix(3) {
+                parts.append("skipped \(name): \(report.reasons[name] ?? "no reason recorded")")
+            }
         }
         if let downloads = lastDownloads?.summary {
             parts.append(downloads)

@@ -264,6 +264,39 @@ final class VaultMigrationTests: XCTestCase {
         XCTAssertTrue(names.contains { $0.contains("Conflicted copy") })
     }
 
+    /// The sequence the device test ran: the memory moves to an iCloud Drive folder, Obsidian
+    /// makes a note there — which is an empty file — the next pass runs, and then the memory
+    /// comes back. The note is a revision by the end of it, and no pass reports it as skipped.
+    func testANoteMadeInTheICloudDriveHomeBecomesARevisionAndComesBack() async throws {
+        let device = makeDevice()
+        let database = InMemoryRecordDatabase()
+        try await write("eggs", to: groceries, in: database, as: hub, at: t0)
+        let memory = memory(database, on: device)
+        await memory.sync()
+        let moved = await memory.keepInICloudDrive(device.obsidianVault)
+        XCTAssertNil(moved)
+
+        // Obsidian makes a note: a file with nothing in it yet.
+        put("", at: "Untitled.md", in: device.obsidianVault)
+        await memory.sync()
+
+        XCTAssertEqual(memory.lastReport?.skipped, [])
+        XCTAssertEqual(memory.lastReport?.pushed.map(\.string), ["Untitled.md"])
+        let untitled = VaultPath("Untitled.md")!
+        var vault = try await MemoryStore(database: database).read()
+        XCTAssertEqual(vault.text(at: untitled), "")
+
+        // And it comes home with everything else.
+        let back = await memory.keepOnThisPhone()
+        XCTAssertNil(back)
+        XCTAssertEqual(text("Untitled.md", in: device.local), "")
+        await memory.sync()
+        XCTAssertEqual(memory.lastReport?.skipped, [])
+        vault = try await MemoryStore(database: database).read()
+        XCTAssertEqual(vault.text(at: untitled), "")
+        XCTAssertFalse(vault.isForked(untitled))
+    }
+
     /// The way back is the same operation with the folders swapped, and the baseline comes back
     /// with the files.
     func testTheWayBackBringsTheFilesAndTheBaseline() async throws {
