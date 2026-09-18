@@ -22,6 +22,23 @@ final class TurnRowRenderTests: XCTestCase {
              text: text, at: Date(timeIntervalSince1970: 1_700_000_000))
     }
 
+    /// A run of turns as the transcript sets them, under the look given. It is the transcript's
+    /// own column — its spacing, its padding, its width — with the rows in it, and nothing of the
+    /// scrolling, which is what `ImageRenderer` will not draw.
+    private func render(_ turns: [Turn], look: Look, width: CGFloat) -> UIImage? {
+        let column = VStack(alignment: .leading, spacing: look.transcript.spacing) {
+            ForEach(turns) { TurnRow(turn: $0) }
+        }
+        .environment(\.look, look)
+        .padding(.horizontal, look.transcript.horizontalPadding)
+        .padding(.vertical, look.transcript.spacing)
+        .frame(width: width)
+        .background(Color.white)
+        let renderer = ImageRenderer(content: column)
+        renderer.scale = 2
+        return renderer.uiImage
+    }
+
     /// One row as it ships, or under a look of the test's own.
     private func render(_ turn: Turn, look: Look = Look()) throws -> Raster {
         let view = TurnRow(turn: turn)
@@ -106,30 +123,29 @@ final class TurnRowRenderTests: XCTestCase {
                              "the bubble reaches into the left half of the row")
     }
 
-    /// The transcript under each screen's look, as a picture attached to the result bundle
-    /// (`xcrun xcresulttool export attachments` is what takes them out of it). It is the phone
-    /// build drawing the watch's and the television's values, not those builds — what it holds is
-    /// that the three looks are three different pictures, and that each one draws the person's
-    /// side enclosed and Topo's not.
-    func testEachScreensLookRendersItsOwnTranscript() throws {
-        var sizes: [Look.Screen: CGSize] = [:]
+    /// Each screen's look, drawn. The rows are rendered directly rather than through
+    /// `TranscriptView` because `ImageRenderer` lays out no content inside a `ScrollView` and
+    /// hands back a blank picture. What is attached to the result bundle is the phone build
+    /// drawing the watch's and the television's values, not those builds — `xcrun xcresulttool
+    /// export attachments` is what takes the pictures out of it. What is asserted of each is
+    /// what the picture is for: the person's side enclosed under that screen's accent, Topo's
+    /// side not, and the three screens' values not all the same.
+    func testEachScreensLookDrawsTheTranscriptItsOwnWay() throws {
         for screen in Look.Screen.allCases {
             let look = Look(screen)
             let width: CGFloat = screen == .watch ? 180 : screen == .tv ? 900 : 390
-            let view = TranscriptView(turns: PreviewTurns.short)
-                .environment(\.look, look)
-                .frame(width: width, height: 260)
-                .background(Color.white)
-            let renderer = ImageRenderer(content: view)
-            renderer.scale = 2
-            let image = try XCTUnwrap(renderer.uiImage, "\(screen.rawValue) rendered to nothing")
-            sizes[screen] = image.size
+            let image = try XCTUnwrap(render(PreviewTurns.short, look: look, width: width),
+                                      "\(screen.rawValue) rendered to nothing")
+            XCTAssertFalse(outlinePixels(try Raster(image), look.bubble.accent).isEmpty,
+                           "\(screen.rawValue): the person's turn draws no bubble")
+            let topo = try render(turn(.assistant, "Paris."), look: look)
+            XCTAssertTrue(outlinePixels(topo, look.bubble.accent).isEmpty,
+                          "\(screen.rawValue): Topo's turn drew the person's accent")
             let attachment = XCTAttachment(image: image)
             attachment.name = "transcript-\(screen.rawValue)"
             attachment.lifetime = .keepAlways
             add(attachment)
         }
-        XCTAssertEqual(sizes.count, Look.Screen.allCases.count)
         XCTAssertNotEqual(Look(.watch).transcript.bodyFont, Look(.tv).transcript.bodyFont,
                           "two screens share a look, so one of them is drawn wrong")
         XCTAssertNotEqual(Look(.phone).bubble.horizontalPadding,
