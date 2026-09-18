@@ -44,14 +44,23 @@ actor Ticker {
     var sleeping: Int { sleepers.count }
 }
 
-/// Yields until `condition` holds. Bounded, so a wrong expectation fails
-/// instead of hanging; everything under test completes in a handful of
-/// actor hops with no real waiting, so the bound is never reached in a
-/// passing test.
+/// Yields until `condition` holds. Bounded by a deadline rather than by a count
+/// of turns, so a wrong expectation fails instead of hanging, and something the
+/// yields cannot advance — work handed to a queue of its own, as the mirror
+/// hands its coordinated access — is waited for rather than spun past. Nothing
+/// under test waits on real time, so the bound is never reached in a passing
+/// test.
 func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
-    for _ in 0..<10_000 {
+    let deadline = ContinuousClock.now + .seconds(10)
+    var turns = 0
+    while ContinuousClock.now < deadline {
         if await condition() { return true }
-        await Task.yield()
+        turns += 1
+        if turns < 1_000 {
+            await Task.yield()
+        } else {
+            try? await Task.sleep(for: .milliseconds(1))
+        }
     }
     return false
 }

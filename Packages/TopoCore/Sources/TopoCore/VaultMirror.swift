@@ -120,19 +120,18 @@ public actor VaultMirror {
         try Task.checkCancellation()
         try disk.createDirectory(at: directory, withIntermediateDirectories: true)
         var report = Report()
-        let (scanned, skipped) = try await scan()
-        report.skipped = skipped
+        let scan = try await scan()
+        report.skipped = scan.skipped
         let previous = try synced ?? loadState()
-        var onDisk = scanned
+        var onDisk = scan.files
         // The heads this folder has been shown, which is what a local change continues
         // from. A push of its own moves them on: the revision it just wrote from them
         // is where this folder now stands.
         var seen = previous.heads
 
         var vault = try await read()
-        // Nothing has been written yet, and after a cancellation nothing will be.
-        try Task.checkCancellation()
-        var wanted = resolutions(onDisk: onDisk, previous: previous, vault: vault)
+        var wanted = resolutions(onDisk: onDisk, previous: previous, vault: vault,
+                                 unreadable: scan.unreadable)
         if !wanted.isEmpty {
             let push = try await push(wanted, seen: seen, at: now)
             (vault, seen) = (push.vault, push.seen)
@@ -159,7 +158,8 @@ public actor VaultMirror {
             guard round < 4, !late.isEmpty else { break }
             for (path, text) in applied.lateEdits { onDisk[path] = text }
             for path in applied.lateRemovals { onDisk[path] = nil }
-            wanted = resolutions(onDisk: onDisk, previous: previous, vault: vault, only: late)
+            wanted = resolutions(onDisk: onDisk, previous: previous, vault: vault,
+                                 unreadable: scan.unreadable, only: late)
             guard !wanted.isEmpty else { break }
             let push = try await push(wanted, seen: seen, at: now)
             (vault, seen) = (push.vault, push.seen)
@@ -168,7 +168,6 @@ public actor VaultMirror {
         }
 
         synced = state
-        try Task.checkCancellation()
         try save(state)
         // A link both scanned and written to is one thing in the way, and a file a round
         // wrote and the round after left alone is one thing written.
@@ -197,26 +196,19 @@ public actor VaultMirror {
 
     private func applyToDisk(vault: Vault, onDisk startingDisk: [VaultPath: String]) async throws -> Applied {
         var out = Applied(onDisk: startingDisk)
-        for path in vault.knownPaths { out.state.heads[path] = vault.heads(of: path) }
 
         // Taking away what has gone comes first: a file the store no longer
         // holds may be standing exactly where a folder is now needed.
         for (path, _) in startingDisk.sorted(by: { $0.key < $1.key }) where vault.files[path] == nil {
-            try Task.checkCancellation()
             let url = url(of: path)
-            // A link anywhere above this file would carry the removal out of the vault, and
-            // no open can refuse that for us. A link *at* the path is refused by the read
-            // inside the coordination, which is the only place it can be refused honestly.
-            guard isInsideVault(url.deletingLastPathComponent()) else {
-                out.skipped.append(path.string)
-                continue
-            }
             switch try await coordinatedRemove(url, expecting: out.onDisk[path]) {
             case .done:
                 out.onDisk[path] = nil
+                out.state.heads[path] = vault.heads(of: path)
                 out.removed.append(path)
             case .gone:
                 out.onDisk[path] = nil
+                out.state.heads[path] = vault.heads(of: path)
             case .different(let text):
                 out.lateEdits[path] = text
             case .blocked:
@@ -227,37 +219,20 @@ public actor VaultMirror {
         for file in vault.ordered {
             if out.onDisk[file.path] == file.text {
                 out.state.files[file.path] = digest(file.text)
+                out.state.heads[file.path] = vault.heads(of: file.path)
                 continue
             }
             let url = url(of: file.path)
-            // A link anywhere above this file writes wherever it points, and the folder it
-            // goes in has to resolve back inside the vault before anything is written. A
-            // link standing at the path itself is refused by the read inside the coordinated
-            // write rather than here: a look taken now is a look at a path the write opens
-            // again, and what stands there can change in between. Either way the path is
-            // left out of the state, so the next sync looks again.
-            if !isInsideVault(url.deletingLastPathComponent()) {
-                out.skipped.append(file.path.string)
-                continue
-            }
-            // A folder left where this file goes, emptied by the removals
-            // above or by a sync that had it as a folder, is cleared away;
-            // one with anything of the person's still in it is not.
-            var isFolder: ObjCBool = false
-            if disk.fileExists(atPath: url.path, isDirectory: &isFolder), isFolder.boolValue {
-                guard (try? disk.contentsOfDirectory(atPath: url.path))?.isEmpty == true else {
-                    out.skipped.append(file.path.string)
-                    continue
-                }
-                try Task.checkCancellation()
-                try await removeItem(at: url)
-            }
-            try Task.checkCancellation()
-            try disk.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             switch try await coordinatedReplace(url, expecting: out.onDisk[file.path], with: file.text) {
             case .done:
                 out.onDisk[file.path] = file.text
                 out.state.files[file.path] = digest(file.text)
+                // Beside the digest, and only here: the heads a path stands at are what this
+                // folder has been *shown*, so a write nobody could make is a revision nobody
+                // saw. Recorded for a path the folder was refused, the person's next edit
+                // there goes out as that revision's child — their words replacing words they
+                // were never given the chance to read.
+                out.state.heads[file.path] = vault.heads(of: file.path)
                 out.written.append(file.path)
             case .gone:
                 // Nothing was there and nothing is: the write was refused by the guard
@@ -302,14 +277,29 @@ public actor VaultMirror {
     /// write and the file it lands as are all the same folder — the one that stood there
     /// when the block opened it, not whatever a path lookup would find each time.
     private func coordinatedReplace(_ url: URL, expecting: String?, with text: String) async throws -> DiskOutcome {
-        try await coordinated(url, reading: false,
-                              options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url, cancellation in
-            guard let folder = self.openFolder(of: url) else { return DiskOutcome.blocked }
+        try await Self.coordinated(url, reading: false,
+                                   options: NSFileCoordinator.WritingOptions.forReplacing.rawValue) { url, cancellation in
+            // Before the way down is made, which is a change to the person's folder like any
+            // other: the coordinator's wait is unbounded and the sign-out may have happened
+            // in it.
+            try cancellation.check()
+            guard let folder = self.openFolder(of: url, creating: true) else { return DiskOutcome.blocked }
             defer { close(folder) }
             let name = url.lastPathComponent
             switch self.reading(name, in: folder) {
             case .blocked:
                 return DiskOutcome.blocked
+            case .folder:
+                // A folder standing where this file goes, left by the removals above or by
+                // a sync that had it as a folder. It is made way for only while it is still
+                // empty, and `rmdir` is what says so at the moment it matters: it refuses a
+                // folder with anything in it, and what is in it is the person's — a draft
+                // saved a moment ago is a file of theirs, not a folder in the way. One that
+                // will not go is what the store's file collides with, and the vault shows
+                // the two beside each other.
+                try cancellation.check()
+                guard unlinkat(folder, name, AT_REMOVEDIR) == 0 else { return DiskOutcome.blocked }
+                if expecting != nil { return DiskOutcome.gone }
             case .missing where expecting != nil:
                 return DiskOutcome.gone
             case .missing:
@@ -323,7 +313,7 @@ public actor VaultMirror {
             // app's access can take as long as that app likes, and a sync abandoned during
             // that wait has no business writing when its turn comes.
             try cancellation.check()
-            guard self.place(text, as: name, in: folder) else { return DiskOutcome.blocked }
+            guard self.place(Data(text.utf8), as: name, in: folder) else { return DiskOutcome.blocked }
             return DiskOutcome.done
         }
     }
@@ -331,13 +321,13 @@ public actor VaultMirror {
     /// Takes a file away, on the same terms: what is there has to be what the scan saw,
     /// and the name is taken out of the folder this block opened rather than off a path.
     private func coordinatedRemove(_ url: URL, expecting: String?) async throws -> DiskOutcome {
-        try await coordinated(url, reading: false,
-                              options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, cancellation in
+        try await Self.coordinated(url, reading: false,
+                                   options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, cancellation in
             guard let folder = self.openFolder(of: url) else { return DiskOutcome.blocked }
             defer { close(folder) }
             let name = url.lastPathComponent
             switch self.reading(name, in: folder) {
-            case .blocked: return DiskOutcome.blocked
+            case .blocked, .folder: return DiskOutcome.blocked
             case .missing: return DiskOutcome.gone
             case .text(let current) where current != expecting: return DiskOutcome.different(current)
             case .text: break
@@ -358,7 +348,7 @@ public actor VaultMirror {
     /// it runs through links of the system's own — but never through a link standing where
     /// the vault goes. `nil` is a way down that is not the vault's, and the caller leaves
     /// the path alone.
-    private nonisolated func openFolder(of url: URL) -> Int32? {
+    private nonisolated func openFolder(of url: URL, creating: Bool = false) -> Int32? {
         let root = open(directory.path(percentEncoded: false), O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
         guard root >= 0 else { return nil }
         guard let relative = wayDown(to: url.deletingLastPathComponent()) else {
@@ -366,6 +356,21 @@ public actor VaultMirror {
             return nil
         }
         guard !relative.isEmpty else { return root }
+        if creating {
+            // The way down is made one name at a time through the descriptor above it, so
+            // that a folder somebody has swapped for a link is never the folder a name is
+            // made in: `mkdir -p` on a path would make the missing ones wherever the link
+            // points, outside the vault, and then this open would refuse to use them.
+            var above = root
+            for name in relative.split(separator: "/").map(String.init) {
+                _ = mkdirat(above, name, 0o700)
+                let next = openat(above, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+                close(above)
+                guard next >= 0 else { return nil }
+                above = next
+            }
+            return above
+        }
         let folder = openat(root, relative, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY)
         close(root)
         return folder >= 0 ? folder : nil
@@ -401,11 +406,11 @@ public actor VaultMirror {
     /// written whole beside it and renamed over it, so nobody ever reads half of it. Both
     /// steps are made through the folder's descriptor, so no part of the way to the file is
     /// resolved again at the moment it is written.
-    private nonisolated func place(_ text: String, as name: String, in folder: Int32) -> Bool {
-        let temporary = ".topo-writing-\(UUID().uuidString)"
+    private nonisolated func place(_ data: Data, as name: String, in folder: Int32) -> Bool {
+        let temporary = Self.scratchPrefix + UUID().uuidString
         let descriptor = openat(folder, temporary, O_WRONLY | O_CREAT | O_EXCL, 0o600)
         guard descriptor >= 0 else { return false }
-        var bytes = Array(text.utf8)
+        var bytes = Array(data)
         var written = 0
         var wrote = true
         while written < bytes.count && wrote {
@@ -428,6 +433,8 @@ public actor VaultMirror {
     private enum Reading {
         case text(String)
         case missing
+        /// A folder of the person's, standing where a file of the store's goes.
+        case folder
         /// A link, or bytes that are not text.
         case blocked
     }
@@ -443,14 +450,27 @@ public actor VaultMirror {
     /// open, so a file from wherever it points can never be read as this folder's and
     /// written into the memory — which a check made before the coordination, on a path
     /// every call after it looks up again, cannot promise.
-    private nonisolated func reading(_ name: String, in folder: Int32) -> Reading {
-        let descriptor = openat(folder, name, O_RDONLY | O_NOFOLLOW)
+    /// The same read, from the vault root down: every name on the way refuses a link, so a
+    /// file the walk found is read as the vault's only if all of it is the vault's.
+    private nonisolated func reading(_ relative: String) -> Reading {
+        let root = open(directory.path(percentEncoded: false), O_RDONLY | O_DIRECTORY | O_NOFOLLOW)
+        guard root >= 0 else { return .missing }
+        defer { close(root) }
+        return reading(relative, in: root, options: O_NOFOLLOW_ANY)
+    }
+
+    private nonisolated func reading(_ name: String, in folder: Int32, options: Int32 = O_NOFOLLOW) -> Reading {
+        let descriptor = openat(folder, name, O_RDONLY | options)
         guard descriptor >= 0 else {
             // ELOOP is the link; ENOENT and ENOTDIR are nothing there. Anything else — no
             // permission, a device that has gone — is not this folder's file either.
             return errno == ENOENT || errno == ENOTDIR ? .missing : .blocked
         }
         defer { close(descriptor) }
+        var status = stat()
+        guard fstat(descriptor, &status) == 0 else { return .blocked }
+        if status.st_mode & S_IFMT == S_IFDIR { return .folder }
+        guard status.st_mode & S_IFMT == S_IFREG else { return .blocked }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
         guard let data = try? handle.readToEnd() else { return .blocked }
         guard let text = String(data: data, encoding: .utf8) else { return .blocked }
@@ -461,7 +481,7 @@ public actor VaultMirror {
     /// to a fork, or a removal. `only`, when given, keeps it to those paths,
     /// which is what a revalidation round asks about.
     private func resolutions(onDisk: [VaultPath: String], previous: State, vault: Vault,
-                             only: Set<VaultPath>? = nil) -> [VaultPath: Resolution] {
+                             unreadable: Set<VaultPath> = [], only: Set<VaultPath>? = nil) -> [VaultPath: Resolution] {
         var wanted: [VaultPath: Resolution] = [:]
         // The filter is on the file that changed, not on the path a change is proposed
         // for: an edited conflict copy is an answer about the file it is a copy of.
@@ -486,6 +506,9 @@ public actor VaultMirror {
         }
         for path in previous.files.keys.sorted() where onDisk[path] == nil {
             if let only, !only.contains(path) { continue }
+            // Missing from the scan is how a deletion is told from everything else, so a file
+            // that is there and unreadable must not reach here as an absence.
+            if unreadable.contains(path) { continue }
             guard let file = vault.files[path] else { continue }
             if file.isConflictCopy {
                 propose(file.origin, .copyRemoved(vault.files[file.origin]?.text))
@@ -539,23 +562,37 @@ public actor VaultMirror {
         return out
     }
 
-    /// A folder standing where a file has to go, taken away under coordination like
-    /// anything else in the folder.
-    private func removeItem(at url: URL) async throws {
-        _ = try await coordinated(url, reading: false,
-                                  options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, _ -> Bool in
-            try FileManager.default.removeItem(at: url)
-            return true
-        }
-    }
-
     /// The folder is shared with every other app that can reach a document
     /// folder, so nothing here reads or writes it uncoordinated: a read waits
     /// out a save in progress rather than seeing half of one, and a write is
     /// announced to whoever has the file open.
     private nonisolated func coordinatedRead<T: Sendable>(_ url: URL,
                                                           _ body: @escaping @Sendable (URL) throws -> T) async throws -> T {
-        try await coordinated(url, reading: true, options: 0) { url, _ in try body(url) }
+        try await Self.coordinated(url, reading: true, options: 0) { url, _ in try body(url) }
+    }
+
+    /// What a write lands through before it is renamed into place. Hidden, so no editor
+    /// shows it for the moment it exists, and prefixed, so a pass can tell one its own
+    /// process left behind from anything else hidden in the folder.
+    static let scratchPrefix = ".topo-writing-"
+
+    /// Takes the whole folder away — the sign-out's own job, and the reason it is here and
+    /// not on whoever is signing out: the folder is shared, so taking it away is a coordinated
+    /// write like every other, an editor holding it makes that write wait as long as the
+    /// editor likes, and a wait taken on the main thread is a phone the system kills. The wait
+    /// is spent on this type's own queue, and the caller is suspended for it. A folder that is
+    /// not there is not a failure; anything else the coordinator says is thrown, because a
+    /// phone that signed out and still holds the memory has something to say.
+    public static func removeFolder(at directory: URL) async throws {
+        _ = try await coordinated(directory, reading: false,
+                                  options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, _ -> Bool in
+            do {
+                try FileManager.default.removeItem(at: url)
+            } catch let error as CocoaError where error.code == .fileNoSuchFile {
+                return true
+            }
+            return true
+        }
     }
 
     /// The queue every coordinated access is spent on, and the reason there is one:
@@ -586,7 +623,7 @@ public actor VaultMirror {
         }
     }
 
-    private nonisolated func coordinated<T: Sendable>(
+    private nonisolated static func coordinated<T: Sendable>(
         _ url: URL, reading: Bool, options: UInt,
         body: @escaping @Sendable (URL, Cancellation) throws -> T
     ) async throws -> T {
@@ -647,21 +684,6 @@ public actor VaultMirror {
         path.components.reduce(directory) { $0.appendingPathComponent($1) }
     }
 
-    /// The vault root with every link in it followed: what a path has to
-    /// still be under to be the vault's.
-    private nonisolated var realRoot: String {
-        directory.resolvingSymlinksInPath().standardizedFileURL.path
-    }
-
-    /// True when a folder, following every link on the way to it, is the
-    /// vault root or inside it. A folder that does not exist yet resolves
-    /// as far as it does exist, which is the part that could be a link.
-    private nonisolated func isInsideVault(_ folder: URL) -> Bool {
-        let resolved = folder.resolvingSymlinksInPath().standardizedFileURL.path
-        let root = realRoot
-        return resolved == root || resolved.hasPrefix(root + "/")
-    }
-
     /// Every readable file in the directory, by vault path. A file whose
     /// path a vault cannot hold, or whose bytes are not text, is reported
     /// as skipped and otherwise untouched.
@@ -672,46 +694,74 @@ public actor VaultMirror {
     /// CloudKit. Only what is really in this folder is the vault's, which
     /// is checked twice — the link itself is refused, and every file's
     /// resolved path has to still be under the vault root.
-    private func scan() async throws -> (files: [VaultPath: String], skipped: [String]) {
+    private func scan() async throws -> Scan {
         try await coordinatedRead(directory) { _ in try self.walkTree() }
     }
 
-    private nonisolated func walkTree() throws -> (files: [VaultPath: String], skipped: [String]) {
-        var found: [VaultPath: String] = [:]
+    /// What one look at the folder found: the text of every file it could read, the paths it
+    /// found something at and could not read, and every name it left alone. The middle one is
+    /// not a nicety — a path missing from `files` is how this mirror knows the person deleted
+    /// a file, and bytes an editor saved as latin-1 are not a deletion.
+    struct Scan: Sendable {
+        var files: [VaultPath: String] = [:]
+        var unreadable: Set<VaultPath> = []
         var skipped: [String] = []
+    }
+
+    private nonisolated func walkTree() throws -> Scan {
+        var scan = Scan()
         let root = directory.standardizedFileURL.path
-        let realRoot = self.realRoot
         guard let walk = FileManager.default.enumerator(at: directory,
-                                         includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
-                                         options: [.skipsHiddenFiles]) else {
-            return (found, skipped)
+                                                        includingPropertiesForKeys: [.isDirectoryKey],
+                                                        options: []) else {
+            return scan
         }
         for case let url as URL in walk {
             let full = url.standardizedFileURL.path
             guard full.hasPrefix(root + "/") else { continue }
             let relative = String(full.dropFirst(root.count + 1))
-            let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-            if values.isSymbolicLink == true {
-                skipped.append(relative)
+            let name = url.lastPathComponent
+            if name.hasPrefix(".") {
+                // A hidden name is somebody else's business — `.obsidian` is the vault's own
+                // and never this mirror's — with one exception: a scratch name this mirror
+                // wrote and never got to rename. Nothing else will ever take it away, since
+                // nothing else looks at hidden names, so this walk does.
+                if name.hasPrefix(Self.scratchPrefix) {
+                    if let folder = openFolder(of: url) {
+                        _ = unlinkat(folder, name, 0)
+                        close(folder)
+                    }
+                } else if (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true {
+                    walk.skipDescendants()
+                }
                 continue
             }
-            guard values.isRegularFile == true else { continue }
-            guard url.resolvingSymlinksInPath().standardizedFileURL.path.hasPrefix(realRoot + "/") else {
-                skipped.append(relative)
+            // The walk says where to look; what is there is the open's to say. A name the
+            // walk called a file can be a link or a folder by the time it is read, and a
+            // link at any point of the way down is refused by the open rather than by a
+            // look taken before it — so nothing outside the vault is ever read as being in
+            // it, and a name this pass cannot read is left for the next one to look at.
+            switch reading(relative) {
+            case .missing:
                 continue
-            }
-            guard let path = VaultPath(relative) else {
-                skipped.append(relative)
+            case .folder:
                 continue
+            case .blocked:
+                // Something is there; this pass cannot read it. Left alone, and — the point —
+                // not read as an absence: a path the last sync wrote and this one cannot read
+                // is not the person deleting their note from every device they own.
+                scan.skipped.append(relative)
+                if let path = VaultPath(relative) { scan.unreadable.insert(path) }
+            case .text(let text):
+                guard let path = VaultPath(relative) else {
+                    scan.skipped.append(relative)
+                    continue
+                }
+                scan.files[path] = text
             }
-            guard let text = String(data: try Data(contentsOf: url), encoding: .utf8) else {
-                skipped.append(relative)
-                continue
-            }
-            found[path] = text
         }
-        skipped.sort()
-        return (found, skipped)
+        scan.skipped.sort()
+        return scan
     }
 
     private var stateURL: URL {
@@ -727,8 +777,8 @@ public actor VaultMirror {
     }
 
     private func loadState() throws -> State {
-        guard let data = try? Data(contentsOf: stateURL),
-              let stored = try? JSONDecoder().decode(StoredState.self, from: data),
+        guard case .text(let json) = reading(".topo/mirror.json"),
+              let stored = try? JSONDecoder().decode(StoredState.self, from: Data(json.utf8)),
               stored.version == 1 else { return State() }
         var state = State()
         for (name, digest) in stored.files {
@@ -745,8 +795,12 @@ public actor VaultMirror {
         for (path, digest) in state.files { stored.files[path.string] = digest }
         for (path, heads) in state.heads { stored.heads[path.string] = heads.map(\.description) }
         let data = try JSONEncoder().encode(stored)
-        try disk.createDirectory(at: stateURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: stateURL, options: .atomic)
+        // Through the folder's own descriptor, like everything else this writes: `.topo` is
+        // this mirror's own, but it stands in a folder every app on the phone can reach, and
+        // a name swapped for a link there would put this state wherever it points.
+        guard let folder = openFolder(of: stateURL, creating: true) else { throw CocoaError(.fileWriteUnknown) }
+        defer { close(folder) }
+        guard place(data, as: "mirror.json", in: folder) else { throw CocoaError(.fileWriteUnknown) }
     }
 
     private func digest(_ text: String) -> String {

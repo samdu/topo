@@ -346,6 +346,36 @@ final class MemoryTests: XCTestCase {
                        "a pass woke under a login that had gone and built the folder anyway")
     }
 
+    /// An editor holding the folder at sign-out. Taking the folder away is a coordinated write
+    /// and the wait for it is as long as the other app likes, so it is not the main thread that
+    /// waits: the screen goes on drawing, and the phone is not killed for a watchdog timeout.
+    @MainActor
+    func testTheFolderIsNotTakenAwayOnTheMainThread() async throws {
+        let db = InMemoryRecordDatabase()
+        let directory = makeDirectory()
+        let login = Login()
+        let memory = memory(db, at: directory, signedIn: login)
+        try await write("from the hub", to: note, in: db, as: hub, at: t0)
+        await memory.sync()
+        XCTAssertEqual(text("Meeting notes.md", in: directory), "from the hub")
+
+        // Somebody else has the folder, and lets it go a third of a second later.
+        let holder = CoordinatedHolder(url: directory)
+        holder.take()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { holder.release() }
+
+        login.holds = false
+        let signOut = Task { @MainActor in await memory.sync() }
+        try await Task.sleep(for: .milliseconds(150))
+        // The main actor had a turn while the removal was still waiting for the holder. It
+        // would not have had one if the wait were taken here.
+        let ranDuringTheHold = holder.isHolding
+        await signOut.value
+
+        XCTAssertTrue(ranDuringTheHold, "the sign-out's removal held the main thread until the folder was let go")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path), "and the folder did go")
+    }
+
     // MARK: A failure at each stage
 
     /// The store cannot be read: nothing is on disk, no state is left behind, and the error
@@ -616,4 +646,33 @@ private func reply(_ text: String) -> String {
 
 private struct FixedToken: TokenProvider {
     func accessToken() async throws -> String { "tok" }
+}
+
+/// Holds a coordinated write on a folder until it is let go, which is what an editor with the
+/// vault open looks like from here.
+final class CoordinatedHolder: @unchecked Sendable {
+    private let url: URL
+    private let lock = NSLock()
+    private var holding = false
+    private let entered = DispatchSemaphore(value: 0)
+    private let leave = DispatchSemaphore(value: 0)
+
+    init(url: URL) { self.url = url }
+
+    var isHolding: Bool { lock.withLock { holding } }
+
+    func take() {
+        DispatchQueue.global().async { [self] in
+            var error: NSError?
+            NSFileCoordinator().coordinate(writingItemAt: url, options: .forDeleting, error: &error) { _ in
+                lock.withLock { holding = true }
+                entered.signal()
+                leave.wait()
+            }
+            lock.withLock { holding = false }
+        }
+        entered.wait()
+    }
+
+    func release() { leave.signal() }
 }

@@ -499,6 +499,41 @@ import TopoCoreTesting
 
     /// Cancelled after the first fence, in the middle of making a writer: the revision it
     /// was about to write is not written, and the folder is left as the person left it.
+    /// A draft saved into the folder while the sync waits to take that folder away. Whether
+    /// the folder is empty is asked at the moment it would go, not before the wait: what the
+    /// person saved a second ago is a file of theirs, and the store's file of the same name
+    /// waits for the folder rather than taking it.
+    @Test func aFileSavedIntoAFolderAboutToBeMadeWayForIsNotTakenWithIt() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            let inside = VaultPath("notes/today.md")!
+            try await w.write("today's note", to: inside, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try await mirror.sync(at: t0 + 1)
+
+            // The folder's one file goes and a file takes its name, so the next sync's job
+            // is to make way for it.
+            try await w.delete(inside, continuing: store.read(), at: t0 + 2)
+            try await w.write("a note called notes", to: VaultPath("notes")!, continuing: store.read(), at: t0 + 3)
+
+            // Somebody else has the name open, so the sync waits — and while it waits, they
+            // save a draft into the folder it was about to take away.
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes"))
+            holder.take()
+            let sync = Task { try await mirror.sync(at: t0 + 4) }
+            try await Task.sleep(for: .milliseconds(200))
+            try Data("half a thought".utf8).write(to: directory.appendingPathComponent("notes/draft.md"))
+            holder.release()
+
+            let report = try await sync.value
+            #expect(read("notes/draft.md", in: directory) == "half a thought")
+            #expect(report.skipped == ["notes"], "the store's file waits for the folder")
+            #expect(report.written.isEmpty)
+            // And the draft is the person's word on it: the next sync makes it a revision.
+            #expect(try await mirror.sync(at: t0 + 5).pushed == [VaultPath("notes/draft.md")!])
+        }
+    }
+
     /// A folder swapped for a link *above* the file, after the way down has been judged and
     /// while the sync waits for another app's access to the file itself. An open of the file
     /// alone refuses a link standing at its own name and nothing above it, so this is the way
@@ -536,6 +571,97 @@ import TopoCoreTesting
                 #expect(vault.notes.values.contains { $0.text.contains("not ours") } == false,
                         "and not read: nothing from outside the vault reached the store")
                 #expect(vault.text(at: inside) == "from the hub, again")
+            }
+        }
+    }
+
+    /// The same swap, on the way to a file being taken away rather than written. The removal
+    /// opens the folder it unlinks from for itself, and a link above it is refused there too —
+    /// otherwise a deletion in the store deletes somebody else's file outside the vault.
+    @Test func aFolderSwappedForALinkWhileTheRemovalWaitsCarriesNothingOutOfTheVault() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                try FileManager.default.createDirectory(at: elsewhere.appendingPathComponent("sub"),
+                                                        withIntermediateDirectories: true)
+                // The same words the vault's file holds, so that nothing but the link guard
+                // stands between the removal and somebody else's file: a compare against what
+                // the scan saw would let this one through.
+                try Data("from the hub".utf8).write(to: elsewhere.appendingPathComponent("sub/old.md"))
+
+                let inside = VaultPath("sub/old.md")!
+                let w = try await store.writer(for: hub)
+                try await w.write("from the hub", to: inside, continuing: store.read(), at: t0)
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                try await mirror.sync(at: t0 + 1)
+                try await w.delete(inside, continuing: store.read(), at: t0 + 2)
+
+                let holder = CoordinatedHolder(url: directory.appendingPathComponent("sub/old.md"))
+                holder.take()
+                let sync = Task { try await mirror.sync(at: t0 + 3) }
+                try await Task.sleep(for: .milliseconds(200))
+                try FileManager.default.removeItem(at: directory.appendingPathComponent("sub"))
+                try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("sub"),
+                                                           withDestinationURL: elsewhere.appendingPathComponent("sub"))
+                holder.release()
+
+                let report = try await sync.value
+                #expect(report.removed.isEmpty)
+                #expect(report.skipped == ["sub/old.md"])
+                #expect(read("sub/old.md", in: elsewhere) == "from the hub",
+                        "somebody else's file, taken away by a deletion in the store")
+            }
+        }
+    }
+
+    /// An empty folder at the scan, so nothing of the vault's is coordinated under it and the
+    /// removal of the folder is the sync's first wait — the far side of where a look at whether
+    /// it is empty used to be taken.
+    @Test func aSaveIntoAnEmptyFolderDuringTheRemovalWaitSurvives() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("a note called notes", to: VaultPath("notes")!, continuing: store.read(), at: t0)
+            try FileManager.default.createDirectory(at: directory.appendingPathComponent("notes"),
+                                                    withIntermediateDirectories: true)
+
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes"))
+            holder.take()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let sync = Task { try await mirror.sync(at: t0 + 1) }
+            try await Task.sleep(for: .milliseconds(300))
+            try Data("half a thought".utf8).write(to: directory.appendingPathComponent("notes/draft.md"))
+            holder.release()
+
+            _ = try await sync.value
+            #expect(read("notes/draft.md", in: directory) == "half a thought")
+        }
+    }
+
+    /// A folder above the one being made way for, swapped for a link while that removal waits.
+    @Test func aFolderIsNotTakenAwayThroughALinkSwappedInAboveIt() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                try FileManager.default.createDirectory(at: elsewhere.appendingPathComponent("notes"),
+                                                        withIntermediateDirectories: true)
+                try Data("not ours to take".utf8).write(to: elsewhere.appendingPathComponent("notes/keep.md"))
+
+                let w = try await store.writer(for: hub)
+                try await w.write("a note called notes", to: VaultPath("sub/notes")!,
+                                  continuing: store.read(), at: t0)
+                try FileManager.default.createDirectory(at: directory.appendingPathComponent("sub/notes"),
+                                                        withIntermediateDirectories: true)
+
+                let holder = CoordinatedHolder(url: directory.appendingPathComponent("sub/notes"))
+                holder.take()
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                let sync = Task { try await mirror.sync(at: t0 + 1) }
+                try await Task.sleep(for: .milliseconds(300))
+                try FileManager.default.removeItem(at: directory.appendingPathComponent("sub"))
+                try FileManager.default.createSymbolicLink(at: directory.appendingPathComponent("sub"),
+                                                           withDestinationURL: elsewhere)
+                holder.release()
+
+                _ = try? await sync.value
+                #expect(read("notes/keep.md", in: elsewhere) == "not ours to take")
             }
         }
     }
@@ -782,5 +908,180 @@ actor Gate {
         opened = true
         waiter?.resume()
         waiter = nil
+    }
+}
+
+/// Reproductions for the adversarial review of `buddy/vault-on-the-phone`.
+///
+/// Every test here is written the way the suite it belongs beside is written, and every one of
+/// them fails on the branch as it stands.
+@Suite struct VaultMirrorReviewSweepTests {
+    let db = InMemoryRecordDatabase()
+    var store: MemoryStore { MemoryStore(database: db) }
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    let note = VaultPath("Meeting notes.md")!
+
+    private func inTemporaryDirectory(_ body: (URL) async throws -> Void) async throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("topo-vault-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: url) }
+        try await body(url)
+    }
+
+    private func read(_ path: String, in directory: URL) -> String? {
+        guard let data = try? Data(contentsOf: directory.appendingPathComponent(path)) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The heads a path stands at are recorded for every path the store holds, before anything
+    /// is written and whether or not this folder was ever shown the text at them
+    /// (`applyToDisk`, the `vault.knownPaths` line). `state.files` is conditional; `state.heads`
+    /// is not, so the two halves of the baseline disagree about the same path.
+    ///
+    /// A write this folder refused is the case: the person's first edit after the refusal
+    /// clears names a revision they were never shown as its parent, which says their edit
+    /// replaces it — and it goes without ever having been read.
+    @Test func aPushNeverNamesAHeadWhoseTextTheFolderWasNotShown() async throws {
+        try await inTemporaryDirectory { directory in
+            try await inTemporaryDirectory { elsewhere in
+                let outside = elsewhere.appendingPathComponent("theirs.md")
+                try Data("not ours to write".utf8).write(to: outside)
+                let file = directory.appendingPathComponent("Meeting notes.md")
+                try FileManager.default.createSymbolicLink(at: file, withDestinationURL: outside)
+
+                let w = try await store.writer(for: hub)
+                try await w.write("what the hub says", to: note, continuing: store.read(), at: t0)
+                let mirror = VaultMirror(directory: directory, store: store, device: phone)
+                #expect(try await mirror.sync(at: t0 + 1).written.isEmpty,
+                        "the link is in the way, so the folder is shown nothing")
+
+                // The person takes the link away and writes their own file at that name. They
+                // have never seen the hub's words: this folder never held them.
+                try FileManager.default.removeItem(at: file)
+                try Data("what I say".utf8).write(to: file)
+                #expect(try await mirror.sync(at: t0 + 2).pushed == [note])
+
+                let vault = try await store.read()
+                #expect(vault.isForked(note),
+                        "an edit that was never shown the hub's revision was written as its child")
+                let copies = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                    .filter { $0.contains("Conflicted copy") }
+                #expect(copies.count == 1, "the hub's words are nowhere in the folder")
+                #expect(read("theirs.md", in: elsewhere) == "not ours to write")
+            }
+        }
+    }
+
+    /// The same refusal, reached the other way: bytes at that name this pass cannot read as
+    /// text. Nothing is written, the heads are recorded anyway, and the person's next edit
+    /// there names them.
+    @Test func aPathTheWriteCouldNotReadDoesNotMakeItsHeadsSeenEither() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("what the hub says", to: note, continuing: store.read(), at: t0)
+            let file = directory.appendingPathComponent("Meeting notes.md")
+            try Data([0x68, 0x69, 0xFF, 0xFE]).write(to: file)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            #expect(try await mirror.sync(at: t0 + 1).written.isEmpty,
+                    "bytes nobody can read as text are in the way, so nothing is written")
+
+            try Data("what I say".utf8).write(to: file)
+            _ = try await mirror.sync(at: t0 + 2)
+
+            #expect(try await store.read().isForked(note),
+                    "an edit that was never shown the hub's revision was written as its child")
+        }
+    }
+
+    /// `rmdir` is a mutation of the person's folder, and it is made after the coordinator's
+    /// unbounded wait and before the cancellation is read. A sign-out landing while another app
+    /// holds that name takes the folder away when the coordinator lets the sync through.
+    @Test func aSyncCancelledWhileItWaitsToTakeAwayAFolderTakesNothingAway() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("a note called notes", to: VaultPath("notes")!, continuing: store.read(), at: t0)
+            try FileManager.default.createDirectory(at: directory.appendingPathComponent("notes"),
+                                                    withIntermediateDirectories: true)
+
+            let holder = CoordinatedHolder(url: directory.appendingPathComponent("notes"))
+            holder.take()
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let sync = Task { try await mirror.sync(at: t0 + 1) }
+            try await Task.sleep(for: .milliseconds(300))
+            sync.cancel()
+            holder.release()
+
+            await #expect(throws: CancellationError.self) { try await sync.value }
+            var isFolder: ObjCBool = false
+            let there = FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent("notes").path, isDirectory: &isFolder)
+            #expect(there && isFolder.boolValue,
+                    "a cancelled sync took the folder away when the coordinator let it through")
+        }
+    }
+
+    /// A file this mirror wrote, whose bytes this pass cannot read as text, is left out of the
+    /// scan — and the scan is what says whether a file is still there. A path in the last sync's
+    /// state that the scan did not find is read as the person's deletion, so the note is deleted
+    /// from the store and from every other device because of bytes on this one.
+    @Test func aFileThisPassCannotReadIsNotADeletion() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("what the hub says", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            #expect(try await mirror.sync(at: t0 + 1).written == [note])
+
+            // Somebody's editor saves it as latin-1, or a byte is flipped. The file is there,
+            // it is the person's, and nobody deleted anything.
+            try Data([0x68, 0x69, 0xFF, 0xFE]).write(to: directory.appendingPathComponent("Meeting notes.md"))
+
+            let report = try await mirror.sync(at: t0 + 2)
+            #expect(report.deleted.isEmpty, "a file nobody deleted was deleted from the store")
+            #expect(try await store.read().text(at: note) != nil,
+                    "the note is gone from every device because one device could not read it")
+        }
+    }
+
+    /// The same, where the file cannot be opened at all rather than read as text — the case a
+    /// permission or an I/O error makes, and the one the walk folds in with a link.
+    @Test func aFileThisPassCannotOpenIsNotADeletionEither() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("what the hub says", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            #expect(try await mirror.sync(at: t0 + 1).written == [note])
+
+            let file = directory.appendingPathComponent("Meeting notes.md")
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path) }
+
+            let report = try await mirror.sync(at: t0 + 2)
+            #expect(report.deleted.isEmpty, "a file nobody deleted was deleted from the store")
+            #expect(try await store.read().text(at: note) != nil,
+                    "the note is gone from every device because one device could not open it")
+        }
+    }
+
+    /// The scratch name a write lands through is hidden, and hidden names are what the scan
+    /// skips, so a write that did not get to its rename leaves one in the person's vault that
+    /// nothing will ever take away.
+    @Test func aWriteThatDidNotLandLeavesNothingBehindInTheVault() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("from the hub", to: note, continuing: store.read(), at: t0)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            _ = try await mirror.sync(at: t0 + 1)
+
+            // What a process killed between the write and the rename leaves behind.
+            try Data("half written".utf8).write(
+                to: directory.appendingPathComponent(".topo-writing-\(UUID().uuidString)"))
+
+            _ = try await mirror.sync(at: t0 + 2)
+            let left = try FileManager.default.contentsOfDirectory(atPath: directory.path)
+                .filter { $0.hasPrefix(".topo-writing-") }
+            #expect(left.isEmpty, "the mirror's own scratch accumulates in the person's vault: \(left)")
+        }
     }
 }

@@ -17,9 +17,9 @@ import TopoCore
 /// this.
 ///
 /// Sign-out takes the folder away. The memory is the person's and lives in their iCloud; a phone
-/// that is signed out keeps no copy of it. A sync still in flight at that moment is cancelled and
-/// writes nothing, and the folder goes once that sync has stopped, so a pass cannot put a file
-/// back after the folder was taken away. Nor can a later cue: the mirror runs only while this
+/// that is signed out keeps no copy of it. A sync still in flight at that moment is cancelled: it
+/// stops at the last thing it did and writes nothing after it, and the folder goes once it has
+/// stopped, so a pass cannot put a file back after the folder was taken away. Nor can a later cue: the mirror runs only while this
 /// device holds a login, the same condition the harness answers under, and a cue arriving without
 /// one — a foreground, a launch as a viewer — takes away any folder it finds instead of filling
 /// one, so an interrupted sign-out settles at the next cue rather than standing.
@@ -105,7 +105,7 @@ final class Memory {
             // A cue can reach a phone with no login — the foreground after a sign-out, a
             // launch as a viewer — and nothing of the memory belongs on one. A folder a
             // sign-out did not get to the end of goes here instead of filling up.
-            removeFolder()
+            await removeFolder()
             return
         }
         requests += 1
@@ -120,14 +120,18 @@ final class Memory {
         // a sign-out that found no pass to cancel left its cleanup to whatever woke next.
         // So the door is checked again here, after every wait and before anything is made.
         guard isSignedIn() else {
-            removeFolder()
+            await removeFolder()
             return
         }
         guard generation == asked else {
             // Something moved under this request while it waited. A sign-out's own cleanup
-            // owns the folder now; a pass another cue began answers this request too, and
-            // asks for one more after it if it is still running.
-            if running != nil { queued = true }
+            // owns the folder now; a pass another cue began answers this request too, and is
+            // asked for one more after it — and waited for, since this call answers only when
+            // a pass no earlier than it has finished.
+            if let running {
+                queued = true
+                await running.value
+            }
             return
         }
         if let running {
@@ -166,8 +170,9 @@ final class Memory {
             lastSync = now()
             lastError = nil
         } catch is CancellationError {
-            // Sign-out, or the screen going: the mirror stopped before it wrote anything, and
-            // there is nothing about that to tell anyone.
+            // Sign-out, or the screen going. The pass stopped at the last thing it did and
+            // did nothing after it, and nobody is waiting on what it was going to do, so
+            // there is nothing here to tell anyone.
         } catch {
             guard mine == generation else { return }
             lastError = Failure(at: now(), message: Self.describe(error))
@@ -199,7 +204,6 @@ final class Memory {
         // earlier sign-out's is still stopping: taking that away would leave every request
         // parked behind it free to run as this sign-out's cleanup makes the folder go.
         let winding = running ?? stopping
-        stopping = winding
         queued = false
         mirror = nil
         zoneReady = false
@@ -215,19 +219,26 @@ final class Memory {
         // that happened — a later sign-out has a cleanup of its own, and a pass begun under a
         // new login owns the folder now, so taking it away here would be one login deleting
         // the next one's memory.
-        Task { @MainActor [weak self] in
+        //
+        // The cleanup is what everything else waits for, not the pass it waits for itself:
+        // taking the folder away is a coordinated write with a wait of its own, and a request
+        // let through in the middle of it would make the folder this is still deleting.
+        stopping = Task { @MainActor [weak self] in
             _ = await winding?.value
             guard let self, self.generation == generation else { return }
-            if self.stopping == winding { self.stopping = nil }
-            self.removeFolder()
+            await self.removeFolder()
         }
     }
 
-    private func removeFolder() {
-        guard FileManager.default.fileExists(atPath: directory.path(percentEncoded: false)) else { return }
-        var error: NSError?
-        NSFileCoordinator().coordinate(writingItemAt: directory, options: .forDeleting, error: &error) { url in
-            try? FileManager.default.removeItem(at: url)
+    private func removeFolder() async {
+        do {
+            try await VaultMirror.removeFolder(at: directory)
+            lastError = nil
+        } catch {
+            // A folder that would not go is a phone that signed out and still holds the
+            // person's memory, which is worth saying on the screen rather than leaving it
+            // reading as a phone that has simply not synced yet.
+            lastError = Failure(at: now(), message: Self.describe(error))
         }
     }
 
