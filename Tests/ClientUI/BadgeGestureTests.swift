@@ -20,14 +20,43 @@ final class BadgeGestureTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
                       "the tap did not open the settings")
         XCTAssertFalse(app.navigationBars["Diagnostics"].exists, "the tap also opened the diagnostics")
+        // The rows the sheet is for. Their order is the screenshots' to show; that each is there
+        // at all is cheap enough to hold here.
+        for row in ["Model", "Read replies aloud", "Vocabulary", "Diagnostics", "About Topo", "Sign out"] {
+            XCTAssertTrue(app.descendants(matching: .any)[row].exists, "the settings have no \(row)")
+        }
     }
 
-    func testAHoldOpensTheDiagnostics() throws {
+    /// A hold just past the gesture's own threshold.
+    func testAShortHoldOpensTheDiagnosticsAndNothingElse() throws {
+        try holdOpensOnlyTheDiagnostics(for: 1)
+    }
+
+    /// A hold a person actually makes. It is a case of its own because what a press leaves
+    /// behind depends on how long it was: the release of a long one is where a second action
+    /// would fire, and a badge whose release is not exclusive opens the settings over the
+    /// diagnostics on the way up.
+    func testALongHoldOpensTheDiagnosticsAndNothingElse() throws {
+        try holdOpensOnlyTheDiagnostics(for: 2.5)
+    }
+
+    private func holdOpensOnlyTheDiagnostics(for hold: TimeInterval) throws {
         let app = launch()
-        badge(in: app).press(forDuration: 1)
+        badge(in: app).press(forDuration: hold)
+        // Asked first, because a release that is also a tap puts the settings up over the
+        // diagnostics and this is the symptom that says so.
+        XCTAssertFalse(app.navigationBars["Settings"].waitForExistence(timeout: 3),
+                       "a \(hold)s hold left the settings on screen")
         XCTAssertTrue(app.navigationBars["Diagnostics"].waitForExistence(timeout: 10),
-                      "the hold did not open the diagnostics")
-        XCTAssertFalse(app.navigationBars["Settings"].exists, "the hold also opened the settings")
+                      "a \(hold)s hold did not open the diagnostics")
+        // One sheet is presented at a time, so Diagnostics standing says nothing about whether
+        // the same press also asked for the settings. What answers that is dismissing this one
+        // and looking at what the press left behind it.
+        app.navigationBars["Diagnostics"].buttons["Done"].tap()
+        XCTAssertFalse(app.navigationBars["Settings"].waitForExistence(timeout: 5),
+                       "a \(hold)s hold also opened the settings")
+        XCTAssertTrue(app.buttons["topo-debug-chat"].waitForExistence(timeout: 10),
+                      "the chat is back with nothing over it")
     }
 
     /// The badge is the element carrying the chat's debug report, and it is a button. A toolbar

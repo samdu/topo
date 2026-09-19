@@ -13,9 +13,17 @@ struct TopoBadge: View {
     var openSettings: () -> Void = {}
     var openDiagnostics: () -> Void = {}
     @Environment(\.look) private var look
+    /// True from the moment a press becomes a hold until the release that ends it, so the
+    /// release opens nothing.
+    @State private var heldOpen = false
 
     var body: some View {
-        Button(action: openSettings) {
+        Button {
+            // A press that became a hold has already opened the diagnostics; its release is not
+            // also a tap. A button's action runs on every release whatever else recognised, so
+            // the hold is what the action asks about rather than something beside it.
+            if heldOpen { heldOpen = false } else { openSettings() }
+        } label: {
             StainedGlass(glass: look.jewel)
                 .frame(width: look.badge.size, height: look.badge.size)
                 .overlay {
@@ -25,9 +33,17 @@ struct TopoBadge: View {
                 }
         }
         .buttonStyle(.plain)
-        // A hold alongside the tap rather than instead of it: the button keeps its own gesture,
-        // so a tap still opens the settings.
-        .simultaneousGesture(LongPressGesture().onEnded { _ in openDiagnostics() })
+        .simultaneousGesture(
+            LongPressGesture()
+                // Every press starts as a tap, including one after a hold whose release the
+                // button never saw — dragged off the badge, or interrupted. Without this the
+                // mark left by that hold would swallow the next tap.
+                .onChanged { _ in heldOpen = false }
+                .onEnded { _ in
+                    heldOpen = true
+                    openDiagnostics()
+                }
+        )
         .accessibilityLabel("Topo")
         .accessibilityHint("Settings; hold for diagnostics")
     }
