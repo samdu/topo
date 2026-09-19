@@ -91,16 +91,16 @@ struct StainedGlass: View {
             // The sheen off the top of the slab, and the shade off its foot.
             .overlay {
                 Circle().fill(
-                    LinearGradient(colors: [.white.opacity(glass.sheenOpacity), .clear, .clear,
-                                            .black.opacity(glass.sheenShadeOpacity)],
+                    LinearGradient(colors: [glass.sheenColor.opacity(glass.sheenOpacity), .clear, .clear,
+                                            glass.sheenShadeColor.opacity(glass.sheenShadeOpacity)],
                                    startPoint: glass.sheenStart, endPoint: glass.sheenEnd))
             }
             // The cut: a jeweller's edge, a true circle with a bright bevel.
             .overlay {
                 Circle().strokeBorder(
-                    LinearGradient(colors: [.white.opacity(glass.bevelHighlightOpacity),
-                                            .white.opacity(glass.bevelMidOpacity),
-                                            .black.opacity(glass.bevelShadeOpacity)],
+                    LinearGradient(colors: [glass.bevelColor.opacity(glass.bevelHighlightOpacity),
+                                            glass.bevelColor.opacity(glass.bevelMidOpacity),
+                                            glass.bevelShadeColor.opacity(glass.bevelShadeOpacity)],
                                    startPoint: .top, endPoint: .bottom),
                     lineWidth: glass.bevelWidth)
             }

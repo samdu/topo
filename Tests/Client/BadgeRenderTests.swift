@@ -62,4 +62,20 @@ final class BadgeRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(TopoBadge()), try raster(TopoBadge(), look: look),
                           "the look's mark size does not reach the badge")
     }
+
+    /// The lights on the glass are the jewel's too: a slab of another colour wants a highlight of
+    /// its own, and a sheen or a bevel written into the view is one it cannot have.
+    func testTheSheenAndTheBevelAreTheJewelsOwnColours() throws {
+        let plain = try raster(StainedGlass(glass: Look().jewel))
+
+        var lit = Look.Jewel()
+        lit.sheenColor = Color(red: 1, green: 0.85, blue: 0.4)
+        XCTAssertNotEqual(plain, try raster(StainedGlass(glass: lit)),
+                          "the jewel's sheen colour does not reach the glass")
+
+        var cut = Look.Jewel()
+        cut.bevelColor = Color(red: 1, green: 0.85, blue: 0.4)
+        XCTAssertNotEqual(plain, try raster(StainedGlass(glass: cut)),
+                          "the jewel's bevel colour does not reach the glass")
+    }
 }

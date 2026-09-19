@@ -194,12 +194,17 @@ struct Look: Equatable, Sendable {
         var bandBlur: CGFloat = 1.5
 
         /// The sheen off the top of the slab, and the shade off its foot.
+        var sheenColor = Color.white
+        var sheenShadeColor = Color.black
         var sheenOpacity = 0.35
         var sheenShadeOpacity = 0.15
         var sheenStart = UnitPoint(x: 0.3, y: 0)
         var sheenEnd = UnitPoint(x: 0.7, y: 1)
 
         /// The cut: a true circle with a bright bevel at the top and a dark one at the foot.
+        /// The lit side of the edge is one colour at two opacities; the foot is the other.
+        var bevelColor = Color.white
+        var bevelShadeColor = Color.black
         var bevelWidth: CGFloat = 1.5
         var bevelHighlightOpacity = 0.8
         var bevelMidOpacity = 0.15
