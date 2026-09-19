@@ -29,6 +29,8 @@ struct Look: Equatable, Sendable {
     var badge: Badge
     /// The sheet the badge opens.
     var settings: Settings
+    /// The lozenge under the transcript, and the microphone set into it.
+    var composer: Composer
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -37,6 +39,7 @@ struct Look: Equatable, Sendable {
         jewel = Jewel()
         badge = Badge()
         settings = Settings()
+        composer = Composer()
     }
 
     /// The three screens the client is drawn on.
@@ -170,14 +173,32 @@ struct Look: Equatable, Sendable {
         var pale = Color(red: 0.55, green: 0.80, blue: 0.84)
         var milk = Color(red: 0.80, green: 0.92, blue: 0.93)
 
+        /// Which of the four a part of the slab is poured from. The parts name a glass rather
+        /// than a colour, so a slab of another colour is the four values and the rest follows —
+        /// and so a jewel lit from behind is the same four read in another order.
+        enum Glass: String, Equatable, Sendable, CaseIterable { case deep, mid, pale, milk }
+
+        func colour(_ glass: Glass) -> Color {
+            switch glass {
+            case .deep: deep
+            case .mid: mid
+            case .pale: pale
+            case .milk: milk
+            }
+        }
+
         /// The body: a radial gradient centred low and right, where the glass is thinnest.
+        /// Its stops run from that thin centre outwards.
+        var bodyGlasses: [Glass] = [.mid, .deep, .deep]
         var bodyCenter = UnitPoint(x: 0.62, y: 0.72)
         var bodyEndRadius: CGFloat = 46
         /// Cut into the body from the top, and the light caught under its lower edge.
         var bodyShade = Shadow(color: .black.opacity(0.45), radius: 5, y: 3)
         var bodyCatch = Shadow(color: .white.opacity(0.3), radius: 2, y: -2)
 
-        /// The milky drift, an off-centre swirl of thinner glass.
+        /// The milky drift, an off-centre swirl of thinner glass: a core and the halo round it.
+        var driftGlass: Glass = .milk
+        var driftHaloGlass: Glass = .pale
         var driftSize = CGSize(width: 44, height: 30)
         var driftEndRadius: CGFloat = 22
         var driftOpacity = 0.55
@@ -187,6 +208,7 @@ struct Look: Equatable, Sendable {
         var driftBlur: CGFloat = 2
 
         /// The dark band across the diagonal.
+        var bandGlass: Glass = .deep
         var bandSize = CGSize(width: 14, height: 90)
         var bandOpacity = 0.6
         var bandAngle = Angle.degrees(24)
@@ -229,6 +251,114 @@ struct Look: Equatable, Sendable {
     struct Settings: Equatable, Sendable {
         /// Its controls address Topo, so they take Topo's colour.
         var tint = Theme.primary
+    }
+    /// The lozenge under the transcript: a floating pane of glass carrying two flanks and, set
+    /// into the middle of it, the microphone in its well.
+    ///
+    /// The glass is what says the microphone is open, because the thumb that opened it covers
+    /// the jewel: the pane takes the colour, the jewel goes pale, and the glow spills onto the
+    /// transcript behind. So the open state is two values here — a tint and another `Jewel` —
+    /// rather than a branch in the view.
+    struct Composer: Equatable, Sendable {
+        /// The share of the screen's width the glass takes, and how far off the bottom it floats.
+        var widthFraction: CGFloat = 0.8
+        var bottomPadding: CGFloat = 8
+        /// The room inside the glass, and its corners.
+        var horizontalInset: CGFloat = 16
+        var verticalInset: CGFloat = 4
+        var cornerRadius: CGFloat = 32
+        /// Between a flank and the well.
+        var spacing: CGFloat = 25
+        /// Between the field, while there is one, and the row under it.
+        var rowSpacing: CGFloat = 4
+        /// What the pane is made of: the system's glass where there is any, a material below it.
+        var surface: Surface = .glass
+        /// The colour the pane takes while the microphone is open, and the alpha it takes it at.
+        /// Clear otherwise: the same value at nothing, so the change is an animation and not a
+        /// swap of one view for another.
+        var tint = Theme.primary
+        var tintOpacity = 0.55
+        /// What the open glass spills onto the transcript behind it.
+        var glow = Shadow(color: Theme.primary.opacity(0.7), radius: 28, y: 4)
+        /// How long the pane takes to take the colour, and the flanks to go.
+        var duration = 0.2
+
+        var flank = Flank()
+        var well = Well()
+        var glyph = Glyph()
+        var field = Field()
+
+        /// The jewel while the microphone is open: the same slab read from its pale end, lit
+        /// from behind, with less shade cut into it and a fainter band.
+        var openJewel: Jewel = {
+            var jewel = Jewel()
+            jewel.bodyGlasses = [.milk, .pale, .mid]
+            jewel.bodyShade = Shadow(color: .black.opacity(0.2), radius: 5, y: 3)
+            jewel.driftOpacity = 0.9
+            jewel.bandOpacity = 0.25
+            return jewel
+        }()
+
+        /// The jewel while a press would be refused: the colour drained out of it and the whole
+        /// slab faded. The diagnostics `speech` row is what says why.
+        var dimmedSaturation = 0.0
+        var dimmedOpacity = 0.5
+
+        /// A control at one end of the glass. Etched rather than drawn on: the glyph a shade
+        /// under its ink, with a light catch below its lower edges and a dark one above, as a
+        /// cut into the surface would have.
+        struct Flank: Equatable, Sendable {
+            var font: Font = .title2
+            /// Topo's colour on clear glass; white once the glass itself has taken that colour,
+            /// so a live control does not read as a dimmed one.
+            var ink = Theme.primary
+            var openInk = Color.white
+            var etchOpacity = 0.9
+            var etchLight = Shadow(color: .white.opacity(0.45), radius: 0.5, y: 0.8)
+            var etchShade = Shadow(color: .black.opacity(0.35), radius: 0.5, y: -0.6)
+            /// While the thumb is on the microphone the flanks go, keeping their space so the
+            /// glass never changes size.
+            var heldOpacity = 0.0
+        }
+
+        /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
+        /// hard line of the lip itself and the light caught under its far edge, inside a cut
+        /// edge that runs dark at the top to bright at the foot.
+        struct Well: Equatable, Sendable {
+            var size: CGFloat = 72
+            /// The jewel set into it.
+            var jewelSize: CGFloat = 64
+            var floor = Color.black.opacity(0.28)
+            var bore = Shadow(color: .black.opacity(0.7), radius: 7, y: 5)
+            var lip = Shadow(color: .black.opacity(0.4), radius: 1, y: 1)
+            var catchLight = Shadow(color: .white.opacity(0.18), radius: 2, y: -2)
+            var edgeColors: [Color] = [.black.opacity(0.55), .black.opacity(0.1), .white.opacity(0.55)]
+            var edgeWidth: CGFloat = 1
+        }
+
+        /// The mark on the jewel. It sits over the glass rather than being cut into it, so it
+        /// is white on the dark slab and Topo's colour on the pale one.
+        struct Glyph: Equatable, Sendable {
+            var size: CGFloat = 26
+            var weight: Font.Weight = .medium
+            var ink = Color.white
+            var openInk = Theme.primary
+            var shadow = Shadow(color: .black.opacity(0.25), radius: 1, y: 1)
+            /// Nothing under the thumb needs a shadow of its own.
+            var openShadowOpacity = 0.0
+        }
+
+        /// The field in the glass while the keyboard is up.
+        struct Field: Equatable, Sendable {
+            var font: Font = .body
+            var ink = Theme.text
+            var lineLimit = 1...5
+            /// The room between the words and the glass's own inset.
+            var horizontalPadding: CGFloat = 8
+            /// The control that sends what is in it.
+            var sendFont: Font = .title2
+            var sendInk = Theme.primary
+        }
     }
 }
 
