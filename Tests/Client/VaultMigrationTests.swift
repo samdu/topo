@@ -547,6 +547,9 @@ final class VaultMigrationTests: XCTestCase {
         XCTAssertEqual(memory.homeSummary, "iCloud Drive › Obsidian › Topo")
         // The grant stays on what the person handed over, not on the folder made under it.
         XCTAssertEqual(memory.home.scope, device.iCloudDriveRoot)
+        // The baseline travels with the files, and the old copy goes.
+        XCTAssertNotNil(text(".topo/mirror.json", in: made))
+        XCTAssertNil(contents(of: device.local))
     }
 
     // MARK: A home that cannot be reached

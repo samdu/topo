@@ -100,7 +100,10 @@ enum VaultDownloads {
         }
         let deadline = now() + timeout
         while !outstanding.isEmpty, now() < deadline {
-            for (relative, url) in outstanding where status(url) == .current {
+            // Anything but `.notDownloaded` is bytes the scan can read: `.current`, and
+            // `.downloaded`, which is here with a newer copy known elsewhere. Waiting on
+            // `.current` alone spends the whole bound on a file that has already landed.
+            for (relative, url) in outstanding where status(url) != .notDownloaded {
                 report.arrived.append(relative)
                 outstanding[relative] = nil
             }

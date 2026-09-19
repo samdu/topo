@@ -92,6 +92,22 @@ final class VaultDownloadsTests: XCTestCase {
         XCTAssertEqual(report.waiting, [])
     }
 
+    /// `.downloaded` is the bytes being here with a newer copy known elsewhere, which is a file
+    /// the scan can read. So it ends the wait exactly as `.current` does: waiting on it would
+    /// spend the whole bound on a file that has already landed.
+    func testAFileThatLandsDownloadedRatherThanCurrentIsReportedAsArrived() async {
+        let folder = makeFolder()
+        write("# Today", to: "notes/today.md", in: folder)
+        let asks = Counter()
+        let report = await VaultDownloads.warm(folder, status: { _ in
+            asks.next() > 1 ? .downloaded : .notDownloaded
+        }, startDownload: { _ in }, now: { .now }, sleep: { _ in })
+
+        XCTAssertEqual(report.asked, ["notes/today.md"])
+        XCTAssertEqual(report.arrived, ["notes/today.md"])
+        XCTAssertEqual(report.waiting, [])
+    }
+
     /// The wait has an end. A file iCloud Drive never delivers is left for the next pass, not a
     /// pass that never returns.
     func testAFileThatNeverArrivesEndsTheWaitAtTheBound() async {

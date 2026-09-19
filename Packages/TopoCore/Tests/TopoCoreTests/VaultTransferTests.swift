@@ -202,6 +202,43 @@ final class VaultTransferTests: XCTestCase {
         }
         XCTAssertEqual(read("notes/today.md", in: source), "# Today")
     }
+
+    /// A name that is a file in the memory and a folder in the new home. Neither is wrong —
+    /// `MemoryVault` keeps both, since two devices can write `notes` and `notes/today.md` without
+    /// either being mistaken — but on one disk only one of them can stand at that name, and
+    /// nothing the transfer could write would leave both. So the move stops before the commit,
+    /// with the memory where it was and the name it hit said.
+    func testAFolderInTheNewHomeWhereTheMemoryHasAFileStopsTheMove() throws {
+        let source = makeFolder("source")
+        let destination = makeFolder("destination")
+        write("everything I know", to: "notes", in: source)
+        write("# Today", to: "notes/today.md", in: destination)
+
+        XCTAssertThrowsError(try VaultTransfer.copy(from: source, to: destination,
+                                                    device: device, at: now)) { error in
+            XCTAssertEqual(error as? VaultTransfer.Failure,
+                           .obstructed("notes", .folderInTheNewHome))
+        }
+        XCTAssertEqual(read("notes", in: source), "everything I know")
+        XCTAssertEqual(read("notes/today.md", in: destination), "# Today")
+    }
+
+    /// The same collision the other way: the memory keeps a folder at a name the new home holds a
+    /// file at.
+    func testAFileInTheNewHomeWhereTheMemoryHasAFolderStopsTheMove() throws {
+        let source = makeFolder("source")
+        let destination = makeFolder("destination")
+        write("# Today", to: "notes/today.md", in: source)
+        write("their own notes", to: "notes", in: destination)
+
+        XCTAssertThrowsError(try VaultTransfer.copy(from: source, to: destination,
+                                                    device: device, at: now)) { error in
+            XCTAssertEqual(error as? VaultTransfer.Failure,
+                           .obstructed("notes", .fileInTheNewHome))
+        }
+        XCTAssertEqual(read("notes/today.md", in: source), "# Today")
+        XCTAssertEqual(read("notes", in: destination), "their own notes")
+    }
 }
 
 /// Running a transfer again after one that stopped before the commit. The move's promise is that

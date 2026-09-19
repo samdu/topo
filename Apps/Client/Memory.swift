@@ -641,6 +641,10 @@ final class Memory {
             "\(path) could not be written into the new folder, so the memory stayed where it was"
         case VaultTransfer.Failure.unverified(let path):
             "\(path) did not arrive whole, so the memory stayed where it was"
+        case VaultTransfer.Failure.obstructed(let path, .folderInTheNewHome):
+            "\(path) is a folder in the new home where the memory has a file, so the memory stayed where it was"
+        case VaultTransfer.Failure.obstructed(let path, .fileInTheNewHome):
+            "\(path) is a file in the new home where the memory has a folder, so the memory stayed where it was"
         default:
             "the move stopped and the memory stayed where it was: \(error)"
         }

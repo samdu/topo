@@ -103,6 +103,20 @@ public enum VaultTransfer {
         /// permission or space: it says the bytes did not arrive, which is the whole reason the
         /// commit waits for this.
         case unverified(String)
+        /// A name that is a file on one side and a folder on the other. The store keeps both —
+        /// two devices can write `notes` and `notes/today.md` without either being wrong, and
+        /// `MemoryVault` shows the one standing where the folder has to go beside it under a
+        /// copy's name — but one disk holds only one of them at that name, so there is nothing
+        /// the transfer could write that would leave the person both.
+        case obstructed(String, Obstruction)
+    }
+
+    /// Which side of a name's collision is the folder.
+    public enum Obstruction: String, Equatable, Sendable {
+        /// The new home holds a folder at a name the memory has a file at.
+        case folderInTheNewHome
+        /// The new home holds a file at a name the memory keeps a folder under.
+        case fileInTheNewHome
     }
 
     /// The baseline, which is carried and is not a vault path.
@@ -127,6 +141,7 @@ public enum VaultTransfer {
             guard let data = disk.contents(atPath: from.path(percentEncoded: false)) else {
                 throw Failure.unreadable(relative)
             }
+            if let collision = obstruction(to: relative, under: destination) { throw collision }
             if relative == baselineName {
                 try place(data, at: baselineName, under: destination)
                 outcome.baseline = true
@@ -160,6 +175,33 @@ public enum VaultTransfer {
         outcome.copied.sort()
         outcome.identical.sort()
         return outcome
+    }
+
+    /// What stands in the destination in the way of a name: a folder where the memory has a
+    /// file, or a file where one of the memory's folders has to go.
+    ///
+    /// `FileManager.contents(atPath:)` answers nil for a folder exactly as it does for a name
+    /// with nothing at it, so the read the copy makes cannot tell a collision from a clear name
+    /// and the collision surfaces as a write that throws, naming the file being carried rather
+    /// than the name it hit. This is the look that tells them apart before anything is written.
+    /// No conflict copy is made for either: a copy is a second file beside the first, and a
+    /// folder is not a file to stand beside.
+    private static func obstruction(to relative: String, under root: URL) -> Failure? {
+        let components = relative.split(separator: "/").map(String.init)
+        var walked = root
+        for (index, component) in components.enumerated() {
+            walked = walked.appendingPathComponent(component)
+            var isFolder: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: plainPath(walked),
+                                                 isDirectory: &isFolder) else { return nil }
+            let name = components[...index].joined(separator: "/")
+            if index == components.count - 1 {
+                if isFolder.boolValue { return .obstructed(name, .folderInTheNewHome) }
+            } else if !isFolder.boolValue {
+                return .obstructed(name, .fileInTheNewHome)
+            }
+        }
+        return nil
     }
 
     /// A conflict copy of `origin` already in the destination whose bytes are the ones being
