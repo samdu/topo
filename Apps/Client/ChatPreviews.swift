@@ -37,6 +37,47 @@ enum PreviewTurns {
     }
 }
 
+#if os(iOS)
+/// The chat as one view, with nothing behind it: the transcript, the row at the end of it, the
+/// badge in the bar and the glass under it, all drawn from the environment's look and from the
+/// fixtures above. It is what the canvas shows and what the render suite photographs, so the
+/// screen a look is judged on is one view and not two ideas of it.
+struct ChatCanvas: View {
+    var turns: [Turn] = PreviewTurns.long
+    var notice: String?
+    var mic: Composer.MicState = .init()
+    /// What the row at the end of the transcript is doing.
+    var row: Row = .hidden
+
+    enum Row: String, CaseIterable { case hidden, writing, inFlight }
+
+    var body: some View {
+        NavigationStack {
+            TranscriptView(turns: turns, notice: notice,
+                           replay: Replay(canSpeak: true),
+                           actions: TurnActions(edit: { _ in }),
+                           draft: draft)
+                .navigationTitle("")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .topBarTrailing) { TopoBadge() } }
+                .safeAreaInset(edge: .bottom) {
+                    Composer(typing: .constant(false), mic: mic)
+                }
+        }
+    }
+
+    /// The row is drawn from what it is handed, so a state of it is a value here rather than a
+    /// screen something has to type into. The keyboard is never asked for: a row with words in it
+    /// is shown whether or not anything is focused, which is what a caption from the microphone
+    /// looks like.
+    private var draft: Draft? {
+        guard row != .hidden else { return nil }
+        return Draft(text: .constant("Remind me to pick up Daphne's food on the way home"),
+                     typing: .constant(false), sending: row == .inFlight, edit: {})
+    }
+}
+#endif
+
 // One preview per platform, each in the target that can draw it: a preview is rendered by the
 // build it is compiled into, so the watch's and the television's are theirs and not the phone's
 // idea of them.
