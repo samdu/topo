@@ -21,7 +21,7 @@ final class DraftRowTests: XCTestCase {
     /// The keyboard flank is the way to the keyboard, and the row is what has it: a control that
     /// raised a keyboard with nothing focused would be a person typing into nothing.
     func testTheKeyboardFlankRaisesTheKeyboardIntoTheRow() throws {
-        let app = launch()
+        let app = launch(owed: "")
         XCTAssertFalse(field(in: app).exists, "the row is drawn before anything asks for it")
 
         keyboardFlank(in: app).tap()
@@ -36,7 +36,7 @@ final class DraftRowTests: XCTestCase {
     /// What is typed is in the row, and sending it leaves the words there under a spinner with
     /// the field closed to typing: the turn is on its way and what it says cannot change.
     func testWhatIsWrittenStaysInTheRowWhileTheTurnIsOnItsWay() throws {
-        let app = launch()
+        let app = launch(owed: "")
         keyboardFlank(in: app).tap()
         let field = field(in: app)
         XCTAssertTrue(field.waitForExistence(timeout: 10), "the row is at the end of the transcript")
@@ -66,7 +66,27 @@ final class DraftRowTests: XCTestCase {
         shot(app, "failed")
     }
 
+    /// An app killed with words said and not yet in the log comes back to the row they were sent
+    /// from: the words in it, on their way, with no way to type over them. The launch is given a
+    /// turn already on the line (`TOPO_DEBUG_OUTBOX`), which is the state a relaunch finds and the
+    /// one no suite can reach by sending a turn and killing the app mid-write.
+    func testAnAppKilledWithWordsOnTheLineComesBackToTheRowTheyWereSentFrom() throws {
+        let app = launch(owed: Self.owed)
+
+        let field = field(in: app)
+        XCTAssertTrue(field.waitForExistence(timeout: 30), "the relaunch drew no row at all")
+        XCTAssertEqual(field.value as? String, Self.owed, "the row came back without the words on the line")
+        XCTAssertTrue(app.descendants(matching: .any)["Sending"].waitForExistence(timeout: 10),
+                      "the words came back with nothing saying they are on their way")
+        XCTAssertFalse(field.isEnabled, "the words on their way can be typed over")
+        XCTAssertFalse(app.buttons["Send"].exists, "the send control is in the slot over a turn on its way")
+        shot(app, "resumed")
+    }
+
     // MARK: -
+
+    /// What a launch is given as already said and not yet in the log.
+    static let owed = "water the plants"
 
     /// Long enough to wrap in the bubble on a phone, which is what the row is for.
     static let words = "Remind me to pick up Daphne's food on the way home"
@@ -93,8 +113,12 @@ final class DraftRowTests: XCTestCase {
     /// Signed in with a placeholder token and past the first-run question, with neither model
     /// resident — nothing here presses the microphone — and the turn held before the model call
     /// so the row it is sent from stays in flight.
-    private func launch() -> XCUIApplication {
+    /// `owed` is what is on the harness's line at the launch, in place of whatever the last one
+    /// left: a turn said and not settled stays on disk, so every test here says what it wants
+    /// rather than inheriting the turn the test before it sent and never landed.
+    private func launch(owed: String) -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = owed
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"

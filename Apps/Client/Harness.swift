@@ -130,6 +130,14 @@ final class Harness {
     }
     private var outgoing: Outgoing? { pending.first }
 
+    /// The words at the head of the line and the nonce they carry. It is what the row at the end
+    /// of the transcript takes back up when the chat appears: the line survives the app being
+    /// killed, so the screen that comes back can draw the row the turn was sent from rather than
+    /// an empty one.
+    var owed: (text: String, nonce: String)? {
+        pending.first.map { ($0.text, $0.nonce) }
+    }
+
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          defaults: UserDefaults = .standard,

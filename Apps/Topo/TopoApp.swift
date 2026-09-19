@@ -20,6 +20,9 @@ struct TopoApp: App {
         // environment is signed in by it, so the simulator comes up past the sign-in screen.
         #if DEBUG
         DebugRun.signIn()
+        // And before the harness reads its line: a debug build asked for a turn owed gets one,
+        // so a launch can be the relaunch that comes back to a row it never finished sending.
+        DebugRun.seedOutbox()
         #endif
         _signIn = State(initialValue: SignIn())
         _harness = State(initialValue: Harness.standard())
