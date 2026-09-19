@@ -257,6 +257,199 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(read11, ["bins?", "Tonight."])
     }
 
+    // MARK: The row at the end of the transcript
+
+    /// The row draws the turn it holds until that turn is in the log. A write that never reached
+    /// the log leaves the words owed under their own nonce, so the row stays in flight, the
+    /// harness sends them again from the outbox, and the way back is offered.
+    func testAWriteThatNeverReachedTheLogLeavesOneOutboxEntryAndTheRowInFlight() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let zone = Switch()
+        await zone.set(false)
+        let harness = harness(db, defaults: defaults, transport: ScriptedTransport(), ensureZone: {
+            guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
+        })
+
+        let nonce = harness.willSend("water the plants")
+        await harness.retry()
+
+        let turns = try await log(db)
+        XCTAssertTrue(turns.isEmpty, "nothing reached the log: \(turns.map(\.text))")
+        XCTAssertEqual(harness.waiting, ["water the plants"], "one entry on the line, not two")
+        XCTAssertFalse(harness.said(nonce), "the row is in flight: the turn is not in the log")
+        XCTAssertTrue(harness.canWithdraw(nonce), "the words can be taken back off a stopped line")
+
+        // And the line's own way forward still works: the same words, the same nonce, one turn.
+        await zone.set(true)
+        await harness.retry()
+        let sent = try await log(db).map(\.text)
+        XCTAssertEqual(sent, ["water the plants"])
+        XCTAssertTrue(harness.said(nonce))
+        XCTAssertTrue(harness.waiting.isEmpty)
+    }
+
+    /// Taking the words back and saying them again is one turn under one nonce: the entry the
+    /// first send made is off the line before the second is put on it.
+    func testTakingBackATurnThatNeverLandedMakesTheResendOneTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let zone = Switch()
+        await zone.set(false)
+        let transport = ScriptedTransport((200, reply("Done.")))
+        let harness = harness(db, defaults: defaults, transport: transport, ensureZone: {
+            guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
+        })
+
+        let first = harness.willSend("water the plans")
+        await harness.retry()
+        XCTAssertEqual(harness.waiting, ["water the plans"])
+
+        let taken = await harness.withdraw(first)
+        XCTAssertTrue(taken, "the words were not taken back")
+        XCTAssertTrue(harness.waiting.isEmpty, "the entry is still on the line")
+        XCTAssertNil(defaults.data(forKey: "topo.harness.outbox"), "and still on disk")
+        XCTAssertFalse(harness.canWithdraw(first), "there is nothing left to take back")
+
+        // The words, changed, said again: a second nonce, and the first one sends nothing.
+        await zone.set(true)
+        let second = harness.willSend("water the plants")
+        XCTAssertNotEqual(second, first)
+        await harness.retry()
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["water the plants", "Done."], "one turn, not two")
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
+        XCTAssertTrue(harness.said(second))
+        XCTAssertFalse(harness.said(first), "the withdrawn nonce wrote a turn of its own")
+        XCTAssertEqual(transport.sent, [["water the plants"]], "the model heard the words once")
+        XCTAssertTrue(harness.waiting.isEmpty)
+    }
+
+    /// The write committed and the acknowledgement was lost. The read that follows the failure
+    /// finds the turn, so the row clears on it: the words are said, whatever this device is still
+    /// owed on disk, and what is left is the reply, which the retry brings under the same nonce.
+    func testALostAcknowledgementIsFoundByTheReadAfterItAndClearsTheRow() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let defaults = makeDefaults()
+        let transport = ScriptedTransport((200, reply("Calling.")))
+        let harness = harness(db, defaults: defaults, transport: transport)
+        await db.loseAcknowledgementOfNextTurn()
+
+        let nonce = harness.willSend("call Helen")
+        await harness.retry()
+
+        XCTAssertEqual(harness.waiting, ["call Helen"], "the turn is still owed on this device")
+        XCTAssertTrue(harness.said(nonce), "the read after the failure found the committed turn")
+        XCTAssertFalse(harness.canWithdraw(nonce), "so there is nothing to take back")
+
+        await harness.retry()
+        let turns = try await log(db.wrapped)
+        XCTAssertEqual(turns.map(\.text), ["call Helen", "Calling."], "one person's turn, one reply")
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
+        XCTAssertEqual(transport.sent, [["call Helen"]])
+        XCTAssertTrue(harness.waiting.isEmpty)
+    }
+
+    /// The same lost acknowledgement, with the read after it lost too: this device has every
+    /// reason to believe the words never landed, and the row offers the way back. The withdrawal
+    /// asks the log itself, and that is what refuses it — the entry stays, so the retry goes
+    /// under the nonce the turn already carries and writes nothing twice.
+    func testTakingBackIsRefusedByTheLogItselfWhenTheTurnIsAlreadyThere() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let defaults = makeDefaults()
+        let transport = ScriptedTransport((200, reply("Calling.")))
+        let harness = harness(db, defaults: defaults, transport: transport)
+        await db.goDarkAfterTheNextTurn()
+
+        let nonce = harness.willSend("call Helen")
+        await harness.retry()
+        XCTAssertEqual(harness.waiting, ["call Helen"])
+        XCTAssertFalse(harness.said(nonce), "nothing this device could read said the turn had landed")
+        XCTAssertTrue(harness.canWithdraw(nonce), "so the row offers the way back")
+
+        await db.refuseReads(false)
+        let taken = await harness.withdraw(nonce)
+        XCTAssertFalse(taken, "the words were taken back although they are in the log")
+        XCTAssertTrue(harness.said(nonce), "asking the log is what found the turn, and the row clears")
+        XCTAssertEqual(harness.waiting, ["call Helen"], "the entry stays, so the retry is under this nonce")
+        XCTAssertFalse(harness.canWithdraw(nonce), "and the way back is gone")
+
+        await harness.retry()
+        let turns = try await log(db.wrapped)
+        XCTAssertEqual(turns.map(\.text), ["call Helen", "Calling."], "one person's turn, one reply")
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
+        XCTAssertEqual(transport.sent, [["call Helen"]], "the model heard the words once")
+    }
+
+    /// A read that failed is not an answer either: the words stay owed under their own nonce and
+    /// the line's own retry is what sends them, so nothing is taken back on what this device
+    /// merely hopes is true.
+    func testTakingBackIsRefusedWhenTheLogCannotBeRead() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                              ensureZone: { throw RecordDatabaseError.unavailable(underlying: Unexpected()) })
+
+        let nonce = harness.willSend("water the plants")
+        await harness.retry()
+        XCTAssertEqual(harness.waiting, ["water the plants"])
+
+        await db.refuseReads(true)
+        let taken = await harness.withdraw(nonce)
+        XCTAssertFalse(taken, "the words were taken back on a log nobody could read")
+        XCTAssertEqual(harness.waiting, ["water the plants"], "and they are still owed")
+        XCTAssertNotNil(harness.error)
+    }
+
+    /// An attempt is a write that may be landing as the way back is asked for, so it is not
+    /// offered while one is running.
+    func testTakingBackIsNotOfferedWhileAnAttemptIsInFlight() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        let harness = harness(db, defaults: defaults, transport: transport)
+        let nonce = harness.willSend("bins?")
+        let duringCall = Answers()
+        transport.duringRequest = { [harness] in
+            await duringCall.set(await MainActor.run { harness.canWithdraw(nonce) })
+        }
+
+        await harness.retry()
+
+        let offered = await duringCall.value
+        XCTAssertEqual(offered, false, "the way back was offered while the turn was being written")
+        let answered = try await log(db).map(\.text)
+        XCTAssertEqual(answered, ["bins?", "Tonight."])
+    }
+
+    /// The reply failed and the person's turn is in the log: the words are said, so the row
+    /// clears and the bubble that lands is the one that was being written in. Nothing is owed on
+    /// this device, and the answering pass is what brings the reply.
+    func testAFailedModelReplyClearsTheRowAndLeavesTheTurnToTheNextPass() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let transport = ScriptedTransport(
+            (529, #"{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"#),
+            (200, reply("Tonight.")))
+        let harness = harness(db, defaults: defaults, transport: transport)
+
+        let nonce = harness.willSend("bins?")
+        await harness.retry()
+
+        let written = try await log(db).map(\.text)
+        XCTAssertEqual(written, ["bins?"])
+        XCTAssertTrue(harness.said(nonce), "the row clears: the words are in the log")
+        XCTAssertTrue(harness.waiting.isEmpty, "and nothing is owed, so the row is not in flight")
+        XCTAssertFalse(harness.canWithdraw(nonce), "what is in the log cannot be taken back")
+        XCTAssertEqual(harness.error, "Overloaded")
+
+        await harness.answerPending()
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["bins?", "Tonight."], "one turn, answered once")
+        XCTAssertEqual(turns.filter { $0.role == .person }.count, 1)
+    }
+
     // MARK: Not primary
 
     func testNotPrimaryWritesTheTurnAsALimbAndThePrimaryAnswersIt() async throws {
@@ -932,27 +1125,58 @@ private struct Unexpected: Error {}
 private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }
 
 /// The in-memory log, able to commit the next person's turn and then throw, which is what a lost
-/// acknowledgement looks like from the writer's side.
+/// acknowledgement looks like from the writer's side; and able to refuse every read, which is
+/// what a device that cannot reach CloudKit sees when it asks whether a turn is there.
 private actor FailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
     private var loseNextTurnAcknowledgement = false
+    private var refusingReads = false
+    private var darkAfterLostAcknowledgement = false
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
     func loseAcknowledgementOfNextTurn() { loseNextTurnAcknowledgement = true }
+    func refuseReads(_ on: Bool) { refusingReads = on }
+    /// The device that went off the network in the middle of the write: the turn is committed,
+    /// the acknowledgement is lost, and nothing after it can read the log to find out.
+    func goDarkAfterTheNextTurn() {
+        loseNextTurnAcknowledgement = true
+        darkAfterLostAcknowledgement = true
+    }
 
     func save(_ records: [Record]) async throws -> [Record] {
         let saved = try await wrapped.save(records)
         if loseNextTurnAcknowledgement, records.contains(where: { $0.type == Turn.recordType }) {
             loseNextTurnAcknowledgement = false
+            refusingReads = darkAfterLostAcknowledgement
             throw RecordDatabaseError.unavailable(underlying: Unexpected())
         }
         return saved
     }
 
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        try refuse()
+        return try await wrapped.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        try refuse()
+        return try await wrapped.query(query)
+    }
+    func records(ofType type: String) async throws -> [Record] {
+        try refuse()
+        return try await wrapped.records(ofType: type)
+    }
+
+    private func refuse() throws {
+        guard refusingReads else { return }
+        throw RecordDatabaseError.unavailable(underlying: Unexpected())
+    }
+}
+
+/// One answer, written where the test can read it after.
+private actor Answers {
+    private(set) var value: Bool?
+    func set(_ answer: Bool) { value = answer }
 }
 
 private actor Switch {
