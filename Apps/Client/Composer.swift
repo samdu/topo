@@ -63,8 +63,11 @@ struct Composer: View {
         /// The thumb is on the glass, so what it covers is not worth drawing.
         var holding: Bool { appearance == .held }
 
+        /// The owner is asked before the manner of opening: a session this screen does not own
+        /// leaves the glass alone however it was opened, so `handsFree` is read only once the
+        /// microphone is known to be this screen's.
         var appearance: Appearance {
-            if !canListen { .dimmed } else if handsFree { .handsFree } else if mine { .held } else { .idle }
+            if !canListen { .dimmed } else if !mine { .idle } else if handsFree { .handsFree } else { .held }
         }
 
         /// `VoiceInput`'s state in words, which is the only route the two UI suites have to

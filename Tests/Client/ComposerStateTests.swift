@@ -29,11 +29,17 @@ final class ComposerStateTests: XCTestCase {
     }
 
     /// The first run has a microphone of its own and this glass is not it. Two surfaces never
-    /// hold the microphone at once, and a session that is not this one's does not light it.
+    /// hold the microphone at once, and a session that is not this one's does not light it —
+    /// however it was opened, since a tap on the other surface leaves `handsFree` set and the
+    /// owner is the only thing that says whose session it is.
     func testAnotherSurfacesSessionLeavesTheGlassAlone() {
-        let mic = state(listening: true, owner: .firstRun)
-        XCTAssertEqual(mic.appearance, .idle)
-        XCTAssertFalse(mic.open)
+        let held = state(listening: true, owner: .firstRun)
+        XCTAssertEqual(held.appearance, .idle)
+        XCTAssertFalse(held.open)
+
+        let handsFree = state(listening: true, owner: .firstRun, handsFree: true)
+        XCTAssertEqual(handsFree.appearance, .idle, "another surface's tap lit this glass")
+        XCTAssertFalse(handsFree.open)
     }
 
     /// A tap leaves the microphone open with the hand off the glass, so the flanks stay and the

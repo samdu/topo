@@ -7,9 +7,25 @@ import XCTest
 @testable import Topo
 
 /// The composer, read off the pixels rather than off the source. What is worth holding is that
-/// the glass, the well, the etch and both states of the jewel are the look's and not the view's:
-/// a value nothing outside the source can change is a value the mind cannot reach, which is the
-/// whole point of `Look`.
+/// the glass, the well, the etch, the mark, the field and both states of the jewel are the look's
+/// and not the view's: a value nothing outside the source can change is a value the mind cannot
+/// reach, which is the whole point of `Look`.
+///
+/// Every field of `Look.Composer` is varied here except six, and each of the six was shown to
+/// render byte for byte the same picture before it was left out rather than assumed to:
+///
+/// - `duration` is a time, so a still frame is the same either way. Nothing tests it.
+/// - `dimmedSaturation` is drawn by `.saturation`, which `ImageRenderer` does not apply. The
+///   colour draining out of the jewel is by eye, in the dimmed screenshots on the PR.
+/// - `widthFraction` is `containerRelativeFrame`, which has no container in a renderer. How
+///   much of the screen the glass takes is by eye, in every screenshot.
+/// - `horizontalInset` is the room inside the glass for the two ends, and the ends are elastic:
+///   each takes the width left over, so the inset bounds them and moves nothing while neither
+///   is wide enough to be bounded. It is drawn and not dead, but there is no picture it changes
+///   today.
+/// - `field.ink` and `field.lineLimit` are the text inside a `TextField`, which `ImageRenderer`
+///   lays out without drawing. The font and the padding do reach the picture, through the space
+///   they take. What the words look like is by eye, in the typing screenshots on the PR.
 ///
 /// The surface is set to `flat` in every render here. The system's own glass is drawn by the
 /// compositor and `ImageRenderer` does not draw it, so a tint laid under it would be a change
@@ -29,8 +45,8 @@ final class ComposerRenderTests: XCTestCase {
     /// The composer at rest, or in whatever state it is handed, as a digest: what a failure here
     /// has to say is that two pictures are the same, and the bytes are not worth printing.
     private func raster(_ mic: Composer.MicState = .init(), typing: Bool = false,
-                        look: Look) throws -> String {
-        let view = Composer(typing: .constant(typing), draft: .constant(""), mic: mic)
+                        draft: String = "", look: Look) throws -> String {
+        let view = Composer(typing: .constant(typing), draft: .constant(draft), mic: mic)
             .environment(\.look, look)
             .frame(width: size.width, height: size.height)
             .background(Color.white)
@@ -86,10 +102,10 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(held, look: look), try raster(held, look: square),
                           "the look's corner radius does not reach the pane")
 
-        var roomy = flatLook()
-        roomy.composer.verticalInset = look.composer.verticalInset + 12
-        XCTAssertNotEqual(try raster(held, look: look), try raster(held, look: roomy),
-                          "the look's inset does not reach the pane")
+        var tall = flatLook()
+        tall.composer.verticalInset = look.composer.verticalInset + 12
+        XCTAssertNotEqual(try raster(held, look: look), try raster(held, look: tall),
+                          "the look's vertical inset does not reach the pane")
     }
 
     /// `flat`, `material` and `glass` are three surfaces and not three views, so a look that
@@ -99,6 +115,37 @@ final class ComposerRenderTests: XCTestCase {
         material.composer.surface = .material
         XCTAssertNotEqual(try raster(held, look: flatLook()), try raster(held, look: material),
                           "the look's surface does not reach the pane")
+    }
+
+    /// How far the glass floats off the bottom, how far its ends sit from the well, and how far
+    /// the field sits above the row under it.
+    func testTheGlassFloatsAndSpacesItsRowFromTheLook() throws {
+        let look = flatLook()
+
+        var high = flatLook()
+        high.composer.bottomPadding = look.composer.bottomPadding + 24
+        XCTAssertNotEqual(try raster(look: look), try raster(look: high),
+                          "the look's bottom padding does not reach the pane")
+
+        var tight = flatLook()
+        tight.composer.spacing = 0
+        XCTAssertNotEqual(try raster(look: look), try raster(look: tight),
+                          "the look's spacing does not reach the row")
+
+        var rows = flatLook()
+        rows.composer.rowSpacing = look.composer.rowSpacing + 20
+        XCTAssertNotEqual(try raster(typing: true, look: look), try raster(typing: true, look: rows),
+                          "the look's row spacing does not reach the field above the row")
+    }
+
+    /// What the open glass spills onto the transcript behind it. It is the same shadow at
+    /// nothing while the microphone is shut, so it is the open state that has one to change.
+    func testTheOpenPaneSpillsTheLooksGlow() throws {
+        var other = flatLook()
+        other.composer.glow = Look.Shadow(color: Color(red: 0.9, green: 0.1, blue: 0.1),
+                                          radius: 30, y: 6)
+        XCTAssertNotEqual(try raster(held, look: flatLook()), try raster(held, look: other),
+                          "the look's glow does not reach the pixels")
     }
 
     // MARK: The well and the jewel
@@ -116,10 +163,42 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(look: look), try raster(look: edge),
                           "the look's cut edge does not reach the pixels")
 
+        var edgeColours = flatLook()
+        edgeColours.composer.well.edgeColors = [.red, .green, .blue]
+        XCTAssertNotEqual(try raster(look: look), try raster(look: edgeColours),
+                          "the look's cut edge colours do not reach the pixels")
+
+        var bore = flatLook()
+        bore.composer.well.size = look.composer.well.size + 20
+        XCTAssertNotEqual(try raster(look: look), try raster(look: bore),
+                          "the look's well size does not reach the pixels")
+
         var small = flatLook()
         small.composer.well.jewelSize = look.composer.well.jewelSize / 2
         XCTAssertNotEqual(try raster(look: look), try raster(look: small),
                           "the look's jewel size does not reach the pixels")
+    }
+
+    /// The three inner shadows that make the bore a cut and not a disc: the wall's deep shadow,
+    /// the hard line of the lip, and the light caught under its far edge. Three values, and each
+    /// one is drawn.
+    func testTheWellsThreeInnerShadowsReachThePixels() throws {
+        let look = flatLook()
+
+        var bore = flatLook()
+        bore.composer.well.bore = Look.Shadow(color: .red.opacity(0.8), radius: 9, y: 7)
+        XCTAssertNotEqual(try raster(look: look), try raster(look: bore),
+                          "the look's bore shadow does not reach the pixels")
+
+        var lip = flatLook()
+        lip.composer.well.lip = Look.Shadow(color: .green.opacity(0.8), radius: 3, y: 3)
+        XCTAssertNotEqual(try raster(look: look), try raster(look: lip),
+                          "the look's lip does not reach the pixels")
+
+        var catchLight = flatLook()
+        catchLight.composer.well.catchLight = Look.Shadow(color: .blue.opacity(0.8), radius: 4, y: -4)
+        XCTAssertNotEqual(try raster(look: look), try raster(look: catchLight),
+                          "the look's catch light does not reach the pixels")
     }
 
     /// The jewel at rest is `look.jewel` — the same slab the badge is cut from — and the jewel
@@ -166,7 +245,7 @@ final class ComposerRenderTests: XCTestCase {
 
     // MARK: The flanks
 
-    func testTheFlanksTakeTheirInkAndTheirEtchFromTheLook() throws {
+    func testTheFlanksTakeTheirInkFromTheLook() throws {
         let look = flatLook()
 
         var ink = flatLook()
@@ -179,15 +258,31 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(handsFree, look: look), try raster(handsFree, look: open),
                           "the look's open flank ink does not reach the pixels")
 
-        var etch = flatLook()
-        etch.composer.flank.etchLight = Look.Shadow(color: .red, radius: 3, y: 3)
-        XCTAssertNotEqual(try raster(look: look), try raster(look: etch),
-                          "the look's etch does not reach the pixels")
-
         var font = flatLook()
         font.composer.flank.font = .largeTitle
         XCTAssertNotEqual(try raster(look: look), try raster(look: font),
                           "the look's flank font does not reach the pixels")
+    }
+
+    /// The etch is three values — how far under its ink the glyph sits, and the two catches that
+    /// make it a cut rather than a drawing — and all three are drawn.
+    func testTheEtchIsTheLooksThreeValues() throws {
+        let look = flatLook()
+
+        var opacity = flatLook()
+        opacity.composer.flank.etchOpacity = 0.2
+        XCTAssertNotEqual(try raster(look: look), try raster(look: opacity),
+                          "the look's etch opacity does not reach the pixels")
+
+        var light = flatLook()
+        light.composer.flank.etchLight = Look.Shadow(color: .red, radius: 3, y: 3)
+        XCTAssertNotEqual(try raster(look: look), try raster(look: light),
+                          "the look's etch light does not reach the pixels")
+
+        var shade = flatLook()
+        shade.composer.flank.etchShade = Look.Shadow(color: .green, radius: 3, y: -3)
+        XCTAssertNotEqual(try raster(look: look), try raster(look: shade),
+                          "the look's etch shade does not reach the pixels")
     }
 
     /// A thumb on the microphone takes the flanks to the look's held alpha and leaves their
@@ -210,6 +305,11 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(look: look), try raster(look: big),
                           "the look's glyph size does not reach the mark")
 
+        var heavy = flatLook()
+        heavy.composer.glyph.weight = .black
+        XCTAssertNotEqual(try raster(look: look), try raster(look: heavy),
+                          "the look's glyph weight does not reach the mark")
+
         var ink = flatLook()
         ink.composer.glyph.ink = Color(red: 0.9, green: 0.3, blue: 0.1)
         XCTAssertNotEqual(try raster(look: look), try raster(look: ink),
@@ -221,6 +321,22 @@ final class ComposerRenderTests: XCTestCase {
                           "the look's open glyph ink does not reach the mark")
     }
 
+    /// The mark sits over the glass rather than in it, so it casts the look's shadow — and none
+    /// under the thumb, by an alpha rather than by a second view.
+    func testTheMarksShadowAndItsOpenAlphaAreTheLooks() throws {
+        let look = flatLook()
+
+        var shadow = flatLook()
+        shadow.composer.glyph.shadow = Look.Shadow(color: .red.opacity(0.9), radius: 4, y: 3)
+        XCTAssertNotEqual(try raster(look: look), try raster(look: shadow),
+                          "the look's glyph shadow does not reach the mark")
+
+        var open = flatLook()
+        open.composer.glyph.openShadowOpacity = 1
+        XCTAssertNotEqual(try raster(held, look: look), try raster(held, look: open),
+                          "the look's open shadow alpha does not reach the open mark")
+    }
+
     // MARK: The field
 
     /// The field is in the glass only while the keyboard is up, and what it is set in is the
@@ -230,9 +346,42 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(look: look), try raster(typing: true, look: look),
                           "raising the keyboard puts no field in the glass")
 
-        var font = flatLook()
-        font.composer.field.sendFont = .largeTitle
-        XCTAssertNotEqual(try raster(typing: true, look: look), try raster(typing: true, look: font),
+        var sendFont = flatLook()
+        sendFont.composer.field.sendFont = .largeTitle
+        XCTAssertNotEqual(try raster(typing: true, look: look),
+                          try raster(typing: true, look: sendFont),
                           "the look's send control does not reach the pixels")
+    }
+
+    /// What the field is set in and how it sits. The draft is not empty here, since the send
+    /// control is disabled on an empty one and a disabled control is drawn in the system's
+    /// colour rather than in `sendInk`.
+    ///
+    /// `field.ink` and `field.lineLimit` are not asserted: `ImageRenderer` lays a `TextField`
+    /// out but does not draw the text in it, so the font and the padding reach the picture
+    /// through the space they take while the ink and the number of rows the words would fill
+    /// change no pixel. Both were shown to render identically before being left out. What the
+    /// words look like is by eye, in the typing screenshots on the PR.
+    func testTheFieldIsSetAndSpacedByTheLook() throws {
+        let look = flatLook()
+        let draft = "the capital of France"
+
+        var font = flatLook()
+        font.composer.field.font = .largeTitle
+        XCTAssertNotEqual(try raster(typing: true, draft: draft, look: look),
+                          try raster(typing: true, draft: draft, look: font),
+                          "the look's field font does not reach the field")
+
+        var padding = flatLook()
+        padding.composer.field.horizontalPadding = look.composer.field.horizontalPadding + 20
+        XCTAssertNotEqual(try raster(typing: true, draft: draft, look: look),
+                          try raster(typing: true, draft: draft, look: padding),
+                          "the look's field padding does not reach the field")
+
+        var sendInk = flatLook()
+        sendInk.composer.field.sendInk = Color(red: 0.1, green: 0.8, blue: 0.3)
+        XCTAssertNotEqual(try raster(typing: true, draft: draft, look: look),
+                          try raster(typing: true, draft: draft, look: sendInk),
+                          "the look's send ink does not reach the live send control")
     }
 }
