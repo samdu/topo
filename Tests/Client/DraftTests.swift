@@ -212,14 +212,15 @@ final class DraftRowRenderTests: XCTestCase {
     /// the same place. What changes is the control beside it.
     func testTheBubbleDoesNotChangeWhenTheTurnGoes() throws {
         let words = "bins?"
+        let sent = try render(draft(words, sending: true))
+        XCTAssertFalse(outline(sent, Look().bubble.accent).isEmpty,
+                       "the bubble in flight is not drawn in the person's colour, so the row says state in colour")
         let writing = try box(try render(draft(words)))
-        let inFlight = try box(try render(draft(words, sending: true)))
+        let inFlight = try box(sent)
         XCTAssertEqual(writing.left, inFlight.left, "the bubble moved when the turn went")
         XCTAssertEqual(writing.right, inFlight.right)
         XCTAssertEqual(writing.top, inFlight.top)
         XCTAssertEqual(writing.bottom, inFlight.bottom)
-        XCTAssertFalse(outline(try render(draft(words, sending: true)), Look().bubble.accent).isEmpty,
-                       "the bubble in flight is not the person's colour any more")
     }
 
     /// The send control is in the slot until the turn goes, and the spinner is in it after. The

@@ -403,21 +403,24 @@ final class HarnessIntegrationTests: XCTestCase {
     }
 
     /// An attempt is a write that may be landing as the way back is asked for, so it is not
-    /// offered while one is running.
+    /// offered while one is running. The moment that matters is the one before the turn is
+    /// written — the zone, the lease, the read — where the words are owed and no turn of theirs
+    /// is in the log yet, and that is where this asks.
     func testTakingBackIsNotOfferedWhileAnAttemptIsInFlight() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
         let transport = ScriptedTransport((200, reply("Tonight.")))
-        let harness = harness(db, defaults: defaults, transport: transport)
+        let probe = Probe()
+        let answer = Answers()
+        let harness = harness(db, defaults: defaults, transport: transport,
+                              ensureZone: { await answer.set(await MainActor.run { probe.ask() }) })
         let nonce = harness.willSend("bins?")
-        let duringCall = Answers()
-        transport.duringRequest = { [harness] in
-            await duringCall.set(await MainActor.run { harness.canWithdraw(nonce) })
-        }
+        probe.set { harness.canWithdraw(nonce) }
+        XCTAssertTrue(harness.canWithdraw(nonce), "the words are owed and nothing is attempting them")
 
         await harness.retry()
 
-        let offered = await duringCall.value
+        let offered = await answer.value
         XCTAssertEqual(offered, false, "the way back was offered while the turn was being written")
         let answered = try await log(db).map(\.text)
         XCTAssertEqual(answered, ["bins?", "Tonight."])
@@ -1171,6 +1174,15 @@ private actor FailingDatabase: RecordDatabase {
         guard refusingReads else { return }
         throw RecordDatabaseError.unavailable(underlying: Unexpected())
     }
+}
+
+/// What the test asks the harness in the middle of a turn, from wherever that turn is.
+@MainActor private final class Probe {
+    private var question: (() -> Bool)?
+    func set(_ question: @escaping () -> Bool) { self.question = question }
+    /// True where no question was asked, so a probe that never ran fails the test rather than
+    /// passing it.
+    func ask() -> Bool { question?() ?? true }
 }
 
 /// One answer, written where the test can read it after.
