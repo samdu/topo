@@ -58,6 +58,12 @@ struct TopoApp: App {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
                 .environment(voice).environment(speaker).environment(memory)
+                // What every view draws with, which is the vault's `look.json` read onto the
+                // compiled look. It is worn here rather than on the chat so that the first run,
+                // the sign-in and the viewer screen are drawn by the same document; the memory
+                // reads it after each sync, so a look the mind wrote is worn from the next one
+                // with no relaunch.
+                .wearing(memory)
                 // The record configuration is brought up on the foreground so the press is not
                 // what pays for the route change; permission-gated inside. The ear's and the
                 // voice's models are asked for on the same cue, downloaded if the phone lacks

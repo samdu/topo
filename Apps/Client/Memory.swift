@@ -95,6 +95,14 @@ final class Memory {
         var isLocal: Bool
     }
 
+    /// The look the vault's own `look.json` makes, read after every pass that reached the end of
+    /// itself, and the compiled look until one says otherwise. The app hands it to the
+    /// environment, so a document the mind wrote is drawn from the next sync with no relaunch.
+    private(set) var look = Look()
+    /// What that read found, for the diagnostics `look` row: the file's state and every field it
+    /// named and did not get.
+    private(set) var lookReading = LookDocument.Reading(look: Look())
+
     /// What the last sync did, for the diagnostics screen.
     private(set) var lastReport: VaultMirror.Report?
     /// When a sync last finished without an error.
@@ -285,11 +293,17 @@ final class Memory {
             } else {
                 lastDownloads = nil
             }
-            let report = try await vault(at: folder).sync()
+            let mirror = vault(at: folder)
+            let report = try await mirror.sync()
             guard mine == generation else { return }
             lastReport = report
             lastSync = now()
             lastError = nil
+            // After the sync and not during it: the document is a file of the vault's like any
+            // other, so it is read through the mirror's own coordination, and a second coordinated
+            // access of this folder taken while the sync still holds one is two accessors of it
+            // from one process. The grant, where there is one, is the pass's and still held.
+            await readLook(from: mirror, generation: mine)
         } catch is CancellationError {
             // Sign-out, or the screen going. The pass stopped at the last thing it did and
             // did nothing after it, and nobody is waiting on what it was going to do, so
@@ -298,6 +312,34 @@ final class Memory {
             guard mine == generation else { return }
             lastError = Failure(at: now(), message: Self.describe(error))
         }
+    }
+
+    /// The look the vault holds, read where every other file of it is read: inside the mirror's
+    /// coordination, from the folder this pass ran against, whichever home that is. A file that
+    /// cannot be read at all is the compiled look with the reason on the diagnostics row, never a
+    /// half-read one — the mirror refuses a partial read in either direction, and a look is no
+    /// different.
+    ///
+    /// A pass that has been superseded writes nothing: the read is a round trip through a
+    /// coordination somebody else can hold for as long as they like, and a sign-out in that
+    /// window is a login this look does not belong to.
+    private func readLook(from mirror: VaultMirror, generation mine: Int) async {
+        guard let path = VaultPath(LookDocument.name) else { return }
+        let reading: LookDocument.Reading
+        do {
+            switch try await mirror.contents(at: path) {
+            case .text(let text): reading = LookDocument.read(text)
+            case .missing: reading = LookDocument.read(nil)
+            case .blocked(let why): reading = LookDocument.Reading(look: Look(), state: .unreadable(why))
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            reading = LookDocument.Reading(look: Look(), state: .unreadable("could not be read: \(error)"))
+        }
+        guard mine == generation else { return }
+        lookReading = reading
+        look = reading.look
     }
 
     /// The mirror for a folder, made the first time that folder is the home, and the presenter
@@ -348,6 +390,10 @@ final class Memory {
         lastDownloads = nil
         stranded = nil
         moveError = nil
+        // The look is the vault's, so it goes with the vault: a phone that is signed out draws
+        // the compiled look and not the one the account it let go of was wearing.
+        look = Look()
+        lookReading = LookDocument.Reading(look: Look())
         dropPresenter()
         // After the pass in flight has stopped, never during it: a folder taken away mid-write
         // is one a half-finished pass puts back. And only while this is still the newest thing
