@@ -90,6 +90,43 @@ final class TurnRowRenderTests: XCTestCase {
             }
             return found
         }
+
+        /// The runs of rows that hold any ink at all, as (first, last) pairs. A row is inked when
+        /// any pixel of it is off the white it was drawn on; a band is a run of such rows with
+        /// blank ones on either side. It is what says how many things a row draws down the page:
+        /// a turn's words and its time are two, and a caption over them would be three.
+        func bands(tolerance: Int = 24) -> [(top: Int, bottom: Int)] {
+            var bands: [(Int, Int)] = []
+            var open: Int?
+            for y in 0..<height {
+                var inked = false
+                for x in 0..<width where !inked {
+                    let i = (y * width + x) * 4
+                    inked = (0..<3).contains { 255 - Int(pixels[i + $0]) > tolerance }
+                }
+                switch (inked, open) {
+                case (true, nil): open = y
+                case (false, let start?): bands.append((start, y - 1)); open = nil
+                default: break
+                }
+            }
+            if let open { bands.append((open, height - 1)) }
+            return bands
+        }
+
+        /// Where the ink of one band of rows sits across the row.
+        func inkColumns(_ band: (top: Int, bottom: Int), tolerance: Int = 24) -> [Int] {
+            var found: [Int] = []
+            for y in band.top...band.bottom {
+                for x in 0..<width {
+                    let i = (y * width + x) * 4
+                    if (0..<3).contains(where: { 255 - Int(pixels[i + $0]) > tolerance }) {
+                        found.append(x)
+                    }
+                }
+            }
+            return found
+        }
     }
 
     /// The accent as it resolves in whichever appearance the renderer drew in: the test is about
@@ -151,6 +188,95 @@ final class TurnRowRenderTests: XCTestCase {
         XCTAssertNotEqual(Look(.phone).bubble.horizontalPadding,
                           Look(.tv).bubble.horizontalPadding)
     }
+
+    // MARK: What a row draws down the page
+
+    /// A turn is two things and not three: its words, and its time under them. The captions that
+    /// used to sit over a turn are gone, and the way to say they are gone is to count the bands
+    /// of ink down the row rather than to look for the words they used to hold — a caption
+    /// restored in any wording at all would be a third band here.
+    ///
+    /// Topo's turn is the one counted, because it is drawn on nothing: the person's bubble fills
+    /// the rows its words sit on, so its bands are the enclosure's and not the ink's.
+    func testAToposRowDrawsTwoBandsOfInkAndNoMore() throws {
+        let raster = try render(turn(.assistant, "Paris."))
+        let bands = raster.bands()
+        XCTAssertEqual(bands.count, 2,
+                       "a row of Topo's drew \(bands.count) bands of ink, and it has two: the words, then the time")
+    }
+
+    /// And the second of them is on the turn's own side, which is the other half of what says who
+    /// said it. The person's bubble is above their time, so the last band of their row is the
+    /// time alone and can be placed.
+    func testTheTimeIsDrawnOnTheTurnsOwnSide() throws {
+        let mine = try render(turn(.person, "ta"))
+        let last = try XCTUnwrap(mine.bands().last, "the person's row drew no ink")
+        let columns = mine.inkColumns(last)
+        XCTAssertGreaterThan(try XCTUnwrap(columns.min()), mine.width / 2,
+                             "the person's time reaches into the left half of the row")
+
+        let theirs = try render(turn(.assistant, "Paris."))
+        let below = try XCTUnwrap(theirs.bands().last, "Topo's row drew no ink")
+        XCTAssertLessThan(try XCTUnwrap(theirs.inkColumns(below).max()), theirs.width / 2,
+                          "Topo's time reaches into the right half of the row")
+    }
+
+    // MARK: Three screens
+
+    /// A watch, a phone and a television are different distances from the eye, so they are drawn
+    /// by three looks and not one — and three looks that are pairwise different values drawing
+    /// three pairwise different pictures, rather than three names for the same thing.
+    func testTheThreeScreensLooksArePairwiseUnequalAndTheirRastersPairwiseDiffer() throws {
+        var rasters: [Look.Screen: String] = [:]
+        for screen in Look.Screen.allCases {
+            let look = Look(screen)
+            let image = try XCTUnwrap(render(PreviewTurns.short, look: look, width: 390),
+                                      "\(screen.rawValue) rendered to nothing")
+            rasters[screen] = try digest(image)
+        }
+        for (one, other) in pairs(of: Look.Screen.allCases) {
+            XCTAssertFalse(try LookCensus.different(Look(one), Look(other)).isEmpty,
+                           "\(one.rawValue) and \(other.rawValue) are the same look")
+            XCTAssertNotEqual(rasters[one], rasters[other],
+                              "\(one.rawValue) and \(other.rawValue) draw the same picture")
+        }
+    }
+
+    /// The watch and the television draw the same transcript from the same look, and the fields
+    /// of it they draw with are the transcript's and the bubble's. A document that changes the
+    /// composer, the badge, the sheet or the row changes nothing on either, because neither has
+    /// one — which is the whole of what `look.json` reaches on those two screens.
+    func testOnlyTheTranscriptsAndTheBubblesFieldsChangeWhatAWatchOrATelevisionDraws() throws {
+        let theirs = """
+        { "composer": { "cornerRadius": 4, "tint": ["#FF0000", "#FF0000"] },
+          "badge": { "size": 44 }, "settings": { "tint": ["#FF0000", "#FF0000"] },
+          "draft": { "slot": 60 }, "jewel": { "deep": "#FF0000" } }
+        """
+        let bubbles = """
+        { "bubble": { "accent": ["#FF00FF", "#FF00FF"], "cornerRadius": 2 },
+          "transcript": { "spacing": 40 } }
+        """
+        for screen in [Look.Screen.watch, .tv] {
+            let width: CGFloat = screen == .watch ? 180 : 900
+            let base = try digest(try XCTUnwrap(render(PreviewTurns.short, look: Look(screen), width: width)))
+            let other = LookDocument.read(theirs, onto: Look(screen)).look
+            XCTAssertEqual(try digest(try XCTUnwrap(render(PreviewTurns.short, look: other, width: width))),
+                           base, "\(screen.rawValue) drew a field of a surface it does not have")
+            let bubbled = LookDocument.read(bubbles, onto: Look(screen)).look
+            XCTAssertNotEqual(try digest(try XCTUnwrap(render(PreviewTurns.short, look: bubbled, width: width))),
+                              base, "\(screen.rawValue) ignored the document's bubble")
+        }
+    }
+
+    private func pairs<T>(of items: [T]) -> [(T, T)] {
+        var out: [(T, T)] = []
+        for (index, one) in items.enumerated() {
+            for other in items[(index + 1)...] { out.append((one, other)) }
+        }
+        return out
+    }
+
+    private func digest(_ image: UIImage) throws -> String { try LookStage.digest(image) }
 
     /// Topo's side is a look value of the same type as the bubble, set to nothing — so a look
     /// that encloses Topo draws an enclosure, with no view changed. A view that decided Topo's

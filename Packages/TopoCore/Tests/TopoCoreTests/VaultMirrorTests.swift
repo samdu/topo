@@ -29,6 +29,101 @@ import TopoCoreTesting
         return String(data: data, encoding: .utf8)
     }
 
+    // MARK: One file of the vault, read on its own
+
+    /// A caller wanting a file of the vault that is not a note — the look the phone wears — asks
+    /// for it here rather than opening the folder itself, so the read waits out whoever is
+    /// halfway through saving it instead of seeing half of one.
+    @Test func oneFileOfTheVaultIsReadAsTheTextItHolds() async throws {
+        try await inTemporaryDirectory { directory in
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try write("{}", to: "look.json", in: directory)
+
+            let contents = try await mirror.contents(at: VaultPath("look.json")!)
+            #expect(contents == .text("{}"))
+        }
+    }
+
+    /// A file nobody has written is not a failure: it is a document nobody has written.
+    @Test func aFileThatIsNotThereIsMissingAndNotAFailure() async throws {
+        try await inTemporaryDirectory { directory in
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+
+            let contents = try await mirror.contents(at: VaultPath("look.json")!)
+            #expect(contents == .missing)
+        }
+    }
+
+    /// The same guard the scan is under, and the reason the read is here at all: a link standing
+    /// where the file goes points anywhere the app can read, and following one would let a file
+    /// the person never put in their vault be read as the vault's.
+    @Test func aLinkStandingWhereTheFileGoesIsRefused() async throws {
+        try await inTemporaryDirectory { directory in
+            let outside = directory.deletingLastPathComponent()
+                .appendingPathComponent("elsewhere-\(UUID().uuidString).json")
+            try Data(#"{"bubble": {"cornerRadius": 99}}"#.utf8).write(to: outside)
+            defer { try? FileManager.default.removeItem(at: outside) }
+            try FileManager.default.createSymbolicLink(
+                at: directory.appendingPathComponent("look.json"), withDestinationURL: outside)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let contents = try await mirror.contents(at: VaultPath("look.json")!)
+
+            guard case .blocked = contents else {
+                Issue.record("a link was read as the vault's own file: \(contents)")
+                return
+            }
+        }
+    }
+
+    /// And a link anywhere on the way down, not only at the name itself.
+    @Test func aLinkOnTheWayDownToTheFileIsRefused() async throws {
+        try await inTemporaryDirectory { directory in
+            let outside = directory.deletingLastPathComponent()
+                .appendingPathComponent("elsewhere-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+            try Data("{}".utf8).write(to: outside.appendingPathComponent("look.json"))
+            defer { try? FileManager.default.removeItem(at: outside) }
+            try FileManager.default.createSymbolicLink(
+                at: directory.appendingPathComponent("settings"), withDestinationURL: outside)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let contents = try await mirror.contents(at: VaultPath("settings/look.json")!)
+
+            guard case .blocked = contents else {
+                Issue.record("a file under a link was read as the vault's own: \(contents)")
+                return
+            }
+        }
+    }
+
+    /// A folder standing where the file goes is what it is, and not an empty file.
+    @Test func aFolderStandingWhereTheFileGoesIsSaidToBeOne() async throws {
+        try await inTemporaryDirectory { directory in
+            try FileManager.default.createDirectory(
+                at: directory.appendingPathComponent("look.json", isDirectory: true),
+                withIntermediateDirectories: true)
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+
+            let contents = try await mirror.contents(at: VaultPath("look.json")!)
+            #expect(contents == .blocked("is a folder"))
+        }
+    }
+
+    /// Bytes that are not text are not a document, and are not an absence either.
+    @Test func bytesThatAreNotTextAreBlockedAndNotMissing() async throws {
+        try await inTemporaryDirectory { directory in
+            try Data([0xFF, 0xFE, 0x00, 0x01]).write(to: directory.appendingPathComponent("look.json"))
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            let contents = try await mirror.contents(at: VaultPath("look.json")!)
+
+            guard case .blocked(let why) = contents, why.contains("UTF-8") else {
+                Issue.record("bytes that are not text were read as a document: \(contents)")
+                return
+            }
+        }
+    }
+
     @Test func theStoreArrivesOnDiskAsPlainMarkdown() async throws {
         try await inTemporaryDirectory { directory in
             let w = try await store.writer(for: hub)

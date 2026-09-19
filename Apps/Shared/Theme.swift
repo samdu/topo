@@ -52,6 +52,54 @@ enum Theme {
     /// Text that supports it: a timestamp, a caption.
     static let textMuted = systemTextMuted
 
+    /// A colour written the way this palette's own are: a light value and a dark one, each
+    /// `#RRGGBB` or `#RRGGBBAA`, the `#` optional. This is the one place hex becomes colour, so
+    /// what `look.json` may name and what the accents above are written in are the same notation.
+    /// `nil` is text that is not a colour, which the document reports and does not apply.
+    static func colour(light: String, dark: String) -> Color? {
+        guard let light = Channels(light), let dark = Channels(dark) else { return nil }
+        return adaptive(light: light, dark: dark)
+    }
+
+    /// One colour's four channels, as a hex string writes them.
+    struct Channels: Equatable, Sendable {
+        var red: Double
+        var green: Double
+        var blue: Double
+        var alpha: Double
+
+        init?(_ text: String) {
+            var hex = text.trimmingCharacters(in: .whitespaces)
+            if hex.hasPrefix("#") { hex.removeFirst() }
+            guard hex.count == 6 || hex.count == 8,
+                  hex.allSatisfy(\.isHexDigit),
+                  let value = UInt32(hex, radix: 16) else { return nil }
+            let opaque = hex.count == 6
+            let rgb = opaque ? value : value >> 8
+            red = Double((rgb >> 16) & 0xFF) / 255
+            green = Double((rgb >> 8) & 0xFF) / 255
+            blue = Double(rgb & 0xFF) / 255
+            alpha = opaque ? 1 : Double(value & 0xFF) / 255
+        }
+    }
+
+    /// The same dynamic colour the accents are, from channels rather than from a literal.
+    private static func adaptive(light: Channels, dark: Channels) -> Color {
+        #if os(watchOS)
+        Color(dark)
+        #elseif canImport(UIKit)
+        Color(uiColor: UIColor { traits in
+            UIColor(traits.userInterfaceStyle == .dark ? dark : light)
+        })
+        #elseif canImport(AppKit)
+        Color(nsColor: NSColor(name: nil) { appearance in
+            NSColor(appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light)
+        })
+        #else
+        Color(light)
+        #endif
+    }
+
     /// One colour that follows the appearance. The watch has one appearance, so it takes the
     /// dark value and asks the system for nothing.
     private static func adaptive(light: UInt32, dark: UInt32) -> Color {
@@ -106,6 +154,29 @@ private extension Theme {
     static let systemTextMuted = Color.secondary
     #endif
 }
+
+extension Color {
+    init(_ channels: Theme.Channels) {
+        self.init(.sRGB, red: channels.red, green: channels.green, blue: channels.blue,
+                  opacity: channels.alpha)
+    }
+}
+
+#if canImport(UIKit)
+extension UIColor {
+    convenience init(_ channels: Theme.Channels) {
+        self.init(red: channels.red, green: channels.green, blue: channels.blue,
+                  alpha: channels.alpha)
+    }
+}
+#elseif canImport(AppKit)
+extension NSColor {
+    convenience init(_ channels: Theme.Channels) {
+        self.init(srgbRed: channels.red, green: channels.green, blue: channels.blue,
+                  alpha: channels.alpha)
+    }
+}
+#endif
 
 private extension Color {
     init(rgb: UInt32) {

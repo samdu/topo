@@ -680,6 +680,39 @@ public actor VaultMirror {
         return out
     }
 
+    /// What is at one path in the folder right now, read the way everything else in the folder
+    /// is read: inside a coordination, and through a descriptor opened from the vault root one
+    /// name at a time, so no link on the way down is followed and a link swapped in where a file
+    /// was is refused rather than read.
+    ///
+    /// It is here rather than at the caller because that is the whole point: the folder is shared
+    /// with Files, with whatever editor has it open and with this mirror, and a read of it taken
+    /// outside the coordination is half a file whenever somebody is halfway through saving one.
+    /// A caller wanting a file of the vault's that is not a note — `look.json` — asks for it here.
+    ///
+    /// Call it between syncs and not during one: the coordination this takes is its own, and an
+    /// actor's method running while `sync` is suspended inside a coordination of its own is two
+    /// accessors of one folder from one process.
+    public func contents(at path: VaultPath) async throws -> Contents {
+        let relative = path.string
+        let outcome = try await coordinatedRead(url(of: path)) { _ in self.reading(relative) }
+        switch outcome {
+        case .text(let text): return .text(text)
+        case .missing: return .missing
+        case .folder: return .blocked("is a folder")
+        case .blocked(let why): return .blocked(why)
+        }
+    }
+
+    /// What one path in the folder holds. A file that is not there is not a failure — it is a
+    /// document nobody has written — and one that cannot be read says why rather than reading as
+    /// an absence.
+    public enum Contents: Sendable, Equatable {
+        case text(String)
+        case missing
+        case blocked(String)
+    }
+
     /// The folder is shared with every other app that can reach a document
     /// folder, so nothing here reads or writes it uncoordinated: a read waits
     /// out a save in progress rather than seeing half of one, and a write is
