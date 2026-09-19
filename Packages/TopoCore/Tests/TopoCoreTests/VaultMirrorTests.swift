@@ -60,6 +60,62 @@ import TopoCoreTesting
         }
     }
 
+    /// A note Obsidian has just made is an empty file, and an empty file is a note with no text
+    /// in it — not a file that could not be read. Read as unreadable it is skipped in both
+    /// directions and never becomes a revision, and the person's new note syncs nowhere until
+    /// they happen to type into it.
+    @Test func anEmptyFileIsANoteWithNoTextInIt() async throws {
+        try await inTemporaryDirectory { directory in
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            try write("", to: "Untitled.md", in: directory)
+            let empty = VaultPath("Untitled.md")!
+
+            let report = try await mirror.sync(at: t0)
+
+            #expect(report.pushed == [empty])
+            #expect(report.skipped.isEmpty)
+            #expect(try await store.read().text(at: empty) == "")
+
+            // And it is not pushed again on the next pass, since the baseline knows its digest.
+            #expect(try await mirror.sync(at: t0 + 1).isEmpty)
+
+            // Typing into it is an ordinary edit, continuing from the revision above.
+            try write("# Untitled", to: "Untitled.md", in: directory)
+            #expect(try await mirror.sync(at: t0 + 2).pushed == [empty])
+            #expect(try await store.read().isForked(empty) == false)
+            #expect(try await store.read().text(at: empty) == "# Untitled")
+        }
+    }
+
+    /// An empty file arriving from the store is an empty file on disk, not a file left out.
+    @Test func anEmptyRevisionArrivesOnDiskAsAnEmptyFile() async throws {
+        try await inTemporaryDirectory { directory in
+            let w = try await store.writer(for: hub)
+            try await w.write("", to: note, continuing: store.read(), at: t0)
+
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            #expect(try await mirror.sync(at: t0 + 1).written == [note])
+            #expect(read("Meeting notes.md", in: directory) == "")
+            #expect(try await mirror.sync(at: t0 + 2).isEmpty)
+        }
+    }
+
+    /// A file the pass really cannot read says which and why, so a folder that will not sync is
+    /// one device run to diagnose rather than two.
+    @Test func aFileThatCannotBeReadSaysWhichAndWhy() async throws {
+        try await inTemporaryDirectory { directory in
+            let mirror = VaultMirror(directory: directory, store: store, device: phone)
+            // Bytes that are not text: half a UTF-8 sequence.
+            try Data([0xE2, 0x82]).write(to: directory.appendingPathComponent("Broken.md"))
+
+            let report = try await mirror.sync(at: t0)
+
+            #expect(report.skipped == ["Broken.md"])
+            #expect(report.reasons["Broken.md"] == "is not UTF-8 text (2 bytes)")
+            #expect(report.pushed.isEmpty)
+        }
+    }
+
     @Test func aFileRemovedFromTheFolderIsRemovedFromTheStore() async throws {
         try await inTemporaryDirectory { directory in
             let mirror = VaultMirror(directory: directory, store: store, device: phone)
