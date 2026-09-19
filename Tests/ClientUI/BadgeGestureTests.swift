@@ -60,6 +60,24 @@ final class BadgeGestureTests: XCTestCase {
                       "the chat is back with nothing over it")
     }
 
+    /// A hold whose release the button never sees: the finger leaves the badge before it lifts.
+    /// The mark that hold left behind must not swallow the next tap.
+    func testATapAfterAHoldDraggedOffTheBadgeStillOpensTheSettings() throws {
+        let app = launch()
+        let badge = badge(in: app)
+        badge.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+            .press(forDuration: 1,
+                   thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)))
+        XCTAssertTrue(app.navigationBars["Diagnostics"].waitForExistence(timeout: 10),
+                      "the hold did not open the diagnostics")
+        app.navigationBars["Diagnostics"].buttons["Done"].tap()
+        XCTAssertTrue(app.buttons["topo-debug-chat"].waitForExistence(timeout: 10),
+                      "the chat is back")
+        badge.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10),
+                      "the tap after a dragged-off hold opened nothing")
+    }
+
     /// The badge is the element carrying the chat's debug report, and it is a button. A toolbar
     /// item's container carries its one child's identifier too, so the type is what names the one
     /// that is the badge.
