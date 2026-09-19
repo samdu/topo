@@ -46,20 +46,21 @@ final class DraftStateTests: XCTestCase {
     }
 }
 
-/// The row, read off the pixels. Two things are worth holding: that it is drawn as the turn it is
-/// about to become — the person's bubble, the transcript's type, hugging its words rather than
-/// filling the line — and that nothing in it changes colour when the turn goes, since colour says
-/// who is on the other end and never says state.
+/// The row, read off the pixels. Two things are worth holding: that it is drawn at the size the
+/// turn it is about to become will be — the transcript's type, an enclosure of the bubble's
+/// shape, hugging its words rather than filling the line — and that its colour is the one thing
+/// that is not the landed turn's, since the row is not a turn until it lands: secondary while it
+/// is written, signal while it is on its way, and the person's primary only in the log.
 @MainActor
 final class DraftRowRenderTests: XCTestCase {
     private let width: CGFloat = 340
 
-    /// The look every render here is made under. A person's own words and the control that sends
-    /// them are both the mind's side, so the bubble and the send control are one colour in the
-    /// shipped palette — which a render read by colour cannot tell apart, and every measurement
-    /// below is of the bubble. So the control is given an ink of its own here. That the look's
-    /// ink reaches the control at all is held by `testTheSendControlIsDrawnFromTheLook`, which
-    /// names an ink of its own too, and the row draws the shipped one.
+    /// The look every render here is made under. The send control is the mind's side and takes
+    /// the same `primary` a landed turn does, which a render read by colour could confuse with
+    /// the bubble it sits beside — and every measurement below is of the bubble. So the control
+    /// is given an ink of its own here. That the look's ink reaches the control at all is held by
+    /// `testTheSendControlIsDrawnFromTheLook`, which names an ink of its own too, and the row
+    /// draws the shipped one.
     private static func look() -> Look {
         var look = Look()
         look.draft.sendInk = Color(red: 0, green: 1, blue: 0)
@@ -157,8 +158,11 @@ final class DraftRowRenderTests: XCTestCase {
     }
 
     /// The bubble's outline, as a box: where it starts, where it ends, how wide and how tall.
-    private func box(_ raster: Raster, _ look: Look = Look()) throws -> (left: Int, right: Int, top: Int, bottom: Int) {
-        let found = outline(raster, look.bubble.accent)
+    /// The accent is the row's own by default, since that is what the row draws; a landed turn's
+    /// is measured by naming the bubble's.
+    private func box(_ raster: Raster, _ accent: Color = Look().draft.written.accent) throws
+        -> (left: Int, right: Int, top: Int, bottom: Int) {
+        let found = outline(raster, accent)
         let xs = found.map(\.x), ys = found.map(\.y)
         return (try XCTUnwrap(xs.min(), "no bubble to measure"), try XCTUnwrap(xs.max()),
                 try XCTUnwrap(ys.min(), "no bubble to measure"), try XCTUnwrap(ys.max()))
@@ -166,20 +170,21 @@ final class DraftRowRenderTests: XCTestCase {
 
     // MARK: Drawn as the turn it becomes
 
-    func testTheRowIsDrawnInThePersonsBubble() throws {
-        XCTAssertFalse(outline(try render(draft("Morning.")), Look().bubble.accent).isEmpty,
-                       "the row draws no outline in the person's accent")
+    func testTheRowIsDrawnInAnOutlinedBubble() throws {
+        XCTAssertFalse(outline(try render(draft("Morning.")), Look().draft.written.accent).isEmpty,
+                       "the row draws no outline at all")
     }
 
-    /// Every value the bubble draws with is the look's, and the row draws the person's bubble
-    /// rather than one of its own: a look that changes the bubble changes the row with it.
-    func testTheRowsBubbleIsTheLooksBubble() throws {
+    /// The row's two enclosures are its own, so a look that changes the person's landed bubble
+    /// leaves the row alone — which is what makes the draft's colour a value of the draft's.
+    func testTheLooksLandedBubbleDoesNotReachTheRow() throws {
         var look = Self.look()
         look.bubble.accent = Color(red: 1, green: 0, blue: 1)
         let raster = try render(draft("Morning."), look: look)
-        XCTAssertFalse(raster.pixels(matching: .magenta).isEmpty, "the row ignored the look's bubble")
-        XCTAssertTrue(outline(raster, Look().bubble.accent).isEmpty,
-                      "the row drew the shipped accent under a look that names another")
+        XCTAssertTrue(raster.pixels(matching: .magenta).isEmpty,
+                      "the landed bubble's accent reached the row, so the row is drawn from it")
+        XCTAssertFalse(outline(raster, Look().draft.written.accent).isEmpty,
+                       "the row stopped drawing its own accent")
     }
 
     /// The words hug: a bubble sized by the field would take every point on offer, and the turn
@@ -199,7 +204,7 @@ final class DraftRowRenderTests: XCTestCase {
     func testTheBubbleIsTheSizeTheLandedTurnsWillBe() throws {
         let words = "Remind me to water"
         let row = try box(try render(draft(words)))
-        let turn = try box(try renderTurn(words))
+        let turn = try box(try renderTurn(words), Look().bubble.accent)
         XCTAssertEqual(row.right - row.left, turn.right - turn.left, accuracy: 6,
                        "the row's bubble is not the width the landed turn's will be")
         XCTAssertEqual(row.bottom - row.top, turn.bottom - turn.top, accuracy: 6,
@@ -226,22 +231,64 @@ final class DraftRowRenderTests: XCTestCase {
 
         var wider = Self.look()
         wider.draft.minimumWidth = 260
-        let widened = try box(try render(draft(""), look: wider), wider)
+        let widened = try box(try render(draft(""), look: wider))
         XCTAssertGreaterThan(widened.right - widened.left, empty.right - empty.left,
                              "the look's minimum width does not reach the empty row")
     }
 
-    // MARK: Colour says who, not state
+    // MARK: The colour of a turn that is not one yet
 
-    /// The bubble in flight is the bubble that was being written: the same accent, the same size,
-    /// the same place. What changes is the control beside it.
-    func testTheBubbleDoesNotChangeWhenTheTurnGoes() throws {
+    /// Being written, the row is the theme's secondary. Asserted against `Theme` and not against
+    /// the look the render was made under, since a colour compared with the one it was drawn
+    /// from passes whatever either of them is.
+    func testTheRowBeingWrittenIsDrawnInTheSecondaryColour() throws {
+        XCTAssertFalse(outline(try render(draft("bins?")), Theme.secondary).isEmpty,
+                       "the row being written is not drawn in the theme's secondary")
+    }
+
+    /// On its way, it is the theme's signal: the palette's measured liveness, which a turn that
+    /// has been said and is not yet in the log is.
+    func testTheRowInFlightIsDrawnInTheSignalColour() throws {
+        XCTAssertFalse(outline(try render(draft("bins?", sending: true)), Theme.signal).isEmpty,
+                       "the row in flight is not drawn in the theme's signal")
+    }
+
+    /// The landed turn's own colour is in neither state of the row. The draft becomes a turn of
+    /// the person's by landing, so a row drawn in `primary` before it lands says it already has.
+    func testThePersonsLandedColourIsInNeitherStateOfTheRow() throws {
+        XCTAssertTrue(outline(try render(draft("bins?")), Theme.primary).isEmpty,
+                      "the row being written is drawn in the landed turn's colour")
+        XCTAssertTrue(outline(try render(draft("bins?", sending: true)), Theme.primary).isEmpty,
+                      "the row in flight is drawn in the landed turn's colour")
+    }
+
+    /// Each state is drawn from its own field of the look, so a look that names another accent
+    /// for either of them draws that and leaves the other alone.
+    func testEachStateIsDrawnFromItsOwnFieldOfTheLook() throws {
+        var written = Self.look()
+        written.draft.written.accent = Color(red: 1, green: 0, blue: 1)
+        let writing = try render(draft("bins?"), look: written)
+        XCTAssertFalse(writing.pixels(matching: .magenta).isEmpty,
+                       "the look's written accent does not reach the row")
+        XCTAssertTrue(try render(draft("bins?", sending: true), look: written)
+                        .pixels(matching: .magenta).isEmpty,
+                      "the written accent reached the row in flight")
+
+        var sending = Self.look()
+        sending.draft.sending.accent = Color(red: 0, green: 0, blue: 1)
+        let inFlight = try render(draft("bins?", sending: true), look: sending)
+        XCTAssertFalse(inFlight.pixels(matching: .blue).isEmpty,
+                       "the look's sending accent does not reach the row in flight")
+        XCTAssertTrue(try render(draft("bins?"), look: sending).pixels(matching: .blue).isEmpty,
+                      "the sending accent reached the row being written")
+    }
+
+    /// The colour is the whole of what changes when the turn goes: the same size, in the same
+    /// place, so nothing moves under the thumb that sent it.
+    func testTheBubbleKeepsItsSizeAndPlaceWhenTheTurnGoes() throws {
         let words = "bins?"
-        let sent = try render(draft(words, sending: true))
-        XCTAssertFalse(outline(sent, Look().bubble.accent).isEmpty,
-                       "the bubble in flight is not drawn in the person's colour, so the row says state in colour")
         let writing = try box(try render(draft(words)))
-        let inFlight = try box(sent)
+        let inFlight = try box(try render(draft(words, sending: true)), Look().draft.sending.accent)
         XCTAssertEqual(writing.left, inFlight.left, "the bubble moved when the turn went")
         XCTAssertEqual(writing.right, inFlight.right)
         XCTAssertEqual(writing.top, inFlight.top)
@@ -269,7 +316,7 @@ final class DraftRowRenderTests: XCTestCase {
         // whole reason the control and the spinner are drawn in one frame of a fixed size.
         let slot = Int(Look().draft.slot * 3)
         XCTAssertGreaterThan(sent.inkInTrailing(slot), 0, "nothing at all is drawn in the slot while the turn is on its way")
-        XCTAssertEqual(try box(sent).right, try box(writing).right,
+        XCTAssertEqual(try box(sent, Look().draft.sending.accent).right, try box(writing).right,
                        "the bubble moved when the turn went, so the slot did not keep its space")
     }
 
@@ -283,13 +330,13 @@ final class DraftRowRenderTests: XCTestCase {
         let shipped = try box(try render(draft("bins?")))
         var wide = Self.look()
         wide.draft.slot = 80
-        let widened = try box(try render(draft("bins?"), look: wide), wide)
+        let widened = try box(try render(draft("bins?"), look: wide))
         XCTAssertLessThan(widened.right, shipped.right,
                           "the look's slot does not reach the room the control takes")
 
         var apart = Self.look()
         apart.draft.spacing = 40
-        let spaced = try box(try render(draft("bins?"), look: apart), apart)
+        let spaced = try box(try render(draft("bins?"), look: apart))
         XCTAssertLessThan(spaced.right, shipped.right,
                           "the look's spacing does not reach the room beside the bubble")
     }

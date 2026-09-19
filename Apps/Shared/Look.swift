@@ -46,7 +46,7 @@ struct Look: Equatable, Sendable {
         badge = Badge()
         settings = Settings()
         composer = Composer()
-        draft = Draft()
+        draft = Draft(screen)
     }
 
     /// The three screens the client is drawn on.
@@ -144,6 +144,14 @@ struct Look: Equatable, Sendable {
             return Enclosure(accent: Theme.primary, fillOpacity: 0.12, strokeWidth: 1.5,
                              cornerRadius: 18, horizontalPadding: padding.0,
                              verticalPadding: padding.1, surface: .flat)
+        }
+
+        /// The draft's, which is the person's bubble in a colour of its own: the accent alone
+        /// differs, so the row keeps its shape as the turn lands and only the colour changes.
+        static func draft(_ screen: Screen, accent: Color) -> Enclosure {
+            var enclosure = bubble(screen)
+            enclosure.accent = accent
+            return enclosure
         }
 
         /// Topo's side: no outline, no tint, no room taken around the words. The same on every
@@ -363,15 +371,21 @@ struct Look: Equatable, Sendable {
     }
 
     /// The person's next turn, written at the end of the transcript rather than in the glass.
-    /// It is drawn on the same enclosure as a landed turn of theirs (`bubble`) and set in the
-    /// same type (`transcript.bodyFont`), because it is that turn before it is said: what is
-    /// here is only what the row has of its own.
+    /// It is set in the transcript's own type (`transcript.bodyFont`) and drawn at the size the
+    /// landed turn will be, because it is that turn before it is said: what is here is only what
+    /// the row has of its own.
     ///
-    /// Nothing in it says whether the turn is on its way. Colour says who is on the other end,
-    /// and the row is the person's from the first letter to the moment it lands, so the state is
-    /// the control beside it — a spinner where the send was — and the field it cannot be typed
-    /// into.
+    /// It is not a turn yet, and its two enclosures say so. A turn a process puts into the
+    /// transcript is `secondary`, and so is the person's own turn while it is still being
+    /// written; a turn on its way is `signal`, which is the palette's measured liveness. The
+    /// draft becomes a turn of the person's, in `bubble`'s primary, by landing in the log.
     struct Draft: Equatable, Sendable {
+        /// What the words are drawn on while they are being written, and while the turn is on
+        /// its way. Both are `bubble`'s enclosure with an accent of their own, so a look that
+        /// changes the person's landed bubble leaves the draft alone and one that changes the
+        /// draft leaves the bubble — and the row keeps its shape as the turn lands.
+        var written: Enclosure
+        var sending: Enclosure
         /// How wide the row is with nothing written in it, so the caret has somewhere to sit.
         var minimumWidth: CGFloat = 160
         /// Between the bubble and the control beside it.
@@ -385,6 +399,11 @@ struct Look: Equatable, Sendable {
         /// What the send control fades to with nothing to send, so an empty row's control says
         /// it is not to be pressed rather than being pressed and doing nothing.
         var sendRestingOpacity = 0.35
+
+        init(_ screen: Screen = .current) {
+            written = .draft(screen, accent: Theme.secondary)
+            sending = .draft(screen, accent: Theme.signal)
+        }
     }
 }
 

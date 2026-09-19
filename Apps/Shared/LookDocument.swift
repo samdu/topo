@@ -120,6 +120,8 @@ enum LookDocument {
     }
 
     private static func draft(_ value: inout Look.Draft, _ r: Reader) {
+        r.object("written") { enclosure(&value.written, $0) }
+        r.object("sending") { enclosure(&value.sending, $0) }
         r.reach("minimumWidth", &value.minimumWidth)
         r.length("spacing", &value.spacing)
         r.reach("slot", &value.slot)
