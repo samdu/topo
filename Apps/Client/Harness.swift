@@ -130,12 +130,13 @@ final class Harness {
     }
     private var outgoing: Outgoing? { pending.first }
 
-    /// The words at the head of the line and the nonce they carry. It is what the row at the end
-    /// of the transcript takes back up when the chat appears: the line survives the app being
+    /// The words on the line and the nonces they carry, oldest first. It is what the row at the
+    /// end of the transcript takes back up when the chat appears: the line survives the app being
     /// killed, so the screen that comes back can draw the row the turn was sent from rather than
-    /// an empty one.
-    var owed: (text: String, nonce: String)? {
-        pending.first.map { ($0.text, $0.nonce) }
+    /// an empty one. The whole line and not its head, because the head can be a turn that landed
+    /// and lost its acknowledgement, with what was said behind it still owed.
+    var owed: [(text: String, nonce: String)] {
+        pending.map { ($0.text, $0.nonce) }
     }
 
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,

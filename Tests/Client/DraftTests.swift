@@ -105,6 +105,19 @@ final class DraftRowRenderTests: XCTestCase {
             pixels = bytes
         }
 
+        /// How many pixels in the rightmost `columns` are not the white behind the render: what
+        /// the slot has in it, whatever colour it is drawn in.
+        func inkInTrailing(_ columns: Int) -> Int {
+            var found = 0
+            for y in 0..<height {
+                for x in max(0, width - columns)..<width {
+                    let i = (y * width + x) * 4
+                    if pixels[i] < 250 || pixels[i + 1] < 250 || pixels[i + 2] < 250 { found += 1 }
+                }
+            }
+            return found
+        }
+
         /// Every pixel of a colour, within the tolerance the render's antialiasing needs.
         func pixels(matching colour: UIColor, tolerance: Int = 4) -> [(x: Int, y: Int)] {
             var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -223,9 +236,13 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertEqual(writing.bottom, inFlight.bottom)
     }
 
-    /// The send control is in the slot until the turn goes, and the spinner is in it after. The
-    /// slot is the same size either way, so the bubble beside it does not move.
-    func testTheSlotHoldsTheSendControlAndThenTheSpinner() throws {
+    /// The send control goes when the turn goes, the slot keeps its space so the bubble beside
+    /// it does not move, and something is drawn in that space. What that something is, this
+    /// render cannot say: `ImageRenderer` draws a `ProgressView` in the system's own grey and not
+    /// in the tint it is given, so the ink in the slot is not the look's to check. That the thing
+    /// there is a spinner and not the send control is the running app's to show —
+    /// `TopoUITests/DraftRowTests`, where "Sending" exists and no "Send" button does.
+    func testTheSendControlGoesAndTheSlotKeepsItsSpace() throws {
         let writing = try render(draft("bins?"))
         let sent = try render(draft("bins?", sending: true))
         let ink = UIColor(Look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
@@ -233,7 +250,15 @@ final class DraftRowRenderTests: XCTestCase {
         let before = writing.pixels(matching: ink).count + writing.pixels(matching: light).count
         let after = sent.pixels(matching: ink).count + sent.pixels(matching: light).count
         XCTAssertGreaterThan(before, 0, "the send control is not drawn in the look's ink")
-        XCTAssertLessThan(after, before, "the send control is still drawn while the turn is on its way")
+        XCTAssertEqual(after, 0, "the send control is still drawn while the turn is on its way")
+
+        // The slot is the row's trailing edge, a `look.draft.slot` wide at the render's scale. A
+        // slot that stopped taking its space would let the bubble slide into it, which is the
+        // whole reason the control and the spinner are drawn in one frame of a fixed size.
+        let slot = Int(Look().draft.slot * 3)
+        XCTAssertGreaterThan(sent.inkInTrailing(slot), 0, "nothing at all is drawn in the slot while the turn is on its way")
+        XCTAssertEqual(try box(sent).right, try box(writing).right,
+                       "the bubble moved when the turn went, so the slot did not keep its space")
     }
 
     /// The control is the look's: its ink, its type and the room it takes.

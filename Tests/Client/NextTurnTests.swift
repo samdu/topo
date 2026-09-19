@@ -91,7 +91,7 @@ final class NextTurnTests: XCTestCase {
         XCTAssertTrue(row.resume(from: relaunched), "the row came back empty")
 
         XCTAssertEqual(row.text, "water the plants")
-        XCTAssertEqual(row.sent, relaunched.owed?.nonce, "the row is holding a nonce of its own")
+        XCTAssertEqual(row.sent, relaunched.owed.first?.nonce, "the row is holding a nonce of its own")
         XCTAssertTrue(row.sending(in: relaunched), "the words are not drawn as on their way")
         XCTAssertTrue(row.canWithdraw(in: relaunched), "the way back is not offered where it is needed")
 
@@ -125,13 +125,45 @@ final class NextTurnTests: XCTestCase {
         let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport(),
                                  ensureZone: { throw Unexpected() })
         await relaunched.refresh()
-        XCTAssertEqual(relaunched.owed?.nonce, nonce, "the line still holds the words")
+        XCTAssertEqual(relaunched.owed.first?.nonce, nonce, "the line still holds the words")
 
         XCTAssertTrue(relaunched.said(nonce), "the read did not find the turn")
         let row = NextTurn()
         XCTAssertFalse(row.resume(from: relaunched), "the row took up words that are already said")
         XCTAssertEqual(row.text, "")
         XCTAssertNil(row.sent)
+    }
+
+    /// Two turns said before the app went away, the first of which reached the log and lost only
+    /// its acknowledgement. Its retry settles it silently; what was said behind it is still owed,
+    /// and it is that turn the row has to come back holding — a row resumed from the head of the
+    /// line would find the head said and come back empty over a turn nobody can see or take back.
+    func testARelaunchResumesTheTurnBehindOneThatLanded() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let offline = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                              ensureZone: { throw Unexpected() })
+        let landed = offline.willSend("call Helen")
+        let owed = offline.willSend("and book the flights")
+
+        // The first turn did reach the log, under its own nonce; only the answer to it was lost.
+        let log = TurnLog(database: db)
+        let writer = try await log.writer(for: phone)
+        _ = try await writer.append(.person, "call Helen", continuing: try await log.read(), nonce: landed)
+
+        let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                                 ensureZone: { throw Unexpected() })
+        await relaunched.refresh()
+        XCTAssertEqual(relaunched.owed.map(\.nonce), [landed, owed], "both turns are still on the line")
+        XCTAssertTrue(relaunched.said(landed), "the read did not find the first turn")
+
+        let row = NextTurn()
+        XCTAssertTrue(row.resume(from: relaunched), "the row came back empty over a turn still owed")
+
+        XCTAssertEqual(row.text, "and book the flights", "the row came back holding the wrong turn")
+        XCTAssertEqual(row.sent, owed)
+        XCTAssertTrue(row.sending(in: relaunched), "the words are not drawn as on their way")
+        XCTAssertTrue(row.canWithdraw(in: relaunched), "the way back is not offered for the turn nobody can see")
     }
 
     /// A screen that has not been away: the row is already holding something, and a resume that

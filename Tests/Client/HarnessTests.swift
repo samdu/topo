@@ -336,12 +336,18 @@ final class HarnessIntegrationTests: XCTestCase {
         let harness = harness(db, defaults: defaults, transport: transport)
         await db.loseAcknowledgementOfNextTurn()
 
-        let nonce = harness.willSend("call Helen")
+        let row = NextTurn()
+        row.text = "call Helen"
+        let nonce = try XCTUnwrap(row.send(via: harness))
         await harness.retry()
 
         XCTAssertEqual(harness.waiting, ["call Helen"], "the turn is still owed on this device")
         XCTAssertTrue(harness.said(nonce), "the read after the failure found the committed turn")
-        XCTAssertFalse(harness.canWithdraw(nonce), "so there is nothing to take back")
+        XCTAssertFalse(row.canWithdraw(in: harness), "so there is nothing to take back")
+        XCTAssertFalse(row.sending(in: harness), "the row is still drawing a turn that is in the log")
+        XCTAssertTrue(row.clearIfLanded(in: harness), "the row kept the words of a turn that landed")
+        XCTAssertEqual(row.text, "", "the words stayed in the row")
+        XCTAssertNil(row.sent, "the row is still holding the turn")
 
         await harness.retry()
         let turns = try await log(db.wrapped)
@@ -437,14 +443,20 @@ final class HarnessIntegrationTests: XCTestCase {
             (200, reply("Tonight.")))
         let harness = harness(db, defaults: defaults, transport: transport)
 
-        let nonce = harness.willSend("bins?")
+        let row = NextTurn()
+        row.text = "bins?"
+        let nonce = try XCTUnwrap(row.send(via: harness))
         await harness.retry()
 
         let written = try await log(db).map(\.text)
         XCTAssertEqual(written, ["bins?"])
-        XCTAssertTrue(harness.said(nonce), "the row clears: the words are in the log")
+        XCTAssertTrue(harness.said(nonce), "the words are in the log")
         XCTAssertTrue(harness.waiting.isEmpty, "and nothing is owed, so the row is not in flight")
-        XCTAssertFalse(harness.canWithdraw(nonce), "what is in the log cannot be taken back")
+        XCTAssertFalse(row.sending(in: harness), "the row is still drawing the turn as on its way")
+        XCTAssertFalse(row.canWithdraw(in: harness), "what is in the log cannot be taken back")
+        XCTAssertTrue(row.clearIfLanded(in: harness), "the row kept the words of a turn that landed")
+        XCTAssertEqual(row.text, "", "the words stayed in the row although the turn is in the log")
+        XCTAssertNil(row.sent)
         XCTAssertEqual(harness.error, "Overloaded")
 
         await harness.answerPending()

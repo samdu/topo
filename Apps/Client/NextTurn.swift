@@ -65,18 +65,24 @@ final class NextTurn {
         return true
     }
 
-    /// What the row takes back up when the chat appears: the head of the line, under the nonce it
-    /// was first said with, so an app killed with words on the line comes back to the row they
-    /// were sent from rather than to an empty one — which is where the way back from a turn that
-    /// never landed is offered, and where it is most needed.
+    /// What the row takes back up when the chat appears: the oldest words on the line whose turn
+    /// the read did not find in the log, under the nonce they were first said with, so an app
+    /// killed with words on the line comes back to the row they were sent from rather than to an
+    /// empty one — which is where the way back from a turn that never landed is offered, and
+    /// where it is most needed.
     ///
-    /// Nothing when the line is empty; when a turn of those words is already in the log, a lost
-    /// acknowledgement the read found, whose words belong to the transcript and not to the row;
-    /// or when the row already holds something, which is a screen that has not been away.
+    /// The oldest still owed, and not the head of the line: the head can be a turn that reached
+    /// the log and lost its acknowledgement, which the retry settles without saying anything
+    /// more, while a turn said behind it — the chat lets a second press append while one is in
+    /// flight — is still owed and is what the row has to draw. Words already in the log belong to
+    /// the transcript and not to the row, whichever entry they are.
+    ///
+    /// Nothing when nothing on the line is still owed, and nothing when the row already holds
+    /// something, which is a screen that has not been away.
     @discardableResult
     func resume(from harness: Harness) -> Bool {
         guard sent == nil, text.isEmpty else { return false }
-        guard let owed = harness.owed, !harness.said(owed.nonce) else { return false }
+        guard let owed = harness.owed.first(where: { !harness.said($0.nonce) }) else { return false }
         text = owed.text
         sent = owed.nonce
         return true
