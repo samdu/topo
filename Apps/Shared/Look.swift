@@ -25,6 +25,9 @@ struct Look: Equatable, Sendable {
     /// The glass a cabochon is cut from. One value, so the mark in the navigation bar and the
     /// microphone are poured from the same slab.
     var jewel: Jewel
+    /// How a mark is pressed into a cabochon. One value, so the octopus in the bar and the
+    /// microphone in the well are cut to the same depth.
+    var press: Press
     /// The mark at the trailing edge of the navigation bar.
     var badge: Badge
     /// The sheet the badge opens.
@@ -39,6 +42,7 @@ struct Look: Equatable, Sendable {
         bubble = .bubble(screen)
         plain = .plain
         jewel = Jewel()
+        press = Press()
         badge = Badge()
         settings = Settings()
         composer = Composer()
@@ -164,61 +168,30 @@ struct Look: Equatable, Sendable {
         var y: CGFloat = 0
     }
 
-    /// A cabochon cut from a slab of poured glass: a domed body paler where the glass is thinner,
-    /// a milky drift across it, a darker band on the diagonal, a sheen off the top and a
-    /// jeweller's bevel around a true circle. The whole slab is these values, so a jewel of
-    /// another colour is another `Jewel` and not another view.
+    /// A cabochon cut from a photograph of a slice of agate (`agate` in the iOS asset
+    /// catalogue): the stone itself under a cast that tints it, with the light cut into it from
+    /// the top, a sheen off its face, a jeweller's bevel around a true circle and a shadow under
+    /// it. The stone is the body, so a jewel of another colour is the same stone under another
+    /// cast and never a second picture.
     ///
-    /// The lengths are the ones the glass is poured at rather than fractions of the disc it is
-    /// drawn in, so the same slab read at 30pt and at 64pt is a different part of the same pour.
+    /// The lengths are the ones the cut is made at rather than fractions of the disc, so the
+    /// same slab read at 44pt and at 64pt is the same stone under a differently sized cut.
     struct Jewel: Equatable, Sendable {
-        /// The four glasses, darkest first.
-        var deep = Color(red: 0.05, green: 0.24, blue: 0.36)
-        var mid = Color(red: 0.08, green: 0.42, blue: 0.53)
-        var pale = Color(red: 0.55, green: 0.80, blue: 0.84)
-        var milk = Color(red: 0.80, green: 0.92, blue: 0.93)
+        /// The disc the body is drawn from, by the name the asset catalogue gives it.
+        var stone = "agate"
+        /// Laid over the stone at `castOpacity`, in `castBlend`. Nothing at all by default: the
+        /// stone was photographed in the colour the app is named for.
+        var cast = Color.clear
+        var castOpacity = 0.0
+        /// How the cast meets the stone. `.hue` keeps the stone's own light and grain and takes
+        /// only the hue of the cast, which is what a stone of another colour wants; `.normal` is
+        /// a veil over it, which is what a stone that has to go pale wants, since a pale cast
+        /// has no hue to give.
+        var castBlend = BlendMode.hue
 
-        /// Which of the four a part of the slab is poured from. The parts name a glass rather
-        /// than a colour, so a slab of another colour is the four values and the rest follows —
-        /// and so a jewel lit from behind is the same four read in another order.
-        enum Glass: String, Equatable, Sendable, CaseIterable { case deep, mid, pale, milk }
-
-        func colour(_ glass: Glass) -> Color {
-            switch glass {
-            case .deep: deep
-            case .mid: mid
-            case .pale: pale
-            case .milk: milk
-            }
-        }
-
-        /// The body: a radial gradient centred low and right, where the glass is thinnest.
-        /// Its stops run from that thin centre outwards.
-        var bodyGlasses: [Glass] = [.mid, .deep, .deep]
-        var bodyCenter = UnitPoint(x: 0.62, y: 0.72)
-        var bodyEndRadius: CGFloat = 46
-        /// Cut into the body from the top, and the light caught under its lower edge.
+        /// Cut into the stone from the top, and the light caught under its lower edge.
         var bodyShade = Shadow(color: .black.opacity(0.45), radius: 5, y: 3)
         var bodyCatch = Shadow(color: .white.opacity(0.3), radius: 2, y: -2)
-
-        /// The milky drift, an off-centre swirl of thinner glass: a core and the halo round it.
-        var driftGlass: Glass = .milk
-        var driftHaloGlass: Glass = .pale
-        var driftSize = CGSize(width: 44, height: 30)
-        var driftEndRadius: CGFloat = 22
-        var driftOpacity = 0.55
-        var driftHaloOpacity = 0.25
-        var driftAngle = Angle.degrees(-28)
-        var driftOffset = CGSize(width: 6, height: 8)
-        var driftBlur: CGFloat = 2
-
-        /// The dark band across the diagonal.
-        var bandGlass: Glass = .deep
-        var bandSize = CGSize(width: 14, height: 90)
-        var bandOpacity = 0.6
-        var bandAngle = Angle.degrees(24)
-        var bandOffset = CGSize(width: 4, height: -4)
-        var bandBlur: CGFloat = 1.5
 
         /// The sheen off the top of the slab, and the shade off its foot.
         var sheenColor = Color.white
@@ -241,15 +214,48 @@ struct Look: Equatable, Sendable {
         var dropShadow = Shadow(color: .black.opacity(0.5), radius: 4, y: 3)
     }
 
-    /// The mark at the trailing edge of the navigation bar: a small cabochon carrying the
-    /// octopus, which is the way to the settings and, held, to the diagnostics.
+    /// A mark pressed into the stone rather than laid on it. The cut is lit from above, as the
+    /// stone is: the wall at the top of every stroke faces away from the light and goes dark,
+    /// the wall at its foot catches it, and the floor of the cut is the stone itself a shade
+    /// under the stone around it.
+    ///
+    /// One treatment for both marks, so what a look changes here it changes in the bar and in
+    /// the well at once.
+    struct Press: Equatable, Sendable {
+        /// How wide a wall is, as a share of the jewel's diameter: 6px of a 512px stone, so a
+        /// mark on the badge and a mark on the microphone are cut to the same proportion at
+        /// their two sizes.
+        var wall: CGFloat = 6.0 / 512
+        /// The wall facing away from the light, at the top of a stroke, and the one at its foot
+        /// that catches it.
+        var shade = Color.black.opacity(0.62)
+        var catchLight = Color.white.opacity(0.62)
+        /// How far a wall is softened, as a share of its own width. A wall is a wall and not a
+        /// smear: the only softening is the width of the cut itself, so this is a share of
+        /// `wall` rather than a length of its own and a cut of any depth is softened in
+        /// proportion.
+        var soften = 0.35
+        /// How much of the shade lies over the whole floor of the cut, which is what sets the
+        /// floor under the stone around it.
+        var floor = 0.3
+    }
+
+    /// The mark at the trailing edge of the navigation bar: a cabochon carrying the octopus,
+    /// which is the way to the settings and, held, to the diagnostics.
     struct Badge: Equatable, Sendable {
-        var size: CGFloat = 30
-        var markSize: CGFloat = 19
-        /// The mark is white on the glass whatever the appearance, because the glass it sits on
-        /// is the same colour in both.
-        var markColor = Color.white
-        var markShadow = Shadow(color: .black.opacity(0.3), radius: 1, y: 1)
+        /// The toolbar control's own height, so the stone fills the item rather than floating
+        /// in it, and the mark at a shade under two thirds of it, which leaves the cut room at
+        /// the stone's edge.
+        var size: CGFloat = 44
+        var markSize: CGFloat = 27.9
+        /// The stone the octopus is cut into: the same slab under the colour of the other side
+        /// of the conversation, so the bar's mark is not the microphone's.
+        var jewel: Jewel = {
+            var jewel = Jewel()
+            jewel.cast = Theme.secondary
+            jewel.castOpacity = 0.75
+            return jewel
+        }()
     }
 
     /// The sheet the badge opens.
@@ -296,14 +302,14 @@ struct Look: Equatable, Sendable {
         var well = Well()
         var glyph = Glyph()
 
-        /// The jewel while the microphone is open: the same slab read from its pale end, lit
-        /// from behind, with less shade cut into it and a fainter band.
+        /// The jewel while the microphone is open: the same stone under a milky veil, with less
+        /// shade cut into it, so it reads pale under the thumb.
         var openJewel: Jewel = {
             var jewel = Jewel()
-            jewel.bodyGlasses = [.milk, .pale, .mid]
+            jewel.cast = Color(red: 0.80, green: 0.92, blue: 0.93)
+            jewel.castOpacity = 0.62
+            jewel.castBlend = .normal
             jewel.bodyShade = Shadow(color: .black.opacity(0.2), radius: 5, y: 3)
-            jewel.driftOpacity = 0.9
-            jewel.bandOpacity = 0.25
             return jewel
         }()
 
@@ -344,16 +350,15 @@ struct Look: Equatable, Sendable {
             var edgeWidth: CGFloat = 1
         }
 
-        /// The mark on the jewel. It sits over the glass rather than being cut into it, so it
-        /// is white on the dark slab and Topo's colour on the pale one.
+        /// The mark on the jewel, which is cut into the stone rather than laid over it. What
+        /// the cut is drawn with is `Look.press`; what is here is how big the mark is and what
+        /// the open state casts on the floor of it.
         struct Glyph: Equatable, Sendable {
             var size: CGFloat = 26
             var weight: Font.Weight = .medium
-            var ink = Color.white
-            var openInk = Theme.primary
-            var shadow = Shadow(color: .black.opacity(0.25), radius: 1, y: 1)
-            /// Nothing under the thumb needs a shadow of its own.
-            var openShadowOpacity = 0.0
+            /// Topo's colour over the floor of the cut while the microphone is open: a mark cut
+            /// into pale stone has no ink to flip.
+            var openCast = Theme.primary.opacity(0.5)
         }
     }
 

@@ -151,9 +151,13 @@ struct Composer: View {
         }
     }
 
-    /// A slab of poured glass set into a well cut through the pane. Open, it is lit from behind
-    /// and goes pale while the glass around it takes the colour, so a thumb over it still leaves
-    /// the state readable at its edges.
+    /// The stone under the thumb: the open slab while the microphone is open, the resting one
+    /// otherwise. The floor of the mark's cut is the same stone, so it is read once here.
+    private var jewel: Look.Jewel { mic.open ? look.composer.openJewel : look.jewel }
+
+    /// A slab of agate set into a well cut through the pane, with the microphone cut into it.
+    /// Open, the stone goes pale under a milky veil while the glass around it takes the colour,
+    /// so a thumb over it still leaves the state readable at its edges.
     ///
     /// The gesture is the chat's: press and release, with the session logic on the far side of
     /// `micPressed`. It sits on the whole well rather than on the mark, so the thumb has the
@@ -161,17 +165,18 @@ struct Composer: View {
     private var micButton: some View {
         Well(well: look.composer.well)
             .overlay {
-                StainedGlass(glass: mic.open ? look.composer.openJewel : look.jewel)
-                    .frame(width: look.composer.well.jewelSize, height: look.composer.well.jewelSize)
+                StainedGlass(glass: jewel, diameter: look.composer.well.jewelSize)
                     .saturation(mic.appearance == .dimmed ? look.composer.dimmedSaturation : 1)
                     .opacity(mic.appearance == .dimmed ? look.composer.dimmedOpacity : 1)
             }
             .overlay {
                 // The waveform is hands free, not listening: a held press reads off the glass.
+                // The symbol is a mask and not ink: what is drawn is the stone under it and the
+                // two walls of the cut, from `Look.press`.
                 Image(systemName: mic.appearance == .handsFree ? "waveform" : "mic.fill")
                     .font(.system(size: look.composer.glyph.size, weight: look.composer.glyph.weight))
-                    .foregroundStyle(mic.open ? look.composer.glyph.openInk : look.composer.glyph.ink)
-                    .shadow(look.composer.glyph.shadow.at(mic.open ? look.composer.glyph.openShadowOpacity : 1))
+                    .pressed(look.press, into: jewel, diameter: look.composer.well.jewelSize,
+                             cast: mic.open ? look.composer.glyph.openCast : .clear)
             }
             .frame(width: look.composer.well.size, height: look.composer.well.size)
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in

@@ -32,10 +32,8 @@ final class LookScreenshots: XCTestCase {
         "verticalPadding": 16
       },
       "jewel": {
-        "deep": "#3A2200",
-        "mid": "#7A4E00",
-        "pale": "#E8C48A",
-        "milk": "#F8EBD6"
+        "cast": "#7A4E00",
+        "castOpacity": 0.8
       },
       "badge": { "size": 36, "markSize": 23 },
       "composer": {
