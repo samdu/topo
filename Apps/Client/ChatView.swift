@@ -17,6 +17,8 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("readAloud") private var readAloud = true
     @State private var draft = ""
+    /// The keyboard is up, so the glass carries a field. The control that raised it lowers it.
+    @State private var typing = false
     @State private var showSettings = false
     @State private var showDiagnostics = false
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
@@ -270,34 +272,26 @@ struct ChatView: View {
         await harness.retry()
     }
 
+    /// The glass under the transcript. What the microphone is doing is four facts read off
+    /// `VoiceInput` here and drawn there; the press is handed straight back to `micPressed`,
+    /// which is the whole of this screen's part in a session.
     private var composer: some View {
-        HStack(spacing: 8) {
-            TextField("Say something", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(1...5)
-                .onSubmit(send)
-            Image(systemName: voice.listening && voice.owner == .chat ? "waveform.circle.fill" : "mic.circle.fill")
-                .font(.title)
-                // Dimmed while a press would be refused: the microphone denied, or an ear that
-                // is not resident yet. The diagnostics `speech` row is what says which.
-                .foregroundStyle(voice.canListen ? Theme.teal : .secondary)
-                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
-                    Task { await micPressed(down) }
-                }
-                .accessibilityLabel(voice.handsFree ? "Listening; press to send" : voice.listening ? "Listening; release to send" : "Hold to talk")
-                #if DEBUG
-                // What the UI test decodes after a press: the counters, the branch it took, and
-                // what the microphone delivered, as JSON (`VoiceInput.Report`). A debug build
-                // only, so VoiceOver on a release build hears the label alone.
-                .accessibilityValue(voice.debugReport)
-                #endif
-            Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill").font(.title).foregroundStyle(Theme.teal)
-            }
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-        .padding()
-        .background(.bar)
+        Composer(typing: $typing, draft: $draft,
+                 mic: Composer.MicState(canListen: voice.canListen, listening: voice.listening,
+                                        owner: voice.owner, handsFree: voice.handsFree),
+                 micPressed: { down in Task { await micPressed(down) } },
+                 send: send,
+                 micReport: micReport)
+    }
+
+    /// What the UI suites decode off the microphone after a press. A debug build only, so
+    /// VoiceOver on a release build hears the label alone.
+    private var micReport: String? {
+        #if DEBUG
+        return voice.debugReport
+        #else
+        return nil
+        #endif
     }
 
     private func send() {

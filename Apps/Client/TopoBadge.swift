@@ -60,7 +60,7 @@ struct StainedGlass: View {
         Circle()
             .fill(
                 // The body of the glass: paler where it is thinner, at the lower right.
-                RadialGradient(colors: [glass.mid, glass.deep, glass.deep],
+                RadialGradient(colors: glass.bodyGlasses.map(glass.colour),
                                center: glass.bodyCenter, startRadius: 0,
                                endRadius: glass.bodyEndRadius)
                     .shadow(.inner(glass.bodyShade))
@@ -69,8 +69,9 @@ struct StainedGlass: View {
             // The milky drift, an off-centre swirl of thinner glass.
             .overlay {
                 Ellipse()
-                    .fill(RadialGradient(colors: [glass.milk.opacity(glass.driftOpacity),
-                                                  glass.pale.opacity(glass.driftHaloOpacity), .clear],
+                    .fill(RadialGradient(colors: [glass.colour(glass.driftGlass).opacity(glass.driftOpacity),
+                                                  glass.colour(glass.driftHaloGlass).opacity(glass.driftHaloOpacity),
+                                                  .clear],
                                          center: .center, startRadius: 0,
                                          endRadius: glass.driftEndRadius))
                     .frame(width: glass.driftSize.width, height: glass.driftSize.height)
@@ -81,7 +82,7 @@ struct StainedGlass: View {
             // The dark band across the diagonal.
             .overlay {
                 Rectangle()
-                    .fill(LinearGradient(colors: [.clear, glass.deep.opacity(glass.bandOpacity), .clear],
+                    .fill(LinearGradient(colors: [.clear, glass.colour(glass.bandGlass).opacity(glass.bandOpacity), .clear],
                                          startPoint: .leading, endPoint: .trailing))
                     .frame(width: glass.bandSize.width, height: glass.bandSize.height)
                     .rotationEffect(glass.bandAngle)
