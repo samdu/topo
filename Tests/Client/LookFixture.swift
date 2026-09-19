@@ -11,7 +11,7 @@ enum LookFixture {
     /// How many fields of the look this document sets, which is every one of them: the jewel is
     /// two fields of the look and not one, since the composer's open jewel is a slab of its own.
     /// It is the count the reader answers with, so a compound — a shadow, a size, a font — is one.
-    static let fields = 142
+    static let fields = 144
 
     static let full = """
     {
@@ -72,6 +72,8 @@ enum LookFixture {
         "tintOpacity": 0.95,
         "glow": { "color": "#20304050", "radius": 9, "x": -4, "y": 11 },
         "duration": 0.9,
+        "presenceRise": 120,
+        "presenceDuration": 0.7,
         "dimmedSaturation": 2.5,
         "dimmedOpacity": 0.15,
         "flank": {

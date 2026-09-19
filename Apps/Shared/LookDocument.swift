@@ -190,6 +190,8 @@ enum LookDocument {
         r.alpha("tintOpacity", &value.tintOpacity)
         r.shadow("glow", &value.glow)
         r.seconds("duration", &value.duration)
+        r.length("presenceRise", &value.presenceRise)
+        r.seconds("presenceDuration", &value.presenceDuration)
         r.object("flank") { flank(&value.flank, $0) }
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
