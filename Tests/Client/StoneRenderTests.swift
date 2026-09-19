@@ -10,9 +10,9 @@ import XCTest
 ///
 /// Two claims, and they are the two the cabochon is made of. The body is one photograph under a
 /// cast, so a jewel of another colour has to reach the picture and a cast of nothing has to
-/// reach none of it. The mark is pressed through one treatment, so the four fields of
-/// `Look.Press` are the whole of what the cut is drawn with: take them all away and what is left
-/// is the stone under the mark's own shape and nothing else.
+/// reach none of it. The mark is pressed through one treatment, so the fields of `Look.Press`
+/// are the whole of what the cut is drawn with: take them all away and what is left is the stone
+/// under the mark's own shape and nothing else.
 ///
 /// What is held here is what `ImageRenderer` draws. It composites none of the system's own glass
 /// and applies no `.saturation`, so neither is asked about; everything below is a shape, a fill,
@@ -88,8 +88,8 @@ final class StoneRenderTests: XCTestCase {
                           "the press's wall does not reach the cut")
     }
 
-    /// The four fields are the whole of the treatment: with both walls clear and no shade over
-    /// the floor, what is drawn is the stone under the mark's shape and nothing besides.
+    /// The press's own fields are the whole of the treatment: with both walls clear and no shade
+    /// over the floor, what is drawn is the stone under the mark's shape and nothing besides.
     func testAPressAtNothingIsTheStoneUnderTheMark() throws {
         var none = Look.Press()
         none.shade = .clear
@@ -108,7 +108,7 @@ final class StoneRenderTests: XCTestCase {
 
         XCTAssertEqual(try raster(mark(none), side: diameter),
                        try raster(stone, side: diameter),
-                       "a press at nothing drew something the four fields do not account for")
+                       "a press at nothing drew something the press's fields do not account for")
     }
 
     /// The floor of the cut is the stone and not a colour: at the same shade, a mark cut into a
