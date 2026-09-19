@@ -79,7 +79,7 @@ enum LookFixture {
         "tintOpacity": 0.95,
         "glow": { "color": "#20304050", "radius": 9, "x": -4, "y": 11 },
         "duration": 0.9,
-        "presenceRise": 96,
+        "presenceRise": 120,
         "presenceDuration": 0.7,
         "dimmedSaturation": 2.5,
         "dimmedOpacity": 0.15,

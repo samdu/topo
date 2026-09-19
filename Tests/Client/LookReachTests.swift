@@ -37,8 +37,7 @@ final class LookReachTests: XCTestCase {
     static let unshowable: [String: String] = [
         "composer.duration": "is a time, and a still frame is the same either way",
         "composer.presenceDuration": "is a time, and a still frame is the same either way",
-        "composer.presenceRise": "is how the chat works out the presence it hands the composer, "
-            + "and no surface here is that screen: PanePresenceTests is what holds it",
+        "composer.presenceRise": "is how far content runs under the pane before it is a pane whole, and every still here sits at one end of that or the other: only a transcript ending inside the rise would draw differently, which is `PanePresenceTests`",
     ]
 
     func testEveryFieldTheDocumentSetsReachesThePixels() throws {
