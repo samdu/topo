@@ -90,7 +90,11 @@ struct ChatView: View {
                     .padding(.bottom, 8)
                 }
             }
-            .composerBar {
+            // The composer is a bar under the transcript, and the inset is the whole of its
+            // declaration: the transcript scrolls under it while there is more to scroll, and
+            // at rest the last turn stops above it. What says whether anything is behind the
+            // pane is the presence, below, and not the modifier.
+            .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
                     // Once, and only while the memory is still in this app's own folder and has
                     // more than a handful in it. Not now is for good: no nag, no timer.
@@ -299,7 +303,7 @@ struct ChatView: View {
     /// The transcript, and — from iOS 18, which is where there is a scroll geometry to read —
     /// where its content ends and where its own top edge is. On iOS 17, the deployment target,
     /// there is neither: nothing is measured and the pane is drawn whole, which is the pane as
-    /// it was before it had a presence.
+    /// it was before it had a presence. This is the one availability branch on this screen.
     @ViewBuilder private var transcript: some View {
         let view = TranscriptView(turns: harness.turns, notice: harness.notice,
                                   // Holding one of Topo's turns says it again, which is how a
@@ -428,22 +432,6 @@ private extension View {
     /// before there is one.
     func topEdge(in space: String, _ report: @escaping (CGFloat) -> Void) -> some View {
         onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(space)).minY } action: { report($0) }
-    }
-}
-
-private extension View {
-    /// The composer is a bar under the transcript, and from iOS 26 that is what it is declared
-    /// as: `safeAreaBar` insets the scroll view the way `safeAreaInset` does and extends the
-    /// scroll view's own edge effect under it, so the system draws its fade beneath the pane
-    /// where content runs under it and nowhere else. Below 26 there is no such modifier and the
-    /// inset is the whole of it. It is the bar's declaration rather than a value the composer
-    /// draws, so it is an availability branch and not a `Look` field.
-    @ViewBuilder func composerBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
-        if #available(iOS 26, *) {
-            safeAreaBar(edge: .bottom, content: bar)
-        } else {
-            safeAreaInset(edge: .bottom, content: bar)
-        }
     }
 }
 
