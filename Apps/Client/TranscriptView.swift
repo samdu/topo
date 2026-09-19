@@ -204,15 +204,16 @@ struct Draft {
     }
 }
 
-/// The person's next turn at the end of the transcript, drawn as the turn it is about to become:
-/// the same bubble, the same type, the same width for the same words, so nothing moves when it
-/// lands. The colour is the person's throughout, written or on its way, because colour says who
-/// is on the other end and never says state.
+/// The person's next turn at the end of the transcript, drawn at the size the turn will be: the
+/// same type, the same width for the same words, an enclosure of the same shape, so nothing
+/// moves when it lands. What it is not yet is a turn, and the colour says so: it is drawn in
+/// `look.draft.written` while it is being written and in `look.draft.sending` while it is on its
+/// way, and becomes the person's own `look.bubble` by landing in the log.
 ///
-/// What says the turn is on its way is the control beside it — a spinner where the send was —
-/// and a field that cannot be typed into. Holding the row is the way back from that: it takes
-/// the words out of the outbox and puts them back to be changed, so what is said again is one
-/// turn and not two.
+/// The control beside it says the same thing a second way — a spinner where the send was — and
+/// the field cannot be typed into. Holding the row is the way back from that: it takes the words
+/// out of the outbox and puts them back to be changed, so what is said again is one turn and not
+/// two.
 struct DraftRow: View {
     var draft: Draft
     @Environment(\.look) private var look
@@ -240,6 +241,13 @@ struct DraftRow: View {
         }
     }
 
+    /// What the words are drawn on: the draft's own enclosure, in the colour of the state it is
+    /// in. The view picks between two values the look names rather than changing one of them, so
+    /// a look that wants a draft drawn differently in either state says so there.
+    private var enclosure: Look.Enclosure {
+        draft.sending ? look.draft.sending : look.draft.written
+    }
+
     /// The words, in a field laid over a `Text` that is not drawn and is the whole reason the
     /// bubble is the size it is: a field asked for its own width takes every point on offer,
     /// where a `Text` takes what the words need. The field is given that `Text`'s size rather
@@ -261,10 +269,10 @@ struct DraftRow: View {
                     .onSubmit(draft.send)
                     .accessibilityLabel("What to say")
             }
-        .padding(.horizontal, look.bubble.horizontalPadding)
-        .padding(.vertical, look.bubble.verticalPadding)
+        .padding(.horizontal, enclosure.horizontalPadding)
+        .padding(.vertical, enclosure.verticalPadding)
         .frame(minWidth: look.draft.minimumWidth, alignment: .leading)
-        .background { TurnShape.fill(look.bubble) }
+        .background { TurnShape.fill(enclosure) }
         #if os(iOS)
         .contextMenu {
             if let edit = draft.edit {

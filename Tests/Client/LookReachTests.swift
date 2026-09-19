@@ -27,9 +27,14 @@ final class LookReachTests: XCTestCase {
 
     // MARK: Every field of the document
 
-    /// The one field of the look no still picture can be asked about, and why.
+    /// The fields of the look no still picture can be asked about, and why.
     static let unshowable: [String: String] = [
         "composer.duration": "is a time, and a still frame is the same either way",
+        "composer.presenceDuration": "is a time, and a still frame is the same either way",
+        "composer.presenceRise": "is the share of a rise the content has run under the pane, "
+            + "and every still the suite has is at one end of it or the other — a pane whole "
+            + "under a long transcript at any rise — so only a transcript ending inside the rise "
+            + "itself would differ; `PanePresenceTests` holds the mapping",
     ]
 
     func testEveryFieldTheDocumentSetsReachesThePixels() throws {

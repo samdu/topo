@@ -119,6 +119,8 @@ enum LookDocument {
     }
 
     private static func draft(_ value: inout Look.Draft, _ r: Reader) {
+        r.object("written") { enclosure(&value.written, $0) }
+        r.object("sending") { enclosure(&value.sending, $0) }
         r.reach("minimumWidth", &value.minimumWidth)
         r.length("spacing", &value.spacing)
         r.reach("slot", &value.slot)
@@ -190,6 +192,8 @@ enum LookDocument {
         r.alpha("tintOpacity", &value.tintOpacity)
         r.shadow("glow", &value.glow)
         r.seconds("duration", &value.duration)
+        r.length("presenceRise", &value.presenceRise)
+        r.seconds("presenceDuration", &value.presenceDuration)
         r.object("flank") { flank(&value.flank, $0) }
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
