@@ -20,6 +20,7 @@ enum DebugRun {
     static let keepSpokenVariable = "TOPO_DEBUG_KEEP_SPOKEN"
     static let replyDelayVariable = "TOPO_DEBUG_REPLY_DELAY"
     static let loopVariable = "TOPO_DEBUG_LOOP_SECONDS"
+    static let outboxVariable = "TOPO_DEBUG_OUTBOX"
 
     /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
     /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be
@@ -29,6 +30,37 @@ enum DebugRun {
         guard let seconds = environment[loopVariable].flatMap(Double.init), seconds > 0 else { return nil }
         return seconds
     }
+
+    /// `TOPO_DEBUG_OUTBOX=<words>`: what is on the harness's line before it is made, in place of
+    /// whatever the last launch left there. Words put one turn on it, as if the app had been
+    /// killed with them said and not yet in the log — which is the state a relaunch finds, the
+    /// one the row has to come back into, and the one no suite can reach by sending a turn and
+    /// killing the app mid-write. Empty clears the line, which is how a suite asks for a launch
+    /// with nothing owed: the line is on disk, so a turn a test sent and never settled is still
+    /// there for the next launch, and a test that did not say what it wanted would be testing
+    /// what the test before it left.
+    ///
+    /// The nonce is this launch's own, so the words go under one nonce however many times they
+    /// are sent, exactly as a turn said on the screen does. Does nothing at all when the variable
+    /// is absent, which is every ordinary run.
+    static func seedOutbox(defaults: UserDefaults = .standard,
+                           environment: [String: String] = ProcessInfo.processInfo.environment) {
+        guard let value = environment[outboxVariable] else { return }
+        let words = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !words.isEmpty else {
+            defaults.removeObject(forKey: outboxKey)
+            say("cleared the line")
+            return
+        }
+        let entry = ["text": words, "nonce": UUID().uuidString]
+        guard let data = try? JSONSerialization.data(withJSONObject: [entry]) else { return }
+        defaults.set(data, forKey: outboxKey)
+        say("put \"\(words)\" on the line, as a launch that found a turn owed")
+    }
+
+    /// Where the harness keeps its line. Named here as well because the seeding above runs before
+    /// the harness exists.
+    private static let outboxKey = "topo.harness.outbox"
 
     /// `TOPO_DEBUG_REPLY_DELAY=<seconds>`: how long the harness waits before it asks the model,
     /// so the reply lands well past iOS's ordinary background grace and only a working hold

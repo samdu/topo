@@ -93,6 +93,56 @@ final class MicrophonePressTests: XCTestCase {
         record("the ear is not resident; the press was refused: \(after.refusal ?? "")", after)
     }
 
+    /// A session opened by a tap, with the hand off the glass, and then the person reaches for
+    /// the keyboard: the session ends there rather than listening on under a keyboard nobody is
+    /// talking into. It is in this class rather than beside the row's own tests because opening
+    /// the microphone raises the permission prompt, and the count of prompts a run raises is
+    /// kept here.
+    ///
+    /// What the stub ear hears is nothing, so there is no caption for the row to keep and the
+    /// assertion is on the microphone's own state in words. What the row keeps is `DraftRowTests`.
+    func testRaisingTheKeyboardEndsAHandsFreeSession() throws {
+        let app = launch(environment: ["TOPO_DEBUG_EAR": "stub"])
+        let mic = microphone(in: app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        try waitForReport(app, timeout: 30, "the stub ear is resident") { $0.ear == "ready" }
+
+        // The first press on a fresh simulator meets the microphone prompt, and its release
+        // while the prompt is up starts nothing; answer it and leave the button at rest.
+        mic.press(forDuration: 0.5)
+        answerOnePrompt()
+        XCTAssertEqual(app.state, .runningForeground, "the app survived the permission prompt")
+        closeHandsFree(app, mic)
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15), "the button is at rest before the tap")
+
+        // A tap opens the microphone and leaves it open until the next press.
+        let before = try report(app)
+        mic.press(forDuration: 0.1)
+        let after = try waitForReport(app, timeout: 15, "the tap reached VoiceInput") { $0.presses == before.presses + 1 }
+        if let refusal = after.refusal {
+            record("hands free; microphone refused: \(refusal)", after)
+            guard refusal == "no audio input" else {
+                return XCTFail("the tap was refused for a reason that is a fault: \(after.raw)")
+            }
+            if laneHasInput {
+                XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the tap was refused for want of one: \(after.raw)")
+            }
+            throw XCTSkip("missing coverage: this host has no audio input, so the tap over the stub ear opened no session to end")
+        }
+        XCTAssertTrue(app.images["Listening; press to send"].waitForExistence(timeout: 15),
+                      "the tap left no hands-free session open: \(after.raw)")
+
+        // Reaching for the keyboard ends it, and the row is what has the keyboard.
+        app.buttons["Type instead"].tap()
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15),
+                      "raising the keyboard left the microphone listening")
+        XCTAssertTrue(app.descendants(matching: .any)["What to say"].waitForExistence(timeout: 10),
+                      "the keyboard went up with no row to type into")
+        let ended = try report(app)
+        XCTAssertEqual(ended.sessions, after.sessions, "raising the keyboard opened a second session: \(ended.raw)")
+        record("hands free, ended by the keyboard", ended)
+    }
+
     /// The whole path: fixture audio looping on the host's input, captured by the simulator's
     /// microphone, converted by the sink, and recognised by Parakeet as the fixture's words. The
     /// hold is two loops and a second long, so it spans at least one whole phrase wherever in

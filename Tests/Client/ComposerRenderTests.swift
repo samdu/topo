@@ -11,7 +11,7 @@ import XCTest
 /// and not the view's: a value nothing outside the source can change is a value the mind cannot
 /// reach, which is the whole point of `Look`.
 ///
-/// Every field of `Look.Composer` is varied here except six, and each of the six was shown to
+/// Every field of `Look.Composer` is varied here except four, and each of the four was shown to
 /// render byte for byte the same picture before it was left out rather than assumed to:
 ///
 /// - `duration` is a time, so a still frame is the same either way. Nothing tests it.
@@ -45,8 +45,8 @@ final class ComposerRenderTests: XCTestCase {
     /// The composer at rest, or in whatever state it is handed, as a digest: what a failure here
     /// has to say is that two pictures are the same, and the bytes are not worth printing.
     private func raster(_ mic: Composer.MicState = .init(), typing: Bool = false,
-                        draft: String = "", look: Look) throws -> String {
-        let view = Composer(typing: .constant(typing), draft: .constant(draft), mic: mic)
+                        look: Look) throws -> String {
+        let view = Composer(typing: .constant(typing), mic: mic)
             .environment(\.look, look)
             .frame(width: size.width, height: size.height)
             .background(Color.white)
@@ -117,8 +117,7 @@ final class ComposerRenderTests: XCTestCase {
                           "the look's surface does not reach the pane")
     }
 
-    /// How far the glass floats off the bottom, how far its ends sit from the well, and how far
-    /// the field sits above the row under it.
+    /// How far the glass floats off the bottom, and how far its ends sit from the well.
     func testTheGlassFloatsAndSpacesItsRowFromTheLook() throws {
         let look = flatLook()
 
@@ -132,10 +131,6 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(look: look), try raster(look: tight),
                           "the look's spacing does not reach the row")
 
-        var rows = flatLook()
-        rows.composer.rowSpacing = look.composer.rowSpacing + 20
-        XCTAssertNotEqual(try raster(typing: true, look: look), try raster(typing: true, look: rows),
-                          "the look's row spacing does not reach the field above the row")
     }
 
     /// What the open glass spills onto the transcript behind it. It is the same shadow at
@@ -264,6 +259,15 @@ final class ComposerRenderTests: XCTestCase {
                           "the look's flank font does not reach the pixels")
     }
 
+    /// The one control the glass has says which way it goes: the keyboard up, or down again.
+    /// The words themselves are not here — they are written in the row at the end of the
+    /// transcript — so this is the whole of what `typing` changes on the glass.
+    func testTheFlankSaysWhichWayTheKeyboardGoes() throws {
+        let look = flatLook()
+        XCTAssertNotEqual(try raster(look: look), try raster(typing: true, look: look),
+                          "the flank draws the same mark whether the keyboard is up or down")
+    }
+
     /// The etch is three values — how far under its ink the glyph sits, and the two catches that
     /// make it a cut rather than a drawing — and all three are drawn.
     func testTheEtchIsTheLooksThreeValues() throws {
@@ -335,53 +339,5 @@ final class ComposerRenderTests: XCTestCase {
         open.composer.glyph.openShadowOpacity = 1
         XCTAssertNotEqual(try raster(held, look: look), try raster(held, look: open),
                           "the look's open shadow alpha does not reach the open mark")
-    }
-
-    // MARK: The field
-
-    /// The field is in the glass only while the keyboard is up, and what it is set in is the
-    /// look's.
-    func testTheFieldIsDrawnFromTheLookWhileTypingAndNotBefore() throws {
-        let look = flatLook()
-        XCTAssertNotEqual(try raster(look: look), try raster(typing: true, look: look),
-                          "raising the keyboard puts no field in the glass")
-
-        var sendFont = flatLook()
-        sendFont.composer.field.sendFont = .largeTitle
-        XCTAssertNotEqual(try raster(typing: true, look: look),
-                          try raster(typing: true, look: sendFont),
-                          "the look's send control does not reach the pixels")
-    }
-
-    /// What the field is set in and how it sits. The draft is not empty here, since the send
-    /// control is disabled on an empty one and a disabled control is drawn in the system's
-    /// colour rather than in `sendInk`.
-    ///
-    /// `field.ink` and `field.lineLimit` are not asserted: `ImageRenderer` lays a `TextField`
-    /// out but does not draw the text in it, so the font and the padding reach the picture
-    /// through the space they take while the ink and the number of rows the words would fill
-    /// change no pixel. Both were shown to render identically before being left out. What the
-    /// words look like is by eye, in the typing screenshots on the PR.
-    func testTheFieldIsSetAndSpacedByTheLook() throws {
-        let look = flatLook()
-        let draft = "the capital of France"
-
-        var font = flatLook()
-        font.composer.field.font = .largeTitle
-        XCTAssertNotEqual(try raster(typing: true, draft: draft, look: look),
-                          try raster(typing: true, draft: draft, look: font),
-                          "the look's field font does not reach the field")
-
-        var padding = flatLook()
-        padding.composer.field.horizontalPadding = look.composer.field.horizontalPadding + 20
-        XCTAssertNotEqual(try raster(typing: true, draft: draft, look: look),
-                          try raster(typing: true, draft: draft, look: padding),
-                          "the look's field padding does not reach the field")
-
-        var sendInk = flatLook()
-        sendInk.composer.field.sendInk = Color(red: 0.1, green: 0.8, blue: 0.3)
-        XCTAssertNotEqual(try raster(typing: true, draft: draft, look: look),
-                          try raster(typing: true, draft: draft, look: sendInk),
-                          "the look's send ink does not reach the live send control")
     }
 }

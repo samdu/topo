@@ -10,24 +10,22 @@ import SwiftUI
 /// the transcript behind: the state reads at the edges, where the hand is not. Every value it
 /// draws with is a field of `Look.Composer`, so the pane, the etch, the well and both states of
 /// the jewel are reachable from outside the source.
+///
+/// Words are not written here. The person's next turn is written at the end of the transcript,
+/// in the bubble it is about to become (`DraftRow`); this raises the keyboard for it and holds
+/// the microphone.
 struct Composer: View {
-    /// The keyboard is up and there is a field in the glass to type into.
+    /// The keyboard is up, and the row at the end of the transcript has it.
     @Binding var typing: Bool
-    /// What is being typed, while there is a field.
-    @Binding var draft: String
     /// What the microphone is doing, read off `VoiceInput` by the chat screen.
     var mic: MicState = .init()
     /// Called with true on the press and false on the release. The session logic is
     /// `VoiceInput`'s; this passes the press on and nothing else.
     var micPressed: (Bool) -> Void = { _ in }
-    /// What sends the draft.
-    var send: () -> Void = {}
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
     @Environment(\.look) private var look
-    /// The field takes the keyboard from the moment it is put in the glass.
-    @FocusState private var writing: Bool
 
     /// What the microphone is doing, and which of the four the glass draws for it. The chat
     /// screen reads the four facts off `VoiceInput` and this decides what they look like, so
@@ -78,21 +76,18 @@ struct Composer: View {
     }
 
     var body: some View {
-        VStack(spacing: look.composer.rowSpacing) {
-            if typing { field }
-            HStack(spacing: look.composer.spacing) {
-                // The two ends take the same width, which is what keeps the microphone in the
-                // middle of the glass. A control that has gone keeps its place, so the glass
-                // never changes size.
-                leading
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .opacity(mic.holding ? look.composer.flank.heldOpacity : 1)
-                micButton
-                trailing
-                    .etched(look.composer.flank, ink: ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(mic.holding ? look.composer.flank.heldOpacity : 1)
-            }
+        HStack(spacing: look.composer.spacing) {
+            // The two ends take the same width, which is what keeps the microphone in the
+            // middle of the glass. A control that has gone keeps its place, so the glass
+            // never changes size.
+            leading
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .opacity(mic.holding ? look.composer.flank.heldOpacity : 1)
+            micButton
+            trailing
+                .etched(look.composer.flank, ink: ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .opacity(mic.holding ? look.composer.flank.heldOpacity : 1)
         }
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, look.composer.verticalInset)
@@ -116,36 +111,13 @@ struct Composer: View {
     }
 
     /// The way to the keyboard, and back from it. One control with two states rather than two
-    /// controls, since the field it raises is the only thing it has to undo.
+    /// controls, since the row it raises the keyboard for is the only thing it has to undo.
     private var trailing: some View {
         Button { typing.toggle() } label: {
             Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard")
                 .font(look.composer.flank.font)
         }
         .accessibilityLabel(typing ? "Hide the keyboard" : "Type instead")
-    }
-
-    /// Where a typed turn is written. Minimal: the glass around it is the border it needs, and
-    /// it takes the keyboard as it appears, since the control that put it there asked for one.
-    private var field: some View {
-        HStack(spacing: look.composer.rowSpacing) {
-            TextField("Say something", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .focused($writing)
-                .onAppear { writing = true }
-                .font(look.composer.field.font)
-                .foregroundStyle(look.composer.field.ink)
-                .lineLimit(look.composer.field.lineLimit)
-                .onSubmit(send)
-                .padding(.horizontal, look.composer.field.horizontalPadding)
-            Button(action: send) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(look.composer.field.sendFont)
-                    .foregroundStyle(look.composer.field.sendInk)
-            }
-            .disabled(draft.trimmingCharacters(in: .whitespaces).isEmpty)
-            .accessibilityLabel("Send")
-        }
     }
 
     /// The system's glass where there is any, a material of the same shape below it. The tint
@@ -249,21 +221,34 @@ private extension View {
 }
 
 #if DEBUG
+/// The row as the canvas drives it: send puts the turn in flight, and holding it gives the words
+/// back, which is what the chat does with an outbox entry it takes off the line.
+@MainActor private func previewDraft(draft: Binding<String>, typing: Binding<Bool>,
+                                     sending: Binding<Bool>) -> Draft {
+    let give: @MainActor () -> Void = { sending.wrappedValue = false }
+    return Draft(text: draft, typing: typing, sending: sending.wrappedValue,
+                 send: { sending.wrappedValue = true },
+                 edit: sending.wrappedValue ? give : nil)
+}
+
 #Preview("Composer") {
     @Previewable @State var draft = ""
     @Previewable @State var typing = false
+    @Previewable @State var sending = false
     @Previewable @State var canListen = true
     @Previewable @State var listening = false
     @Previewable @State var handsFree = false
 
     VStack(spacing: 0) {
         NavigationStack {
-            TranscriptView(turns: PreviewTurns.long)
+            TranscriptView(turns: PreviewTurns.long, draft: previewDraft(draft: $draft,
+                                                                          typing: $typing,
+                                                                          sending: $sending))
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { TopoBadge() } }
                 .safeAreaInset(edge: .bottom) {
-                    Composer(typing: $typing, draft: $draft,
+                    Composer(typing: $typing,
                              mic: .init(canListen: canListen, listening: listening,
                                         owner: listening ? .chat : nil, handsFree: handsFree))
                 }
@@ -274,6 +259,7 @@ private extension View {
             Toggle("Listening", isOn: $listening)
             Toggle("Hands free", isOn: $handsFree)
             Toggle("Typing", isOn: $typing)
+            Toggle("Sending", isOn: $sending)
         }
         .font(.footnote)
         .padding()

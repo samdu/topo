@@ -31,6 +31,8 @@ struct Look: Equatable, Sendable {
     var settings: Settings
     /// The lozenge under the transcript, and the microphone set into it.
     var composer: Composer
+    /// The person's next turn, written at the end of the transcript.
+    var draft: Draft
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -40,6 +42,7 @@ struct Look: Equatable, Sendable {
         badge = Badge()
         settings = Settings()
         composer = Composer()
+        draft = Draft()
     }
 
     /// The three screens the client is drawn on.
@@ -269,8 +272,6 @@ struct Look: Equatable, Sendable {
         var cornerRadius: CGFloat = 32
         /// Between a flank and the well.
         var spacing: CGFloat = 25
-        /// Between the field, while there is one, and the row under it.
-        var rowSpacing: CGFloat = 4
         /// What the pane is made of: the system's glass where there is any, a material below it.
         var surface: Surface = .glass
         /// The colour the pane takes while the microphone is open, and the alpha it takes it at.
@@ -286,7 +287,6 @@ struct Look: Equatable, Sendable {
         var flank = Flank()
         var well = Well()
         var glyph = Glyph()
-        var field = Field()
 
         /// The jewel while the microphone is open: the same slab read from its pale end, lit
         /// from behind, with less shade cut into it and a fainter band.
@@ -347,18 +347,31 @@ struct Look: Equatable, Sendable {
             /// Nothing under the thumb needs a shadow of its own.
             var openShadowOpacity = 0.0
         }
+    }
 
-        /// The field in the glass while the keyboard is up.
-        struct Field: Equatable, Sendable {
-            var font: Font = .body
-            var ink = Theme.text
-            var lineLimit = 1...5
-            /// The room between the words and the glass's own inset.
-            var horizontalPadding: CGFloat = 8
-            /// The control that sends what is in it.
-            var sendFont: Font = .title2
-            var sendInk = Theme.primary
-        }
+    /// The person's next turn, written at the end of the transcript rather than in the glass.
+    /// It is drawn on the same enclosure as a landed turn of theirs (`bubble`) and set in the
+    /// same type (`transcript.bodyFont`), because it is that turn before it is said: what is
+    /// here is only what the row has of its own.
+    ///
+    /// Nothing in it says whether the turn is on its way. Colour says who is on the other end,
+    /// and the row is the person's from the first letter to the moment it lands, so the state is
+    /// the control beside it — a spinner where the send was — and the field it cannot be typed
+    /// into.
+    struct Draft: Equatable, Sendable {
+        /// How wide the row is with nothing written in it, so the caret has somewhere to sit.
+        var minimumWidth: CGFloat = 160
+        /// Between the bubble and the control beside it.
+        var spacing: CGFloat = 8
+        /// The control that sends what is written, and the spinner that stands in its place
+        /// while the turn is on its way: one slot, so the row does not move as one becomes the
+        /// other.
+        var slot: CGFloat = 36
+        var sendFont: Font = .title2
+        var sendInk = Theme.primary
+        /// What the send control fades to with nothing to send, so an empty row's control says
+        /// it is not to be pressed rather than being pressed and doing nothing.
+        var sendRestingOpacity = 0.35
     }
 }
 

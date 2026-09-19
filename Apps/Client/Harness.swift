@@ -130,6 +130,15 @@ final class Harness {
     }
     private var outgoing: Outgoing? { pending.first }
 
+    /// The words on the line and the nonces they carry, oldest first. It is what the row at the
+    /// end of the transcript takes back up when the chat appears: the line survives the app being
+    /// killed, so the screen that comes back can draw the row the turn was sent from rather than
+    /// an empty one. The whole line and not its head, because the head can be a turn that landed
+    /// and lost its acknowledgement, with what was said behind it still owed.
+    var owed: [(text: String, nonce: String)] {
+        pending.map { ($0.text, $0.nonce) }
+    }
+
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          defaults: UserDefaults = .standard,
@@ -219,15 +228,21 @@ final class Harness {
         info = nil
     }
 
-    func refresh() async {
+    /// Reads the log into the screen, and answers whether it read it: a log that is not there
+    /// yet is read as empty and is an answer like any other, where a read that failed is not one.
+    /// Only `withdraw` asks; everything else refreshes for the screen's sake.
+    @discardableResult
+    func refresh() async -> Bool {
         do {
             let transcript = try await log.read()
             turns = transcript.ordered
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
+            return true
         } catch {
-            guard !TopoCloudKit.meansNoLogYet(error) else { turns = []; return }
+            guard !TopoCloudKit.meansNoLogYet(error) else { turns = []; return true }
             self.error = "Couldn't read the transcript: \(TranscriptStore.message(for: error))"
+            return false
         }
     }
 
@@ -274,6 +289,40 @@ final class Harness {
         spokenNonces.removeAll { $0 == nonce }
     }
 
+
+    /// Whether the person's turn said under `nonce` is in the log, as this device knows it. It
+    /// is what the row at the end of the transcript watches: the words are said once it is true,
+    /// whatever became of the reply, and a second send would be a second turn.
+    func said(_ nonce: String) -> Bool {
+        turns.contains { $0.role == .person && $0.nonce == nonce }
+    }
+
+    /// Whether the words said under `nonce` can be taken back: they are still owed on this
+    /// device, nothing is attempting them — an attempt is a write that may be landing as this is
+    /// asked — and no turn of theirs is known to be in the log. It is what decides whether the
+    /// row offers a way back; `withdraw` asks the log itself before it acts on the answer.
+    func canWithdraw(_ nonce: String) -> Bool {
+        !busy && !said(nonce) && pending.contains { $0.nonce == nonce }
+    }
+
+    /// Takes the words said under `nonce` off the line, so they can be changed and said again as
+    /// one turn rather than two, and answers whether it did.
+    ///
+    /// What is in the log is said: a second send would be a second turn, so the log is read
+    /// first and the withdrawal is refused if the turn is there — which is also how a write
+    /// whose acknowledgement was lost is found, since the screen then shows the turn it did not
+    /// know had landed. A read that failed is not an answer either, and refuses too: the words
+    /// stay owed and the retry that is already the line's way forward sends them under this same
+    /// nonce.
+    @discardableResult
+    func withdraw(_ nonce: String) async -> Bool {
+        guard canWithdraw(nonce) else { return false }
+        guard await refresh() else { return false }
+        guard canWithdraw(nonce) else { return false }
+        pending.removeAll { $0.nonce == nonce }
+        spokenNonces.removeAll { $0 == nonce }
+        return true
+    }
 
     /// Sends the line from its head, after a turn that stopped it or a launch that found it.
     func retry() async {

@@ -4,7 +4,8 @@ import TopoAuth
 import TopoCore
 import TopoTurn
 
-/// Single-device chat: the transcript from the log, a field to type in, a mic to dictate with.
+/// Single-device chat: the transcript from the log, the row at the end of it the next turn is
+/// written in, and the glass under it holding the microphone.
 struct ChatView: View {
     @Environment(Harness.self) private var harness
     @Environment(SignIn.self) private var signIn
@@ -16,9 +17,11 @@ struct ChatView: View {
     @Environment(Speaker.self) private var speaker
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("readAloud") private var readAloud = true
-    @State private var draft = ""
-    /// The keyboard is up, so the glass carries a field. The control that raised it lowers it.
-    @State private var typing = false
+    /// The row at the end of the transcript: what is written, whether the keyboard has it, and
+    /// the turn those words are on their way under. It is a `NextTurn` rather than this screen's
+    /// own state because what the row holds outlives the screen — an app killed with words on the
+    /// line comes back to the row they were sent from.
+    @State private var row = NextTurn()
     @State private var showSettings = false
     @State private var showDiagnostics = false
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
@@ -52,10 +55,8 @@ struct ChatView: View {
                                               canSpeak: speaker.voice.ready,
                                               say: { speaker.speak($0) },
                                               stopSpeaking: { speaker.stop() }),
-                               // Holding one of their own turns puts its words back into the
-                               // draft. The log is append-only, so this edits what is said next
-                               // and never the turn that was said.
-                               actions: TurnActions(edit: { draft = $0.text }))
+                               actions: turnActions,
+                               draft: draftRow)
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
@@ -135,6 +136,10 @@ struct ChatView: View {
             harness.onPass = { [memory] in await memory.sync() }
             defer { harness.onPass = nil }
             await harness.refresh()
+            // The row comes back before anything is sent from it: words on their way when the
+            // app last went away are the row's again, under the nonce they were first said with,
+            // so the way back from a turn that never landed is where it always is.
+            row.resume(from: harness)
             // Words on their way when the app last went away go first, under their own nonce.
             // Otherwise the first-run answer is the first turn, once, only when the log is empty;
             // it clears once it is in the log so a stale read on a later launch cannot resend it.
@@ -206,7 +211,18 @@ struct ChatView: View {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
-        .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { draft = text } }
+        .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { row.text = text } }
+        // The row holds the turn's words until the turn is in the log, and the log is what ends
+        // it: a turn whose reply failed is in the log like any other, so the row clears and the
+        // bubble that lands is the one that was being written in. A turn that never reached the
+        // log is owed, so the row stays as it is and the outbox sends it again.
+        .onChange(of: landed) { _, inTheLog in
+            guard inTheLog else { return }
+            row.clearIfLanded(in: harness)
+        }
+        // The keyboard coming up ends a hands-free session: a person who has started typing is
+        // not still talking. What was heard stays in the row, to be finished by hand.
+        .onChange(of: row.typing) { _, up in if up { voice.cancel(.chat) } }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
             // it, so nothing said into it was meant. A reply plays on — that is what the hold is
@@ -250,7 +266,7 @@ struct ChatView: View {
     }
 
     private func sendSpoken(_ heard: String) async {
-        draft = ""
+        row.text = ""
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         #if DEBUG
         if DebugRun.keepsSpoken() {
@@ -264,7 +280,9 @@ struct ChatView: View {
         // The wait says whether the reply will be read aloud, which is what marks the turn as
         // spoken; whether the process is being kept running for it is its own answer, and this
         // screen states no condition of its own either way.
-        let nonce = harness.willSend(heard)
+        // What was heard stands in the row as the turn on its way, rather than vanishing between
+        // the release and the log: the bubble being written in is the bubble that lands.
+        guard let nonce = row.send(heard: heard, via: harness) else { return }
         if speaker.awaitReply(nonce, readAloud: readAloud).spoken { harness.markSpoken(nonce) }
         #if DEBUG
         spokenNonce = nonce
@@ -276,11 +294,10 @@ struct ChatView: View {
     /// `VoiceInput` here and drawn there; the press is handed straight back to `micPressed`,
     /// which is the whole of this screen's part in a session.
     private var composer: some View {
-        Composer(typing: $typing, draft: $draft,
+        Composer(typing: Bindable(row).typing,
                  mic: Composer.MicState(canListen: voice.canListen, listening: voice.listening,
                                         owner: voice.owner, handsFree: voice.handsFree),
                  micPressed: { down in Task { await micPressed(down) } },
-                 send: send,
                  micReport: micReport)
     }
 
@@ -296,9 +313,51 @@ struct ChatView: View {
 
     private func send() {
         voice.cancel(.chat)
-        let text = draft
-        draft = ""
-        Task { await harness.send(text) }
+        guard row.send(via: harness) != nil else { return }
+        Task { await harness.retry() }
+    }
+
+    /// What holding a turn in the transcript offers. Holding one of the person's own puts its
+    /// words back into the row: the log is append-only, so this edits what is said next and never
+    /// the turn that was said. It is offered only while the row is free to take them — the row
+    /// draws the words being sent until they land or are taken back — and `NextTurn.edit` refuses
+    /// them over a turn on its way whether or not the item is there.
+    private var turnActions: TurnActions {
+        guard !row.sending(in: harness) else { return TurnActions() }
+        let take: @MainActor (Turn) -> Void = { row.edit($0, in: harness) }
+        return TurnActions(edit: take)
+    }
+
+    /// The person's next turn, at the end of the transcript, as the row draws it. What is written
+    /// and whether the keyboard is asked for are the row's own state, bound both ways; the rest is
+    /// read off it and off the log.
+    private var draftRow: Draft {
+        let bindable = Bindable(row)
+        return Draft(text: bindable.text, typing: bindable.typing,
+                     sending: row.sending(in: harness), send: send, edit: editSending)
+    }
+
+    /// The turn the row is holding is in the log — answered, or answered by nothing, which are
+    /// the same thing to the row: the words are said either way and a second send would be a
+    /// second turn.
+    private var landed: Bool {
+        guard let sent = row.sent else { return false }
+        return harness.said(sent)
+    }
+
+    /// The way back from a turn that never reached the log: the words come off the line and stay
+    /// in the row to be changed, so what is said again is one turn under one nonce. Nil while
+    /// there is nothing to take back, which is what leaves the row with no way out of a turn that
+    /// is genuinely on its way.
+    private var editSending: (@MainActor () -> Void)? {
+        guard row.canWithdraw(in: harness) else { return nil }
+        return {
+            Task {
+                guard let taken = await row.withdraw(via: harness) else { return }
+                // Nothing is coming for a turn that was never said, so nothing waits for it.
+                speaker.endAwaiting(taken, "the turn was taken back")
+            }
+        }
     }
 }
 
