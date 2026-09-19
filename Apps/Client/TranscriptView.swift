@@ -197,9 +197,17 @@ struct DraftRow: View {
         .frame(maxWidth: .infinity, alignment: .trailing)
         .onAppear { writing = draft.typing }
         .onChange(of: draft.typing) { _, wanted in writing = wanted }
+        // A turn on its way closes the field, which takes the keyboard with it. The keyboard is
+        // the person's until they put it down, so it comes back with the row the moment the turn
+        // lands and there is somewhere to type again.
+        .onChange(of: draft.state) { _, now in if now != .inFlight, draft.typing { writing = true } }
         // The keyboard lowered from anywhere — a swipe, another screen — is the row saying so,
-        // which is what keeps the control that raised it honest.
-        .onChange(of: writing) { _, focused in draft.typing = focused }
+        // which is what keeps the control that raised it honest. The field closing to a turn on
+        // its way is not that, and says nothing about what the person wants next.
+        .onChange(of: writing) { _, focused in
+            guard draft.state != .inFlight else { return }
+            draft.typing = focused
+        }
     }
 
     /// The words, in a field laid over a `Text` that is not drawn and is the whole reason the
