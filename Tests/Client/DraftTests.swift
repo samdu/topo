@@ -54,10 +54,22 @@ final class DraftStateTests: XCTestCase {
 final class DraftRowRenderTests: XCTestCase {
     private let width: CGFloat = 340
 
+    /// The look every render here is made under. A person's own words and the control that sends
+    /// them are both the mind's side, so the bubble and the send control are one colour in the
+    /// shipped palette — which a render read by colour cannot tell apart, and every measurement
+    /// below is of the bubble. So the control is given an ink of its own here. That the look's
+    /// ink reaches the control at all is held by `testTheSendControlIsDrawnFromTheLook`, which
+    /// names an ink of its own too, and the row draws the shipped one.
+    private static func look() -> Look {
+        var look = Look()
+        look.draft.sendInk = Color(red: 0, green: 1, blue: 0)
+        return look
+    }
+
     /// The row under the look given, as pixels. The `TextField` in it is laid out by
     /// `ImageRenderer` and not drawn, which is exactly why the bubble is sized by a `Text` behind
     /// it: what is measured here is the size that `Text` gives it.
-    private func render(_ draft: Draft, look: Look = Look()) throws -> Raster {
+    private func render(_ draft: Draft, look: Look = DraftRowRenderTests.look()) throws -> Raster {
         let view = DraftRow(draft: draft)
             .environment(\.look, look)
             .frame(width: width)
@@ -162,7 +174,7 @@ final class DraftRowRenderTests: XCTestCase {
     /// Every value the bubble draws with is the look's, and the row draws the person's bubble
     /// rather than one of its own: a look that changes the bubble changes the row with it.
     func testTheRowsBubbleIsTheLooksBubble() throws {
-        var look = Look()
+        var look = Self.look()
         look.bubble.accent = Color(red: 1, green: 0, blue: 1)
         let raster = try render(draft("Morning."), look: look)
         XCTAssertFalse(raster.pixels(matching: .magenta).isEmpty, "the row ignored the look's bubble")
@@ -212,7 +224,7 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertEqual(empty.right - empty.left, Int(Look().draft.minimumWidth * 3), accuracy: 9,
                        "an empty row is not the look's minimum width")
 
-        var wider = Look()
+        var wider = Self.look()
         wider.draft.minimumWidth = 260
         let widened = try box(try render(draft(""), look: wider), wider)
         XCTAssertGreaterThan(widened.right - widened.left, empty.right - empty.left,
@@ -245,8 +257,8 @@ final class DraftRowRenderTests: XCTestCase {
     func testTheSendControlGoesAndTheSlotKeepsItsSpace() throws {
         let writing = try render(draft("bins?"))
         let sent = try render(draft("bins?", sending: true))
-        let ink = UIColor(Look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-        let light = UIColor(Look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        let ink = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        let light = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
         let before = writing.pixels(matching: ink).count + writing.pixels(matching: light).count
         let after = sent.pixels(matching: ink).count + sent.pixels(matching: light).count
         XCTAssertGreaterThan(before, 0, "the send control is not drawn in the look's ink")
@@ -263,19 +275,19 @@ final class DraftRowRenderTests: XCTestCase {
 
     /// The control is the look's: its ink, its type and the room it takes.
     func testTheSendControlIsDrawnFromTheLook() throws {
-        var ink = Look()
+        var ink = Self.look()
         ink.draft.sendInk = Color(red: 1, green: 0, blue: 1)
         XCTAssertFalse(try render(draft("bins?"), look: ink).pixels(matching: .magenta).isEmpty,
                        "the look's send ink does not reach the control")
 
         let shipped = try box(try render(draft("bins?")))
-        var wide = Look()
+        var wide = Self.look()
         wide.draft.slot = 80
         let widened = try box(try render(draft("bins?"), look: wide), wide)
         XCTAssertLessThan(widened.right, shipped.right,
                           "the look's slot does not reach the room the control takes")
 
-        var apart = Look()
+        var apart = Self.look()
         apart.draft.spacing = 40
         let spaced = try box(try render(draft("bins?"), look: apart), apart)
         XCTAssertLessThan(spaced.right, shipped.right,
@@ -285,15 +297,15 @@ final class DraftRowRenderTests: XCTestCase {
     /// A control that would send nothing says so: an empty row's send is faded by the look's
     /// own value rather than being live to press and doing nothing.
     func testAnEmptyRowsSendIsFadedByTheLook() throws {
-        let ink = UIColor(Look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-        let dark = UIColor(Look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+        let ink = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        let dark = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
         let empty = try render(draft(""))
         let written = try render(draft("bins?"))
         XCTAssertLessThan(empty.pixels(matching: ink).count + empty.pixels(matching: dark).count,
                           written.pixels(matching: ink).count + written.pixels(matching: dark).count,
                           "an empty row draws its send control as live as a written one's")
 
-        var solid = Look()
+        var solid = Self.look()
         solid.draft.sendRestingOpacity = 1
         let full = try render(draft(""), look: solid)
         XCTAssertGreaterThan(full.pixels(matching: ink).count + full.pixels(matching: dark).count,
