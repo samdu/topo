@@ -103,10 +103,13 @@ final class TurnRowRenderTests: XCTestCase {
         accents(colour).flatMap { raster.columns(matching: $0) }
     }
 
+    /// The colour is named here as the palette token rather than as `Look().bubble.accent`,
+    /// which is whatever default ships and so cannot fail on it: what is held is that a person's
+    /// own words are drawn in the theme's primary colour.
     func testThePersonsTurnIsDrawnInABubble() throws {
         let raster = try render(turn(.person, "What's the capital of France?"))
-        XCTAssertFalse(outlinePixels(raster, Look().bubble.accent).isEmpty,
-                       "the person's turn draws no outline in the bubble's accent")
+        XCTAssertFalse(outlinePixels(raster, Theme.primary).isEmpty,
+                       "the person's turn draws no outline in the theme's primary colour")
     }
 
     func testToposTurnIsDrawnWithNoBubble() throws {

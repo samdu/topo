@@ -9,11 +9,14 @@ import AppKit
 /// (OKLCH, triadic at a 28° spread, chroma ×1.3, `primary` at role lightness 0.52 light and
 /// 0.66 dark), one value per role per appearance.
 ///
-/// **Colour says who is on the other end; it never says state.** `primary` is Topo's own voice
-/// and the controls that address it, `secondary` the person's side, `highlight` tiles, chips and
-/// progress, `signal` measured liveness alone — a status dot, an open microphone, a failure mark
-/// — and never a bubble's state. A control keeps its role's colour idle or active: state is
-/// carried by fill and by motion, never by a change of hue.
+/// **Colour says who is on the other end; it never says state.** `primary` is the mind's own
+/// colour: Topo's voice, the controls that address it, and the enclosure a person's own words are
+/// drawn in, since the two ends of a conversation a person is having with their own mind are one
+/// side. `secondary` is the other side — a turn a process put into the transcript rather than
+/// words anyone said. `highlight` is tiles, chips and progress, `signal` measured liveness alone
+/// — a status dot, an open microphone, a failure mark — and never a bubble's state. A control
+/// keeps its role's colour idle or active: state is carried by fill and by motion, never by a
+/// change of hue.
 ///
 /// The neutrals are Apple's semantic colours rather than values of ours, so a surface follows the
 /// person's appearance, contrast and accessibility settings as the system means it to. Only the
@@ -25,9 +28,13 @@ enum Theme {
 
     // MARK: Accents
 
-    /// Topo's own voice, and the controls that address it.
+    /// Topo's own voice, the controls that address it, and the outline on the person's own
+    /// bubble.
     static let primary = adaptive(light: 0x007687, dark: 0x00A4BB)
-    /// The person's side: the outline on their own bubble.
+    /// A turn a process put into the transcript — a reminder firing, a schedule, a limb's sensor
+    /// — rather than words a person said, so that a reader can tell one from their own at a
+    /// glance. Nothing writes such a turn yet, and no role for it exists: this is the colour the
+    /// first process that does will draw in.
     static let secondary = adaptive(light: 0x8D5B86, dark: 0xCD96C4)
     /// Tiles and indicators: chips, progress, confirmations.
     static let highlight = adaptive(light: 0x1679AF, dark: 0x6AC1FB)
