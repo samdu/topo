@@ -15,6 +15,7 @@ struct ChatView: View {
     @AppStorage("firstRunAnswered") private var answered = false
     @Environment(VoiceInput.self) private var voice
     @Environment(Speaker.self) private var speaker
+    @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("readAloud") private var readAloud = true
     /// The row at the end of the transcript: what is written, whether the keyboard has it, and
@@ -24,6 +25,13 @@ struct ChatView: View {
     @State private var row = NextTurn()
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    /// The two edges the pane's presence is read from, in the chat's own space: where the
+    /// transcript stops drawing, measured down from its own top edge, and where that top edge
+    /// and the pane's own are. Each is nil until something has measured it — iOS 17 has no
+    /// scroll geometry to read at all — and the pane is drawn whole while any of them is.
+    @State private var contentBottomInTranscript: CGFloat?
+    @State private var transcriptTop: CGFloat?
+    @State private var paneTop: CGFloat?
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
     @State private var showMemory = false
@@ -48,15 +56,7 @@ struct ChatView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                TranscriptView(turns: harness.turns, notice: harness.notice,
-                               // Holding one of Topo's turns says it again, which is how a
-                               // typed turn's reply — never read aloud as it lands — is heard.
-                               replay: Replay(speaking: speaker.speaking,
-                                              canSpeak: speaker.voice.ready,
-                                              say: { speaker.speak($0) },
-                                              stopSpeaking: { speaker.stop() }),
-                               actions: turnActions,
-                               draft: draftRow)
+                transcript
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
@@ -90,7 +90,7 @@ struct ChatView: View {
                     .padding(.bottom, 8)
                 }
             }
-            .safeAreaInset(edge: .bottom) {
+            .composerBar {
                 VStack(spacing: 0) {
                     // Once, and only while the memory is still in this app's own folder and has
                     // more than a handful in it. Not now is for good: no nag, no timer.
@@ -105,6 +105,9 @@ struct ChatView: View {
                     composer
                 }
             }
+            // The one space the transcript's content bottom and the pane's top edge are both
+            // measured in, so the two numbers the presence is worked out from are comparable.
+            .coordinateSpace(.named(Self.space))
             // The mark says the name, so the title says it twice.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -290,15 +293,71 @@ struct ChatView: View {
         await harness.retry()
     }
 
+    /// The name of the space both edges are measured in.
+    private static let space = "chat"
+
+    /// The transcript, and — from iOS 18, which is where there is a scroll geometry to read —
+    /// where its content ends and where its own top edge is. On iOS 17, the deployment target,
+    /// there is neither: nothing is measured and the pane is drawn whole, which is the pane as
+    /// it was before it had a presence.
+    @ViewBuilder private var transcript: some View {
+        let view = TranscriptView(turns: harness.turns, notice: harness.notice,
+                                  // Holding one of Topo's turns says it again, which is how a
+                                  // typed turn's reply — never read aloud as it lands — is heard.
+                                  replay: Replay(speaking: speaker.speaking,
+                                                 canSpeak: speaker.voice.ready,
+                                                 say: { speaker.speak($0) },
+                                                 stopSpeaking: { speaker.stop() }),
+                                  actions: turnActions,
+                                  draft: draftRow)
+        if #available(iOS 18, *) {
+            view
+                // Where the transcript stops drawing, measured down from the transcript's own
+                // top edge. `contentOffset` is the content's y at the top of the scroll view's
+                // frame, which reaches under the navigation bar; taking the top inset off puts
+                // the number back at the edge of the frame this view was laid out in, which is
+                // what `transcriptTop` is measured for. The stack's own trailing padding comes
+                // off with it: those points are content and draw nothing, so a pane over them
+                // is a pane over nothing.
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height - geometry.contentOffset.y
+                        - geometry.contentInsets.top - look.transcript.spacing
+                } action: { _, bottom in contentBottomInTranscript = bottom }
+                .topEdge(in: Self.space) { transcriptTop = $0 }
+        } else {
+            view
+        }
+    }
+
+    /// How much of a pane the pane is. One while any of the three edges is unmeasured: iOS 17
+    /// measures none of them, and a launch has not measured them yet.
+    private var panePresence: Double {
+        guard let contentBottomInTranscript, let transcriptTop, let paneTop else { return 1 }
+        return PanePresence.of(contentBottom: transcriptTop + contentBottomInTranscript,
+                               paneTop: paneTop, rise: look.composer.presenceRise,
+                               open: micState.open)
+    }
+
+    /// The four facts the glass draws the microphone from, read off `VoiceInput`.
+    private var micState: Composer.MicState {
+        Composer.MicState(canListen: voice.canListen, listening: voice.listening,
+                          owner: voice.owner, handsFree: voice.handsFree)
+    }
+
     /// The glass under the transcript. What the microphone is doing is four facts read off
     /// `VoiceInput` here and drawn there; the press is handed straight back to `micPressed`,
-    /// which is the whole of this screen's part in a session.
-    private var composer: some View {
-        Composer(typing: Bindable(row).typing,
-                 mic: Composer.MicState(canListen: voice.canListen, listening: voice.listening,
-                                        owner: voice.owner, handsFree: voice.handsFree),
-                 micPressed: { down in Task { await micPressed(down) } },
-                 micReport: micReport)
+    /// which is the whole of this screen's part in a session. Its own top edge is read off its
+    /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
+    /// the edge the presence is read against.
+    @ViewBuilder private var composer: some View {
+        let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
+                            micPressed: { down in Task { await micPressed(down) } },
+                            micReport: micReport)
+        if #available(iOS 18, *) {
+            view.topEdge(in: Self.space) { paneTop = $0 }
+        } else {
+            view
+        }
     }
 
     /// What the UI suites decode off the microphone after a press. A debug build only, so
@@ -357,6 +416,33 @@ struct ChatView: View {
                 // Nothing is coming for a turn that was never said, so nothing waits for it.
                 speaker.endAwaiting(taken, "the turn was taken back")
             }
+        }
+    }
+}
+
+@available(iOS 18, *)
+private extension View {
+    /// One view's top edge in a named space, reported as it moves. `onGeometryChange` rather
+    /// than a `GeometryReader` behind the view: it is the view's own geometry, read after every
+    /// layout, where a reader in a background reports the size it is given and can be read
+    /// before there is one.
+    func topEdge(in space: String, _ report: @escaping (CGFloat) -> Void) -> some View {
+        onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(space)).minY } action: { report($0) }
+    }
+}
+
+private extension View {
+    /// The composer is a bar under the transcript, and from iOS 26 that is what it is declared
+    /// as: `safeAreaBar` insets the scroll view the way `safeAreaInset` does and extends the
+    /// scroll view's own edge effect under it, so the system draws its fade beneath the pane
+    /// where content runs under it and nowhere else. Below 26 there is no such modifier and the
+    /// inset is the whole of it. It is the bar's declaration rather than a value the composer
+    /// draws, so it is an availability branch and not a `Look` field.
+    @ViewBuilder func composerBar<Bar: View>(@ViewBuilder _ bar: () -> Bar) -> some View {
+        if #available(iOS 26, *) {
+            safeAreaBar(edge: .bottom, content: bar)
+        } else {
+            safeAreaInset(edge: .bottom, content: bar)
         }
     }
 }

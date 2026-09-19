@@ -19,6 +19,11 @@ struct Composer: View {
     @Binding var typing: Bool
     /// What the microphone is doing, read off `VoiceInput` by the chat screen.
     var mic: MicState = .init()
+    /// How much of a pane the pane is, 0 to 1: the surface, its edge and the glow it spills are
+    /// drawn at this, so at 0 there is the well, the jewel and the flanks over whatever is behind
+    /// and nothing else. The chat works it out from the transcript's scroll geometry
+    /// (`PanePresence`); a screen with no geometry to read hands over 1, which is the pane whole.
+    var presence: Double = 1
     /// Called with true on the press and false on the release. The session logic is
     /// `VoiceInput`'s; this passes the press on and nothing else.
     var micPressed: (Bool) -> Void = { _ in }
@@ -91,12 +96,13 @@ struct Composer: View {
         }
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, look.composer.verticalInset)
-        .background(lozenge)
-        .shadow(look.composer.glow.at(mic.open ? 1 : 0))
+        .background(lozenge.opacity(presence))
+        .shadow(look.composer.glow.at(mic.open ? presence : 0))
         .containerRelativeFrame(.horizontal) { width, _ in width * look.composer.widthFraction }
         .padding(.bottom, look.composer.bottomPadding)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
         .animation(.easeInOut(duration: look.composer.duration), value: typing)
+        .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
     }
 
     /// The ink both ends are etched in: Topo's colour on clear glass, white once the glass
@@ -123,6 +129,11 @@ struct Composer: View {
     /// The system's glass where there is any, a material of the same shape below it. The tint
     /// is the same value at nothing while the microphone is shut, so what happens when it opens
     /// is an animation of one value and not a swap of one view for another.
+    ///
+    /// It is drawn at the presence, which is one value again rather than a branch: the whole
+    /// surface goes, its edge with it, where there is nothing behind the pane to lens. It is a
+    /// background and the glow is a shadow, so neither moves anything and what the pane is drawn
+    /// at cannot change where its own edge is measured to be.
     @ViewBuilder private var lozenge: some View {
         let shape = RoundedRectangle(cornerRadius: look.composer.cornerRadius, style: .continuous)
         let tint = look.composer.tint.opacity(mic.open ? look.composer.tintOpacity : 0)
@@ -175,6 +186,27 @@ struct Composer: View {
             // VoiceOver on a release build hears the label alone.
             .accessibilityValue(micReport ?? "")
             #endif
+    }
+}
+
+/// How much of a pane the pane is, from where the transcript's content ends and where the pane's
+/// own top edge is. Both are measured in one space by the chat screen, so the offer card and the
+/// keyboard's rise move the pane's top rather than being assumed away.
+///
+/// Nothing under the pane is no pane at all: glass over a flat background is a lens with an edge
+/// and nothing behind it. It becomes one over `rise` points of content running under it, which
+/// is a share and not a step, so the surface arrives as the content does.
+///
+/// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
+/// open, and that must not depend on how much has been said.
+enum PanePresence {
+    /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing
+    /// is the step the share cannot express: a pane, or none, with nothing in between.
+    static func of(contentBottom: CGFloat, paneTop: CGFloat, rise: CGFloat, open: Bool) -> Double {
+        if open { return 1 }
+        let under = contentBottom - paneTop
+        guard rise > 0 else { return under > 0 ? 1 : 0 }
+        return Double(min(max(under / rise, 0), 1))
     }
 }
 

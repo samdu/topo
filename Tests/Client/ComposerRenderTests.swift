@@ -14,7 +14,10 @@ import XCTest
 /// Every field of `Look.Composer` is varied here except four, and each of the four was shown to
 /// render byte for byte the same picture before it was left out rather than assumed to:
 ///
-/// - `duration` is a time, so a still frame is the same either way. Nothing tests it.
+/// - `duration` and `presenceDuration` are times, so a still frame is the same either way.
+///   Nothing tests them.
+/// - `presenceRise` is not drawn by the composer at all: it is how the chat works out the
+///   presence it hands over, and it is `PanePresenceTests` that holds it.
 /// - `dimmedSaturation` is drawn by `.saturation`, which `ImageRenderer` does not apply. The
 ///   colour draining out of the jewel is by eye, in the dimmed screenshots on the PR.
 /// - `widthFraction` is `containerRelativeFrame`, which has no container in a renderer. How
@@ -30,7 +33,10 @@ import XCTest
 /// The surface is set to `flat` in every render here. The system's own glass is drawn by the
 /// compositor and `ImageRenderer` does not draw it, so a tint laid under it would be a change
 /// these digests could not see; `flat` is the same tint with nothing over it, which is exactly
-/// what is being asked about.
+/// what is being asked about. This is also the whole of what the presence can be said to do
+/// here: that the flat substitute goes when the presence does. Whether the *system's* glass goes
+/// with it is a compositor's business and is by eye, in the screenshots on the PR and in the
+/// device box under them.
 @MainActor
 final class ComposerRenderTests: XCTestCase {
     private let size = CGSize(width: 340, height: 160)
@@ -45,8 +51,8 @@ final class ComposerRenderTests: XCTestCase {
     /// The composer at rest, or in whatever state it is handed, as a digest: what a failure here
     /// has to say is that two pictures are the same, and the bytes are not worth printing.
     private func raster(_ mic: Composer.MicState = .init(), typing: Bool = false,
-                        look: Look) throws -> String {
-        let view = Composer(typing: .constant(typing), mic: mic)
+                        presence: Double = 1, look: Look) throws -> String {
+        let view = Composer(typing: .constant(typing), mic: mic, presence: presence)
             .environment(\.look, look)
             .frame(width: size.width, height: size.height)
             .background(Color.white)
@@ -106,6 +112,28 @@ final class ComposerRenderTests: XCTestCase {
         tall.composer.verticalInset = look.composer.verticalInset + 12
         XCTAssertNotEqual(try raster(held, look: look), try raster(held, look: tall),
                           "the look's vertical inset does not reach the pane")
+    }
+
+    /// A look whose pane draws nothing: the flat substitute at no alpha, and a glow of nothing.
+    /// It is the picture the pane at no presence has to be, since a pane over nothing is meant
+    /// to be no pane and not a fainter one.
+    private func panelessLook() -> Look {
+        var look = flatLook()
+        look.composer.tintOpacity = 0
+        look.composer.glow = Look.Shadow(color: .clear, radius: 0, y: 0)
+        return look
+    }
+
+    /// The surface and the glow are drawn at the presence, so over the empty end of the
+    /// transcript there is the well, the jewel and the flanks and nothing else behind them.
+    func testThePaneAndItsGlowAreDrawnAtThePresence() throws {
+        let look = flatLook()
+        XCTAssertNotEqual(try raster(held, presence: 0, look: look),
+                          try raster(held, presence: 1, look: look),
+                          "the presence does not reach the pane")
+        XCTAssertEqual(try raster(held, presence: 0, look: look),
+                       try raster(held, presence: 1, look: panelessLook()),
+                       "the pane at no presence is not the picture of no pane")
     }
 
     /// `flat`, `material` and `glass` are three surfaces and not three views, so a look that
