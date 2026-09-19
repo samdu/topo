@@ -284,6 +284,12 @@ struct Look: Equatable, Sendable {
         /// How long the pane takes to take the colour, and the flanks to go.
         var duration = 0.2
 
+        /// How much of a pane the pane is: clear over the empty end of the transcript, glass
+        /// where turns run under it. How far the content runs under the pane before it is a
+        /// pane whole, and how long that takes.
+        var presenceRise: CGFloat = 48
+        var presenceDuration = 0.2
+
         var flank = Flank()
         var well = Well()
         var glyph = Glyph()
