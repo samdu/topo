@@ -127,7 +127,9 @@ struct Look: Equatable, Sendable {
         /// What sits under the tint.
         var surface: Surface
 
-        /// The person's side. `secondary` is the person's colour in the palette.
+        /// The person's side. `primary` is the person's colour in the palette, the same one
+        /// Topo's own voice wears; `secondary` is reserved for a turn a process put into the
+        /// transcript.
         static func bubble(_ screen: Screen) -> Enclosure {
             let padding: (CGFloat, CGFloat)
             switch screen {
@@ -135,7 +137,7 @@ struct Look: Equatable, Sendable {
             case .tv: padding = (20, 14)
             case .phone: padding = (14, 10)
             }
-            return Enclosure(accent: Theme.secondary, fillOpacity: 0.12, strokeWidth: 1.5,
+            return Enclosure(accent: Theme.primary, fillOpacity: 0.12, strokeWidth: 1.5,
                              cornerRadius: 18, horizontalPadding: padding.0,
                              verticalPadding: padding.1, surface: .flat)
         }
