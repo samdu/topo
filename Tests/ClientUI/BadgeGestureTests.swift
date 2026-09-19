@@ -22,7 +22,8 @@ final class BadgeGestureTests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Diagnostics"].exists, "the tap also opened the diagnostics")
         // The rows the sheet is for. Their order is the screenshots' to show; that each is there
         // at all is cheap enough to hold here.
-        for row in ["Model", "Read replies aloud", "Vocabulary", "Diagnostics", "About Topo", "Sign out"] {
+        for row in ["Model", "Read replies aloud", "Vocabulary", "Where it lives", "Diagnostics",
+                    "About Topo", "Sign out"] {
             XCTAssertTrue(app.descendants(matching: .any)[row].exists, "the settings have no \(row)")
         }
     }

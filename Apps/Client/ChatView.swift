@@ -19,6 +19,12 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var showSettings = false
     @State private var showDiagnostics = false
+    /// Where the memory's folder lives, and the control that moves it: the settings sheet's
+    /// Memory section, and what the offer card above the composer opens.
+    @State private var showMemory = false
+    /// The offer card's answer, once and for good: Choose folder or Not now. It is the chat's
+    /// rather than the sheet's, because the card it answers is drawn here.
+    @AppStorage("memoryOfferAnswered") private var memoryOfferAnswered = false
     #if DEBUG
     /// The last spoken turn's nonce, for the badge's debug report.
     @State private var spokenNonce: String?
@@ -81,7 +87,21 @@ struct ChatView: View {
                     .padding(.bottom, 8)
                 }
             }
-            .safeAreaInset(edge: .bottom) { composer }
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    // Once, and only while the memory is still in this app's own folder and has
+                    // more than a handful in it. Not now is for good: no nag, no timer.
+                    if memory.offersICloudDrive(answered: memoryOfferAnswered) {
+                        MemoryOfferCard(choose: {
+                            memoryOfferAnswered = true
+                            showMemory = true
+                        }, notNow: {
+                            memoryOfferAnswered = true
+                        })
+                    }
+                    composer
+                }
+            }
             // The mark says the name, so the title says it twice.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -99,6 +119,9 @@ struct ChatView: View {
             // The diagnostics are the badge's own, held rather than tapped, so they open from
             // here as well as from the sheet: a screen that will not draw is still reachable.
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
+            // The memory screen is the sheet's Memory section, and also what the offer card
+            // above the composer opens, so the chat presents it too.
+            .sheet(isPresented: $showMemory) { MemoryView() }
         }
         .task {
             // The mirror runs on every pass of the loop below, which is what makes the folder

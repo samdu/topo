@@ -55,6 +55,13 @@ public actor VaultMirror {
         public var deleted: [VaultPath] = []
         /// Things in the directory a vault cannot hold, left where they are.
         public var skipped: [String] = []
+        /// Why each of those was left, by name. A folder that will not sync is a question
+        /// about one file, and this is the answer the diagnostics row carries.
+        public var reasons: [String: String] = [:]
+        /// How many of the memory's files the folder holds at the end of the pass — the ones
+        /// this pass wrote or found already saying what the store says, so a file it was
+        /// refused is not counted. What "the vault has more than a handful in it" is read from.
+        public var files = 0
 
         public var isEmpty: Bool {
             written.isEmpty && removed.isEmpty && pushed.isEmpty && deleted.isEmpty
@@ -125,6 +132,7 @@ public actor VaultMirror {
         var report = Report()
         let scan = try await scan()
         report.skipped = scan.skipped
+        report.reasons = scan.reasons
         let previous: State
         if let synced { previous = synced } else { previous = try await loadState() }
         var onDisk = scan.files
@@ -158,6 +166,7 @@ public actor VaultMirror {
             report.written += applied.written
             report.removed += applied.removed
             report.skipped += applied.skipped
+            report.reasons.merge(applied.reasons) { _, new in new }
             let late = Set(applied.lateEdits.keys).union(applied.lateRemovals)
             guard round < 4, !late.isEmpty else { break }
             for (path, text) in applied.lateEdits { onDisk[path] = text }
@@ -180,10 +189,12 @@ public actor VaultMirror {
         // A link both scanned and written to is one thing in the way, and a file a round
         // wrote and the round after left alone is one thing written.
         report.skipped = Array(Set(report.skipped)).sorted()
+        report.reasons = report.reasons.filter { report.skipped.contains($0.key) }
         report.written = Array(Set(report.written)).sorted()
         report.removed = Array(Set(report.removed)).sorted()
         report.pushed = Array(Set(report.pushed)).sorted()
         report.deleted = Array(Set(report.deleted)).sorted()
+        report.files = state.files.count
         return report
     }
 
@@ -243,6 +254,8 @@ public actor VaultMirror {
         var written: [VaultPath] = []
         var removed: [VaultPath] = []
         var skipped: [String] = []
+        /// Why each skipped name was left alone.
+        var reasons: [String: String] = [:]
         /// Text found where the scan's text should have been.
         var lateEdits: [VaultPath: String] = [:]
         /// Files somebody took away while this sync was running.
@@ -266,8 +279,9 @@ public actor VaultMirror {
                 out.state.heads[path] = vault.heads(of: path)
             case .different(let text):
                 out.lateEdits[path] = text
-            case .blocked:
+            case .blocked(let why):
                 out.skipped.append(path.string)
+                out.reasons[path.string] = why
             }
         }
 
@@ -297,10 +311,11 @@ public actor VaultMirror {
             case .different(let text):
                 out.onDisk[file.path] = text
                 out.lateEdits[file.path] = text
-            case .blocked:
+            case .blocked(let why):
                 // A link, or bytes nobody can read as text, standing where this file goes.
                 // Somebody else's business, left alone and left out of the state.
                 out.skipped.append(file.path.string)
+                out.reasons[file.path.string] = why
             }
         }
         return out
@@ -315,9 +330,9 @@ public actor VaultMirror {
         /// Somebody else's text is there.
         case different(String)
         /// Something that is not this vault's file to act on: a link, or bytes that are
-        /// not text. Left exactly as it is, and left out of the state, so the next sync
-        /// looks again.
-        case blocked
+        /// not text, and which of those it is. Left exactly as it is, and left out of the
+        /// state, so the next sync looks again.
+        case blocked(String)
     }
 
     /// Replaces a file with what the store holds — but only if the folder still holds what
@@ -338,12 +353,12 @@ public actor VaultMirror {
             // other: the coordinator's wait is unbounded and the sign-out may have happened
             // in it.
             guard let folder = try self.openFolder(of: url, creating: true, check: cancellation.check)
-            else { return DiskOutcome.blocked }
+            else { return DiskOutcome.blocked("the way down to it is not the vault's") }
             defer { close(folder) }
             let name = url.lastPathComponent
             switch self.reading(name, in: folder) {
-            case .blocked:
-                return DiskOutcome.blocked
+            case .blocked(let why):
+                return DiskOutcome.blocked(why)
             case .folder:
                 // A folder standing where this file goes, left by the removals above or by
                 // a sync that had it as a folder. It is made way for only while it is still
@@ -353,7 +368,9 @@ public actor VaultMirror {
                 // will not go is what the store's file collides with, and the vault shows
                 // the two beside each other.
                 try cancellation.check()
-                guard unlinkat(folder, name, AT_REMOVEDIR) == 0 else { return DiskOutcome.blocked }
+                guard unlinkat(folder, name, AT_REMOVEDIR) == 0 else {
+                    return DiskOutcome.blocked("a folder of the person's is standing where it goes")
+                }
                 if expecting != nil { return DiskOutcome.gone }
             case .missing where expecting != nil:
                 return DiskOutcome.gone
@@ -369,7 +386,7 @@ public actor VaultMirror {
             // that wait has no business writing when its turn comes.
             try cancellation.check()
             guard try Self.place(Data(text.utf8), as: name, in: folder, check: cancellation.check)
-            else { return DiskOutcome.blocked }
+            else { return DiskOutcome.blocked("could not be written") }
             return DiskOutcome.done
         }
     }
@@ -379,17 +396,20 @@ public actor VaultMirror {
     private func coordinatedRemove(_ url: URL, expecting: String?) async throws -> DiskOutcome {
         try await Self.coordinated(url, reading: false,
                                    options: NSFileCoordinator.WritingOptions.forDeleting.rawValue) { url, cancellation in
-            guard let folder = try self.openFolder(of: url) else { return DiskOutcome.blocked }
+            guard let folder = try self.openFolder(of: url) else {
+                return DiskOutcome.blocked("the way down to it is not the vault's")
+            }
             defer { close(folder) }
             let name = url.lastPathComponent
             switch self.reading(name, in: folder) {
-            case .blocked, .folder: return DiskOutcome.blocked
+            case .blocked(let why): return DiskOutcome.blocked(why)
+            case .folder: return DiskOutcome.blocked("a folder of the person's is there now")
             case .missing: return DiskOutcome.gone
             case .text(let current) where current != expecting: return DiskOutcome.different(current)
             case .text: break
             }
             try cancellation.check()
-            guard unlinkat(folder, name, 0) == 0 else { return DiskOutcome.blocked }
+            guard unlinkat(folder, name, 0) == 0 else { return DiskOutcome.blocked("could not be taken away") }
             return DiskOutcome.done
         }
     }
@@ -522,8 +542,8 @@ public actor VaultMirror {
         case missing
         /// A folder of the person's, standing where a file of the store's goes.
         case folder
-        /// A link, or bytes that are not text.
-        case blocked
+        /// A link, or bytes that are not text, and which of those it is.
+        case blocked(String)
     }
 
     /// A file's text as it stands, read inside a coordination this actor already holds —
@@ -551,16 +571,27 @@ public actor VaultMirror {
         guard descriptor >= 0 else {
             // ELOOP is the link; ENOENT and ENOTDIR are nothing there. Anything else — no
             // permission, a device that has gone — is not this folder's file either.
-            return errno == ENOENT || errno == ENOTDIR ? .missing : .blocked
+            let failure = errno
+            return failure == ENOENT || failure == ENOTDIR ? .missing
+                : .blocked("could not be opened (errno \(failure))")
         }
         defer { close(descriptor) }
         var status = stat()
-        guard fstat(descriptor, &status) == 0 else { return .blocked }
+        guard fstat(descriptor, &status) == 0 else { return .blocked("could not be looked at (errno \(errno))") }
         if status.st_mode & S_IFMT == S_IFDIR { return .folder }
-        guard status.st_mode & S_IFMT == S_IFREG else { return .blocked }
+        guard status.st_mode & S_IFMT == S_IFREG else { return .blocked("is not a plain file") }
         let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: false)
-        guard let data = try? handle.readToEnd() else { return .blocked }
-        guard let text = String(data: data, encoding: .utf8) else { return .blocked }
+        // `readToEnd` answers nil at the end of the file, which an empty file is from the start,
+        // so an empty note — every note Obsidian has just made — is no text rather than no read.
+        let data: Data
+        do {
+            data = try handle.readToEnd() ?? Data()
+        } catch {
+            return .blocked("could not be read: \(error)")
+        }
+        guard let text = String(data: data, encoding: .utf8) else {
+            return .blocked("is not UTF-8 text (\(data.count) bytes)")
+        }
         return .text(text)
     }
 
@@ -794,6 +825,9 @@ public actor VaultMirror {
         var files: [VaultPath: String] = [:]
         var unreadable: Set<VaultPath> = []
         var skipped: [String] = []
+        /// Why each skipped name was left alone, so a folder that will not sync says which
+        /// file and which reason rather than only a count.
+        var reasons: [String: String] = [:]
     }
 
     private nonisolated func walkTree() throws -> Scan {
@@ -828,15 +862,17 @@ public actor VaultMirror {
                 continue
             case .folder:
                 continue
-            case .blocked:
+            case .blocked(let why):
                 // Something is there; this pass cannot read it. Left alone, and — the point —
                 // not read as an absence: a path the last sync wrote and this one cannot read
                 // is not the person deleting their note from every device they own.
                 scan.skipped.append(relative)
+                scan.reasons[relative] = why
                 if let path = VaultPath(relative) { scan.unreadable.insert(path) }
             case .text(let text):
                 guard let path = VaultPath(relative) else {
                     scan.skipped.append(relative)
+                    scan.reasons[relative] = "is not a name a vault can hold"
                     continue
                 }
                 scan.files[path] = text

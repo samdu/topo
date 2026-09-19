@@ -15,10 +15,7 @@ struct SettingsView: View {
     @State private var showDiagnostics = false
     @State private var showAbout = false
     @State private var showVocabulary = false
-    #if DEBUG
-    /// The vault's other home, asked about rather than built: see `VaultProbe`.
-    @State private var showVaultProbe = false
-    #endif
+    @State private var showMemory = false
 
     var body: some View {
         @Bindable var harness = harness
@@ -33,15 +30,14 @@ struct SettingsView: View {
                     Toggle("Read replies aloud", isOn: $readAloud)
                     Button("Vocabulary") { showVocabulary = true }
                 }
+                Section("Memory") {
+                    // The screen behind it says where the vault's folder is and carries the one
+                    // control that moves it, so the row names that rather than the section again.
+                    Button("Where it lives") { showMemory = true }
+                }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
                     Button("About Topo") { showAbout = true }
-                    #if DEBUG
-                    // Whether a folder in iCloud Drive › Obsidian, granted by the picker alone,
-                    // is one this app can read and write on a later launch. Nothing it does
-                    // reaches the memory; it goes when that answer is in.
-                    Button("Probe iCloud Drive…") { showVaultProbe = true }
-                    #endif
                 }
                 Section {
                     Button("Sign out", role: .destructive) { signOut.act() }
@@ -53,9 +49,7 @@ struct SettingsView: View {
             .sheet(isPresented: $showDiagnostics) { DiagnosticsView() }
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
-            #if DEBUG
-            .sheet(isPresented: $showVaultProbe) { VaultProbeView() }
-            #endif
+            .sheet(isPresented: $showMemory) { MemoryView() }
         }
         .tint(look.settings.tint)
     }
