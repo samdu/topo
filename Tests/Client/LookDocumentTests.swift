@@ -1,0 +1,388 @@
+import Foundation
+import SwiftUI
+import UIKit
+import XCTest
+
+@testable import Topo
+
+/// `look.json` as the app reads it: field by field onto the compiled look, with a field that is
+/// absent, misspelt, of the wrong kind or out of its range falling back on its own and saying so.
+///
+/// The first test here is the one that keeps the rest honest: it walks the look the fixture makes
+/// against the compiled one leaf by leaf, so a field added to `Look` and not taught to the
+/// document fails as a field the mind cannot reach — which is the whole point of the type.
+@MainActor
+final class LookDocumentTests: XCTestCase {
+
+    // MARK: Every field
+
+    /// A document naming every field overrides every field. The walk is over `Look` itself rather
+    /// than over a list kept beside it, so the list cannot go stale: a new field of the look is a
+    /// failure here until `look.json` can name it.
+    func testAFullDocumentOverridesEveryField() throws {
+        let reading = LookDocument.read(LookFixture.full)
+        XCTAssertEqual(reading.notes, [], "the fixture names something the document cannot read")
+        XCTAssertEqual(reading.state, .read(fields: LookFixture.fields),
+                       "the fixture set a different number of fields than the look has")
+
+        let unchanged = try LookCensus.same(Look(), reading.look)
+        XCTAssertEqual(unchanged, [], "these fields of the look no document can reach")
+    }
+
+    /// The census walks the look by reflection, so it has to know every kind of value the look is
+    /// made of. A kind it does not know would be quietly skipped, which would make the test above
+    /// pass over a field nothing reaches; this is what says it does not.
+    func testTheCensusKnowsEveryKindOfValueTheLookIsMadeOf() throws {
+        XCTAssertGreaterThan(try LookCensus.leafPaths(Look()).count, 100,
+                             "the walk found too few fields to be walking the whole look")
+    }
+
+    // MARK: No file, and files that are not one
+
+    func testAnAbsentFileIsTheCompiledLook() {
+        let reading = LookDocument.read(nil)
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.state, .absent)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertTrue(reading.summary.contains("the compiled look"))
+    }
+
+    func testAFileThatIsNotJSONIsTheCompiledLookAndSaysSo() {
+        let reading = LookDocument.read("# Look\n\nnot really json")
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.state, .unreadable("is not JSON"))
+        XCTAssertTrue(reading.summary.contains("is not JSON"))
+    }
+
+    func testAFileThatIsJSONAndNotAnObjectIsTheCompiledLook() {
+        let reading = LookDocument.read("[1, 2, 3]")
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.state, .unreadable("is not a JSON object"))
+    }
+
+    // MARK: One bad field
+
+    /// The point of reading field by field rather than through `Codable`: one value the document
+    /// gets wrong costs that value and nothing else. Everything the full fixture set still stands,
+    /// the one bad field is the compiled default, and the row says which field and why.
+    func testOneBadFieldKeepsEveryOtherOverrideAndReportsTheOne() throws {
+        let broken = LookFixture.full.replacingOccurrences(of: "\"cornerRadius\": 3",
+                                                           with: "\"cornerRadius\": \"wide\"")
+        XCTAssertNotEqual(broken, LookFixture.full, "the fixture no longer holds the field to break")
+        let reading = LookDocument.read(broken)
+
+        XCTAssertEqual(reading.look.bubble.cornerRadius, Look().bubble.cornerRadius,
+                       "a field the document got wrong was taken anyway")
+        XCTAssertEqual(reading.notes, ["bubble.cornerRadius is not a length in points"])
+        XCTAssertEqual(reading.state, .read(fields: LookFixture.fields - 1))
+
+        // Everything else the document said still stands, which is the claim: one bad field is
+        // one field, not a document thrown away. Compared leaf by leaf rather than with `==`,
+        // because two dynamic colours built from different closures are never equal to each
+        // other however they resolve, so `Look ==  Look` cannot answer this.
+        var expected = LookDocument.read(LookFixture.full).look
+        expected.bubble.cornerRadius = Look().bubble.cornerRadius
+        XCTAssertEqual(try LookCensus.different(reading.look, expected), [])
+        XCTAssertTrue(reading.summary.contains("bubble.cornerRadius"))
+    }
+
+    /// A field nobody reads is a misspelling, and a misspelling that says nothing is a document
+    /// whose author has no way to find out it did nothing.
+    func testAKeyNothingReadsIsReported() {
+        let reading = LookDocument.read("""
+        { "bubble": { "cornerRadis": 4 }, "compozer": {} }
+        """)
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.notes, ["bubble.cornerRadis is not a field of the look",
+                                       "compozer is not a field of the look"])
+    }
+
+    // MARK: Numbers
+
+    /// Each field is read in a range of its own, and a value outside it is refused rather than
+    /// clamped: a clamped value is a document quietly saying something other than what it says.
+    func testAValueOutsideItsFieldsRangeIsRefusedAndReported() {
+        let reading = LookDocument.read("""
+        { "bubble": { "fillOpacity": 4, "strokeWidth": -2 } }
+        """)
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.notes.count, 2)
+        XCTAssertTrue(reading.notes[0].contains("bubble.fillOpacity"), reading.notes[0])
+        XCTAssertTrue(reading.notes[1].contains("bubble.strokeWidth"), reading.notes[1])
+    }
+
+    /// What has to be pressed or read has a floor as well as a ceiling: a document may restyle
+    /// the microphone and may not shrink it out of the person's reach.
+    func testTheLengthsThatHaveToBeReachedHaveAFloor() {
+        let reading = LookDocument.read("""
+        { "composer": { "well": { "size": 2, "jewelSize": 1 }, "widthFraction": 0.01 },
+          "badge": { "size": 3 }, "draft": { "slot": 0 } }
+        """)
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.notes.count, 5, reading.notes.description)
+    }
+
+    /// JSON gives every number as an `NSNumber`, and a `Bool` is one. A true where a length goes
+    /// would otherwise be a padding of one point.
+    func testABooleanIsNotANumber() {
+        let reading = LookDocument.read("""
+        { "bubble": { "strokeWidth": true } }
+        """)
+        XCTAssertEqual(reading.look.bubble.strokeWidth, Look().bubble.strokeWidth)
+        XCTAssertEqual(reading.notes, ["bubble.strokeWidth is not a length in points"])
+    }
+
+    /// A number too big for its field never reaches a view, and neither does one too big to be a
+    /// number at all — which the parser refuses outright rather than handing over as an infinity.
+    /// Either way the look is the compiled one and the row says something other than "no file".
+    func testANumberNoViewCouldSurviveNeverReachesOne() {
+        for document in ["{ \"bubble\": { \"cornerRadius\": 1e30 } }",
+                         "{ \"bubble\": { \"cornerRadius\": 1e400 } }"] {
+            let reading = LookDocument.read(document)
+            XCTAssertEqual(reading.look, Look(), document)
+            XCTAssertNotEqual(reading.summary, LookDocument.read(nil).summary, document)
+        }
+    }
+
+    /// Every integer JSON hands back is an `NSNumber` a boolean would also be, so a `1` written
+    /// anywhere in a document is the field this is about: one that reads it as a boolean throws
+    /// every 0 and every 1 in the file away.
+    func testAOneIsANumberAndNotABoolean() {
+        let reading = LookDocument.read("""
+        { "bubble": { "strokeWidth": 1, "fillOpacity": 0 } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(reading.look.bubble.strokeWidth, 1)
+        XCTAssertEqual(reading.look.bubble.fillOpacity, 0)
+    }
+
+    /// The one column width that may be no width at all.
+    func testTheColumnsWidthMayBeInfinite() {
+        let reading = LookDocument.read("""
+        { "transcript": { "maximumLineWidth": "infinity" } }
+        """)
+        XCTAssertEqual(reading.look.transcript.maximumLineWidth, .infinity)
+        XCTAssertEqual(reading.notes, [])
+    }
+
+    func testANullIsNotAValue() {
+        let reading = LookDocument.read("""
+        { "bubble": { "accent": null } }
+        """)
+        XCTAssertEqual(reading.look, Look())
+        XCTAssertEqual(reading.notes, ["bubble.accent is null"])
+    }
+
+    // MARK: Colours
+
+    /// A colour is a pair as `Theme` writes one, and it resolves per appearance like the palette's
+    /// own: the light value in a light appearance and the dark one in a dark appearance.
+    func testAColourIsAHexPairThatResolvesPerAppearance() throws {
+        let reading = LookDocument.read("""
+        { "bubble": { "accent": ["#102030", "#405060"] } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        let colour = UIColor(reading.look.bubble.accent)
+        XCTAssertEqual(colour.resolvedColor(with: .init(userInterfaceStyle: .light)),
+                       UIColor(red: 0x10 / 255, green: 0x20 / 255, blue: 0x30 / 255, alpha: 1))
+        XCTAssertEqual(colour.resolvedColor(with: .init(userInterfaceStyle: .dark)),
+                       UIColor(red: 0x40 / 255, green: 0x50 / 255, blue: 0x60 / 255, alpha: 1))
+    }
+
+    /// One string is the same colour in both appearances, which is what the jewel's own glass
+    /// wants; eight digits carry an alpha, which is what a shadow wants.
+    func testOneStringIsBothAppearancesAndEightDigitsCarryAnAlpha() throws {
+        let reading = LookDocument.read("""
+        { "jewel": { "deep": "#0080FF", "dropShadow": { "color": "#00000080" } } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        let deep = UIColor(reading.look.jewel.deep)
+        XCTAssertEqual(deep.resolvedColor(with: .init(userInterfaceStyle: .light)),
+                       deep.resolvedColor(with: .init(userInterfaceStyle: .dark)))
+        var alpha: CGFloat = 0
+        UIColor(reading.look.jewel.dropShadow.color).getWhite(nil, alpha: &alpha)
+        XCTAssertEqual(alpha, 0x80 / 255, accuracy: 0.01)
+    }
+
+    func testSomethingThatIsNotAColourIsRefused() {
+        for value in ["\"teal\"", "\"#12345\"", "[\"#112233\"]", "42"] {
+            let reading = LookDocument.read("{ \"bubble\": { \"accent\": \(value) } }")
+            XCTAssertEqual(reading.look.bubble.accent, Look().bubble.accent, value)
+            XCTAssertEqual(reading.notes.count, 1, value)
+        }
+    }
+
+    // MARK: Names
+
+    func testAMaterialIsNamedAndAnUnknownOneIsRefused() {
+        XCTAssertEqual(LookDocument.read("{ \"bubble\": { \"surface\": \"glass\" } }").look.bubble.surface,
+                       .glass)
+        let wrong = LookDocument.read("{ \"bubble\": { \"surface\": \"frosted\" } }")
+        XCTAssertEqual(wrong.look.bubble.surface, Look().bubble.surface)
+        XCTAssertEqual(wrong.notes.count, 1)
+        XCTAssertTrue(wrong.notes[0].contains("\"material\""), wrong.notes[0])
+    }
+
+    // MARK: Compounds
+
+    /// A shadow the document names part of keeps the rest of the compiled one, so `{"radius": 9}`
+    /// is the same shadow further out rather than a black one at nothing.
+    func testAShadowNamedInPartKeepsTheRestOfTheCompiledOne() {
+        let reading = LookDocument.read("""
+        { "badge": { "markShadow": { "radius": 9 } } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(reading.look.badge.markShadow.radius, 9)
+        XCTAssertEqual(reading.look.badge.markShadow.color, Look().badge.markShadow.color)
+        XCTAssertEqual(reading.look.badge.markShadow.y, Look().badge.markShadow.y)
+    }
+
+    /// A font cannot be read back out of SwiftUI, so a weight with nothing to weigh is refused
+    /// rather than applied to a font nobody named.
+    func testAFontNamingOnlyAWeightIsRefused() {
+        let reading = LookDocument.read("""
+        { "transcript": { "bodyFont": { "weight": "bold" } } }
+        """)
+        XCTAssertEqual(reading.look.transcript.bodyFont, Look().transcript.bodyFont)
+        XCTAssertEqual(reading.notes, ["transcript.bodyFont names neither a style nor a size"])
+    }
+
+    func testAFontIsAStyleOrASizeAndOneFieldEitherWay() {
+        let styled = LookDocument.read("{ \"transcript\": { \"bodyFont\": \"footnote\" } }")
+        XCTAssertEqual(styled.look.transcript.bodyFont, .system(.footnote))
+        XCTAssertEqual(styled.state, .read(fields: 1))
+
+        let sized = LookDocument.read("""
+        { "transcript": { "bodyFont": { "size": 22, "weight": "semibold" } } }
+        """)
+        XCTAssertEqual(sized.look.transcript.bodyFont, Font.system(size: 22).weight(.semibold))
+        XCTAssertEqual(sized.state, .read(fields: 1), "a font counts as the one field it is")
+    }
+
+    /// The cut edge of the well is a gradient, so its colours are a list — and a list holding
+    /// something that is not a colour is not half a gradient.
+    func testAListOfColoursIsAllOfThemOrNoneOfThem() {
+        let good = LookDocument.read("""
+        { "composer": { "well": { "edgeColors": ["#FF0000", "#00FF00"] } } }
+        """)
+        XCTAssertEqual(good.look.composer.well.edgeColors.count, 2)
+
+        let bad = LookDocument.read("""
+        { "composer": { "well": { "edgeColors": ["#FF0000", 7] } } }
+        """)
+        XCTAssertEqual(bad.look.composer.well.edgeColors, Look().composer.well.edgeColors)
+        XCTAssertEqual(bad.notes.count, 1)
+    }
+
+    // MARK: The row
+
+    /// A count alone is a device run that has to be repeated to learn anything, so the row names
+    /// the first few reasons and counts the rest.
+    func testTheRowNamesTheFirstReasonsAndCountsTheRest() {
+        let reading = LookDocument.read("""
+        { "bubble": { "a": 1, "b": 2, "c": 3, "d": 4, "e": 5, "f": 6, "g": 7 } }
+        """)
+        XCTAssertEqual(reading.notes.count, 7)
+        XCTAssertTrue(reading.summary.contains("bubble.a"), reading.summary)
+        XCTAssertTrue(reading.summary.contains("bubble.e"), reading.summary)
+        XCTAssertFalse(reading.summary.contains("bubble.f"), reading.summary)
+        XCTAssertTrue(reading.summary.contains("and 2 more"), reading.summary)
+    }
+}
+
+/// The look walked by reflection, leaf by leaf, so a claim about "every field" is about the type
+/// and not about a list somebody remembered to update.
+///
+/// The kinds of value a look is made of are named here rather than inferred, because a kind the
+/// walk did not recognise would be skipped, and a skipped field is exactly the field the walk
+/// exists to catch. Anything else it meets is an error, not a shrug.
+enum LookCensus {
+    /// How many fields of the look a document can set. A compound — a shadow, a size, a font — is
+    /// one field, because that is how the reader counts what it took.
+    static let fields = 95
+
+    enum Trouble: Error, CustomStringConvertible {
+        case unknownKind(String, String)
+
+        var description: String {
+            switch self {
+            case .unknownKind(let path, let kind):
+                "\(path) is a \(kind), which the census does not know how to compare"
+            }
+        }
+    }
+
+    /// Every leaf of a look, by the path the document writes it at.
+    static func leafPaths(_ look: Look) throws -> [String] {
+        var paths: [String] = []
+        try walk(look, look, "", { path, _ in paths.append(path) })
+        return paths
+    }
+
+    /// The paths at which two looks hold the same value. Empty is two looks with nothing in
+    /// common, which is what a full document against the compiled look has to be.
+    static func same(_ a: Look, _ b: Look) throws -> [String] {
+        var same: [String] = []
+        try walk(a, b, "") { path, equal in if equal { same.append(path) } }
+        return same
+    }
+
+    /// The paths at which two looks part company. Empty is two looks that draw the same, which
+    /// `==` cannot say for looks holding colours: a dynamic colour is never equal to another
+    /// built from another closure, however the two resolve.
+    static func different(_ a: Look, _ b: Look) throws -> [String] {
+        var different: [String] = []
+        try walk(a, b, "") { path, equal in if !equal { different.append(path) } }
+        return different
+    }
+
+    private static func walk(_ a: Any, _ b: Any, _ path: String,
+                             _ found: (String, Bool) -> Void) throws {
+        if let leaf = compare(a, b) {
+            found(path.isEmpty ? "(the look)" : path, leaf)
+            return
+        }
+        let (left, right) = (Mirror(reflecting: a), Mirror(reflecting: b))
+        if left.displayStyle == .collection || right.displayStyle == .collection {
+            guard left.children.count == right.children.count else { return found(path, false) }
+            for (index, pair) in zip(left.children, right.children).enumerated() {
+                try walk(pair.0.value, pair.1.value, "\(path)[\(index)]", found)
+            }
+            return
+        }
+        guard !left.children.isEmpty else {
+            throw Trouble.unknownKind(path, "\(type(of: a))")
+        }
+        for (one, other) in zip(left.children, right.children) {
+            let name = one.label ?? "?"
+            try walk(one.value, other.value, path.isEmpty ? name : "\(path).\(name)", found)
+        }
+    }
+
+    /// Whether two values of a kind the look is made of are the same, or nil for something that
+    /// is not one of those kinds and has to be walked into.
+    ///
+    /// A colour is compared as it resolves rather than as it was made: two dynamic colours built
+    /// from different closures are never `==`, so `==` alone would call every colour changed and
+    /// the walk would prove nothing about colours at all.
+    private static func compare(_ a: Any, _ b: Any) -> Bool? {
+        if let a = a as? Color { return (b as? Color).map { resolved(a) == resolved($0) } ?? false }
+        switch a {
+        case is CGFloat, is Double, is Int, is Bool, is String,
+             is Font, is Font.Weight, is Font.TextStyle,
+             is Angle, is UnitPoint, is CGSize,
+             is Look.Surface, is Look.Jewel.Glass:
+            guard let a = a as? any Equatable else { return false }
+            return alike(a, b)
+        default:
+            return nil
+        }
+    }
+
+    private static func alike<T: Equatable>(_ a: T, _ b: Any) -> Bool { a == (b as? T) }
+
+    private static func resolved(_ colour: Color) -> [UIColor] {
+        [UITraitCollection(userInterfaceStyle: .light), UITraitCollection(userInterfaceStyle: .dark)]
+            .map { UIColor(colour).resolvedColor(with: $0) }
+    }
+}

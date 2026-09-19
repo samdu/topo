@@ -1,0 +1,152 @@
+import Foundation
+
+/// A `look.json` that names every field of `Look`, each at a value the compiled look does not
+/// have. It is the fixture the coverage walk is run against — a field of the look this document
+/// does not reach is a field the mind cannot reach — and the source the per-field documents in
+/// the render suite are cut from.
+///
+/// Every value here differs from the shipped default for that field, including the four the open
+/// jewel differs from the resting one in, so one slab of JSON serves both.
+enum LookFixture {
+    /// How many fields of the look this document sets, which is every one of them: the jewel is
+    /// two fields of the look and not one, since the composer's open jewel is a slab of its own.
+    /// It is the count the reader answers with, so a compound — a shadow, a size, a font — is one.
+    static let fields = 142
+
+    static let full = """
+    {
+      "transcript": {
+        "spacing": 20,
+        "captionSpacing": 7,
+        "horizontalPadding": 24,
+        "maximumLineWidth": "infinity",
+        "bodyFont": { "style": "largeTitle", "weight": "black" },
+        "labelFont": { "style": "title", "weight": "light" },
+        "noticeFont": { "size": 31, "weight": "heavy" },
+        "text": ["#101010", "#F0F0F0"],
+        "caption": ["#202020", "#E0E0E0"]
+      },
+      "bubble": {
+        "accent": ["#FF0000", "#00FF00"],
+        "fillOpacity": 0.42,
+        "strokeWidth": 4,
+        "cornerRadius": 3,
+        "horizontalPadding": 26,
+        "verticalPadding": 19,
+        "surface": "material"
+      },
+      "plain": {
+        "accent": ["#0000FF", "#FFFF00"],
+        "fillOpacity": 0.3,
+        "strokeWidth": 2,
+        "cornerRadius": 9,
+        "horizontalPadding": 11,
+        "verticalPadding": 7,
+        "surface": "glass"
+      },
+      "draft": {
+        "minimumWidth": 90,
+        "spacing": 17,
+        "slot": 48,
+        "sendFont": { "style": "footnote", "weight": "thin" },
+        "sendInk": ["#AA00AA", "#00AAAA"],
+        "sendRestingOpacity": 0.8
+      },
+      "jewel": \(jewel),
+      "badge": {
+        "size": 44,
+        "markSize": 28,
+        "markColor": ["#FF00FF", "#00FF00"],
+        "markShadow": { "color": "#01020304", "radius": 7, "x": 3, "y": -2 }
+      },
+      "settings": { "tint": ["#336699", "#99CCFF"] },
+      "composer": {
+        "widthFraction": 0.55,
+        "bottomPadding": 22,
+        "horizontalInset": 30,
+        "verticalInset": 14,
+        "cornerRadius": 10,
+        "spacing": 6,
+        "surface": "flat",
+        "tint": ["#B3002D", "#FF6680"],
+        "tintOpacity": 0.95,
+        "glow": { "color": "#20304050", "radius": 9, "x": -4, "y": 11 },
+        "duration": 0.9,
+        "dimmedSaturation": 2.5,
+        "dimmedOpacity": 0.15,
+        "flank": {
+          "font": { "style": "caption2", "weight": "bold" },
+          "ink": ["#0A0B0C", "#F5F4F3"],
+          "openInk": ["#112233", "#332211"],
+          "etchOpacity": 0.35,
+          "etchLight": { "color": "#AABBCCDD", "radius": 3, "x": 1, "y": 2 },
+          "etchShade": { "color": "#DDCCBBAA", "radius": 2, "x": -1, "y": -3 },
+          "heldOpacity": 0.85
+        },
+        "well": {
+          "size": 96,
+          "jewelSize": 40,
+          "floor": ["#123123", "#321321"],
+          "bore": { "color": "#0A141E32", "radius": 11, "x": 2, "y": 9 },
+          "lip": { "color": "#141E28FF", "radius": 4, "x": -2, "y": 3 },
+          "catchLight": { "color": "#E6E6E64D", "radius": 6, "x": 4, "y": -6 },
+          "edgeColors": ["#FF0000", "#00FF00", "#0000FF", "#FFFFFF"],
+          "edgeWidth": 3
+        },
+        "glyph": {
+          "size": 34,
+          "weight": "black",
+          "ink": ["#2B2B2B", "#D4D4D4"],
+          "openInk": ["#7F00FF", "#FF7F00"],
+          "shadow": { "color": "#3C3C3C80", "radius": 5, "x": -1, "y": 4 },
+          "openShadowOpacity": 0.7
+        },
+        "openJewel": \(jewel)
+      }
+    }
+    """
+
+    /// One slab of glass, named once and poured twice: it differs from `Look.Jewel()` in every
+    /// field and from the composer's `openJewel` in the four that one changes.
+    private static let jewel = """
+    {
+        "deep": "#3B0A14",
+        "mid": "#8A1C2E",
+        "pale": "#E8A0AC",
+        "milk": "#F7DDE2",
+        "bodyGlasses": ["pale", "milk", "deep", "mid"],
+        "bodyCenter": { "x": 0.2, "y": 0.3 },
+        "bodyEndRadius": 70,
+        "bodyShade": { "color": "#11223344", "radius": 8, "x": 2, "y": -5 },
+        "bodyCatch": { "color": "#55667788", "radius": 6, "x": -3, "y": 4 },
+        "driftGlass": "deep",
+        "driftHaloGlass": "mid",
+        "driftSize": { "width": 60, "height": 12 },
+        "driftEndRadius": 40,
+        "driftOpacity": 0.15,
+        "driftHaloOpacity": 0.75,
+        "driftAngle": 55,
+        "driftOffset": { "width": -9, "height": -2 },
+        "driftBlur": 6,
+        "bandGlass": "pale",
+        "bandSize": { "width": 30, "height": 40 },
+        "bandOpacity": 0.2,
+        "bandAngle": -60,
+        "bandOffset": { "width": -8, "height": 9 },
+        "bandBlur": 4,
+        "sheenColor": ["#123456", "#654321"],
+        "sheenShadeColor": ["#ABCDEF", "#FEDCBA"],
+        "sheenOpacity": 0.9,
+        "sheenShadeOpacity": 0.6,
+        "sheenStart": { "x": 0.1, "y": 0.4 },
+        "sheenEnd": { "x": 0.9, "y": 0.2 },
+        "bevelColor": ["#0F0F0F", "#F0F0F0"],
+        "bevelShadeColor": ["#1F1F1F", "#E0E0E0"],
+        "bevelWidth": 5,
+        "bevelHighlightOpacity": 0.2,
+        "bevelMidOpacity": 0.65,
+        "bevelShadeOpacity": 0.05,
+        "dropShadow": { "color": "#99887766", "radius": 12, "x": 5, "y": -6 }
+    }
+    """
+}

@@ -98,17 +98,13 @@ struct TurnRow: View {
         }
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
-        // Held, never tapped: a turn brushed in passing must not start talking. Topo's turns
-        // offer saying them again (or stopping) and copy; the person's own offer edit and copy.
+        // Held, never tapped: a turn brushed in passing must not start talking. What is offered
+        // is `TurnMenu`'s to say, so which items a turn gets is a value a test can read rather
+        // than a gesture nothing can press.
         .contextMenu {
-            if let offer = replay.offer(for: turn) {
-                Button { offer.act() } label: { Label(offer.title, systemImage: offer.systemImage) }
-            }
-            if mine, let edit = actions.edit {
-                Button { edit(turn) } label: { Label("Edit", systemImage: "pencil") }
-            }
-            Button { UIPasteboard.general.string = turn.text } label: {
-                Label("Copy", systemImage: "doc.on.doc")
+            ForEach(TurnMenu.items(for: turn, replay: replay, actions: actions,
+                                   copy: { UIPasteboard.general.string = $0 })) { item in
+                Button { item.act() } label: { Label(item.title, systemImage: item.systemImage) }
             }
         }
         #endif
@@ -117,6 +113,40 @@ struct TurnRow: View {
         // to be somewhere focus can land.
         .focusable()
         #endif
+    }
+}
+
+/// What holding a turn offers, as values rather than as a block of buttons inside a view: a
+/// context menu is a gesture no test can press, so which items each role gets is decided here and
+/// read there.
+///
+/// Topo's turns offer saying them again — or stopping, while something is being said — and copy;
+/// the person's own offer edit, where there is a row to put the words back into, and copy. A
+/// person's own words are not Topo's to say, which is `Replay`'s answer and not this one's.
+enum TurnMenu {
+    /// One item: what it reads, the mark beside it, and what it does.
+    struct Item: Identifiable {
+        let title: String
+        let systemImage: String
+        let act: @MainActor () -> Void
+
+        var id: String { title }
+    }
+
+    /// Where Copy's text goes is handed in rather than reached for, so the items can be read
+    /// without a pasteboard behind them.
+    static func items(for turn: Turn, replay: Replay = Replay(), actions: TurnActions = TurnActions(),
+                      copy: @escaping @MainActor (String) -> Void) -> [Item] {
+        var items: [Item] = []
+        if let offer = replay.offer(for: turn) {
+            items.append(Item(title: offer.title, systemImage: offer.systemImage, act: offer.act))
+        }
+        if turn.role == .person, let edit = actions.edit {
+            items.append(Item(title: "Edit", systemImage: "pencil", act: { edit(turn) }))
+        }
+        let text = turn.text
+        items.append(Item(title: "Copy", systemImage: "doc.on.doc", act: { copy(text) }))
+        return items
     }
 }
 
