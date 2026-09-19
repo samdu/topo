@@ -3,8 +3,8 @@ import SwiftUI
 
 /// Why a turn did or did not go: the lease, the last CloudKit error, the last API answer, the
 /// token, whether the ear's and the voice's models are resident, and when the memory's folder was
-/// last in step with the store. Opened by a long press on the title, or
-/// from the menu. Reads everything afresh each time it appears and on Refresh; changes nothing.
+/// last in step with the store. Opened by a long press on the badge, or from the settings sheet
+/// it opens. Reads everything afresh each time it appears and on Refresh; changes nothing.
 struct DiagnosticsView: View {
     @Environment(Harness.self) private var harness
     @Environment(VoiceInput.self) private var voice

@@ -2,7 +2,7 @@
 import SwiftUI
 
 /// The ear's word list, edited in place: a name it keeps mangling goes in here and works from
-/// the next press. Opened from the chat menu.
+/// the next press. Opened from the settings sheet.
 struct VocabularyView: View {
     @Environment(VoiceInput.self) private var voice
     @Environment(\.dismiss) private var dismiss

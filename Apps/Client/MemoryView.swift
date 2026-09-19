@@ -2,10 +2,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Memory section: where the vault folder is, and the one control that moves it.
-///
-/// It lives behind an item in the chat's overflow menu until the settings sheet exists, and moves
-/// into that sheet's Memory section when it does.
+/// The Memory section: where the vault folder is, and the one control that moves it. It is what
+/// the settings sheet's Memory section opens, and what the offer card above the composer opens
+/// when the person chooses a folder.
 struct MemoryView: View {
     @Environment(Memory.self) private var memory
     @Environment(\.dismiss) private var dismiss

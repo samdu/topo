@@ -487,7 +487,7 @@ final class Speaker {
 extension Speaker {
     enum Engine: String, Codable { case pocket }
 
-    /// The chat title's debug-only report of the last reply: how many replies `speak` has been
+    /// The badge's debug-only report of the last reply: how many replies `speak` has been
     /// given, which engine the last one took (`pocket`, the only one there is), its text, whether
     /// audio for it started (the first frame queued) and whether it came to its end rather than
     /// being stopped. `first` and `rtf` are the reply's, not a sentence's: seconds from `speak`
