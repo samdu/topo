@@ -144,7 +144,7 @@ final class ThemeTests: XCTestCase {
                                                          $0.accessibilityContrast = .high }),
     ]
 
-    /// The seed is fixed: the mark and the icon gradient are the same teal whatever the
+    /// The seed is fixed: the mark is the same teal whatever the
     /// appearance, which is the one thing about it that is not a palette decision.
     func testSeedIsFixed() {
         XCTAssertEqual(hex(Theme.teal, light), "#1E8C9E")

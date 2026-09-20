@@ -2,23 +2,18 @@ import UIKit
 
 /// The Topo mark, drawn from `Design/topo-mark.svg` in the bundle.
 ///
-/// The client holds the same curves as Swift (`Apps/Shared/OctopusMark.swift`)
-/// and has to be changed alongside the drawing; this reads the drawing itself,
-/// so Womble is one place the mark cannot go stale. The file uses a move and
-/// cubic segments and nothing else, which is why so little of SVG is read
-/// here — `Design/make-icons.swift` reads it the same way.
+/// Every client reads that file — this one, `Apps/Shared/OctopusMark.swift`
+/// and `Design/make-icons.swift` — so none of them holds a copy of the curves
+/// and the mark cannot go stale. The file is a move and cubic segments and
+/// nothing else, which is why so little of SVG is read here.
 final class MarkView: UIView {
     /// The drawing's own space; every coordinate in the file is in it.
     private static let side: CGFloat = 100
-    private static let strokeWidth: CGFloat = 6
 
-    private let arms: [UIBezierPath]
-    private let head: UIBezierPath?
+    private let outline: UIBezierPath?
 
     init(svg: String? = MarkView.bundledSVG()) {
-        let drawing = svg ?? ""
-        arms = MarkView.arms(in: drawing)
-        head = MarkView.head(in: drawing)
+        outline = MarkView.outline(in: svg ?? "")
         super.init(frame: .zero)
         backgroundColor = .clear
         isOpaque = false
@@ -27,27 +22,18 @@ final class MarkView: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// True when the drawing was there and read: eight arms and a head.
-    var isDrawn: Bool { return arms.count == 8 && head != nil }
+    /// True when the drawing was there and read.
+    var isDrawn: Bool { return outline != nil }
 
     override func draw(_ rect: CGRect) {
         let scale = min(bounds.width, bounds.height) / MarkView.side
-        guard scale > 0 else { return }
-        let transform = CGAffineTransform(translationX: (bounds.width - MarkView.side * scale) / 2,
+        guard scale > 0, let outline = outline else { return }
+        var transform = CGAffineTransform(translationX: (bounds.width - MarkView.side * scale) / 2,
                                           y: (bounds.height - MarkView.side * scale) / 2)
             .scaledBy(x: scale, y: scale)
-        Palette.accent.setStroke()
+        guard let scaled = outline.cgPath.copy(using: &transform) else { return }
         Palette.accent.setFill()
-        for arm in arms {
-            let path = UIBezierPath(cgPath: arm.cgPath.copy(using: [transform]) ?? arm.cgPath)
-            path.lineWidth = MarkView.strokeWidth * scale
-            path.lineCapStyle = .round
-            path.lineJoinStyle = .round
-            path.stroke()
-        }
-        if let head = head, let scaled = head.cgPath.copy(using: [transform]) {
-            UIBezierPath(cgPath: scaled).fill()
-        }
+        UIBezierPath(cgPath: scaled).fill()
     }
 
     static func bundledSVG(in bundle: Bundle = Bundle.main) -> String? {
@@ -55,32 +41,21 @@ final class MarkView: UIView {
         return try? String(contentsOf: url, encoding: .utf8)
     }
 
-    /// One `d` attribute: a move, then cubic segments.
-    static func arms(in svg: String) -> [UIBezierPath] {
-        return matches("<path d=\"([^\"]+)\"", in: svg).compactMap { d in
-            let numbers = d.split(whereSeparator: { " ,MC".contains($0) }).compactMap { Double($0) }
-            guard numbers.count >= 8, (numbers.count - 2) % 6 == 0 else { return nil }
-            let path = UIBezierPath()
-            path.move(to: CGPoint(x: numbers[0], y: numbers[1]))
-            for start in stride(from: 2, to: numbers.count, by: 6) {
-                path.addCurve(to: CGPoint(x: numbers[start + 4], y: numbers[start + 5]),
-                              controlPoint1: CGPoint(x: numbers[start], y: numbers[start + 1]),
-                              controlPoint2: CGPoint(x: numbers[start + 2], y: numbers[start + 3]))
-            }
-            return path
+    /// The one `d` attribute: a move, then cubic segments, then the close that makes the
+    /// outline a silhouette.
+    static func outline(in svg: String) -> UIBezierPath? {
+        guard let d = matches("<path d=\"([^\"]+)\"", in: svg).first else { return nil }
+        let numbers = d.split(whereSeparator: { " ,MCZ".contains($0) }).compactMap { Double($0) }
+        guard numbers.count >= 8, (numbers.count - 2) % 6 == 0 else { return nil }
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: numbers[0], y: numbers[1]))
+        for start in stride(from: 2, to: numbers.count, by: 6) {
+            path.addCurve(to: CGPoint(x: numbers[start + 4], y: numbers[start + 5]),
+                          controlPoint1: CGPoint(x: numbers[start], y: numbers[start + 1]),
+                          controlPoint2: CGPoint(x: numbers[start + 2], y: numbers[start + 3]))
         }
-    }
-
-    static func head(in svg: String) -> UIBezierPath? {
-        guard let cx = number("cx=\"([0-9.]+)\"", in: svg),
-              let cy = number("cy=\"([0-9.]+)\"", in: svg),
-              let r = number(" r=\"([0-9.]+)\"", in: svg) else { return nil }
-        return UIBezierPath(ovalIn: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2))
-    }
-
-    private static func number(_ pattern: String, in svg: String) -> CGFloat? {
-        guard let text = matches(pattern, in: svg).first, let value = Double(text) else { return nil }
-        return CGFloat(value)
+        path.close()
+        return path
     }
 
     private static func matches(_ pattern: String, in text: String) -> [String] {

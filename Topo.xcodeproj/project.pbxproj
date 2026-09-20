@@ -22,6 +22,7 @@
 		0CB7A7CF45352A0C90878229 /* ModelDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */; };
 		0CB9C6F0BF69A4125ADF0F51 /* Memory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AECABE45D12B711410A2ED /* Memory.swift */; };
 		10356762FE3EC781DA7DB5B8 /* SurfaceTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */; };
+		11DB03A3B196E498EE9229BF /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		15379415C6F4FC595ACDA7E2 /* womble.js in Resources */ = {isa = PBXBuildFile; fileRef = 5FA3798B7F6069020E5A4DA0 /* womble.js */; };
 		16918B8B33C4D5EC925A1862 /* capital-of-france.wav in Resources */ = {isa = PBXBuildFile; fileRef = 8D9560A4BB990698B0D1E786 /* capital-of-france.wav */; };
 		19A62A893D0B7D987CE76127 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
@@ -107,6 +108,7 @@
 		6DDF523A0250D4A9CC22C13C /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		6FB46136563FED2942CB8295 /* VaultDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E270E681606D89AAEA041E6 /* VaultDownloads.swift */; };
 		72726826FE4958249B7EFF62 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
+		73A4054C3FA45E24C3655044 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
@@ -132,6 +134,7 @@
 		898DCC65F9AF024811776C52 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		8C031FE613E8A808216E049D /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC10F86563FE12BC674EFBB /* AboutView.swift */; };
 		8DC7F6A8F29EFF59088C1EA9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
+		8EFF69F6AEB8325BA0231FD0 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		8F23C4CC1D002938AB5A7F2F /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
 		8F774C342A06BCBA1B0B8662 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A383104A833CDB1DFF33D305 /* Composer.swift */; };
 		9033B137D8B8028A45CDB059 /* TopoLink in Frameworks */ = {isa = PBXBuildFile; productRef = 05964D437C17D363B9B1006F /* TopoLink */; };
@@ -208,6 +211,7 @@
 		E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		E4F6A39CB234B2F7FF938D1C /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		E72AC5641EFE61743159DCD5 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 5A4E38620A9CC6B4ED612A12 /* TopoAuth */; };
+		E942602EA806665C4E0B77D5 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		E9C3F1CE0924C7104534402E /* LookScreenshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = F59AA6D01DD8D8703F00072C /* LookScreenshots.swift */; };
 		EAE76D18E221DDE86E6B8E9F /* NextTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168BFCB3EC9C31AD43D68959 /* NextTurn.swift */; };
 		EB5D170F823BF4964F6331DB /* ModelDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */; };
@@ -349,6 +353,7 @@
 		D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
 		D946D8851F96D23296B16179 /* RoleSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelectorTests.swift; sourceTree = "<group>"; };
 		D9BDDB4560950858CA3F4314 /* purple-elephants.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "purple-elephants.wav"; sourceTree = "<group>"; };
+		DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */ = {isa = PBXFileReference; path = "topo-mark.svg"; sourceTree = "<group>"; };
 		DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Look.swift; sourceTree = "<group>"; };
 		DEF0C378213C9A0018F5BC0B /* TopoLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoLink; path = Packages/TopoLink; sourceTree = SOURCE_ROOT; };
 		E2DC2072C5D784DECA9AEAE0 /* Vocabulary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Vocabulary.swift; sourceTree = "<group>"; };
@@ -462,6 +467,7 @@
 			children = (
 				2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */,
 				75CB24A74CCC2EDCEE3C1327 /* Apps */,
+				FAEE9030D41B592DBC26843C /* Design */,
 				563C364857507E01F7F9A349 /* Packages */,
 				73516B840F018A2E1C1376ED /* Tests */,
 				9F92B42EC0130B3AB3D11DAE /* Womble */,
@@ -684,6 +690,14 @@
 				10C7E3FD777A713DA6298113 /* WatchRootView.swift */,
 			);
 			path = TopoWatch;
+			sourceTree = "<group>";
+		};
+		FAEE9030D41B592DBC26843C /* Design */ = {
+			isa = PBXGroup;
+			children = (
+				DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */,
+			);
+			path = Design;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -925,6 +939,7 @@
 				6D6F51A6884E7842339B80AC /* Assets.xcassets in Resources */,
 				AEDBC2E2814F7E6370987732 /* PrivacyInfo.xcprivacy in Resources */,
 				9040B9EE59A3C73B93E3DE32 /* index.html in Resources */,
+				E942602EA806665C4E0B77D5 /* topo-mark.svg in Resources */,
 				5CAFD5862DC2B9484E9493EF /* womble.css in Resources */,
 				15379415C6F4FC595ACDA7E2 /* womble.js in Resources */,
 			);
@@ -937,6 +952,7 @@
 				F710CD8D19E9952AD050CCD8 /* Assets.xcassets in Resources */,
 				8DC7F6A8F29EFF59088C1EA9 /* PrivacyInfo.xcprivacy in Resources */,
 				AB0C7C4754391EDC4D4A7E0B /* THIRD-PARTY in Resources */,
+				8EFF69F6AEB8325BA0231FD0 /* topo-mark.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -955,6 +971,7 @@
 				DDAF0AAE6CDED176CD2FCEA2 /* Assets.xcassets in Resources */,
 				1E6472BE7B0F51AC2B8B0D30 /* PrivacyInfo.xcprivacy in Resources */,
 				8F23C4CC1D002938AB5A7F2F /* THIRD-PARTY in Resources */,
+				73A4054C3FA45E24C3655044 /* topo-mark.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -966,6 +983,7 @@
 				6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */,
 				86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */,
 				3E0191DE9AE9C06EF5B40374 /* models.json in Resources */,
+				11DB03A3B196E498EE9229BF /* topo-mark.svg in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
