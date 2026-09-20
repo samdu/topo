@@ -52,9 +52,90 @@ final class LookReachTests: XCTestCase {
     /// excuse, and this is what says so.
     func testTheUnshowableFieldsAreReallyUnshowable() throws {
         for field in try LookFieldDocuments.all() where Self.unshowable[field.path] != nil {
-            XCTAssertFalse(try draws(field.path),
-                           "\(field.path) is excused as \(Self.unshowable[field.path]!), and it draws")
+            guard try draws(field.path) else { continue }
+            // This has failed on the CI runner and on no engineer's Mac, so the failure has to
+            // arrive carrying what the runner saw rather than only the claim that it saw it.
+            let shown = try show(field.path)
+            XCTFail("\(field.path) is excused as \(Self.unshowable[field.path]!), and it draws"
+                    + " — \(shown)")
         }
+    }
+
+    /// What a field that unexpectedly draws actually changed, attached to the result bundle: the
+    /// two pictures, a mask of where they differ, and the numbers. Only a failure pays for this.
+    ///
+    /// The magnitude is the thing to read first. A difference of a shade or two is the render
+    /// server rounding a curve's antialiasing between two windows, which is not this field
+    /// drawing and is what `LookStage.differ` exists to tolerate; anything larger is something
+    /// on the screen really changing, and then the mask says where.
+    private func show(_ path: String) throws -> String {
+        let field = try XCTUnwrap(LookFieldDocuments.all().first { $0.path == path }, path)
+        let look = LookDocument.read(field.document, onto: Self.companion(path)).look
+        for surface in Surface.order(for: path) {
+            let mine = try surface.picture(look, path)
+            let base = try surface.picture(Self.companion(path), path)
+            let a = try LookStage.pixels(of: base), b = try LookStage.pixels(of: mine)
+            guard a.count == b.count else { return "\(surface.rawValue): two different sizes" }
+
+            var channels = 0, worst = 0, pixels = 0
+            var minX = Int.max, maxX = -1, minY = Int.max, maxY = -1
+            let width = Int(base.size.width * base.scale)
+            var mask = [UInt8](repeating: 0, count: a.count)
+            for pixel in 0..<(a.count / 4) {
+                var here = 0
+                for channel in 0..<3 {
+                    let i = pixel * 4 + channel
+                    let d = a[i] > b[i] ? Int(a[i]) - Int(b[i]) : Int(b[i]) - Int(a[i])
+                    if d > 0 { channels += 1 }
+                    here = max(here, d)
+                }
+                worst = max(worst, here)
+                mask[pixel * 4 + 3] = 255
+                if here > 0 {
+                    pixels += 1
+                    mask[pixel * 4] = 255
+                    let x = pixel % width, y = pixel / width
+                    minX = min(minX, x); maxX = max(maxX, x)
+                    minY = min(minY, y); maxY = max(maxY, y)
+                }
+            }
+            guard pixels > 0 else { continue }
+
+            attach(base, "\(path)-\(surface.rawValue)-without")
+            attach(mine, "\(path)-\(surface.rawValue)-with")
+            if let picture = Self.bitmap(mask, width: width, height: a.count / 4 / width,
+                                         scale: base.scale) {
+                attach(picture, "\(path)-\(surface.rawValue)-mask")
+            }
+            let scale = Int(base.scale)
+            let size = worst <= 2
+                ? "within a shade, so this is the render server rounding rather than the field"
+                : "more than a shade, so something on the screen really changed"
+            return "on \(surface.rawValue): \(pixels) pixels and \(channels) channels differ,"
+                + " worst \(worst) of 255 (\(size)),"
+                + " box in points x \(minX / scale)…\(maxX / scale) y \(minY / scale)…\(maxY / scale)"
+                + " of \(width / scale)×\(a.count / 4 / width / scale);"
+                + " pictures and mask attached"
+        }
+        return "no surface differed the second time it was asked, so the difference did not repeat"
+    }
+
+    private func attach(_ image: UIImage, _ name: String) {
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
+    }
+
+    private static func bitmap(_ bytes: [UInt8], width: Int, height: Int,
+                               scale: CGFloat) -> UIImage? {
+        var bytes = bytes
+        guard let context = CGContext(
+            data: &bytes, width: width, height: height, bitsPerComponent: 8,
+            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+            let made = context.makeImage() else { return nil }
+        return UIImage(cgImage: made, scale: scale, orientation: .up)
     }
 
     /// Whether any surface of the chat is drawn differently under the document that sets this
@@ -140,6 +221,54 @@ final class LookReachTests: XCTestCase {
         /// does not draw, so every composer render here is flattened — except the one asking
         /// about that very field, which is what the staged surfaces are for.
         static func flattened(_ path: String) -> String { path == "composer.surface" ? path : "flat" }
+
+        /// The same surface as a picture rather than a digest, which is what a failure needs in
+        /// order to say what it saw.
+        func picture(_ look: Look, _ path: String) throws -> UIImage {
+            var look = look
+            if path != "composer.surface" { look.composer.surface = .flat }
+            switch self {
+            case .settings:
+                return try LookStage.image(SettingsView(signOut: SignOut()).environment(Fixtures.harness()),
+                                           look: look)
+            case .canvas: return try LookStage.image(Self.staged(row: .writing), look: look)
+            case .canvasDimmed:
+                return try LookStage.image(Self.staged(mic: .init(canListen: false)), look: look)
+            case .canvasNotice:
+                return try LookStage.image(Self.staged(notice: "Topo is on another device."), look: look)
+            case .canvasWide:
+                return try LookStage.image(Self.staged(row: .writing), look: look,
+                                           size: CGSize(width: 900, height: 700))
+            case .turnPerson: return try Self.picture(TurnRow(turn: Fixtures.person), look)
+            case .turnTopo: return try Self.picture(TurnRow(turn: Fixtures.topo), look)
+            case .draftWriting: return try Self.picture(DraftRow(draft: Fixtures.writing), look)
+            case .draftInFlight: return try Self.picture(DraftRow(draft: Fixtures.inFlight), look)
+            case .draftEmpty: return try Self.picture(DraftRow(draft: Fixtures.empty), look)
+            case .composerIdle: return try Self.picture(Fixtures.composer(.init()), look, 340, 170)
+            case .composerHeld: return try Self.picture(Fixtures.composer(Fixtures.held), look, 340, 170)
+            case .composerHandsFree:
+                return try Self.picture(Fixtures.composer(Fixtures.handsFree), look, 340, 170)
+            case .composerDimmed:
+                return try Self.picture(Fixtures.composer(.init(canListen: false)), look, 340, 170)
+            case .badge: return try Self.picture(TopoBadge(), look, 80, 80)
+            }
+        }
+
+        private static func picture(_ view: some View, _ look: Look,
+                                    _ width: CGFloat = 320, _ height: CGFloat? = nil) throws -> UIImage {
+            let animations = UIView.areAnimationsEnabled
+            UIView.setAnimationsEnabled(false)
+            defer { UIView.setAnimationsEnabled(animations) }
+
+            let sized = view
+                .environment(\.look, look)
+                .transaction { $0.animation = nil }
+                .frame(width: width, height: height)
+                .background(Color.white)
+            let renderer = ImageRenderer(content: sized)
+            renderer.scale = 2
+            return try XCTUnwrap(renderer.uiImage, "the surface rendered to nothing")
+        }
 
         func raster(_ look: Look, _ path: String) throws -> String {
             var look = look
