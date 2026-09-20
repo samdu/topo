@@ -83,16 +83,28 @@ enum LookStage {
     }
 
     static func digest(_ image: UIImage) throws -> String {
-        let bytes = try pixels(of: image)
+        SHA256.hash(data: Data(try bytes(image))).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// One picture's pixels, four bytes to each. A picture with nothing in it is a failure of
+    /// its own: a stage that drew nothing would make every look look alike.
+    static func bytes(_ image: UIImage) throws -> [UInt8] {
+        let cgImage = try XCTUnwrap(image.cgImage, "no bitmap behind the render")
+        var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &bytes, width: cgImage.width, height: cgImage.height, bitsPerComponent: 8,
+            bytesPerRow: cgImage.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         XCTAssertGreaterThan(Set(bytes).count, 8, "the stage drew a blank picture, so it says nothing")
-        return SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
+        return bytes
     }
 
     /// The settled bitmap of a view: what two staged pictures are compared by, since a digest is
     /// the wrong currency for the render server — see `differ`.
     static func plane(_ view: some View, look: Look, style: UIUserInterfaceStyle = .light,
                       size: CGSize = LookStage.size) throws -> [UInt8] {
-        try pixels(of: try image(view, look: look, style: style, size: size))
+        try bytes(try image(view, look: look, style: style, size: size))
     }
 
     /// Whether two pictures are pictures of two different things.
@@ -110,17 +122,5 @@ enum LookStage {
             return true
         }
         return false
-    }
-
-    /// The bitmap behind a render, which is what two pictures are the same or different by.
-    static func pixels(of image: UIImage) throws -> [UInt8] {
-        let cgImage = try XCTUnwrap(image.cgImage, "no bitmap behind the render")
-        var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
-        let context = try XCTUnwrap(CGContext(
-            data: &bytes, width: cgImage.width, height: cgImage.height, bitsPerComponent: 8,
-            bytesPerRow: cgImage.width * 4, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
-        return bytes
     }
 }

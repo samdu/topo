@@ -9,9 +9,10 @@ import Foundation
 /// jewel differs from the resting one in, so one slab of JSON serves both.
 enum LookFixture {
     /// How many fields of the look this document sets, which is every one of them: the jewel is
-    /// two fields of the look and not one, since the composer's open jewel is a slab of its own.
-    /// It is the count the reader answers with, so a compound — a shadow, a size, a font — is one.
-    static let fields = 142
+    /// three fields of the look and not one, since the badge's slab and the composer's open one
+    /// are stones of their own. It is the count the reader answers with, so a compound — a
+    /// shadow, a size, a font — is one.
+    static let fields = 141
 
     static let full = """
     {
@@ -45,6 +46,24 @@ enum LookFixture {
         "surface": "glass"
       },
       "draft": {
+        "written": {
+          "accent": ["#FF7700", "#0077FF"],
+          "fillOpacity": 0.5,
+          "strokeWidth": 5,
+          "cornerRadius": 2,
+          "horizontalPadding": 28,
+          "verticalPadding": 21,
+          "surface": "material"
+        },
+        "sending": {
+          "accent": ["#77FF00", "#7700FF"],
+          "fillOpacity": 0.55,
+          "strokeWidth": 6,
+          "cornerRadius": 5,
+          "horizontalPadding": 30,
+          "verticalPadding": 23,
+          "surface": "material"
+        },
         "minimumWidth": 90,
         "spacing": 17,
         "slot": 48,
@@ -53,11 +72,17 @@ enum LookFixture {
         "sendRestingOpacity": 0.8
       },
       "jewel": \(jewel),
+      "press": {
+        "wall": 0.05,
+        "shade": ["#7F0000", "#00007F"],
+        "catchLight": ["#00FF7F", "#FF007F"],
+        "soften": 0.9,
+        "floor": 0.9
+      },
       "badge": {
-        "size": 44,
-        "markSize": 28,
-        "markColor": ["#FF00FF", "#00FF00"],
-        "markShadow": { "color": "#01020304", "radius": 7, "x": 3, "y": -2 }
+        "size": 56,
+        "markSize": 36,
+        "jewel": \(jewel)
       },
       "settings": { "tint": ["#336699", "#99CCFF"] },
       "composer": {
@@ -72,6 +97,8 @@ enum LookFixture {
         "tintOpacity": 0.95,
         "glow": { "color": "#20304050", "radius": 9, "x": -4, "y": 11 },
         "duration": 0.9,
+        "presenceRise": 120,
+        "presenceDuration": 0.7,
         "dimmedSaturation": 2.5,
         "dimmedOpacity": 0.15,
         "flank": {
@@ -96,44 +123,24 @@ enum LookFixture {
         "glyph": {
           "size": 34,
           "weight": "black",
-          "ink": ["#2B2B2B", "#D4D4D4"],
-          "openInk": ["#7F00FF", "#FF7F00"],
-          "shadow": { "color": "#3C3C3C80", "radius": 5, "x": -1, "y": 4 },
-          "openShadowOpacity": 0.7
+          "openCast": ["#7F00FF", "#FF7F00"]
         },
         "openJewel": \(jewel)
       }
     }
     """
 
-    /// One slab of glass, named once and poured twice: it differs from `Look.Jewel()` in every
-    /// field and from the composer's `openJewel` in the four that one changes.
+    /// One stone, named once and cut three times: it differs from `Look.Jewel()` in every field,
+    /// and from the badge's slab and the composer's open one in the fields each of those changes,
+    /// so one slab of JSON serves all three.
     private static let jewel = """
     {
-        "deep": "#3B0A14",
-        "mid": "#8A1C2E",
-        "pale": "#E8A0AC",
-        "milk": "#F7DDE2",
-        "bodyGlasses": ["pale", "milk", "deep", "mid"],
-        "bodyCenter": { "x": 0.2, "y": 0.3 },
-        "bodyEndRadius": 70,
+        "stone": "not-a-stone",
+        "cast": ["#3B0A14", "#8A1C2E"],
+        "castOpacity": 0.35,
+        "castBlend": "multiply",
         "bodyShade": { "color": "#11223344", "radius": 8, "x": 2, "y": -5 },
         "bodyCatch": { "color": "#55667788", "radius": 6, "x": -3, "y": 4 },
-        "driftGlass": "deep",
-        "driftHaloGlass": "mid",
-        "driftSize": { "width": 60, "height": 12 },
-        "driftEndRadius": 40,
-        "driftOpacity": 0.15,
-        "driftHaloOpacity": 0.75,
-        "driftAngle": 55,
-        "driftOffset": { "width": -9, "height": -2 },
-        "driftBlur": 6,
-        "bandGlass": "pale",
-        "bandSize": { "width": 30, "height": 40 },
-        "bandOpacity": 0.2,
-        "bandAngle": -60,
-        "bandOffset": { "width": -8, "height": 9 },
-        "bandBlur": 4,
         "sheenColor": ["#123456", "#654321"],
         "sheenShadeColor": ["#ABCDEF", "#FEDCBA"],
         "sheenOpacity": 0.9,

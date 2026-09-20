@@ -78,11 +78,23 @@ struct ChatCanvas: View {
                            draft: draft)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .topBarTrailing) { TopoBadge() } }
+                .toolbar {
+                    // The same bar the chat puts the badge in: from iOS 26 on it puts none of
+                    // its own glass behind the jewel, which is the whole of the control.
+                    if #available(iOS 26, *) {
+                        badgeItem.sharedBackgroundVisibility(.hidden)
+                    } else {
+                        badgeItem
+                    }
+                }
                 .safeAreaInset(edge: .bottom) {
                     Composer(typing: .constant(false), mic: mic)
                 }
         }
+    }
+
+    private var badgeItem: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) { TopoBadge() }
     }
 
     /// The row is drawn from what it is handed, so a state of it is a value here rather than a

@@ -32,10 +32,8 @@ final class LookScreenshots: XCTestCase {
         "verticalPadding": 16
       },
       "jewel": {
-        "deep": "#3A2200",
-        "mid": "#7A4E00",
-        "pale": "#E8C48A",
-        "milk": "#F8EBD6"
+        "cast": "#7A4E00",
+        "castOpacity": 0.8
       },
       "badge": { "size": 36, "markSize": 23 },
       "composer": {
@@ -62,8 +60,8 @@ final class LookScreenshots: XCTestCase {
             let written = try LookStage.image(canvas, look: reading.look, style: style)
             // And compared the way the render server's drawings are compared, so a difference of
             // a shade along an antialiased edge is not read as the document either.
-            XCTAssertTrue(try LookStage.differ(try LookStage.pixels(of: compiled),
-                                               try LookStage.pixels(of: written)),
+            XCTAssertTrue(try LookStage.differ(try LookStage.bytes(compiled),
+                                               try LookStage.bytes(written)),
                           "\(name): the document changed no more of the chat than a shade")
             attach(compiled, "chat-default-\(name)")
             attach(written, "chat-document-\(name)")

@@ -189,19 +189,51 @@ final class LookDocumentTests: XCTestCase {
                        UIColor(red: 0x40 / 255, green: 0x50 / 255, blue: 0x60 / 255, alpha: 1))
     }
 
-    /// One string is the same colour in both appearances, which is what the jewel's own glass
+    /// One string is the same colour in both appearances, which is what a stone's own cast
     /// wants; eight digits carry an alpha, which is what a shadow wants.
     func testOneStringIsBothAppearancesAndEightDigitsCarryAnAlpha() throws {
         let reading = LookDocument.read("""
-        { "jewel": { "deep": "#0080FF", "dropShadow": { "color": "#00000080" } } }
+        { "jewel": { "cast": "#0080FF", "dropShadow": { "color": "#00000080" } } }
         """)
         XCTAssertEqual(reading.notes, [])
-        let deep = UIColor(reading.look.jewel.deep)
-        XCTAssertEqual(deep.resolvedColor(with: .init(userInterfaceStyle: .light)),
-                       deep.resolvedColor(with: .init(userInterfaceStyle: .dark)))
+        let cast = UIColor(reading.look.jewel.cast)
+        XCTAssertEqual(cast.resolvedColor(with: .init(userInterfaceStyle: .light)),
+                       cast.resolvedColor(with: .init(userInterfaceStyle: .dark)))
         var alpha: CGFloat = 0
         UIColor(reading.look.jewel.dropShadow.color).getWhite(nil, alpha: &alpha)
         XCTAssertEqual(alpha, 0x80 / 255, accuracy: 0.01)
+    }
+
+    /// The row's two states are two enclosures under `draft`, read with the same reader the
+    /// bubble is, so a document can colour a turn being written and one on its way separately
+    /// and leave the landed bubble where it is.
+    func testTheDraftsTwoEnclosuresAreReadFromTheDocument() throws {
+        let reading = LookDocument.read("""
+        { "draft": { "written": { "accent": "#112233" }, "sending": { "accent": "#445566" } } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(reading.state, .read(fields: 2))
+        let light = UITraitCollection(userInterfaceStyle: .light)
+        XCTAssertEqual(UIColor(reading.look.draft.written.accent).resolvedColor(with: light),
+                       UIColor(red: 0x11 / 255, green: 0x22 / 255, blue: 0x33 / 255, alpha: 1))
+        XCTAssertEqual(UIColor(reading.look.draft.sending.accent).resolvedColor(with: light),
+                       UIColor(red: 0x44 / 255, green: 0x55 / 255, blue: 0x66 / 255, alpha: 1))
+        XCTAssertEqual(reading.look.bubble.accent, Look().bubble.accent,
+                       "a document that colours the draft moved the landed bubble too")
+    }
+
+    /// The rest of each enclosure is the bubble's shape, so a document naming only a colour
+    /// leaves the row the size the landed turn will be.
+    func testTheDraftsEnclosuresShipWithTheBubblesShape() {
+        let draft = Look().draft
+        for enclosure in [draft.written, draft.sending] {
+            XCTAssertEqual(enclosure.cornerRadius, Look().bubble.cornerRadius)
+            XCTAssertEqual(enclosure.horizontalPadding, Look().bubble.horizontalPadding)
+            XCTAssertEqual(enclosure.verticalPadding, Look().bubble.verticalPadding)
+            XCTAssertEqual(enclosure.strokeWidth, Look().bubble.strokeWidth)
+            XCTAssertEqual(enclosure.fillOpacity, Look().bubble.fillOpacity)
+            XCTAssertEqual(enclosure.surface, Look().bubble.surface)
+        }
     }
 
     func testSomethingThatIsNotAColourIsRefused() {
@@ -229,12 +261,12 @@ final class LookDocumentTests: XCTestCase {
     /// is the same shadow further out rather than a black one at nothing.
     func testAShadowNamedInPartKeepsTheRestOfTheCompiledOne() {
         let reading = LookDocument.read("""
-        { "badge": { "markShadow": { "radius": 9 } } }
+        { "jewel": { "bodyShade": { "radius": 9 } } }
         """)
         XCTAssertEqual(reading.notes, [])
-        XCTAssertEqual(reading.look.badge.markShadow.radius, 9)
-        XCTAssertEqual(reading.look.badge.markShadow.color, Look().badge.markShadow.color)
-        XCTAssertEqual(reading.look.badge.markShadow.y, Look().badge.markShadow.y)
+        XCTAssertEqual(reading.look.jewel.bodyShade.radius, 9)
+        XCTAssertEqual(reading.look.jewel.bodyShade.color, Look().jewel.bodyShade.color)
+        XCTAssertEqual(reading.look.jewel.bodyShade.y, Look().jewel.bodyShade.y)
     }
 
     /// A font cannot be read back out of SwiftUI, so a weight with nothing to weigh is refused
@@ -371,7 +403,7 @@ enum LookCensus {
         case is CGFloat, is Double, is Int, is Bool, is String,
              is Font, is Font.Weight, is Font.TextStyle,
              is Angle, is UnitPoint, is CGSize,
-             is Look.Surface, is Look.Jewel.Glass:
+             is Look.Surface, is BlendMode:
             guard let a = a as? any Equatable else { return false }
             return alike(a, b)
         default:

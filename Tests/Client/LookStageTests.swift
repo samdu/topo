@@ -42,15 +42,16 @@ final class LookStageTests: XCTestCase {
         XCTAssertEqual(unsteady, [], "these staged surfaces drew more than one picture of one look")
     }
 
-    /// The surfaces `ImageRenderer` draws, which reproduce exactly and are compared by digest.
+    /// The surfaces `ImageRenderer` draws, which reproduce exactly — so they are asked for
+    /// exactly, without the shade of tolerance the render server's need.
     func testEveryDrawnSurfaceGivesOnePicture() throws {
         var unsteady: [String] = []
         for surface in LookReachTests.Surface.allCases where surface.isDrawn {
-            _ = try surface.raster(Look(), "stage")
-            let made = try (0..<Self.asks).map { _ in try surface.raster(Look(), "stage") }
+            _ = try surface.picture(Look(), "stage")
+            let made = try (0..<Self.asks).map { _ in try surface.picture(Look(), "stage") }
             if Set(made).count != 1 { unsteady.append(surface.rawValue) }
         }
-        XCTAssertEqual(unsteady, [], "these drawn surfaces gave more than one digest of one look")
+        XCTAssertEqual(unsteady, [], "these drawn surfaces gave more than one picture of one look")
     }
 
     /// The other two looks this surface is drawn at, and a dark render of it — the surface and

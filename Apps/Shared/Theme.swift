@@ -9,14 +9,15 @@ import AppKit
 /// (OKLCH, triadic at a 28° spread, chroma ×1.3, `primary` at role lightness 0.52 light and
 /// 0.66 dark), one value per role per appearance.
 ///
-/// **Colour says who is on the other end; it never says state.** `primary` is the mind's own
-/// colour: Topo's voice, the controls that address it, and the enclosure a person's own words are
-/// drawn in, since the two ends of a conversation a person is having with their own mind are one
-/// side. `secondary` is the other side — a turn a process put into the transcript rather than
-/// words anyone said. `highlight` is tiles, chips and progress, `signal` measured liveness alone
-/// — a status dot, an open microphone, a failure mark — and never a bubble's state. A control
-/// keeps its role's colour idle or active: state is carried by fill and by motion, never by a
-/// change of hue.
+/// **Colour says who is on the other end.** `primary` is the mind's own colour: Topo's voice,
+/// the controls that address it, and the enclosure a person's own words are drawn in, since the
+/// two ends of a conversation a person is having with their own mind are one side. `secondary`
+/// is what is not either of them — a turn a process put into the transcript rather than words
+/// anyone said, and the person's own turn while it is still being written rather than said.
+/// `highlight` is tiles, chips and progress, and `signal` measured liveness: a status dot, an
+/// open microphone, a failure mark, a turn that is on its way and not yet in the log. A landed
+/// turn's colour is who said it and never what has become of it, and a control keeps its role's
+/// colour idle or active: state is carried by fill and by motion, never by a change of hue.
 ///
 /// The neutrals are Apple's semantic colours rather than values of ours, so a surface follows the
 /// person's appearance, contrast and accessibility settings as the system means it to. Only the
@@ -31,14 +32,14 @@ enum Theme {
     /// Topo's own voice, the controls that address it, and the outline on the person's own
     /// bubble.
     static let primary = adaptive(light: 0x007687, dark: 0x00A4BB)
-    /// A turn a process put into the transcript — a reminder firing, a schedule, a limb's sensor
-    /// — rather than words a person said, so that a reader can tell one from their own at a
-    /// glance. Nothing writes such a turn yet, and no role for it exists: this is the colour the
-    /// first process that does will draw in.
+    /// What is neither voice's own turn. Two things read it: a turn a process put into the
+    /// transcript — a reminder firing, a schedule, a limb's sensor — which nothing writes yet
+    /// and which has no role, and the person's own turn while it is still being written, which
+    /// becomes theirs in `primary` by landing in the log.
     static let secondary = adaptive(light: 0x8D5B86, dark: 0xCD96C4)
     /// Tiles and indicators: chips, progress, confirmations.
     static let highlight = adaptive(light: 0x1679AF, dark: 0x6AC1FB)
-    /// Measured liveness: a status dot, an open microphone, a failure.
+    /// Measured liveness: a status dot, an open microphone, a failure, a turn on its way.
     static let signal = adaptive(light: 0x796000, dark: 0xBDA24D)
 
     /// Ink on a `primary` fill. 5.2:1 light, 6.5:1 dark.
