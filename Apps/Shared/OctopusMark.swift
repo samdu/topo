@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// The mark: a filled round head over eight curling arms, countable at icon
-/// size. One mind, eight limbs.
+/// size. One mind, eight limbs, no two arms the same length.
 ///
 /// The drawing is `Design/topo-mark.svg`, which is also what the app icons
 /// are rendered from; the curves below are that file's, in the same 100×100
@@ -35,28 +35,28 @@ struct OctopusMark: View {
     }
 
     private static let strokeWidth: CGFloat = 6
-    private static let head = CGRect(x: 29, y: 14, width: 42, height: 42)
+    private static let head = CGRect(x: 27.9, y: 14, width: 42.4, height: 42.4)
     /// What the mark actually covers once the arms are stroked, measured
     /// from the same curves.
-    private static let ink = CGRect(x: 4.5, y: 14, width: 91, height: 82)
+    private static let ink = CGRect(x: 5, y: 14, width: 90, height: 82)
 
     /// Each arm: where it starts, then its cubic segments as
     /// (control, control, end).
     private static let arms: [(CGPoint, [(CGPoint, CGPoint, CGPoint)])] = [
-        (CGPoint(x: 31, y: 48), [(CGPoint(x: 28, y: 60), CGPoint(x: 22, y: 66), CGPoint(x: 12, y: 66)),
-                                 (CGPoint(x: 6, y: 66), CGPoint(x: 6, y: 58), CGPoint(x: 12, y: 58))]),
-        (CGPoint(x: 37, y: 50), [(CGPoint(x: 35, y: 62), CGPoint(x: 28, y: 70), CGPoint(x: 20, y: 76)),
-                                 (CGPoint(x: 15, y: 80), CGPoint(x: 19, y: 86), CGPoint(x: 24, y: 83))]),
-        (CGPoint(x: 43, y: 52), [(CGPoint(x: 42, y: 66), CGPoint(x: 36, y: 76), CGPoint(x: 30, y: 86)),
-                                 (CGPoint(x: 27, y: 91), CGPoint(x: 33, y: 94), CGPoint(x: 34, y: 89))]),
-        (CGPoint(x: 48, y: 52), [(CGPoint(x: 49, y: 68), CGPoint(x: 45, y: 80), CGPoint(x: 43, y: 93))]),
-        (CGPoint(x: 69, y: 48), [(CGPoint(x: 72, y: 60), CGPoint(x: 78, y: 66), CGPoint(x: 88, y: 66)),
-                                 (CGPoint(x: 94, y: 66), CGPoint(x: 94, y: 58), CGPoint(x: 88, y: 58))]),
-        (CGPoint(x: 63, y: 50), [(CGPoint(x: 65, y: 62), CGPoint(x: 72, y: 70), CGPoint(x: 80, y: 76)),
-                                 (CGPoint(x: 85, y: 80), CGPoint(x: 81, y: 86), CGPoint(x: 76, y: 83))]),
-        (CGPoint(x: 57, y: 52), [(CGPoint(x: 58, y: 66), CGPoint(x: 64, y: 76), CGPoint(x: 70, y: 86)),
-                                 (CGPoint(x: 73, y: 91), CGPoint(x: 67, y: 94), CGPoint(x: 66, y: 89))]),
-        (CGPoint(x: 52, y: 52), [(CGPoint(x: 51, y: 68), CGPoint(x: 55, y: 80), CGPoint(x: 57, y: 93))]),
+        (CGPoint(x: 29.9, y: 48.3), [(CGPoint(x: 27.1, y: 59.5), CGPoint(x: 21.6, y: 65.1), CGPoint(x: 12.2, y: 65.1)),
+                                     (CGPoint(x: 6.6, y: 65.1), CGPoint(x: 6.6, y: 57.6), CGPoint(x: 12.2, y: 57.6))]),
+        (CGPoint(x: 36, y: 50.3), [(CGPoint(x: 34.2, y: 61.5), CGPoint(x: 27.6, y: 69), CGPoint(x: 20.2, y: 74.6)),
+                                   (CGPoint(x: 15.5, y: 78.3), CGPoint(x: 19.2, y: 83.8), CGPoint(x: 23.9, y: 81))]),
+        (CGPoint(x: 42.1, y: 52.4), [(CGPoint(x: 41.4, y: 60.9), CGPoint(x: 37.8, y: 67), CGPoint(x: 34.2, y: 73)),
+                                     (CGPoint(x: 32.3, y: 76.1), CGPoint(x: 36, y: 78), CGPoint(x: 36.6, y: 74.9))]),
+        (CGPoint(x: 47.1, y: 52.4), [(CGPoint(x: 48.1, y: 68.2), CGPoint(x: 44.2, y: 80.1), CGPoint(x: 42.2, y: 92.9))]),
+        (CGPoint(x: 68.3, y: 48.3), [(CGPoint(x: 71.3, y: 60.4), CGPoint(x: 77.4, y: 66.5), CGPoint(x: 87.5, y: 66.5)),
+                                     (CGPoint(x: 93.5, y: 66.5), CGPoint(x: 93.5, y: 58.4), CGPoint(x: 87.5, y: 58.4))]),
+        (CGPoint(x: 62.2, y: 50.3), [(CGPoint(x: 63.8, y: 59.5), CGPoint(x: 69.1, y: 65.7), CGPoint(x: 75.3, y: 70.2)),
+                                     (CGPoint(x: 79.1, y: 73.2), CGPoint(x: 76, y: 77.9), CGPoint(x: 72.2, y: 75.6))]),
+        (CGPoint(x: 56.2, y: 52.4), [(CGPoint(x: 57, y: 64.1), CGPoint(x: 62, y: 72.3), CGPoint(x: 67, y: 80.7)),
+                                     (CGPoint(x: 69.5, y: 84.8), CGPoint(x: 64.6, y: 87.4), CGPoint(x: 63.6, y: 83.2))]),
+        (CGPoint(x: 51.1, y: 52.4), [(CGPoint(x: 50.4, y: 63.9), CGPoint(x: 53.3, y: 72.5), CGPoint(x: 54.8, y: 81.8))]),
     ]
 
     private static let armsPath = Path { path in
