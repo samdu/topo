@@ -29,15 +29,15 @@ final class LookStageTests: XCTestCase {
     func testEveryStagedSurfaceGivesOnePicture() throws {
         var unsteady: [String] = []
         for (name, made) in try [
-            ("canvas", planes(LookReachTests.Surface.staged(row: .writing))),
-            ("canvasNotice", planes(LookReachTests.Surface.staged(notice: "Topo is on another device."))),
-            ("canvasDimmed", planes(LookReachTests.Surface.staged(mic: .init(canListen: false)))),
-            ("canvasInFlight", planes(LookReachTests.Surface.staged(row: .inFlight))),
-            ("canvasWide", planes(LookReachTests.Surface.staged(row: .writing),
-                                  size: CGSize(width: 900, height: 700))),
-            ("settings", planes(SettingsView(signOut: SignOut()).environment(Fixtures.harness()))),
-        ] where try alike(made) == false {
-            unsteady.append(name)
+            ("canvas", shots(LookReachTests.Surface.staged(row: .writing))),
+            ("canvasNotice", shots(LookReachTests.Surface.staged(notice: "Topo is on another device."))),
+            ("canvasDimmed", shots(LookReachTests.Surface.staged(mic: .init(canListen: false)))),
+            ("canvasInFlight", shots(LookReachTests.Surface.staged(row: .inFlight))),
+            ("canvasWide", shots(LookReachTests.Surface.staged(row: .writing),
+                                 size: CGSize(width: 900, height: 700))),
+            ("settings", shots(SettingsView(signOut: SignOut()).environment(Fixtures.harness()))),
+        ] {
+            if let said = try unsteadiness(of: made, called: name) { unsteady.append(said) }
         }
         XCTAssertEqual(unsteady, [], "these staged surfaces drew more than one picture of one look")
     }
@@ -56,13 +56,29 @@ final class LookStageTests: XCTestCase {
 
     /// The other two looks this surface is drawn at, and a dark render of it — the surface and
     /// the appearances the screenshots compare.
+    ///
+    /// Each look is drawn on a stage it fits, which is the whole of what makes a still steady
+    /// and is a different size for each: a look that overflows its stage is a transcript with a
+    /// scroll to make, and where that comes to rest is what the phone's surfaces were changed to
+    /// stop deciding. The watch's look fits the phone's stage with room over. The television's
+    /// does not — 48 points of side padding and `.title3` on a 393-point column runs the draft
+    /// row off the bottom edge, where the composer's glass is, which is exactly the pairing that
+    /// magnifies a pixel of drift into a picture. So it is drawn at 1280×720, a television's
+    /// shape, where nothing is clipped at either end.
     func testTheOtherLooksAndTheDarkRenderAreAsSteady() throws {
-        for look in [Look(.watch), Look(.tv)] {
-            XCTAssertTrue(try alike(planes(LookReachTests.Surface.staged(row: .writing), look: look)),
-                          "one of the other screens' looks drew more than one picture")
+        var unsteady: [String] = []
+        let surface = LookReachTests.Surface.staged(row: .writing)
+        for (name, look, size) in [("watch", Look(.watch), LookStage.size),
+                                   ("tv", Look(.tv), CGSize(width: 1280, height: 720))] {
+            if let said = try unsteadiness(of: shots(surface, look: look, size: size),
+                                           called: name) {
+                unsteady.append(said)
+            }
         }
-        XCTAssertTrue(try alike(planes(LookReachTests.Surface.staged(row: .writing), style: .dark)),
-                      "the dark render drew more than one picture")
+        if let said = try unsteadiness(of: shots(surface, style: .dark), called: "dark") {
+            unsteady.append(said)
+        }
+        XCTAssertEqual(unsteady, [], "these drew more than one picture of one look")
     }
 
     /// And that a shade is all the tolerance is: two pictures that differ by more than one are
@@ -85,17 +101,42 @@ final class LookStageTests: XCTestCase {
     /// process is not like the ones after it — glyphs are not yet in the atlas, a backdrop's
     /// caches are not yet built — and this asks whether the drawings after that are one picture.
     /// Comparing across that boundary is the defect `LookReachTests.baseline` guards against.
-    private func planes(_ view: some View, look: Look = Look(),
-                        style: UIUserInterfaceStyle = .light,
-                        size: CGSize = LookStage.size) throws -> [[UInt8]] {
-        _ = try LookStage.plane(view, look: look, style: style, size: size)
+    private func shots(_ view: some View, look: Look = Look(),
+                       style: UIUserInterfaceStyle = .light,
+                       size: CGSize = LookStage.size) throws -> [UIImage] {
+        _ = try LookStage.image(view, look: look, style: style, size: size)
         return try (0..<Self.asks).map {
-            _ in try LookStage.plane(view, look: look, style: style, size: size)
+            _ in try LookStage.image(view, look: look, style: style, size: size)
         }
     }
 
-    private func alike(_ made: [[UInt8]]) throws -> Bool {
-        for plane in made.dropFirst() where try LookStage.differ(made[0], plane) { return false }
-        return true
+    /// Whether these drawings are one picture, and if they are not, what the difference was:
+    /// the same account the reach suite's own failure gives, since a failure that names only
+    /// the subject is a run on the CI runner that has to be repeated to learn anything.
+    ///
+    /// The first drawing that differs is the one reported, and only a failure pays for the
+    /// pictures.
+    private func unsteadiness(of made: [UIImage], called name: String) throws -> String? {
+        let first = try LookStage.bytes(made[0])
+        let width = Int(made[0].size.width * made[0].scale)
+        for (index, image) in made.enumerated().dropFirst() {
+            let bytes = try LookStage.bytes(image)
+            guard try LookStage.differ(first, bytes) else { continue }
+            let difference = LookStage.difference(first, bytes, width: width, scale: made[0].scale)
+            attach(made[0], "\(name)-first")
+            attach(image, "\(name)-ask-\(index)")
+            if let mask = difference?.picture { attach(mask, "\(name)-mask") }
+            // `differ` said these are two pictures, so `difference` has something to report.
+            let said = difference?.said ?? "a difference of no channel, which cannot happen"
+            return "\(name) on ask \(index): \(said); pictures and mask attached"
+        }
+        return nil
+    }
+
+    private func attach(_ image: UIImage, _ name: String) {
+        let attachment = XCTAttachment(image: image)
+        attachment.name = name
+        attachment.lifetime = .keepAlways
+        add(attachment)
     }
 }

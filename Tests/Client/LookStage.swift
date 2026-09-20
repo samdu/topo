@@ -107,6 +107,74 @@ enum LookStage {
         try bytes(try image(view, look: look, style: style, size: size))
     }
 
+    /// Where two drawings of one size differ, and by how much — what a failure has to say when
+    /// two pictures that were meant to be one picture are not.
+    ///
+    /// The magnitude is the thing to read first. A difference of a shade or two is the render
+    /// server rounding a curve's antialiasing between two windows, which is what `differ`
+    /// exists to tolerate; anything larger is something on the screen really changing, and then
+    /// the box and the mask say where.
+    struct Difference {
+        let pixels: Int
+        let channels: Int
+        let worst: Int
+        let minX: Int, maxX: Int, minY: Int, maxY: Int
+        let width: Int, height: Int, scale: Int
+        /// Red where the two differ, opaque black where they do not.
+        let mask: [UInt8]
+
+        var said: String {
+            let size = worst <= 2
+                ? "within a shade, so this is the render server rounding rather than a real change"
+                : "more than a shade, so something on the screen really changed"
+            return "\(pixels) pixels and \(channels) channels differ, worst \(worst) of 255"
+                + " (\(size)), box in points x \(minX / scale)…\(maxX / scale)"
+                + " y \(minY / scale)…\(maxY / scale) of \(width / scale)×\(height / scale)"
+        }
+
+        var picture: UIImage? {
+            var bytes = mask
+            guard let context = CGContext(
+                data: &bytes, width: width, height: height, bitsPerComponent: 8,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+                let made = context.makeImage() else { return nil }
+            return UIImage(cgImage: made, scale: CGFloat(scale), orientation: .up)
+        }
+    }
+
+    /// How two drawings of one picture differ, or nil when no channel of them does. Every
+    /// difference counts here, a shade included: this is what a failure says, not what decides
+    /// one — `differ` is what decides.
+    static func difference(_ a: [UInt8], _ b: [UInt8], width: Int, scale: CGFloat) -> Difference? {
+        guard a.count == b.count, width > 0 else { return nil }
+        var channels = 0, worst = 0, pixels = 0
+        var minX = Int.max, maxX = -1, minY = Int.max, maxY = -1
+        var mask = [UInt8](repeating: 0, count: a.count)
+        for pixel in 0..<(a.count / 4) {
+            var here = 0
+            for channel in 0..<3 {
+                let i = pixel * 4 + channel
+                let d = a[i] > b[i] ? Int(a[i]) - Int(b[i]) : Int(b[i]) - Int(a[i])
+                if d > 0 { channels += 1 }
+                here = max(here, d)
+            }
+            worst = max(worst, here)
+            mask[pixel * 4 + 3] = 255
+            if here > 0 {
+                pixels += 1
+                mask[pixel * 4] = 255
+                let x = pixel % width, y = pixel / width
+                minX = min(minX, x); maxX = max(maxX, x)
+                minY = min(minY, y); maxY = max(maxY, y)
+            }
+        }
+        guard pixels > 0 else { return nil }
+        return Difference(pixels: pixels, channels: channels, worst: worst,
+                          minX: minX, maxX: maxX, minY: minY, maxY: maxY,
+                          width: width, height: a.count / 4 / width, scale: Int(scale), mask: mask)
+    }
+
     /// Whether two pictures are pictures of two different things.
     ///
     /// A digest is the right question of `ImageRenderer`, which draws the same bytes from the

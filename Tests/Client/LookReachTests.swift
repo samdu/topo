@@ -84,46 +84,14 @@ final class LookReachTests: XCTestCase {
             let base = try surface.render(Self.companion(path), path)
             let a = try LookStage.bytes(base), b = try LookStage.bytes(mine)
             guard a.count == b.count else { return "\(surface.rawValue): two different sizes" }
-
-            var channels = 0, worst = 0, pixels = 0
-            var minX = Int.max, maxX = -1, minY = Int.max, maxY = -1
             let width = Int(base.size.width * base.scale)
-            var mask = [UInt8](repeating: 0, count: a.count)
-            for pixel in 0..<(a.count / 4) {
-                var here = 0
-                for channel in 0..<3 {
-                    let i = pixel * 4 + channel
-                    let d = a[i] > b[i] ? Int(a[i]) - Int(b[i]) : Int(b[i]) - Int(a[i])
-                    if d > 0 { channels += 1 }
-                    here = max(here, d)
-                }
-                worst = max(worst, here)
-                mask[pixel * 4 + 3] = 255
-                if here > 0 {
-                    pixels += 1
-                    mask[pixel * 4] = 255
-                    let x = pixel % width, y = pixel / width
-                    minX = min(minX, x); maxX = max(maxX, x)
-                    minY = min(minY, y); maxY = max(maxY, y)
-                }
-            }
-            guard pixels > 0 else { continue }
+            guard let difference = LookStage.difference(a, b, width: width, scale: base.scale)
+            else { continue }
 
             attach(base, "\(path)-\(surface.rawValue)-without")
             attach(mine, "\(path)-\(surface.rawValue)-with")
-            if let picture = Self.bitmap(mask, width: width, height: a.count / 4 / width,
-                                         scale: base.scale) {
-                attach(picture, "\(path)-\(surface.rawValue)-mask")
-            }
-            let scale = Int(base.scale)
-            let size = worst <= 2
-                ? "within a shade, so this is the render server rounding rather than the field"
-                : "more than a shade, so something on the screen really changed"
-            return "on \(surface.rawValue): \(pixels) pixels and \(channels) channels differ,"
-                + " worst \(worst) of 255 (\(size)),"
-                + " box in points x \(minX / scale)…\(maxX / scale) y \(minY / scale)…\(maxY / scale)"
-                + " of \(width / scale)×\(a.count / 4 / width / scale);"
-                + " pictures and mask attached"
+            if let picture = difference.picture { attach(picture, "\(path)-\(surface.rawValue)-mask") }
+            return "on \(surface.rawValue): \(difference.said); pictures and mask attached"
         }
         // A difference the comparison saw and this did not is a difference that does not survive
         // being asked again — a first drawing against a later one. Since the baseline is now a
@@ -137,17 +105,6 @@ final class LookReachTests: XCTestCase {
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
-    }
-
-    private static func bitmap(_ bytes: [UInt8], width: Int, height: Int,
-                               scale: CGFloat) -> UIImage? {
-        var bytes = bytes
-        guard let context = CGContext(
-            data: &bytes, width: width, height: height, bitsPerComponent: 8,
-            bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
-            let made = context.makeImage() else { return nil }
-        return UIImage(cgImage: made, scale: scale, orientation: .up)
     }
 
     /// Whether any surface of the chat is drawn differently under the document that sets this
