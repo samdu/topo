@@ -23,8 +23,7 @@ import AppKit
 /// person's appearance, contrast and accessibility settings as the system means it to. Only the
 /// four accents and their two inks are ours to name.
 enum Theme {
-    /// The seed itself, where one fixed colour is wanted whatever the appearance: the mark and
-    /// the icon gradient.
+    /// The seed itself, where one fixed colour is wanted whatever the appearance: the mark.
     static let teal = Color(red: 0x1E / 255, green: 0x8C / 255, blue: 0x9E / 255)
 
     // MARK: Accents

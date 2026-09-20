@@ -4,6 +4,8 @@
 
 `topo-slab.png` is the stone: one square of teal agate that every ground and every cabochon in the app is cut from. The icons are grounded on it and `Apps/Topo/Assets.xcassets/agate.imageset/agate.png` — the disc `StainedGlass` fills the microphone's and the badge's cabochons with — is a circular window onto it, so the icon on the home screen and the gem under the thumb are the same piece of stone.
 
+It is Sam's own macro photograph of an agate slice (`~/Desktop/IMG_8321.jpeg`), redrawn as a full square slab of the same material by OpenAI's `gpt-image-2.5` through the image-edit endpoint. The photograph was soft, grainy and 512px across the disc, which is smaller than the icon it has to fill; both ends of that chain are Sam's, so `THIRD-PARTY` gains nothing.
+
 ## The icons
 
 ```
