@@ -108,6 +108,15 @@ final class LookReachTests: XCTestCase {
         case badge, settings
         case canvas, canvasDimmed, canvasNotice, canvasWide
 
+        /// Whether `ImageRenderer` draws this surface. The rest go through a window and the
+        /// render server, which is a different question to ask of a picture — see `LookStage`.
+        var isDrawn: Bool {
+            switch self {
+            case .settings, .canvas, .canvasDimmed, .canvasNotice, .canvasWide: return false
+            default: return true
+            }
+        }
+
         /// Which surfaces to try, in order, for a field at this path.
         static func order(for path: String) -> [Surface] {
             let staged: [Surface] = [.canvas, .canvasNotice, .canvasDimmed]
@@ -150,26 +159,44 @@ final class LookReachTests: XCTestCase {
             case .settings:
                 return try LookStage.raster(SettingsView(signOut: SignOut()).environment(Fixtures.harness()),
                                             look: look)
-            case .canvas: return try LookStage.raster(ChatCanvas(row: .writing), look: look)
+            case .canvas: return try LookStage.raster(Self.staged(row: .writing), look: look)
             case .canvasDimmed:
-                return try LookStage.raster(ChatCanvas(mic: .init(canListen: false)), look: look)
+                return try LookStage.raster(Self.staged(mic: .init(canListen: false)), look: look)
             case .canvasNotice:
-                return try LookStage.raster(ChatCanvas(notice: "Topo is on another device."),
+                return try LookStage.raster(Self.staged(notice: "Topo is on another device."),
                                             look: look)
             // A column wider than the widest the look lets it be, which is the one way a bound
             // on that width is a bound on anything.
             case .canvasWide:
-                return try LookStage.raster(ChatCanvas(row: .writing), look: look,
+                return try LookStage.raster(Self.staged(row: .writing), look: look,
                                             size: CGSize(width: 900, height: 700))
             }
         }
 
+        /// The chat as a still that can be compared: a transcript that fits its stage, so no
+        /// scroll offset the system chooses is in the picture. `LookStageTests` is what holds
+        /// that these give one picture apiece.
+        static func staged(notice: String? = nil, mic: Composer.MicState = .init(),
+                           row: ChatCanvas.Row = .hidden) -> ChatCanvas {
+            ChatCanvas(turns: PreviewTurns.fitting, notice: notice, mic: mic, row: row)
+        }
+
         /// `ImageRenderer` over one piece of the chat, on white so a digest has something to be
         /// a digest of.
+        ///
+        /// This renderer draws the same bytes from the same view every time, so these are
+        /// compared by digest rather than by `LookStage.differ`, and `LookStageTests` holds that
+        /// they do. Animations are off here as they are on the stage: a surface drawn mid-change
+        /// is a picture of when it was taken.
         private static func drawn(_ view: some View, _ look: Look,
                                   _ width: CGFloat = 320, _ height: CGFloat? = nil) throws -> String {
+            let animations = UIView.areAnimationsEnabled
+            UIView.setAnimationsEnabled(false)
+            defer { UIView.setAnimationsEnabled(animations) }
+
             let sized = view
                 .environment(\.look, look)
+                .transaction { $0.animation = nil }
                 .frame(width: width, height: height)
                 .background(Color.white)
             let renderer = ImageRenderer(content: sized)
