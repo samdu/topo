@@ -25,6 +25,8 @@ enum PreviewTurns {
     static let fitting: [Turn] = make([
         (.person, "What's on today?"),
         (.assistant, "The dentist at 11, and Krista wanted to talk about the garden when you're back."),
+        (.person, "Anything from Helen?"),
+        (.assistant, "She sent photos of the garden wall. Nothing that needs an answer today."),
         (.person, "Thanks."),
     ])
 

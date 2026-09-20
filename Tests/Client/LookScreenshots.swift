@@ -52,11 +52,19 @@ final class LookScreenshots: XCTestCase {
         XCTAssertEqual(reading.notes, [], "the screenshot document does not read")
 
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
-            let canvas = ChatCanvas(row: .writing)
+            // The same surface every other compared still uses, for the same reason: a
+            // transcript taller than its stage scrolls to its end and comes to rest a pixel or
+            // two apart between two drawings, and this asks whether two drawings differ. Drawn
+            // long, the difference could be that drift rather than the document.
+            let canvas = LookReachTests.Surface.staged(row: .writing)
+            _ = try LookStage.image(canvas, look: Look(), style: style)
             let compiled = try LookStage.image(canvas, look: Look(), style: style)
             let written = try LookStage.image(canvas, look: reading.look, style: style)
-            XCTAssertNotEqual(try LookStage.digest(compiled), try LookStage.digest(written),
-                              "\(name): the document changed no pixel of the chat")
+            // And compared the way the render server's drawings are compared, so a difference of
+            // a shade along an antialiased edge is not read as the document either.
+            XCTAssertTrue(try LookStage.differ(try LookStage.pixels(of: compiled),
+                                               try LookStage.pixels(of: written)),
+                          "\(name): the document changed no more of the chat than a shade")
             attach(compiled, "chat-default-\(name)")
             attach(written, "chat-document-\(name)")
         }

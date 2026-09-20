@@ -53,8 +53,8 @@ final class LookStageTests: XCTestCase {
         XCTAssertEqual(unsteady, [], "these drawn surfaces gave more than one digest of one look")
     }
 
-    /// The other two looks the same transcript is drawn at, and a dark render, which is what the
-    /// screenshots compare.
+    /// The other two looks this surface is drawn at, and a dark render of it — the surface and
+    /// the appearances the screenshots compare.
     func testTheOtherLooksAndTheDarkRenderAreAsSteady() throws {
         for look in [Look(.watch), Look(.tv)] {
             XCTAssertTrue(try alike(planes(LookReachTests.Surface.staged(row: .writing), look: look)),
