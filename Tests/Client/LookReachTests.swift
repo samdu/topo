@@ -160,12 +160,40 @@ final class LookReachTests: XCTestCase {
             // warm, and the field's drawing has to be on the same side of that as the picture
             // it is compared against.
             let base = try baseline(surface, path)
-            if try surface.raster(look, path) != base { return true }
+            if try Self.differ(surface.drawing(look, path), base) { return true }
         }
         return false
     }
 
-    private var baselines: [String: String] = [:]
+    /// What a drawing is compared as, which is not the same question of the two renderers.
+    ///
+    /// `ImageRenderer` draws the same bytes from the same view every time, so its drawings are
+    /// compared exactly, by digest. The render server does not: the same view drawn through two
+    /// windows rounds the antialiasing on a curve's edge a shade either way. On the CI runner's
+    /// software renderer that reached the pixels — `composer.presenceDuration` read as drawing
+    /// off 2,299 pixels differing by one channel value out of 255, and the mask of them was a
+    /// single thin ring, the cabochon's rim in the navigation bar, with the rest of the frame
+    /// untouched. So staged drawings are compared as bytes through `LookStage.differ`, which
+    /// asks that something differ by more than a shade.
+    ///
+    /// That tolerance cannot hide a field. Each field's document sets it to a value nothing like
+    /// the compiled one, so a field that draws moves a fill, a position or a size — not one
+    /// channel value along one antialiased edge — and `testEveryFieldTheDocumentSetsReachesThePixels`
+    /// is what would fail if it ever did.
+    enum Drawing {
+        case digest(String)
+        case plane([UInt8])
+    }
+
+    private static func differ(_ one: Drawing, _ other: Drawing) throws -> Bool {
+        switch (one, other) {
+        case (.digest(let a), .digest(let b)): return a != b
+        case (.plane(let a), .plane(let b)): return try LookStage.differ(a, b)
+        default: return true
+        }
+    }
+
+    private var baselines: [String: Drawing] = [:]
 
     /// The picture of a surface with the field left out, which every field of it is judged
     /// against — and a *warm* picture of it, which is the whole of why there are two drawings
@@ -182,11 +210,11 @@ final class LookReachTests: XCTestCase {
     ///
     /// So the first drawing is thrown away and the second is kept, and the field's own drawing
     /// comes after both. One extra drawing per surface, not per field.
-    private func baseline(_ surface: Surface, _ path: String) throws -> String {
+    private func baseline(_ surface: Surface, _ path: String) throws -> Drawing {
         let key = "\(surface.rawValue)|\(Surface.flattened(path))|\(Self.companioned(path))"
         if let kept = baselines[key] { return kept }
-        _ = try surface.raster(Self.companion(path), path)
-        let made = try surface.raster(Self.companion(path), path)
+        _ = try surface.drawing(Self.companion(path), path)
+        let made = try surface.drawing(Self.companion(path), path)
         baselines[key] = made
         return made
     }
@@ -245,6 +273,14 @@ final class LookReachTests: XCTestCase {
         /// does not draw, so every composer render here is flattened — except the one asking
         /// about that very field, which is what the staged surfaces are for.
         static func flattened(_ path: String) -> String { path == "composer.surface" ? path : "flat" }
+
+        /// This surface drawn, in whichever currency it is compared in: a digest where
+        /// `ImageRenderer` drew it, the bitmap where the render server did — see
+        /// `LookReachTests.Drawing`.
+        func drawing(_ look: Look, _ path: String) throws -> Drawing {
+            isDrawn ? .digest(try raster(look, path))
+                    : .plane(try LookStage.pixels(of: try picture(look, path)))
+        }
 
         /// The same surface as a picture rather than a digest, which is what a failure needs in
         /// order to say what it saw.
