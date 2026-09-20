@@ -13,6 +13,23 @@ enum PreviewTurns {
         (.assistant, "Paris."),
     ])
 
+    /// Turns that fit a phone-sized stage with the composer over them, one of which is long
+    /// enough to wrap and so to be bounded by the column's width.
+    ///
+    /// What a compared still must not contain is anything the system chooses the resting place
+    /// of. A transcript taller than its stage is scrolled to its end through a `LazyVStack`, and
+    /// where that comes to rest depends on how many rows had been made when the scroll ran — so
+    /// two drawings of one look settle a pixel or two apart, and the composer's glass, which
+    /// samples the transcript behind it, magnifies that into a picture that is different by
+    /// more than a shade. These fit, so nothing scrolls and nothing is decided.
+    static let fitting: [Turn] = make([
+        (.person, "What's on today?"),
+        (.assistant, "The dentist at 11, and Krista wanted to talk about the garden when you're back."),
+        (.person, "Anything from Helen?"),
+        (.assistant, "She sent photos of the garden wall. Nothing that needs an answer today."),
+        (.person, "Thanks."),
+    ])
+
     static let long: [Turn] = make([
         (.person, "Morning. What's on today?"),
         (.assistant, "Two things: the dentist at 11, and Krista wanted to talk about the garden when you're back. Nothing else on the calendar."),
@@ -44,6 +61,8 @@ enum PreviewTurns {
 /// screen a look is judged on is one view and not two ideas of it.
 struct ChatCanvas: View {
     var turns: [Turn] = PreviewTurns.long
+    /// Whether this canvas is one that will be compared with another, which is what makes a
+    /// scrolled transcript a problem rather than a detail — see `PreviewTurns.fitting`.
     var notice: String?
     var mic: Composer.MicState = .init()
     /// What the row at the end of the transcript is doing.
