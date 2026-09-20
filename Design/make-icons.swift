@@ -1,5 +1,6 @@
 #!/usr/bin/env swift
-// Renders the app icons from Design/topo-mark.svg.
+// Renders the app icons, and the stone the app's cabochons are cut from,
+// from Design/topo-mark.svg and Design/topo-slab.png.
 //
 //   swift Design/make-icons.swift        # from the repository root
 //
@@ -8,11 +9,12 @@
 // Everything it writes is committed, so nobody needs Xcode to run this to
 // build the app — only to change the mark.
 //
-// The ground is the identity's icon gradient, #0A8EA1 to #005C6B at 160°,
-// and the mark is white on it. iOS and watchOS icons are full-bleed squares
-// (the system masks them), macOS draws its own rounded square with the
-// margin that platform expects, and tvOS is a layered stack: ground behind,
-// mark in front, so it parallaxes under the remote.
+// The ground is the app's own stone — `Design/topo-slab.png`, the slab the
+// microphone's and the badge's cabochons are cut from — and the mark is white
+// on it. iOS and watchOS icons are full-bleed squares (the system masks them),
+// macOS draws its own rounded square with the margin that platform expects,
+// and tvOS is a layered stack: ground behind, mark in front, so it parallaxes
+// under the remote.
 
 import AppKit
 import Foundation
@@ -66,11 +68,33 @@ func mark(fromSVG svg: String) -> CGPath {
 
 // MARK: - Drawing
 
-let groundTop = NSColor(srgbRed: 0x0A / 255, green: 0x8E / 255, blue: 0xA1 / 255, alpha: 1)
-let groundBottom = NSColor(srgbRed: 0x00 / 255, green: 0x5C / 255, blue: 0x6B / 255, alpha: 1)
-/// 160° in CSS is mostly downwards and a little to the right; NSGradient
-/// measures the other way round, from the x axis with y upwards.
-let groundAngle: CGFloat = -70
+/// The slab both the icon's ground and the app's cabochons are cut from. It is
+/// read once: every icon this writes is the same square of stone at a different
+/// size, so the icon on the home screen and the gem under the thumb are the
+/// same piece of agate.
+let slab: NSImage = {
+    let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent("Design/topo-slab.png")
+    guard let image = NSImage(contentsOf: url) else {
+        fatalError("Design/topo-slab.png: not readable")
+    }
+    return image
+}()
+
+/// The slab covering a rectangle, cropped rather than stretched: the top shelf
+/// is far wider than it is tall and a squashed stone is a different stone.
+func fill(_ rect: NSRect, with image: NSImage) {
+    let scale = max(rect.width / image.size.width, rect.height / image.size.height)
+    let side = NSSize(width: image.size.width * scale, height: image.size.height * scale)
+    image.draw(in: NSRect(x: rect.midX - side.width / 2, y: rect.midY - side.height / 2,
+                          width: side.width, height: side.height))
+}
+
+/// What holds the white mark off the slab's bright band: a soft shade under it,
+/// measured as a share of the icon's own side so every size is one picture.
+let markShadowOffset: CGFloat = 0.008
+let markShadowBlur: CGFloat = 0.012
+let markShadowAlpha: CGFloat = 0.35
 
 enum Ground {
     /// The whole square, for the platforms that mask the icon themselves.
@@ -95,15 +119,17 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath)
     let cg = context.cgContext
     cg.setShouldAntialias(true)
 
-    let gradient = NSGradient(starting: groundTop, ending: groundBottom)!
     switch ground {
     case .full:
-        gradient.draw(in: NSRect(origin: .zero, size: size), angle: groundAngle)
+        fill(NSRect(origin: .zero, size: size), with: slab)
     case .rounded(let margin):
         let inset = min(size.width, size.height) * margin
         let box = NSRect(x: inset, y: inset, width: size.width - 2 * inset, height: size.height - 2 * inset)
         let radius = box.width * 0.225
-        gradient.draw(in: NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius), angle: groundAngle)
+        NSGraphicsContext.saveGraphicsState()
+        NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius).addClip()
+        fill(box, with: slab)
+        NSGraphicsContext.restoreGraphicsState()
     case .none:
         break
     }
@@ -119,9 +145,18 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath)
     let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)
     let placed = CGMutablePath()
     placed.addPath(markPath, transform: place.concatenating(flip))
+    // The mark is laid on the stone rather than cut into it, because a cut mark
+    // is gone by the size the home screen draws this at. What keeps it off the
+    // slab's bright band is a shade under it, at a share of the icon's own side
+    // so every size is the same picture.
+    cg.saveGState()
+    cg.setShadow(offset: CGSize(width: 0, height: -size.height * markShadowOffset),
+                 blur: size.height * markShadowBlur,
+                 color: NSColor.black.withAlphaComponent(markShadowAlpha).cgColor)
     cg.setFillColor(NSColor.white.cgColor)
     cg.addPath(placed)
     cg.fillPath()
+    cg.restoreGState()
 
     NSGraphicsContext.restoreGraphicsState()
     guard let png = rep.representation(using: .png, properties: [:]) else { fatalError("no png") }
@@ -313,4 +348,38 @@ func topShelf(_ name: String, width: Int, height: Int) throws {
 try topShelf("Top Shelf Image", width: 1920, height: 720)
 try topShelf("Top Shelf Image Wide", width: 2320, height: 720)
 
+print("the stone")
+try writeGem()
+
 print("done")
+
+
+// MARK: - The stone
+
+/// The disc the app's cabochons are filled with, cut from the same slab the
+/// icons are grounded on, so the gem under the thumb and the icon on the home
+/// screen are one piece of agate. `StainedGlass` fills a circle with this as an
+/// `ImagePaint`, so what it wants is a square whose content is the disc.
+func writeGem(side: Int = 512, centre: CGPoint = CGPoint(x: 0.5, y: 0.5),
+              extent: CGFloat = 0.62) throws {
+    guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,
+                                     bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                     isPlanar: false, colorSpaceName: .deviceRGB,
+                                     bytesPerRow: 0, bitsPerPixel: 0) else {
+        fatalError("no bitmap at \(side)")
+    }
+    rep.size = NSSize(width: side, height: side)
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+    let box = NSRect(x: 0, y: 0, width: side, height: side)
+    NSBezierPath(ovalIn: box).addClip()
+    // The window on the slab, in the slab's own points, drawn so that window
+    // fills the disc.
+    let window = NSRect(x: (centre.x - extent / 2) * slab.size.width,
+                        y: (1 - centre.y - extent / 2) * slab.size.height,
+                        width: extent * slab.size.width, height: extent * slab.size.height)
+    slab.draw(in: box, from: window, operation: .copy, fraction: 1)
+    NSGraphicsContext.restoreGraphicsState()
+    guard let png = rep.representation(using: .png, properties: [:]) else { fatalError("no png") }
+    try write(png, "Apps/Topo/Assets.xcassets/agate.imageset/agate.png")
+}
