@@ -35,6 +35,7 @@ The process — who plans, who builds, who reviews, and in what order — is `do
 - Never force push. One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
 - Prefer what exists: stdlib, then a platform framework, then an already-linked dependency, before new code or a new dependency. Nothing GPL from others ships in a bundle (App Store distribution); every borrowed piece is attributed in `THIRD-PARTY`.
 - Docs describe the present state. When you change behaviour, change the doc to match; do not narrate the change.
+- A fix round is scoped: fix the findings you were sent, on the same branch, and say which commit answers which. The re-review sees only that diff, so anything you change beyond the list is new surface for it. Minor findings are not sent as rounds at all — they are deferred to the sweep before merge.
 - An engineer reports to the Topo PM at every task boundary (PR opened, blocked, finished) with `SendMessage`: what, where (branch, commit, PR), what it waits on. It never merges, never reads or answers a review, and never polls with background shells — the PM does all three.
 
 ## Where the risk lives
