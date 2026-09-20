@@ -45,15 +45,20 @@ func matches(_ pattern: String, in text: String) -> [String] {
     }
 }
 
-/// The mark as one filled path in its own 100×100 space, arms stroked and
-/// head filled, ready to be scaled into whatever canvas is asked for.
-func mark(fromSVG svg: String) -> CGPath {
+/// The mark in its own 100×100 space: the arms as stroked outlines and the head
+/// as a disc, each a path of its own.
+///
+/// They are kept apart rather than added into one path because a fill is one
+/// winding calculation over everything in it: a stroked outline's inner contour
+/// runs the other way, so where an arm passes under the head the two cancel and
+/// the fill leaves a notch. Filled one at a time they simply paint over each
+/// other, which is what a single-colour mark means.
+func mark(fromSVG svg: String) -> [CGPath] {
     let strokeWidth = Double(matches("stroke-width=\"([0-9.]+)\"", in: svg).first ?? "6") ?? 6
-    let whole = CGMutablePath()
+    var parts: [CGPath] = []
     for d in matches("<path d=\"([^\"]+)\"", in: svg) {
-        let stroked = path(fromD: d).copy(strokingWithWidth: strokeWidth, lineCap: .round,
-                                          lineJoin: .round, miterLimit: 10)
-        whole.addPath(stroked)
+        parts.append(path(fromD: d).copy(strokingWithWidth: strokeWidth, lineCap: .round,
+                                         lineJoin: .round, miterLimit: 10))
     }
     let circle = matches("<circle cx=\"([0-9.]+)\" cy=\"[0-9.]+\" r=\"[0-9.]+\"", in: svg)
     guard !circle.isEmpty,
@@ -62,8 +67,15 @@ func mark(fromSVG svg: String) -> CGPath {
           let r = Double(matches(" r=\"([0-9.]+)\"", in: svg).first ?? "") else {
         fatalError("Design/topo-mark.svg: no head")
     }
-    whole.addEllipse(in: CGRect(x: cx - r, y: cy - r, width: 2 * r, height: 2 * r))
-    return whole
+    let head = CGMutablePath()
+    head.addEllipse(in: CGRect(x: cx - r, y: cy - r, width: 2 * r, height: 2 * r))
+    parts.append(head)
+    return parts
+}
+
+/// What the whole mark covers, which is what it is centred and scaled on.
+func inkBox(_ parts: [CGPath]) -> CGRect {
+    parts.dropFirst().reduce(parts[0].boundingBoxOfPath) { $0.union($1.boundingBoxOfPath) }
 }
 
 // MARK: - Drawing
@@ -105,7 +117,7 @@ enum Ground {
     case none
 }
 
-func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath) -> Data {
+func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: [CGPath]) -> Data {
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width),
                                      pixelsHigh: Int(size.height), bitsPerSample: 8,
                                      samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -136,15 +148,14 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath)
 
     // The mark, white, centred on its own ink rather than on its 100×100
     // box, and flipped: SVG counts y downwards and Quartz counts it up.
-    let ink = markPath.boundingBoxOfPath
+    let ink = inkBox(markPath)
     let scale = markHeight / max(ink.width, ink.height)
     let place = CGAffineTransform.identity
         .translatedBy(x: (size.width - ink.width * scale) / 2 - ink.minX * scale,
                       y: (size.height - ink.height * scale) / 2 - ink.minY * scale)
         .scaledBy(x: scale, y: scale)
     let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)
-    let placed = CGMutablePath()
-    placed.addPath(markPath, transform: place.concatenating(flip))
+    var transform = place.concatenating(flip)
     // The mark is laid on the stone rather than cut into it, because a cut mark
     // is gone by the size the home screen draws this at. What keeps it off the
     // slab's bright band is a shade under it, at a share of the icon's own side
@@ -154,8 +165,15 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath)
                  blur: size.height * markShadowBlur,
                  color: NSColor.black.withAlphaComponent(markShadowAlpha).cgColor)
     cg.setFillColor(NSColor.white.cgColor)
-    cg.addPath(placed)
-    cg.fillPath()
+    // Under a shadow, one fill of everything: filling part by part would cast a
+    // shadow from each part onto the ones drawn after it.
+    cg.beginTransparencyLayer(auxiliaryInfo: nil)
+    for part in markPath {
+        guard let placed = part.copy(using: &transform) else { continue }
+        cg.addPath(placed)
+        cg.fillPath()
+    }
+    cg.endTransparencyLayer()
     cg.restoreGState()
 
     NSGraphicsContext.restoreGraphicsState()
