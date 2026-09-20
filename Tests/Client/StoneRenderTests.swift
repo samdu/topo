@@ -111,6 +111,48 @@ final class StoneRenderTests: XCTestCase {
                        "a press at nothing drew something the press's fields do not account for")
     }
 
+    /// Each of the press's fields is one of the marks the light leaves, so each has to be shown
+    /// to draw on its own: a treatment that ignores one of them still passes a check that clears
+    /// them together. `wall` is varied alone above and `catchLight` by
+    /// `ComposerRenderTests.testTheCutIsDrawnFromTheLooksOnePress`; these are the other three.
+
+    /// The shade is the wall above a stroke, which faces away from the light. It is the one field
+    /// the cut reads twice — the floor is the same colour at the floor's own alpha — so the floor
+    /// is taken out of both pictures first: otherwise a cut that draws no shaded wall at all still
+    /// answers to the field, through the floor, and the test passes on a treatment that ignores it.
+    func testTheShadeIsTheWallThatFacesAwayFromTheLight() throws {
+        var lit = Look.Press()
+        lit.floor = 0
+
+        var unshaded = lit
+        unshaded.shade = .clear
+
+        XCTAssertNotEqual(try raster(mark(lit), side: diameter),
+                          try raster(mark(unshaded), side: diameter),
+                          "the press's shade does not reach the wall that faces away from the light")
+    }
+
+    /// The floor's own alpha is what sets the floor of the cut under the stone around it, and it
+    /// is a field of its own: at the same two walls, a floor at nothing is a different picture.
+    func testTheFloorsShadeIsWhatSetsTheFloorUnderTheStone() throws {
+        var unlit = Look.Press()
+        unlit.floor = 0
+        XCTAssertNotEqual(try raster(mark(Look.Press()), side: diameter),
+                          try raster(mark(unlit), side: diameter),
+                          "the press's floor does not reach the floor of the cut")
+    }
+
+    /// A wall is blurred by a share of its own width, which is what makes the cut a press rather
+    /// than an outline. At nothing it is an outline, and that is a different picture at the same
+    /// wall, the same two colours and the same floor.
+    func testSofteningAWallIsAShareOfItsOwnWidth() throws {
+        var hard = Look.Press()
+        hard.soften = 0
+        XCTAssertNotEqual(try raster(mark(Look.Press()), side: diameter),
+                          try raster(mark(hard), side: diameter),
+                          "the press's soften does not reach the walls of the cut")
+    }
+
     /// The floor of the cut is the stone and not a colour: at the same shade, a mark cut into a
     /// stone of another cast is a different floor.
     func testTheFloorOfTheCutIsTheStoneUnderIt() throws {
