@@ -72,10 +72,13 @@ final class LookReachTests: XCTestCase {
     /// What a field that unexpectedly draws actually changed, attached to the result bundle: the
     /// two pictures, a mask of where they differ, and the numbers. Only a failure pays for this.
     ///
-    /// The magnitude is the thing to read first. A difference of a shade or two is the render
-    /// server rounding a curve's antialiasing between two windows, which is not this field
-    /// drawing and is what `LookStage.differ` exists to tolerate; anything larger is something
-    /// on the screen really changing, and then the mask says where.
+    /// The surface reported is the first one that differs by `LookStage.differ`'s rule, which is
+    /// the rule `draws` failed on: a surface differing by a shade is one `draws` passed over, and
+    /// attaching its mask would be evidence of something that did not cause the failure. The
+    /// account still says whether what it found is within a shade, because that is the thing to
+    /// read first of the surface that did — a shade is the render server rounding a curve's
+    /// antialiasing between two windows, and anything larger is something on the screen really
+    /// changing, which is where the mask says to look.
     private func show(_ path: String) throws -> String {
         let field = try XCTUnwrap(LookFieldDocuments.all().first { $0.path == path }, path)
         let look = LookDocument.read(field.document, onto: Self.companion(path)).look
@@ -84,6 +87,12 @@ final class LookReachTests: XCTestCase {
             let base = try surface.render(Self.companion(path), path)
             let a = try LookStage.bytes(base), b = try LookStage.bytes(mine)
             guard a.count == b.count else { return "\(surface.rawValue): two different sizes" }
+            // `differ`'s own rule, which is the one `draws` failed on: a surface differing by
+            // a shade is one `draws` passed over, so reporting it would attach a picture of
+            // something that did not cause the failure. The account below still says whether
+            // what it found is within a shade, because that is worth knowing of the surface
+            // that did.
+            guard try LookStage.differ(a, b) else { continue }
             let width = Int(base.size.width * base.scale)
             guard let difference = LookStage.difference(a, b, width: width, scale: base.scale)
             else { continue }
