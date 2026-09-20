@@ -117,7 +117,11 @@ final class LookReachTests: XCTestCase {
                 + " of \(width / scale)×\(a.count / 4 / width / scale);"
                 + " pictures and mask attached"
         }
-        return "no surface differed the second time it was asked, so the difference did not repeat"
+        // A difference the comparison saw and this did not is a difference that does not survive
+        // being asked again — a first drawing against a later one. Since the baseline is now a
+        // warm picture and the field's drawing comes after it, reaching here means something new.
+        return "no surface differed when asked again, so whatever the comparison saw did not"
+            + " repeat — which is the shape of a first drawing being compared against a later one"
     }
 
     private func attach(_ image: UIImage, _ name: String) {
@@ -152,16 +156,36 @@ final class LookReachTests: XCTestCase {
         let field = try XCTUnwrap(LookFieldDocuments.all().first { $0.path == path }, path)
         let look = LookDocument.read(field.document, onto: Self.companion(path)).look
         for surface in Surface.order(for: path) {
-            if try surface.raster(look, path) != baseline(surface, path) { return true }
+            // The baseline first, and never the other way round: it is what makes the surface
+            // warm, and the field's drawing has to be on the same side of that as the picture
+            // it is compared against.
+            let base = try baseline(surface, path)
+            if try surface.raster(look, path) != base { return true }
         }
         return false
     }
 
     private var baselines: [String: String] = [:]
 
+    /// The picture of a surface with the field left out, which every field of it is judged
+    /// against — and a *warm* picture of it, which is the whole of why there are two drawings
+    /// here.
+    ///
+    /// A surface's first drawing in a process is not like the ones after it: glyphs are not yet
+    /// in the atlas, a backdrop's caches are not yet built, and on a software renderer the
+    /// difference reaches the pixels. Comparing across that boundary reads it as the field, and
+    /// the comparison here is exactly where that would happen — whichever of the two sides is
+    /// drawn first is the cold one, and the other is warm. It is invisible on a Mac with a GPU
+    /// and plain on a CI runner without one, where it failed as `composer.duration` drawing:
+    /// that field is the first of the excused ones, its first surface had never been drawn in
+    /// that instance, and the difference was gone by the time anything asked a second time.
+    ///
+    /// So the first drawing is thrown away and the second is kept, and the field's own drawing
+    /// comes after both. One extra drawing per surface, not per field.
     private func baseline(_ surface: Surface, _ path: String) throws -> String {
         let key = "\(surface.rawValue)|\(Surface.flattened(path))|\(Self.companioned(path))"
         if let kept = baselines[key] { return kept }
+        _ = try surface.raster(Self.companion(path), path)
         let made = try surface.raster(Self.companion(path), path)
         baselines[key] = made
         return made

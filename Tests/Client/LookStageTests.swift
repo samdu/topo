@@ -46,6 +46,7 @@ final class LookStageTests: XCTestCase {
     func testEveryDrawnSurfaceGivesOnePicture() throws {
         var unsteady: [String] = []
         for surface in LookReachTests.Surface.allCases where surface.isDrawn {
+            _ = try surface.raster(Look(), "stage")
             let made = try (0..<Self.asks).map { _ in try surface.raster(Look(), "stage") }
             if Set(made).count != 1 { unsteady.append(surface.rawValue) }
         }
@@ -79,10 +80,17 @@ final class LookStageTests: XCTestCase {
         XCTAssertFalse(try LookStage.differ(one, within), "two shades read as a difference")
     }
 
+    /// The drawings to compare, with the first one thrown away: a surface's first drawing in a
+    /// process is not like the ones after it — glyphs are not yet in the atlas, a backdrop's
+    /// caches are not yet built — and this asks whether the drawings after that are one picture.
+    /// Comparing across that boundary is the defect `LookReachTests.baseline` guards against.
     private func planes(_ view: some View, look: Look = Look(),
                         style: UIUserInterfaceStyle = .light,
                         size: CGSize = LookStage.size) throws -> [[UInt8]] {
-        try (0..<Self.asks).map { _ in try LookStage.plane(view, look: look, style: style, size: size) }
+        _ = try LookStage.plane(view, look: look, style: style, size: size)
+        return try (0..<Self.asks).map {
+            _ in try LookStage.plane(view, look: look, style: style, size: size)
+        }
     }
 
     private func alike(_ made: [[UInt8]]) throws -> Bool {
