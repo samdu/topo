@@ -48,6 +48,7 @@
 		2DB26E2E9DD8FA0757FB7500 /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC10F86563FE12BC674EFBB /* AboutView.swift */; };
 		2DEF9C81428F08E13848D373 /* SignOutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1AF008F3C113182739CEB6D7 /* SignOutTests.swift */; };
 		2F2C24F4D930E90272D6ED1D /* LookDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B4AAF2BA51E20FAEF2AB1FA /* LookDocumentTests.swift */; };
+		2FBBC319A56891113C7BB372 /* StoneRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 629737688F7BECCE20D49992 /* StoneRenderTests.swift */; };
 		3055E1A4768606FB6D9EF046 /* ModelDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */; };
 		30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEE1B3C3847A7B4EB6616526 /* EarTests.swift */; };
 		30DF481D4769365D1072FE1B /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
@@ -295,6 +296,7 @@
 		5C5D5EA3AC974059B62B6B47 /* NextTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextTurnTests.swift; sourceTree = "<group>"; };
 		5FA3798B7F6069020E5A4DA0 /* womble.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = womble.js; sourceTree = "<group>"; };
 		61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressRefusalTests.swift; sourceTree = "<group>"; };
+		629737688F7BECCE20D49992 /* StoneRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoneRenderTests.swift; sourceTree = "<group>"; };
 		631F54F3CC1F646736B81799 /* SurfacePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacePages.swift; sourceTree = "<group>"; };
 		654D33CC62A8C821EACD662C /* TopoHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoHubApp.swift; sourceTree = "<group>"; };
 		680EA7BD55CA0D2F27D81FE8 /* BadgeRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeRenderTests.swift; sourceTree = "<group>"; };
@@ -591,6 +593,7 @@
 				9C9A782EE9118805036640C7 /* ReplayTests.swift */,
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
 				1AF008F3C113182739CEB6D7 /* SignOutTests.swift */,
+				629737688F7BECCE20D49992 /* StoneRenderTests.swift */,
 				8B7F8C14868F6151C38208F7 /* ThemeTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
 				246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */,
@@ -1142,6 +1145,7 @@
 				401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */,
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
 				2DEF9C81428F08E13848D373 /* SignOutTests.swift in Sources */,
+				2FBBC319A56891113C7BB372 /* StoneRenderTests.swift in Sources */,
 				F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
 				A80AAFDB7F75D142FA415516 /* TurnMenuTests.swift in Sources */,

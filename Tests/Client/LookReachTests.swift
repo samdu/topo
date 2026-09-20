@@ -21,7 +21,13 @@ import XCTest
 /// `ScrollView`, a `containerRelativeFrame`, a `TextField`'s text, the system's own glass,
 /// `.saturation` — goes to `LookStage`, which puts the whole chat in a window and takes the
 /// picture off the render server. A field neither can show is named in `unshowable` with the
-/// reason, and there is one.
+/// reason, and there are three.
+///
+/// Two pictures are compared with a shade's tolerance (`LookStage.differ`) rather than by
+/// digest, because the staged half of that pair goes through the render server, which rounds
+/// the antialiasing on a curve's edge a shade either way between one window and the next. A
+/// field that only moves a handful of pixels by one in a channel is not a field reaching the
+/// pixels, so the tolerance is the question this suite means to ask.
 @MainActor
 final class LookReachTests: XCTestCase {
 
@@ -73,33 +79,51 @@ final class LookReachTests: XCTestCase {
         let field = try XCTUnwrap(LookFieldDocuments.all().first { $0.path == path }, path)
         let look = LookDocument.read(field.document, onto: Self.companion(path)).look
         for surface in Surface.order(for: path) {
-            if try surface.raster(look, path) != baseline(surface, path) { return true }
+            if try LookStage.differ(surface.picture(look, path), baseline(surface, path)) {
+                return true
+            }
         }
         return false
     }
 
-    private var baselines: [String: String] = [:]
+    private var baselines: [String: [UInt8]] = [:]
 
-    private func baseline(_ surface: Surface, _ path: String) throws -> String {
+    private func baseline(_ surface: Surface, _ path: String) throws -> [UInt8] {
         let key = "\(surface.rawValue)|\(Surface.flattened(path))|\(Self.companioned(path))"
         if let kept = baselines[key] { return kept }
-        let made = try surface.raster(Self.companion(path), path)
+        let made = try surface.picture(Self.companion(path), path)
         baselines[key] = made
         return made
     }
 
-    /// Topo's side is the one part of the look that draws nothing at all by default, so a field
-    /// of it is shown against a companion that draws.
+    /// Two parts of the look draw nothing at all by default, so a field of either is shown
+    /// against a companion that draws: Topo's side of the transcript, which ships as an
+    /// enclosure set to nothing, and the resting stone, which ships with no cast laid over it.
+    /// The field under test overrides its own part of the companion, and the two pictures then
+    /// differ by that field alone.
     private static func companion(_ path: String) -> Look {
         var look = Look()
-        guard companioned(path) else { return look }
-        look.plain = Look.Enclosure(accent: Color(red: 0.1, green: 0.7, blue: 0.4),
-                                    fillOpacity: 0.5, strokeWidth: 3, cornerRadius: 4,
-                                    horizontalPadding: 10, verticalPadding: 6, surface: .flat)
+        switch companioned(path) {
+        case "plain":
+            look.plain = Look.Enclosure(accent: Color(red: 0.1, green: 0.7, blue: 0.4),
+                                        fillOpacity: 0.5, strokeWidth: 3, cornerRadius: 4,
+                                        horizontalPadding: 10, verticalPadding: 6, surface: .flat)
+        case "cast":
+            look.jewel.cast = Color(red: 0.1, green: 0.7, blue: 0.4)
+            look.jewel.castOpacity = 0.6
+        default: break
+        }
         return look
     }
 
-    private static func companioned(_ path: String) -> Bool { path.hasPrefix("plain.") }
+    /// Which companion a field is shown against, and "" for the fields that need none. The
+    /// badge's stone and the composer's open one are cast by default, so only the resting
+    /// jewel's own cast is companioned.
+    private static func companioned(_ path: String) -> String {
+        if path.hasPrefix("plain.") { return "plain" }
+        if path.hasPrefix("jewel.cast") { return "cast" }
+        return ""
+    }
 
     /// The surfaces a field can show on. The first ten are `ImageRenderer`'s; the last three put
     /// the chat in a window and go through the render server.
@@ -119,6 +143,7 @@ final class LookReachTests: XCTestCase {
             case "plain": return [.turnTopo] + staged
             case "draft": return [.draftWriting, .draftEmpty, .draftInFlight] + staged
             case "badge": return [.badge] + staged
+            case "press": return [.badge, .composerIdle] + staged
             case "jewel": return [.badge, .composerIdle] + staged
             case "settings": return [.settings]
             case "composer" where path.hasPrefix("composer.openJewel"):
@@ -134,7 +159,10 @@ final class LookReachTests: XCTestCase {
         /// about that very field, which is what the staged surfaces are for.
         static func flattened(_ path: String) -> String { path == "composer.surface" ? path : "flat" }
 
-        func raster(_ look: Look, _ path: String) throws -> String {
+        /// This surface's pixels under a look, four bytes to a pixel. They are compared with a
+        /// shade's tolerance rather than by digest, because the last four surfaces go through
+        /// the render server, which does not rasterise a curve's edge identically twice.
+        func picture(_ look: Look, _ path: String) throws -> [UInt8] {
             var look = look
             if path != "composer.surface" { look.composer.surface = .flat }
             switch self {
@@ -150,33 +178,35 @@ final class LookReachTests: XCTestCase {
                 return try Self.drawn(Fixtures.composer(.init(canListen: false)), look, 340, 170)
             case .badge: return try Self.drawn(TopoBadge(), look, 80, 80)
             case .settings:
-                return try LookStage.raster(SettingsView(signOut: SignOut()).environment(Fixtures.harness()),
-                                            look: look)
-            case .canvas: return try LookStage.raster(ChatCanvas(row: .writing), look: look)
+                return try LookStage.bytes(try LookStage.image(
+                    SettingsView(signOut: SignOut()).environment(Fixtures.harness()), look: look))
+            case .canvas:
+                return try LookStage.bytes(try LookStage.image(ChatCanvas(row: .writing), look: look))
             case .canvasDimmed:
-                return try LookStage.raster(ChatCanvas(mic: .init(canListen: false)), look: look)
+                return try LookStage.bytes(try LookStage.image(ChatCanvas(mic: .init(canListen: false)),
+                                                               look: look))
             case .canvasNotice:
-                return try LookStage.raster(ChatCanvas(notice: "Topo is on another device."),
-                                            look: look)
+                return try LookStage.bytes(try LookStage.image(
+                    ChatCanvas(notice: "Topo is on another device."), look: look))
             // A column wider than the widest the look lets it be, which is the one way a bound
             // on that width is a bound on anything.
             case .canvasWide:
-                return try LookStage.raster(ChatCanvas(row: .writing), look: look,
-                                            size: CGSize(width: 900, height: 700))
+                return try LookStage.bytes(try LookStage.image(
+                    ChatCanvas(row: .writing), look: look, size: CGSize(width: 900, height: 700)))
             }
         }
 
         /// `ImageRenderer` over one piece of the chat, on white so a digest has something to be
         /// a digest of.
         private static func drawn(_ view: some View, _ look: Look,
-                                  _ width: CGFloat = 320, _ height: CGFloat? = nil) throws -> String {
+                                  _ width: CGFloat = 320, _ height: CGFloat? = nil) throws -> [UInt8] {
             let sized = view
                 .environment(\.look, look)
                 .frame(width: width, height: height)
                 .background(Color.white)
             let renderer = ImageRenderer(content: sized)
             renderer.scale = 2
-            return try LookStage.digest(try XCTUnwrap(renderer.uiImage, "the surface rendered to nothing"))
+            return try LookStage.bytes(try XCTUnwrap(renderer.uiImage, "the surface rendered to nothing"))
         }
     }
 }

@@ -87,6 +87,7 @@ enum LookDocument {
             r.object("plain") { enclosure(&look.plain, $0) }
             r.object("draft") { draft(&look.draft, $0) }
             r.object("jewel") { jewel(&look.jewel, $0) }
+            r.object("press") { press(&look.press, $0) }
             r.object("badge") { badge(&look.badge, $0) }
             r.object("settings") { settings(&look.settings, $0) }
             r.object("composer") { composer(&look.composer, $0) }
@@ -132,8 +133,15 @@ enum LookDocument {
     private static func badge(_ value: inout Look.Badge, _ r: Reader) {
         r.reach("size", &value.size)
         r.reach("markSize", &value.markSize)
-        r.colour("markColor", &value.markColor)
-        r.shadow("markShadow", &value.markShadow)
+        r.object("jewel") { jewel(&value.jewel, $0) }
+    }
+
+    private static func press(_ value: inout Look.Press, _ r: Reader) {
+        r.fractionOfOne("wall", &value.wall)
+        r.colour("shade", &value.shade)
+        r.colour("catchLight", &value.catchLight)
+        r.alpha("soften", &value.soften)
+        r.alpha("floor", &value.floor)
     }
 
     private static func settings(_ value: inout Look.Settings, _ r: Reader) {
@@ -141,30 +149,12 @@ enum LookDocument {
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {
-        r.colour("deep", &value.deep)
-        r.colour("mid", &value.mid)
-        r.colour("pale", &value.pale)
-        r.colour("milk", &value.milk)
-        r.glasses("bodyGlasses", &value.bodyGlasses)
-        r.point("bodyCenter", &value.bodyCenter)
-        r.length("bodyEndRadius", &value.bodyEndRadius)
+        r.asset("stone", &value.stone)
+        r.colour("cast", &value.cast)
+        r.alpha("castOpacity", &value.castOpacity)
+        r.blend("castBlend", &value.castBlend)
         r.shadow("bodyShade", &value.bodyShade)
         r.shadow("bodyCatch", &value.bodyCatch)
-        r.glass("driftGlass", &value.driftGlass)
-        r.glass("driftHaloGlass", &value.driftHaloGlass)
-        r.size("driftSize", &value.driftSize)
-        r.length("driftEndRadius", &value.driftEndRadius)
-        r.alpha("driftOpacity", &value.driftOpacity)
-        r.alpha("driftHaloOpacity", &value.driftHaloOpacity)
-        r.degrees("driftAngle", &value.driftAngle)
-        r.size("driftOffset", &value.driftOffset, signed: true)
-        r.length("driftBlur", &value.driftBlur)
-        r.glass("bandGlass", &value.bandGlass)
-        r.size("bandSize", &value.bandSize)
-        r.alpha("bandOpacity", &value.bandOpacity)
-        r.degrees("bandAngle", &value.bandAngle)
-        r.size("bandOffset", &value.bandOffset, signed: true)
-        r.length("bandBlur", &value.bandBlur)
         r.colour("sheenColor", &value.sheenColor)
         r.colour("sheenShadeColor", &value.sheenShadeColor)
         r.alpha("sheenOpacity", &value.sheenOpacity)
@@ -226,10 +216,7 @@ enum LookDocument {
     private static func glyph(_ value: inout Look.Composer.Glyph, _ r: Reader) {
         r.reach("size", &value.size)
         r.weight("weight", &value.weight)
-        r.colour("ink", &value.ink)
-        r.colour("openInk", &value.openInk)
-        r.shadow("shadow", &value.shadow)
-        r.alpha("openShadowOpacity", &value.openShadowOpacity)
+        r.colour("openCast", &value.openCast)
     }
 
     // MARK: Reading one object
@@ -306,6 +293,16 @@ enum LookDocument {
         /// How much of the screen's width something takes, bounded below for the same reason.
         func fraction(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.1...1, "a share of the width between 0.1 and 1") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
+        /// A share of a length rather than of the screen: how wide the wall of a cut is as a
+        /// part of the jewel it is cut into. Bounded well under a half, because a wall wider
+        /// than the stroke it walls is a mark with no floor left in it.
+        func fractionOfOne(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0...0.25, "a share between 0 and 0.25") {
                 applied += 1
                 value = CGFloat(number)
             }
@@ -439,24 +436,36 @@ enum LookDocument {
         // MARK: Names
 
         func surface(_ key: String, _ value: inout Look.Surface) { named(key, &value) }
-        func glass(_ key: String, _ value: inout Look.Jewel.Glass) { named(key, &value) }
 
-        /// Which of the slab's four glasses each stop of the body's gradient is poured from.
-        func glasses(_ key: String, _ value: inout [Look.Jewel.Glass]) {
+        /// The name of a picture in the app's asset catalogue. What names are in there is not
+        /// something this can be asked — the catalogue is the app's and this type is every
+        /// platform's — so a name that is not one of them is a jewel with no stone in it, which
+        /// is the same answer the palette gives to a colour nobody can read.
+        func asset(_ key: String, _ value: inout String) {
             guard let raw = take(key) else { return }
-            guard let list = raw as? [Any], (1...8).contains(list.count) else {
-                return note(key, "is not a list of 1 to 8 of \(Self.cases(Look.Jewel.Glass.self))")
-            }
-            var glasses: [Look.Jewel.Glass] = []
-            for entry in list {
-                guard let text = entry as? String, let glass = Look.Jewel.Glass(rawValue: text) else {
-                    return note(key, "holds something that is not one of \(Self.cases(Look.Jewel.Glass.self))")
-                }
-                glasses.append(glass)
+            guard let text = raw as? String, (1...200).contains(text.count) else {
+                return note(key, "is not the name of a picture in the app")
             }
             applied += 1
-            value = glasses
+            value = text
         }
+
+        /// How a colour laid over a picture meets it, by the name SwiftUI gives it.
+        func blend(_ key: String, _ value: inout BlendMode) {
+            guard let raw = take(key) else { return }
+            guard let text = raw as? String, let mode = Self.blends[text] else {
+                return note(key, "is not one of \(Self.listed(Self.blends.keys))")
+            }
+            applied += 1
+            value = mode
+        }
+
+        static let blends: [String: BlendMode] = [
+            "normal": .normal, "hue": .hue, "color": .color, "saturation": .saturation,
+            "luminosity": .luminosity, "multiply": .multiply, "screen": .screen,
+            "overlay": .overlay, "softLight": .softLight, "hardLight": .hardLight,
+            "lighten": .lighten, "darken": .darken,
+        ]
 
         private func named<T: RawRepresentable & CaseIterable>(_ key: String, _ value: inout T)
         where T.RawValue == String {

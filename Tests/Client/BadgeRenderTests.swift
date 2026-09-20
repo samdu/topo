@@ -32,28 +32,46 @@ final class BadgeRenderTests: XCTestCase {
         return SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// A jewel poured from another glass entirely, so a picture drawn with it cannot match the
-    /// default's by accident.
+    /// A stone under a cast of another colour entirely, so a picture drawn with it cannot match
+    /// the uncast one's by accident.
     private var otherGlass: Look.Jewel {
         var jewel = Look.Jewel()
-        jewel.deep = Color(red: 0.32, green: 0.05, blue: 0.05)
-        jewel.mid = Color(red: 0.56, green: 0.12, blue: 0.10)
-        jewel.pale = Color(red: 0.90, green: 0.60, blue: 0.55)
-        jewel.milk = Color(red: 0.96, green: 0.86, blue: 0.84)
+        jewel.cast = Color(red: 0.90, green: 0.20, blue: 0.10)
+        jewel.castOpacity = 0.85
         return jewel
     }
 
     func testTheJewelIsDrawnFromTheGlassItIsHanded() throws {
-        let teal = try raster(StainedGlass(glass: Look().jewel), size: Look().badge.size)
-        let other = try raster(StainedGlass(glass: otherGlass), size: Look().badge.size)
+        let teal = try raster(StainedGlass(glass: Look().jewel, diameter: Look().badge.size))
+        let other = try raster(StainedGlass(glass: otherGlass, diameter: Look().badge.size))
         XCTAssertNotEqual(teal, other, "the jewel drew the same picture from two different glasses")
     }
 
     func testTheBadgeTakesItsGlassFromTheLook() throws {
         var look = Look()
-        look.jewel = otherGlass
+        look.badge.jewel = otherGlass
         XCTAssertNotEqual(try raster(TopoBadge()), try raster(TopoBadge(), look: look),
-                          "the look's jewel does not reach the badge")
+                          "the look's badge jewel does not reach the badge")
+    }
+
+    /// The badge's stone is its own, so the microphone's does not reach it: two slabs, which is
+    /// what makes the bar's mark a different colour from the one in the well.
+    func testTheBadgeDoesNotTakeTheRestingJewel() throws {
+        var look = Look()
+        look.jewel = otherGlass
+        XCTAssertEqual(try raster(TopoBadge()), try raster(TopoBadge(), look: look),
+                       "the resting jewel reached the badge, which has a stone of its own")
+    }
+
+    /// The octopus is cut into the stone through the one press, so a look that takes the cut
+    /// away takes it away in the bar as well as in the well.
+    func testTheBadgesMarkIsCutAtTheLooksPress() throws {
+        var flat = Look()
+        flat.press.shade = .clear
+        flat.press.catchLight = .clear
+        flat.press.floor = 0
+        XCTAssertNotEqual(try raster(TopoBadge()), try raster(TopoBadge(), look: flat),
+                          "the look's press does not reach the badge's mark")
     }
 
     func testTheBadgeTakesItsSizeFromTheLook() throws {
@@ -66,16 +84,16 @@ final class BadgeRenderTests: XCTestCase {
     /// The lights on the glass are the jewel's too: a slab of another colour wants a highlight of
     /// its own, and a sheen or a bevel written into the view is one it cannot have.
     func testTheSheenAndTheBevelAreTheJewelsOwnColours() throws {
-        let plain = try raster(StainedGlass(glass: Look().jewel))
+        let plain = try raster(StainedGlass(glass: Look().jewel, diameter: Look().badge.size))
 
         var lit = Look.Jewel()
         lit.sheenColor = Color(red: 1, green: 0.85, blue: 0.4)
-        XCTAssertNotEqual(plain, try raster(StainedGlass(glass: lit)),
+        XCTAssertNotEqual(plain, try raster(StainedGlass(glass: lit, diameter: Look().badge.size)),
                           "the jewel's sheen colour does not reach the glass")
 
         var cut = Look.Jewel()
         cut.bevelColor = Color(red: 1, green: 0.85, blue: 0.4)
-        XCTAssertNotEqual(plain, try raster(StainedGlass(glass: cut)),
+        XCTAssertNotEqual(plain, try raster(StainedGlass(glass: cut, diameter: Look().badge.size)),
                           "the jewel's bevel colour does not reach the glass")
     }
 }

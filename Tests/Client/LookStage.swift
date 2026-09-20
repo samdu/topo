@@ -64,6 +64,12 @@ enum LookStage {
     }
 
     static func digest(_ image: UIImage) throws -> String {
+        SHA256.hash(data: Data(try bytes(image))).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// One picture's pixels, four bytes to each. A picture with nothing in it is a failure of
+    /// its own: a stage that drew nothing would make every look look alike.
+    static func bytes(_ image: UIImage) throws -> [UInt8] {
         let cgImage = try XCTUnwrap(image.cgImage, "no bitmap behind the render")
         var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
         let context = try XCTUnwrap(CGContext(
@@ -72,6 +78,23 @@ enum LookStage {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
         XCTAssertGreaterThan(Set(bytes).count, 8, "the stage drew a blank picture, so it says nothing")
-        return SHA256.hash(data: Data(bytes)).map { String(format: "%02x", $0) }.joined()
+        return bytes
+    }
+
+    /// Whether two pictures are pictures of two different things.
+    ///
+    /// A digest is the right question of `ImageRenderer`, which draws the same bytes from the
+    /// same view every time. It is not the right question of the render server: the same view
+    /// drawn through two windows rounds the antialiasing on a curve's edge a shade either way,
+    /// so a handful of pixels differ by one in a channel between two drawings of one picture.
+    /// What is asked here is therefore that something differ by more than a shade — which every
+    /// field of the look that draws at all does, since the fixture sets each to a value nothing
+    /// like the compiled one.
+    static func differ(_ a: [UInt8], _ b: [UInt8], by shade: UInt8 = 2) throws -> Bool {
+        guard a.count == b.count else { return true }
+        for (one, other) in zip(a, b) where one > other ? one - other > shade : other - one > shade {
+            return true
+        }
+        return false
     }
 }
