@@ -1,6 +1,6 @@
 #!/usr/bin/env swift
 // Renders the app icons, and the stone the app's cabochons are cut from,
-// from Design/topo-mark.svg and Design/topo-slab.png.
+// from Design/topo-mark.svg and Design/topo-jelly.png.
 //
 //   swift Design/make-icons.swift        # from the repository root
 //
@@ -9,22 +9,27 @@
 // Everything it writes is committed, so nobody needs Xcode to run this to
 // build the app — only to change the mark.
 //
-// The ground is the app's own stone — `Design/topo-slab.png`, the slab the
-// microphone's and the badge's cabochons are cut from — and the mark is white
-// on it. iOS and watchOS icons are full-bleed squares (the system masks them),
-// macOS draws its own rounded square with the margin that platform expects,
-// and tvOS is a layered stack: ground behind, mark in front, so it parallaxes
-// under the remote.
+// The ground is the app's own stone — `Design/topo-jelly.png`, which the
+// microphone's and the badge's cabochons are cut from too — and the mark is cut
+// into it through the same treatment the app presses its marks with, so the icon
+// on the home screen is the same object as the gem under the thumb. iOS and
+// watchOS icons are full-bleed squares (the system masks them), macOS draws its
+// own rounded square with the margin that platform expects, and tvOS is a
+// layered stack: ground behind, mark in front, so it parallaxes under the
+// remote. That front layer is the one place the mark is laid on in white rather
+// than cut in — a layer that floats above the stone has no stone to cut into.
 
 import AppKit
+import CoreImage
 import Foundation
 
 // MARK: - The mark
 
-/// One `d` attribute: a move, then cubic segments. The mark uses no other
-/// commands, so this reads what is there rather than all of SVG.
+/// One `d` attribute: a move, then cubic segments, then the close that makes the
+/// outline a silhouette. The mark uses no other commands, so this reads what is
+/// there rather than all of SVG.
 func path(fromD d: String) -> CGPath {
-    let numbers = d.split(whereSeparator: { " ,MC".contains($0) }).compactMap { Double($0) }
+    let numbers = d.split(whereSeparator: { " ,MCZ".contains($0) }).compactMap { Double($0) }
     guard numbers.count >= 8, (numbers.count - 2) % 6 == 0 else {
         fatalError("Design/topo-mark.svg: not a move-then-curves path: \(d)")
     }
@@ -35,6 +40,7 @@ func path(fromD d: String) -> CGPath {
                       control1: CGPoint(x: numbers[start], y: numbers[start + 1]),
                       control2: CGPoint(x: numbers[start + 2], y: numbers[start + 3]))
     }
+    path.closeSubpath()
     return path
 }
 
@@ -45,65 +51,140 @@ func matches(_ pattern: String, in text: String) -> [String] {
     }
 }
 
-/// The mark in its own 100×100 space: the arms as stroked outlines and the head
-/// as a disc, each a path of its own.
-///
-/// They are kept apart rather than added into one path because a fill is one
-/// winding calculation over everything in it: a stroked outline's inner contour
-/// runs the other way, so where an arm passes under the head the two cancel and
-/// the fill leaves a notch. Filled one at a time they simply paint over each
-/// other, which is what a single-colour mark means.
-func mark(fromSVG svg: String) -> [CGPath] {
-    let strokeWidth = Double(matches("stroke-width=\"([0-9.]+)\"", in: svg).first ?? "6") ?? 6
-    var parts: [CGPath] = []
-    for d in matches("<path d=\"([^\"]+)\"", in: svg) {
-        parts.append(path(fromD: d).copy(strokingWithWidth: strokeWidth, lineCap: .round,
-                                         lineJoin: .round, miterLimit: 10))
+/// The mark in its own 100×100 space: one closed outline, filled.
+func mark(fromSVG svg: String) -> CGPath {
+    guard let d = matches("<path d=\"([^\"]+)\"", in: svg).first else {
+        fatalError("Design/topo-mark.svg: no path")
     }
-    let circle = matches("<circle cx=\"([0-9.]+)\" cy=\"[0-9.]+\" r=\"[0-9.]+\"", in: svg)
-    guard !circle.isEmpty,
-          let cx = Double(matches("cx=\"([0-9.]+)\"", in: svg).first ?? ""),
-          let cy = Double(matches("cy=\"([0-9.]+)\"", in: svg).first ?? ""),
-          let r = Double(matches(" r=\"([0-9.]+)\"", in: svg).first ?? "") else {
-        fatalError("Design/topo-mark.svg: no head")
-    }
-    let head = CGMutablePath()
-    head.addEllipse(in: CGRect(x: cx - r, y: cy - r, width: 2 * r, height: 2 * r))
-    parts.append(head)
-    return parts
-}
-
-/// What the whole mark covers, which is what it is centred and scaled on.
-func inkBox(_ parts: [CGPath]) -> CGRect {
-    parts.dropFirst().reduce(parts[0].boundingBoxOfPath) { $0.union($1.boundingBoxOfPath) }
+    return path(fromD: d)
 }
 
 // MARK: - Drawing
 
-/// The slab both the icon's ground and the app's cabochons are cut from. It is
-/// read once: every icon this writes is the same square of stone at a different
-/// size, so the icon on the home screen and the gem under the thumb are the
-/// same piece of agate.
-let slab: NSImage = {
+/// The stone: one photograph of a slice of jelly-teal glass, which every icon
+/// is grounded on and both cabochons are cut from, so the icon on the home
+/// screen and the gem under the thumb are one object.
+let jelly: NSImage = {
     let url = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        .appendingPathComponent("Design/topo-slab.png")
+        .appendingPathComponent("Design/topo-jelly.png")
     guard let image = NSImage(contentsOf: url) else {
-        fatalError("Design/topo-slab.png: not readable")
+        fatalError("Design/topo-jelly.png: not readable")
     }
     return image
 }()
 
-/// The slab covering a rectangle, cropped rather than stretched: the top shelf
-/// is far wider than it is tall and a squashed stone is a different stone.
-func fill(_ rect: NSRect, with image: NSImage) {
-    let scale = max(rect.width / image.size.width, rect.height / image.size.height)
-    let side = NSSize(width: image.size.width * scale, height: image.size.height * scale)
-    image.draw(in: NSRect(x: rect.midX - side.width / 2, y: rect.midY - side.height / 2,
-                          width: side.width, height: side.height))
+/// A window on the stone, in fractions of it, measured from the top-left as the
+/// picture is written.
+struct Cut {
+    let cx: CGFloat
+    let cy: CGFloat
+    let side: CGFloat
 }
 
-/// What holds the white mark off the slab's bright band: a soft shade under it,
-/// measured as a share of the icon's own side so every size is one picture.
+/// The two cuts. Each is the largest of its shape that holds no card at all,
+/// placed where the stone's light varies most: the middle of the jelly is a flat
+/// wash, and a crop centred on the picture lands in it. They are constants here
+/// because finding them is a search over the photograph, run once
+/// (`Design/README.md`), and what the search found is what ships.
+let groundCut = Cut(cx: 0.5024, cy: 0.4928, side: 0.5750)
+let gemCut = Cut(cx: 0.5064, cy: 0.5112, side: 0.7775)
+
+/// The stone covering a rectangle, cropped rather than stretched: the top shelf
+/// is far wider than it is tall and a squashed stone is a different stone. What
+/// is narrowed is the window and never the destination, so no part of the card
+/// the jelly was photographed on can reach an icon however wide it is.
+func fill(_ rect: NSRect, from cut: Cut) {
+    let width = jelly.size.width, height = jelly.size.height
+    let aspect = rect.width / rect.height
+    let window = NSSize(width: cut.side * width * min(aspect, 1),
+                        height: cut.side * height / max(aspect, 1))
+    jelly.draw(in: rect,
+               from: NSRect(x: cut.cx * width - window.width / 2,
+                            // The cuts are measured downwards and Quartz counts up.
+                            y: (1 - cut.cy) * height - window.height / 2,
+                            width: window.width, height: window.height),
+               operation: .sourceOver, fraction: 1)
+}
+
+// MARK: - The cut
+
+/// `Look.Press`, which is what the app cuts both its marks with: the wall's
+/// width as a share of the stone it is cut into, the dark wall at the top of a
+/// stroke and the light one at its foot, how far a wall is softened as a share
+/// of its own width, and how much of the shade lies over the floor. Held here
+/// rather than read from `Look.swift`, which is Swift the app compiles and not
+/// something a script can import; the two are checked against each other by
+/// `IconTests`.
+let pressWall: CGFloat = 6.0 / 512
+let pressSoften: CGFloat = 0.35
+let pressFloor: CGFloat = 0.3
+let pressShade: CGFloat = 0.62
+let pressCatch: CGFloat = 0.62
+
+/// One wall of the cut as a mask: the mark, less the mark moved by the wall's
+/// width, softened. Moved down the screen that is the side facing away from the
+/// light; moved up, the side that catches it.
+func wall(_ mark: CGPath, by dy: CGFloat, size: CGSize, soften: CGFloat) -> CGImage? {
+    guard let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height),
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(),
+                                  bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return nil }
+    context.setFillColor(CGColor(gray: 0, alpha: 1))
+    context.fill(CGRect(origin: .zero, size: size))
+    context.setFillColor(CGColor(gray: 1, alpha: 1))
+    context.addPath(mark)
+    context.fillPath()
+    context.setBlendMode(.copy)
+    context.setFillColor(CGColor(gray: 0, alpha: 1))
+    var moved = CGAffineTransform(translationX: 0, y: dy)
+    if let offset = mark.copy(using: &moved) {
+        context.addPath(offset)
+        context.fillPath()
+    }
+    guard let band = context.makeImage() else { return nil }
+    guard soften > 0.4, let filter = CIFilter(name: "CIGaussianBlur") else { return band }
+    filter.setValue(CIImage(cgImage: band), forKey: kCIInputImageKey)
+    filter.setValue(soften, forKey: kCIInputRadiusKey)
+    guard let blurred = filter.outputImage else { return band }
+    let frame = CGRect(origin: .zero, size: size)
+    return CIContext().createCGImage(blurred, from: frame, format: .L8,
+                                     colorSpace: CGColorSpaceCreateDeviceGray()) ?? band
+}
+
+/// The mark cut into the stone, the way `Pressed` cuts it: the mark's own shape
+/// filled with the stone a shade under the stone around it, the wall at the top
+/// of every stroke dark where it faces away from the light, and the wall at its
+/// foot catching it.
+func engrave(_ cg: CGContext, mark: CGPath, size: CGSize, ground cut: Cut) {
+    let frame = CGRect(origin: .zero, size: size)
+    let width = min(size.width, size.height) * pressWall
+
+    // The floor: the same stone in the same place, under the shade that sets it
+    // below the surface.
+    cg.saveGState()
+    cg.addPath(mark)
+    cg.clip()
+    fill(frame, from: cut)
+    cg.setFillColor(CGColor(gray: 0, alpha: pressFloor))
+    cg.fill(frame)
+    cg.restoreGState()
+
+    // The two walls. Quartz counts y upwards, so the wall at the top of a stroke
+    // is the band left when the mark moved *down* is taken out of it.
+    for (dy, colour) in [(-width, CGColor(gray: 0, alpha: pressShade)),
+                         (width, CGColor(gray: 1, alpha: pressCatch))] {
+        guard let band = wall(mark, by: dy, size: size, soften: width * pressSoften) else { continue }
+        cg.saveGState()
+        cg.clip(to: frame, mask: band)
+        cg.setFillColor(colour)
+        cg.fill(frame)
+        cg.restoreGState()
+    }
+}
+
+/// What holds a laid mark off the stone's bright band: a soft shade under it,
+/// measured as a share of the icon's own side so every size is one picture. Only
+/// the tvOS front layer is laid on; everything else is cut in.
 let markShadowOffset: CGFloat = 0.008
 let markShadowBlur: CGFloat = 0.012
 let markShadowAlpha: CGFloat = 0.35
@@ -117,7 +198,7 @@ enum Ground {
     case none
 }
 
-func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: [CGPath]) -> Data {
+func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: CGPath) -> Data {
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size.width),
                                      pixelsHigh: Int(size.height), bitsPerSample: 8,
                                      samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -133,22 +214,22 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: [CGPath
 
     switch ground {
     case .full:
-        fill(NSRect(origin: .zero, size: size), with: slab)
+        fill(NSRect(origin: .zero, size: size), from: groundCut)
     case .rounded(let margin):
         let inset = min(size.width, size.height) * margin
         let box = NSRect(x: inset, y: inset, width: size.width - 2 * inset, height: size.height - 2 * inset)
         let radius = box.width * 0.225
         NSGraphicsContext.saveGraphicsState()
         NSBezierPath(roundedRect: box, xRadius: radius, yRadius: radius).addClip()
-        fill(box, with: slab)
+        fill(box, from: groundCut)
         NSGraphicsContext.restoreGraphicsState()
     case .none:
         break
     }
 
-    // The mark, white, centred on its own ink rather than on its 100×100
-    // box, and flipped: SVG counts y downwards and Quartz counts it up.
-    let ink = inkBox(markPath)
+    // The mark, centred on its own ink rather than on its 100×100 box, and
+    // flipped: SVG counts y downwards and Quartz counts it up.
+    let ink = markPath.boundingBoxOfPath
     let scale = markHeight / max(ink.width, ink.height)
     let place = CGAffineTransform.identity
         .translatedBy(x: (size.width - ink.width * scale) / 2 - ink.minX * scale,
@@ -156,25 +237,26 @@ func render(size: CGSize, ground: Ground, markHeight: CGFloat, markPath: [CGPath
         .scaledBy(x: scale, y: scale)
     let flip = CGAffineTransform(a: 1, b: 0, c: 0, d: -1, tx: 0, ty: size.height)
     var transform = place.concatenating(flip)
-    // The mark is laid on the stone rather than cut into it, because a cut mark
-    // is gone by the size the home screen draws this at. What keeps it off the
-    // slab's bright band is a shade under it, at a share of the icon's own side
-    // so every size is the same picture.
-    cg.saveGState()
-    cg.setShadow(offset: CGSize(width: 0, height: -size.height * markShadowOffset),
-                 blur: size.height * markShadowBlur,
-                 color: NSColor.black.withAlphaComponent(markShadowAlpha).cgColor)
-    cg.setFillColor(NSColor.white.cgColor)
-    // Under a shadow, one fill of everything: filling part by part would cast a
-    // shadow from each part onto the ones drawn after it.
-    cg.beginTransparencyLayer(auxiliaryInfo: nil)
-    for part in markPath {
-        guard let placed = part.copy(using: &transform) else { continue }
+    guard let placed = markPath.copy(using: &transform) else { fatalError("the mark did not place") }
+
+    switch ground {
+    case .full, .rounded:
+        // Cut into the stone, through the treatment the app presses both its
+        // marks with, so the icon and the gem are the same object.
+        engrave(cg, mark: placed, size: size, ground: groundCut)
+    case .none:
+        // A layer that floats above the stone has no stone to cut into, so the
+        // tvOS front layer is the mark laid on in white, held off whatever is
+        // behind it by a shade.
+        cg.saveGState()
+        cg.setShadow(offset: CGSize(width: 0, height: -size.height * markShadowOffset),
+                     blur: size.height * markShadowBlur,
+                     color: NSColor.black.withAlphaComponent(markShadowAlpha).cgColor)
+        cg.setFillColor(NSColor.white.cgColor)
         cg.addPath(placed)
         cg.fillPath()
+        cg.restoreGState()
     }
-    cg.endTransparencyLayer()
-    cg.restoreGState()
 
     NSGraphicsContext.restoreGraphicsState()
     guard let png = rep.representation(using: .png, properties: [:]) else { fatalError("no png") }
@@ -374,12 +456,11 @@ print("done")
 
 // MARK: - The stone
 
-/// The disc the app's cabochons are filled with, cut from the same slab the
+/// The disc the app's cabochons are filled with, cut from the same stone the
 /// icons are grounded on, so the gem under the thumb and the icon on the home
-/// screen are one piece of agate. `StainedGlass` fills a circle with this as an
+/// screen are one object. `StainedGlass` fills a circle with this as an
 /// `ImagePaint`, so what it wants is a square whose content is the disc.
-func writeGem(side: Int = 512, centre: CGPoint = CGPoint(x: 0.5, y: 0.5),
-              extent: CGFloat = 0.62) throws {
+func writeGem(side: Int = 512, cut: Cut = gemCut) throws {
     guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side,
                                      bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                                      isPlanar: false, colorSpaceName: .deviceRGB,
@@ -391,12 +472,7 @@ func writeGem(side: Int = 512, centre: CGPoint = CGPoint(x: 0.5, y: 0.5),
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
     let box = NSRect(x: 0, y: 0, width: side, height: side)
     NSBezierPath(ovalIn: box).addClip()
-    // The window on the slab, in the slab's own points, drawn so that window
-    // fills the disc.
-    let window = NSRect(x: (centre.x - extent / 2) * slab.size.width,
-                        y: (1 - centre.y - extent / 2) * slab.size.height,
-                        width: extent * slab.size.width, height: extent * slab.size.height)
-    slab.draw(in: box, from: window, operation: .copy, fraction: 1)
+    fill(box, from: cut)
     NSGraphicsContext.restoreGraphicsState()
     guard let png = rep.representation(using: .png, properties: [:]) else { fatalError("no png") }
     try write(png, "Apps/Topo/Assets.xcassets/agate.imageset/agate.png")

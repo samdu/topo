@@ -55,6 +55,9 @@ targets:
       # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
       - path: Apps/Topo/Resources/models.json
         buildPhase: resources
+      # The mark itself, read at launch rather than copied into Swift.
+      - path: Design/topo-mark.svg
+        buildPhase: resources
     dependencies:
       - package: TopoCore
       - package: TopoAuth
@@ -108,6 +111,9 @@ targets:
       - Apps/TopoWatch
       - path: THIRD-PARTY
         buildPhase: resources
+      # The mark itself, read at launch rather than copied into Swift.
+      - path: Design/topo-mark.svg
+        buildPhase: resources
     dependencies:
       - package: TopoAuth
       - package: TopoCore
@@ -127,6 +133,9 @@ targets:
       - Apps/Client
       - Apps/TopoTV
       - path: THIRD-PARTY
+        buildPhase: resources
+      # The mark itself, read at launch rather than copied into Swift.
+      - path: Design/topo-mark.svg
         buildPhase: resources
     dependencies:
       - package: TopoAuth
@@ -200,6 +209,9 @@ targets:
       - path: Womble/Web
         buildPhase: resources
         excludes: [surface.json]
+      # The mark itself, read at launch rather than copied into Swift.
+      - path: Design/topo-mark.svg
+        buildPhase: resources
     dependencies:
       - package: TopoAuth
       - package: TopoCore

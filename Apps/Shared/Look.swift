@@ -252,10 +252,10 @@ struct Look: Equatable, Sendable {
     /// which is the way to the settings and, held, to the diagnostics.
     struct Badge: Equatable, Sendable {
         /// The toolbar control's own height, so the stone fills the item rather than floating
-        /// in it, and the mark at a shade under two thirds of it, which leaves the cut room at
-        /// the stone's edge.
+        /// in it, and the mark at a shade under it: the arms reach the bevel's inner edge, which
+        /// is as big as the octopus goes before the cut runs out of wall to be cut against.
         var size: CGFloat = 44
-        var markSize: CGFloat = 27.9
+        var markSize: CGFloat = 37.4
         /// The stone the octopus is cut into: the same slab under the colour of the other side
         /// of the conversation, so the bar's mark is not the microphone's.
         var jewel: Jewel = {

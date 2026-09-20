@@ -73,9 +73,10 @@ final class MarkViewTests: XCTestCase {
     func testDrawsTheMarkFromTheBundledDrawing() throws {
         let svg = try XCTUnwrap(MarkView.bundledSVG(in: Bundle(for: type(of: self))),
                                 "topo-mark.svg is not in the bundle")
-        // Eight arms, countable at icon size, and the head above them.
-        XCTAssertEqual(MarkView.arms(in: svg).count, 8)
-        XCTAssertEqual(MarkView.head(in: svg)?.bounds, CGRect(x: 29, y: 14, width: 42, height: 42))
+        // One closed outline, filling the drawing's own 100x100 space across its ink.
+        let outline = try XCTUnwrap(MarkView.outline(in: svg))
+        XCTAssertEqual(outline.bounds.minX, 5, accuracy: 0.5)
+        XCTAssertEqual(outline.bounds.width, 90, accuracy: 0.5)
         XCTAssertTrue(MarkView(svg: svg).isDrawn)
     }
 
