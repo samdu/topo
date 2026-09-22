@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Holds scripts/ci-select-lane.sh against the voice path as .github/workflows/pr-validate.yaml
-# declares it (the `VOICE_PATHS` of the select job's `Choose the lane` step, read from the file
-# rather than copied, so an entry dropped there is an entry this test no longer expects): a change
-# outside the list selects the fast lane, a change to each entry on the list selects the full one,
+# declares it (the `VOICE_PATHS` of the select job's `Choose the lane` step), against a list of the
+# voice path this test writes out for itself: the two lists are equal both ways, so an entry
+# deleted from the workflow fails here rather than silently leaving the test; a change outside the
+# list selects the fast lane, a change to each expected entry selects the full one,
 # and every way the inputs can be missing selects full or fails, never fast. Then it runs the select
 # step itself out of the workflow on a pull_request event in scratch repositories, a diff producer
 # that fails among them.
@@ -28,12 +29,32 @@ while IFS= read -r line; do
 done <<< "$voice_paths"
 [ "${#patterns[@]}" -gt 0 ] || { echo "the workflow's VOICE_PATHS is empty" >&2; exit 2; }
 
-# The plan's minimum: a list that loses one of these is a voice path that lost its real ear.
-required=(
-  Apps/Client/VoiceInput.swift Apps/Client/Ear.swift Apps/Client/Vocabulary.swift
-  Apps/Client/Composer.swift Apps/Client/ChatView.swift Apps/Client/ModelDownloads.swift
-  Apps/Topo/Resources/models.json 'Tests/ClientUI/*' 'Tests/Fixtures/*'
-  scripts/ci-audio-lane.sh project.yml .github/workflows/pr-validate.yaml
+# The voice path as this test expects it, written out here rather than read from the workflow, so
+# an entry deleted there is a difference here and not an entry that silently stops being tested.
+# Every entry selects full, and the workflow's VOICE_PATHS has to equal this list both ways.
+expected=(
+  Apps/Client/AudioSession.swift
+  Apps/Client/ChatView.swift
+  Apps/Client/Composer.swift
+  Apps/Client/DebugRun.swift
+  Apps/Client/Ear.swift
+  Apps/Client/ModelDownloads.swift
+  Apps/Client/ModelHousekeeping.swift
+  Apps/Client/Vocabulary.swift
+  Apps/Client/VoiceInput.swift
+  Apps/Topo/Resources/models.json
+  'Tests/ClientUI/*'
+  'Tests/Fixtures/*'
+  Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+  project.yml
+  scripts/ci-audio-feeder.swift
+  scripts/ci-audio-lane.sh
+  scripts/ci-audio-meter.swift
+  scripts/ci-require-tests.sh
+  scripts/ci-select-lane.sh
+  scripts/fetch-ear-models.sh
+  '.github/actions/prepare/*'
+  .github/workflows/pr-validate.yaml
 )
 
 failures=0
@@ -53,8 +74,11 @@ select_lane() {
   fi
 }
 
-for entry in "${required[@]}"; do
-  printf '%s\n' "${patterns[@]}" | grep -qxF -- "$entry" || fail "the voice path has no entry $entry"
+for entry in "${expected[@]}"; do
+  printf '%s\n' "${patterns[@]}" | grep -qxF -- "$entry" || fail "the workflow's VOICE_PATHS has no entry $entry"
+done
+for pattern in "${patterns[@]}"; do
+  printf '%s\n' "${expected[@]}" | grep -qxF -- "$pattern" || fail "the workflow's VOICE_PATHS has $pattern, which this test does not expect"
 done
 
 # A diff outside the list.
@@ -62,7 +86,7 @@ select_lane fast "outside the voice path" $'Apps/Client/SettingsView.swift\nPack
 select_lane fast "a neighbour of a listed file" $'Apps/Client/EarringView.swift\nTests/Client/EarTests.swift\n'
 
 # Each entry, alone and beside paths outside the list. A glob is exercised with a file under it.
-for pattern in "${patterns[@]}"; do
+for pattern in "${expected[@]}"; do
   example="${pattern//\*/Nested/Example.swift}"
   select_lane full "$pattern alone ($example)" "$example"$'\n'
   select_lane full "$pattern among others" $'docs/design.md\n'"$example"$'\nApps/Client/SettingsView.swift\n'

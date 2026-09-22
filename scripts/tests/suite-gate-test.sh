@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Holds .github/workflows/pr-validate.yaml's gate against its own job list, read from the file:
-# every suite job — every job that is not the gate or the review path — is in `test`'s needs and
-# its SUITE_RESULTS, in `codex`'s needs with `needs.<job>.result == 'success'` in its `if`, and in
-# `reviewer_ran`'s and `review_gate`'s needs, with reviewer_ran's SUITE_RESULTS naming it too. Then
+# Holds .github/workflows/pr-validate.yaml's gate against the job list this test pins by name —
+# the suite jobs select, topo_unit, topo_ui and others, and the gate and review jobs — rather than
+# one discovered from the file: the workflow has exactly those jobs; `test` needs and reads in its
+# SUITE_RESULTS exactly the suite jobs; `codex` needs and spells out
+# `needs.<job>.result == 'success'` for exactly the suite jobs and `test`; and `reviewer_ran` and
+# `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
+# reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. Then
 # it runs the two snippets that read those results — `test`'s `Require every suite job passed` and
 # reviewer_ran's `Assert a verdict was produced and delivered` — with each job's result set in turn
 # to every value other than `success` (failure, cancelled, skipped, and empty for `test`), and holds
@@ -30,8 +33,10 @@ fail() { echo "FAIL $*"; failures=$((failures + 1)); }
 ruby -ryaml - "$workflow" "$work" <<'RUBY' || failures=$((failures + 1))
 path, work = ARGV
 jobs = YAML.load_file(path).fetch("jobs")
+# The jobs by name, written out here rather than discovered, so a suite job deleted from the
+# workflow is a difference and not a job that silently stops being checked.
+suite = %w[select topo_unit topo_ui others]
 review = %w[test codex post_feedback reviewer_ran review_gate]
-suite = jobs.keys - review
 bad = 0
 check = lambda do |ok, msg|
   if ok then puts "ok   #{msg}" else puts "FAIL #{msg}"; bad += 1 end
@@ -48,8 +53,11 @@ names_in = lambda do |results|
   results.scan(PAIR).map { |job, _expr, read| [job, read] }
 end
 
-check.(suite.size >= 3, "the suite is #{suite.size} jobs: #{suite.join(', ')}")
+check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
 check.(needs.("test").sort == suite.sort, "test needs exactly the suite jobs (#{needs.('test').join(', ')})")
+check.(needs.("codex").sort == (suite + ["test"]).sort, "codex needs exactly the suite jobs and test (#{needs.('codex').join(', ')})")
+check.(needs.("reviewer_ran").sort == (suite + %w[test codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
+check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, codex and post_feedback (#{needs.('review_gate').join(', ')})")
 
 gate = step.("test", "Require every suite job passed")
 pairs = names_in.(gate.fetch("env").fetch("SUITE_RESULTS"))
@@ -57,6 +65,8 @@ check.(pairs.map(&:first).sort == suite.sort, "test's SUITE_RESULTS names exactl
 pairs.each { |job, read| check.(job == read, "test's SUITE_RESULTS reads #{job} from its own result") }
 
 cif = jobs.fetch("codex").fetch("if")
+read = cif.scan(/needs\.(\w+)\.result == 'success'/).flatten
+check.(read.sort == (suite + ["test"]).sort, "codex's if reads exactly the suite jobs and test (#{read.join(', ')})")
 (suite + ["test"]).each do |job|
   check.(needs.("codex").include?(job), "codex needs #{job}")
   check.(cif.include?("needs.#{job}.result == 'success'"), "codex's if spells out needs.#{job}.result == 'success'")
