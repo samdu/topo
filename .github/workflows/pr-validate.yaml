@@ -1,7 +1,8 @@
-# The merge gate. The Swift suite runs first; Codex reviews every non-draft PR
-# whose suite is green, and its verdict is what gates. `review_gate` and `test`
-# are the required status checks on main, and automerge.yaml merges on this
-# workflow concluding green — so a red suite holds the merge by both routes and
+# The merge gate. The suite runs first, as parallel jobs gated by `test`;
+# Codex reviews every non-draft PR whose suite is green, and its verdict is
+# what gates. `review_gate` and `test` are the required status checks on main,
+# and automerge.yaml merges on this workflow's latest pull_request run
+# concluding green — so a red suite job holds the merge by both routes and
 # costs no reviewer round.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
@@ -61,10 +62,33 @@ on:
     # concluded until someone pushes. It is not what skips the reviewer on
     # drafts; the `if` on the codex job does that.
     types: [opened, synchronize, reopened, ready_for_review]
+  # The nightly: the full lane on main, real ear included, once a night. A
+  # red one is this workflow's failed run on main; the review jobs do not run
+  # outside a pull request, so its conclusion is the suite's.
+  schedule:
+    - cron: "17 10 * * *"
+  # The same jobs by hand. `lane: full` is the nightly's body; `lane:
+  # fast-benchmark` forces the fast lane, to time it on a branch whose own
+  # diff selects the full one. `fail` fails one job on purpose (or, as
+  # `skip`, takes the fast lane whatever `lane` says and leaves the real-ear
+  # test selected with no models) to show the gate holding against it.
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Which lane to run
+        type: choice
+        options: [full, fast-benchmark]
+        default: full
+      fail:
+        description: Fail one job on purpose
+        type: choice
+        options: [none, topo_unit, topo_ui, others, skip]
+        default: none
 
-# One run per PR: a superseded push should not keep burning a reviewer.
+# One run per PR: a superseded push should not keep burning a reviewer. A run
+# outside a pull request is its own group.
 concurrency:
-  group: pr-validate-${{ github.event.pull_request.number }}
+  group: pr-validate-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 permissions:
@@ -80,64 +104,386 @@ env:
   # skipped and the POST simply fails into its own warning, which is the same
   # best-effort behaviour as a pane that is down.
   STATUS_PANE_URL: https://pane.burmese-egret.ts.net/topo-status/api/review
+  # The suite's toolchain, read by .github/actions/prepare. The XcodeGen
+  # version is the one the committed projects are generated with locally, and
+  # the release zip is checked against its hash so a replaced asset fails.
+  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+  IOS_SIMULATOR_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-5
+  XCODEGEN_VERSION: 2.46.0
+  XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+  RESULTS: ${{ github.workspace }}/ci-results
+  # The TopoTests suites `topo_ui` runs beside the UI tests, and `topo_unit`
+  # skips.
+  UI_JOB_SUITES: LookReachTests
+  # The one test only the full lane runs: Parakeet hearing the fixture.
+  REAL_EAR_TEST: TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 
 jobs:
-  # The Swift suite, and the reviewer's precondition. It runs on every PR
-  # including drafts, so an agent iterating locally still gets the signal; the
-  # `codex` job below needs it green. A macOS runner that never picks this job
-  # up therefore holds the merge — deliberately, because a reviewer round spent
-  # on a build that does not compile is a round wasted, and a merge waved
-  # through on a red suite is worse than a late one.
+  # Which lane this run takes, and why, said in its log and its summary.
   #
-  # Green means the named suites ran, not that nothing complained. Every
-  # package and project is named here and a missing one fails; the XcodeGen
-  # projects are generated from project.yml before anything builds, so a file
-  # on disk that the committed project does not list is still compiled; and
+  #   pull_request       the paths the PR changes against main: `full` when any
+  #                      is on the voice path below or when the diff cannot be
+  #                      read, `fast` otherwise (scripts/ci-select-lane.sh,
+  #                      whose test reads this list and runs this step).
+  #   schedule           `full`: the nightly run on main.
+  #   workflow_dispatch  the `lane` input: `full` by default, which is the
+  #                      nightly's body run by hand, or `fast-benchmark`, which
+  #                      forces the fast lane on the same jobs to time it.
+  #
+  # The two lanes differ in one job, `topo_ui`, and in one thing: the full lane
+  # fetches Parakeet's models and runs the UI test in which the real ear hears
+  # the fixture through the microphone; the fast lane deselects that test by
+  # name. Everything else — the audio loopback, the press tests over the stub
+  # and loading ears, every other suite — runs in both.
+  #
+  # The PR's own changes are `HEAD^1..HEAD` of GitHub's test merge commit,
+  # whose first parent is main: what merging the PR would change on main.
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      lane: ${{ steps.lane.outputs.lane }}
+      reason: ${{ steps.lane.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Choose the lane
+        id: lane
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_LANE: ${{ inputs.lane }}
+          DISPATCH_FAIL: ${{ inputs.fail }}
+          # The voice path: a change to any of these runs the real ear on its
+          # PR. One bash glob per line; `*` crosses `/`.
+          VOICE_PATHS: |
+            Apps/Client/AudioSession.swift
+            Apps/Client/ChatView.swift
+            Apps/Client/Composer.swift
+            Apps/Client/DebugRun.swift
+            Apps/Client/Ear.swift
+            Apps/Client/ModelDownloads.swift
+            Apps/Client/ModelHousekeeping.swift
+            Apps/Client/Vocabulary.swift
+            Apps/Client/VoiceInput.swift
+            Apps/Topo/Resources/models.json
+            Tests/ClientUI/*
+            Tests/Fixtures/*
+            Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+            project.yml
+            scripts/ci-audio-feeder.swift
+            scripts/ci-audio-lane.sh
+            scripts/ci-audio-meter.swift
+            scripts/ci-require-tests.sh
+            scripts/ci-select-lane.sh
+            scripts/fetch-ear-models.sh
+            .github/actions/prepare/*
+            .github/workflows/pr-validate.yaml
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request)
+              # A diff that cannot be read selects full, inside the script.
+              scripts/ci-select-lane.sh --git HEAD^1 HEAD > "$RUNNER_TEMP/lane.txt"
+              ;;
+            schedule)
+              printf 'lane=full\nreason=the nightly run on main\n' > "$RUNNER_TEMP/lane.txt"
+              ;;
+            workflow_dispatch)
+              # `fail=skip` is the fast lane's model-less setup with the real-ear
+              # test left selected, so it takes the fast lane whatever `lane` says.
+              if [ "$DISPATCH_FAIL" = skip ]; then
+                printf 'lane=fast\nreason=workflow_dispatch fail=skip overrode lane=%s: the fast lane with no models and the real-ear test left selected, a deliberate failure\n' "$DISPATCH_LANE" > "$RUNNER_TEMP/lane.txt"
+              else
+                case "$DISPATCH_LANE" in
+                  full) printf 'lane=full\nreason=workflow_dispatch asked for the full lane\n' > "$RUNNER_TEMP/lane.txt" ;;
+                  fast-benchmark) printf 'lane=fast\nreason=workflow_dispatch forced the fast lane: a benchmark run, not a selection\n' > "$RUNNER_TEMP/lane.txt" ;;
+                  *) echo "::error::Unknown lane input '$DISPATCH_LANE'."; exit 1 ;;
+                esac
+              fi
+              ;;
+            *)
+              echo "::error::No lane rule for the $EVENT event."; exit 1
+              ;;
+          esac
+          cat "$RUNNER_TEMP/lane.txt" >> "$GITHUB_OUTPUT"
+          lane="$(sed -n 's/^lane=//p' "$RUNNER_TEMP/lane.txt")"
+          reason="$(sed -n 's/^reason=//p' "$RUNNER_TEMP/lane.txt")"
+          echo "::notice title=Lane: $lane::$reason"
+          echo "**Lane: $lane** — $reason" >> "$GITHUB_STEP_SUMMARY"
+
+  # The suite is three macOS jobs that run at once — `topo_unit`, `topo_ui`
+  # and `others` — and `test` below is the gate over them and the select job.
+  # Concurrency cost: three of the five macOS jobs the free plan runs at a
+  # time across the account, so a second PR validating at once gets two
+  # runners straight away and queues its third for a few minutes, rather than
+  # queueing whole. Two jobs would leave the Topo scheme's suite on one runner,
+  # which is today's time (about 22–25 minutes), and in-job parallel testing
+  # over simulator clones starves a runner of this size (three clones never
+  # launched; two ran past the fast lane's budget). What can run on
+  # ubuntu-latest (the lane choice, the gate) runs there and does not count.
+  #
+  # Green means the named suites ran, not that nothing complained: every
+  # package and project is named and a missing one fails, and
   # scripts/ci-require-tests.sh reads each result — xcresult bundles per test
   # target, Swift Testing's xunit report per package — and fails on a target
-  # that did not run, a suite with no tests, a failure or a skip. Each suite
-  # step runs after an earlier one failed (`!cancelled()`), so one red run
-  # reports every suite, and the logs and result bundles are uploaded however
-  # the job ends.
+  # that did not run, a suite with no tests, a failure or a skip. Within a job
+  # each suite step runs after an earlier one failed (`!cancelled()`), so one
+  # red run reports every suite, and the logs and result bundles are uploaded
+  # however the job ends, one artifact per job.
   #
-  # The runner and compiler are pinned rather than `macos-latest`, so a new
-  # image cannot silently change what the suite is compiled with; a runner
-  # without Xcode 26.6 or the iOS 26.5 simulator runtime fails in the
-  # Toolchain step with a message saying which. Arm64 is required: FluidAudio
-  # ships an arm64-only binary and project.yml excludes x86_64 simulators.
-  test:
+  # The Topo scheme's test action is split two ways by test selection, never
+  # by leaving a suite's inputs out and letting it skip: `topo_ui` runs the UI
+  # tests and the TopoTests suites named in UI_JOB_SUITES, and `topo_unit`
+  # runs everything else, so a suite added to TopoTests lands in `topo_unit`
+  # without anyone naming it. UI_JOB_SUITES is there for balance: the look
+  # suites render every field to pixels and are the longest in TopoTests, and
+  # one of them beside the UI tests evens the two jobs out.
+  #
+  # `fail` is a workflow_dispatch input that fails one job on purpose, as its
+  # last step, so the gate can be shown holding against each prerequisite.
+
+  # The app targets' own suite (TopoTests) less UI_JOB_SUITES, hosted by the
+  # iOS app and covering the code the watch and TV builds share with the
+  # phone, and the userland package's two bundles.
+  topo_unit:
     runs-on: macos-26
-    timeout-minutes: 45
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-      IOS_SIMULATOR_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-5
-      # The version the committed projects are generated with locally. The
-      # release zip is checked against its hash so a replaced asset fails.
-      XCODEGEN_VERSION: 2.46.0
-      XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
-      RESULTS: ${{ github.workspace }}/ci-results
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: Toolchain
+      - uses: ./.github/actions/prepare
+        with:
+          guest: "true"
+
+      # Alpine's minirootfs and Claude Code, fetched from the manifest's entries
+      # and verified by digest, for the userland suites to import, boot and run.
+      - name: The rootfs and Claude Code for the userland suites
         run: |
           set -euo pipefail
-          mkdir -p "$RESULTS"
-          [ "$(uname -m)" = arm64 ] || { echo "::error::Runner is $(uname -m), not arm64."; exit 1; }
-          [ -d "$DEVELOPER_DIR" ] || { echo "::error::$DEVELOPER_DIR is not on this runner image; pick the Xcode it has on purpose."; exit 1; }
-          sw_vers
-          xcodebuild -version
-          swift --version
-          # One iPhone from the pinned runtime, the first by name, so every run
-          # on an image uses the same device.
-          udid="$(xcrun simctl list devices available --json | jq -r --arg rt "$IOS_SIMULATOR_RUNTIME" '
-            [.devices[$rt] // [] | .[] | select(.name | startswith("iPhone"))]
-            | sort_by(.name) | .[0] | if . then "\(.udid) \(.name)" else empty end')"
-          [ -n "$udid" ] || { echo "::error::No iPhone simulator for $IOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
-          echo "Simulator: $udid ($IOS_SIMULATOR_RUNTIME)"
-          echo "SIMULATOR_UDID=${udid%% *}" >> "$GITHUB_ENV"
+          rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$HOME/rootfs")"
+          echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
+          claude="$(scripts/fetch-pinned.sh claude-code "$HOME/claude-code")"
+          echo "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" >> "$GITHUB_ENV"
+
+      # Booted while the build runs, so the suite does not wait on it.
+      - name: Boot the simulator
+        run: xcrun simctl boot "$SIMULATOR_UDID"
+
+      - name: xcodebuild build-for-testing (Topo)
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project Topo.xcodeproj -scheme Topo \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            2>&1 | tee "$RESULTS/Topo-unit-build.log"
+
+      - name: xcodebuild test (Topo, unit and userland)
+        run: |
+          set -euo pipefail
+          skip=(-skip-testing:TopoUITests)
+          for suite in $UI_JOB_SUITES; do skip+=("-skip-testing:TopoTests/$suite"); done
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
+          xcodebuild test-without-building \
+            -project Topo.xcodeproj -scheme Topo \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            "${skip[@]}" \
+            -resultBundlePath "$RESULTS/Topo-unit.xcresult" \
+            2>&1 | tee "$RESULTS/Topo-unit.log"
+
+      # The exit codes above say nothing about a target the scheme dropped;
+      # this reads what actually ran. It also runs after a failed test step,
+      # where a missing result bundle is reported as such.
+      - name: Require every test target ran and passed
+        if: ${{ !cancelled() }}
+        run: scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-unit.xcresult" TopoTests TopoUserlandTests TopoUserlandBrakeTests
+
+      - name: Deliberate failure (workflow_dispatch fail=topo_unit)
+        if: ${{ !cancelled() && inputs.fail == 'topo_unit' }}
+        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=topo_unit."; exit 1
+
+      - name: Upload logs and result bundles
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: topo-unit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-results
+          retention-days: 7
+          if-no-files-found: warn
+
+  # The UI tests (TopoUITests) and UI_JOB_SUITES, behind the input-capable
+  # audio lane on every lane. The press tests over the stub and loading ears
+  # need no model, but `MicrophonePressTests` asserts buffers and samples
+  # reached the tap, which only a host with an input delivers. The full lane
+  # adds Parakeet's models and the test in which the real ear hears the
+  # fixture; the fast lane deselects that test by name, so it neither runs nor
+  # skips.
+  topo_ui:
+    needs: select
+    runs-on: macos-26
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    env:
+      LANE: ${{ needs.select.outputs.lane }}
+      LANE_REASON: ${{ needs.select.outputs.reason }}
+    steps:
+      - name: Lane
+        run: |
+          set -euo pipefail
+          echo "Lane: $LANE — $LANE_REASON"
+          case "$LANE" in
+            full | fast) ;;
+            *) echo "::error::No lane from the select job ('$LANE')."; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/prepare
+        with:
+          guest: "true"
+
+      # The microphone test's input-capable lane: BlackHole as the runner
+      # Mac's default input and output, and the fixture looping into it from
+      # one long-lived feeder that listens to BlackHole itself and restarts on
+      # silence (scripts/ci-audio-lane.sh). The simulator's microphone is the
+      # host's default input; its own output does not reach the loopback.
+      # TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to the test
+      # runner, which then fails a hold refused for want of an input. It starts
+      # before the simulator boots, because a simulator's audio binds to the
+      # coreaudiod it booted against and the lane restarts coreaudiod.
+      - name: Audio loopback for the microphone test
+        id: audio_lane
+        run: |
+          set -euo pipefail
+          scripts/ci-audio-lane.sh start
+          echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
+
+      # Booted while the build runs, so the suite does not wait on it.
+      - name: Boot the simulator
+        run: xcrun simctl boot "$SIMULATOR_UDID"
+
+      # Parakeet's models, for the UI test in which the real recogniser hears
+      # the fixture through the microphone: fetched from the manifest's pinned
+      # revisions and verified file by file, cached on the manifest's hash.
+      # The full lane only.
+      - name: Cache the ear's models
+        if: ${{ env.LANE == 'full' }}
+        uses: actions/cache@v4
+        with:
+          path: ~/ear-models
+          key: ear-models-${{ hashFiles('Apps/Topo/Resources/models.json') }}
+      - name: The ear's models for the microphone test
+        if: ${{ env.LANE == 'full' }}
+        run: |
+          set -euo pipefail
+          scripts/fetch-ear-models.sh "$HOME/ear-models"
+          echo "TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$HOME/ear-models" >> "$GITHUB_ENV"
+
+      - name: xcodebuild build-for-testing (Topo)
+        run: |
+          set -euo pipefail
+          xcodebuild build-for-testing \
+            -project Topo.xcodeproj -scheme Topo \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            2>&1 | tee "$RESULTS/Topo-ui-build.log"
+
+      # The microphone test counts the permission prompts the run raises, and
+      # holds that there is exactly one and that it is the microphone's. That
+      # count is only exact on a simulator that has answered nothing, so the
+      # app's grants are cleared first and the flag tells the test so: without
+      # it the test would take a reset that silently did not happen for a
+      # permission that was never asked for.
+      - name: Clear Topo's privacy grants on the simulator
+        run: |
+          set -euo pipefail
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
+          xcrun simctl privacy "$SIMULATOR_UDID" reset all zone.hexagon.topo
+          echo "TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1" >> "$GITHUB_ENV"
+
+      # A lane that has died fails here by name, before and after the suite,
+      # rather than only as a silent tap inside the microphone test.
+      - name: Audio lane holds before the microphone test
+        if: ${{ steps.audio_lane.outcome == 'success' }}
+        run: scripts/ci-audio-lane.sh check before
+
+      # `fail=skip` is the defect the gate exists for: the fast lane leaving
+      # the real-ear test selected with no models, where it ends in XCTSkip,
+      # which scripts/ci-require-tests.sh must fail.
+      - name: xcodebuild test (Topo, UI)
+        env:
+          DELIBERATE_SKIP: ${{ inputs.fail == 'skip' }}
+        run: |
+          set -euo pipefail
+          select=(-only-testing:TopoUITests)
+          for suite in $UI_JOB_SUITES; do select+=("-only-testing:TopoTests/$suite"); done
+          if [ "$LANE" = fast ]; then
+            if [ "$DELIBERATE_SKIP" = true ]; then
+              echo "::warning::workflow_dispatch fail=skip: the real-ear test stays selected with no models, so it skips."
+            else
+              select+=("-skip-testing:$REAL_EAR_TEST")
+              echo "Fast lane: $REAL_EAR_TEST is deselected."
+            fi
+          fi
+          xcodebuild test-without-building \
+            -project Topo.xcodeproj -scheme Topo \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            "${select[@]}" \
+            -resultBundlePath "$RESULTS/Topo-ui.xcresult" \
+            2>&1 | tee "$RESULTS/Topo-ui.log"
+
+      - name: Audio lane holds after the microphone test
+        if: ${{ always() && steps.audio_lane.outcome == 'success' }}
+        run: scripts/ci-audio-lane.sh check after
+
+      # The target as a whole; each of UI_JOB_SUITES by name, since a suite
+      # that was renamed would otherwise leave this job running without it
+      # while it ran in `topo_unit`, unnoticed; and on the full lane the
+      # real-ear test by name: the target check counts test cases, and a lane
+      # that meant to run Parakeet and did not would still pass it.
+      - name: Require every test target ran and passed
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          status=0
+          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-ui.xcresult" TopoUITests TopoTests || status=1
+          named=()
+          for suite in $UI_JOB_SUITES; do named+=("TopoTests/$suite"); done
+          if [ "$LANE" = full ]; then named+=("$REAL_EAR_TEST"); fi
+          if [ "${#named[@]}" -gt 0 ]; then
+            scripts/ci-require-tests.sh named "$RESULTS/Topo-ui.xcresult" "${named[@]}" || status=1
+          fi
+          exit "$status"
+
+      - name: Deliberate failure (workflow_dispatch fail=topo_ui)
+        if: ${{ !cancelled() && inputs.fail == 'topo_ui' }}
+        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=topo_ui."; exit 1
+
+      - name: Upload logs and result bundles
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: topo-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ci-results
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Everything that is not the Topo scheme's suite: the scripts' own tests,
+  # the Swift packages, Womble, and the builds no suite hosts — the watch and
+  # TV for their own simulators, a Release build for iOS devices, and the hub.
+  others:
+    runs-on: macos-26
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/prepare
+        with:
+          guest: "true"
 
       # scripts/simulator-run.sh against a fake xcrun: every failed run exits non-zero.
       - name: simulator-run.sh fails closed
@@ -151,45 +497,25 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/review-verdict-test.sh
 
-      - name: Generate Xcode projects (XcodeGen)
-        run: |
-          set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
-            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
-          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
-          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
-          xcodegen="$RUNNER_TEMP/xcodegen/bin/xcodegen"
-          "$xcodegen" --version | grep -qx "Version: $XCODEGEN_VERSION"
-          "$xcodegen" generate --spec project.yml
-          (cd Womble && "$xcodegen" generate --spec project.yml)
-          # Informational: what generation changed against the committed
-          # projects. Not a gate — Womble's generation reorders resource IDs.
-          git status --short -- '*.xcodeproj'
-
-      # The guest's kernel: OpenMinis/ish-arm64 at its pin with Topo's patches,
-      # built into Packages/TopoUserland/Frameworks/TopoIsh.xcframework, which
-      # is never committed and which every Topo scheme resolves, so it is built
-      # before any xcodebuild. Cached on everything the script folds into its
-      # own inputs stamp; a restored framework whose stamp matches is kept.
-      - name: Cache the guest's framework
+      # The lane selection against this workflow's own voice path: a change
+      # outside it selects fast, a change to each entry selects full.
+      - name: The lane selection reads the voice path
         if: ${{ !cancelled() }}
-        uses: actions/cache@v4
-        with:
-          path: Packages/TopoUserland/Frameworks
-          key: topo-ish-${{ hashFiles('scripts/build-ish.sh', 'patches/ish/**', 'Packages/TopoUserland/Guest/**') }}
-      - name: Build the guest's framework (scripts/build-ish.sh)
-        run: |
-          set -euo pipefail
-          brew install meson ninja llvm lld
-          scripts/build-ish.sh
-          # The memory brake's refresh is what the patch adds and the app sets:
-          # a library without it is a kernel built from the fork unpatched.
-          for slice in Packages/TopoUserland/Frameworks/TopoIsh.xcframework/*/libTopoIsh.a; do
-            symbols="$(nm -gU "$slice")"
-            grep -q ' _ish_mem_refresh_hook$' <<< "$symbols" \
-              || { echo "::error::$slice does not export ish_mem_refresh_hook."; exit 1; }
-            echo "$slice exports ish_mem_refresh_hook"
-          done
+        run: scripts/tests/ci-select-lane-test.sh
+
+      # This workflow's gate against its own job list: every suite job is a
+      # prerequisite of `test` and `codex` and is read by `reviewer_ran` and
+      # `review_gate`, and a red one fails the gate snippets.
+      - name: Every suite job gates the reviewer and the merge
+        if: ${{ !cancelled() }}
+        run: scripts/tests/suite-gate-test.sh
+
+      # ci-require-tests.sh's xcresult and named modes against a fake
+      # xcresulttool: a skip fails both, and a test that did not run fails
+      # `named`.
+      - name: ci-require-tests.sh fails a skip and a test that did not run
+        if: ${{ !cancelled() }}
+        run: scripts/tests/ci-require-tests-test.sh
 
       # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
       # patch that does not apply, a populated deps/linux, and options that are
@@ -197,17 +523,6 @@ jobs:
       - name: build-ish.sh refuses what it should
         if: ${{ !cancelled() }}
         run: scripts/tests/build-ish-test.sh
-
-      # Alpine's minirootfs and Claude Code, fetched from the manifest's entries
-      # and verified by digest, for the userland suites to import, boot and run.
-      - name: The rootfs and Claude Code for the userland suites
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$HOME/rootfs")"
-          echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
-          claude="$(scripts/fetch-pinned.sh claude-code "$HOME/claude-code")"
-          echo "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" >> "$GITHUB_ENV"
 
       # Named, not globbed: a package that disappears fails here instead of
       # leaving the loop with one fewer iteration. Every package runs even
@@ -244,8 +559,7 @@ jobs:
           exit "$status"
 
       # Womble is an Xcode project, not a package, so it needs a simulator
-      # rather than `swift test`. Its deployment target is iOS 12; it runs on
-      # the same simulator as the Topo suite, as it would on a Mac by hand.
+      # rather than `swift test`. Its deployment target is iOS 12.
       - name: xcodebuild test (Womble)
         if: ${{ !cancelled() && env.SIMULATOR_UDID != '' }}
         run: |
@@ -257,89 +571,11 @@ jobs:
             -resultBundlePath "$RESULTS/Womble.xcresult" \
             2>&1 | tee "$RESULTS/Womble.log"
 
-      # The microphone test's input-capable lane: BlackHole as the runner
-      # Mac's default input and output, and the fixture looping into it from
-      # one long-lived feeder that listens to BlackHole itself and restarts on
-      # silence (scripts/ci-audio-lane.sh). The simulator's microphone is the
-      # host's default input; its own output does not reach the loopback.
-      # TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 declares the lane to the test
-      # runner, which then fails a hold refused for want of an input.
-      - name: Audio loopback for the microphone test
-        id: audio_lane
+      - name: Require Womble's tests ran and passed
         if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          scripts/ci-audio-lane.sh start
-          echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
+        run: scripts/ci-require-tests.sh xcresult "$RESULTS/Womble.xcresult" WombleTests
 
-      # Parakeet's models, for the UI test in which the real recogniser hears
-      # the fixture through the microphone: fetched from the manifest's pinned
-      # revisions and verified file by file, cached on the manifest's hash.
-      - name: Cache the ear's models
-        if: ${{ !cancelled() }}
-        uses: actions/cache@v4
-        with:
-          path: ~/ear-models
-          key: ear-models-${{ hashFiles('Apps/Topo/Resources/models.json') }}
-      - name: The ear's models for the microphone test
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          scripts/fetch-ear-models.sh "$HOME/ear-models"
-          echo "TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$HOME/ear-models" >> "$GITHUB_ENV"
-
-      # A lane that has died fails here by name, before and after the suite,
-      # rather than only as a silent tap inside the microphone test.
-      - name: Audio lane holds before the microphone test
-        if: ${{ !cancelled() && steps.audio_lane.outcome == 'success' }}
-        run: scripts/ci-audio-lane.sh check before
-
-      # The microphone test counts the permission prompts the run raises, and
-      # holds that there is exactly one and that it is the microphone's. That
-      # count is only exact on a simulator that has answered nothing, so the
-      # app's grants are cleared first and the flag tells the test so: without
-      # it the test would take a reset that silently did not happen for a
-      # permission that was never asked for.
-      - name: Clear Topo's privacy grants on the simulator
-        if: ${{ !cancelled() && env.SIMULATOR_UDID != '' }}
-        run: |
-          set -euo pipefail
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
-          xcrun simctl privacy "$SIMULATOR_UDID" reset all zone.hexagon.topo
-          echo "TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1" >> "$GITHUB_ENV"
-
-      # The app targets' own suite (TopoTests), and the UI test that presses
-      # the microphone (TopoUITests), both in the scheme's test action. The
-      # suite is hosted by the iOS app and covers the code the watch and TV
-      # builds share with the phone.
-      - name: xcodebuild test (Topo)
-        if: ${{ !cancelled() && env.SIMULATOR_UDID != '' }}
-        run: |
-          set -euo pipefail
-          xcodebuild test \
-            -project Topo.xcodeproj \
-            -scheme Topo \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            -resultBundlePath "$RESULTS/Topo.xcresult" \
-            2>&1 | tee "$RESULTS/Topo.log"
-
-      - name: Audio lane holds after the microphone test
-        if: ${{ always() && steps.audio_lane.outcome == 'success' }}
-        run: scripts/ci-audio-lane.sh check after
-
-      # The exit codes above say nothing about a target the scheme dropped;
-      # this reads what actually ran. It also runs after a failed test step,
-      # where a missing result bundle is reported as such.
-      - name: Require every test target ran and passed
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          status=0
-          scripts/ci-require-tests.sh xcresult "$RESULTS/Womble.xcresult" WombleTests || status=1
-          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo.xcresult" TopoTests TopoUITests TopoUserlandTests TopoUserlandBrakeTests || status=1
-          exit "$status"
-
-      # The watch and TV builds are not covered by that suite's host, so they
+      # The watch and TV builds are not covered by the suite's host, so they
       # are built for their own simulators here.
       - name: xcodebuild build (TopoWatch, TopoTV)
         if: ${{ !cancelled() }}
@@ -352,9 +588,9 @@ jobs:
             -destination 'generic/platform=tvOS Simulator' \
             2>&1 | tee "$RESULTS/TopoTV-build.log"
 
-      # Compilation only, with signing off. The simulator builds above never
-      # compile code excluded from the simulator — the Pocket engine and its
-      # model calls in Apps/Client/Voice.swift sit behind
+      # Compilation only, with signing off. The simulator builds never compile
+      # code excluded from the simulator — the Pocket engine and its model
+      # calls in Apps/Client/Voice.swift sit behind
       # `!targetEnvironment(simulator)` — and nothing else builds TopoHub, which
       # has no test target. A Release build for any iOS device and a macOS
       # build of the hub catch compile and link errors in both. They do not
@@ -387,14 +623,54 @@ jobs:
             || { echo "::error::TopoHub failed to build."; status=1; }
           exit "$status"
 
+      - name: Deliberate failure (workflow_dispatch fail=others)
+        if: ${{ !cancelled() && inputs.fail == 'others' }}
+        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=others."; exit 1
+
       - name: Upload logs and result bundles
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: test-results-${{ github.run_id }}-${{ github.run_attempt }}
+          name: others-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-results
           retention-days: 7
           if-no-files-found: warn
+
+  # The gate over the suite, and the required status check on main that holds
+  # a red suite out. On a completed run it is green only when every suite job
+  # concluded `success`, and it names each that did not. A cancelled run skips
+  # it (`!cancelled()`) and concludes cancelled, and automerge merges only on
+  # the latest pull_request run concluding `completed success`.
+  # A macOS runner that never picks a job up therefore holds the merge —
+  # deliberately, because a reviewer round spent on a build that does not
+  # compile is a round wasted, and a merge waved through on a red suite is
+  # worse than a late one. SUITE_RESULTS names every job in `needs` and
+  # scripts/tests/suite-gate-test.sh holds that the two lists agree.
+  test:
+    needs: [select, topo_unit, topo_ui, others]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every suite job passed
+        env:
+          SUITE_RESULTS: >-
+            select=${{ needs.select.result }}
+            topo_unit=${{ needs.topo_unit.result }}
+            topo_ui=${{ needs.topo_ui.result }}
+            others=${{ needs.others.result }}
+        run: |
+          set -euo pipefail
+          status=0
+          for pair in $SUITE_RESULTS; do
+            job="${pair%%=*}"; result="${pair#*=}"
+            if [ "$result" = success ]; then
+              echo "$job: success"
+            else
+              echo "::error::$job did not pass (result: ${result:-none})."
+              status=1
+            fi
+          done
+          exit "$status"
 
   # Codex runs the CLI in the runner with the repo checked out, so unlike a
   # single-shot reviewer it can open the file the diff only mentions. Its
@@ -405,16 +681,21 @@ jobs:
   # against the free local reviewer, and marks it ready — that transition is
   # what first spends a Codex round.
   codex:
-    needs: test
+    needs: [select, topo_unit, topo_ui, others, test]
     # Same-repo branches only: a fork PR carries untrusted content and must
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
     #
-    # `needs.test.result` is spelled out because a job with its own `if:` drops
-    # the implicit `success()` over its `needs` — without it, a red suite would
-    # still spend a reviewer round.
+    # Every `needs.<job>.result` is spelled out because a job with its own
+    # `if:` drops the implicit `success()` over its `needs` — without them, a
+    # red suite job would still spend a reviewer round.
     if: >-
+      needs.select.result == 'success' &&
+      needs.topo_unit.result == 'success' &&
+      needs.topo_ui.result == 'success' &&
+      needs.others.result == 'success' &&
       needs.test.result == 'success' &&
+      github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
@@ -739,7 +1020,7 @@ jobs:
   post_feedback:
     runs-on: ubuntu-latest
     needs: codex
-    if: needs.codex.outputs.has_verdict == 'true'
+    if: github.event_name == 'pull_request' && needs.codex.outputs.has_verdict == 'true'
     permissions:
       # Read-only on Actions, for the verdict artifact from this same run.
       actions: read
@@ -797,15 +1078,23 @@ jobs:
   # holds the merge — and a `cancelled` or `skipped` conclusion holds it too:
   # concurrency cancels a superseded run, `!cancelled()` skips both jobs, and
   # the run concludes `cancelled` rather than red.
+  #
+  # Neither runs outside a pull request: a nightly or dispatched run has no PR
+  # to review, and its conclusion is the suite's.
   reviewer_ran:
-    needs: [test, codex, post_feedback]
-    if: ${{ !cancelled() }}
+    needs: [select, topo_unit, topo_ui, others, test, codex, post_feedback]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
       - name: Assert a verdict was produced and delivered
         env:
           IS_DRAFT: ${{ github.event.pull_request.draft }}
-          TEST_RESULT: ${{ needs.test.result }}
+          SUITE_RESULTS: >-
+            select=${{ needs.select.result }}
+            topo_unit=${{ needs.topo_unit.result }}
+            topo_ui=${{ needs.topo_ui.result }}
+            others=${{ needs.others.result }}
+            test=${{ needs.test.result }}
           CODEX_RESULT: ${{ needs.codex.result }}
           FEEDBACK_RESULT: ${{ needs.post_feedback.result }}
         run: |
@@ -817,9 +1106,14 @@ jobs:
           fi
           # Named before the reviewer's own result, because a red suite is why
           # the reviewer did not run and "the reviewer job did not complete"
-          # would send a reader to the wrong log.
-          if [ "$TEST_RESULT" != "success" ]; then
-            echo "::error::No verdict: the Swift suite did not pass (result: $TEST_RESULT), so the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
+          # would send a reader to the wrong log. Every suite job that did not
+          # pass is named.
+          red=""
+          for pair in $SUITE_RESULTS; do
+            [ "${pair#*=}" = success ] || red="$red ${pair%%=*} (${pair#*=})"
+          done
+          if [ -n "$red" ]; then
+            echo "::error::No verdict: the suite did not pass —$red — so the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
             exit 1
           fi
           if [ "$CODEX_RESULT" != "success" ]; then
@@ -856,8 +1150,8 @@ jobs:
   #
   # This is the required status check on main.
   review_gate:
-    needs: [reviewer_ran, test, codex, post_feedback]
-    if: ${{ !cancelled() }}
+    needs: [reviewer_ran, select, topo_unit, topo_ui, others, test, codex, post_feedback]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
