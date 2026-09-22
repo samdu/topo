@@ -82,7 +82,7 @@ on:
       fail:
         description: Fail one job on purpose
         type: choice
-        options: [none, topo_unit, topo_looks, topo_ui, packages, builds, skip]
+        options: [none, topo, others, skip]
         default: none
 
 # One run per PR: a superseded push should not keep burning a reviewer. A run
@@ -112,8 +112,8 @@ env:
   XCODEGEN_VERSION: 2.46.0
   XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
   RESULTS: ${{ github.workspace }}/ci-results
-  # The TopoTests suites `topo_looks` runs and `topo_unit` skips.
-  LOOK_SUITES: LookReachTests LookStageTests
+  # The simulator clones the Topo suite is spread over.
+  TEST_WORKERS: "3"
   # The one test only the full lane runs: Parakeet hearing the fixture.
   REAL_EAR_TEST: TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 
@@ -128,7 +128,7 @@ jobs:
   #                      nightly's body run by hand, or `fast-benchmark`, which
   #                      forces the fast lane on the same jobs to time it.
   #
-  # The two lanes differ in one job, `topo_ui`, and in one thing: the full lane
+  # The two lanes differ in one job, `topo`, and in one thing: the full lane
   # fetches Parakeet's models and runs the UI test in which the real ear hears
   # the fixture through the microphone; the fast lane deselects that test by
   # name. Everything else — the audio loopback, the press tests over the stub
@@ -204,168 +204,43 @@ jobs:
           echo "::notice title=Lane: $lane::$reason"
           echo "**Lane: $lane** — $reason" >> "$GITHUB_STEP_SUMMARY"
 
-  # The suite is five jobs that run at once, each on its own runner, and `test`
-  # below is the gate over all of them. Green means the named suites ran, not
-  # that nothing complained: every package and project is named and a missing
-  # one fails, and scripts/ci-require-tests.sh reads each result — xcresult
-  # bundles per test target, Swift Testing's xunit report per package — and
-  # fails on a target that did not run, a suite with no tests, a failure or a
-  # skip. Within a job each suite step runs after an earlier one failed
-  # (`!cancelled()`), so one red run reports every suite, and the logs and
-  # result bundles are uploaded however the job ends, one artifact per job.
+  # The suite is two macOS jobs that run at once, `topo` and `others`, and
+  # `test` below is the gate over both and the select job. Two, not more: the
+  # free plan runs five macOS jobs at a time across the account, and PRs
+  # routinely validate in pairs, so a run that took the whole limit would make
+  # the second PR queue behind it. What can run on ubuntu-latest (the lane
+  # choice, the gate) runs there and does not count.
   #
-  # The Topo scheme's test action is split three ways by test selection, never
-  # by leaving a suite's inputs out and letting it skip: `topo_unit` runs
-  # everything but the UI tests and the look suites named in LOOK_SUITES,
-  # `topo_looks` runs those suites alone, and `topo_ui` runs the UI tests. A
-  # suite added to TopoTests lands in `topo_unit` without anyone naming it.
+  # Green means the named suites ran, not that nothing complained: every
+  # package and project is named and a missing one fails, and
+  # scripts/ci-require-tests.sh reads each result — xcresult bundles per test
+  # target, Swift Testing's xunit report per package — and fails on a target
+  # that did not run, a suite with no tests, a failure or a skip. Within a job
+  # each suite step runs after an earlier one failed (`!cancelled()`), so one
+  # red run reports every suite, and the logs and result bundles are uploaded
+  # however the job ends, one artifact per job.
   #
   # `fail` is a workflow_dispatch input that fails one job on purpose, as its
   # last step, so the gate can be shown holding against each prerequisite.
-  topo_unit:
-    runs-on: macos-26
-    timeout-minutes: 40
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/prepare
-        with:
-          guest: "true"
 
-      # Alpine's minirootfs, fetched from the manifest's entry and verified by
-      # digest, for the userland suites to import and boot.
-      - name: The rootfs for the userland suites
-        run: |
-          set -euo pipefail
-          rootfs="$(scripts/fetch-rootfs.sh "$HOME/rootfs")"
-          echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
-
-      # Booted in the background while the build runs, so the suite does not
-      # wait on it.
-      - name: Boot the simulator
-        run: xcrun simctl boot "$SIMULATOR_UDID"
-
-      - name: xcodebuild build-for-testing (Topo)
-        run: |
-          set -euo pipefail
-          xcodebuild build-for-testing \
-            -project Topo.xcodeproj -scheme Topo \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            2>&1 | tee "$RESULTS/Topo-unit-build.log"
-
-      # The app targets' own suite (TopoTests) less the look suites, and the
-      # userland package's two bundles. The suite is hosted by the iOS app and
-      # covers the code the watch and TV builds share with the phone.
-      - name: xcodebuild test (Topo, unit and userland)
-        run: |
-          set -euo pipefail
-          skip=(-skip-testing:TopoUITests)
-          for suite in $LOOK_SUITES; do skip+=("-skip-testing:TopoTests/$suite"); done
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
-          xcodebuild test-without-building \
-            -project Topo.xcodeproj -scheme Topo \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            "${skip[@]}" \
-            -resultBundlePath "$RESULTS/Topo-unit.xcresult" \
-            2>&1 | tee "$RESULTS/Topo-unit.log"
-
-      # The exit codes above say nothing about a target the scheme dropped;
-      # this reads what actually ran. It also runs after a failed test step,
-      # where a missing result bundle is reported as such.
-      - name: Require every test target ran and passed
-        if: ${{ !cancelled() }}
-        run: scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-unit.xcresult" TopoTests TopoUserlandTests TopoUserlandBrakeTests
-
-      - name: Deliberate failure (workflow_dispatch fail=topo_unit)
-        if: ${{ !cancelled() && inputs.fail == 'topo_unit' }}
-        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=topo_unit."; exit 1
-
-      - name: Upload logs and result bundles
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: topo-unit-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ci-results
-          retention-days: 7
-          if-no-files-found: warn
-
-  # The look suites that render every field and surface to pixels: the two
-  # longest suites in TopoTests, on a runner of their own.
-  topo_looks:
-    runs-on: macos-26
-    timeout-minutes: 40
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/prepare
-        with:
-          guest: "true"
-
-      - name: Boot the simulator
-        run: xcrun simctl boot "$SIMULATOR_UDID"
-
-      - name: xcodebuild build-for-testing (Topo)
-        run: |
-          set -euo pipefail
-          xcodebuild build-for-testing \
-            -project Topo.xcodeproj -scheme Topo \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            2>&1 | tee "$RESULTS/Topo-looks-build.log"
-
-      - name: xcodebuild test (Topo, look suites)
-        run: |
-          set -euo pipefail
-          only=()
-          for suite in $LOOK_SUITES; do only+=("-only-testing:TopoTests/$suite"); done
-          xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
-          xcodebuild test-without-building \
-            -project Topo.xcodeproj -scheme Topo \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            "${only[@]}" \
-            -resultBundlePath "$RESULTS/Topo-looks.xcresult" \
-            2>&1 | tee "$RESULTS/Topo-looks.log"
-
-      # Each suite in LOOK_SUITES by name as well as the target: a suite that
-      # was renamed would otherwise leave this job running the other alone
-      # while the renamed one ran nowhere it was expected.
-      - name: Require every look suite ran and passed
-        if: ${{ !cancelled() }}
-        run: |
-          set -euo pipefail
-          status=0
-          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-looks.xcresult" TopoTests || status=1
-          suites=()
-          for suite in $LOOK_SUITES; do suites+=("TopoTests/$suite"); done
-          scripts/ci-require-tests.sh named "$RESULTS/Topo-looks.xcresult" "${suites[@]}" || status=1
-          exit "$status"
-
-      - name: Deliberate failure (workflow_dispatch fail=topo_looks)
-        if: ${{ !cancelled() && inputs.fail == 'topo_looks' }}
-        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=topo_looks."; exit 1
-
-      - name: Upload logs and result bundles
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: topo-looks-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ci-results
-          retention-days: 7
-          if-no-files-found: warn
-
-  # The UI tests (TopoUITests), behind the input-capable audio lane on every
-  # lane: the press tests over the stub and loading ears need no model, but
+  # The Topo scheme's test action: the app targets' own suite (TopoTests),
+  # hosted by the iOS app and covering the code the watch and TV builds share
+  # with the phone; the userland package's two bundles; and the UI tests
+  # (TopoUITests), behind the input-capable audio lane on every lane. The
+  # press tests over the stub and loading ears need no model, but
   # `MicrophonePressTests` asserts buffers and samples reached the tap, which
   # only a host with an input delivers. The full lane adds Parakeet's models
   # and the test in which the real ear hears the fixture; the fast lane
   # deselects that test by name, so it neither runs nor skips.
-  topo_ui:
+  #
+  # One build, then the suite spread over TEST_WORKERS clones of the
+  # simulator by class (`-parallel-testing-enabled`). The clones are made from
+  # the simulator after its grants are cleared and after the audio lane is up,
+  # so each boots clean and against the coreaudiod that has BlackHole.
+  topo:
     needs: select
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -387,6 +262,14 @@ jobs:
         with:
           guest: "true"
 
+      # Alpine's minirootfs, fetched from the manifest's entry and verified by
+      # digest, for the userland suites to import and boot.
+      - name: The rootfs for the userland suites
+        run: |
+          set -euo pipefail
+          rootfs="$(scripts/fetch-rootfs.sh "$HOME/rootfs")"
+          echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
+
       # The microphone test's input-capable lane: BlackHole as the runner
       # Mac's default input and output, and the fixture looping into it from
       # one long-lived feeder that listens to BlackHole itself and restarts on
@@ -403,6 +286,7 @@ jobs:
           scripts/ci-audio-lane.sh start
           echo "TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1" >> "$GITHUB_ENV"
 
+      # Booted while the build runs, so the suite does not wait on it.
       - name: Boot the simulator
         run: xcrun simctl boot "$SIMULATOR_UDID"
 
@@ -429,7 +313,7 @@ jobs:
           xcodebuild build-for-testing \
             -project Topo.xcodeproj -scheme Topo \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            2>&1 | tee "$RESULTS/Topo-ui-build.log"
+            2>&1 | tee "$RESULTS/Topo-build.log"
 
       # The microphone test counts the permission prompts the run raises, and
       # holds that there is exactly one and that it is the microphone's. That
@@ -453,12 +337,12 @@ jobs:
       # `fail=skip` is the defect the gate exists for: the fast lane leaving
       # the real-ear test selected with no models, where it ends in XCTSkip,
       # which scripts/ci-require-tests.sh must fail.
-      - name: xcodebuild test (Topo, UI)
+      - name: xcodebuild test (Topo)
         env:
           DELIBERATE_SKIP: ${{ inputs.fail == 'skip' }}
         run: |
           set -euo pipefail
-          select=(-only-testing:TopoUITests)
+          select=()
           if [ "$LANE" = fast ]; then
             if [ "$DELIBERATE_SKIP" = true ]; then
               echo "::warning::workflow_dispatch fail=skip: the real-ear test stays selected with no models, so it skips."
@@ -470,51 +354,59 @@ jobs:
           xcodebuild test-without-building \
             -project Topo.xcodeproj -scheme Topo \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            "${select[@]}" \
-            -resultBundlePath "$RESULTS/Topo-ui.xcresult" \
-            2>&1 | tee "$RESULTS/Topo-ui.log"
+            -parallel-testing-enabled YES \
+            -parallel-testing-worker-count "$TEST_WORKERS" \
+            ${select[@]+"${select[@]}"} \
+            -resultBundlePath "$RESULTS/Topo.xcresult" \
+            2>&1 | tee "$RESULTS/Topo.log"
 
       - name: Audio lane holds after the microphone test
         if: ${{ always() && steps.audio_lane.outcome == 'success' }}
         run: scripts/ci-audio-lane.sh check after
 
-      # The target as a whole, and on the full lane the real-ear test by name:
-      # the target check counts test cases, and a lane that meant to run
-      # Parakeet and did not would still pass it.
+      # The exit codes above say nothing about a target the scheme dropped;
+      # this reads what actually ran, and on the full lane the real-ear test by
+      # name: the target check counts test cases, and a lane that meant to run
+      # Parakeet and did not would still pass it. It also runs after a failed
+      # test step, where a missing result bundle is reported as such.
       - name: Require every test target ran and passed
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           status=0
-          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-ui.xcresult" TopoUITests || status=1
+          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo.xcresult" TopoTests TopoUITests TopoUserlandTests TopoUserlandBrakeTests || status=1
           if [ "$LANE" = full ]; then
-            scripts/ci-require-tests.sh named "$RESULTS/Topo-ui.xcresult" "$REAL_EAR_TEST" || status=1
+            scripts/ci-require-tests.sh named "$RESULTS/Topo.xcresult" "$REAL_EAR_TEST" || status=1
           fi
           exit "$status"
 
-      - name: Deliberate failure (workflow_dispatch fail=topo_ui)
-        if: ${{ !cancelled() && inputs.fail == 'topo_ui' }}
-        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=topo_ui."; exit 1
+      - name: Deliberate failure (workflow_dispatch fail=topo)
+        if: ${{ !cancelled() && inputs.fail == 'topo' }}
+        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=topo."; exit 1
 
       - name: Upload logs and result bundles
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: topo-ui-${{ github.run_id }}-${{ github.run_attempt }}
+          name: topo-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-results
           retention-days: 7
           if-no-files-found: warn
 
-  # The scripts' own tests, the Swift packages, and Womble.
-  packages:
+  # Everything that is not the Topo scheme's suite: the scripts' own tests,
+  # the Swift packages, Womble, and the builds no suite hosts — the watch and
+  # TV for their own simulators, a Release build for iOS devices, and the hub.
+  others:
     runs-on: macos-26
-    timeout-minutes: 30
+    timeout-minutes: 40
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/prepare
+        with:
+          guest: "true"
 
       # scripts/simulator-run.sh against a fake xcrun: every failed run exits non-zero.
       - name: simulator-run.sh fails closed
@@ -541,10 +433,19 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/suite-gate-test.sh
 
-      # ci-require-tests.sh's `named` mode against a fake xcresulttool.
-      - name: ci-require-tests.sh names a test that did not pass
+      # ci-require-tests.sh's xcresult and named modes against a fake
+      # xcresulttool: a skip fails both, and a test that did not run fails
+      # `named`.
+      - name: ci-require-tests.sh fails a skip and a test that did not run
         if: ${{ !cancelled() }}
         run: scripts/tests/ci-require-tests-test.sh
+
+      # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
+      # patch that does not apply, a populated deps/linux, and options that are
+      # not arm64/ish/asbestos each fail.
+      - name: build-ish.sh refuses what it should
+        if: ${{ !cancelled() }}
+        run: scripts/tests/build-ish-test.sh
 
       # Named, not globbed: a package that disappears fails here instead of
       # leaving the loop with one fewer iteration. Every package runs even
@@ -597,40 +498,6 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/ci-require-tests.sh xcresult "$RESULTS/Womble.xcresult" WombleTests
 
-      - name: Deliberate failure (workflow_dispatch fail=packages)
-        if: ${{ !cancelled() && inputs.fail == 'packages' }}
-        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=packages."; exit 1
-
-      - name: Upload logs and result bundles
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: packages-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ci-results
-          retention-days: 7
-          if-no-files-found: warn
-
-  # The builds no suite hosts: the watch and TV for their own simulators, a
-  # Release build for iOS devices, and the hub.
-  builds:
-    runs-on: macos-26
-    timeout-minutes: 30
-    defaults:
-      run:
-        shell: bash
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/prepare
-        with:
-          guest: "true"
-
-      # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
-      # patch that does not apply, a populated deps/linux, and options that are
-      # not arm64/ish/asbestos each fail.
-      - name: build-ish.sh refuses what it should
-        if: ${{ !cancelled() }}
-        run: scripts/tests/build-ish-test.sh
-
       # The watch and TV builds are not covered by the suite's host, so they
       # are built for their own simulators here.
       - name: xcodebuild build (TopoWatch, TopoTV)
@@ -679,15 +546,15 @@ jobs:
             || { echo "::error::TopoHub failed to build."; status=1; }
           exit "$status"
 
-      - name: Deliberate failure (workflow_dispatch fail=builds)
-        if: ${{ !cancelled() && inputs.fail == 'builds' }}
-        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=builds."; exit 1
+      - name: Deliberate failure (workflow_dispatch fail=others)
+        if: ${{ !cancelled() && inputs.fail == 'others' }}
+        run: echo "::error::Failed on purpose by the workflow_dispatch input fail=others."; exit 1
 
       - name: Upload logs and result bundles
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: builds-${{ github.run_id }}-${{ github.run_attempt }}
+          name: others-${{ github.run_id }}-${{ github.run_attempt }}
           path: ci-results
           retention-days: 7
           if-no-files-found: warn
@@ -701,7 +568,7 @@ jobs:
   # worse than a late one. SUITE_RESULTS names every job in `needs` and
   # scripts/tests/suite-gate-test.sh holds that the two lists agree.
   test:
-    needs: [select, topo_unit, topo_looks, topo_ui, packages, builds]
+    needs: [select, topo, others]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -709,11 +576,8 @@ jobs:
         env:
           SUITE_RESULTS: >-
             select=${{ needs.select.result }}
-            topo_unit=${{ needs.topo_unit.result }}
-            topo_looks=${{ needs.topo_looks.result }}
-            topo_ui=${{ needs.topo_ui.result }}
-            packages=${{ needs.packages.result }}
-            builds=${{ needs.builds.result }}
+            topo=${{ needs.topo.result }}
+            others=${{ needs.others.result }}
         run: |
           set -euo pipefail
           status=0
@@ -737,7 +601,7 @@ jobs:
   # against the free local reviewer, and marks it ready — that transition is
   # what first spends a Codex round.
   codex:
-    needs: [select, topo_unit, topo_looks, topo_ui, packages, builds, test]
+    needs: [select, topo, others, test]
     # Same-repo branches only: a fork PR carries untrusted content and must
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
@@ -747,11 +611,8 @@ jobs:
     # red suite job would still spend a reviewer round.
     if: >-
       needs.select.result == 'success' &&
-      needs.topo_unit.result == 'success' &&
-      needs.topo_looks.result == 'success' &&
-      needs.topo_ui.result == 'success' &&
-      needs.packages.result == 'success' &&
-      needs.builds.result == 'success' &&
+      needs.topo.result == 'success' &&
+      needs.others.result == 'success' &&
       needs.test.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
@@ -1140,7 +1001,7 @@ jobs:
   # Neither runs outside a pull request: a nightly or dispatched run has no PR
   # to review, and its conclusion is the suite's.
   reviewer_ran:
-    needs: [select, topo_unit, topo_looks, topo_ui, packages, builds, test, codex, post_feedback]
+    needs: [select, topo, others, test, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -1149,11 +1010,8 @@ jobs:
           IS_DRAFT: ${{ github.event.pull_request.draft }}
           SUITE_RESULTS: >-
             select=${{ needs.select.result }}
-            topo_unit=${{ needs.topo_unit.result }}
-            topo_looks=${{ needs.topo_looks.result }}
-            topo_ui=${{ needs.topo_ui.result }}
-            packages=${{ needs.packages.result }}
-            builds=${{ needs.builds.result }}
+            topo=${{ needs.topo.result }}
+            others=${{ needs.others.result }}
             test=${{ needs.test.result }}
           CODEX_RESULT: ${{ needs.codex.result }}
           FEEDBACK_RESULT: ${{ needs.post_feedback.result }}
@@ -1210,7 +1068,7 @@ jobs:
   #
   # This is the required status check on main.
   review_gate:
-    needs: [reviewer_ran, select, topo_unit, topo_looks, topo_ui, packages, builds, test, codex, post_feedback]
+    needs: [reviewer_ran, select, topo, others, test, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
