@@ -69,6 +69,42 @@ final class DebugRunTests: XCTestCase {
         }
     }
 
+    /// The launch's hand-over as the device run meets it with no long-lived token and the ordinary
+    /// access token in its last minute: the diagnostic refresh and the fallback are one grant, and
+    /// the guest is handed what that grant returned.
+    func testTheLaunchSpendsOneRefreshGrantWhenTheGuestFallsBack() async throws {
+        let scopes = ["user:profile", "user:inference"]
+        func handOver(answer status: Int, _ json: String, guest: Tokens? = nil) async -> (environment: [String: String], lines: [String]) {
+            RefreshStub.answer = (status, Data(json.utf8))
+            RefreshStub.requests = 0
+            let ordinary = InMemoryTokenStore(Tokens(accessToken: "sk-stale", refreshToken: "rt-first",
+                                                     expiresAt: Date().addingTimeInterval(30), scopes: scopes))
+            return await DebugRun.handOver(port: 4242, guestStore: InMemoryTokenStore(guest), ordinaryStore: ordinary,
+                                           oauth: ClaudeOAuth(session: RefreshStub.session()))
+        }
+        let granted = #"{"access_token":"sk-fresh","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#
+
+        let fellBack = await handOver(answer: 200, granted)
+        XCTAssertEqual(RefreshStub.requests, 1, "the launch spent more than one refresh grant")
+        XCTAssertEqual(fellBack.environment["CLAUDE_CODE_OAUTH_TOKEN"], "sk-fresh")
+        XCTAssertEqual(fellBack.lines, ["userland: proxy on http://127.0.0.1:4242, guest token: access token",
+                                        "userland: mint: none held, the guest runs on the ordinary access token",
+                                        "userland: ordinary refresh scope: user:profile user:inference"])
+
+        let refused = await handOver(answer: 400, #"{"error":"invalid_grant"}"#)
+        XCTAssertEqual(RefreshStub.requests, 1, "a refused refresh was asked for again")
+        XCTAssertNil(refused.environment["CLAUDE_CODE_OAUTH_TOKEN"])
+        XCTAssertEqual(refused.lines, ["userland: proxy on http://127.0.0.1:4242, no guest token: http(status: 400)",
+                                       "userland: ordinary refresh failed: http(status: 400)"])
+
+        let longLived = Tokens(accessToken: "sk-long-lived", refreshToken: "", expiresAt: Date().addingTimeInterval(86_400 * 300),
+                               scopes: ["user:inference"])
+        let withGuest = await handOver(answer: 200, granted, guest: longLived)
+        XCTAssertEqual(RefreshStub.requests, 1)
+        XCTAssertEqual(withGuest.environment["CLAUDE_CODE_OAUTH_TOKEN"], "sk-long-lived")
+        XCTAssertEqual(withGuest.lines.first, "userland: proxy on http://127.0.0.1:4242, guest token: long-lived")
+    }
+
     func testWithoutOneNothingIsTouched() throws {
         let store = InMemoryTokenStore()
         let guest = InMemoryTokenStore()
@@ -132,6 +168,8 @@ final class DebugRunTests: XCTestCase {
 final class RefreshStub: URLProtocol {
     nonisolated(unsafe) static var answer: (Int, Data) = (200, Data())
     nonisolated(unsafe) static var lastBody: Data?
+    /// Every request since it was last set to zero, each one a grant spent.
+    nonisolated(unsafe) static var requests = 0
 
     static func session() -> URLSession {
         let configuration = URLSessionConfiguration.ephemeral
@@ -142,6 +180,7 @@ final class RefreshStub: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
+        Self.requests += 1
         Self.lastBody = request.httpBody ?? request.httpBodyStream.map { stream in
             stream.open(); defer { stream.close() }
             var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)

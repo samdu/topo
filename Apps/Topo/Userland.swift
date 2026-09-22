@@ -173,15 +173,50 @@ extension DebugRun {
     /// it granted (never a value) or why it was refused. The refreshed tokens are written back, so
     /// a refresh token the server rotates is not lost.
     static func ordinaryRefreshLine(_ ordinary: Tokens?, provider: StoredTokenProvider) async -> String {
-        guard let ordinary else { return "userland: ordinary refresh: not checked, not signed in" }
+        await ordinaryRefresh(ordinary, provider: provider).line
+    }
+
+    /// The refresh behind `ordinaryRefreshLine`, with its refusal when it was refused.
+    private static func ordinaryRefresh(_ ordinary: Tokens?, provider: StoredTokenProvider) async -> (line: String, refusal: (any Error)?) {
+        guard let ordinary else { return ("userland: ordinary refresh: not checked, not signed in", nil) }
         guard !ordinary.refreshToken.isEmpty else {
-            return "userland: ordinary refresh: not checked, no refresh token held (a seeded setup token)"
+            return ("userland: ordinary refresh: not checked, no refresh token held (a seeded setup token)", nil)
         }
         do {
             let refreshed = try await provider.refresh()
-            return "userland: ordinary refresh scope: \(refreshed.scopes.isEmpty ? "(none returned)" : refreshed.scopes.joined(separator: " "))"
+            return ("userland: ordinary refresh scope: \(refreshed.scopes.isEmpty ? "(none returned)" : refreshed.scopes.joined(separator: " "))", nil)
         } catch {
-            return "userland: ordinary refresh failed: \(error)"
+            return ("userland: ordinary refresh failed: \(error)", error)
+        }
+    }
+
+    /// A fallback that answers with the refusal the launch's own refresh already met, so the
+    /// guest's hand-over does not spend a second grant on the same refresh token.
+    private struct Refused: TokenProvider {
+        let error: any Error
+        func accessToken() async throws -> String { throw error }
+    }
+
+    /// The guest's token and the launch's three lines about it, with one refresh grant at most:
+    /// the ordinary tokens are refreshed once for the diagnostic line first, so the fallback
+    /// hands over the access token that refresh wrote back rather than refreshing again, and a
+    /// refused refresh is the fallback's answer too. The lines are printed in the order the device
+    /// run reads them: the hand-over, the guest's token, the ordinary refresh.
+    static func handOver(port: UInt16, guestStore: TokenStore, ordinaryStore: TokenStore,
+                         oauth: ClaudeOAuth = ClaudeOAuth()) async -> (environment: [String: String], lines: [String]) {
+        let provider = StoredTokenProvider(store: ordinaryStore, oauth: oauth)
+        let refresh = await ordinaryRefresh(try? ordinaryStore.load(), provider: provider)
+        let fallback: TokenProvider = refresh.refusal.map { Refused(error: $0) } ?? provider
+        let credential = GuestCredential(store: guestStore, fallback: fallback)
+        do {
+            let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
+            return (handed.environment, [
+                "userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")",
+                mintLine(try? guestStore.load()),
+                refresh.line,
+            ])
+        } catch {
+            return ([:], ["userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)", refresh.line])
         }
     }
 
@@ -194,8 +229,6 @@ extension DebugRun {
     /// Nothing at all when the variable is absent.
     @MainActor
     static func userland(_ userland: Userland = .shared,
-                         credential: GuestCredential = GuestCredential(store: KeychainTokenStore.guest,
-                                                                       fallback: StoredTokenProvider(store: KeychainTokenStore())),
                          environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let command = environment[userlandVariable], !command.isEmpty else { return }
         say("userland: \(userland.summary)")
@@ -214,16 +247,9 @@ extension DebugRun {
             defer { Task { await proxy.stop() } }
             var guestEnvironment = Guest.environment
             guestEnvironment["ANTHROPIC_BASE_URL"] = APIProxy.baseURL(port: port)
-            do {
-                let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
-                guestEnvironment.merge(handed.environment) { _, new in new }
-                say("userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")")
-                say(mintLine(try? KeychainTokenStore.guest.load()))
-                say(await ordinaryRefreshLine(try? KeychainTokenStore().load(),
-                                              provider: StoredTokenProvider(store: KeychainTokenStore())))
-            } catch {
-                say("userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)")
-            }
+            let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, ordinaryStore: KeychainTokenStore())
+            guestEnvironment.merge(handed.environment) { _, new in new }
+            handed.lines.forEach(say)
             let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment)
             var lines = exit.output.split(separator: "\n", omittingEmptySubsequences: false)
             if lines.last == "" { lines.removeLast() }
