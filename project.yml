@@ -57,6 +57,10 @@ targets:
       # What the About screen reads, rather than a copy of it in Swift.
       - path: THIRD-PARTY
         buildPhase: resources
+      # The GPL's text, which the iSH fork's App Store waiver holds only while the app carries it;
+      # the About screen shows it, and `scripts/check-built-plist.sh` fails a product without it.
+      - path: LICENSE
+        buildPhase: resources
       # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
       - path: Apps/Topo/Resources/models.json
         buildPhase: resources
@@ -95,9 +99,13 @@ targets:
         # and every TestFlight upload would carry the same build number (docs/testflight.md).
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The commit this build's source is, which the About screen names as the corresponding
+        # source the GPL asks for; `scripts/archive-upload.sh` passes it, and it is empty elsewhere.
+        TopoSourceCommit: $(TOPO_SOURCE_COMMIT)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        TOPO_SOURCE_COMMIT: ""
         # FluidAudio's prebuilt text-normalisation xcframework has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64

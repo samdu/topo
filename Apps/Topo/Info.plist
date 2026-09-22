@@ -20,6 +20,8 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>TopoSourceCommit</key>
+	<string>$(TOPO_SOURCE_COMMIT)</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

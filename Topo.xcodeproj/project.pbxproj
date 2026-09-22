@@ -68,6 +68,7 @@
 		39DD8E0131A9E3A312E554E5 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		3BB50E214E3CCDE7B541504F /* OctopusMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */; };
+		3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 834457A014E7809E1A052937 /* LicenceTests.swift */; };
 		3C6EE019F5CEBDDD755176BB /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		3DACBB555F2EC78AAE73038D /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */; };
 		3E0191DE9AE9C06EF5B40374 /* models.json in Resources */ = {isa = PBXBuildFile; fileRef = D7E1A5F0E00768D69191A35A /* models.json */; };
@@ -157,6 +158,7 @@
 		991ADA7B5521CE31F21F6C22 /* TopoBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2093D9815FF009868258903B /* TopoBadge.swift */; };
 		99B40888DAC3C3C3D6159522 /* AudioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D3BE114E74EF949FD68B7B /* AudioLog.swift */; };
 		9A80EB5F9761BF3F2287D2D8 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A03D6163E6AC87912A0A8E /* SettingsView.swift */; };
+		9C3DBAD81CD9FEC783B43859 /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A92EDFAF7BC94A3837BE8C2F /* LICENSE */; };
 		9C4656ACA5CED95740060C72 /* VaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0910114D0F4D264253EC5 /* VaultMigration.swift */; };
 		9DC35C9774FC8468D5A984DA /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		9F9AF8D67A6810562B2D9225 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = AF1BDBBDAB883F52D9800C0C /* TopoCore */; };
@@ -332,6 +334,7 @@
 		80D8ACCA9AB1382E8130057F /* TurnPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPush.swift; sourceTree = "<group>"; };
 		822E74B0C8A75DD45679AF48 /* TopoUserlandTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUserlandTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		82E8447D928AACA5D0B36ABD /* VaultHome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultHome.swift; sourceTree = "<group>"; };
+		834457A014E7809E1A052937 /* LicenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LicenceTests.swift; sourceTree = "<group>"; };
 		843B7316243F6B0BFD30D130 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHousekeeping.swift; sourceTree = "<group>"; };
 		8809A0CAEB64B3D22525D3DD /* HubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModel.swift; sourceTree = "<group>"; };
@@ -353,6 +356,7 @@
 		A383104A833CDB1DFF33D305 /* Composer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Composer.swift; sourceTree = "<group>"; };
 		A3A3C4700E7D184EF8B26C0A /* RootfsInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootfsInstallerTests.swift; sourceTree = "<group>"; };
 		A64DF85F65D65AA39B2128BD /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
+		A92EDFAF7BC94A3837BE8C2F /* LICENSE */ = {isa = PBXFileReference; path = LICENSE; sourceTree = "<group>"; };
 		ADE17E3120F6835D9626B032 /* Ear.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ear.swift; sourceTree = "<group>"; };
 		AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoTVApp.swift; sourceTree = "<group>"; };
 		B2F92FDD0A90790863EA800E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -506,6 +510,7 @@
 		228DC6E6F01800790D6AABC1 = {
 			isa = PBXGroup;
 			children = (
+				A92EDFAF7BC94A3837BE8C2F /* LICENSE */,
 				2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */,
 				75CB24A74CCC2EDCEE3C1327 /* Apps */,
 				FAEE9030D41B592DBC26843C /* Design */,
@@ -654,6 +659,7 @@
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
+				834457A014E7809E1A052937 /* LicenceTests.swift */,
 				3B4AAF2BA51E20FAEF2AB1FA /* LookDocumentTests.swift */,
 				0364BEBF4B83A52C1E950A08 /* LookFixture.swift */,
 				3BE447F6D164A10E8BC7A28E /* LookLiveTests.swift */,
@@ -1120,6 +1126,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				56D87FA7BAFAB16DF3E30DE7 /* Assets.xcassets in Resources */,
+				9C3DBAD81CD9FEC783B43859 /* LICENSE in Resources */,
 				6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */,
 				86919A7639066820A0974BB1 /* THIRD-PARTY in Resources */,
 				3E0191DE9AE9C06EF5B40374 /* models.json in Resources */,
@@ -1311,6 +1318,7 @@
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
+				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
 				2F2C24F4D930E90272D6ED1D /* LookDocumentTests.swift in Sources */,
 				D2F8B1E1223894485901C980 /* LookFixture.swift in Sources */,
 				2D6A036BCDB473F05062F65E /* LookLiveTests.swift in Sources */,
@@ -1505,6 +1513,7 @@
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				TOPO_SOURCE_COMMIT = "";
 			};
 			name = Release;
 		};
@@ -1680,6 +1689,7 @@
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = YES;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = YES;
 				TARGETED_DEVICE_FAMILY = "1,2";
+				TOPO_SOURCE_COMMIT = "";
 			};
 			name = Debug;
 		};
