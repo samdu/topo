@@ -61,6 +61,7 @@ on:
     # concluded until someone pushes. It is not what skips the reviewer on
     # drafts; the `if` on the codex job does that.
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 # One run per PR: a superseded push should not keep burning a reviewer.
 concurrency:
