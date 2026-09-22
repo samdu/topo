@@ -103,6 +103,12 @@ enum LookStage {
     /// display, not time: a fixed wait on the clock is a guess at how soon the render server
     /// composites, and a loaded CI runner is where the guess is wrong.
     ///
+    /// A stage wider or taller than the screen — the television's 1280×720, the wide canvas's
+    /// 900×700 — has glass past the screen's edge that the display never composites. That part
+    /// is not drawn from an on-screen capture, but once the part on the screen has been, it is
+    /// the same picture every time: forty asks of each on a runner with every core saturated
+    /// differed from the first by one shade at most.
+    ///
     /// The wait turns the run loop, which is also what SwiftUI commits its layout on.
     private static func composited(_ window: UIWindow) throws {
         CATransaction.flush()
