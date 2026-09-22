@@ -18,6 +18,10 @@ public final class Guest: Sendable {
         case spawn(Int32)
         /// The program could not be waited for, with the guest errno.
         case wait(Int32)
+        /// A host directory could not be mounted, with the guest errno.
+        case mount(Int32)
+        /// A link could not be made, with the guest errno.
+        case link(Int32)
 
         public var description: String {
             switch self {
@@ -25,6 +29,8 @@ public final class Guest: Sendable {
             case .boot(let errno): "the kernel refused to boot (\(errno))"
             case .spawn(let errno): "the program could not be started (\(errno))"
             case .wait(let errno): "the program could not be waited for (\(errno))"
+            case .mount(let errno): "the directory could not be mounted (\(errno))"
+            case .link(let errno): "the link could not be made (\(errno))"
             }
         }
     }
@@ -37,10 +43,14 @@ public final class Guest: Sendable {
         public let errors: String
     }
 
-    /// The environment a program gets when it is given none: root's home and the usual path.
+    /// The environment a program gets when it is given none: root's home, the usual path, and
+    /// Claude Code's updater off. The binary is a pin the app fetches (`ClaudeCodeInstaller`), a
+    /// bump is a new pin, and the updater's own fetch speaks TLS through a library that never
+    /// completes a handshake under the emulator.
     public static let environment = [
         "HOME": "/root",
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "DISABLE_AUTOUPDATER": "1",
     ]
 
     private init() {}
@@ -55,6 +65,22 @@ public final class Guest: Sendable {
         if result == TOPO_ISH_ALREADY_BOOTED { throw Failure.alreadyBooted }
         if result != 0 { throw Failure.boot(result) }
         MemorySampler.shared.start()
+    }
+
+    /// Bind-mounts the host directory `host` at `point` in the guest (the fork's realfs), making
+    /// `point` a directory first. The guest reads and writes the host's files there, with the
+    /// host's mode bits. Mounting the same directory at the same point again changes nothing; a
+    /// different one there is refused. Requires a booted kernel.
+    public func mount(_ host: URL, at point: String) throws {
+        let result = host.withUnsafeFileSystemRepresentation { topo_ish_mount($0, point) }
+        if result != 0 { throw Failure.mount(result) }
+    }
+
+    /// Makes `path` in the guest a symbolic link to `target`, replacing a link that points
+    /// elsewhere and leaving one that already points there untouched. Requires a booted kernel.
+    public func link(_ target: String, at path: String) throws {
+        let result = topo_ish_link(target, path)
+        if result != 0 { throw Failure.link(result) }
     }
 
     /// Runs `path` with `arguments` to its end and returns what it left. The work is blocking —

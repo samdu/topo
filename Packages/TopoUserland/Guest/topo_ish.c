@@ -255,6 +255,118 @@ int topo_ish_wait(int pid, int *status) {
     return 0;
 }
 
+// Makes every directory on the way to `path` (a normalised, absolute guest path), and `path`
+// itself, in whatever filesystem holds each. One that is already there is not an error.
+static int make_directories(const char *path) {
+    char partial[MAX_PATH];
+    size_t length = strlen(path);
+    if (length == 0 || length >= sizeof(partial) || path[0] != '/')
+        return _EINVAL;
+    for (size_t at = 1; at <= length; at++) {
+        if (path[at] != '/' && path[at] != '\0')
+            continue;
+        memcpy(partial, path, at);
+        partial[at] = '\0';
+        int err = generic_mkdirat(AT_PWD, partial, 0755);
+        if (err < 0 && err != _EEXIST)
+            return err;
+    }
+    struct statbuf stat;
+    int err = generic_statat(AT_PWD, path, &stat, true);
+    if (err < 0)
+        return err;
+    return S_ISDIR(stat.mode) ? 0 : _ENOTDIR;
+}
+
+// The guest's file calls resolve against `current`'s root and working directory, so the host
+// thread speaks as init while it makes the mount and the link, under the spawn lock that already
+// serialises every other use of `current` from outside the guest.
+static struct task *speak_as_init(void) {
+    pthread_mutex_lock(&spawn_lock);
+    struct task *previous = current;
+    current = pid_get_task(1);
+    return previous;
+}
+
+static void stop_speaking_as_init(struct task *previous) {
+    current = previous;
+    pthread_mutex_unlock(&spawn_lock);
+}
+
+int topo_ish_mount(const char *host_dir, const char *point_raw) {
+    if (!booted)
+        return _ENODEV;
+    // realfs keeps the source by its real path, so that is what an existing mount is compared by.
+    char *source = realpath(host_dir, NULL);
+    if (source == NULL)
+        return _ENOENT;
+    struct task *previous = speak_as_init();
+    char point[MAX_PATH];
+    int err = path_normalize(AT_PWD, point_raw, point, N_SYMLINK_FOLLOW);
+    if (err < 0)
+        goto out;
+    err = make_directories(point);
+    if (err < 0)
+        goto out;
+    lock(&mounts_lock);
+    struct mount *mount;
+    bool standing = false;
+    list_for_each_entry(&mounts, mount, mounts) {
+        if (strcmp(mount->point, point) == 0) {
+            standing = true;
+            break;
+        }
+    }
+    if (standing)
+        err = strcmp(mount->source, source) == 0 ? 0 : _EBUSY;
+    else
+        err = do_mount(&realfs, source, point, "", 0);
+    unlock(&mounts_lock);
+out:
+    stop_speaking_as_init(previous);
+    free(source);
+    return err;
+}
+
+int topo_ish_link(const char *target, const char *path) {
+    if (!booted)
+        return _ENODEV;
+    struct task *previous = speak_as_init();
+    char normalised[MAX_PATH];
+    int err = path_normalize(AT_PWD, path, normalised, N_SYMLINK_NOFOLLOW);
+    if (err < 0)
+        goto out;
+    char *slash = strrchr(normalised, '/');
+    if (slash != NULL && slash != normalised) {
+        *slash = '\0';
+        err = make_directories(normalised);
+        *slash = '/';
+        if (err < 0)
+            goto out;
+    }
+    char existing[MAX_PATH];
+    ssize_t length = generic_readlinkat(AT_PWD, normalised, existing, sizeof(existing) - 1);
+    if (length >= 0) {
+        existing[length] = '\0';
+        if (strcmp(existing, target) == 0) {
+            err = 0;
+            goto out;
+        }
+        err = generic_unlinkat(AT_PWD, normalised);
+        if (err < 0)
+            goto out;
+    } else if (length != _ENOENT) {
+        // Something that is not a link is there (readlink answers EINVAL for one): not ours to
+        // take away.
+        err = length == _EINVAL ? _EEXIST : (int) length;
+        goto out;
+    }
+    err = generic_symlinkat(target, AT_PWD, normalised);
+out:
+    stop_speaking_as_init(previous);
+    return err;
+}
+
 void topo_ish_memory_feed(uint64_t limit, uint64_t avail, bool critical) {
     ish_set_memory_status(limit, avail, critical);
 }

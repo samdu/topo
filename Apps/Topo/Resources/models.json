@@ -306,6 +306,18 @@
           "sha256": "821565fa8f3953eefd12497b166b4b50add2f7c57fb312e75862f5867e06fefe"
         }
       ]
+    },
+    {
+      "id": "claude-code",
+      "version": "2.1.278",
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.278/linux-arm64-musl/",
+      "files": [
+        {
+          "path": "claude",
+          "size": 226637472,
+          "sha256": "cc8266db086b92faa10180d8c34fb4f196022ad13d0d8800b656966f94a9f0f4"
+        }
+      ]
     }
   ]
 }
