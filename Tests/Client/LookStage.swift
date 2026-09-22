@@ -33,6 +33,7 @@ enum LookStage {
     /// `composer.presenceDuration` off scroll geometry that arrives after layout.
     static func image(_ view: some View, look: Look, style: UIUserInterfaceStyle = .light,
                       size: CGSize = LookStage.size) throws -> UIImage {
+        framesBeforeLastPicture = 0
         let animations = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(animations) }
@@ -91,6 +92,11 @@ enum LookStage {
     /// a picture: a stage that took the picture anyway would be the defect this wait exists for.
     static let framesTimeout: TimeInterval = 10
 
+    /// How many frames the display drew between the last picture's window going up and the
+    /// picture being taken: what `LookStageTests` reads to hold that no picture is taken before
+    /// the display has drawn its window.
+    private(set) static var framesBeforeLastPicture = 0
+
     /// Waits until the display has drawn the window, so the system's glass has a backdrop.
     ///
     /// The composer's glass is a `CABackdropLayer`, and `drawHierarchy` draws it from what the
@@ -125,6 +131,7 @@ enum LookStage {
             RunLoop.current.run(mode: .default,
                                 before: min(deadline, Date().addingTimeInterval(0.1)))
         }
+        framesBeforeLastPicture = counter.frames
     }
 
     private final class FrameCounter: NSObject {

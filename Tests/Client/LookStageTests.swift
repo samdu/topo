@@ -98,6 +98,47 @@ final class LookStageTests: XCTestCase {
                         "two different pictures drawn in turn read as one steady picture")
     }
 
+    /// What the stage's steadiness rests on: no picture is taken before the display has drawn
+    /// its window twice, since the system's glass is drawn from the render server's capture of
+    /// the screen and a window the display has not drawn has none. A wait on the clock passes on
+    /// an idle machine and loses on a loaded runner, so it is the frames that are held here,
+    /// not the picture.
+    func testNoPictureIsTakenBeforeTheDisplayHasDrawnItsWindow() throws {
+        _ = try LookStage.image(LookReachTests.Surface.staged(row: .writing), look: Look())
+        XCTAssertGreaterThanOrEqual(LookStage.framesBeforeLastPicture, 2,
+                                    "the picture was taken before the display drew its window twice")
+    }
+
+    /// Whatever is on the screen under the stage stays out of the picture. The glass samples a
+    /// margin past its own edge, and from a pane near the stage's foot that reaches past the
+    /// stage; a full-screen window of another colour put under the stage is what would show if
+    /// it reached the host app's window there.
+    func testWhatIsUnderTheStageStaysOutOfThePicture() throws {
+        let surface = LookReachTests.Surface.staged(row: .writing)
+        _ = try LookStage.image(surface, look: Look(), style: .dark)
+        let picture = try LookStage.image(surface, look: Look(), style: .dark)
+        let alone = try LookStage.bytes(picture)
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }.first, "no scene to put a window under the stage in")
+        let under = UIWindow(windowScene: scene)
+        under.frame = scene.screen.bounds
+        let red = UIViewController()
+        red.view.backgroundColor = .systemRed
+        under.rootViewController = red
+        under.isHidden = false
+        defer {
+            under.isHidden = true
+            under.rootViewController = nil
+        }
+        let over = try LookStage.plane(surface, look: Look(), style: .dark)
+
+        let said = LookStage.difference(alone, over, width: Int(picture.size.width * picture.scale),
+                                        scale: picture.scale)?.said ?? ""
+        XCTAssertFalse(try LookStage.differ(alone, over),
+                       "a window under the stage reached the picture: \(said)")
+    }
+
     /// And that a shade is all the tolerance is: two pictures that differ by more than one are
     /// two pictures, or the reach suite would see no field at all.
     func testMoreThanAShadeIsADifference() throws {
