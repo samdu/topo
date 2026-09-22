@@ -9,22 +9,35 @@ import TopoAuth
     /// the proxy logs contains it.
     @Test func theGuestsAuthorizationGoesThroughUnchangedAndIsNeverLogged() async throws {
         let token = "sk-ant-oat01-guest-\(UUID().uuidString)"
+        let beta = "oauth-2025-04-20,beta-\(UUID().uuidString)"
+        let apiKey = "sk-ant-api03-\(UUID().uuidString)"
+        let custom = "custom-\(UUID().uuidString)"
+        let agent = "claude-cli/\(UUID().uuidString)"
         let upstream = StubUpstream()
         let (proxy, port, logs) = try await startedProxy(upstream)
         defer { Task { await proxy.stop() } }
         let client = try await WireClient(port: port)
         try await client.send(post("/v1/messages?beta=true", body: #"{"model":"claude-haiku-4-5-20251001"}"#,
-                                   headers: ["Authorization: Bearer \(token)", "anthropic-beta: oauth-2025-04-20"]))
+                                   headers: ["Authorization: Bearer \(token)", "anthropic-beta: \(beta)", "x-api-key: \(apiKey)",
+                                             "X-Topo-Custom: \(custom)", "User-Agent: \(agent)"]))
         let (head, _) = try await client.readResponse()
         #expect(head.status == 200)
 
         let seen = try #require(upstream.requests.first)
         #expect(seen.headers.values("Authorization") == ["Bearer \(token)"])
-        #expect(seen.headers.value("anthropic-beta") == "oauth-2025-04-20")
+        #expect(seen.headers.value("anthropic-beta") == beta)
+        #expect(seen.headers.value("x-api-key") == apiKey)
+        #expect(seen.headers.value("X-Topo-Custom") == custom)
         #expect(seen.target == "/v1/messages?beta=true")
+        // The request's line is logged once its response has been sent, which can be just after the
+        // client has read it.
+        for _ in 0..<200 where logs.lines.isEmpty { try await Task.sleep(for: .milliseconds(10)) }
         #expect(!logs.lines.isEmpty)
+        // No header value the request carried reaches the log, the credential or any other.
         for line in logs.lines {
-            #expect(!line.contains(token), "logged: \(line)")
+            for value in [token, beta, apiKey, custom, agent, "application/json", "127.0.0.1"] {
+                #expect(!line.contains(value), "logged \(value): \(line)")
+            }
             #expect(!line.contains("Bearer"), "logged: \(line)")
         }
     }
@@ -249,6 +262,90 @@ import TopoAuth
         try await second.send("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n")
         #expect(try await second.readResponse().head.status >= 400)
         #expect(upstream.requests.isEmpty)
+    }
+
+    /// A transfer coding other than chunked is refused, never forwarded.
+    @Test func anUnsupportedTransferCodingIsRefused() async throws {
+        let upstream = StubUpstream()
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send("POST /v1/messages HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: gzip\r\n\r\nabc")
+        let (head, _) = try await client.readResponse()
+        #expect(head.status == 501)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(upstream.requests.isEmpty)
+    }
+
+    /// An HTTP/1.0 client gets the body as it comes, unchunked, and then the end of the connection.
+    @Test func anHTTP10ClientGetsTheRawBodyAndThenTheEnd() async throws {
+        let upstream = StubUpstream { _ in
+            UpstreamResponse(status: 200, headers: [HTTPField("Content-Type", "application/json")], body: AsyncThrowingStream { continuation in
+                Task {
+                    for piece in ["{\"data\":", "[1,2,3]", "}"] {
+                        continuation.yield(Data(piece.utf8))
+                        try? await Task.sleep(for: .milliseconds(30))
+                    }
+                    continuation.finish()
+                }
+            })
+        }
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send("GET /v1/models HTTP/1.0\r\n\r\n")
+        let head = try await client.readHead()
+        #expect(head.status == 200)
+        #expect(!head.chunked)
+        #expect(head.headers.value("Transfer-Encoding") == nil)
+        #expect(head.headers.value("Connection") == "close")
+        let body = try await client.readToEnd()
+        #expect(String(decoding: body, as: UTF8.self) == "{\"data\":[1,2,3]}")
+    }
+
+    /// The body limit: exactly `bodyLimit` bytes is forwarded, one more is a 413 that never
+    /// reaches the upstream, in both framings.
+    @Test(arguments: [false, true])
+    func theBodyLimitIsExact(chunked: Bool) async throws {
+        let upstream = StubUpstream { request in StubUpstream.ok("\(request.body?.count ?? 0)") }
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let limit = APIProxy.bodyLimit
+        #expect(limit == 32 * 1024 * 1024)
+
+        func request(_ size: Int) -> Data {
+            let path = "/v1/files"
+            if chunked {
+                var data = Data("POST \(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\n\r\n".utf8)
+                // The body in two chunks, the second a single byte, so the limit falls between them.
+                data.append(ResponseWriter.chunk(Data(repeating: 0x61, count: size - 1)))
+                data.append(ResponseWriter.chunk(Data([0x62])))
+                data.append(ResponseWriter.lastChunk)
+                return data
+            }
+            var data = Data("POST \(path) HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: \(size)\r\n\r\n".utf8)
+            data.append(Data(repeating: 0x61, count: size))
+            return data
+        }
+
+        let fits = try await WireClient(port: port, deadline: 30)
+        try await fits.send(request(limit))
+        let (fitsHead, fitsBody) = try await fits.readResponse()
+        #expect(fitsHead.status == 200)
+        #expect(String(decoding: fitsBody, as: UTF8.self) == "\(limit)")
+        #expect(upstream.requests.count == 1)
+
+        let over = try await WireClient(port: port, deadline: 30)
+        if chunked {
+            try await over.send(request(limit + 1))
+        } else {
+            // The head alone: the length is refused before any of the body is read.
+            try await over.send("POST /v1/files HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: \(limit + 1)\r\n\r\n")
+        }
+        let (overHead, _) = try await over.readResponse()
+        #expect(overHead.status == 413)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(upstream.requests.count == 1)
     }
 
     @Test func expectContinueIsAnswered() async throws {

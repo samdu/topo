@@ -77,6 +77,14 @@ final class WireClient: @unchecked Sendable {
         return data
     }
 
+    /// Every byte until the proxy closes the connection.
+    func readToEnd() async throws -> Data {
+        var data = Data()
+        while true {
+            do { data.append(try await inbound.read(count: 1)) } catch WireError.closed { return data }
+        }
+    }
+
     /// A whole response: head and body, de-chunked or by Content-Length.
     func readResponse() async throws -> (head: Head, body: Data) {
         let head = try await readHead()

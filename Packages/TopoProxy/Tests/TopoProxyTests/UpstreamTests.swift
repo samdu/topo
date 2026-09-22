@@ -101,6 +101,36 @@ import Testing
         #expect((error["error"] as? [String: Any])?["type"] as? String == "api_error")
     }
 
+    /// The session keeps no cookies and no cache: a response that sets a cookie and says it may be
+    /// cached is asked for again at the origin, with no cookie.
+    @Test func theSessionKeepsNoCookiesAndNoCache() async throws {
+        let origin = try StubOrigin { _, inbound in
+            let body = #"{"data":[]}"#
+            try await inbound.send(Data(("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                + "Set-Cookie: topo-session=abc123; Path=/\r\nCache-Control: public, max-age=3600\r\n"
+                + "Last-Modified: Mon, 21 Sep 2026 00:00:00 GMT\r\nETag: \"v1\"\r\n"
+                + "Content-Length: \(body.utf8.count)\r\n\r\n\(body)").utf8))
+        }
+        _ = try await origin.start()
+        defer { origin.stop() }
+        let (proxy, port, _) = try await startedProxy(URLSessionUpstream(origin: origin.url))
+        defer { Task { await proxy.stop() } }
+        for _ in 0..<2 {
+            let client = try await WireClient(port: port)
+            try await client.send("GET /v1/models HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n")
+            let (head, _) = try await client.readResponse()
+            #expect(head.status == 200)
+            #expect(head.headers.value("Set-Cookie") != nil, "the guest is still handed what the origin set")
+        }
+        let seen = origin.requests
+        #expect(seen.count == 2, "the second request was answered from a cache")
+        for request in seen {
+            #expect(request.headers.value("Cookie") == nil)
+            #expect(request.headers.value("If-None-Match") == nil)
+            #expect(request.headers.value("If-Modified-Since") == nil)
+        }
+    }
+
     @Test func everyTargetStaysOnTheOneOrigin() {
         let upstream = URLSessionUpstream()
         #expect(upstream.url(for: "/v1/messages?beta=true")?.absoluteString == "https://api.anthropic.com/v1/messages?beta=true")
