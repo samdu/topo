@@ -93,7 +93,7 @@ final class UserlandTests: XCTestCase {
     /// A Claude Code entry whose pin names no version — absent, empty or only whitespace — is a
     /// failure, not a pin `claude --version` is held to an empty string by.
     func testAClaudeCodePinWithNoVersionFails() async throws {
-        for version in [nil, "", "  "] as [String?] {
+        for version in [nil, "", "  ", "\n", " \t\n"] as [String?] {
             let claude = ScriptedSource()
             let userland = Userland(installer: RootfsInstaller(directory: base.appendingPathComponent("Userland"), importer: MakesADirectory()),
                                     source: ScriptedSource(), claudeSource: claude)

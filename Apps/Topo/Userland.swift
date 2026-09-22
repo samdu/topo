@@ -158,7 +158,7 @@ final class Userland {
             let waiting = self.claudeReadiness
             self.claudeReadiness = []
             switch result {
-            case .success(let fetched) where (fetched.version ?? "").trimmingCharacters(in: .whitespaces).isEmpty:
+            case .success(let fetched) where (fetched.version ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                 // A pin without its version — absent, empty or blank — is not one `claude --version`
                 // can be held to.
                 let why = "the manifest's \(ModelManifest.claudeCode) entry names no version"
