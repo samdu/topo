@@ -360,6 +360,34 @@ import TopoAuth
         #expect(upstream.requests.isEmpty)
     }
 
+    /// An upstream that fails after its head has gone cannot become a 502. The client can tell the
+    /// response is incomplete: what arrived is handed on, no terminating chunk follows, and the
+    /// connection closes.
+    @Test func anUpstreamFailingMidBodyEndsTheResponseIncomplete() async throws {
+        struct Dropped: Error {}
+        let upstream = StubUpstream { _ in
+            UpstreamResponse(status: 200, headers: [HTTPField("Content-Type", "text/event-stream")], body: AsyncThrowingStream { continuation in
+                Task {
+                    continuation.yield(Data("event: message_start\ndata: {}\n\n".utf8))
+                    try? await Task.sleep(for: .milliseconds(50))
+                    continuation.finish(throwing: Dropped())
+                }
+            })
+        }
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send(post("/v1/messages", body: #"{"model":"x","stream":true}"#))
+        let head = try await client.readHead()
+        #expect(head.status == 200)
+        #expect(head.chunked)
+        let event = try await client.readChunk()
+        #expect(event.map { String(decoding: $0, as: UTF8.self) } == "event: message_start\ndata: {}\n\n")
+        // After the event: nothing more, not even the zero-length chunk, and then the end.
+        let rest = try await client.readToEnd()
+        #expect(rest.isEmpty, "after the failure the proxy wrote \(String(decoding: rest, as: UTF8.self).debugDescription)")
+    }
+
     @Test func expectContinueIsAnswered() async throws {
         let upstream = StubUpstream { request in StubUpstream.ok("\(request.body?.count ?? 0)") }
         let (proxy, port, _) = try await startedProxy(upstream)
