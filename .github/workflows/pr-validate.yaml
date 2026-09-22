@@ -266,11 +266,9 @@ jobs:
       - name: xcodebuild build-for-testing (Topo)
         run: |
           set -euo pipefail
-          read -ra caching <<< "$XCODE_CACHING"
           xcodebuild build-for-testing \
             -project Topo.xcodeproj -scheme Topo \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            "${caching[@]}" \
             2>&1 | tee "$RESULTS/Topo-unit-build.log"
 
       - name: xcodebuild test (Topo, unit and userland)
@@ -378,11 +376,9 @@ jobs:
       - name: xcodebuild build-for-testing (Topo)
         run: |
           set -euo pipefail
-          read -ra caching <<< "$XCODE_CACHING"
           xcodebuild build-for-testing \
             -project Topo.xcodeproj -scheme Topo \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            "${caching[@]}" \
             2>&1 | tee "$RESULTS/Topo-ui-build.log"
 
       # The microphone test counts the permission prompts the run raises, and
@@ -576,12 +572,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          read -ra caching <<< "$XCODE_CACHING"
           xcodebuild build -project Topo.xcodeproj -scheme TopoWatch \
-            -destination 'generic/platform=watchOS Simulator' "${caching[@]}" \
+            -destination 'generic/platform=watchOS Simulator' \
             2>&1 | tee "$RESULTS/TopoWatch-build.log"
           xcodebuild build -project Topo.xcodeproj -scheme TopoTV \
-            -destination 'generic/platform=tvOS Simulator' "${caching[@]}" \
+            -destination 'generic/platform=tvOS Simulator' \
             2>&1 | tee "$RESULTS/TopoTV-build.log"
 
       # Compilation only, with signing off. The simulator builds never compile
@@ -597,13 +592,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          read -ra caching <<< "$XCODE_CACHING"
           # Both build even when the first fails, so one run reports both.
           status=0
           xcodebuild build -project Topo.xcodeproj -scheme Topo \
             -configuration Release -destination 'generic/platform=iOS' \
             -derivedDataPath build/device \
-            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=999 "${caching[@]}" \
+            CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=999 \
             2>&1 | tee "$RESULTS/Topo-iOS-Release-build.log" \
             || { echo "::error::Topo Release for iOS devices failed to build."; status=1; }
           # The device build is the one product this check has, so the Info.plist is
@@ -615,7 +609,7 @@ jobs:
             || { echo "::error::The built app's Info.plist is wrong."; status=1; }
           xcodebuild build -project Topo.xcodeproj -scheme TopoHub \
             -destination 'platform=macOS' \
-            CODE_SIGNING_ALLOWED=NO "${caching[@]}" \
+            CODE_SIGNING_ALLOWED=NO \
             2>&1 | tee "$RESULTS/TopoHub-build.log" \
             || { echo "::error::TopoHub failed to build."; status=1; }
           exit "$status"

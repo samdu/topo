@@ -1,7 +1,7 @@
 # What every macOS job in pr-validate.yaml does before its own work: the pinned toolchain, one
 # iPhone simulator from the pinned runtime (its UDID in SIMULATOR_UDID), the XcodeGen projects
 # generated from project.yml, and with `guest: true` the guest's framework every Topo scheme
-# resolves and Xcode's compilation cache for building one. The versions and hashes are the workflow's env (DEVELOPER_DIR,
+# resolves. The versions and hashes are the workflow's env (DEVELOPER_DIR,
 # IOS_SIMULATOR_RUNTIME, XCODEGEN_VERSION, XCODEGEN_SHA256, RESULTS).
 #
 # The runner and compiler are pinned rather than `macos-latest`, so a new image cannot silently
@@ -12,7 +12,7 @@ name: Prepare a macOS runner
 description: The pinned toolchain, a simulator, the XcodeGen projects and optionally the guest's framework.
 inputs:
   guest:
-    description: Restore or build Packages/TopoUserland/Frameworks/TopoIsh.xcframework, and restore the compilation cache.
+    description: Restore or build Packages/TopoUserland/Frameworks/TopoIsh.xcframework.
     default: "false"
 runs:
   using: composite
@@ -80,28 +80,3 @@ runs:
             || { echo "::error::$slice does not export ish_mem_refresh_hook."; exit 1; }
           echo "$slice exports ish_mem_refresh_hook"
         done
-
-    # Xcode's compilation cache: every compile keyed by its inputs in a
-    # content-addressed store (the CAS), so a build replays what an earlier
-    # one already compiled. XCODE_CACHING is the build settings every Topo
-    # xcodebuild in the workflow passes. A miss, a stale entry or an empty
-    # store costs only time: a key is the compile's inputs, so an entry either
-    # is that compile's output or is not used. Saved per job and run (an
-    # Actions cache is immutable), restored from the newest for the same job;
-    # a PR restores from its own branch's and then main's, which the nightly
-    # keeps warm.
-    - name: Cache Xcode's compilation store
-      if: inputs.guest == 'true'
-      uses: actions/cache@v4
-      with:
-        path: ~/xcode-cas
-        key: xcode-cas-${{ github.job }}-${{ github.run_id }}-${{ github.run_attempt }}
-        restore-keys: xcode-cas-${{ github.job }}-
-    - name: The compilation cache's settings
-      if: inputs.guest == 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        mkdir -p "$HOME/xcode-cas"
-        echo "Compilation store: $(du -sh "$HOME/xcode-cas" | cut -f1)"
-        echo "XCODE_CACHING=COMPILATION_CACHE_ENABLE_CACHING=YES COMPILATION_CACHE_CAS_PATH=$HOME/xcode-cas" >> "$GITHUB_ENV"
