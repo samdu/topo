@@ -9,14 +9,22 @@ public enum TokenProviderError: Error, Equatable {
     case signedOut
 }
 
-/// Tokens from the store, refreshed through the OAuth client and written back. Refreshes run one
-/// at a time so two turns in flight cannot both spend the same refresh token, and a refresh that
-/// finishes after a sign-out, or after another writer replaced the tokens, is not written back:
-/// the store must still hold exactly what was loaded.
+/// Tokens from the store, refreshed through the OAuth client and written back. A refresh token is
+/// single-use — the grant rotates it, and a second grant on the spent one is refused — so a
+/// provider has one refresh in flight at most: a caller that finds the set expired while a refresh
+/// is running, or asks for a refresh while one is, awaits that refresh and gets its result, tokens
+/// or error. The app makes one provider over the ordinary store and hands it to every path that
+/// needs a token (`TopoApp`), which makes that one refresh in flight for the process. A failed
+/// refresh is not kept: the next call after it makes a fresh attempt. A refresh that finishes
+/// after a sign-out, or after another writer replaced the tokens, is not written back: the store
+/// must still hold exactly what was loaded.
 public actor StoredTokenProvider: TokenProvider {
-    private let store: TokenStore
+    /// The store this provider reads and writes, for a caller that reports on what it holds.
+    public nonisolated let store: TokenStore
     private let oauth: ClaudeOAuth
     private let now: @Sendable () -> Date
+    /// The refresh every caller awaits while it runs; nil between refreshes.
+    private var inFlight: Task<Tokens, any Error>?
 
     public init(store: TokenStore, oauth: ClaudeOAuth = ClaudeOAuth(), now: @escaping @Sendable () -> Date = { Date() }) {
         self.store = store
@@ -36,6 +44,9 @@ public actor StoredTokenProvider: TokenProvider {
         return tokens.isExpired(at: now()) ? .expired(at: tokens.expiresAt) : .valid(until: tokens.expiresAt)
     }
 
+    /// The stored access token, or, when it is about to expire, what the refresh in flight returns
+    /// (a new one when none is). A caller arriving after a refresh wrote its tokens reads those and
+    /// makes no grant.
     public func accessToken() async throws -> String {
         guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
         guard tokens.isExpired(at: now()) else { return tokens.accessToken }
@@ -43,17 +54,28 @@ public actor StoredTokenProvider: TokenProvider {
     }
 
     /// Refreshes now, expired or not, and writes the result back as `accessToken` does: what the
-    /// refresh grant returned, its granted `scopes` included.
+    /// refresh grant returned, its granted `scopes` included. Asked for while a refresh is in
+    /// flight, it is that refresh.
     public func refresh() async throws -> Tokens {
         guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
         return try await refresh(tokens)
     }
 
     private func refresh(_ tokens: Tokens) async throws -> Tokens {
-        let refreshed = try await oauth.refresh(tokens)
-        guard try store.load() == tokens else { throw TokenProviderError.signedOut }
-        try store.save(refreshed)
-        return refreshed
+        if let inFlight { return try await inFlight.value }
+        // The task inherits this actor, so it cannot start before `inFlight` is set, and it clears
+        // `inFlight` on the actor as it ends, before any caller resumes: a call after a failure
+        // finds nothing in flight and makes its own grant. A caller cancelled while it waits
+        // leaves the refresh running for the others.
+        let task = Task { () throws -> Tokens in
+            defer { inFlight = nil }
+            let refreshed = try await oauth.refresh(tokens)
+            guard try store.load() == tokens else { throw TokenProviderError.signedOut }
+            try store.save(refreshed)
+            return refreshed
+        }
+        inFlight = task
+        return try await task.value
     }
 }
 

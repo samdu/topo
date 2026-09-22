@@ -13,6 +13,7 @@ struct TopoApp: App {
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
+    private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -26,7 +27,11 @@ struct TopoApp: App {
         #endif
         // The phone runs the guest, so its sign-in mints the guest's long-lived token too.
         _signIn = State(initialValue: SignIn(guestStore: KeychainTokenStore.guest))
-        _harness = State(initialValue: Harness.standard())
+        // The one provider over the ordinary tokens, shared by the chat and the guest's hand-over
+        // so a refresh is in flight once for the process: a refresh token is single-use.
+        let tokens = StoredTokenProvider(store: KeychainTokenStore())
+        self.tokens = tokens
+        _harness = State(initialValue: Harness.standard(tokens: tokens))
         _memory = State(initialValue: Memory.standard())
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
@@ -61,7 +66,7 @@ struct TopoApp: App {
     /// app that boots the guest. Nothing at all in a release one.
     private func debugUserland() async {
         #if DEBUG
-        await DebugRun.userland()
+        await DebugRun.userland(tokens: tokens)
         #endif
     }
 

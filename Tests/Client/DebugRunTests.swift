@@ -79,8 +79,8 @@ final class DebugRunTests: XCTestCase {
             RefreshStub.requests = 0
             let ordinary = InMemoryTokenStore(Tokens(accessToken: "sk-stale", refreshToken: "rt-first",
                                                      expiresAt: Date().addingTimeInterval(30), scopes: scopes))
-            return await DebugRun.handOver(port: 4242, guestStore: InMemoryTokenStore(guest), ordinaryStore: ordinary,
-                                           oauth: ClaudeOAuth(session: RefreshStub.session()))
+            let provider = StoredTokenProvider(store: ordinary, oauth: ClaudeOAuth(session: RefreshStub.session()))
+            return await DebugRun.handOver(port: 4242, guestStore: InMemoryTokenStore(guest), provider: provider)
         }
         let granted = #"{"access_token":"sk-fresh","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#
 
