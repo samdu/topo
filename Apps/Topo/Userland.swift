@@ -158,6 +158,11 @@ final class Userland {
             let waiting = self.claudeReadiness
             self.claudeReadiness = []
             switch result {
+            case .success(let fetched) where fetched.version == nil:
+                // A pin without its version is not one `claude --version` can be held to.
+                let why = "the manifest's \(ModelManifest.claudeCode) entry names no version"
+                self.claude = .failed(why)
+                waiting.forEach { $0.resume(throwing: ModelDownloadFailure(id: ModelManifest.claudeCode, why: why)) }
             case .success(let fetched):
                 let pin = ClaudeCodePin(version: fetched.version ?? "", size: fetched.size, sha256: fetched.sha256)
                 let installer = ClaudeCodeInstaller(binary: fetched.file, pin: pin)
