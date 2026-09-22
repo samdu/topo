@@ -348,6 +348,18 @@ import TopoAuth
         #expect(upstream.requests.count == 1)
     }
 
+    /// A fragment is not part of an origin-form target: refused, never forwarded.
+    @Test func aTargetWithAFragmentIsRefused() async throws {
+        let upstream = StubUpstream()
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send(post("/v1/messages#private", body: #"{"model":"x"}"#))
+        #expect(try await client.readResponse().head.status == 400)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(upstream.requests.isEmpty)
+    }
+
     @Test func expectContinueIsAnswered() async throws {
         let upstream = StubUpstream { request in StubUpstream.ok("\(request.body?.count ?? 0)") }
         let (proxy, port, _) = try await startedProxy(upstream)

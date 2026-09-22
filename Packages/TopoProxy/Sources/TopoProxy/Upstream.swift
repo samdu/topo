@@ -72,7 +72,7 @@ public final class URLSessionUpstream: Upstream, @unchecked Sendable {
     /// The URL a target names on the one origin, or nil if putting them together would name any
     /// other scheme, host or port.
     func url(for target: String) -> URL? {
-        guard target.hasPrefix("/") else { return nil }
+        guard target.hasPrefix("/"), !target.contains("#") else { return nil }
         var base = origin.absoluteString
         while base.hasSuffix("/") { base.removeLast() }
         guard let url = URL(string: base + target),

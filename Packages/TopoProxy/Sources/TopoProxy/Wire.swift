@@ -255,7 +255,9 @@ enum RequestReader {
         let parts = requestLine.split(separator: " ", omittingEmptySubsequences: false)
         guard parts.count == 3, parts[0] == method else { throw WireError.malformed("unreadable request line") }
         let target = String(parts[1])
-        guard target.hasPrefix("/"), target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7F }) else {
+        // Origin-form is a path and a query: a fragment is never part of a request-target.
+        guard target.hasPrefix("/"), !target.contains("#"),
+              target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7F }) else {
             throw WireError.malformed("the request-target has to be a path")
         }
         let fields = (CFHTTPMessageCopyAllHeaderFields(message)?.takeRetainedValue() as? [String: String]) ?? [:]

@@ -134,9 +134,10 @@ import Testing
     @Test func everyTargetStaysOnTheOneOrigin() {
         let upstream = URLSessionUpstream()
         #expect(upstream.url(for: "/v1/messages?beta=true")?.absoluteString == "https://api.anthropic.com/v1/messages?beta=true")
-        for target in ["//evil.example/v1", "/@evil.example/", "/v1/messages#frag"] {
+        for target in ["//evil.example/v1", "/@evil.example/"] {
             #expect(upstream.url(for: target)?.host == "api.anthropic.com", "\(target)")
         }
+        #expect(upstream.url(for: "/v1/messages#private") == nil)
         #expect(upstream.url(for: "http://evil.example/") == nil)
         #expect(upstream.url(for: "evil.example") == nil)
         #expect(upstream.url(for: ".evil.example/") == nil)
