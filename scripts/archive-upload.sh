@@ -39,6 +39,9 @@ done
 build="${BUILD:-$(( ($(date +%s) - 1767225600) / 60 ))}"
 echo "==> build $build"
 
+# The guest's kernel is built from the fork at its pin, never committed; the archive links it.
+"$(dirname "${BASH_SOURCE[0]}")/build-ish.sh"
+
 rm -rf "$archive"
 xcodebuild archive \
   -project "$project" \

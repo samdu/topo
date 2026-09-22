@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Why a turn did or did not go: the lease, the last CloudKit error, the last API answer, the
 /// token, whether the ear's and the voice's models are resident, when the memory's folder was
-/// last in step with the store, and what the vault's `look.json` said. Opened by a long press on
+/// last in step with the store, what the vault's `look.json` said, and where the guest's rootfs
+/// stands. Opened by a long press on
 /// the badge, or from the settings sheet it opens. Reads everything afresh each time it appears
 /// and on Refresh; changes nothing.
 struct DiagnosticsView: View {
@@ -39,7 +40,8 @@ struct DiagnosticsView: View {
     private func load() async {
         rows = await harness.diagnostics().rows
             + [("speech", voice.ear.summary), ("voice", speaker.voice.summary),
-               ("memory", memory.summary), ("look", memory.lookReading.summary)]
+               ("memory", memory.summary), ("look", memory.lookReading.summary),
+               ("userland", Userland.shared.summary)]
     }
 }
 #endif

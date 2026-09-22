@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Writes Apps/Topo/Resources/models.json: the pinned list of every file the phone downloads for
-# its on-device models, with sizes and sha256 digests, from the Hugging Face tree API at the
-# revision pinned below. The app downloads exactly this list through its background session and
+# its on-device models and its guest's rootfs, with sizes and sha256 digests: the models from the
+# Hugging Face tree API at the revision pinned below, the rootfs from the URL pinned below. The app downloads exactly this list through its background session and
 # admits a file only when its digest matches, so a bump of a model is a bump of a revision here
 # and a re-run of this script.
 #
@@ -44,6 +44,15 @@ models="
 parakeet-tdt-0.6b-v2|FluidInference/parakeet-tdt-0.6b-v2-coreml|ee09c569f73759e6d44c9bd16766f477b2b36d39|Preprocessor.mlmodelc/ Encoder.mlmodelc/ Decoder.mlmodelc/ JointDecision.mlmodelc/ parakeet_vocab.json
 parakeet-ctc-110m-coreml|FluidInference/parakeet-ctc-110m-coreml|accdafd8cf8a2ff1cabe3c11e54416b405d409aa|MelSpectrogram.mlmodelc/ AudioEncoder.mlmodelc/ vocab.json tokenizer.json
 pocket-tts-coreml|FluidInference/pocket-tts-coreml|91748676fe3c8b2eb3007b3125253bcd898202c3|v2.1/english/cond_prefill_ane.mlmodelc/ v2.1/english/flowlm_step_ane.mlmodelc/ v2.1/english/flow_decoder_fused.mlmodelc/ v2.1/english/mimi_decoder.mlmodelc/ v2.1/english/constants_bin/bos_emb.bin v2.1/english/constants_bin/bos_before_voice.bin v2.1/english/constants_bin/text_embed_table.bin v2.1/english/constants_bin/tokenizer.model v2.1/english/constants_bin/eponine.safetensors
+"
+
+# id | base URL | files: entries that are not on the Hub, fetched from the base URL plus each file
+# name and checked against the digest their publisher lists beside them (`<file>.sha256`) as well
+# as hashed here. The guest's rootfs: Alpine's aarch64 minirootfs, taken straight from Alpine's
+# CDN, so Topo distributes none of it; the fakefs is made from it on the phone
+# (Packages/TopoUserland).
+direct="
+alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|alpine-minirootfs-3.22.6-aarch64.tar.gz
 "
 
 tmp="$(mktemp -d)"
@@ -90,6 +99,26 @@ while IFS='|' read -r id repo revision selectors; do
   echo "   $id: ${#files[@]} files, $total bytes ($((total / 1048576)) MiB)" >&2
   entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg r "$repo" --arg v "$revision" '{id:$id,repo:$r,revision:$v,files:.}')")
 done <<< "$models"
+
+while IFS='|' read -r id base names; do
+  [ -z "$id" ] && continue
+  echo "== $base" >&2
+  entry_files=()
+  for name in $names; do
+    local_file="$cache/direct/$id/$name"
+    if [ ! -f "$local_file" ]; then
+      mkdir -p "$(dirname "$local_file")"
+      echo "   fetching $name" >&2
+      curl -sSfL "$base$name" -o "$local_file"
+    fi
+    digest="$(shasum -a 256 "$local_file" | cut -d' ' -f1)"
+    published="$(curl -sSfL "$base$name.sha256" | cut -d' ' -f1)"
+    [ "$digest" = "$published" ] || { echo "$name: sha256 $digest, but $base$name.sha256 says $published" >&2; exit 1; }
+    size="$(stat -f %z "$local_file")"
+    entry_files+=("$(jq -cn --arg p "$name" --argjson s "$size" --arg d "$digest" '{path:$p,size:$s,sha256:$d}')")
+  done
+  entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg u "$base" '{id:$id,url:$u,files:.}')")
+done <<< "$direct"
 
 manifest="$(printf '%s\n' "${entries[@]}" | jq -s '{models:.}')"
 if [ "$check" = yes ]; then

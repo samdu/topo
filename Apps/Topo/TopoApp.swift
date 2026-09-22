@@ -54,6 +54,14 @@ struct TopoApp: App {
         #endif
     }
 
+    /// The guest command `TOPO_DEBUG_USERLAND` asks for, in a debug build: the only path in the
+    /// app that boots the guest. Nothing at all in a release one.
+    private func debugUserland() async {
+        #if DEBUG
+        await DebugRun.userland()
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
@@ -83,6 +91,9 @@ struct TopoApp: App {
                     if phase == .active {
                         voice.prepare()
                         speaker.prepare()
+                        // The guest's rootfs, fetched and imported on the same cue, so the
+                        // userland is on the phone before anything needs it. Nothing boots it.
+                        Userland.shared.prepare()
                         // The memory catches up with what the other devices wrote while this
                         // phone was away, and anything edited in Files here goes out, before
                         // the person has typed anything.
@@ -92,6 +103,7 @@ struct TopoApp: App {
                 // Nothing unless a debug build was launched asking for a turn; the screen
                 // behaves as it always does either way.
                 .task { await debugTurn() }
+                .task { await debugUserland() }
         }
     }
 }

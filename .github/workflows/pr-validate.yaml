@@ -166,6 +166,47 @@ jobs:
           # projects. Not a gate — Womble's generation reorders resource IDs.
           git status --short -- '*.xcodeproj'
 
+      # The guest's kernel: OpenMinis/ish-arm64 at its pin with Topo's patches,
+      # built into Packages/TopoUserland/Frameworks/TopoIsh.xcframework, which
+      # is never committed and which every Topo scheme resolves, so it is built
+      # before any xcodebuild. Cached on everything the script folds into its
+      # own inputs stamp; a restored framework whose stamp matches is kept.
+      - name: Cache the guest's framework
+        if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: Packages/TopoUserland/Frameworks
+          key: topo-ish-${{ hashFiles('scripts/build-ish.sh', 'patches/ish/**', 'Packages/TopoUserland/Guest/**') }}
+      - name: Build the guest's framework (scripts/build-ish.sh)
+        run: |
+          set -euo pipefail
+          brew install meson ninja llvm lld
+          scripts/build-ish.sh
+          # The memory brake's refresh is what the patch adds and the app sets:
+          # a library without it is a kernel built from the fork unpatched.
+          for slice in Packages/TopoUserland/Frameworks/TopoIsh.xcframework/*/libTopoIsh.a; do
+            symbols="$(nm -gU "$slice")"
+            grep -q ' _ish_mem_refresh_hook$' <<< "$symbols" \
+              || { echo "::error::$slice does not export ish_mem_refresh_hook."; exit 1; }
+            echo "$slice exports ish_mem_refresh_hook"
+          done
+
+      # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
+      # patch that does not apply, a populated deps/linux, and options that are
+      # not arm64/ish/asbestos each fail.
+      - name: build-ish.sh refuses what it should
+        if: ${{ !cancelled() }}
+        run: scripts/tests/build-ish-test.sh
+
+      # Alpine's minirootfs, fetched from the manifest's entry and verified by
+      # digest, for the userland suites to import and boot.
+      - name: The rootfs for the userland suites
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          rootfs="$(scripts/fetch-rootfs.sh "$HOME/rootfs")"
+          echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
+
       # Named, not globbed: a package that disappears fails here instead of
       # leaving the loop with one fewer iteration. Every package runs even
       # after one fails, so the log shows them all.
@@ -293,7 +334,7 @@ jobs:
           set -euo pipefail
           status=0
           scripts/ci-require-tests.sh xcresult "$RESULTS/Womble.xcresult" WombleTests || status=1
-          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo.xcresult" TopoTests TopoUITests || status=1
+          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo.xcresult" TopoTests TopoUITests TopoUserlandTests TopoUserlandBrakeTests || status=1
           exit "$status"
 
       # The watch and TV builds are not covered by that suite's host, so they

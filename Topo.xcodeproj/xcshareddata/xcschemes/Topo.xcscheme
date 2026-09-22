@@ -49,6 +49,34 @@
                ReferencedContainer = "container:Topo.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F278C894AE9873500FB0A57E"
+               BuildableName = "TopoUserlandBrakeTests.xctest"
+               BlueprintName = "TopoUserlandBrakeTests"
+               ReferencedContainer = "container:Topo.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry
+            buildForTesting = "YES"
+            buildForRunning = "NO"
+            buildForProfiling = "NO"
+            buildForArchiving = "NO"
+            buildForAnalyzing = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "D0916AFE9B1430928F2F5F4F"
+               BuildableName = "TopoUserlandTests.xctest"
+               BlueprintName = "TopoUserlandTests"
+               ReferencedContainer = "container:Topo.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
       </BuildActionEntries>
    </BuildAction>
    <TestAction
@@ -75,6 +103,28 @@
                BlueprintIdentifier = "FC229031B297F833E844B1AB"
                BuildableName = "TopoTests.xctest"
                BlueprintName = "TopoTests"
+               ReferencedContainer = "container:Topo.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "D0916AFE9B1430928F2F5F4F"
+               BuildableName = "TopoUserlandTests.xctest"
+               BlueprintName = "TopoUserlandTests"
+               ReferencedContainer = "container:Topo.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
+         <TestableReference
+            skipped = "NO"
+            parallelizable = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "F278C894AE9873500FB0A57E"
+               BuildableName = "TopoUserlandBrakeTests.xctest"
+               BlueprintName = "TopoUserlandBrakeTests"
                ReferencedContainer = "container:Topo.xcodeproj">
             </BuildableReference>
          </TestableReference>

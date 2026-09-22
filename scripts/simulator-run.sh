@@ -12,6 +12,9 @@
 #   scripts/simulator-run.sh --send "hello"         # ... and send one turn, asserting the reply
 #   scripts/simulator-run.sh --press-mic            # ... after pressing the microphone (TopoUITests)
 #   scripts/simulator-run.sh --talk                 # speak a question, assert it is answered aloud
+#   scripts/simulator-run.sh --userland "echo hi" --expect hi   # boot the guest, run a command
+#   scripts/simulator-run.sh --userland "echo hi" --fresh --expect-rootfs fetched
+#   scripts/simulator-run.sh --userland "echo hi" --no-build --expect-rootfs reused
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
@@ -33,6 +36,16 @@
 # passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
 # lane is stopped and the Mac's defaults restored on every exit. Its turn is a real one.
 #
+# A --userland run needs no token. The app fetches or reuses the guest's rootfs, boots the guest and
+# runs the command under /bin/sh -c (DebugRun.userland, TOPO_DEBUG_USERLAND); the run passes only
+# when the app printed `userland done`, no `userland error:`, and `guest exit: 0`, and, when asked,
+# the exact guest line --expect names and the rootfs line --expect-rootfs names (`fetched`: this
+# launch downloaded and imported it; `reused`: it found the fakefs whole and fetched nothing).
+# --fresh uninstalls the app first, which takes its data container, fakefs and all, with it.
+#
+# Building runs scripts/build-ish.sh first: the guest's framework is built from the fork's pin and
+# is not in the repository.
+#
 # On buddybox xcodebuild needs the login keychain, so run this from the GUI session:
 #   ssh buddybox 'sudo launchctl asuser $(id -u) sudo -u buddy bash -lc "cd ~/github/topo && scripts/simulator-run.sh --send hello"'
 set -euo pipefail
@@ -49,6 +62,10 @@ erase=no
 build=yes
 pressmic=no
 talk=no
+userland=""
+expect=""
+expect_rootfs=""
+fresh=no
 timeout="${TIMEOUT:-180}"
 
 while [ $# -gt 0 ]; do
@@ -60,7 +77,11 @@ while [ $# -gt 0 ]; do
     --erase) erase=yes; shift ;;
     --no-build) build=no; shift ;;
     --talk) talk=yes; shift ;;
-    -h|--help) sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --userland) userland="$2"; shift 2 ;;
+    --expect) expect="$2"; shift 2 ;;
+    --expect-rootfs) expect_rootfs="$2"; shift 2 ;;
+    --fresh) fresh=yes; shift ;;
+    -h|--help) sed -n '2,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -86,6 +107,15 @@ read_token() {
   fi
   [ -n "$token" ] || { echo "no Claude setup token: set CLAUDE_SETUP_TOKEN or check the vault item" >&2; exit 1; }
 }
+
+case "$expect_rootfs" in
+  ""|fetched|reused) ;;
+  *) echo "--expect-rootfs takes fetched or reused, not '$expect_rootfs'" >&2; exit 2 ;;
+esac
+
+if [ "$build" = yes ]; then
+  scripts/build-ish.sh
+fi
 
 if [ "$talk" = yes ]; then
   read_token
@@ -144,9 +174,16 @@ if [ "$pressmic" = yes ]; then
       -only-testing:TopoUITests
 fi
 
-read_token
+# A guest command alone needs no sign-in; anything else launches signed in.
+token=""
+if [ -z "$userland" ] || [ -n "$send" ]; then
+  read_token
+fi
 
 xcrun simctl bootstatus "$udid" -b >/dev/null
+if [ "$fresh" = yes ]; then
+  xcrun simctl uninstall "$udid" "$bundle" 2>/dev/null || true
+fi
 xcrun simctl install "$udid" "$app"
 
 log="$(mktemp -t topo-sim)"
@@ -158,6 +195,7 @@ run="$(uuidgen)"
 echo "==> launching (run $run)"
 SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN="$token" \
 SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" \
+SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland" \
 SIMCTL_CHILD_TOPO_DEBUG_RUN="$run" \
   xcrun simctl launch --console-pty --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
 launcher=$!
@@ -168,26 +206,31 @@ fail() {
   exit 1
 }
 
-if [ -n "$send" ]; then
-  # The app prints one prefixed line per step and `done` when the turn has settled; wait for it
-  # rather than for the app to exit, which it never does. A launcher that exits first is a launch
-  # or an app that died, and fails the run there rather than at the timeout.
-  waited=0
-  until grep -q '\[topo-debug\] done' "$log" 2>/dev/null; do
+# Waits for the app to print `marker`: one prefixed line per step and a closing line when the
+# work has settled, rather than for the app to exit, which it never does. A launcher that exits
+# first is a launch or an app that died, and fails the run there rather than at the timeout.
+wait_for() {
+  local marker="$1" what="$2" waited=0
+  until grep -q "\[topo-debug\] $marker" "$log" 2>/dev/null; do
     if ! kill -0 "$launcher" 2>/dev/null; then
       wait "$launcher" && status=0 || status=$?; launcher=""
-      grep -q '\[topo-debug\] done' "$log" || fail "the launcher exited ($status) before the turn finished"
+      grep -q "\[topo-debug\] $marker" "$log" || fail "the launcher exited ($status) before $what finished"
       break
     fi
-    [ "$waited" -lt "$timeout" ] || fail "no turn finished within ${timeout}s"
+    [ "$waited" -lt "$timeout" ] || fail "$what did not finish within ${timeout}s"
     sleep 1
     waited=$((waited + 1))
   done
-  # `done` is printed; a launcher already gone by now has to have gone cleanly.
+}
+
+[ -z "$send" ] || wait_for done "the turn"
+[ -z "$userland" ] || wait_for "userland done" "the guest command"
+if [ -n "$send" ] || [ -n "$userland" ]; then
+  # The closing lines are printed; a launcher already gone by now has to have gone cleanly.
   if [ -n "$launcher" ] && ! kill -0 "$launcher" 2>/dev/null; then
     wait "$launcher" && status=0 || status=$?; launcher=""
   fi
-  [ "${status:-0}" = 0 ] || fail "the launcher exited ($status) after the turn finished"
+  [ "${status:-0}" = 0 ] || fail "the launcher exited ($status) after the work finished"
 fi
 
 if [ -n "$screenshot" ]; then
@@ -199,8 +242,27 @@ if [ -n "$send" ]; then
   grep -q '\[topo-debug\] error:' "$log" && fail "the turn reported an error"
   grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run: " "$log" \
     || fail "no reply to the turn this run sent (run $run)"
-  grep '\[topo-debug\]' "$log"
   echo "==> the message landed and was answered"
+fi
+
+if [ -n "$userland" ]; then
+  lines="$(grep '\[topo-debug\]' "$log" | tr -d '\r')"
+  grep -q '\[topo-debug\] userland error:' <<< "$lines" && fail "the guest reported an error"
+  grep -Fxq '[topo-debug] guest exit: 0' <<< "$lines" || fail "the guest command did not exit 0"
+  if [ -n "$expect" ]; then
+    grep -Fxq "[topo-debug] guest: $expect" <<< "$lines" || fail "the guest did not print '$expect'"
+  fi
+  case "$expect_rootfs" in
+    fetched) grep -Fxq '[topo-debug] userland: rootfs fetched and imported' <<< "$lines" \
+               || fail "this launch did not fetch and import the rootfs" ;;
+    reused) grep -Fxq '[topo-debug] userland: rootfs reused: nothing fetched, nothing imported' <<< "$lines" \
+              || fail "this launch did not reuse the fakefs" ;;
+  esac
+  echo "==> the guest booted and ran the command"
+fi
+
+if [ -n "$send" ] || [ -n "$userland" ]; then
+  grep '\[topo-debug\]' "$log"
 else
   wait "$launcher" && status=0 || status=$?; launcher=""
   [ "$status" = 0 ] || fail "the launcher exited ($status)"

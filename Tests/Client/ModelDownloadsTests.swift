@@ -23,7 +23,7 @@ final class ModelDownloadsTests: XCTestCase {
         for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.pocket] {
             let model = try XCTUnwrap(manifest.model(id), id)
             XCTAssertFalse(model.files.isEmpty, id)
-            XCTAssertEqual(model.revision.count, 40, "\(id) is pinned to a commit")
+            XCTAssertEqual(model.revision?.count, 40, "\(id) is pinned to a commit")
             for file in model.files {
                 XCTAssertEqual(file.sha256.count, 64, "\(id)/\(file.path)")
                 XCTAssertTrue(file.sha256.allSatisfy(\.isHexDigit), "\(id)/\(file.path)")
@@ -31,6 +31,15 @@ final class ModelDownloadsTests: XCTestCase {
                 XCTAssertEqual(model.url(for: file).host, "huggingface.co")
             }
         }
+        // The guest's rootfs is not on the Hub: one tarball, fetched from Alpine's CDN at the
+        // pinned release, and checked against its digest like every model file.
+        let rootfs = try XCTUnwrap(manifest.model(ModelManifest.rootfs))
+        XCTAssertNil(rootfs.repo)
+        XCTAssertEqual(rootfs.files.map(\.path), ["alpine-minirootfs-3.22.6-aarch64.tar.gz"])
+        XCTAssertEqual(rootfs.url(for: rootfs.files[0]).absoluteString,
+                       "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz")
+        XCTAssertEqual(rootfs.files[0].sha256.count, 64)
+        XCTAssertGreaterThan(rootfs.files[0].size, 0)
         // The CoreML bundles arrive flattened: a bundle is several files on the Hub.
         let parakeet = try XCTUnwrap(manifest.model(ModelManifest.parakeet))
         XCTAssertTrue(parakeet.files.contains { $0.path == "Encoder.mlmodelc/weights/weight.bin" })

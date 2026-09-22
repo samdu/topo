@@ -1,0 +1,50 @@
+diff --git a/kernel/mm.h b/kernel/mm.h
+index 30d5a3a8..50234f24 100644
+--- a/kernel/mm.h
++++ b/kernel/mm.h
+@@ -132,6 +132,10 @@ bool ish_footprint_mode(void);
+ // the whole limit (an absurd ask deserves a clean upfront ENOMEM rather
+ // than a mid-memset death).
+ bool ish_mem_commit_ok(uint64_t bytes);
++// Called by ish_mem_commit_ok when the last feed is stale, before it fails
++// closed: the host feeds a fresh sample from it if it can. NULL (the default)
++// fails closed on a stale feed exactly as before.
++extern void (*ish_mem_refresh_hook)(void);
+ #endif
+ 
+ // uses mem.lock instead of having a lock of its own
+diff --git a/kernel/mmap.c b/kernel/mmap.c
+index 7c4605ae..cae65bff 100644
+--- a/kernel/mmap.c
++++ b/kernel/mmap.c
+@@ -45,6 +45,8 @@ static uint64_t ish_monotonic_ms(void) {
+     return (uint64_t)ts.tv_sec * 1000 + (uint64_t)ts.tv_nsec / 1000000;
+ }
+ 
++void (*ish_mem_refresh_hook)(void) = NULL;
++
+ bool ish_footprint_mode(void) {
+     return atomic_load(&ish_mem_stamp_ms) != 0;
+ }
+@@ -87,8 +89,19 @@ bool ish_mem_commit_ok(uint64_t bytes) {
+     // instead of admitting it and killing the process mid-memset later.
+     if (limit != 0 && bytes > limit)
+         return false;
+-    if (ish_monotonic_ms() - stamp > ISH_MEM_STALE_MS)
+-        return false;  // dead sampler fails closed
++    if (ish_monotonic_ms() - stamp > ISH_MEM_STALE_MS) {
++        // The sampler is a timer in the app, and a suspended app's timers
++        // stop. On resume the guest runs before the timer does, the stamp is
++        // as old as the suspension, and every allocation would fail closed
++        // with gigabytes free. Ask the host for a fresh sample before
++        // deciding the sampler is dead.
++        if (ish_mem_refresh_hook != NULL) {
++            ish_mem_refresh_hook();
++            stamp = atomic_load(&ish_mem_stamp_ms);
++        }
++        if (ish_monotonic_ms() - stamp > ISH_MEM_STALE_MS)
++            return false;  // dead sampler fails closed
++    }
+     return atomic_load(&ish_mem_state_v) == ISH_MEM_OK;
+ }
+ 

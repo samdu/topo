@@ -6,3 +6,6 @@ DerivedData/
 
 # What scripts/archive-upload.sh makes.
 build/
+
+# What scripts/build-ish.sh makes from the fork's pin and patches/ish/.
+Packages/TopoUserland/Frameworks/

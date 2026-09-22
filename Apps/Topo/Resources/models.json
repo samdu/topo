@@ -295,6 +295,17 @@
           "sha256": "bda3b76a384ff355fe0350736387765946304ae8ca16e59f60ea3296a1c99cc6"
         }
       ]
+    },
+    {
+      "id": "alpine-minirootfs",
+      "url": "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/",
+      "files": [
+        {
+          "path": "alpine-minirootfs-3.22.6-aarch64.tar.gz",
+          "size": 3969729,
+          "sha256": "821565fa8f3953eefd12497b166b4b50add2f7c57fb312e75862f5867e06fefe"
+        }
+      ]
     }
   ]
 }

@@ -7,11 +7,12 @@ import UIKit
 import FluidAudio
 #endif
 
-/// Every file the phone downloads for its on-device models, pinned: repository, revision, and
-/// the flattened file list with sizes and digests. `Apps/Topo/Resources/models.json`, written by
-/// `scripts/model-manifest.sh` from the Hugging Face tree API at the pinned revisions, so a bump
-/// of a model is a bump of a revision there and a re-run of the script. A `.mlmodelc` bundle is a
-/// directory of several files on the Hub, which is why the list is flat.
+/// Every file the phone downloads for its on-device models and its guest's rootfs, pinned: where
+/// each comes from, and the flattened file list with sizes and digests.
+/// `Apps/Topo/Resources/models.json`, written by `scripts/model-manifest.sh` — the models from the
+/// Hugging Face tree API at the pinned revisions, the rootfs from its pinned URL — so a bump is a
+/// bump there and a re-run of the script. A `.mlmodelc` bundle is a directory of several files on
+/// the Hub, which is why the list is flat.
 struct ModelManifest: Codable, Sendable {
     struct File: Codable, Sendable, Equatable {
         let path: String
@@ -23,17 +24,30 @@ struct ModelManifest: Codable, Sendable {
         /// The model's directory under the store's root, and the name the ear and the voice ask
         /// for it by.
         let id: String
-        let repo: String
-        let revision: String
+        /// A Hugging Face repository and the revision pinned in it; nil for an entry with a `url`.
+        let repo: String?
+        let revision: String?
+        /// The explicit source of an entry that is not on the Hub: each file is fetched from this
+        /// base plus its path.
+        let url: String?
         let files: [File]
+
+        init(id: String, repo: String? = nil, revision: String? = nil, url: String? = nil, files: [File]) {
+            self.id = id
+            self.repo = repo
+            self.revision = revision
+            self.url = url
+            self.files = files
+        }
 
         var bytes: Int64 { files.reduce(0) { $0 + $1.size } }
 
-        /// Where a file is fetched from: the pinned revision, so the manifest's digest is the
-        /// digest of what arrives.
+        /// Where a file is fetched from: the explicit source when the entry has one, otherwise the
+        /// pinned revision on the Hub, so the manifest's digest is the digest of what arrives.
         func url(for file: File) -> URL {
             let path = file.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file.path
-            return URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(path)")!
+            if let url { return URL(string: url + path)! }
+            return URL(string: "https://huggingface.co/\(repo ?? "")/resolve/\(revision ?? "")/\(path)")!
         }
     }
 
@@ -46,6 +60,9 @@ struct ModelManifest: Codable, Sendable {
     /// The voice's repository. Its paths are repository-relative (`v2.1/english/…`), because
     /// FluidAudio's Pocket loader reads the language pack from beneath the repository root.
     static let pocket = "pocket-tts-coreml"
+    /// The guest's rootfs: Alpine's aarch64 minirootfs, one tarball, which the userland imports
+    /// into a fakefs once it is here and verified (`Apps/Topo/Userland.swift`).
+    static let rootfs = "alpine-minirootfs"
 
     static func load(from url: URL) throws -> ModelManifest {
         try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: url))
