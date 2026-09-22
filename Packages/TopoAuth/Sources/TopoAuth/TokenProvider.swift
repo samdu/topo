@@ -39,9 +39,52 @@ public actor StoredTokenProvider: TokenProvider {
     public func accessToken() async throws -> String {
         guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
         guard tokens.isExpired(at: now()) else { return tokens.accessToken }
+        return try await refresh(tokens).accessToken
+    }
+
+    /// Refreshes now, expired or not, and writes the result back as `accessToken` does: what the
+    /// refresh grant returned, its granted `scopes` included.
+    public func refresh() async throws -> Tokens {
+        guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
+        return try await refresh(tokens)
+    }
+
+    private func refresh(_ tokens: Tokens) async throws -> Tokens {
         let refreshed = try await oauth.refresh(tokens)
         guard try store.load() == tokens else { throw TokenProviderError.signedOut }
         try store.save(refreshed)
-        return refreshed.accessToken
+        return refreshed
+    }
+}
+
+/// The token Claude Code in the guest is started with, as `CLAUDE_CODE_OAUTH_TOKEN`: the
+/// long-lived one sign-in minted when there is one and it has not expired, and otherwise the
+/// ordinary access token, refreshed first if it is about to expire. The guest never refreshes: a
+/// refresh would go to platform.claude.com over the guest's own TLS, which fails under the
+/// emulator, so whatever it is handed has to last the life of the process it is handed to.
+public struct GuestCredential: Sendable {
+    public enum Source: Equatable, Sendable {
+        /// The long-lived token sign-in minted.
+        case longLived
+        /// The ordinary access token, since no long-lived one is held.
+        case accessToken
+    }
+
+    public var store: TokenStore
+    public var fallback: TokenProvider
+    public var now: @Sendable () -> Date
+
+    public init(store: TokenStore, fallback: TokenProvider, now: @escaping @Sendable () -> Date = { Date() }) {
+        self.store = store
+        self.fallback = fallback
+        self.now = now
+    }
+
+    /// Throws `TokenProviderError.signedOut` when there is no login at all.
+    public func token() async throws -> (token: String, source: Source) {
+        if let minted = try store.load(), !minted.accessToken.isEmpty, !minted.isExpired(at: now()) {
+            return (minted.accessToken, .longLived)
+        }
+        return (try await fallback.accessToken(), .accessToken)
     }
 }

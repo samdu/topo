@@ -24,6 +24,12 @@ struct SignInView: View {
                 Button("Cancel") { webAuth.close(); signIn.cancel() }
             case .exchanging:
                 ProgressView("Signing in…")
+            case .approvingGuest(_, let pasteHint):
+                Text("Approve once more, for Claude Code on this phone.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                if pasteHint { pasteField } else { ProgressView() }
+                Button("Skip") { webAuth.close(); signIn.cancel() }
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 signInButton
@@ -37,6 +43,11 @@ struct SignInView: View {
         .padding()
         .onChange(of: signIn.phase) { _, phase in
             if phase == .signedIn || { if case .failed = phase { true } else { false } }() { webAuth.close() }
+            // The guest's authorization, when the browser is not already on its way to it.
+            if case .approvingGuest(let url?, _) = phase {
+                pasted = ""
+                webAuth.open(url) { signIn.cancel() }
+            }
         }
     }
 

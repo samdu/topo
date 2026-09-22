@@ -46,12 +46,23 @@ public struct ClaudeOAuth: Sendable {
         }
     }
 
+    /// What an authorization is for.
+    public enum Grant: Sendable, Equatable {
+        /// The ordinary login: the CLI's scopes, refreshed by the app for as long as it is signed in.
+        case login
+        /// The guest's token, asked for as `claude setup-token` asks for one: its own authorization
+        /// with `user:inference` alone on the authorize URL and `expires_in` of a year on the
+        /// exchange. Only its access token is kept; nothing refreshes it.
+        case longLived
+    }
+
     /// One sign-in attempt: the PKCE verifier and state that must round-trip through the browser.
     public struct Attempt: Sendable, Equatable {
         public var state: String
         public var codeVerifier: String
         public var redirect: Redirect
         public var authorizeURL: URL
+        public var grant: Grant
     }
 
     public enum Error: Swift.Error, Equatable {
@@ -71,7 +82,7 @@ public struct ClaudeOAuth: Sendable {
 
     // MARK: Authorize
 
-    public func begin(redirect: Redirect) -> Attempt {
+    public func begin(redirect: Redirect, grant: Grant = .login) -> Attempt {
         let verifier = Self.randomToken(bytes: 96)
         let challenge = Self.base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
         let state = Self.randomToken(bytes: 32)
@@ -79,18 +90,20 @@ public struct ClaudeOAuth: Sendable {
             state: state,
             codeVerifier: verifier,
             redirect: redirect,
-            authorizeURL: authorizeURL(state: state, challenge: challenge, redirect: redirect)
+            authorizeURL: authorizeURL(state: state, challenge: challenge, redirect: redirect,
+                                       scopes: grant == .longLived ? [Self.inferenceScope] : configuration.scopes),
+            grant: grant
         )
     }
 
-    func authorizeURL(state: String, challenge: String, redirect: Redirect) -> URL {
+    func authorizeURL(state: String, challenge: String, redirect: Redirect, scopes: [String]) -> URL {
         var components = URLComponents(url: configuration.authorizeURL, resolvingAgainstBaseURL: false)!
         components.queryItems = [
             URLQueryItem(name: "code", value: "true"),
             URLQueryItem(name: "client_id", value: configuration.clientID),
             URLQueryItem(name: "response_type", value: "code"),
             URLQueryItem(name: "redirect_uri", value: redirect.url(configuration).absoluteString),
-            URLQueryItem(name: "scope", value: configuration.scopes.joined(separator: " ")),
+            URLQueryItem(name: "scope", value: scopes.joined(separator: " ")),
             URLQueryItem(name: "code_challenge", value: challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
             URLQueryItem(name: "state", value: state),
@@ -120,10 +133,11 @@ public struct ClaudeOAuth: Sendable {
     // MARK: Token exchange
 
     /// Exchanges the authorization code for tokens. `state` is checked against the attempt when the
-    /// callback carried one; a pasted bare code is accepted on the attempt's own state.
+    /// callback carried one; a pasted bare code is accepted on the attempt's own state. A long-lived
+    /// attempt's exchange asks for a year (`expires_in`), as `claude setup-token`'s does.
     public func exchange(code: String, state: String?, attempt: Attempt) async throws -> Tokens {
         if let state, state != attempt.state { throw Error.stateMismatch }
-        let body: [String: String] = [
+        var body: [String: Any] = [
             "grant_type": "authorization_code",
             "code": code,
             "redirect_uri": attempt.redirect.url(configuration).absoluteString,
@@ -131,7 +145,8 @@ public struct ClaudeOAuth: Sendable {
             "code_verifier": attempt.codeVerifier,
             "state": attempt.state,
         ]
-        return try await post(body)
+        if attempt.grant == .longLived { body["expires_in"] = Self.longLivedLifetime }
+        return try await post(JSONSerialization.data(withJSONObject: body))
     }
 
     public func refresh(_ tokens: Tokens) async throws -> Tokens {
@@ -146,11 +161,20 @@ public struct ClaudeOAuth: Sendable {
         return refreshed
     }
 
+    /// How long the guest's token is asked to live: a year, what `claude setup-token` asks for.
+    public static let longLivedLifetime = 31_536_000
+    /// The one scope the guest's token carries: inference, as a setup token's does.
+    public static let inferenceScope = "user:inference"
+
     private func post(_ body: [String: String]) async throws -> Tokens {
+        try await post(JSONEncoder().encode(body))
+    }
+
+    private func post(_ body: Data) async throws -> Tokens {
         var request = URLRequest(url: configuration.tokenURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = body
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw status == 401 ? Error.invalidCode : Error.http(status: status) }

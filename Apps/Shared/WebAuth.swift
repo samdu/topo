@@ -8,22 +8,34 @@ import Foundation
 @MainActor
 final class WebAuth: NSObject, ASWebAuthenticationPresentationContextProviding {
     private var session: ASWebAuthenticationSession?
+    private var current: UUID?
 
     func open(_ url: URL, onDismiss: @escaping @MainActor () -> Void) {
+        close()
+        // Only the sheet still open reports its dismissal: one closed or replaced by the caller
+        // (the sign-in opening its second authorization) is not the person closing the browser.
+        let id = UUID()
         // `@Sendable` so the completion is not main-actor-isolated by inference: the framework
         // owns the thread it calls back on, and Swift 6 traps an isolated closure off it.
         let session = ASWebAuthenticationSession(url: url, callbackURLScheme: nil) { @Sendable _, _ in
-            Task { @MainActor in onDismiss() }
+            Task { @MainActor [weak self] in
+                guard let self, self.current == id else { return }
+                self.session = nil
+                self.current = nil
+                onDismiss()
+            }
         }
         session.prefersEphemeralWebBrowserSession = false
         #if os(iOS) || os(macOS)
         session.presentationContextProvider = self
         #endif
         self.session = session
+        current = id
         session.start()
     }
 
     func close() {
+        current = nil
         session?.cancel()
         session = nil
     }

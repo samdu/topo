@@ -285,7 +285,8 @@ struct SignInSection: View {
                     ProgressView("Waiting for Claude…")
                 }
                 Button("Cancel") { webAuth.close(); signIn.cancel() }
-            case .exchanging:
+            case .exchanging, .approvingGuest:
+                // The hub runs no guest, so its sign-in never asks for the guest's authorization.
                 ProgressView("Signing in…")
             case .failed(let message):
                 Text(message).foregroundStyle(.secondary)

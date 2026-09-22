@@ -11,6 +11,9 @@ public final class LoopbackCallback: @unchecked Sendable {
     private var sources: [DispatchSourceRead] = []
     private var continuation: CheckedContinuation<URL, Swift.Error>?
     private var finished = false
+    private var successRedirect: URL?
+    /// A callback that arrived before anyone waited for it, kept for the first `wait()`.
+    private var caught: URL?
 
     public enum Error: Swift.Error { case cancelled, bindFailed }
 
@@ -62,19 +65,34 @@ public final class LoopbackCallback: @unchecked Sendable {
 
     deinit { tearDown() }
 
-    /// Resolves with the callback URL the browser hit. Cancel with `cancel()`.
+    /// Resolves with the callback URL the browser hit, including one that arrived before the call.
+    /// Cancel with `cancel()`.
     public func wait() async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
-                if self.finished { continuation.resume(throwing: Error.cancelled) } else { self.continuation = continuation }
+                if let caught = self.caught {
+                    self.caught = nil
+                    continuation.resume(returning: caught)
+                } else if self.finished {
+                    continuation.resume(throwing: Error.cancelled)
+                } else {
+                    self.continuation = continuation
+                }
             }
         }
+    }
+
+    /// Answers the callback with a redirect to `url` instead of the "Signed in" page, so the
+    /// browser goes straight on to the next authorization. Set it before the callback can arrive.
+    public func redirectOnSuccess(to url: URL) {
+        queue.sync { successRedirect = url }
     }
 
     public func cancel() {
         queue.async {
             self.continuation?.resume(throwing: Error.cancelled)
             self.continuation = nil
+            self.caught = nil
             self.tearDown()
         }
     }
@@ -99,12 +117,20 @@ public final class LoopbackCallback: @unchecked Sendable {
         let body = done
             ? "<html><body style=\"font-family:-apple-system,system-ui;text-align:center;padding-top:4em\"><h1>Signed in</h1><p>You can close this window and go back to Topo.</p></body></html>"
             : "<html><body><h1>Not found</h1></body></html>"
-        let response = "HTTP/1.1 \(done ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        let response = if done, let next = successRedirect {
+            "HTTP/1.1 302 Found\r\nLocation: \(next.absoluteString)\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        } else {
+            "HTTP/1.1 \(done ? "200 OK" : "404 Not Found")\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+        }
         _ = response.utf8CString.withUnsafeBufferPointer { write(client, $0.baseAddress, $0.count - 1) }
         close(client)
         if done, let url {
-            continuation?.resume(returning: url)
-            continuation = nil
+            if let continuation {
+                continuation.resume(returning: url)
+                self.continuation = nil
+            } else {
+                caught = url
+            }
             tearDown()
         }
     }

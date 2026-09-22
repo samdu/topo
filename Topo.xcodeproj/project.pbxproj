@@ -192,6 +192,7 @@
 		B4589C07DA2FA92E64271237 /* LookReachTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49FF7F06A3C8BC8FB4F1910D /* LookReachTests.swift */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
 		B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
+		B63B6F52C265588ADE976B9B /* TopoProxy in Frameworks */ = {isa = PBXBuildFile; productRef = F62F043A4758AE7705F44F5A /* TopoProxy */; };
 		B671F1F9F691342A9216792C /* ComposerRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 327323DA10D8649D7ED7A137 /* ComposerRenderTests.swift */; };
 		B6D3FC3FD33A20C4A5EB3000 /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDAC8EACAE809E951210532 /* Fixture.swift */; };
 		B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D33CC62A8C821EACD662C /* TopoHubApp.swift */; };
@@ -297,6 +298,7 @@
 		1AF008F3C113182739CEB6D7 /* SignOutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignOutTests.swift; sourceTree = "<group>"; };
 		1DABB17BCD6602885282D24F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		2093D9815FF009868258903B /* TopoBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoBadge.swift; sourceTree = "<group>"; };
+		2161479EF81FD157D026791F /* TopoProxy */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoProxy; path = Packages/TopoProxy; sourceTree = SOURCE_ROOT; };
 		246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnMenuTests.swift; sourceTree = "<group>"; };
 		255D132EA660241074B17048 /* VocabularyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyView.swift; sourceTree = "<group>"; };
 		26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctopusMark.swift; sourceTree = "<group>"; };
@@ -477,6 +479,7 @@
 				3FD6601DD9ABAC3CC53FD7B5 /* TopoTurn in Frameworks */,
 				1B7B2F193C4455E96A95552E /* FluidAudio in Frameworks */,
 				250B656BBEC3CA81673470FE /* TopoUserland in Frameworks */,
+				B63B6F52C265588ADE976B9B /* TopoProxy in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -574,6 +577,7 @@
 				5990B1776EC4BC101510B22E /* TopoAuth */,
 				5BC384737CD70F66D0AB8921 /* TopoCore */,
 				DEF0C378213C9A0018F5BC0B /* TopoLink */,
+				2161479EF81FD157D026791F /* TopoProxy */,
 				6C7E1C60D34856E30862D65D /* TopoTurn */,
 				E3F988BC655FF785C0ACBCFD /* TopoUserland */,
 				6B97D1E3C9BC0B27CFD2637F /* TopoUserland */,
@@ -877,6 +881,7 @@
 				FE39E35328B7F68962D1C4D7 /* TopoTurn */,
 				B3BA0E084B64DA5739DA87CC /* FluidAudio */,
 				3F4F449C8FB0A054DAD1B18D /* TopoUserland */,
+				F62F043A4758AE7705F44F5A /* TopoProxy */,
 			);
 			productName = Topo;
 			productReference = 99296C045628A368812315E3 /* Topo.app */;
@@ -1063,6 +1068,7 @@
 				44BFC1A6FFE8F646066FC6D3 /* XCLocalSwiftPackageReference "Packages/TopoAuth" */,
 				1E536CC259DF31745E68DDFA /* XCLocalSwiftPackageReference "Packages/TopoCore" */,
 				B799C97BE3650B1621A9547D /* XCLocalSwiftPackageReference "Packages/TopoLink" */,
+				54F548ED01C1514B191F3CA5 /* XCLocalSwiftPackageReference "Packages/TopoProxy" */,
 				93D0CD534651E631B1A6A93A /* XCLocalSwiftPackageReference "Packages/TopoTurn" */,
 				3AD18B64CE9DA5B2ACB92346 /* XCLocalSwiftPackageReference "Packages/TopoUserland" */,
 			);
@@ -2008,6 +2014,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/TopoAuth;
 		};
+		54F548ED01C1514B191F3CA5 /* XCLocalSwiftPackageReference "Packages/TopoProxy" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/TopoProxy;
+		};
 		93D0CD534651E631B1A6A93A /* XCLocalSwiftPackageReference "Packages/TopoTurn" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/TopoTurn;
@@ -2086,6 +2096,10 @@
 		C397A5056727C7C66CD989BC /* TopoUserland */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoUserland;
+		};
+		F62F043A4758AE7705F44F5A /* TopoProxy */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TopoProxy;
 		};
 		F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */ = {
 			isa = XCSwiftPackageProductDependency;
