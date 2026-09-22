@@ -52,10 +52,11 @@ public final class URLSessionUpstream: Upstream, @unchecked Sendable {
     /// inside this, and a long one is still streaming.
     public var idleTimeout: TimeInterval = 600
 
-    /// - Parameter origin: api.anthropic.com; a test's local stub origin in the suite.
-    public init(origin: URL = URLSessionUpstream.anthropic) {
+    /// - Parameters:
+    ///   - origin: api.anthropic.com; a test's local stub origin in the suite.
+    ///   - configuration: the session's; a test adds a `URLProtocol` to it.
+    public init(origin: URL = URLSessionUpstream.anthropic, configuration: URLSessionConfiguration = .ephemeral) {
         self.origin = origin
-        let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.httpShouldSetCookies = false
         configuration.urlCache = nil

@@ -62,12 +62,14 @@ import Testing
 
     /// Review focus 5 over URLSession: the guest going away closes the upstream connection.
     @Test func aClientThatGoesAwayClosesTheUpstreamConnection() async throws {
-        let firstSent = Signal()
         let origin = try StubOrigin { _, inbound in
             try await inbound.send(Data("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n".utf8))
-            try await inbound.send(ResponseWriter.chunk(Data("event: ping\ndata: {}\n\n".utf8)))
-            firstSent.fire()
-            // And then nothing: the stream stays open until the far side closes it.
+            try await inbound.send(ResponseWriter.chunk(Data("event: message_start\ndata: {}\n\n".utf8)))
+            // Then a ping every 100 ms, as the API sends between events, until the far side closes.
+            while true {
+                try await Task.sleep(for: .milliseconds(100))
+                try await inbound.send(ResponseWriter.chunk(Data("event: ping\ndata: {}\n\n".utf8)))
+            }
         }
         _ = try await origin.start()
         defer { origin.stop() }
@@ -82,6 +84,21 @@ import Testing
         let closed = Signal()
         Task { while origin.closed == 0 { try? await Task.sleep(for: .milliseconds(10)) }; closed.fire() }
         #expect(await closed.wait(3), "the upstream connection stayed open after the client left")
+    }
+
+    /// An upstream failure is the API-shaped 502, a response that is not HTTP included.
+    @Test func aResponseThatIsNotHTTPIsABadGateway() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [NotHTTPProtocol.self]
+        let (proxy, port, _) = try await startedProxy(URLSessionUpstream(configuration: configuration))
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send(post("/v1/messages", body: #"{"model":"x"}"#))
+        let (head, body) = try await client.readResponse()
+        #expect(head.status == 502)
+        let error = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(error["type"] as? String == "error")
+        #expect((error["error"] as? [String: Any])?["type"] as? String == "api_error")
     }
 
     @Test func everyTargetStaysOnTheOneOrigin() {
@@ -110,4 +127,17 @@ import Testing
         #expect(error["type"] as? String == "error")
         #expect((error["error"] as? [String: Any])?["type"] as? String == "api_error")
     }
+}
+
+/// Answers every request with a plain `URLResponse`, which no HTTP server would.
+final class NotHTTPProtocol: URLProtocol {
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = URLResponse(url: request.url!, mimeType: "text/plain", expectedContentLength: 2, textEncodingName: nil)
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Data("ok".utf8))
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
