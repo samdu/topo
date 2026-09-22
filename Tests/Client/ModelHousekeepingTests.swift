@@ -88,6 +88,9 @@ final class ModelHousekeepingTests: XCTestCase {
         try orphans.forEach(write)
         let link = dir.appendingPathComponent("v2.1/elsewhere")
         try fm.createSymbolicLink(at: link, withDestinationURL: outside.deletingLastPathComponent())
+        // And one inside an orphan folder, which goes whole: its removal unlinks the link.
+        try fm.createSymbolicLink(at: dir.appendingPathComponent("v2/english/elsewhere"),
+                                  withDestinationURL: outside.deletingLastPathComponent())
 
         let removed = store.sweep(ModelManifest(models: [model]))
 
@@ -132,6 +135,33 @@ final class ModelHousekeepingTests: XCTestCase {
         for file in model.files { XCTAssertTrue(exists(target.appendingPathComponent(file.path)), file.path) }
         XCTAssertTrue(exists(target.appendingPathComponent(ModelStore.ledgerName)))
         XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: link.path), target.path, "the link is left alone")
+    }
+
+    /// `Models` itself a link, to a folder holding a present model's home (with a file in it no
+    /// manifest names) and something that is nobody's business: the sweep touches nothing
+    /// behind it, at the top level or inside the home, and leaves the link where it is.
+    func testARootThatIsALinkIsNeverSwept() throws {
+        let support = base.appendingPathComponent("Application Support", isDirectory: true)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        let model = try filled(ModelStore(root: elsewhere), id: "example", files: [
+            "Encoder.mlmodelc/weights/weight.bin": "the weights",
+            "vocab.json": "the vocabulary",
+        ])
+        let precious = elsewhere.appendingPathComponent("precious.txt")
+        let inside = elsewhere.appendingPathComponent("example/notes.txt")
+        try [precious, inside].forEach(write)
+        try fm.createDirectory(at: support, withIntermediateDirectories: true)
+        let root = support.appendingPathComponent("Models", isDirectory: true)
+        try fm.createSymbolicLink(at: root, withDestinationURL: elsewhere)
+        let store = ModelStore(root: root)
+        XCTAssertTrue(store.isPresent(model), "presence reads through the link")
+
+        XCTAssertEqual(store.sweep(ModelManifest(models: [model])), [], "nothing is removed")
+
+        XCTAssertTrue(exists(precious), "the top level behind the link is not the sweep's")
+        XCTAssertTrue(exists(inside), "nor is the home behind it")
+        for file in model.files { XCTAssertTrue(exists(elsewhere.appendingPathComponent("example/\(file.path)")), file.path) }
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: root.path), elsewhere.path, "the link is left alone")
     }
 
     /// A set the downloader has not finished is left whole: a file missing, one at the wrong
@@ -261,6 +291,28 @@ final class ModelHousekeepingTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: CompileCache.recorded), "C")
 
         for sibling in siblings { XCTAssertTrue(exists(sibling), "\(sibling.path) is not the compile cache") }
+    }
+
+    /// The cache's own folder under Caches a link to somewhere else: nothing behind it is
+    /// removed, and the key is not recorded, so a later launch looks again.
+    func testACacheReachedThroughALinkIsNotCleared() throws {
+        let caches = base.appendingPathComponent("Library/Caches", isDirectory: true)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        let behind = elsewhere.appendingPathComponent("com.apple.e5rt.e5bundlecache/first/bundle.e5")
+        let precious = elsewhere.appendingPathComponent("precious.txt")
+        try [behind, precious].forEach(write)
+        try fm.createDirectory(at: caches, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: caches.appendingPathComponent("zone.hexagon.topo"), withDestinationURL: elsewhere)
+        let suite = "topo-cache-link-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let clear = CompileCache(directory: CompileCache.directory(caches: caches, bundleIdentifier: "zone.hexagon.topo"),
+                                 defaults: defaults)
+
+        guard case .failed = clear.clear(install: "A") else { return XCTFail("a cache behind a link is refused") }
+        XCTAssertTrue(exists(behind), "nothing behind the link is removed")
+        XCTAssertTrue(exists(precious))
+        XCTAssertNil(defaults.string(forKey: CompileCache.recorded), "nothing is recorded")
     }
 
     /// The key the app runs with is read off this image and this bundle, and is the same on

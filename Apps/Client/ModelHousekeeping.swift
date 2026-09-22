@@ -41,6 +41,13 @@ extension ModelStore {
             }
         }
 
+        // Nothing is removed or entered behind a link: `root` reached through one is somewhere
+        // else's folder, and the sweep does nothing at all.
+        guard !linkOnChain(from: anchor, to: root) else {
+            log.error("sweep: \(root.path, privacy: .public) is reached through a link; nothing swept")
+            return []
+        }
+
         // The first name beneath `root` of every home that lives under it.
         let rootPath = Self.components(root)
         let protected = Set(manifest.models.compactMap { model -> String? in
@@ -69,13 +76,12 @@ extension ModelStore {
                 }
             }
             func walk(_ directory: URL, _ prefix: String) {
-                let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
-                for entry in (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: keys)) ?? [] {
+                for entry in (try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)) ?? [] {
                     let relative = prefix.isEmpty ? entry.lastPathComponent : prefix + "/" + entry.lastPathComponent
                     if kept.contains(relative) { continue }
-                    let values = try? entry.resourceValues(forKeys: Set(keys))
-                    let isFolder = values?.isDirectory == true && values?.isSymbolicLink != true
-                    if isFolder, ancestors.contains(relative) {
+                    // `lstat`: a link is a link, never the folder it names, so it is removed as
+                    // one and never descended.
+                    if fileType(entry) == S_IFDIR, ancestors.contains(relative) {
                         walk(entry, relative)
                     } else {
                         remove(entry)
@@ -89,20 +95,15 @@ extension ModelStore {
         return removed
     }
 
-    /// Whether the model's home, or any folder between `root` and it, is a symbolic link, read
-    /// with `lstat` so the link itself is what is judged. A home behind a link is somewhere
-    /// else's folder: the sweep never enters it and leaves the link where it is.
+    /// Where the chain every sweep judges starts: the folder `root` sits in, which is
+    /// Application Support on the phone.
+    var anchor: URL { root.deletingLastPathComponent() }
+
+    /// Whether the model's home, or any folder from `anchor` down to it, is a symbolic link. A
+    /// home behind a link is somewhere else's folder: the sweep never enters it and leaves the
+    /// link where it is.
     func reachedThroughLink(_ model: ModelManifest.Model) -> Bool {
-        let home = Self.components(directory(for: model))
-        let depth = Self.components(root).count
-        guard home.count > depth else { return true }
-        var url = root
-        for name in home[depth...] {
-            url = url.appendingPathComponent(name)
-            var info = stat()
-            if lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFLNK { return true }
-        }
-        return false
+        linkOnChain(from: anchor, to: directory(for: model))
     }
 
     private static func components(_ url: URL) -> [String] {
@@ -156,6 +157,14 @@ struct CompileCache {
     @discardableResult
     func clear(install: String) -> Outcome {
         if defaults.string(forKey: Self.recorded) == install { return .sameInstall }
+        // Caches, and the app's folder in it, judged with `lstat`: a folder behind a link is
+        // somewhere else's, so nothing is removed and nothing recorded. The cache folder itself,
+        // were it a link, is removed as a link, which touches nothing behind it.
+        let parent = directory.deletingLastPathComponent()
+        if linkOnChain(from: parent.deletingLastPathComponent(), to: parent) {
+            log.error("compile cache: \(parent.path, privacy: .public) is reached through a link; not cleared")
+            return .failed("reached through a link")
+        }
         let outcome: Outcome
         do {
             try remove(directory)
@@ -206,6 +215,30 @@ struct CompileCache {
         }
         return nil
     }
+}
+
+/// The file type of `url` itself, by `lstat`, so a link is `S_IFLNK` and never what it names.
+/// Nil when there is nothing there.
+func fileType(_ url: URL) -> mode_t? {
+    var info = stat()
+    guard lstat(url.path, &info) == 0 else { return nil }
+    return info.st_mode & S_IFMT
+}
+
+/// Whether any directory from `anchor` down to `url`, both included, is a symbolic link. A
+/// `url` that is not `anchor` or beneath it counts as one, since nothing can be said of the way
+/// to it. What is not there yet is no link.
+func linkOnChain(from anchor: URL, to url: URL) -> Bool {
+    let top = anchor.standardizedFileURL.pathComponents
+    let path = url.standardizedFileURL.pathComponents
+    guard path.count >= top.count, Array(path.prefix(top.count)) == top else { return true }
+    var step = anchor
+    if fileType(step) == S_IFLNK { return true }
+    for name in path[top.count...] {
+        step = step.appendingPathComponent(name)
+        if fileType(step) == S_IFLNK { return true }
+    }
+    return false
 }
 
 enum ModelHousekeeping {
