@@ -269,7 +269,7 @@ final class ModelDownloads {
     private var waiting: Set<String> = []
     private var verifying: Set<String> = []
     private var failures: [String: String] = [:]
-    private var waiters: [(ids: [String], body: @MainActor () -> Void)] = []
+    private var waiters = ModelWaiters()
     /// The models something in this process has asked for; the rest of the manifest is left
     /// alone (a debug build given its models on the command line asks for none).
     private var wanted: Set<String> = []
@@ -407,12 +407,26 @@ final class ModelDownloads {
         return "downloading \(formatter.string(fromByteCount: done)) of \(formatter.string(fromByteCount: total))"
     }
 
-    /// Runs `body` once every model in `ids` is present: now, if they already are.
+    /// Runs `body` once every model in `ids` is present: now, if they already are. A failure
+    /// does not reach it; it stays waiting for the success a later `start` may bring.
     func whenPresent(_ ids: [String], _ body: @escaping @MainActor () -> Void) {
         if ids.allSatisfy({ present.contains($0) }) {
             body()
         } else {
-            waiters.append((ids, body))
+            waiters.add(ids, settlesOnFailure: false) { result in
+                if case .success = result { body() }
+            }
+        }
+    }
+
+    /// Runs `body` once, with success when every model in `ids` is present (now, if they already
+    /// are) or with the failure of the first of them to fail. Either way it is settled and gone:
+    /// the next `start` is a fresh attempt, and whoever wants its outcome asks again.
+    func whenSettled(_ ids: [String], _ body: @escaping ModelWaiters.Body) {
+        if ids.allSatisfy({ present.contains($0) }) {
+            body(.success(()))
+        } else {
+            waiters.add(ids, settlesOnFailure: true, body)
         }
     }
 
@@ -437,9 +451,7 @@ final class ModelDownloads {
             if let model = manifest?.model(id), store.isPresent(model) {
                 present.insert(id)
                 if let manifest { store.sweep(manifest) }
-                let ready = waiters.filter { $0.ids.allSatisfy(present.contains) }
-                waiters.removeAll { $0.ids.allSatisfy(present.contains) }
-                ready.forEach { $0.body() }
+                waiters.present(present).forEach { $0(.success(())) }
             }
         case .failed(let key, let why):
             verifying.remove(key)
@@ -447,11 +459,51 @@ final class ModelDownloads {
             inFlight[key] = nil
             let id = String(key.prefix(while: { $0 != "|" }))
             failures[id] = why
+            let failure = ModelDownloadFailure(id: id, why: why)
+            waiters.failed(id).forEach { $0(.failure(failure)) }
         case .finished:
             let handler = completion
             completion = nil
             handler?()
         }
+    }
+}
+
+/// A model's download that failed: which, and the reason the session gave.
+struct ModelDownloadFailure: Error, Equatable, CustomStringConvertible {
+    let id: String
+    let why: String
+    var description: String { "\(id): \(why)" }
+}
+
+/// Who is waiting on which models. A waiter is settled with success once every model it named is
+/// present; one that settles on failure is also settled, with that failure, when any model it
+/// named fails, and a waiter is gone once settled. One that does not settle on failure outlives
+/// it, for the success a later attempt may bring.
+struct ModelWaiters {
+    typealias Body = @MainActor (Result<Void, ModelDownloadFailure>) -> Void
+    private var entries: [(ids: [String], settlesOnFailure: Bool, body: Body)] = []
+
+    var count: Int { entries.count }
+
+    mutating func add(_ ids: [String], settlesOnFailure: Bool, _ body: @escaping Body) {
+        entries.append((ids, settlesOnFailure, body))
+    }
+
+    /// Takes the waiters every one of whose models is in `present`, to be told success.
+    mutating func present(_ present: Set<String>) -> [Body] {
+        take { $0.ids.allSatisfy(present.contains) }
+    }
+
+    /// Takes the waiters that settle on failure and named `id`, to be told it failed.
+    mutating func failed(_ id: String) -> [Body] {
+        take { $0.settlesOnFailure && $0.ids.contains(id) }
+    }
+
+    private mutating func take(where matches: ((ids: [String], settlesOnFailure: Bool, body: Body)) -> Bool) -> [Body] {
+        let taken = entries.filter(matches).map(\.body)
+        entries.removeAll(where: matches)
+        return taken
     }
 }
 

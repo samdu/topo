@@ -96,3 +96,34 @@ final class ModelDownloadsTests: XCTestCase {
         return url
     }
 }
+
+/// The downloader's waiters: a failure settles the waiters that asked to hear of one, and leaves
+/// the ones waiting only for success to wait on.
+@MainActor
+final class ModelWaitersTests: XCTestCase {
+    func testAFailureSettlesTheWaitersThatAskedForIt() {
+        var waiters = ModelWaiters()
+        var told: [Result<Void, ModelDownloadFailure>] = []
+        waiters.add(["rootfs"], settlesOnFailure: true) { told.append($0) }
+        waiters.add(["rootfs"], settlesOnFailure: false) { _ in XCTFail("a success-only waiter heard a failure") }
+        waiters.add(["voice"], settlesOnFailure: true) { _ in XCTFail("a waiter on another model heard the failure") }
+
+        let failure = ModelDownloadFailure(id: "rootfs", why: "404")
+        waiters.failed("rootfs").forEach { $0(.failure(failure)) }
+        XCTAssertEqual(told.count, 1)
+        if case .failure(let got) = told.first { XCTAssertEqual(got, failure) } else { XCTFail("not told the failure") }
+        XCTAssertEqual(waiters.count, 2, "the settled waiter is gone, the other two wait on")
+        XCTAssertTrue(waiters.failed("rootfs").isEmpty, "a settled waiter was told twice")
+    }
+
+    func testSuccessSettlesEveryWaiterWhoseModelsArePresent() {
+        var waiters = ModelWaiters()
+        var told = 0
+        waiters.add(["rootfs"], settlesOnFailure: true) { if case .success = $0 { told += 1 } }
+        waiters.add(["rootfs"], settlesOnFailure: false) { if case .success = $0 { told += 1 } }
+        waiters.add(["rootfs", "voice"], settlesOnFailure: true) { _ in XCTFail("settled with a model still missing") }
+        waiters.present(["rootfs"]).forEach { $0(.success(())) }
+        XCTAssertEqual(told, 2)
+        XCTAssertEqual(waiters.count, 1)
+    }
+}

@@ -2,10 +2,53 @@ import Foundation
 import Observation
 import TopoUserland
 
+/// Where the rootfs tarball comes from: fetched, verified by the downloader, and handed over with
+/// the pin the installer checks it against again.
+@MainActor
+protocol RootfsSource: AnyObject {
+    /// Whether the tarball is already on disk and verified, so a fetch has nothing to do.
+    var isFetched: Bool { get }
+    /// The downloader's own line while a fetch is on its way.
+    var status: String { get }
+    /// Starts a fetch, or carries on the one under way, and settles `done` once: with the
+    /// tarball and its pin, or with why the fetch failed.
+    func fetch(_ done: @escaping @MainActor (Result<(tarball: URL, pin: RootfsPin), Error>) -> Void)
+}
+
+/// The rootfs as one more entry of the model manifest, fetched by `ModelDownloads`.
+@MainActor
+final class DownloadedRootfs: RootfsSource {
+    private let downloads: ModelDownloads
+
+    init(downloads: ModelDownloads = .shared) {
+        self.downloads = downloads
+    }
+
+    var isFetched: Bool { downloads.status(for: ModelManifest.rootfs) == .present }
+
+    var status: String {
+        if case .failed(let why) = downloads.status(for: ModelManifest.rootfs) { return "download failed: \(why)" }
+        return downloads.describe([ModelManifest.rootfs])
+    }
+
+    func fetch(_ done: @escaping @MainActor (Result<(tarball: URL, pin: RootfsPin), Error>) -> Void) {
+        downloads.start([ModelManifest.rootfs])
+        downloads.whenSettled([ModelManifest.rootfs]) { [downloads] result in
+            done(result.mapError { $0 as Error }.flatMap {
+                guard let model = downloads.manifest?.model(ModelManifest.rootfs), let file = model.files.first else {
+                    return .failure(ModelStoreError.unknownModel(ModelManifest.rootfs))
+                }
+                return .success((downloads.store.location(of: file, in: model), RootfsPin(size: file.size, sha256: file.sha256)))
+            })
+        }
+    }
+}
+
 /// The guest's root on this phone: Alpine's minirootfs, fetched by `ModelDownloads` as one more
 /// pinned entry of the manifest and verified there, then made into a fakefs by the fork's own
 /// importer (`RootfsInstaller`) under Application Support. Asked for on every foreground, like the
 /// ear's and the voice's models; once the fakefs is whole nothing is fetched or imported again.
+/// A fetch that fails ends in `failed` with its reason, and the next `prepare` fetches afresh.
 /// Nothing boots the guest here: only a debug launch does (`DebugRun.userland`), and the tests.
 @MainActor
 @Observable
@@ -26,10 +69,14 @@ final class Userland {
     /// launch downloaded is not one this launch fetched.
     private(set) var fetchedThisLaunch = false
     let installer: RootfsInstaller
+    private let source: any RootfsSource
+    /// Whether a fetch is on its way, so a foreground during one asks for nothing more.
+    private var fetching = false
     private var readiness: [CheckedContinuation<URL, Error>] = []
 
-    init(installer: RootfsInstaller = .standard()) {
+    init(installer: RootfsInstaller = .standard(), source: (any RootfsSource)? = nil) {
         self.installer = installer
+        self.source = source ?? DownloadedRootfs()
     }
 
     /// Asks for the rootfs and imports it once it is here. Idempotent, and called on every
@@ -44,25 +91,22 @@ final class Userland {
             finish(.success(.reused))
             return
         }
-        let downloads = ModelDownloads.shared
-        if downloads.status(for: ModelManifest.rootfs) != .present { fetchedThisLaunch = true }
+        guard !fetching else { return }
+        fetching = true
+        if !source.isFetched { fetchedThisLaunch = true }
         phase = .fetching
-        downloads.start([ModelManifest.rootfs])
-        downloads.whenPresent([ModelManifest.rootfs]) { [weak self] in
-            guard let self, self.phase == .fetching else { return }
-            self.install()
+        source.fetch { [weak self] result in
+            guard let self else { return }
+            self.fetching = false
+            switch result {
+            case .success(let fetched): self.install(fetched.tarball, fetched.pin)
+            case .failure(let error): self.finish(.failure(error))
+            }
         }
     }
 
-    private func install() {
-        guard let manifest = ModelDownloads.shared.manifest,
-              let model = manifest.model(ModelManifest.rootfs), let file = model.files.first else {
-            finish(.failure(ModelStoreError.unknownModel(ModelManifest.rootfs)))
-            return
-        }
+    private func install(_ tarball: URL, _ pin: RootfsPin) {
         phase = .importing
-        let tarball = ModelDownloads.shared.store.location(of: file, in: model)
-        let pin = RootfsPin(size: file.size, sha256: file.sha256)
         let installer = installer
         // The digest reads four megabytes and the import writes a few thousand files: blocking
         // work, so a queue of its own rather than the cooperative pool.
@@ -100,11 +144,7 @@ final class Userland {
     /// The diagnostics screen's `userland` row: waiting, downloading, verifying, importing, ready.
     var summary: String {
         switch phase {
-        case .fetching:
-            if case .failed(let why) = ModelDownloads.shared.status(for: ModelManifest.rootfs) {
-                return "download failed: \(why)"
-            }
-            return ModelDownloads.shared.describe([ModelManifest.rootfs])
+        case .fetching: return source.status
         case .importing: return "importing the rootfs"
         case .ready: return "ready"
         case .failed(let why): return "failed: \(why)"
