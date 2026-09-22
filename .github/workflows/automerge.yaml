@@ -87,8 +87,10 @@ jobs:
             # have concluded success. Pick the newest run explicitly rather than
             # trusting the API's order: one sha can carry several runs (a draft
             # accumulates red runs, and `ready_for_review` adds the green one to
-            # the same commit).
-            run="$(gh api "repos/$GH_REPO/actions/workflows/pr-validate.yaml/runs?head_sha=$sha&per_page=100" \
+            # the same commit). Only pull_request runs count: a dispatched run
+            # on the PR's branch runs the suite and no reviewer, so its green
+            # is not a review.
+            run="$(gh api "repos/$GH_REPO/actions/workflows/pr-validate.yaml/runs?head_sha=$sha&event=pull_request&per_page=100" \
                     --jq '[.workflow_runs[]] | sort_by(.created_at, .id) | last | "\(.status) \(.conclusion)"' || echo "none")"
             echo "pr-validate for $sha: $run"
             if [ "$run" != "completed success" ]; then
