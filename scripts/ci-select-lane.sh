@@ -7,7 +7,8 @@
 #   VOICE_PATHS="$patterns" scripts/ci-select-lane.sh --git HEAD^1 HEAD
 #   git diff --name-only HEAD^1 HEAD | VOICE_PATHS="$patterns" scripts/ci-select-lane.sh
 #
-# With `--git <base> <head>` it reads the changed paths itself, from `git diff --name-only`, and
+# With `--git <base> <head>` it reads the changed paths itself, from `git diff --no-renames
+# --name-only` (so a rename counts by both its old and its new path), and
 # prints them to stderr; a diff that fails (a base the checkout does not hold, a shallow clone)
 # is changed paths unknown, which selects full and says why. Without it, the paths come on stdin.
 #
@@ -32,7 +33,8 @@ done <<< "${VOICE_PATHS:-}"
 
 if [ "${1:-}" = --git ]; then
   [ "$#" -eq 3 ] || { echo "usage: $0 [--git <base> <head>]" >&2; exit 2; }
-  if ! changed="$(git diff --name-only "$2" "$3" 2>&1)"; then
+  # --no-renames: a rename is its source and its destination, and either may be on the list.
+  if ! changed="$(git diff --no-renames --name-only "$2" "$3" 2>&1)"; then
     echo "The changed paths could not be read: $changed" >&2
     echo "lane=full"
     echo "reason=the changed paths are unknown (git diff $2 $3 failed: $(head -n 1 <<<"$changed")), so the lane is full"

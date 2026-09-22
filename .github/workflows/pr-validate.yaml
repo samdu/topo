@@ -70,8 +70,8 @@ on:
   # The same jobs by hand. `lane: full` is the nightly's body; `lane:
   # fast-benchmark` forces the fast lane, to time it on a branch whose own
   # diff selects the full one. `fail` fails one job on purpose (or, as
-  # `skip`, leaves the real-ear test selected on the fast lane with no models)
-  # to show the gate holding against it.
+  # `skip`, takes the fast lane whatever `lane` says and leaves the real-ear
+  # test selected with no models) to show the gate holding against it.
   workflow_dispatch:
     inputs:
       lane:
@@ -153,6 +153,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           DISPATCH_LANE: ${{ inputs.lane }}
+          DISPATCH_FAIL: ${{ inputs.fail }}
           # The voice path: a change to any of these runs the real ear on its
           # PR. One bash glob per line; `*` crosses `/`.
           VOICE_PATHS: |
@@ -189,11 +190,17 @@ jobs:
               printf 'lane=full\nreason=the nightly run on main\n' > "$RUNNER_TEMP/lane.txt"
               ;;
             workflow_dispatch)
-              case "$DISPATCH_LANE" in
-                full) printf 'lane=full\nreason=workflow_dispatch asked for the full lane\n' > "$RUNNER_TEMP/lane.txt" ;;
-                fast-benchmark) printf 'lane=fast\nreason=workflow_dispatch forced the fast lane: a benchmark run, not a selection\n' > "$RUNNER_TEMP/lane.txt" ;;
-                *) echo "::error::Unknown lane input '$DISPATCH_LANE'."; exit 1 ;;
-              esac
+              # `fail=skip` is the fast lane's model-less setup with the real-ear
+              # test left selected, so it takes the fast lane whatever `lane` says.
+              if [ "$DISPATCH_FAIL" = skip ]; then
+                printf 'lane=fast\nreason=workflow_dispatch fail=skip overrode lane=%s: the fast lane with no models and the real-ear test left selected, a deliberate failure\n' "$DISPATCH_LANE" > "$RUNNER_TEMP/lane.txt"
+              else
+                case "$DISPATCH_LANE" in
+                  full) printf 'lane=full\nreason=workflow_dispatch asked for the full lane\n' > "$RUNNER_TEMP/lane.txt" ;;
+                  fast-benchmark) printf 'lane=fast\nreason=workflow_dispatch forced the fast lane: a benchmark run, not a selection\n' > "$RUNNER_TEMP/lane.txt" ;;
+                  *) echo "::error::Unknown lane input '$DISPATCH_LANE'."; exit 1 ;;
+                esac
+              fi
               ;;
             *)
               echo "::error::No lane rule for the $EVENT event."; exit 1
