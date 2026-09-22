@@ -104,6 +104,36 @@ final class ModelHousekeepingTests: XCTestCase {
         XCTAssertFalse(removed.isEmpty)
     }
 
+    /// A home that is itself a link is not Topo's to empty: `Models/example` points at a folder
+    /// elsewhere holding the manifest's files, a matching ledger and something that is nobody's
+    /// business. The model reads as present through the link, and the sweep still enters none of
+    /// it, and leaves the link where it is.
+    func testAHomeThatIsALinkIsNeverEntered() throws {
+        let root = base.appendingPathComponent("Models", isDirectory: true)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        let model = try filled(ModelStore(root: elsewhere), id: "example", files: [
+            "Encoder.mlmodelc/weights/weight.bin": "the weights",
+            "vocab.json": "the vocabulary",
+        ])
+        let target = elsewhere.appendingPathComponent("example", isDirectory: true)
+        let precious = target.appendingPathComponent("precious.txt")
+        let nested = target.appendingPathComponent("Encoder.mlmodelc/notes.txt")
+        try [precious, nested].forEach(write)
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("example")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+        let store = ModelStore(root: root)
+        XCTAssertTrue(store.isPresent(model), "presence reads through the link")
+
+        XCTAssertEqual(store.sweep(ModelManifest(models: [model])), [], "nothing is removed")
+
+        XCTAssertTrue(exists(precious), "what the link points at is not the sweep's")
+        XCTAssertTrue(exists(nested))
+        for file in model.files { XCTAssertTrue(exists(target.appendingPathComponent(file.path)), file.path) }
+        XCTAssertTrue(exists(target.appendingPathComponent(ModelStore.ledgerName)))
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: link.path), target.path, "the link is left alone")
+    }
+
     /// A set the downloader has not finished is left whole: a file missing, one at the wrong
     /// size, one on disk that is not in the ledger. The voice's pack in its real home, and an
     /// entry under its id.

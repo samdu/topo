@@ -27,7 +27,7 @@ extension ModelStore {
     /// Inside a home Topo owns, of a model that is present — every manifest file on disk at its
     /// size and in the ledger, the downloader's own definition — anything that is not a manifest
     /// file, the ledger or a file's resume data is removed. A model that is not present is left
-    /// alone whole, and a library's home is never entered.
+    /// alone whole, and neither a library's home nor a home that is a link is ever entered.
     @discardableResult
     func sweep(_ manifest: ModelManifest) -> [URL] {
         let fm = FileManager.default
@@ -53,7 +53,7 @@ extension ModelStore {
             remove(entry)
         }
 
-        for model in manifest.models where owns(model) && isPresent(model) {
+        for model in manifest.models where owns(model) && !reachedThroughLink(model) && isPresent(model) {
             var kept: Set<String> = [Self.ledgerName]
             for file in model.files {
                 kept.insert(file.path)
@@ -87,6 +87,22 @@ extension ModelStore {
 
         for url in removed { log.notice("sweep: removed \(url.path, privacy: .public)") }
         return removed
+    }
+
+    /// Whether the model's home, or any folder between `root` and it, is a symbolic link, read
+    /// with `lstat` so the link itself is what is judged. A home behind a link is somewhere
+    /// else's folder: the sweep never enters it and leaves the link where it is.
+    func reachedThroughLink(_ model: ModelManifest.Model) -> Bool {
+        let home = Self.components(directory(for: model))
+        let depth = Self.components(root).count
+        guard home.count > depth else { return true }
+        var url = root
+        for name in home[depth...] {
+            url = url.appendingPathComponent(name)
+            var info = stat()
+            if lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFLNK { return true }
+        }
+        return false
     }
 
     private static func components(_ url: URL) -> [String] {
