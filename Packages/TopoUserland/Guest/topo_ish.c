@@ -33,6 +33,9 @@
 
 #include "topo_ish.h"
 
+// kernel/uname.c defines it and no header declares it.
+extern const char *uname_hostname_override;
+
 // kernel/exit.c defines these and declares none of them in a header.
 int do_wait(int idtype, pid_t_ id, struct siginfo_ *info, struct rusage_ *rusage, int options);
 #define TOPO_P_PID 1
@@ -77,6 +80,11 @@ int topo_ish_boot(const char *fakefs_dir) {
     kernels++;
 
     install_anon_cap();
+
+    // The guest's name is its own, never the host's: do_uname strcpys the host's nodename into a
+    // 65-byte field, which a long host name (a CI runner's, a Mac's) overflows into a fortify
+    // trap in the first program that asks, and the host's name is not the guest's to read.
+    uname_hostname_override = "topo";
 
     char data[PATH_MAX];
     snprintf(data, sizeof(data), "%s/data", fakefs_dir);

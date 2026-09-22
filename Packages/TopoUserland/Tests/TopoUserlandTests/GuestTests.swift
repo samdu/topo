@@ -19,6 +19,15 @@ final class GuestTests: XCTestCase {
         XCTAssertEqual(exit.errors, "err\n")
     }
 
+    /// The guest answers to its own name, whatever the host is called: busybox's shell asks at
+    /// start, and a host name longer than the kernel's 65-byte field is a crash rather than a name.
+    func testTheGuestHasItsOwnHostname() async throws {
+        _ = try SharedGuest.booted()
+        let exit = try await Guest.shared.run("/bin/uname", ["-n"])
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        XCTAssertEqual(exit.output, "topo\n")
+    }
+
     func testAMissingProgramIsRefusedAtTheStart() async throws {
         _ = try SharedGuest.booted()
         do {
