@@ -15,14 +15,14 @@ import XCTest
 /// answer is in three places. The composer's glass is drawn from what the render server captured
 /// behind it when it last composited the screen, so a window not yet on the display draws its
 /// pane without that backdrop — another rim, shadow and lensed edge — and a wait on the clock is
-/// a race a loaded runner loses: the stage waits for frames of the display instead
-/// (`LookStage.composited`). A transcript taller than its stage is scrolled to its end and comes
-/// to rest a pixel or two apart between two drawings, which the composer's glass magnifies into a
-/// difference of eight shades over three thousand pixels — no capture strategy answers that,
-/// because both drawings are finished; the surfaces are the answer, and they fit. A curve
-/// composited through two windows rounds its antialiasing a shade either way, which nothing can
-/// remove either: `differ` is the answer to that, and the settings sheet's glass is what needs
-/// it.
+/// a race a loaded runner loses: the stage waits for two display refreshes after the window's
+/// commit instead (`LookStage.refreshed`). A transcript taller than its stage is scrolled to its
+/// end and comes to rest a pixel or two apart between two drawings, which the composer's glass
+/// magnifies into a difference of eight shades over three thousand pixels — no capture strategy
+/// answers that, because both drawings are finished; the surfaces are the answer, and they fit.
+/// A curve composited through two windows rounds its antialiasing a shade either way, which
+/// nothing can remove either: `differ` is the answer to that, and the settings sheet's glass is
+/// what needs it.
 @MainActor
 final class LookStageTests: XCTestCase {
     /// How many times each surface is asked. Enough for an alternating pair to show itself, and
@@ -98,15 +98,40 @@ final class LookStageTests: XCTestCase {
                         "two different pictures drawn in turn read as one steady picture")
     }
 
-    /// What the stage's steadiness rests on: no picture is taken before the display has drawn
-    /// its window twice, since the system's glass is drawn from the render server's capture of
-    /// the screen and a window the display has not drawn has none. A wait on the clock passes on
-    /// an idle machine and loses on a loaded runner, so it is the frames that are held here,
-    /// not the picture.
-    func testNoPictureIsTakenBeforeTheDisplayHasDrawnItsWindow() throws {
+    /// The ordering the stage's steadiness rests on: no picture is taken before two display
+    /// refreshes after its window went up, stamped by the capture itself. It holds the order of
+    /// events, not that the window's composite had finished — a refresh is the display's tick,
+    /// not an acknowledgement, and `LookStage.refreshes` says what two of them are measured to
+    /// do. A wait on the clock passes on an idle machine and loses on a loaded runner, so it is
+    /// the refreshes that are held here, not the picture.
+    func testNoPictureIsTakenBeforeTwoRefreshesAfterItsWindowWentUp() throws {
         _ = try LookStage.image(LookReachTests.Surface.staged(row: .writing), look: Look())
-        XCTAssertGreaterThanOrEqual(LookStage.framesBeforeLastPicture, 2,
-                                    "the picture was taken before the display drew its window twice")
+        XCTAssertGreaterThanOrEqual(
+            LookStage.refreshesBeforeLastPicture, 2,
+            "the picture was taken before two refreshes after its window went up")
+    }
+
+    /// A display that never refreshes is a failure within the deadline, and never a picture
+    /// taken anyway.
+    func testNoRefreshesIsAFailureWithinTheDeadline() throws {
+        final class Silent: LookStage.RefreshCount {
+            var count: Int { 0 }
+            func stop() {}
+        }
+        let window = UIWindow(frame: CGRect(origin: .zero, size: LookStage.size))
+        let deadline: TimeInterval = 0.3
+        let start = Date()
+        XCTAssertThrowsError(
+            try LookStage.refreshed(window, timeout: deadline, counting: Silent.init)) {
+            guard case LookStage.StageError.notRefreshed(let counted, let wanted, _) = $0 else {
+                return XCTFail("a display that never refreshed failed with \($0)")
+            }
+            XCTAssertEqual(counted, 0)
+            XCTAssertEqual(wanted, LookStage.refreshes)
+        }
+        let took = Date().timeIntervalSince(start)
+        XCTAssertGreaterThanOrEqual(took, deadline, "it gave up before its deadline")
+        XCTAssertLessThan(took, deadline + 1, "it did not give up at its deadline")
     }
 
     /// Whatever is on the screen under the stage stays out of the picture. The glass samples a
