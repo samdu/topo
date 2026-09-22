@@ -33,29 +33,38 @@ enum LookStage {
     /// `composer.presenceDuration` off scroll geometry that arrives after layout.
     static func image(_ view: some View, look: Look, style: UIUserInterfaceStyle = .light,
                       size: CGSize = LookStage.size) throws -> UIImage {
+        refreshesBeforeLastPicture = 0
         let animations = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(animations) }
 
         let host = UIHostingController(
             rootView: view.environment(\.look, look).transaction { $0.animation = nil })
-        let window: UIWindow
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first {
-            window = UIWindow(windowScene: scene)
-            window.frame = CGRect(origin: .zero, size: size)
-        } else {
-            window = UIWindow(frame: CGRect(origin: .zero, size: size))
-        }
+        // The window covers the whole screen as well as the stage, with the view on the stage
+        // at its top left and the view's own background colour around it: the system's glass
+        // samples a margin beyond its own edge, which from a pane near the stage's foot reaches
+        // past the stage, and what is there is then this window's background rather than
+        // whatever the host app's own window happens to be showing under it.
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let screen = scene?.screen.bounds.size ?? size
+        let frame = CGRect(x: 0, y: 0, width: max(size.width, screen.width),
+                           height: max(size.height, screen.height))
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+        window.frame = frame
+        let stage = UIViewController()
+        stage.view.backgroundColor = .systemBackground
+        stage.addChild(host)
+        stage.view.addSubview(host.view)
+        host.view.frame = CGRect(origin: .zero, size: size)
+        host.didMove(toParent: stage)
         window.overrideUserInterfaceStyle = style
-        window.rootViewController = host
+        window.rootViewController = stage
         window.isHidden = false
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
         }
-        host.view.frame = window.bounds
         window.layoutIfNeeded()
 
         // A `ProgressView`'s spinner is a Core Animation on its own layer, which neither
@@ -65,12 +74,115 @@ enum LookStage {
         // under this window is then drawn at the same moment of whatever it is doing.
         window.layer.speed = 0
         window.layer.timeOffset = 0
-        // SwiftUI commits its layout on the run loop, and `afterScreenUpdates` draws what the
-        // render server has: both want a turn of the loop before the picture is taken.
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        let refreshes = try refreshed(window)
+        defer { refreshes.stop() }
+        // The whole window is drawn at its own size into a picture the stage's size, which
+        // keeps the stage and clips the rest.
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { _ in
+            refreshesBeforeLastPicture = refreshes.count
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+    }
+
+    /// How many display refreshes the stage waits for after the window's commit before the
+    /// picture is taken. Two is chosen and measured, not derived: a refresh is the display's
+    /// tick, not an acknowledgement that this window was composited, and no public API gives
+    /// one. On a simulator with every core saturated, capturing with no wait gave the unsettled
+    /// glass 16 times in 40 and after 10 ms on the clock 5 in 40, where one, two or three
+    /// refreshes gave it none in 40 each. That is the evidence two refreshes settle the glass in
+    /// practice; it is no guarantee against a render server further behind than that, and the
+    /// steadiness tests are what would show one.
+    static let refreshes = 2
+
+    /// How long those refreshes may take before the stage gives up, which is a failure and never
+    /// a picture: a stage that took the picture anyway would be the defect this wait exists for.
+    static let refreshesTimeout: TimeInterval = 10
+
+    /// How many display refreshes had been counted, from just after the last picture's window
+    /// went up, at the moment that picture was drawn: stamped by the capture itself, so it says
+    /// what was true when the picture was taken and not what a wait reported beside it. What
+    /// `LookStageTests` reads to hold the ordering — no picture before two refreshes after its
+    /// window went up — which is not a claim that the window's composite had finished. Nought
+    /// for a picture taken with no count running.
+    private(set) static var refreshesBeforeLastPicture = 0
+
+    /// Waits for display refreshes after the window's commit, so the system's glass has had the
+    /// chance of an on-screen backdrop before the picture is taken.
+    ///
+    /// The composer's glass is a `CABackdropLayer`, and `drawHierarchy` draws it from what the
+    /// render server captured behind it the last time it composited the screen. A window that
+    /// has never been on the screen has no such capture, and its glass is drawn from something
+    /// else: an edge of the pane that lenses nothing where it should lens the window's own
+    /// content, and a rim and a shadow missing along its foot. A window placed off the screen
+    /// gives that picture every time, however long it waits; one the display has drawn gives the
+    /// settled picture. So what the picture waits on is refreshes of the display rather than
+    /// time on the clock, which is a guess at how soon the render server composites that a
+    /// loaded CI runner loses. See `refreshes` for what two refreshes are and are not.
+    ///
+    /// A stage wider or taller than the screen — the television's 1280×720, the wide canvas's
+    /// 900×700 — has glass past the screen's edge that the display never composites. That part
+    /// is not drawn from an on-screen capture, but once the part on the screen has been, it is
+    /// the same picture every time: forty asks of each on a runner with every core saturated
+    /// differed from the first by one shade at most.
+    ///
+    /// The wait turns the run loop, which is also what SwiftUI commits its layout on. It returns
+    /// the count still running, so the capture can stamp what the count was when it drew; the
+    /// caller stops it. The count is handed in so a test can give it one that never ticks.
+    static func refreshed(_ window: UIWindow, timeout: TimeInterval = refreshesTimeout,
+                          counting count: () -> RefreshCount = DisplayRefreshes.init)
+        throws -> RefreshCount {
+        CATransaction.flush()
+        let counter = count()
+        let deadline = Date().addingTimeInterval(timeout)
+        while counter.count < refreshes {
+            guard Date() < deadline else {
+                counter.stop()
+                throw StageError.notRefreshed(refreshes: counter.count, of: refreshes, in: timeout)
+            }
+            RunLoop.current.run(mode: .default,
+                                before: min(deadline, Date().addingTimeInterval(0.1)))
+        }
+        return counter
+    }
+
+    /// A count of display refreshes, from when it is made until it is stopped.
+    protocol RefreshCount: AnyObject {
+        var count: Int { get }
+        func stop()
+    }
+
+    /// The display's own refreshes, counted by a display link.
+    final class DisplayRefreshes: NSObject, RefreshCount {
+        private(set) var count = 0
+        private var link: CADisplayLink?
+
+        override init() {
+            super.init()
+            let link = CADisplayLink(target: self, selector: #selector(tick))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        @objc private func tick(_ link: CADisplayLink) { count += 1 }
+
+        /// The link holds its target, so it is invalidated here rather than left to a deinit
+        /// that would never come.
+        func stop() {
+            link?.invalidate()
+            link = nil
+        }
+    }
+
+    enum StageError: Error, CustomStringConvertible {
+        case notRefreshed(refreshes: Int, of: Int, in: TimeInterval)
+
+        var description: String {
+            switch self {
+            case .notRefreshed(let counted, let wanted, let seconds):
+                return "the display refreshed \(counted) of \(wanted) times in \(seconds)"
+                    + " seconds after the window went up, so no picture was taken"
+            }
         }
     }
 

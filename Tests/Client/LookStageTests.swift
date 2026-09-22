@@ -11,14 +11,18 @@ import XCTest
 /// its fields report differently from one run to the next — a field that draws nothing read as
 /// drawing, and the excuse list read as stale.
 ///
-/// Two things made one view two pictures, and they wanted different answers, which is why the
-/// fix is in two places. A transcript taller than its stage is scrolled to its end and comes to
-/// rest a pixel or two apart between two drawings, which the composer's glass magnifies into a
-/// difference of eight shades over three thousand pixels — no capture strategy answers that,
-/// because both drawings are finished; the surfaces are the answer, and they now fit. A curve
-/// composited through two windows rounds its antialiasing a shade either way, which nothing can
-/// remove either: `differ` is the answer to that, and the settings sheet's glass is what needs
-/// it.
+/// Three things make one view two pictures, and they want different answers, which is why the
+/// answer is in three places. The composer's glass is drawn from what the render server captured
+/// behind it when it last composited the screen, so a window not yet on the display draws its
+/// pane without that backdrop — another rim, shadow and lensed edge — and a wait on the clock is
+/// a race a loaded runner loses: the stage waits for two display refreshes after the window's
+/// commit instead (`LookStage.refreshed`). A transcript taller than its stage is scrolled to its
+/// end and comes to rest a pixel or two apart between two drawings, which the composer's glass
+/// magnifies into a difference of eight shades over three thousand pixels — no capture strategy
+/// answers that, because both drawings are finished; the surfaces are the answer, and they fit.
+/// A curve composited through two windows rounds its antialiasing a shade either way, which
+/// nothing can remove either: `differ` is the answer to that, and the settings sheet's glass is
+/// what needs it.
 @MainActor
 final class LookStageTests: XCTestCase {
     /// How many times each surface is asked. Enough for an alternating pair to show itself, and
@@ -81,6 +85,85 @@ final class LookStageTests: XCTestCase {
         XCTAssertEqual(unsteady, [], "these drew more than one picture of one look")
     }
 
+    /// The steadiness assertion's own teeth: two surfaces that really are two pictures, drawn in
+    /// turn, one to each ask, through the same stage and the same comparison the steadiness tests
+    /// make, are reported as unsteady. The two are the draft row being written and on its way,
+    /// which differ in the row's colour and in the spinner beside it — the kind of difference a
+    /// still that had not settled would be.
+    func testTwoPicturesDrawnInTurnAreReportedUnsteady() throws {
+        let made = try shots { ask in
+            LookReachTests.Surface.staged(row: ask.isMultiple(of: 2) ? .writing : .inFlight)
+        }
+        XCTAssertNotNil(try unsteadiness(of: made, called: "negative-control"),
+                        "two different pictures drawn in turn read as one steady picture")
+    }
+
+    /// The ordering the stage's steadiness rests on: no picture is taken before two display
+    /// refreshes after its window went up, stamped by the capture itself. It holds the order of
+    /// events, not that the window's composite had finished — a refresh is the display's tick,
+    /// not an acknowledgement, and `LookStage.refreshes` says what two of them are measured to
+    /// do. A wait on the clock passes on an idle machine and loses on a loaded runner, so it is
+    /// the refreshes that are held here, not the picture.
+    func testNoPictureIsTakenBeforeTwoRefreshesAfterItsWindowWentUp() throws {
+        _ = try LookStage.image(LookReachTests.Surface.staged(row: .writing), look: Look())
+        XCTAssertGreaterThanOrEqual(
+            LookStage.refreshesBeforeLastPicture, 2,
+            "the picture was taken before two refreshes after its window went up")
+    }
+
+    /// A display that never refreshes is a failure within the deadline, and never a picture
+    /// taken anyway.
+    func testNoRefreshesIsAFailureWithinTheDeadline() throws {
+        final class Silent: LookStage.RefreshCount {
+            var count: Int { 0 }
+            func stop() {}
+        }
+        let window = UIWindow(frame: CGRect(origin: .zero, size: LookStage.size))
+        let deadline: TimeInterval = 0.3
+        let start = Date()
+        XCTAssertThrowsError(
+            try LookStage.refreshed(window, timeout: deadline, counting: Silent.init)) {
+            guard case LookStage.StageError.notRefreshed(let counted, let wanted, _) = $0 else {
+                return XCTFail("a display that never refreshed failed with \($0)")
+            }
+            XCTAssertEqual(counted, 0)
+            XCTAssertEqual(wanted, LookStage.refreshes)
+        }
+        let took = Date().timeIntervalSince(start)
+        XCTAssertGreaterThanOrEqual(took, deadline, "it gave up before its deadline")
+        XCTAssertLessThan(took, deadline + 1, "it did not give up at its deadline")
+    }
+
+    /// Whatever is on the screen under the stage stays out of the picture. The glass samples a
+    /// margin past its own edge, and from a pane near the stage's foot that reaches past the
+    /// stage; a full-screen window of another colour put under the stage is what would show if
+    /// it reached the host app's window there.
+    func testWhatIsUnderTheStageStaysOutOfThePicture() throws {
+        let surface = LookReachTests.Surface.staged(row: .writing)
+        _ = try LookStage.image(surface, look: Look(), style: .dark)
+        let picture = try LookStage.image(surface, look: Look(), style: .dark)
+        let alone = try LookStage.bytes(picture)
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }.first, "no scene to put a window under the stage in")
+        let under = UIWindow(windowScene: scene)
+        under.frame = scene.screen.bounds
+        let red = UIViewController()
+        red.view.backgroundColor = .systemRed
+        under.rootViewController = red
+        under.isHidden = false
+        defer {
+            under.isHidden = true
+            under.rootViewController = nil
+        }
+        let over = try LookStage.plane(surface, look: Look(), style: .dark)
+
+        let said = LookStage.difference(alone, over, width: Int(picture.size.width * picture.scale),
+                                        scale: picture.scale)?.said ?? ""
+        XCTAssertFalse(try LookStage.differ(alone, over),
+                       "a window under the stage reached the picture: \(said)")
+    }
+
     /// And that a shade is all the tolerance is: two pictures that differ by more than one are
     /// two pictures, or the reach suite would see no field at all.
     func testMoreThanAShadeIsADifference() throws {
@@ -104,9 +187,17 @@ final class LookStageTests: XCTestCase {
     private func shots(_ view: some View, look: Look = Look(),
                        style: UIUserInterfaceStyle = .light,
                        size: CGSize = LookStage.size) throws -> [UIImage] {
-        _ = try LookStage.image(view, look: look, style: style, size: size)
-        return try (0..<Self.asks).map {
-            _ in try LookStage.image(view, look: look, style: style, size: size)
+        try shots(look: look, style: style, size: size) { _ in view }
+    }
+
+    /// The same, with the view each ask draws handed over by the ask's number: 0 is the drawing
+    /// thrown away, and 1 onwards are the ones compared.
+    private func shots<V: View>(look: Look = Look(), style: UIUserInterfaceStyle = .light,
+                                size: CGSize = LookStage.size,
+                                _ view: (Int) -> V) throws -> [UIImage] {
+        _ = try LookStage.image(view(0), look: look, style: style, size: size)
+        return try (1...Self.asks).map {
+            try LookStage.image(view($0), look: look, style: style, size: size)
         }
     }
 
