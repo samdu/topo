@@ -295,6 +295,10 @@ import TopoAuth
         let client = try await WireClient(port: port)
         try await client.send("GET /v1/models HTTP/1.0\r\n\r\n")
         let head = try await client.readHead()
+        // RFC 9110 §6.2: the server's own version, the highest minor it conforms to within the
+        // request's major, so a 1.0 request is answered under an HTTP/1.1 status line; what makes
+        // the reply one a 1.0 client can read is its framing, a raw body ended by the close.
+        #expect(String(decoding: head.raw.prefix(13), as: UTF8.self) == "HTTP/1.1 200 ")
         #expect(head.status == 200)
         #expect(!head.chunked)
         #expect(head.headers.value("Transfer-Encoding") == nil)

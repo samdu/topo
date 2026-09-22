@@ -200,6 +200,45 @@ extension Stubbed {
             #expect(try store.load()?.refreshToken == "first")
         }
 
+        /// With no loopback listener for either authorization, both codes are pasted: the login's,
+        /// then the guest's from the second authorization the screen is told to open, and the
+        /// ordinary tokens are the first exchange's throughout.
+        @Test func withNoListenerBothCodesArePasted() async throws {
+            StubURLProtocol.reset()
+            defer { StubURLProtocol.reset() }
+            StubURLProtocol.responder = Self.tokenEndpoint()
+            let store = InMemoryTokenStore()
+            let guest = InMemoryTokenStore()
+            let signIn = SignIn(oauth: ClaudeOAuth(session: StubURLProtocol.session()), store: store, guestStore: guest)
+            var binds = 0
+            signIn.makeListener = { binds += 1; return nil }
+
+            let login = signIn.start()
+            #expect(signIn.phase == .waiting(pasteHint: true))
+            #expect(Self.query(login, "redirect_uri") == "https://platform.claude.com/oauth/code/callback")
+            await signIn.finish(pasted: "login-code#\(try #require(Self.query(login, "state")))")
+            guard case .approvingGuest(let opening?, pasteHint: true) = signIn.phase else {
+                Issue.record("the login's paste did not ask for the guest's authorization to be opened: \(signIn.phase)")
+                return
+            }
+            #expect(binds == 2, "the guest's authorization did not try a listener of its own")
+            #expect(Self.query(opening, "scope") == "user:inference")
+            #expect(Self.query(opening, "redirect_uri") == "https://platform.claude.com/oauth/code/callback")
+            let ordinaryBefore = try #require(try store.load())
+
+            await signIn.finish(pasted: "guest-code#\(try #require(Self.query(opening, "state")))")
+            #expect(signIn.phase == .signedIn)
+            let minted = try #require(try guest.load())
+            #expect(minted.accessToken == "long-lived")
+            #expect(minted.refreshToken == "")
+            #expect(try store.load() == ordinaryBefore)
+            #expect(try store.load()?.refreshToken == "first")
+            let bodies = Self.sentBodies()
+            #expect(bodies.map { $0["code"] as? String } == ["login-code", "guest-code"])
+            #expect(bodies.map { $0["grant_type"] as? String } == ["authorization_code", "authorization_code"])
+            #expect(bodies.last?["expires_in"] as? Int == 31_536_000)
+        }
+
         /// A device with no guest store (the hub) asks for no second authorization: one exchange,
         /// and the callback is answered with the "Signed in" page rather than sent anywhere.
         @Test func aDeviceWithNoGuestAsksForNoSecondAuthorization() async throws {

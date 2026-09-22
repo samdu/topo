@@ -46,6 +46,8 @@ public final class SignIn {
     /// The guest's authorization was declined while the ordinary exchange was still running.
     private var guestDeclined = false
     private var exchangingGuest = false
+    /// Makes a loopback listener, nil when none binds. A test makes it nil to take the paste path.
+    var makeListener: () -> LoopbackCallback? = { try? LoopbackCallback() }
 
     public init(oauth: ClaudeOAuth = ClaudeOAuth(), store: TokenStore = KeychainTokenStore(),
                 guestStore: TokenStore? = nil) {
@@ -60,7 +62,7 @@ public final class SignIn {
     public func start() -> URL {
         reset()
         let redirect: ClaudeOAuth.Redirect
-        if let listener = try? LoopbackCallback() {
+        if let listener = makeListener() {
             loopback = listener
             redirect = .loopback(port: listener.port)
         } else {
@@ -164,7 +166,7 @@ public final class SignIn {
     /// listener of its own when one binds (the hosted paste page when not).
     private func prepareGuest() {
         let redirect: ClaudeOAuth.Redirect
-        if let listener = try? LoopbackCallback() {
+        if let listener = makeListener() {
             guestLoopback = listener
             redirect = .loopback(port: listener.port)
             Task { [weak self] in
