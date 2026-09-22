@@ -263,11 +263,38 @@ final class ModelHousekeepingTests: XCTestCase {
         for sibling in siblings { XCTAssertTrue(exists(sibling), "\(sibling.path) is not the compile cache") }
     }
 
-    /// The key the app runs with is read off this image and is the same on every read.
-    func testTheInstallKeyIsThisImagesUUID() throws {
+    /// The key the app runs with is read off this image and this bundle, and is the same on
+    /// every read.
+    func testTheInstallKeyIsThisImageAndThisBundle() throws {
+        let image = try XCTUnwrap(CompileCache.imageUUID())
+        XCTAssertNotNil(UUID(uuidString: image))
         let key = try XCTUnwrap(CompileCache.installKey())
-        XCTAssertNotNil(UUID(uuidString: key))
+        XCTAssertEqual(key, CompileCache.installKey(image: image, bundle: Bundle.main.bundleURL))
         XCTAssertEqual(CompileCache.installKey(), key)
+    }
+
+    /// A byte-identical build installed over itself has the same UUID and a new bundle
+    /// container, and is a new install: it clears. The same UUID at the same path is a relaunch,
+    /// and does not.
+    func testTheSameBuildInstalledAgainIsANewInstall() throws {
+        let cache = base.appendingPathComponent("Library/Caches/zone.hexagon.topo/com.apple.e5rt.e5bundlecache")
+        let suite = "topo-install-key-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let clear = CompileCache(directory: cache, defaults: defaults)
+        let image = "8DCA16A0-1AE6-3AF6-B0E6-2196DC5EE906"
+        let first = URL(fileURLWithPath: "/containers/Bundle/Application/73E6F797-EE47-46A6-AAD7-8F6BA62AC899/Topo.app")
+        let second = URL(fileURLWithPath: "/containers/Bundle/Application/0B1C2D3E-4F50-6172-8394-A5B6C7D8E9F0/Topo.app")
+
+        try write(cache.appendingPathComponent("first/bundle.e5"))
+        XCTAssertEqual(clear.clear(install: CompileCache.installKey(image: image, bundle: first)), .cleared)
+        try write(cache.appendingPathComponent("first/bundle.e5"))
+        XCTAssertEqual(clear.clear(install: CompileCache.installKey(image: image, bundle: first)), .sameInstall,
+                       "the same build at the same path is a relaunch")
+        XCTAssertTrue(exists(cache))
+        XCTAssertEqual(clear.clear(install: CompileCache.installKey(image: image, bundle: second)), .cleared,
+                       "the same build in a new bundle container is a new install")
+        XCTAssertFalse(exists(cache))
     }
 
     /// The launch clears before either the ear or the voice exists, since a debug build's start

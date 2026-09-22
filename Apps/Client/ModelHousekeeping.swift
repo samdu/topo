@@ -173,13 +173,27 @@ struct CompileCache {
         return outcome
     }
 
-    /// What every install changes: the `LC_UUID` of the image this code is linked into. ld writes
-    /// it from a hash of the image, so any build that changes the code changes it, whatever
-    /// `CFBundleVersion` says (every development install carries 1), and a relaunch of the same
-    /// install never does. In a release build the image is the main executable; in a debug build
-    /// Xcode links the app's code into `Topo.debug.dylib` beside a stub executable that barely
-    /// changes, which is why this reads the image holding this code rather than image zero.
+    /// What every install changes: the image's `LC_UUID` and the path of the app bundle. The
+    /// bundle's container directory is made new by every install, so a byte-identical build
+    /// installed over itself is a new key too; the UUID is there so that a build is never
+    /// mistaken for another whatever its path. `CFBundleVersion` is no part of it, since every
+    /// development install carries 1. Should the bundle's path ever move on a plain launch, the
+    /// cost is one extra clear and so one recompile of the models, never a lost file.
     static func installKey() -> String? {
+        guard let image = imageUUID() else { return nil }
+        return installKey(image: image, bundle: Bundle.main.bundleURL)
+    }
+
+    static func installKey(image: String, bundle: URL) -> String {
+        "\(image) \(bundle.standardizedFileURL.path)"
+    }
+
+    /// The `LC_UUID` of the image this code is linked into. ld writes it from a hash of the
+    /// image, so any build that changes the code changes it. In a release build the image is the
+    /// main executable; in a debug build Xcode links the app's code into `Topo.debug.dylib`
+    /// beside a stub executable that barely changes, which is why this reads the image holding
+    /// this code rather than image zero.
+    static func imageUUID() -> String? {
         let header = #dsohandle.assumingMemoryBound(to: mach_header_64.self)
         guard header.pointee.magic == MH_MAGIC_64 else { return nil }
         var command = #dsohandle.advanced(by: MemoryLayout<mach_header_64>.size)
