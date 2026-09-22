@@ -74,11 +74,13 @@ enum LookStage {
         // under this window is then drawn at the same moment of whatever it is doing.
         window.layer.speed = 0
         window.layer.timeOffset = 0
-        try composited(window)
+        let frames = try composited(window)
+        defer { frames.stop() }
         // The whole window is drawn at its own size into a picture the stage's size, which
         // keeps the stage and clips the rest.
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { _ in
+            framesBeforeLastPicture = frames.count
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
         }
     }
@@ -92,9 +94,11 @@ enum LookStage {
     /// a picture: a stage that took the picture anyway would be the defect this wait exists for.
     static let framesTimeout: TimeInterval = 10
 
-    /// How many frames the display drew between the last picture's window going up and the
-    /// picture being taken: what `LookStageTests` reads to hold that no picture is taken before
-    /// the display has drawn its window.
+    /// How many frames the display had drawn, counted from just after the last picture's window
+    /// went up, at the moment that picture was drawn: stamped by the capture itself, so it says
+    /// what was true when the picture was taken and not what a wait reported beside it. What
+    /// `LookStageTests` reads to hold that no picture is taken before the display has drawn its
+    /// window. Nought for a picture taken with no count running.
     private(set) static var framesBeforeLastPicture = 0
 
     /// Waits until the display has drawn the window, so the system's glass has a backdrop.
@@ -115,28 +119,44 @@ enum LookStage {
     /// the same picture every time: forty asks of each on a runner with every core saturated
     /// differed from the first by one shade at most.
     ///
-    /// The wait turns the run loop, which is also what SwiftUI commits its layout on.
-    private static func composited(_ window: UIWindow) throws {
+    /// The wait turns the run loop, which is also what SwiftUI commits its layout on. It returns the count still running, so the capture can stamp what the count was when it
+    /// drew; the caller stops it.
+    private static func composited(_ window: UIWindow) throws -> FrameCounter {
         CATransaction.flush()
         let counter = FrameCounter()
-        let link = CADisplayLink(target: counter, selector: #selector(FrameCounter.tick))
-        link.add(to: .main, forMode: .common)
-        defer { link.invalidate() }
         let deadline = Date().addingTimeInterval(framesTimeout)
-        while counter.frames < frames {
+        while counter.count < frames {
             guard Date() < deadline else {
-                throw StageError.notComposited(frames: counter.frames, of: frames,
+                counter.stop()
+                throw StageError.notComposited(frames: counter.count, of: frames,
                                                in: framesTimeout)
             }
             RunLoop.current.run(mode: .default,
                                 before: min(deadline, Date().addingTimeInterval(0.1)))
         }
-        framesBeforeLastPicture = counter.frames
+        return counter
     }
 
+    /// The display's frames, counted from when it is made until it is stopped.
     private final class FrameCounter: NSObject {
-        var frames = 0
-        @objc func tick(_ link: CADisplayLink) { frames += 1 }
+        private(set) var count = 0
+        private var link: CADisplayLink?
+
+        override init() {
+            super.init()
+            let link = CADisplayLink(target: self, selector: #selector(tick))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        }
+
+        @objc private func tick(_ link: CADisplayLink) { count += 1 }
+
+        /// The link holds its target, so it is invalidated here rather than left to a deinit
+        /// that would never come.
+        func stop() {
+            link?.invalidate()
+            link = nil
+        }
     }
 
     enum StageError: Error, CustomStringConvertible {
