@@ -90,6 +90,27 @@ final class UserlandTests: XCTestCase {
         XCTAssertEqual(claude.fetches, 2, "Claude Code on the phone was fetched again")
     }
 
+    /// A Claude Code entry whose pin names no version is a failure, not a pin `claude --version`
+    /// is held to an empty string by.
+    func testAClaudeCodePinWithNoVersionFails() async throws {
+        let claude = ScriptedSource()
+        let userland = Userland(installer: RootfsInstaller(directory: base.appendingPathComponent("Userland"), importer: MakesADirectory()),
+                                source: ScriptedSource(), claudeSource: claude)
+        let answer = Answer()
+        Task { @MainActor in await answer.settle { try await userland.claudeCode().binary } }
+        try await until { claude.fetches == 1 }
+        claude.settle(.success(Fetched(file: base.appendingPathComponent("claude"), size: 1,
+                                       sha256: String(repeating: "c", count: 64), version: nil)))
+        try await until(seconds: 5) { answer.result != nil }
+        guard case .failure(let error)? = answer.result else {
+            return XCTFail("claudeCode() handed out a pin with no version: \(String(describing: answer.result))")
+        }
+        XCTAssertEqual((error as? ModelDownloadFailure)?.id, ModelManifest.claudeCode)
+        guard case .failed = userland.claude else {
+            return XCTFail("the phase is \(userland.claude), not failed")
+        }
+    }
+
     /// The diagnostics row says which of the two downloads the guest is waiting on.
     func testTheUserlandRowSaysWhichDownloadIsOutstanding() async throws {
         let rootfs = ScriptedSource(), claude = ScriptedSource()
