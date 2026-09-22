@@ -64,6 +64,8 @@ extension Stubbed {
             #expect(ordinary.refreshToken == "rotated")
             #expect(minted.accessToken == "long-lived")
             #expect(minted.refreshToken == "")
+            #expect(minted.scopes == ["user:inference"])
+            #expect(minted.mintReturnedRefreshToken == true)
             #expect(minted.expiresAt > Date().addingTimeInterval(364 * 86_400))
             #expect(keychain.holdsItem(service: guest.service, account: guest.account))
             let grants = StubURLProtocol.bodies.compactMap { (try? JSONSerialization.jsonObject(with: $0) as? [String: Any])?["grant_type"] as? String }

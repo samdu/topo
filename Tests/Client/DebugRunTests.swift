@@ -24,6 +24,20 @@ final class DebugRunTests: XCTestCase {
         XCTAssertEqual(try guest.load(), tokens)
     }
 
+    func testTheMintLineNamesTheScopeAndNeverAValue() {
+        let minted = Tokens(accessToken: "sk-secret", refreshToken: "", expiresAt: .distantFuture,
+                            scopes: ["user:inference"], mintReturnedRefreshToken: true)
+        let line = DebugRun.mintLine(minted)
+        XCTAssertEqual(line, "userland: mint scope: user:inference; the ordinary tokens carry the refresh token it returned")
+        XCTAssertFalse(line.contains("sk-secret"))
+        var kept = minted
+        kept.mintReturnedRefreshToken = false
+        XCTAssertTrue(DebugRun.mintLine(kept).hasSuffix("it returned no refresh token, the ordinary tokens keep their own"))
+        kept.mintReturnedRefreshToken = nil
+        XCTAssertTrue(DebugRun.mintLine(kept).hasSuffix("not minted by a sign-in (a seeded setup token)"))
+        XCTAssertEqual(DebugRun.mintLine(nil), "userland: mint scope: none, no long-lived token held")
+    }
+
     func testWithoutOneNothingIsTouched() throws {
         let store = InMemoryTokenStore()
         let guest = InMemoryTokenStore()

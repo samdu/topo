@@ -113,8 +113,10 @@ public final class SignIn {
     private func mintGuestToken(from tokens: inout Tokens) async -> Tokens? {
         guard guestStore != nil, !tokens.refreshToken.isEmpty else { return nil }
         guard var minted = try? await oauth.mintLongLived(from: tokens) else { return nil }
-        if !minted.refreshToken.isEmpty { tokens.refreshToken = minted.refreshToken }
+        let returned = !minted.refreshToken.isEmpty
+        if returned { tokens.refreshToken = minted.refreshToken }
         minted.refreshToken = ""
+        minted.mintReturnedRefreshToken = returned
         return minted
     }
 

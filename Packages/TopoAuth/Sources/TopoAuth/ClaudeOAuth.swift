@@ -226,12 +226,17 @@ public struct Tokens: Codable, Sendable, Equatable {
     public var refreshToken: String
     public var expiresAt: Date
     public var scopes: [String]
+    /// On the guest's minted token only: whether the mint came back with a refresh token, which the
+    /// ordinary tokens then carry on with — and whose grant is `scopes`. Nil on every other token.
+    public var mintReturnedRefreshToken: Bool?
 
-    public init(accessToken: String, refreshToken: String, expiresAt: Date, scopes: [String]) {
+    public init(accessToken: String, refreshToken: String, expiresAt: Date, scopes: [String],
+                mintReturnedRefreshToken: Bool? = nil) {
         self.accessToken = accessToken
         self.refreshToken = refreshToken
         self.expiresAt = expiresAt
         self.scopes = scopes
+        self.mintReturnedRefreshToken = mintReturnedRefreshToken
     }
 
     /// True inside the last minute of the token's life, so a caller refreshes before a request fails.

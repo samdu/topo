@@ -165,6 +165,20 @@ extension DebugRun {
     /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
     /// runs, with the base URL and no token. The only path in the app that boots the guest.
     /// Nothing at all when the variable is absent.
+    /// What the mint was granted, for the device run: the scope string (never a value) of the
+    /// minted token, which is the grant of the refresh token the mint returned, and whether the
+    /// ordinary tokens now carry that refresh token. An inference-only grant carried by the
+    /// ordinary tokens is a refresh that may be refused the scopes they ask for.
+    static func mintLine(_ guest: Tokens?) -> String {
+        guard let guest else { return "userland: mint scope: none, no long-lived token held" }
+        let scope = guest.scopes.isEmpty ? "(none returned)" : guest.scopes.joined(separator: " ")
+        switch guest.mintReturnedRefreshToken {
+        case true?: return "userland: mint scope: \(scope); the ordinary tokens carry the refresh token it returned"
+        case false?: return "userland: mint scope: \(scope); it returned no refresh token, the ordinary tokens keep their own"
+        case nil: return "userland: mint scope: \(scope); not minted by a sign-in (a seeded setup token)"
+        }
+    }
+
     @MainActor
     static func userland(_ userland: Userland = .shared,
                          credential: GuestCredential = GuestCredential(store: KeychainTokenStore.guest,
@@ -191,6 +205,7 @@ extension DebugRun {
                 let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
                 guestEnvironment.merge(handed.environment) { _, new in new }
                 say("userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")")
+                say(mintLine(try? KeychainTokenStore.guest.load()))
             } catch {
                 say("userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)")
             }
