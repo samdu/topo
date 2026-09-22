@@ -20,7 +20,7 @@
 # at least one test case, every one of them passed. The target check above counts test cases, so
 # a lane that meant to run one particular test and did not would still pass it; this is the check
 # that says the test itself ran. `TopoUITests/MicrophonePressTests/testX` names one test,
-# `TopoTests/LookStageTests` a whole suite.
+# `TopoTests/TurnRowRenderTests` a whole suite.
 #
 # xunit: the Swift Testing report that `swift test --xunit-output <f>.xml`
 # writes as `<f>-swift-testing.xml` must count at least one test and no

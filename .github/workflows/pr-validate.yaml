@@ -112,9 +112,6 @@ env:
   XCODEGEN_VERSION: 2.46.0
   XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
   RESULTS: ${{ github.workspace }}/ci-results
-  # The TopoTests suites `topo_ui` runs beside the UI tests, and `topo_unit`
-  # skips.
-  UI_JOB_SUITES: LookReachTests
   # The one test only the full lane runs: Parakeet hearing the fixture.
   REAL_EAR_TEST: TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 
@@ -234,18 +231,15 @@ jobs:
   #
   # The Topo scheme's test action is split two ways by test selection, never
   # by leaving a suite's inputs out and letting it skip: `topo_ui` runs the UI
-  # tests and the TopoTests suites named in UI_JOB_SUITES, and `topo_unit`
-  # runs everything else, so a suite added to TopoTests lands in `topo_unit`
-  # without anyone naming it. UI_JOB_SUITES is there for balance: the look
-  # suites render every field to pixels and are the longest in TopoTests, and
-  # one of them beside the UI tests evens the two jobs out.
+  # tests, and `topo_unit` runs everything else, so a suite added to TopoTests
+  # lands in `topo_unit` without anyone naming it.
   #
   # `fail` is a workflow_dispatch input that fails one job on purpose, as its
   # last step, so the gate can be shown holding against each prerequisite.
 
-  # The app targets' own suite (TopoTests) less UI_JOB_SUITES, hosted by the
-  # iOS app and covering the code the watch and TV builds share with the
-  # phone, and the userland package's two bundles.
+  # The app targets' own suite (TopoTests), hosted by the iOS app and covering
+  # the code the watch and TV builds share with the phone, and the userland
+  # package's two bundles.
   topo_unit:
     runs-on: macos-26
     timeout-minutes: 40
@@ -283,13 +277,11 @@ jobs:
       - name: xcodebuild test (Topo, unit and userland)
         run: |
           set -euo pipefail
-          skip=(-skip-testing:TopoUITests)
-          for suite in $UI_JOB_SUITES; do skip+=("-skip-testing:TopoTests/$suite"); done
           xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
           xcodebuild test-without-building \
             -project Topo.xcodeproj -scheme Topo \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
-            "${skip[@]}" \
+            -skip-testing:TopoUITests \
             -resultBundlePath "$RESULTS/Topo-unit.xcresult" \
             2>&1 | tee "$RESULTS/Topo-unit.log"
 
@@ -313,9 +305,9 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
-  # The UI tests (TopoUITests) and UI_JOB_SUITES, behind the input-capable
-  # audio lane on every lane. The press tests over the stub and loading ears
-  # need no model, but `MicrophonePressTests` asserts buffers and samples
+  # The UI tests (TopoUITests), behind the input-capable audio lane on every
+  # lane. The press tests over the stub and loading ears need no model, but
+  # `MicrophonePressTests` asserts buffers and samples
   # reached the tap, which only a host with an input delivers. The full lane
   # adds Parakeet's models and the test in which the real ear hears the
   # fixture; the fast lane deselects that test by name, so it neither runs nor
@@ -418,7 +410,6 @@ jobs:
         run: |
           set -euo pipefail
           select=(-only-testing:TopoUITests)
-          for suite in $UI_JOB_SUITES; do select+=("-only-testing:TopoTests/$suite"); done
           if [ "$LANE" = fast ]; then
             if [ "$DELIBERATE_SKIP" = true ]; then
               echo "::warning::workflow_dispatch fail=skip: the real-ear test stays selected with no models, so it skips."
@@ -438,22 +429,17 @@ jobs:
         if: ${{ always() && steps.audio_lane.outcome == 'success' }}
         run: scripts/ci-audio-lane.sh check after
 
-      # The target as a whole; each of UI_JOB_SUITES by name, since a suite
-      # that was renamed would otherwise leave this job running without it
-      # while it ran in `topo_unit`, unnoticed; and on the full lane the
-      # real-ear test by name: the target check counts test cases, and a lane
-      # that meant to run Parakeet and did not would still pass it.
+      # The target as a whole; and on the full lane the real-ear test by
+      # name: the target check counts test cases, and a lane that meant to run
+      # Parakeet and did not would still pass it.
       - name: Require every test target ran and passed
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
           status=0
-          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-ui.xcresult" TopoUITests TopoTests || status=1
-          named=()
-          for suite in $UI_JOB_SUITES; do named+=("TopoTests/$suite"); done
-          if [ "$LANE" = full ]; then named+=("$REAL_EAR_TEST"); fi
-          if [ "${#named[@]}" -gt 0 ]; then
-            scripts/ci-require-tests.sh named "$RESULTS/Topo-ui.xcresult" "${named[@]}" || status=1
+          scripts/ci-require-tests.sh xcresult "$RESULTS/Topo-ui.xcresult" TopoUITests || status=1
+          if [ "$LANE" = full ]; then
+            scripts/ci-require-tests.sh named "$RESULTS/Topo-ui.xcresult" "$REAL_EAR_TEST" || status=1
           fi
           exit "$status"
 

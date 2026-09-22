@@ -261,10 +261,9 @@ final class TurnRowRenderTests: XCTestCase {
         """
         for screen in [Look.Screen.watch, .tv] {
             let width: CGFloat = screen == .watch ? 180 : 900
-            // A surface's first drawing is not like the ones after it, and this asks two
-            // drawings to be the same picture, so the first one is thrown away — see
-            // `LookReachTests.baseline`, where comparing across that boundary failed on a CI
-            // runner as a field appearing to draw.
+            // A surface's first drawing is not like the ones after it — glyphs are not yet in
+            // the atlas — and this asks two drawings to be the same picture, so the first one is
+            // thrown away.
             _ = try render(PreviewTurns.short, look: Look(screen), width: width)
             let base = try digest(try XCTUnwrap(render(PreviewTurns.short, look: Look(screen), width: width)))
             let other = LookDocument.read(theirs, onto: Look(screen)).look

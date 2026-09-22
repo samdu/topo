@@ -50,11 +50,11 @@ final class LookScreenshots: XCTestCase {
         XCTAssertEqual(reading.notes, [], "the screenshot document does not read")
 
         for (name, style) in [("light", UIUserInterfaceStyle.light), ("dark", .dark)] {
-            // The same surface every other compared still uses, for the same reason: a
-            // transcript taller than its stage scrolls to its end and comes to rest a pixel or
-            // two apart between two drawings, and this asks whether two drawings differ. Drawn
-            // long, the difference could be that drift rather than the document.
-            let canvas = LookReachTests.Surface.staged(row: .writing)
+            // A transcript that fits its stage: one taller than it scrolls to its end and comes
+            // to rest a pixel or two apart between two drawings, and this asks whether two
+            // drawings differ. Drawn long, the difference could be that drift rather than the
+            // document.
+            let canvas = ChatCanvas(turns: PreviewTurns.fitting, row: .writing)
             _ = try LookStage.image(canvas, look: Look(), style: style)
             let compiled = try LookStage.image(canvas, look: Look(), style: style)
             let written = try LookStage.image(canvas, look: reading.look, style: style)
