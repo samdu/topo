@@ -122,8 +122,9 @@ jobs:
   # Which lane this run takes, and why, said in its log and its summary.
   #
   #   pull_request       the paths the PR changes against main: `full` when any
-  #                      is on the voice path below, `fast` otherwise
-  #                      (scripts/ci-select-lane.sh, whose test reads this list).
+  #                      is on the voice path below or when the diff cannot be
+  #                      read, `fast` otherwise (scripts/ci-select-lane.sh,
+  #                      whose test reads this list and runs this step).
   #   schedule           `full`: the nightly run on main.
   #   workflow_dispatch  the `lane` input: `full` by default, which is the
   #                      nightly's body run by hand, or `fast-benchmark`, which
@@ -181,9 +182,8 @@ jobs:
           set -euo pipefail
           case "$EVENT" in
             pull_request)
-              git diff --name-only HEAD^1 HEAD > "$RUNNER_TEMP/changed.txt"
-              echo "Changed paths:"; sed 's/^/  /' "$RUNNER_TEMP/changed.txt"
-              scripts/ci-select-lane.sh < "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/lane.txt"
+              # A diff that cannot be read selects full, inside the script.
+              scripts/ci-select-lane.sh --git HEAD^1 HEAD > "$RUNNER_TEMP/lane.txt"
               ;;
             schedule)
               printf 'lane=full\nreason=the nightly run on main\n' > "$RUNNER_TEMP/lane.txt"
@@ -628,8 +628,10 @@ jobs:
           if-no-files-found: warn
 
   # The gate over the suite, and the required status check on main that holds
-  # a red suite out. It is green only when every suite job concluded
-  # `success`: a failure, a cancellation or a skip each fail it, by name.
+  # a red suite out. On a completed run it is green only when every suite job
+  # concluded `success`, and it names each that did not. A cancelled run skips
+  # it (`!cancelled()`) and concludes cancelled, and automerge merges only on
+  # the latest pull_request run concluding `completed success`.
   # A macOS runner that never picks a job up therefore holds the merge —
   # deliberately, because a reviewer round spent on a build that does not
   # compile is a round wasted, and a merge waved through on a red suite is

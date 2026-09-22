@@ -4,9 +4,12 @@
 # its SUITE_RESULTS, in `codex`'s needs with `needs.<job>.result == 'success'` in its `if`, and in
 # `reviewer_ran`'s and `review_gate`'s needs, with reviewer_ran's SUITE_RESULTS naming it too. Then
 # it runs the two snippets that read those results — `test`'s `Require every suite job passed` and
-# reviewer_ran's `Assert a verdict was produced and delivered` — with each job failed, cancelled
-# and skipped in turn, and holds that each goes red naming the job, and that both pass only when
-# every job succeeded. So a suite job added without being wired into the gate, or a gate snippet
+# reviewer_ran's `Assert a verdict was produced and delivered` — with each job's result set in turn
+# to every value other than `success` (failure, cancelled, skipped, and empty for `test`), and holds
+# that each goes red naming the job, and that both pass only when every job succeeded. That is the
+# snippets' reading of a result string, not a cancelled run: a run that is cancelled skips `test`
+# (`!cancelled()`) and concludes cancelled, and automerge merges only on the latest pull_request
+# run concluding `completed success` (.github/workflows/automerge.yaml). So a suite job added without being wired into the gate, or a gate snippet
 # that reads one job fewer, turns this red.
 #
 #   scripts/tests/suite-gate-test.sh
@@ -100,7 +103,7 @@ SUITE_RESULTS="$(results none success)" expect pass "test: every suite job succe
 for job in "${suite[@]}"; do
   for result in failure cancelled skipped ""; do
     SUITE_RESULTS="$(results "$job" "$result")" \
-      expect fail "test: $job ${result:-empty}" "$job did not pass" "$work/gate.sh"
+      expect fail "test: $job result=${result:-empty}" "$job did not pass" "$work/gate.sh"
   done
 done
 
@@ -109,7 +112,7 @@ SUITE_RESULTS="$(results none success test)" expect pass "reviewer_ran: every su
 for job in "${suite[@]}" test; do
   for result in failure cancelled skipped; do
     SUITE_RESULTS="$(results "$job" "$result" test)" \
-      expect fail "reviewer_ran: $job $result" "the suite did not pass.* $job ($result)" "$work/ran.sh"
+      expect fail "reviewer_ran: $job result=$result" "the suite did not pass.* $job ($result)" "$work/ran.sh"
   done
 done
 

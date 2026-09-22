@@ -3,7 +3,9 @@
 # declares it (the `VOICE_PATHS` of the select job's `Choose the lane` step, read from the file
 # rather than copied, so an entry dropped there is an entry this test no longer expects): a change
 # outside the list selects the fast lane, a change to each entry on the list selects the full one,
-# and every way the inputs can be missing selects full or fails, never fast.
+# and every way the inputs can be missing selects full or fails, never fast. Then it runs the select
+# step itself out of the workflow on a pull_request event in scratch repositories, a diff producer
+# that fails among them.
 #
 #   scripts/tests/ci-select-lane-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/ci-select-lane-test.sh
@@ -76,6 +78,58 @@ if [ "$status" = 2 ] && ! grep -q '^lane=' <<<"$out"; then
 else
   fail "an empty VOICE_PATHS: exit $status: $out"
 fi
+
+# The select step itself, extracted from the workflow and run on a pull_request event in a scratch
+# repository: a diff it can read chooses by the paths, and a diff producer that fails — HEAD^1
+# missing, as in a checkout too shallow to hold the merge commit's parent — chooses full and says
+# so, rather than killing the step and leaving the run with no lane.
+step_run="$(ruby -ryaml -e '
+  w = YAML.load_file(ARGV[0])
+  print w.fetch("jobs").fetch("select").fetch("steps").find { |s| s["id"] == "lane" }.fetch("run")
+' "$workflow")" || exit 2
+scratch="$(mktemp -d -t ci-select-lane-test)"
+trap 'rm -rf "$scratch"' EXIT
+
+# run_step <case> <repo> <expected lane> <expected reason pattern>
+run_step() {
+  local name="$1" repo="$2" want="$3" match="$4" out status lane reason
+  : > "$scratch/output"
+  out="$(cd "$repo" && EVENT=pull_request DISPATCH_LANE='' VOICE_PATHS="$voice_paths" \
+    RUNNER_TEMP="$scratch" GITHUB_OUTPUT="$scratch/output" GITHUB_STEP_SUMMARY="$scratch/summary" \
+    bash -eo pipefail -c "$step_run" 2>&1)" && status=0 || status=$?
+  lane="$(sed -n 's/^lane=//p' "$scratch/output")"
+  reason="$(sed -n 's/^reason=//p' "$scratch/output")"
+  if [ "$status" != 0 ] || [ "$lane" != "$want" ] || ! grep -q -- "$match" <<<"$reason"; then
+    fail "step, $name: wanted lane=$want and a reason matching '$match', got exit $status, lane=$lane, reason=$reason: $out"
+  else
+    echo "ok   step, $name → $lane ($reason)"
+  fi
+}
+
+# repo <dir> <path>... — a scratch repository whose last commit adds each path.
+repo() {
+  local dir="$1"; shift
+  mkdir -p "$dir/scripts"
+  cp "$script" "$dir/scripts/ci-select-lane.sh"
+  # A branch of its own and no hooks: whatever hooks this machine installs are not the test's.
+  git -C "$dir" init -q -b scratch
+  git -C "$dir" config core.hooksPath /dev/null
+  git -C "$dir" -c user.name=t -c user.email=t@t add -A
+  git -C "$dir" -c user.name=t -c user.email=t@t commit -qm base
+  local path
+  for path in "$@"; do mkdir -p "$dir/$(dirname "$path")"; echo x > "$dir/$path"; done
+  if [ "$#" -gt 0 ]; then
+    git -C "$dir" -c user.name=t -c user.email=t@t add -A
+    git -C "$dir" -c user.name=t -c user.email=t@t commit -qm change
+  fi
+}
+
+repo "$scratch/fast" docs/design.md
+run_step "a diff outside the voice path" "$scratch/fast" fast "none of the 1 changed paths"
+repo "$scratch/full" Apps/Client/Ear.swift
+run_step "a diff on the voice path" "$scratch/full" full "Apps/Client/Ear.swift is on the voice path"
+repo "$scratch/shallow"
+run_step "a diff producer that fails (no HEAD^1)" "$scratch/shallow" full "changed paths are unknown"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

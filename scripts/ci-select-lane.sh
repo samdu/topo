@@ -4,7 +4,12 @@
 # and the UI test in which Parakeet hears the fixture through the microphone. The input-capable
 # audio lane and the press tests over the stub and loading ears run in both.
 #
+#   VOICE_PATHS="$patterns" scripts/ci-select-lane.sh --git HEAD^1 HEAD
 #   git diff --name-only HEAD^1 HEAD | VOICE_PATHS="$patterns" scripts/ci-select-lane.sh
+#
+# With `--git <base> <head>` it reads the changed paths itself, from `git diff --name-only`, and
+# prints them to stderr; a diff that fails (a base the checkout does not hold, a shallow clone)
+# is changed paths unknown, which selects full and says why. Without it, the paths come on stdin.
 #
 # VOICE_PATHS is the path list, one bash glob per line (`*` crosses `/`, so `Tests/ClientUI/*`
 # is everything under it); blank lines and lines starting with `#` are ignored. The list lives in
@@ -25,10 +30,24 @@ while IFS= read -r line; do
 done <<< "${VOICE_PATHS:-}"
 [ "${#patterns[@]}" -gt 0 ] || { echo "::error::VOICE_PATHS is empty: there is no voice path to select a lane against." >&2; exit 2; }
 
+if [ "${1:-}" = --git ]; then
+  [ "$#" -eq 3 ] || { echo "usage: $0 [--git <base> <head>]" >&2; exit 2; }
+  if ! changed="$(git diff --name-only "$2" "$3" 2>&1)"; then
+    echo "The changed paths could not be read: $changed" >&2
+    echo "lane=full"
+    echo "reason=the changed paths are unknown (git diff $2 $3 failed: $(head -n 1 <<<"$changed")), so the lane is full"
+    exit 0
+  fi
+  echo "Changed paths:" >&2
+  sed 's/^/  /' <<<"$changed" >&2
+else
+  changed="$(cat)"
+fi
+
 paths=()
 while IFS= read -r path; do
   [ -z "$path" ] || paths+=("$path")
-done
+done <<< "$changed"
 
 if [ "${#paths[@]}" -eq 0 ]; then
   echo "lane=full"
