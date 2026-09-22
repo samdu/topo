@@ -146,11 +146,38 @@ public struct ClaudeOAuth: Sendable {
         return refreshed
     }
 
+    /// How long the guest's token is asked to live: a year, what `claude setup-token` asks for.
+    public static let longLivedLifetime = 31_536_000
+    /// The one scope the guest's token carries: inference, as a setup token's does.
+    public static let inferenceScope = "user:inference"
+
+    /// Mints the long-lived, inference-only token the guest runs Claude Code on, the kind
+    /// `claude setup-token` mints, from the refresh token of an ordinary sign-in. It is the Claude
+    /// Code CLI's own login from a refresh token (`CLAUDE_CODE_OAUTH_REFRESH_TOKEN`): the refresh
+    /// grant with the scopes wanted and `expires_in` set to a year. What comes back is the minted
+    /// token and whatever refresh token the server returned with it (empty when it returned none),
+    /// which is the one the ordinary tokens carry on with, since the server may rotate the one
+    /// spent here.
+    public func mintLongLived(from tokens: Tokens) async throws -> Tokens {
+        let body: [String: Any] = [
+            "grant_type": "refresh_token",
+            "refresh_token": tokens.refreshToken,
+            "client_id": configuration.clientID,
+            "scope": Self.inferenceScope,
+            "expires_in": Self.longLivedLifetime,
+        ]
+        return try await post(JSONSerialization.data(withJSONObject: body))
+    }
+
     private func post(_ body: [String: String]) async throws -> Tokens {
+        try await post(JSONEncoder().encode(body))
+    }
+
+    private func post(_ body: Data) async throws -> Tokens {
         var request = URLRequest(url: configuration.tokenURL)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.httpBody = body
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard status == 200 else { throw status == 401 ? Error.invalidCode : Error.http(status: status) }

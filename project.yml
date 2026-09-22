@@ -35,6 +35,10 @@ packages:
   # resolves; the iOS app only.
   TopoUserland:
     path: Packages/TopoUserland
+  # The loopback relay Claude Code in the guest reaches api.anthropic.com through: plain HTTP in
+  # on 127.0.0.1, TLS out. The iOS app only.
+  TopoProxy:
+    path: Packages/TopoProxy
   # The phone's ear and its voice: NVIDIA Parakeet as CoreML with its CTC keyword spotter for
   # the vocabulary rescoring (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
   # (Apps/Client/Voice.swift). Pinned exactly: neither the vocabulary-boosting API the ear
@@ -73,6 +77,7 @@ targets:
       - package: TopoTurn
       - package: FluidAudio
       - package: TopoUserland
+      - package: TopoProxy
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built

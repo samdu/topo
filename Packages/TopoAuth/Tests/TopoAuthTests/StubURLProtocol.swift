@@ -16,6 +16,17 @@ final class StubURLProtocol: URLProtocol {
     nonisolated(unsafe) static var lastBody: Data?
     /// Runs while the request is in flight, before the reply lands.
     nonisolated(unsafe) static var beforeResponse: (@Sendable () -> Void)?
+    /// Answers each request from its body instead of the last `respond(...)`, when set: for a flow
+    /// that makes more than one request and needs a different answer to each.
+    nonisolated(unsafe) static var responder: (@Sendable (_ body: [String: Any]) -> (status: Int, json: String))?
+    /// Every request body since the last `reset()`, in order.
+    nonisolated(unsafe) static var bodies: [Data] = []
+
+    static func reset() {
+        responder = nil
+        bodies = []
+        beforeResponse = nil
+    }
 
     static func respond(status: Int, json: String) {
         self.status = status
@@ -44,9 +55,17 @@ final class StubURLProtocol: URLProtocol {
             return data
         }
         Self.beforeResponse?()
-        let response = HTTPURLResponse(url: request.url!, statusCode: Self.status, httpVersion: nil, headerFields: nil)!
+        let sent = Self.lastBody ?? Data()
+        Self.bodies.append(sent)
+        var status = Self.status, body = Self.body
+        if let responder = Self.responder {
+            let answer = responder((try? JSONSerialization.jsonObject(with: sent) as? [String: Any]) ?? [:])
+            status = answer.status
+            body = Data(answer.json.utf8)
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-        client?.urlProtocol(self, didLoad: Self.body)
+        client?.urlProtocol(self, didLoad: body)
         client?.urlProtocolDidFinishLoading(self)
     }
 

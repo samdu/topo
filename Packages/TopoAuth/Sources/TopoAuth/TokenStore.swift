@@ -32,6 +32,9 @@ public struct KeychainTokenStore: TokenStore {
         public var status: OSStatus
     }
 
+    /// The guest's long-lived token, its own item beside the ordinary tokens in the same service.
+    public static let guest = KeychainTokenStore(account: "claude-guest")
+
     private func query() throws -> [String: Any] {
         var q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,

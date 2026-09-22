@@ -19,13 +19,18 @@ public final class SignIn {
     public private(set) var phase: Phase = .idle
     public let oauth: ClaudeOAuth
     public let store: TokenStore
+    /// Where the guest's long-lived token is kept, or nil on a device that runs no guest (the hub,
+    /// the watch, the television), which mints none.
+    public let guestStore: TokenStore?
 
     private var attempt: ClaudeOAuth.Attempt?
     private var loopback: LoopbackCallback?
 
-    public init(oauth: ClaudeOAuth = ClaudeOAuth(), store: TokenStore = KeychainTokenStore()) {
+    public init(oauth: ClaudeOAuth = ClaudeOAuth(), store: TokenStore = KeychainTokenStore(),
+                guestStore: TokenStore? = nil) {
         self.oauth = oauth
         self.store = store
+        self.guestStore = guestStore
         if (try? store.load()) != nil { phase = .signedIn }
     }
 
@@ -74,6 +79,7 @@ public final class SignIn {
 
     public func signOut() {
         try? store.clear()
+        try? guestStore?.clear()
         cancel()
         phase = .idle
     }
@@ -82,8 +88,12 @@ public final class SignIn {
         guard let attempt else { fail("No sign-in in progress."); return }
         phase = .exchanging
         do {
-            let tokens = try await oauth.exchange(code: code, state: state, attempt: attempt)
+            var tokens = try await oauth.exchange(code: code, state: state, attempt: attempt)
+            let guest = await mintGuestToken(from: &tokens)
             try store.save(tokens)
+            if let guestStore {
+                if let guest { try guestStore.save(guest) } else { try guestStore.clear() }
+            }
             loopback = nil
             self.attempt = nil
             phase = .signedIn
@@ -94,6 +104,18 @@ public final class SignIn {
         } catch {
             fail("Sign-in failed: \(error)")
         }
+    }
+
+    /// The guest's long-lived token, minted from the fresh sign-in's refresh token, or nil when this
+    /// device mints none or the endpoint would not mint one — in which case the guest is handed the
+    /// ordinary access token instead (`GuestCredential`). A refresh token the mint came back with
+    /// replaces the one it spent, so the ordinary tokens carry on whether or not the server rotates.
+    private func mintGuestToken(from tokens: inout Tokens) async -> Tokens? {
+        guard guestStore != nil, !tokens.refreshToken.isEmpty else { return nil }
+        guard var minted = try? await oauth.mintLongLived(from: tokens) else { return nil }
+        if !minted.refreshToken.isEmpty { tokens.refreshToken = minted.refreshToken }
+        minted.refreshToken = ""
+        return minted
     }
 
     private func fail(_ message: String) {

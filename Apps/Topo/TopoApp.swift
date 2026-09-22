@@ -24,7 +24,8 @@ struct TopoApp: App {
         // so a launch can be the relaunch that comes back to a row it never finished sending.
         DebugRun.seedOutbox()
         #endif
-        _signIn = State(initialValue: SignIn())
+        // The phone runs the guest, so its sign-in mints the guest's long-lived token too.
+        _signIn = State(initialValue: SignIn(guestStore: KeychainTokenStore.guest))
         _harness = State(initialValue: Harness.standard())
         _memory = State(initialValue: Memory.standard())
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),

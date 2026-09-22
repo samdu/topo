@@ -77,6 +77,16 @@ enum DebugRun {
         try? await Task.sleep(for: .seconds(seconds))
     }
 
+    /// Where the guest's long-lived token lives on this platform: the phone runs a guest, and
+    /// nothing else here does.
+    static var defaultGuestStore: TokenStore? {
+        #if os(iOS)
+        KeychainTokenStore.guest
+        #else
+        nil
+        #endif
+    }
+
     /// Puts a long-lived Claude Code setup token in the store as if a sign-in had just finished, so
     /// the app comes up past the sign-in screen. Does nothing when the variable is absent, which is
     /// every ordinary debug build: an engineer's own sign-in is left exactly as it was.
@@ -87,6 +97,7 @@ enum DebugRun {
     /// the empty refresh token is rejected and the turn reports it.
     @discardableResult
     static func signIn(store: TokenStore = KeychainTokenStore(),
+                       guestStore: TokenStore? = defaultGuestStore,
                        environment: [String: String] = ProcessInfo.processInfo.environment,
                        now: Date = Date()) -> Bool {
         let token = (environment[tokenVariable] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -98,6 +109,8 @@ enum DebugRun {
                             scopes: ClaudeOAuth.Configuration.claude.scopes)
         do {
             try store.save(tokens)
+            // A setup token is the long-lived kind the guest runs on, so it is the guest's too.
+            try guestStore?.save(tokens)
             say("signed in from \(tokenVariable) for \(Int(days)) days")
             return true
         } catch {

@@ -8,8 +8,9 @@ import XCTest
 final class DebugRunTests: XCTestCase {
     func testATokenInTheEnvironmentSignsTheAppIn() throws {
         let store = InMemoryTokenStore()
+        let guest = InMemoryTokenStore()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        XCTAssertTrue(DebugRun.signIn(store: store,
+        XCTAssertTrue(DebugRun.signIn(store: store, guestStore: guest,
                                       environment: ["TOPO_CLAUDE_SETUP_TOKEN": "  sk-ant-oat01-test  ",
                                                     "TOPO_CLAUDE_SETUP_TOKEN_DAYS": "2"],
                                       now: now))
@@ -19,13 +20,17 @@ final class DebugRunTests: XCTestCase {
         XCTAssertTrue(tokens.refreshToken.isEmpty)
         XCTAssertEqual(tokens.expiresAt, now.addingTimeInterval(2 * 86_400))
         XCTAssertFalse(tokens.isExpired(at: now))
+        // A setup token is the long-lived kind, so the guest is handed the same one.
+        XCTAssertEqual(try guest.load(), tokens)
     }
 
     func testWithoutOneNothingIsTouched() throws {
         let store = InMemoryTokenStore()
-        XCTAssertFalse(DebugRun.signIn(store: store, environment: [:]))
-        XCTAssertFalse(DebugRun.signIn(store: store, environment: ["TOPO_CLAUDE_SETUP_TOKEN": "   "]))
+        let guest = InMemoryTokenStore()
+        XCTAssertFalse(DebugRun.signIn(store: store, guestStore: guest, environment: [:]))
+        XCTAssertFalse(DebugRun.signIn(store: store, guestStore: guest, environment: ["TOPO_CLAUDE_SETUP_TOKEN": "   "]))
         XCTAssertNil(try store.load())
+        XCTAssertNil(try guest.load())
     }
 
     func testOnlyAnAskedForTurnIsSent() {

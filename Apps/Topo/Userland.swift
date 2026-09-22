@@ -1,5 +1,7 @@
 import Foundation
 import Observation
+import TopoAuth
+import TopoProxy
 import TopoUserland
 
 /// Where the rootfs tarball comes from: fetched, verified by the downloader, and handed over with
@@ -156,12 +158,17 @@ final class Userland {
 extension DebugRun {
     static let userlandVariable = "TOPO_DEBUG_USERLAND"
 
-    /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs, boot the guest, run
-    /// the command under `/bin/sh -c`, and print what it wrote and how it exited, each line
-    /// prefixed, for `scripts/simulator-run.sh --userland` to assert on. The only path in the app
-    /// that boots the guest. Nothing at all when the variable is absent.
+    /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs, boot the guest, start
+    /// the API proxy on loopback, run the command under `/bin/sh -c` with `ANTHROPIC_BASE_URL`
+    /// pointing at the proxy and `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token, and print what
+    /// it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh --userland` to
+    /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
+    /// runs, with the base URL and no token. The only path in the app that boots the guest.
+    /// Nothing at all when the variable is absent.
     @MainActor
     static func userland(_ userland: Userland = .shared,
+                         credential: GuestCredential = GuestCredential(store: KeychainTokenStore.guest,
+                                                                       fallback: StoredTokenProvider(store: KeychainTokenStore())),
                          environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let command = environment[userlandVariable], !command.isEmpty else { return }
         say("userland: \(userland.summary)")
@@ -175,7 +182,19 @@ extension DebugRun {
             }
             try Guest.shared.boot(fakefs: fakefs)
             say("userland: booted")
-            let exit = try await Guest.shared.run("/bin/sh", ["-c", command])
+            let proxy = try APIProxy(log: { line in say("proxy: \(line)") })
+            let port = try await proxy.start()
+            defer { Task { await proxy.stop() } }
+            var guestEnvironment = Guest.environment
+            guestEnvironment["ANTHROPIC_BASE_URL"] = APIProxy.baseURL(port: port)
+            do {
+                let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
+                guestEnvironment.merge(handed.environment) { _, new in new }
+                say("userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")")
+            } catch {
+                say("userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)")
+            }
+            let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment)
             var lines = exit.output.split(separator: "\n", omittingEmptySubsequences: false)
             if lines.last == "" { lines.removeLast() }
             for line in lines {
