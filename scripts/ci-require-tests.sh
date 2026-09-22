@@ -2,6 +2,7 @@
 # Fails unless the named tests actually ran and every one of them passed.
 #
 #   scripts/ci-require-tests.sh xcresult <bundle.xcresult> <TestTarget>...
+#   scripts/ci-require-tests.sh named <bundle.xcresult> <Target/Suite[/test]>...
 #   scripts/ci-require-tests.sh xunit <package-swift-testing.xml>
 #
 # A green `xcodebuild test` or `swift test` does not say a test ran: a scheme
@@ -14,6 +15,12 @@
 # passed — a skipped test or an expected failure fails here too, because either
 # is a test that did not prove what it names. No skip is allowed anywhere. A
 # bundle that is absent (the build failed before testing) fails.
+#
+# named: each named suite, or single test, must appear in the result bundle under its target with
+# at least one test case, every one of them passed. The target check above counts test cases, so
+# a lane that meant to run one particular test and did not would still pass it; this is the check
+# that says the test itself ran. `TopoUITests/MicrophonePressTests/testX` names one test,
+# `TopoTests/LookStageTests` a whole suite.
 #
 # xunit: the Swift Testing report that `swift test --xunit-output <f>.xml`
 # writes as `<f>-swift-testing.xml` must count at least one test and no
@@ -57,6 +64,40 @@ case "$mode" in
     done
     exit "$status"
     ;;
+  named)
+    [ "$#" -ge 3 ] || fail "usage: $0 named <bundle.xcresult> <Target/Suite[/test]>..."
+    bundle="$2"; shift 2
+    [ -d "$bundle" ] || fail "$bundle does not exist: the tests never produced a result bundle."
+
+    tests="$(xcrun xcresulttool get test-results tests --path "$bundle" --format json)" \
+      || fail "xcresulttool could not read $bundle."
+    status=0
+    for name in "$@"; do
+      IFS=/ read -r target suite test <<<"$name"
+      if [ -z "$target" ] || [ -z "$suite" ]; then
+        echo "::error::$name is not Target/Suite or Target/Suite/test."
+        status=1; continue
+      fi
+      results="$(jq -c --arg t "$target" --arg s "$suite" --arg c "$test" '
+        [.testNodes[] | .. | objects
+          | select((.nodeType // "") | endswith("test bundle")) | select(.name == $t)
+          | .. | objects | select(.nodeType == "Test Case")
+          | select(if $c == "" then (.nodeIdentifier // "" | startswith($s + "/"))
+                   else (.nodeIdentifier == ($s + "/" + $c + "()") or .nodeIdentifier == ($s + "/" + $c)) end)
+          | .result]' <<<"$tests")"
+      total="$(jq 'length' <<<"$results")"
+      if [ "$total" -eq 0 ]; then
+        echo "::error::$name is not in $(basename "$bundle"): it did not run."
+        status=1
+      elif [ "$(jq '[.[] | select(. != "Passed")] | length' <<<"$results")" -ne 0 ]; then
+        echo "::error::$name did not pass: $(jq -c 'group_by(.) | map({(.[0]): length}) | add' <<<"$results")."
+        status=1
+      else
+        echo "$name: $total test cases, all passed."
+      fi
+    done
+    exit "$status"
+    ;;
   xunit)
     [ "$#" -eq 2 ] || fail "usage: $0 xunit <package-swift-testing.xml>"
     report="$2"
@@ -69,6 +110,6 @@ case "$mode" in
     echo "$(basename "$report"): $total tests, all passed."
     ;;
   *)
-    fail "usage: $0 xcresult <bundle.xcresult> <TestTarget>... | xunit <report.xml>"
+    fail "usage: $0 xcresult <bundle.xcresult> <TestTarget>... | named <bundle.xcresult> <Target/Suite[/test]>... | xunit <report.xml>"
     ;;
 esac
