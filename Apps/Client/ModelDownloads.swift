@@ -308,6 +308,8 @@ final class ModelDownloads {
             done[model.id] = store.verifiedBytes(model)
             if store.isPresent(model) { present.insert(model.id) }
         }
+        // What an earlier manifest left behind, for every model already present.
+        if let manifest = self.manifest { store.sweep(manifest) }
     }
 
     /// Where a model's files are, for its loader. Throws for a name the manifest lacks.
@@ -434,6 +436,7 @@ final class ModelDownloads {
             done[id, default: 0] += size
             if let model = manifest?.model(id), store.isPresent(model) {
                 present.insert(id)
+                if let manifest { store.sweep(manifest) }
                 let ready = waiters.filter { $0.ids.allSatisfy(present.contains) }
                 waiters.removeAll { $0.ids.allSatisfy(present.contains) }
                 ready.forEach { $0.body() }

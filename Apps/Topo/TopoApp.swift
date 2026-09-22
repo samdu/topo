@@ -31,13 +31,15 @@ struct TopoApp: App {
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
         _audio = State(initialValue: audio)
-        // A debug build launched asking for a stub ear gets one; every other launch, the real one.
+        // The compile cache a new install leaves behind is cleared before the ear and the voice
+        // exist, so no model is loading while it goes. A debug build launched asking for a stub
+        // ear gets one; every other launch, the real one.
         #if DEBUG
-        let ear = DebugRun.ear()
-        let spoken = DebugRun.voice()
+        let (ear, spoken) = ModelHousekeeping.launch(clear: ModelHousekeeping.clearCompileCache,
+                                                     ear: { DebugRun.ear() }, voice: { DebugRun.voice() })
         #else
-        let ear = Ear()
-        let spoken = Voice()
+        let (ear, spoken) = ModelHousekeeping.launch(clear: ModelHousekeeping.clearCompileCache,
+                                                     ear: { Ear() }, voice: { Voice() })
         #endif
         _voice = State(initialValue: VoiceInput(audio: audio, ear: ear))
         _speaker = State(initialValue: Speaker(audio: audio, voice: spoken))

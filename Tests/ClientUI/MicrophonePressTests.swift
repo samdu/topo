@@ -86,7 +86,7 @@ final class MicrophonePressTests: XCTestCase {
         mic.press(forDuration: 1.5)
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 3), "the app survived the hold")
         let after = try waitForReport(app, timeout: 30, "the hold reached VoiceInput") { $0.refusal != nil }
-        XCTAssertEqual(after.refusal, "loading", "the refusal is the ear's own words: \(after.raw)")
+        XCTAssertEqual(after.refusal, "preparing the models for this phone", "the refusal is the ear's own words: \(after.raw)")
         XCTAssertEqual(after.sessions, before.sessions, "a refused hold opened no session: \(after.raw)")
         XCTAssertEqual(after.capture, Capture(), "a refused hold delivered nothing: \(after.raw)")
         XCTAssertEqual(app.state, .runningForeground)

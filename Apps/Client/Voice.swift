@@ -36,7 +36,8 @@ import FluidAudio
 @Observable
 final class Voice {
     /// `fetching` is the wait for `ModelDownloads` to have every file; `loading` is the CoreML
-    /// compile from disk, which the first load pays.
+    /// compile from disk, which the first load after an install pays: the Neural Engine
+    /// compiling the model for this phone.
     enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
@@ -45,6 +46,9 @@ final class Voice {
 
     /// The manifest entries the voice needs on disk.
     static let models = [ModelManifest.pocket]
+
+    /// What `loading` reads as: the step a first load after an install spends its time in.
+    static let preparing = "preparing the model for this phone"
 
     /// The speaker: one of the pack's stock voices, resolved by the port against the language
     /// pack's `constants_bin/`. The manifest fetches this one only.
@@ -94,7 +98,7 @@ final class Voice {
         switch state {
         case .cold: return "not loaded"
         case .fetching: return ModelDownloads.shared.describe(Self.models)
-        case .loading: return "loading"
+        case .loading: return Self.preparing
         case .ready: return "Pocket resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
