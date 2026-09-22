@@ -55,15 +55,25 @@ case "$2" in
       answered) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run: hi"; say "done"
                 exec sleep 600 ;;
       launched) exit 0 ;;
-      userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"; say "userland: booted"
+      userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"
+                        say "userland: claude code 2.1.278 fetched"; say "userland: booted"
+                        say "userland: claude code 2.1.278 verified in 310 ms, mounted at /usr/local/bin/claude"
                         say "guest: hi"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
       userland-reused) say "userland: ready"; say "userland: rootfs reused: nothing fetched, nothing imported"
-                       say "userland: booted"; say "guest: hi"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
+                       say "userland: claude code 2.1.278 reused: nothing fetched, nothing copied"; say "userland: booted"
+                       say "userland: claude code 2.1.278 verified in 290 ms, mounted at /usr/local/bin/claude"
+                       say "guest: hi"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
+      userland-unmounted) say "userland: rootfs reused: nothing fetched, nothing imported"
+                          say "userland: claude code 2.1.278 reused: nothing fetched, nothing copied"; say "userland: booted"
+                          say "guest: hi"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
       userland-error) say "userland: ready"; say "userland error: the kernel refused to boot (-2)"; say "userland done"
                       exec sleep 600 ;;
-      userland-exit-1) say "userland: booted"; say "guest: hi"; say "guest exit: 1"; say "userland done"; exec sleep 600 ;;
-      userland-other-output) say "userland: booted"; say "guest: hi there"; say "guest exit: 0"; say "userland done"
-                             exec sleep 600 ;;
+      userland-exit-1) say "userland: booted"
+                       say "userland: claude code 2.1.278 verified in 290 ms, mounted at /usr/local/bin/claude"
+                       say "guest: hi"; say "guest exit: 1"; say "userland done"; exec sleep 600 ;;
+      userland-other-output) say "userland: booted"
+                             say "userland: claude code 2.1.278 verified in 290 ms, mounted at /usr/local/bin/claude"
+                             say "guest: hi there"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
       userland-dies) say "userland: booted"; exit 42 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
@@ -97,6 +107,13 @@ case_() {
   fi
 }
 
+# One untimed run first. The first case to exec the script, python3 (the device lookup), uuidgen
+# and the fakes on a fresh runner pays for loading them, which has taken from 0 s to 9 s on the
+# same script with the same scenario; the limits below are about what the script waits for, not
+# about a cold disk.
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=6 FAKE_LAUNCH=exits-42 \
+  "$work/root/scripts/simulator-run.sh" --no-build >/dev/null 2>&1 </dev/null
+
 case_ no-send-launcher-exits-nonzero       fail exits-42             5
 case_ no-send-stale-reply-launcher-exits-42 fail stale-reply-exits-42 5
 case_ send-stale-reply-launcher-exits-42   fail stale-reply-exits-42 5  --send "new message"
@@ -119,6 +136,11 @@ case_ userland-exit-nonzero                fail userland-exit-1      5  --userla
 case_ userland-other-output                fail userland-other-output 5 --userland "echo hi" --expect hi
 case_ userland-launcher-dies               fail userland-dies        5  --userland "echo hi"
 case_ userland-times-out-silent            fail silent               12 --userland "echo hi"
+case_ userland-claude-fetched-as-expected  pass userland-fetched     5  --userland "claude --version" --expect-claude fetched
+case_ userland-claude-reused-as-expected   pass userland-reused      5  --userland "claude --version" --expect-claude reused
+case_ userland-claude-fetched-not-reused   fail userland-fetched     5  --userland "claude --version" --expect-claude reused
+case_ userland-claude-reused-not-fetched   fail userland-reused      5  --userland "claude --version" --expect-claude fetched
+case_ userland-claude-not-mounted          fail userland-unmounted   5  --userland "echo hi"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"

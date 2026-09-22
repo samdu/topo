@@ -258,13 +258,15 @@ jobs:
         with:
           guest: "true"
 
-      # Alpine's minirootfs, fetched from the manifest's entry and verified by
-      # digest, for the userland suites to import and boot.
-      - name: The rootfs for the userland suites
+      # Alpine's minirootfs and Claude Code, fetched from the manifest's entries
+      # and verified by digest, for the userland suites to import, boot and run.
+      - name: The rootfs and Claude Code for the userland suites
         run: |
           set -euo pipefail
-          rootfs="$(scripts/fetch-rootfs.sh "$HOME/rootfs")"
+          rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$HOME/rootfs")"
           echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
+          claude="$(scripts/fetch-pinned.sh claude-code "$HOME/claude-code")"
+          echo "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" >> "$GITHUB_ENV"
 
       # Booted while the build runs, so the suite does not wait on it.
       - name: Boot the simulator

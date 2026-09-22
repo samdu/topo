@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Writes Apps/Topo/Resources/models.json: the pinned list of every file the phone downloads for
-# its on-device models and its guest's rootfs, with sizes and sha256 digests: the models from the
-# Hugging Face tree API at the revision pinned below, the rootfs from the URL pinned below. The app downloads exactly this list through its background session and
-# admits a file only when its digest matches, so a bump of a model is a bump of a revision here
-# and a re-run of this script.
+# its on-device models and its guest, with sizes and sha256 digests: the models from the Hugging
+# Face tree API at the revision pinned below, the rootfs from the URL pinned below, and Claude Code
+# from Anthropic's release distribution at the version pinned below. The app downloads exactly this
+# list through its background session and admits a file only when its digest matches, so a bump of
+# a model is a bump of a revision here, a bump of Claude Code a bump of its version, and either a
+# re-run of this script.
 #
 #   scripts/model-manifest.sh            # regenerate the manifest
 #   scripts/model-manifest.sh --check    # regenerate to a temp file and diff against the committed one
@@ -53,6 +55,17 @@ pocket-tts-coreml|FluidInference/pocket-tts-coreml|91748676fe3c8b2eb3007b3125253
 # (Packages/TopoUserland).
 direct="
 alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|alpine-minirootfs-3.22.6-aarch64.tar.gz
+"
+
+# id | version | platform: Claude Code, from the release distribution the official installer reads
+# (https://claude.ai/install.sh: `DOWNLOAD_BASE_URL`, then `<version>/manifest.json` for the
+# platform's `checksum` and `size`, then `<version>/<platform>/claude`). The entry is checked
+# against that manifest's size and checksum as well as hashed here. The platform is the musl arm64
+# build, which is what runs in the guest's Alpine; the version is a pin, and the guest runs it with
+# its own updater off, since the updater's TLS never completes a handshake under the emulator.
+releases="https://downloads.claude.ai/claude-code-releases"
+claude="
+claude-code|2.1.278|linux-arm64-musl
 "
 
 tmp="$(mktemp -d)"
@@ -119,6 +132,26 @@ while IFS='|' read -r id base names; do
   done
   entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg u "$base" '{id:$id,url:$u,files:.}')")
 done <<< "$direct"
+
+while IFS='|' read -r id version platform; do
+  [ -z "$id" ] && continue
+  echo "== Claude Code $version ($platform)" >&2
+  curl -sSfL "$releases/$version/manifest.json" -o "$tmp/release.json"
+  IFS=$'\t' read -r name published size < <(jq -r --arg p "$platform" \
+    '.platforms[$p] | [.binary, .checksum, (.size|tostring)] | @tsv' "$tmp/release.json")
+  [ -n "${published:-}" ] && [ "$published" != null ] || { echo "no $platform in $releases/$version/manifest.json" >&2; exit 1; }
+  local_file="$cache/claude-code/$version/$platform/$name"
+  if [ ! -f "$local_file" ] || [ "$(stat -f %z "$local_file")" != "$size" ]; then
+    mkdir -p "$(dirname "$local_file")"
+    echo "   fetching $name ($size bytes)" >&2
+    curl -sSfL "$releases/$version/$platform/$name" -o "$local_file"
+  fi
+  [ "$(stat -f %z "$local_file")" = "$size" ] || { echo "$name: got $(stat -f %z "$local_file") bytes, the release says $size" >&2; exit 1; }
+  digest="$(shasum -a 256 "$local_file" | cut -d' ' -f1)"
+  [ "$digest" = "$published" ] || { echo "$name: sha256 $digest, but the release's manifest says $published" >&2; exit 1; }
+  entries+=("$(jq -cn --arg id "$id" --arg v "$version" --arg u "$releases/$version/$platform/" \
+    --arg p "$name" --argjson s "$size" --arg d "$digest" '{id:$id,version:$v,url:$u,files:[{path:$p,size:$s,sha256:$d}]}')")
+done <<< "$claude"
 
 manifest="$(printf '%s\n' "${entries[@]}" | jq -s '{models:.}')"
 if [ "$check" = yes ]; then
