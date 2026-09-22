@@ -183,6 +183,7 @@
 		AD4F9E8277006852F3904EED /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
 		AD9E6CF1B98606CCE69DADAD /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
 		ADECDDCBA226E9262EE67313 /* TurnPushTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E657338C47DD5C2996280F04 /* TurnPushTests.swift */; };
+		AE9F04E40A3D14A888B3CD36 /* GuestConcurrencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */; };
 		AEDBC2E2814F7E6370987732 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		AF4F131F2EC3C983BC0BFBB0 /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
@@ -323,6 +324,7 @@
 		5BC384737CD70F66D0AB8921 /* TopoCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoCore; path = Packages/TopoCore; sourceTree = SOURCE_ROOT; };
 		5C5D5EA3AC974059B62B6B47 /* NextTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextTurnTests.swift; sourceTree = "<group>"; };
 		5D8D9234166E53AA4FC71B31 /* TopoUserlandBrakeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUserlandBrakeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestConcurrencyTests.swift; sourceTree = "<group>"; };
 		5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeGuestTests.swift; sourceTree = "<group>"; };
 		5FA3798B7F6069020E5A4DA0 /* womble.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = womble.js; sourceTree = "<group>"; };
 		61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressRefusalTests.swift; sourceTree = "<group>"; };
@@ -534,6 +536,7 @@
 			children = (
 				5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */,
 				3C85E2F26724D2DFDA22E0E7 /* ClaudeCodeInstallerTests.swift */,
+				5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */,
 				9E76FB1A1AE01CF01D39D057 /* GuestMountTests.swift */,
 				EC5C273524C6EE9CB5783D8E /* GuestTests.swift */,
 				A3A3C4700E7D184EF8B26C0A /* RootfsInstallerTests.swift */,
@@ -1255,6 +1258,7 @@
 				6BA81614A5DAA60FB08C276F /* ClaudeCodeGuestTests.swift in Sources */,
 				24D0E6115E039F63E2B34C67 /* ClaudeCodeInstallerTests.swift in Sources */,
 				B6D3FC3FD33A20C4A5EB3000 /* Fixture.swift in Sources */,
+				AE9F04E40A3D14A888B3CD36 /* GuestConcurrencyTests.swift in Sources */,
 				8969FA455CA20EEC9FDE4171 /* GuestMountTests.swift in Sources */,
 				1BC59D44A4D7713252277BB6 /* GuestTests.swift in Sources */,
 				3F631DF7F5E2E65CCCC2C53F /* RootfsInstallerTests.swift in Sources */,

@@ -45,7 +45,12 @@ static pthread_mutex_t boot_lock = PTHREAD_MUTEX_INITIALIZER;
 static int kernels = 0;
 static bool booted = false;
 // `become_new_init_child` takes no lock of its own ("locking? who needs locking?!"), so two
-// launches at once would race on the pid table.
+// launches at once would race on the pid table; the mount and the link take it too, so they never
+// run beside a launch that is changing the tables they read. It serialises the pid table's
+// neighbours, not `current`: `current` is the calling host thread's own (`extern __thread`,
+// kernel/task.h:145), so every save-and-restore of it here is confined to the thread that made
+// it and no other thread's swap can be seen or undone by it. The wait swaps without the lock for
+// that reason, and must not take it: it blocks for the program's whole life.
 static pthread_mutex_t spawn_lock = PTHREAD_MUTEX_INITIALIZER;
 
 int topo_ish_import(const char *tarball, const char *fakefs_dir, char *error, size_t error_size) {
@@ -241,7 +246,9 @@ fail:
 int topo_ish_wait(int pid, int *status) {
     if (!booted)
         return _ENODEV;
-    // do_wait reaps children of `current`, and the process was started as init's.
+    // do_wait reaps children of `current`, and the process was started as init's. The swap is
+    // this thread's alone (`current` is thread-local, kernel/task.h:145), so it needs no lock, and
+    // takes none: do_wait blocks until the program exits.
     struct task *previous = current;
     current = pid_get_task(1);
     struct siginfo_ info = {0};
@@ -279,8 +286,9 @@ static int make_directories(const char *path) {
 }
 
 // The guest's file calls resolve against `current`'s root and working directory, so the host
-// thread speaks as init while it makes the mount and the link, under the spawn lock that already
-// serialises every other use of `current` from outside the guest.
+// thread speaks as init while it makes the mount and the link. The swap is this thread's alone
+// (`current` is thread-local, kernel/task.h:145); the spawn lock is held so the mount and the link
+// never run beside a launch changing the pid table, not to guard `current`.
 static struct task *speak_as_init(void) {
     pthread_mutex_lock(&spawn_lock);
     struct task *previous = current;
