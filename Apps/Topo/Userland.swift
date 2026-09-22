@@ -158,6 +158,33 @@ final class Userland {
 extension DebugRun {
     static let userlandVariable = "TOPO_DEBUG_USERLAND"
 
+    /// What the guest's authorization was granted, for the device run: the scope string and the
+    /// days left on the long-lived token (never a value), or that none is held and the guest runs
+    /// on the ordinary access token.
+    static func mintLine(_ guest: Tokens?, now: Date = Date()) -> String {
+        guard let guest else { return "userland: mint: none held, the guest runs on the ordinary access token" }
+        let scope = guest.scopes.isEmpty ? "(none returned)" : guest.scopes.joined(separator: " ")
+        let days = Int((guest.expiresAt.timeIntervalSince(now) / 86_400).rounded())
+        return "userland: mint scope: \(scope), expires in \(days) days"
+    }
+
+    /// Whether the ordinary tokens are still refreshable after sign-in, for the device run: one
+    /// refresh with the refresh token they hold, asking for their own scopes, and the scope string
+    /// it granted (never a value) or why it was refused. The refreshed tokens are written back, so
+    /// a refresh token the server rotates is not lost.
+    static func ordinaryRefreshLine(_ ordinary: Tokens?, provider: StoredTokenProvider) async -> String {
+        guard let ordinary else { return "userland: ordinary refresh: not checked, not signed in" }
+        guard !ordinary.refreshToken.isEmpty else {
+            return "userland: ordinary refresh: not checked, no refresh token held (a seeded setup token)"
+        }
+        do {
+            let refreshed = try await provider.refresh()
+            return "userland: ordinary refresh scope: \(refreshed.scopes.isEmpty ? "(none returned)" : refreshed.scopes.joined(separator: " "))"
+        } catch {
+            return "userland: ordinary refresh failed: \(error)"
+        }
+    }
+
     /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs, boot the guest, start
     /// the API proxy on loopback, run the command under `/bin/sh -c` with `ANTHROPIC_BASE_URL`
     /// pointing at the proxy and `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token, and print what
@@ -165,38 +192,6 @@ extension DebugRun {
     /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
     /// runs, with the base URL and no token. The only path in the app that boots the guest.
     /// Nothing at all when the variable is absent.
-    /// What the mint was granted, for the device run: the scope string (never a value) of the
-    /// minted token, which is the grant of the refresh token the mint returned, and whether the
-    /// ordinary tokens now carry that refresh token. An inference-only grant carried by the
-    /// ordinary tokens is a refresh that may be refused the scopes they ask for.
-    static func mintLine(_ guest: Tokens?) -> String {
-        guard let guest else { return "userland: mint scope: none, no long-lived token held" }
-        let scope = guest.scopes.isEmpty ? "(none returned)" : guest.scopes.joined(separator: " ")
-        switch guest.mintReturnedRefreshToken {
-        case true?: return "userland: mint scope: \(scope); the ordinary tokens carry the refresh token it returned"
-        case false?: return "userland: mint scope: \(scope); it returned no refresh token, the ordinary tokens keep their own"
-        case nil: return "userland: mint scope: \(scope); not minted by a sign-in (a seeded setup token)"
-        }
-    }
-
-    /// Whether the ordinary tokens survived the mint, for the device run. When the sign-in's mint
-    /// came back with a refresh token, the ordinary tokens carry it on; this refreshes them once
-    /// with it, asking for their own scopes, and says the scope string the refresh granted (never a
-    /// value) or why it was refused. Their own scopes back is a set intact; `user:inference` alone,
-    /// or a refusal, is a set the mint left inference-only. The refreshed tokens are written back,
-    /// so a refresh token the server rotates is not lost.
-    static func ordinaryRefreshLine(_ minted: Tokens?, ordinary: StoredTokenProvider) async -> String {
-        guard minted?.mintReturnedRefreshToken == true else {
-            return "userland: ordinary refresh: not checked, no sign-in mint returned a refresh token"
-        }
-        do {
-            let refreshed = try await ordinary.refresh()
-            return "userland: ordinary refresh scope: \(refreshed.scopes.isEmpty ? "(none returned)" : refreshed.scopes.joined(separator: " "))"
-        } catch {
-            return "userland: ordinary refresh failed: \(error)"
-        }
-    }
-
     @MainActor
     static func userland(_ userland: Userland = .shared,
                          credential: GuestCredential = GuestCredential(store: KeychainTokenStore.guest,
@@ -223,9 +218,9 @@ extension DebugRun {
                 let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
                 guestEnvironment.merge(handed.environment) { _, new in new }
                 say("userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")")
-                let minted = try? KeychainTokenStore.guest.load()
-                say(mintLine(minted))
-                say(await ordinaryRefreshLine(minted, ordinary: StoredTokenProvider(store: KeychainTokenStore())))
+                say(mintLine(try? KeychainTokenStore.guest.load()))
+                say(await ordinaryRefreshLine(try? KeychainTokenStore().load(),
+                                              provider: StoredTokenProvider(store: KeychainTokenStore())))
             } catch {
                 say("userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)")
             }

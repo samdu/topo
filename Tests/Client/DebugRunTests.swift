@@ -24,50 +24,47 @@ final class DebugRunTests: XCTestCase {
         XCTAssertEqual(try guest.load(), tokens)
     }
 
-    func testTheMintLineNamesTheScopeAndNeverAValue() {
-        let minted = Tokens(accessToken: "sk-secret", refreshToken: "", expiresAt: .distantFuture,
-                            scopes: ["user:inference"], mintReturnedRefreshToken: true)
-        let line = DebugRun.mintLine(minted)
-        XCTAssertEqual(line, "userland: mint scope: user:inference; the ordinary tokens carry the refresh token it returned")
+    /// The device run's evidence of the guest's authorization: its scope and the days its token
+    /// has left, never a value.
+    func testTheMintLineNamesTheScopeAndExpiryAndNeverAValue() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let minted = Tokens(accessToken: "sk-secret", refreshToken: "", expiresAt: now.addingTimeInterval(31_536_000),
+                            scopes: ["user:inference"])
+        let line = DebugRun.mintLine(minted, now: now)
+        XCTAssertEqual(line, "userland: mint scope: user:inference, expires in 365 days")
         XCTAssertFalse(line.contains("sk-secret"))
-        var kept = minted
-        kept.mintReturnedRefreshToken = false
-        XCTAssertTrue(DebugRun.mintLine(kept).hasSuffix("it returned no refresh token, the ordinary tokens keep their own"))
-        kept.mintReturnedRefreshToken = nil
-        XCTAssertTrue(DebugRun.mintLine(kept).hasSuffix("not minted by a sign-in (a seeded setup token)"))
-        XCTAssertEqual(DebugRun.mintLine(nil), "userland: mint scope: none, no long-lived token held")
+        XCTAssertEqual(DebugRun.mintLine(nil), "userland: mint: none held, the guest runs on the ordinary access token")
     }
 
-    /// The device run's evidence that the ordinary tokens survived the mint: one refresh with the
-    /// refresh token they carry, and the scope string it came back with, or its refusal.
+    /// The device run's evidence that the ordinary tokens are refreshable after sign-in: one refresh
+    /// with the refresh token they hold, and the scope string it came back with, or its refusal.
     func testTheOrdinaryRefreshLineSaysWhatTheRefreshGranted() async throws {
-        let minted = Tokens(accessToken: "long-lived", refreshToken: "", expiresAt: .distantFuture,
-                            scopes: ["user:inference"], mintReturnedRefreshToken: true)
-        let ordinary = Tokens(accessToken: "sk-ordinary", refreshToken: "rt-rotated", expiresAt: .distantFuture,
+        let ordinary = Tokens(accessToken: "sk-ordinary", refreshToken: "rt-first", expiresAt: .distantFuture,
                               scopes: ["user:profile", "user:inference"])
-        func line(answer status: Int, _ json: String, minted: Tokens?) async throws -> (String, InMemoryTokenStore) {
+        func line(answer status: Int, _ json: String, holding tokens: Tokens?) async throws -> (String, InMemoryTokenStore) {
             RefreshStub.answer = (status, Data(json.utf8))
-            let store = InMemoryTokenStore(ordinary)
+            let store = InMemoryTokenStore(tokens)
             let oauth = ClaudeOAuth(session: RefreshStub.session())
-            return (await DebugRun.ordinaryRefreshLine(minted, ordinary: StoredTokenProvider(store: store, oauth: oauth)), store)
+            return (await DebugRun.ordinaryRefreshLine(try store.load(), provider: StoredTokenProvider(store: store, oauth: oauth)), store)
         }
 
-        let (intact, store) = try await line(answer: 200, #"{"access_token":"sk-new","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#, minted: minted)
+        let (intact, store) = try await line(answer: 200, #"{"access_token":"sk-new","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#, holding: ordinary)
         XCTAssertEqual(intact, "userland: ordinary refresh scope: user:profile user:inference")
         XCTAssertEqual(try store.load()?.refreshToken, "rt-next", "the rotated refresh token was not written back")
         let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(RefreshStub.lastBody)) as? [String: String])
-        XCTAssertEqual(body["refresh_token"], "rt-rotated")
+        XCTAssertEqual(body["refresh_token"], "rt-first")
         XCTAssertEqual(body["scope"], "user:profile user:inference")
 
-        let (narrowed, _) = try await line(answer: 200, #"{"access_token":"sk-new","refresh_token":"rt-next","expires_in":28800,"scope":"user:inference"}"#, minted: minted)
-        XCTAssertEqual(narrowed, "userland: ordinary refresh scope: user:inference")
-
-        let (refused, _) = try await line(answer: 400, #"{"error":"invalid_scope"}"#, minted: minted)
+        let (refused, _) = try await line(answer: 400, #"{"error":"invalid_scope"}"#, holding: ordinary)
         XCTAssertEqual(refused, "userland: ordinary refresh failed: http(status: 400)")
 
-        let (unchecked, _) = try await line(answer: 200, "{}", minted: nil)
-        XCTAssertEqual(unchecked, "userland: ordinary refresh: not checked, no sign-in mint returned a refresh token")
-        for text in [intact, narrowed, refused] {
+        var seeded = ordinary
+        seeded.refreshToken = ""
+        let (unchecked, _) = try await line(answer: 200, "{}", holding: seeded)
+        XCTAssertEqual(unchecked, "userland: ordinary refresh: not checked, no refresh token held (a seeded setup token)")
+        let (signedOut, _) = try await line(answer: 200, "{}", holding: nil)
+        XCTAssertEqual(signedOut, "userland: ordinary refresh: not checked, not signed in")
+        for text in [intact, refused] {
             XCTAssertFalse(text.contains("sk-") || text.contains("rt-"), text)
         }
     }

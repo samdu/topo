@@ -24,6 +24,30 @@ import Testing
         listener.cancel()
     }
 
+    /// The login's callback sends the browser on to the guest's authorization.
+    @Test func aSuccessRedirectAnswersTheCallbackWithIt() async throws {
+        let listener = try LoopbackCallback()
+        let next = URL(string: "https://claude.com/cai/oauth/authorize?scope=user%3Ainference")!
+        listener.redirectOnSuccess(to: next)
+        final class NoFollow: NSObject, URLSessionTaskDelegate {
+            func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                            newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+        }
+        let session = URLSession(configuration: .ephemeral, delegate: NoFollow(), delegateQueue: nil)
+        let (_, response) = try await session.data(from: URL(string: "http://localhost:\(listener.port)/callback?code=abc&state=xyz")!)
+        let http = try #require(response as? HTTPURLResponse)
+        #expect(http.statusCode == 302)
+        #expect(http.value(forHTTPHeaderField: "Location") == next.absoluteString)
+        #expect(ClaudeOAuth.parseCallback(try await listener.wait())?.code == "abc")
+    }
+
+    /// A callback that lands before anyone waits is kept for the wait, not dropped as cancelled.
+    @Test func aCallbackBeforeTheWaitIsKept() async throws {
+        let listener = try LoopbackCallback()
+        _ = try await URLSession.shared.data(from: URL(string: "http://localhost:\(listener.port)/callback?code=early&state=s")!)
+        #expect(ClaudeOAuth.parseCallback(try await listener.wait())?.code == "early")
+    }
+
     @Test func cancelUnblocksWait() async throws {
         let listener = try LoopbackCallback()
         let task = Task { try await listener.wait() }
