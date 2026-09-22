@@ -28,18 +28,22 @@ import FluidAudio
 @Observable
 final class Ear {
     /// `fetching` is the wait for `ModelDownloads` to have every file; `loading` is the CoreML
-    /// compile from disk.
+    /// compile from disk, which after an install is the Neural Engine compiling the models for
+    /// this phone, and takes its time.
     enum State: Equatable { case cold, fetching, loading, ready, failed }
 
     private(set) var state: State = .cold
     /// Why the ear is not available when it is not, or why the vocabulary is not applied when
     /// the ear is ready without it. Cleared by the next `prepare`, or by the rebuild that works.
     private(set) var trouble: String?
-    /// Where the load has got to: a state that just says "loading" for a minute reads as hung.
+    /// Where the load has got to: a state that says only that it is preparing for a minute reads as hung.
     private(set) var progress = ""
 
     /// The manifest entries the ear needs on disk.
     static let models = [ModelManifest.parakeet, ModelManifest.ctc]
+
+    /// What `loading` reads as: the step a first load after an install spends its time in.
+    static let preparing = "preparing the models for this phone"
 
     /// Parakeet eats 16 kHz mono, so the microphone is converted to that and nothing else.
     nonisolated static let rate = 16000
@@ -85,7 +89,7 @@ final class Ear {
         switch state {
         case .cold: return "not loaded"
         case .fetching: return ModelDownloads.shared.describe(Self.models)
-        case .loading: return progress.isEmpty ? "loading" : "loading: \(progress)"
+        case .loading: return progress.isEmpty ? Self.preparing : "\(Self.preparing): \(progress)"
         case .ready: return trouble.map { "Parakeet resident; vocabulary boost unavailable: \($0)" } ?? "Parakeet resident"
         case .failed: return "failed: \(trouble ?? "unknown")"
         }
