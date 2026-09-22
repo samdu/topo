@@ -107,6 +107,13 @@ case_() {
   fi
 }
 
+# One untimed run first. The first case to exec the script, python3 (the device lookup), uuidgen
+# and the fakes on a fresh runner pays for loading them, which has taken from 0 s to 9 s on the
+# same script with the same scenario; the limits below are about what the script waits for, not
+# about a cold disk.
+PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=6 FAKE_LAUNCH=exits-42 \
+  "$work/root/scripts/simulator-run.sh" --no-build >/dev/null 2>&1 </dev/null
+
 case_ no-send-launcher-exits-nonzero       fail exits-42             5
 case_ no-send-stale-reply-launcher-exits-42 fail stale-reply-exits-42 5
 case_ send-stale-reply-launcher-exits-42   fail stale-reply-exits-42 5  --send "new message"
