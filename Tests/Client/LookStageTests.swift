@@ -11,11 +11,15 @@ import XCTest
 /// its fields report differently from one run to the next — a field that draws nothing read as
 /// drawing, and the excuse list read as stale.
 ///
-/// Two things made one view two pictures, and they wanted different answers, which is why the
-/// fix is in two places. A transcript taller than its stage is scrolled to its end and comes to
-/// rest a pixel or two apart between two drawings, which the composer's glass magnifies into a
+/// Three things make one view two pictures, and they want different answers, which is why the
+/// answer is in three places. The composer's glass is drawn from what the render server captured
+/// behind it when it last composited the screen, so a window not yet on the display draws its
+/// pane without that backdrop — another rim, shadow and lensed edge — and a wait on the clock is
+/// a race a loaded runner loses: the stage waits for frames of the display instead
+/// (`LookStage.composited`). A transcript taller than its stage is scrolled to its end and comes
+/// to rest a pixel or two apart between two drawings, which the composer's glass magnifies into a
 /// difference of eight shades over three thousand pixels — no capture strategy answers that,
-/// because both drawings are finished; the surfaces are the answer, and they now fit. A curve
+/// because both drawings are finished; the surfaces are the answer, and they fit. A curve
 /// composited through two windows rounds its antialiasing a shade either way, which nothing can
 /// remove either: `differ` is the answer to that, and the settings sheet's glass is what needs
 /// it.
@@ -81,6 +85,19 @@ final class LookStageTests: XCTestCase {
         XCTAssertEqual(unsteady, [], "these drew more than one picture of one look")
     }
 
+    /// The steadiness assertion's own teeth: two surfaces that really are two pictures, drawn in
+    /// turn, one to each ask, through the same stage and the same comparison the steadiness tests
+    /// make, are reported as unsteady. The two are the draft row being written and on its way,
+    /// which differ in the row's colour and in the spinner beside it — the kind of difference a
+    /// still that had not settled would be.
+    func testTwoPicturesDrawnInTurnAreReportedUnsteady() throws {
+        let made = try shots { ask in
+            LookReachTests.Surface.staged(row: ask.isMultiple(of: 2) ? .writing : .inFlight)
+        }
+        XCTAssertNotNil(try unsteadiness(of: made, called: "negative-control"),
+                        "two different pictures drawn in turn read as one steady picture")
+    }
+
     /// And that a shade is all the tolerance is: two pictures that differ by more than one are
     /// two pictures, or the reach suite would see no field at all.
     func testMoreThanAShadeIsADifference() throws {
@@ -104,9 +121,17 @@ final class LookStageTests: XCTestCase {
     private func shots(_ view: some View, look: Look = Look(),
                        style: UIUserInterfaceStyle = .light,
                        size: CGSize = LookStage.size) throws -> [UIImage] {
-        _ = try LookStage.image(view, look: look, style: style, size: size)
-        return try (0..<Self.asks).map {
-            _ in try LookStage.image(view, look: look, style: style, size: size)
+        try shots(look: look, style: style, size: size) { _ in view }
+    }
+
+    /// The same, with the view each ask draws handed over by the ask's number: 0 is the drawing
+    /// thrown away, and 1 onwards are the ones compared.
+    private func shots<V: View>(look: Look = Look(), style: UIUserInterfaceStyle = .light,
+                                size: CGSize = LookStage.size,
+                                _ view: (Int) -> V) throws -> [UIImage] {
+        _ = try LookStage.image(view(0), look: look, style: style, size: size)
+        return try (1...Self.asks).map {
+            try LookStage.image(view($0), look: look, style: style, size: size)
         }
     }
 

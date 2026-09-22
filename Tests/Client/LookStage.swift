@@ -39,23 +39,31 @@ enum LookStage {
 
         let host = UIHostingController(
             rootView: view.environment(\.look, look).transaction { $0.animation = nil })
-        let window: UIWindow
-        if let scene = UIApplication.shared.connectedScenes
-            .compactMap({ $0 as? UIWindowScene }).first {
-            window = UIWindow(windowScene: scene)
-            window.frame = CGRect(origin: .zero, size: size)
-        } else {
-            window = UIWindow(frame: CGRect(origin: .zero, size: size))
-        }
+        // The window covers the whole screen as well as the stage, with the view on the stage
+        // at its top left and the view's own background colour around it: the system's glass
+        // samples a margin beyond its own edge, which from a pane near the stage's foot reaches
+        // past the stage, and what is there is then this window's background rather than
+        // whatever the host app's own window happens to be showing under it.
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let screen = scene?.screen.bounds.size ?? size
+        let frame = CGRect(x: 0, y: 0, width: max(size.width, screen.width),
+                           height: max(size.height, screen.height))
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: frame)
+        window.frame = frame
+        let stage = UIViewController()
+        stage.view.backgroundColor = .systemBackground
+        stage.addChild(host)
+        stage.view.addSubview(host.view)
+        host.view.frame = CGRect(origin: .zero, size: size)
+        host.didMove(toParent: stage)
         window.overrideUserInterfaceStyle = style
-        window.rootViewController = host
+        window.rootViewController = stage
         window.isHidden = false
         window.makeKeyAndVisible()
         defer {
             window.isHidden = true
             window.rootViewController = nil
         }
-        host.view.frame = window.bounds
         window.layoutIfNeeded()
 
         // A `ProgressView`'s spinner is a Core Animation on its own layer, which neither
@@ -65,12 +73,68 @@ enum LookStage {
         // under this window is then drawn at the same moment of whatever it is doing.
         window.layer.speed = 0
         window.layer.timeOffset = 0
-        // SwiftUI commits its layout on the run loop, and `afterScreenUpdates` draws what the
-        // render server has: both want a turn of the loop before the picture is taken.
-        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        try composited(window)
+        // The whole window is drawn at its own size into a picture the stage's size, which
+        // keeps the stage and clips the rest.
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { _ in
             window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+        }
+    }
+
+    /// How many frames the display draws with the window on it before the picture is taken.
+    /// The first frame's tick can arrive before the render server has composited the commit
+    /// that put the window up; by the second, a frame with the window in it has been drawn.
+    static let frames = 2
+
+    /// How long those frames may take before the stage gives up, which is a failure and never
+    /// a picture: a stage that took the picture anyway would be the defect this wait exists for.
+    static let framesTimeout: TimeInterval = 10
+
+    /// Waits until the display has drawn the window, so the system's glass has a backdrop.
+    ///
+    /// The composer's glass is a `CABackdropLayer`, and `drawHierarchy` draws it from what the
+    /// render server captured behind it the last time it composited the screen. A window that
+    /// has never been on the screen has no such capture, and its glass is drawn from something
+    /// else: an edge of the pane that lenses nothing where it should lens the window's own
+    /// content, and a rim and a shadow missing along its foot. A window placed off the screen
+    /// gives that picture every time, however long it waits; one that has been composited once
+    /// gives the settled picture every time. So what the picture waits on is frames of the
+    /// display, not time: a fixed wait on the clock is a guess at how soon the render server
+    /// composites, and a loaded CI runner is where the guess is wrong.
+    ///
+    /// The wait turns the run loop, which is also what SwiftUI commits its layout on.
+    private static func composited(_ window: UIWindow) throws {
+        CATransaction.flush()
+        let counter = FrameCounter()
+        let link = CADisplayLink(target: counter, selector: #selector(FrameCounter.tick))
+        link.add(to: .main, forMode: .common)
+        defer { link.invalidate() }
+        let deadline = Date().addingTimeInterval(framesTimeout)
+        while counter.frames < frames {
+            guard Date() < deadline else {
+                throw StageError.notComposited(frames: counter.frames, of: frames,
+                                               in: framesTimeout)
+            }
+            RunLoop.current.run(mode: .default,
+                                before: min(deadline, Date().addingTimeInterval(0.1)))
+        }
+    }
+
+    private final class FrameCounter: NSObject {
+        var frames = 0
+        @objc func tick(_ link: CADisplayLink) { frames += 1 }
+    }
+
+    enum StageError: Error, CustomStringConvertible {
+        case notComposited(frames: Int, of: Int, in: TimeInterval)
+
+        var description: String {
+            switch self {
+            case .notComposited(let drawn, let wanted, let seconds):
+                return "the display drew \(drawn) of \(wanted) frames in \(seconds)"
+                    + " seconds, so the window's glass has no backdrop to be drawn from"
+            }
         }
     }
 
