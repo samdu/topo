@@ -158,8 +158,9 @@ final class Userland {
             let waiting = self.claudeReadiness
             self.claudeReadiness = []
             switch result {
-            case .success(let fetched) where fetched.version == nil:
-                // A pin without its version is not one `claude --version` can be held to.
+            case .success(let fetched) where (fetched.version ?? "").trimmingCharacters(in: .whitespaces).isEmpty:
+                // A pin without its version — absent, empty or blank — is not one `claude --version`
+                // can be held to.
                 let why = "the manifest's \(ModelManifest.claudeCode) entry names no version"
                 self.claude = .failed(why)
                 waiting.forEach { $0.resume(throwing: ModelDownloadFailure(id: ModelManifest.claudeCode, why: why)) }
