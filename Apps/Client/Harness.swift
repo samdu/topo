@@ -169,9 +169,10 @@ final class Harness {
         }
     }
 
-    /// The app's harness: the shared CloudKit log and the keychain's tokens.
-    static func standard(store: TokenStore = KeychainTokenStore()) -> Harness {
-        Harness(database: TopoCloudKit.database(), tokens: StoredTokenProvider(store: store))
+    /// The app's harness: the shared CloudKit log and the keychain's tokens, through the one
+    /// provider the app makes for them.
+    static func standard(tokens: StoredTokenProvider) -> Harness {
+        Harness(database: TopoCloudKit.database(), tokens: tokens)
     }
 
     var model: ClaudeModel {

@@ -294,11 +294,12 @@ extension DebugRun {
     /// the ordinary tokens are refreshed once for the diagnostic line first, so the fallback
     /// hands over the access token that refresh wrote back rather than refreshing again, and a
     /// refused refresh is the fallback's answer too. The lines are printed in the order the device
-    /// run reads them: the hand-over, the guest's token, the ordinary refresh.
-    static func handOver(port: UInt16, guestStore: TokenStore, ordinaryStore: TokenStore,
-                         oauth: ClaudeOAuth = ClaudeOAuth()) async -> (environment: [String: String], lines: [String]) {
-        let provider = StoredTokenProvider(store: ordinaryStore, oauth: oauth)
-        let refresh = await ordinaryRefresh(try? ordinaryStore.load(), provider: provider)
+    /// run reads them: the hand-over, the guest's token, the ordinary refresh. `provider` is the
+    /// app's one provider over the ordinary tokens, the chat's too, so a refresh the chat has in
+    /// flight is the one this joins.
+    static func handOver(port: UInt16, guestStore: TokenStore,
+                         provider: StoredTokenProvider) async -> (environment: [String: String], lines: [String]) {
+        let refresh = await ordinaryRefresh(try? provider.store.load(), provider: provider)
         let fallback: TokenProvider = refresh.refusal.map { Refused(error: $0) } ?? provider
         let credential = GuestCredential(store: guestStore, fallback: fallback)
         do {
@@ -321,9 +322,10 @@ extension DebugRun {
     /// it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh --userland` to
     /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
     /// runs, with the base URL and no token. The only path in the app that boots the guest.
-    /// Nothing at all when the variable is absent.
+    /// Nothing at all when the variable is absent. `tokens` is the app's one provider over the
+    /// ordinary tokens.
     @MainActor
-    static func userland(_ userland: Userland = .shared,
+    static func userland(_ userland: Userland = .shared, tokens: StoredTokenProvider,
                          environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let command = environment[userlandVariable], !command.isEmpty else { return }
         say("userland: \(userland.summary)")
@@ -354,7 +356,7 @@ extension DebugRun {
             defer { Task { await proxy.stop() } }
             var guestEnvironment = Guest.environment
             guestEnvironment["ANTHROPIC_BASE_URL"] = APIProxy.baseURL(port: port)
-            let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, ordinaryStore: KeychainTokenStore())
+            let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, provider: tokens)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
             let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment)
