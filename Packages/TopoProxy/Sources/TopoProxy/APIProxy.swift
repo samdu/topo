@@ -212,10 +212,10 @@ struct Forwarder: Sendable {
             response = try await upstream.send(outbound)
         } catch {
             if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
-            log("\(line) failed upstream: \(Self.describe(error))")
             // A target that would leave the one origin is the guest's request at fault; anything
             // else is the upstream failing, and a bad gateway.
             let status = { if case .foreignTarget? = error as? UpstreamError { 400 } else { 502 } }()
+            log("\(line) \(status) in \(Self.elapsed(since: started)): failed upstream: \(Self.describe(error))")
             try? await inbound.send(Self.errorResponse(status: status, type: "api_error",
                                                        message: "Topo's proxy could not reach api.anthropic.com: \(Self.describe(error))"))
             return request.keepAlive

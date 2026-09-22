@@ -148,12 +148,17 @@ import Testing
         let placeholder = try StubOrigin { _, _ in }
         let closedPort = try await placeholder.start()
         placeholder.stop()
-        let (proxy, port, _) = try await startedProxy(URLSessionUpstream(origin: URL(string: "http://127.0.0.1:\(closedPort)")!))
+        let (proxy, port, logs) = try await startedProxy(URLSessionUpstream(origin: URL(string: "http://127.0.0.1:\(closedPort)")!))
         defer { Task { await proxy.stop() } }
         let client = try await WireClient(port: port)
-        try await client.send(post("/v1/messages", body: #"{"model":"x"}"#))
+        try await client.send(post("/v1/messages", body: #"{"model":"x"}"#, headers: ["Authorization: Bearer sk-ant-oat01-unlogged"]))
         let (head, body) = try await client.readResponse()
         #expect(head.status == 502)
+        // Logged like every other request: method, path, status and time, then the error's kind.
+        let line = try #require(logs.lines.first)
+        #expect(logs.lines.count == 1)
+        #expect(line.range(of: #"^POST /v1/messages 502 in \d+ ms: failed upstream: URLError -?\d+$"#, options: .regularExpression) != nil, "logged: \(line)")
+        #expect(!line.contains("sk-ant-oat01-unlogged"))
         let error = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
         #expect(error["type"] as? String == "error")
         #expect((error["error"] as? [String: Any])?["type"] as? String == "api_error")
