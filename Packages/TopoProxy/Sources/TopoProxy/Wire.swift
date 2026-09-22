@@ -75,12 +75,22 @@ struct InboundRequest: Sendable {
 /// buffer the request reader takes from, so a client that goes away is seen while a response is
 /// still streaming to it (`whenEnded`), and a request pipelined behind another waits in the buffer.
 /// Receiving pauses while more than `limit` bytes wait unread.
+///
+/// The end of what the client sends and the client being gone are two things. A FIN is only the
+/// first: a client may shut down its write side after a whole request and still read the whole
+/// response, so it ends the reads (`readsEnded`) and nothing else. The client is gone when the
+/// connection fails or is cancelled — a reset, or the RST a closed socket answers the next write
+/// with — and only that fires `whenEnded`. A client that closed outright is therefore seen at the
+/// first write after its close, which on a streamed reply is the next event or ping.
 final class Inbound: @unchecked Sendable {
     let connection: NWConnection
     private let limit: Int
     private let lock = NSLock()
     private var buffer = Data()
+    /// The connection failed or was cancelled: the client is gone.
     private var ended = false
+    /// The client sent its FIN, or the connection is gone: nothing more will arrive.
+    private var readsEnded = false
     private var paused = false
     private var waiter: CheckedContinuation<Void, Never>?
     private var onEnd: (@Sendable () -> Void)?
@@ -104,14 +114,13 @@ final class Inbound: @unchecked Sendable {
     private func receive() {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, complete, error in
             guard let self else { return }
-            let finished = complete || error != nil
             let rearm: Bool = lock.withLock {
                 if let data, !data.isEmpty { buffer.append(data) }
-                if finished { return false }
+                if complete || error != nil { readsEnded = true; return false }
                 if buffer.count >= limit { paused = true; return false }
                 return true
             }
-            if finished { end() } else { wake() }
+            if error != nil { end() } else { wake() }
             if rearm { receive() }
         }
     }
@@ -120,6 +129,7 @@ final class Inbound: @unchecked Sendable {
         let (handler, waiting): ((@Sendable () -> Void)?, CheckedContinuation<Void, Never>?) = lock.withLock {
             guard !ended else { return (nil, nil) }
             ended = true
+            readsEnded = true
             defer { onEnd = nil; waiter = nil }
             return (onEnd, waiter)
         }
@@ -150,7 +160,7 @@ final class Inbound: @unchecked Sendable {
     private func awaitMore(than count: Int) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let ready: Bool = lock.withLock {
-                if buffer.count > count || ended { return true }
+                if buffer.count > count || readsEnded { return true }
                 waiter = continuation
                 return false
             }
@@ -163,7 +173,7 @@ final class Inbound: @unchecked Sendable {
         let (taken, rearm): (Data, Bool) = lock.withLock {
             let taken = buffer.prefix(count)
             buffer.removeFirst(count)
-            let rearm = paused && buffer.count < limit && !ended
+            let rearm = paused && buffer.count < limit && !readsEnded
             if rearm { paused = false }
             return (Data(taken), rearm)
         }
@@ -171,7 +181,7 @@ final class Inbound: @unchecked Sendable {
         return taken
     }
 
-    private var snapshot: (Data, Bool) { lock.withLock { (buffer, ended) } }
+    private var snapshot: (Data, Bool) { lock.withLock { (buffer, readsEnded) } }
 
     /// Everything up to and including the first `delimiter`, or nil when the stream ended with
     /// nothing buffered (a client that closed between requests). Throws when more than `maximum`

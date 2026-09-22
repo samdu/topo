@@ -111,19 +111,31 @@ import TopoAuth
         #expect(try await client.readChunk() == nil)
     }
 
-    /// Review focus 5: a client that goes away mid-stream cancels the upstream request.
-    @Test func aClientThatGoesAwayCancelsTheUpstream() async throws {
-        let cancelled = Signal()
-        let upstream = StubUpstream { _ in
+    /// An upstream stream that sends one event and then, if `pinging`, a ping every 100 ms as the
+    /// API does between events, and never ends; `cancelled` fires when the proxy cancels it.
+    static func endlessStream(pinging: Bool, cancelled: Signal) -> StubUpstream {
+        StubUpstream { _ in
             UpstreamResponse(status: 200, headers: [HTTPField("Content-Type", "text/event-stream")], body: AsyncThrowingStream { continuation in
+                let pings = Task {
+                    continuation.yield(Data("event: message_start\ndata: {}\n\n".utf8))
+                    while pinging, !Task.isCancelled {
+                        try? await Task.sleep(for: .milliseconds(100))
+                        continuation.yield(Data("event: ping\ndata: {\"type\": \"ping\"}\n\n".utf8))
+                    }
+                }
                 continuation.onTermination = { termination in
+                    pings.cancel()
                     if case .cancelled = termination { cancelled.fire() }
                 }
-                // One event, and then the upstream stays open, as a long reply does between events.
-                continuation.yield(Data("event: ping\ndata: {}\n\n".utf8))
             })
         }
-        let (proxy, port, logs) = try await startedProxy(upstream)
+    }
+
+    /// Review focus 5: a client that closes its connection mid-stream cancels the upstream
+    /// request. A full close is seen at the proxy's first write after it — the next ping.
+    @Test func aClientThatGoesAwayCancelsTheUpstream() async throws {
+        let cancelled = Signal()
+        let (proxy, port, logs) = try await startedProxy(Self.endlessStream(pinging: true, cancelled: cancelled))
         defer { Task { await proxy.stop() } }
         let client = try await WireClient(port: port)
         try await client.send(post("/v1/messages", body: #"{"model":"x","stream":true}"#))
@@ -132,6 +144,47 @@ import TopoAuth
         #expect(!cancelled.hasFired)
         client.close()
         #expect(await cancelled.wait(3), "the upstream stream was still running after the client left: \(logs.lines)")
+    }
+
+    /// Review focus 5: a reset is the client gone at once, whether or not the upstream is sending.
+    @Test func aClientThatResetsCancelsTheUpstreamAtOnce() async throws {
+        let cancelled = Signal()
+        let (proxy, port, logs) = try await startedProxy(Self.endlessStream(pinging: false, cancelled: cancelled))
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send(post("/v1/messages", body: #"{"model":"x","stream":true}"#))
+        _ = try await client.readHead()
+        _ = try await client.readChunk()
+        #expect(!cancelled.hasFired)
+        client.reset()
+        #expect(await cancelled.wait(3), "the upstream stream was still running after the client reset: \(logs.lines)")
+    }
+
+    /// A client that shuts down its write side after a whole request is still reading: it gets
+    /// the whole streamed response, and the upstream is not cancelled.
+    @Test func aClientThatHalfClosesAfterItsRequestGetsTheWholeResponse() async throws {
+        let cancelled = Signal()
+        let upstream = StubUpstream { _ in
+            UpstreamResponse(status: 200, headers: [HTTPField("Content-Type", "text/event-stream")], body: AsyncThrowingStream { continuation in
+                continuation.onTermination = { termination in
+                    if case .cancelled = termination { cancelled.fire() }
+                }
+                Task {
+                    continuation.yield(Data("event: message_start\ndata: {}\n\n".utf8))
+                    try? await Task.sleep(for: .milliseconds(300))
+                    continuation.yield(Data("event: message_stop\ndata: {}\n\n".utf8))
+                    continuation.finish()
+                }
+            })
+        }
+        let (proxy, port, logs) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.sendThenShutDownWrites(post("/v1/messages", body: #"{"model":"x","stream":true}"#))
+        let (head, body) = try await client.readResponse()
+        #expect(head.status == 200)
+        #expect(String(decoding: body, as: UTF8.self) == "event: message_start\ndata: {}\n\nevent: message_stop\ndata: {}\n\n", "\(logs.lines)")
+        #expect(!cancelled.hasFired)
     }
 }
 

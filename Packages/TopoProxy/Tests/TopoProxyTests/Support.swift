@@ -30,7 +30,18 @@ final class WireClient: @unchecked Sendable {
 
     func send(_ text: String) async throws { try await inbound.send(Data(text.utf8)) }
     func send(_ data: Data) async throws { try await inbound.send(data) }
+    /// Sends `text` and then a FIN: the write side shut down, the read side still open.
+    func sendThenShutDownWrites(_ text: String) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            connection.send(content: Data(text.utf8), contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { error in
+                if let error { continuation.resume(throwing: error) } else { continuation.resume() }
+            })
+        }
+    }
+    /// A full close: the socket closed both ways, as a client that aborts closes it.
     func close() { connection.cancel() }
+    /// A reset.
+    func reset() { connection.forceCancel() }
 
     struct Head {
         var status: Int
