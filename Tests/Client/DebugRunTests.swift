@@ -38,6 +38,40 @@ final class DebugRunTests: XCTestCase {
         XCTAssertEqual(DebugRun.mintLine(nil), "userland: mint scope: none, no long-lived token held")
     }
 
+    /// The device run's evidence that the ordinary tokens survived the mint: one refresh with the
+    /// refresh token they carry, and the scope string it came back with, or its refusal.
+    func testTheOrdinaryRefreshLineSaysWhatTheRefreshGranted() async throws {
+        let minted = Tokens(accessToken: "long-lived", refreshToken: "", expiresAt: .distantFuture,
+                            scopes: ["user:inference"], mintReturnedRefreshToken: true)
+        let ordinary = Tokens(accessToken: "sk-ordinary", refreshToken: "rt-rotated", expiresAt: .distantFuture,
+                              scopes: ["user:profile", "user:inference"])
+        func line(answer status: Int, _ json: String, minted: Tokens?) async throws -> (String, InMemoryTokenStore) {
+            RefreshStub.answer = (status, Data(json.utf8))
+            let store = InMemoryTokenStore(ordinary)
+            let oauth = ClaudeOAuth(session: RefreshStub.session())
+            return (await DebugRun.ordinaryRefreshLine(minted, ordinary: StoredTokenProvider(store: store, oauth: oauth)), store)
+        }
+
+        let (intact, store) = try await line(answer: 200, #"{"access_token":"sk-new","refresh_token":"rt-next","expires_in":28800,"scope":"user:profile user:inference"}"#, minted: minted)
+        XCTAssertEqual(intact, "userland: ordinary refresh scope: user:profile user:inference")
+        XCTAssertEqual(try store.load()?.refreshToken, "rt-next", "the rotated refresh token was not written back")
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: XCTUnwrap(RefreshStub.lastBody)) as? [String: String])
+        XCTAssertEqual(body["refresh_token"], "rt-rotated")
+        XCTAssertEqual(body["scope"], "user:profile user:inference")
+
+        let (narrowed, _) = try await line(answer: 200, #"{"access_token":"sk-new","refresh_token":"rt-next","expires_in":28800,"scope":"user:inference"}"#, minted: minted)
+        XCTAssertEqual(narrowed, "userland: ordinary refresh scope: user:inference")
+
+        let (refused, _) = try await line(answer: 400, #"{"error":"invalid_scope"}"#, minted: minted)
+        XCTAssertEqual(refused, "userland: ordinary refresh failed: http(status: 400)")
+
+        let (unchecked, _) = try await line(answer: 200, "{}", minted: nil)
+        XCTAssertEqual(unchecked, "userland: ordinary refresh: not checked, no sign-in mint returned a refresh token")
+        for text in [intact, narrowed, refused] {
+            XCTAssertFalse(text.contains("sk-") || text.contains("rt-"), text)
+        }
+    }
+
     func testWithoutOneNothingIsTouched() throws {
         let store = InMemoryTokenStore()
         let guest = InMemoryTokenStore()
@@ -94,4 +128,37 @@ final class DebugRunTests: XCTestCase {
         // A nonce is never empty on a turn this run sent; an empty one names no turn at all.
         XCTAssertEqual(DebugRun.answer(to: "", in: [turn("phone", 3, .person, "old", nonce: "")]), .notInLog)
     }
+}
+
+/// The token endpoint for `testTheOrdinaryRefreshLineSaysWhatTheRefreshGranted`: one scripted
+/// answer, and the body it was asked with.
+final class RefreshStub: URLProtocol {
+    nonisolated(unsafe) static var answer: (Int, Data) = (200, Data())
+    nonisolated(unsafe) static var lastBody: Data?
+
+    static func session() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RefreshStub.self]
+        return URLSession(configuration: configuration)
+    }
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.lastBody = request.httpBody ?? request.httpBodyStream.map { stream in
+            stream.open(); defer { stream.close() }
+            var data = Data(); var buffer = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable {
+                let n = stream.read(&buffer, maxLength: buffer.count)
+                if n <= 0 { break }
+                data.append(buffer, count: n)
+            }
+            return data
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.answer.0, httpVersion: nil, headerFields: nil)!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.answer.1)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

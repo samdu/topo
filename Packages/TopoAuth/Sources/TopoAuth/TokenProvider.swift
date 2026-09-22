@@ -39,10 +39,21 @@ public actor StoredTokenProvider: TokenProvider {
     public func accessToken() async throws -> String {
         guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
         guard tokens.isExpired(at: now()) else { return tokens.accessToken }
+        return try await refresh(tokens).accessToken
+    }
+
+    /// Refreshes now, expired or not, and writes the result back as `accessToken` does: what the
+    /// refresh grant returned, its granted `scopes` included.
+    public func refresh() async throws -> Tokens {
+        guard let tokens = try store.load() else { throw TokenProviderError.signedOut }
+        return try await refresh(tokens)
+    }
+
+    private func refresh(_ tokens: Tokens) async throws -> Tokens {
         let refreshed = try await oauth.refresh(tokens)
         guard try store.load() == tokens else { throw TokenProviderError.signedOut }
         try store.save(refreshed)
-        return refreshed.accessToken
+        return refreshed
     }
 }
 

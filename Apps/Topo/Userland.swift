@@ -179,6 +179,24 @@ extension DebugRun {
         }
     }
 
+    /// Whether the ordinary tokens survived the mint, for the device run. When the sign-in's mint
+    /// came back with a refresh token, the ordinary tokens carry it on; this refreshes them once
+    /// with it, asking for their own scopes, and says the scope string the refresh granted (never a
+    /// value) or why it was refused. Their own scopes back is a set intact; `user:inference` alone,
+    /// or a refusal, is a set the mint left inference-only. The refreshed tokens are written back,
+    /// so a refresh token the server rotates is not lost.
+    static func ordinaryRefreshLine(_ minted: Tokens?, ordinary: StoredTokenProvider) async -> String {
+        guard minted?.mintReturnedRefreshToken == true else {
+            return "userland: ordinary refresh: not checked, no sign-in mint returned a refresh token"
+        }
+        do {
+            let refreshed = try await ordinary.refresh()
+            return "userland: ordinary refresh scope: \(refreshed.scopes.isEmpty ? "(none returned)" : refreshed.scopes.joined(separator: " "))"
+        } catch {
+            return "userland: ordinary refresh failed: \(error)"
+        }
+    }
+
     @MainActor
     static func userland(_ userland: Userland = .shared,
                          credential: GuestCredential = GuestCredential(store: KeychainTokenStore.guest,
@@ -205,7 +223,9 @@ extension DebugRun {
                 let handed = try await APIProxy.guestEnvironment(port: port, credential: credential)
                 guestEnvironment.merge(handed.environment) { _, new in new }
                 say("userland: proxy on \(APIProxy.baseURL(port: port)), guest token: \(handed.source == .longLived ? "long-lived" : "access token")")
-                say(mintLine(try? KeychainTokenStore.guest.load()))
+                let minted = try? KeychainTokenStore.guest.load()
+                say(mintLine(minted))
+                say(await ordinaryRefreshLine(minted, ordinary: StoredTokenProvider(store: KeychainTokenStore())))
             } catch {
                 say("userland: proxy on \(APIProxy.baseURL(port: port)), no guest token: \(error)")
             }
