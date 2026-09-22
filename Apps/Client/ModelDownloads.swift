@@ -7,11 +7,12 @@ import UIKit
 import FluidAudio
 #endif
 
-/// Every file the phone downloads for its on-device models, pinned: repository, revision, and
-/// the flattened file list with sizes and digests. `Apps/Topo/Resources/models.json`, written by
-/// `scripts/model-manifest.sh` from the Hugging Face tree API at the pinned revisions, so a bump
-/// of a model is a bump of a revision there and a re-run of the script. A `.mlmodelc` bundle is a
-/// directory of several files on the Hub, which is why the list is flat.
+/// Every file the phone downloads for its on-device models and its guest's rootfs, pinned: where
+/// each comes from, and the flattened file list with sizes and digests.
+/// `Apps/Topo/Resources/models.json`, written by `scripts/model-manifest.sh` — the models from the
+/// Hugging Face tree API at the pinned revisions, the rootfs from its pinned URL — so a bump is a
+/// bump there and a re-run of the script. A `.mlmodelc` bundle is a directory of several files on
+/// the Hub, which is why the list is flat.
 struct ModelManifest: Codable, Sendable {
     struct File: Codable, Sendable, Equatable {
         let path: String
@@ -23,17 +24,30 @@ struct ModelManifest: Codable, Sendable {
         /// The model's directory under the store's root, and the name the ear and the voice ask
         /// for it by.
         let id: String
-        let repo: String
-        let revision: String
+        /// A Hugging Face repository and the revision pinned in it; nil for an entry with a `url`.
+        let repo: String?
+        let revision: String?
+        /// The explicit source of an entry that is not on the Hub: each file is fetched from this
+        /// base plus its path.
+        let url: String?
         let files: [File]
+
+        init(id: String, repo: String? = nil, revision: String? = nil, url: String? = nil, files: [File]) {
+            self.id = id
+            self.repo = repo
+            self.revision = revision
+            self.url = url
+            self.files = files
+        }
 
         var bytes: Int64 { files.reduce(0) { $0 + $1.size } }
 
-        /// Where a file is fetched from: the pinned revision, so the manifest's digest is the
-        /// digest of what arrives.
+        /// Where a file is fetched from: the explicit source when the entry has one, otherwise the
+        /// pinned revision on the Hub, so the manifest's digest is the digest of what arrives.
         func url(for file: File) -> URL {
             let path = file.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? file.path
-            return URL(string: "https://huggingface.co/\(repo)/resolve/\(revision)/\(path)")!
+            if let url { return URL(string: url + path)! }
+            return URL(string: "https://huggingface.co/\(repo ?? "")/resolve/\(revision ?? "")/\(path)")!
         }
     }
 
@@ -46,6 +60,9 @@ struct ModelManifest: Codable, Sendable {
     /// The voice's repository. Its paths are repository-relative (`v2.1/english/…`), because
     /// FluidAudio's Pocket loader reads the language pack from beneath the repository root.
     static let pocket = "pocket-tts-coreml"
+    /// The guest's rootfs: Alpine's aarch64 minirootfs, one tarball, which the userland imports
+    /// into a fakefs once it is here and verified (`Apps/Topo/Userland.swift`).
+    static let rootfs = "alpine-minirootfs"
 
     static func load(from url: URL) throws -> ModelManifest {
         try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: url))
@@ -252,7 +269,7 @@ final class ModelDownloads {
     private var waiting: Set<String> = []
     private var verifying: Set<String> = []
     private var failures: [String: String] = [:]
-    private var waiters: [(ids: [String], body: @MainActor () -> Void)] = []
+    private var waiters = ModelWaiters()
     /// The models something in this process has asked for; the rest of the manifest is left
     /// alone (a debug build given its models on the command line asks for none).
     private var wanted: Set<String> = []
@@ -390,12 +407,26 @@ final class ModelDownloads {
         return "downloading \(formatter.string(fromByteCount: done)) of \(formatter.string(fromByteCount: total))"
     }
 
-    /// Runs `body` once every model in `ids` is present: now, if they already are.
+    /// Runs `body` once every model in `ids` is present: now, if they already are. A failure
+    /// does not reach it; it stays waiting for the success a later `start` may bring.
     func whenPresent(_ ids: [String], _ body: @escaping @MainActor () -> Void) {
         if ids.allSatisfy({ present.contains($0) }) {
             body()
         } else {
-            waiters.append((ids, body))
+            waiters.add(ids, settlesOnFailure: false) { result in
+                if case .success = result { body() }
+            }
+        }
+    }
+
+    /// Runs `body` once, with success when every model in `ids` is present (now, if they already
+    /// are) or with the failure of the first of them to fail. Either way it is settled and gone:
+    /// the next `start` is a fresh attempt, and whoever wants its outcome asks again.
+    func whenSettled(_ ids: [String], _ body: @escaping ModelWaiters.Body) {
+        if ids.allSatisfy({ present.contains($0) }) {
+            body(.success(()))
+        } else {
+            waiters.add(ids, settlesOnFailure: true, body)
         }
     }
 
@@ -420,9 +451,7 @@ final class ModelDownloads {
             if let model = manifest?.model(id), store.isPresent(model) {
                 present.insert(id)
                 if let manifest { store.sweep(manifest) }
-                let ready = waiters.filter { $0.ids.allSatisfy(present.contains) }
-                waiters.removeAll { $0.ids.allSatisfy(present.contains) }
-                ready.forEach { $0.body() }
+                waiters.present(present).forEach { $0(.success(())) }
             }
         case .failed(let key, let why):
             verifying.remove(key)
@@ -430,11 +459,51 @@ final class ModelDownloads {
             inFlight[key] = nil
             let id = String(key.prefix(while: { $0 != "|" }))
             failures[id] = why
+            let failure = ModelDownloadFailure(id: id, why: why)
+            waiters.failed(id).forEach { $0(.failure(failure)) }
         case .finished:
             let handler = completion
             completion = nil
             handler?()
         }
+    }
+}
+
+/// A model's download that failed: which, and the reason the session gave.
+struct ModelDownloadFailure: Error, Equatable, CustomStringConvertible {
+    let id: String
+    let why: String
+    var description: String { "\(id): \(why)" }
+}
+
+/// Who is waiting on which models. A waiter is settled with success once every model it named is
+/// present; one that settles on failure is also settled, with that failure, when any model it
+/// named fails, and a waiter is gone once settled. One that does not settle on failure outlives
+/// it, for the success a later attempt may bring.
+struct ModelWaiters {
+    typealias Body = @MainActor (Result<Void, ModelDownloadFailure>) -> Void
+    private var entries: [(ids: [String], settlesOnFailure: Bool, body: Body)] = []
+
+    var count: Int { entries.count }
+
+    mutating func add(_ ids: [String], settlesOnFailure: Bool, _ body: @escaping Body) {
+        entries.append((ids, settlesOnFailure, body))
+    }
+
+    /// Takes the waiters every one of whose models is in `present`, to be told success.
+    mutating func present(_ present: Set<String>) -> [Body] {
+        take { $0.ids.allSatisfy(present.contains) }
+    }
+
+    /// Takes the waiters that settle on failure and named `id`, to be told it failed.
+    mutating func failed(_ id: String) -> [Body] {
+        take { $0.settlesOnFailure && $0.ids.contains(id) }
+    }
+
+    private mutating func take(where matches: ((ids: [String], settlesOnFailure: Bool, body: Body)) -> Bool) -> [Body] {
+        let taken = entries.filter(matches).map(\.body)
+        entries.removeAll(where: matches)
+        return taken
     }
 }
 

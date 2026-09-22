@@ -23,7 +23,7 @@ final class ModelDownloadsTests: XCTestCase {
         for id in [ModelManifest.parakeet, ModelManifest.ctc, ModelManifest.pocket] {
             let model = try XCTUnwrap(manifest.model(id), id)
             XCTAssertFalse(model.files.isEmpty, id)
-            XCTAssertEqual(model.revision.count, 40, "\(id) is pinned to a commit")
+            XCTAssertEqual(model.revision?.count, 40, "\(id) is pinned to a commit")
             for file in model.files {
                 XCTAssertEqual(file.sha256.count, 64, "\(id)/\(file.path)")
                 XCTAssertTrue(file.sha256.allSatisfy(\.isHexDigit), "\(id)/\(file.path)")
@@ -31,6 +31,15 @@ final class ModelDownloadsTests: XCTestCase {
                 XCTAssertEqual(model.url(for: file).host, "huggingface.co")
             }
         }
+        // The guest's rootfs is not on the Hub: one tarball, fetched from Alpine's CDN at the
+        // pinned release, and checked against its digest like every model file.
+        let rootfs = try XCTUnwrap(manifest.model(ModelManifest.rootfs))
+        XCTAssertNil(rootfs.repo)
+        XCTAssertEqual(rootfs.files.map(\.path), ["alpine-minirootfs-3.22.6-aarch64.tar.gz"])
+        XCTAssertEqual(rootfs.url(for: rootfs.files[0]).absoluteString,
+                       "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz")
+        XCTAssertEqual(rootfs.files[0].sha256.count, 64)
+        XCTAssertGreaterThan(rootfs.files[0].size, 0)
         // The CoreML bundles arrive flattened: a bundle is several files on the Hub.
         let parakeet = try XCTUnwrap(manifest.model(ModelManifest.parakeet))
         XCTAssertTrue(parakeet.files.contains { $0.path == "Encoder.mlmodelc/weights/weight.bin" })
@@ -85,5 +94,36 @@ final class ModelDownloadsTests: XCTestCase {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try data.write(to: url)
         return url
+    }
+}
+
+/// The downloader's waiters: a failure settles the waiters that asked to hear of one, and leaves
+/// the ones waiting only for success to wait on.
+@MainActor
+final class ModelWaitersTests: XCTestCase {
+    func testAFailureSettlesTheWaitersThatAskedForIt() {
+        var waiters = ModelWaiters()
+        var told: [Result<Void, ModelDownloadFailure>] = []
+        waiters.add(["rootfs"], settlesOnFailure: true) { told.append($0) }
+        waiters.add(["rootfs"], settlesOnFailure: false) { _ in XCTFail("a success-only waiter heard a failure") }
+        waiters.add(["voice"], settlesOnFailure: true) { _ in XCTFail("a waiter on another model heard the failure") }
+
+        let failure = ModelDownloadFailure(id: "rootfs", why: "404")
+        waiters.failed("rootfs").forEach { $0(.failure(failure)) }
+        XCTAssertEqual(told.count, 1)
+        if case .failure(let got) = told.first { XCTAssertEqual(got, failure) } else { XCTFail("not told the failure") }
+        XCTAssertEqual(waiters.count, 2, "the settled waiter is gone, the other two wait on")
+        XCTAssertTrue(waiters.failed("rootfs").isEmpty, "a settled waiter was told twice")
+    }
+
+    func testSuccessSettlesEveryWaiterWhoseModelsArePresent() {
+        var waiters = ModelWaiters()
+        var told = 0
+        waiters.add(["rootfs"], settlesOnFailure: true) { if case .success = $0 { told += 1 } }
+        waiters.add(["rootfs"], settlesOnFailure: false) { if case .success = $0 { told += 1 } }
+        waiters.add(["rootfs", "voice"], settlesOnFailure: true) { _ in XCTFail("settled with a model still missing") }
+        waiters.present(["rootfs"]).forEach { $0(.success(())) }
+        XCTAssertEqual(told, 2)
+        XCTAssertEqual(waiters.count, 1)
     }
 }

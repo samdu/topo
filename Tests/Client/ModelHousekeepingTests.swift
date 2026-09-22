@@ -1,4 +1,5 @@
 import CryptoKit
+import TopoUserland
 import XCTest
 
 @testable import Topo
@@ -53,6 +54,46 @@ final class ModelHousekeepingTests: XCTestCase {
         XCTAssertFalse(exists(store.root.appendingPathComponent("kokoro")))
         XCTAssertEqual(try Set(fm.contentsOfDirectory(atPath: store.root.path)),
                        [ModelManifest.parakeet, home.lastPathComponent], "only the two homes under Models/ remain")
+    }
+
+    /// The guest's rootfs on the phone as it is laid out: the tarball in its manifest home under
+    /// `Models/`, and the fakefs made from it beside `Models/`, never inside it, since everything
+    /// under `Models/` that is not a manifest home or a manifest file goes.
+    @MainActor
+    func testTheRootfsHomeIsProtectedAndTheFakefsIsOutsideTheSweep() throws {
+        let store = ModelStore.standard()
+        let manifest = try ModelManifest.bundled()
+        let rootfs = try XCTUnwrap(manifest.model(ModelManifest.rootfs))
+        XCTAssertEqual(store.directory(for: rootfs), store.root.appendingPathComponent(ModelManifest.rootfs, isDirectory: true))
+        XCTAssertTrue(store.owns(rootfs), "the tarball's home is Topo's, under Models/")
+        let models = store.root.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        let fakefs = Userland.shared.installer.fakefs.standardizedFileURL.resolvingSymlinksInPath().pathComponents
+        XCTAssertNotEqual(Array(fakefs.prefix(models.count)), models, "the fakefs is under Models/, where the sweep removes it")
+    }
+
+    /// The sweep over a store holding the rootfs, whole or halfway down, with a fakefs beside
+    /// `Models/`: the tarball, its resume data and the fakefs all survive.
+    func testTheSweepLeavesTheRootfsAndItsFakefs() throws {
+        let (store, voices) = try realStore()
+        let support = store.root.deletingLastPathComponent()
+        let fakefs = RootfsInstaller(directory: support.appendingPathComponent("Userland", isDirectory: true)).fakefs
+        try write(fakefs.appendingPathComponent("meta.db"))
+        try write(fakefs.appendingPathComponent("data/bin/busybox"))
+
+        let rootfs = try filled(store, id: ModelManifest.rootfs, files: ["alpine-minirootfs-3.22.6-aarch64.tar.gz": "tarball"])
+        let tarball = store.location(of: rootfs.files[0], in: rootfs)
+        store.sweep(ModelManifest(models: voices.models + [rootfs]))
+        XCTAssertTrue(store.isPresent(rootfs), "the rootfs was swept")
+        XCTAssertTrue(exists(fakefs.appendingPathComponent("meta.db")), "the fakefs was swept")
+        XCTAssertTrue(exists(fakefs.appendingPathComponent("data/bin/busybox")))
+
+        // Halfway down: the file not yet admitted, its resume data waiting.
+        try fm.removeItem(at: tarball)
+        let resume = URL(fileURLWithPath: tarball.path + ModelStore.resumeSuffix)
+        try write(resume)
+        store.sweep(ModelManifest(models: voices.models + [rootfs]))
+        XCTAssertTrue(exists(resume), "a rootfs download in progress was swept")
+        XCTAssertTrue(exists(fakefs.appendingPathComponent("meta.db")))
     }
 
     /// A model's directory built from a manifest entry the way the downloader fills one:

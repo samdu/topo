@@ -83,6 +83,15 @@ What it reads is two debug-only accessibility values, decoded strictly: the micr
 
 What it does not cover: Parakeet and Pocket run on the simulator's CPU, not the Neural Engine, so neither the speed nor the placement a phone gets is shown here; the question is `say`'s through a loopback device, not a person's through a microphone; and what the speaker plays goes to the host's output, which nothing listens to.
 
+## Running a command in the guest
+
+```
+DEVICE=<udid> scripts/simulator-run.sh --userland "echo hello from topo; cat /etc/alpine-release" --fresh --expect "hello from topo" --expect-rootfs fetched
+DEVICE=<udid> scripts/simulator-run.sh --no-build --userland "echo hello from topo" --expect "hello from topo" --expect-rootfs reused
+```
+
+`--userland CMD` launches the app with `TOPO_DEBUG_USERLAND=CMD`: it fetches the rootfs through `ModelDownloads` (or finds the fakefs already made), imports it, boots the guest and runs the command under `/bin/sh -c`, printing `[topo-debug] guest: <line>` for each line it wrote and `[topo-debug] guest exit: <status>`, ending in `userland done`. No token is read unless `--send` is given too, and the build runs `scripts/build-ish.sh` first. The script passes only with no `userland error:` line, exactly `guest exit: 0`, and, when given, a `guest: <TEXT>` line equal to `--expect TEXT` and the rootfs line `--expect-rootfs` names: `fetched` (this launch downloaded the tarball and imported it) or `reused` (the fakefs was already whole and nothing was fetched or imported). `--fresh` uninstalls the app before installing it, so its container, the downloaded tarball and the fakefs go with it. The rootfs comes from `dl-cdn.alpinelinux.org`, so the simulator needs the network the first time.
+
 ## What a shell cannot reach
 
 `simctl` has no tap. It boots a device, installs and launches an app, and captures the screen, and there is no command in it that touches what is on that screen; System Events cannot see the Simulator's window either, so an AppleScript UI script finds nothing to click. Anything behind a gesture is out of reach from a *shell* — which is why the microphone press is an XCUITest (above) rather than a `simctl` step; screenshots are the same, so `--screenshot` captures whatever the app came up on and nothing further in.

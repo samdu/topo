@@ -55,6 +55,16 @@ case "$2" in
       answered) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run: hi"; say "done"
                 exec sleep 600 ;;
       launched) exit 0 ;;
+      userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"; say "userland: booted"
+                        say "guest: hi"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
+      userland-reused) say "userland: ready"; say "userland: rootfs reused: nothing fetched, nothing imported"
+                       say "userland: booted"; say "guest: hi"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
+      userland-error) say "userland: ready"; say "userland error: the kernel refused to boot (-2)"; say "userland done"
+                      exec sleep 600 ;;
+      userland-exit-1) say "userland: booted"; say "guest: hi"; say "guest exit: 1"; say "userland done"; exec sleep 600 ;;
+      userland-other-output) say "userland: booted"; say "guest: hi there"; say "guest exit: 0"; say "userland done"
+                             exec sleep 600 ;;
+      userland-dies) say "userland: booted"; exit 42 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
   *) exit 0 ;;
@@ -99,6 +109,16 @@ case_ send-no-reply-to-this-turn           fail no-reply             5  --send h
 case_ send-done-then-launcher-exits-1      fail done-then-exits-1    5  --send hello
 case_ send-answered                        pass answered             5  --send hello
 case_ no-send-launched                     pass launched             5
+case_ userland-ran                         pass userland-fetched     5  --userland "echo hi" --expect hi
+case_ userland-fetched-as-expected         pass userland-fetched     5  --userland "echo hi" --expect-rootfs fetched
+case_ userland-reused-as-expected          pass userland-reused      5  --userland "echo hi" --expect-rootfs reused
+case_ userland-fetched-when-reuse-expected fail userland-fetched     5  --userland "echo hi" --expect-rootfs reused
+case_ userland-reused-when-fetch-expected  fail userland-reused      5  --userland "echo hi" --expect-rootfs fetched
+case_ userland-error                       fail userland-error       5  --userland "echo hi"
+case_ userland-exit-nonzero                fail userland-exit-1      5  --userland "echo hi"
+case_ userland-other-output                fail userland-other-output 5 --userland "echo hi" --expect hi
+case_ userland-launcher-dies               fail userland-dies        5  --userland "echo hi"
+case_ userland-times-out-silent            fail silent               12 --userland "echo hi"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"

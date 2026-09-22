@@ -39,6 +39,19 @@ done
 build="${BUILD:-$(( ($(date +%s) - 1767225600) / 60 ))}"
 echo "==> build $build"
 
+# The guest's kernel is built from the fork at its pin, never committed; the archive links it.
+"$(dirname "${BASH_SOURCE[0]}")/build-ish.sh"
+
+# The About screen names the commit this build is as its corresponding source, which is only
+# true of a clean tree whose commit is on GitHub.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "the tree has uncommitted changes; a build shipped from it has no commit that is its source" >&2
+  exit 1
+fi
+commit="$(git rev-parse HEAD)"
+[ -n "$(git branch -r --contains "$commit")" ] \
+  || { echo "$commit is on no remote branch; push it first, since the About screen points at it" >&2; exit 1; }
+
 rm -rf "$archive"
 xcodebuild archive \
   -project "$project" \
@@ -46,7 +59,8 @@ xcodebuild archive \
   -destination 'generic/platform=iOS' \
   -archivePath "$archive" \
   -allowProvisioningUpdates \
-  CURRENT_PROJECT_VERSION="$build"
+  CURRENT_PROJECT_VERSION="$build" \
+  TOPO_SOURCE_COMMIT="$commit"
 
 xcodebuild -exportArchive \
   -archivePath "$archive" \

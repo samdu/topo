@@ -1,0 +1,13 @@
+diff --git a/meson.build b/meson.build
+index 738c5a57..7d1f6871 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1776,7 +1776,7 @@ if get_option('kernel') == 'ish'
+         include_directories: includes)
+ 
+     if not meson.is_cross_build()
+-        executable('ish', ['main.c'], dependencies: ish)
++        executable('ish', ['main.c', offsets], dependencies: ish)
+     endif
+ 
+ elif get_option('kernel') == 'linux'

@@ -2,7 +2,7 @@
 
 The About screen in Topo and in Womble is this file: the apps read it out of their own bundle and render it, so what a person sees credited is what is written here.
 
-Every borrowed piece in a Topo bundle is named below with where it came from and what its licence is. Nothing under a copyleft licence held by somebody else ships inside a bundle: Topo is distributed through the App Store, and embedding such code would make the whole app theirs to object to. What is left is Sam's own code, which carries no terms between one project and the other, and tools that run on the Mac that builds Topo and stay there.
+Every borrowed piece in a Topo bundle is named below with where it came from and what its licence is. Nothing under a copyleft licence held by somebody else ships inside a bundle unless its holders waive the conflict between that licence and the App Store's terms, as iSH's do: Topo is distributed through the App Store, and embedding such code without that waiver would make the whole app theirs to object to. The iSH fork is the one such piece. What is left is permissively licensed code, Sam's own code, which carries no terms between one project and the other, tools that run on the Mac that builds Topo and stay there, and what Topo downloads after it is installed.
 
 The format is the whole contract with the apps: a heading beginning `## ` opens an entry, and the `Licence`, `Where` and `Use` lines under it are shown as they are written. Everything above the first heading is the note at the top of the screen.
 
@@ -25,6 +25,21 @@ Use: The speech-to-text model the ear runs (parakeet-tdt-0.6b-v2, 442 MB) and th
 Licence: CC-BY-4.0, © Kyutai; the CoreML conversion is FluidInference's
 Where: https://huggingface.co/FluidInference/pocket-tts-coreml, from https://huggingface.co/kyutai/pocket-tts
 Use: The text-to-speech model the voice runs (351 MB: the four bundles of the English pack that the Neural Engine placement loads, the constants and the tokenizer beside them, and the `eponine` speaker, one of the pack's stock voices). Not in the bundle: Topo downloads them into the app's Application Support on the first run and keeps them there.
+
+## iSH (the OpenMinis/ish-arm64 fork)
+Licence: GPL-3.0, © the iSH developers (contributions after iSH commit 0e3a414 are also GPL-2.0), with the additional terms of iSH's LICENSE.IOS, quoted here in full: "The iSH developers are aware that the terms of service that apply to apps distributed via Apple's App Store services may conflict with rights granted under the iSH license, the GNU General Public License, version 2 or 3. The copyright holders of the iSH app do not wish this conflict to prevent the otherwise-compliant distribution of derived apps via the App Store. Therefore, we have committed not to pursue any license violation that results solely from the conflict between the GNU GPLv2 or v3 and the Apple App Store terms of service. In other words, as long as you comply with the GPL in all other respects, including its requirements to provide users with source code and the text of the license, we will not object to your distribution of the iSH app through the App Store."
+Where: https://github.com/OpenMinis/ish-arm64 at e1d579480fba88e8f0428e3cf23811bcdd05421f, built by `scripts/build-ish.sh` with the patches in `patches/ish/` (the memory brake's refresh hook in `kernel/mmap.c`, and the `offsets` source in the fork's `meson.build`)
+Use: The guest's kernel: an arm64 Linux userland run in the app's own process, its system calls answered by iSH's kernel and its code run by the Asbestos engine. Linked into the iOS app through `Packages/TopoUserland`; nothing boots it outside a debug launch and the tests. `Packages/TopoUserland/Guest/topo_ish.c` follows the fork's `app/AppDelegate.m` and `app/ISHShellExecutor.m` for the boot sequence, the anonymous-memory cap and the process launch, and is under the same terms.
+
+## libarchive
+Licence: BSD-2-Clause, © Tim Kientzle and the libarchive contributors; a few files are also under a 3-clause UC Regents copyright, and archive_getdate.c is public domain
+Where: https://github.com/libarchive/libarchive at fc6563f5130d8a7ee1fc27c0e55baef35119f26c, the iSH fork's `deps/libarchive` submodule
+Use: Reads the rootfs tarball for the fork's fakefs importer (`tools/fakefs.c`). Built by `scripts/build-ish.sh` with no crypto library and no XML reader, and linked into the iOS app with the fork.
+
+## Alpine Linux minirootfs
+Licence: Each package's own: chiefly BusyBox (GPL-2.0), musl (MIT), apk-tools (GPL-2.0) and the Alpine base files
+Where: https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz, pinned by size and sha256 in `Apps/Topo/Resources/models.json`
+Use: The guest's root filesystem (4 MB). Not in the bundle: Topo downloads it into the app's Application Support on the first run, checks it against the pinned digest, and makes a fakefs of it there with the fork's importer.
 
 ## XcodeGen
 Licence: MIT, © Yonas Kolb

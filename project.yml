@@ -30,6 +30,11 @@ packages:
     path: Packages/TopoAuth
   TopoTurn:
     path: Packages/TopoTurn
+  # The guest: the iSH kernel and emulator of OpenMinis/ish-arm64 and the Swift over them. Its
+  # framework is built by scripts/build-ish.sh, which has to have run before this project
+  # resolves; the iOS app only.
+  TopoUserland:
+    path: Packages/TopoUserland
   # The phone's ear and its voice: NVIDIA Parakeet as CoreML with its CTC keyword spotter for
   # the vocabulary rescoring (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
   # (Apps/Client/Voice.swift). Pinned exactly: neither the vocabulary-boosting API the ear
@@ -52,6 +57,10 @@ targets:
       # What the About screen reads, rather than a copy of it in Swift.
       - path: THIRD-PARTY
         buildPhase: resources
+      # The GPL's text, which the iSH fork's App Store waiver holds only while the app carries it;
+      # the About screen shows it, and `scripts/check-built-plist.sh` fails a product without it.
+      - path: LICENSE
+        buildPhase: resources
       # The pinned file list the models are downloaded from; scripts/model-manifest.sh writes it.
       - path: Apps/Topo/Resources/models.json
         buildPhase: resources
@@ -63,6 +72,7 @@ targets:
       - package: TopoAuth
       - package: TopoTurn
       - package: FluidAudio
+      - package: TopoUserland
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -89,9 +99,13 @@ targets:
         # and every TestFlight upload would carry the same build number (docs/testflight.md).
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # The commit this build's source is, which the About screen names as the corresponding
+        # source the GPL asks for; `scripts/archive-upload.sh` passes it, and it is empty elsewhere.
+        TopoSourceCommit: $(TOPO_SOURCE_COMMIT)
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
+        TOPO_SOURCE_COMMIT: ""
         # FluidAudio's prebuilt text-normalisation xcframework has an arm64 simulator slice and
         # no x86_64 one, so a generic simulator build of this target is arm64 only.
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
@@ -165,6 +179,35 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tests
+  # The guest's suite: the rootfs pipeline and the kernel booted on Alpine's minirootfs
+  # (TEST_RUNNER_TOPO_USERLAND_ROOTFS, from scripts/fetch-rootfs.sh). Not hosted, so it runs in a
+  # process of its own: the kernel is process-global, and this bundle boots it once.
+  TopoUserlandTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Packages/TopoUserland/Tests/TopoUserlandTests
+      - Packages/TopoUserland/Tests/Support
+    dependencies:
+      - package: TopoUserland
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.userlandtests
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
+  # The memory brake on a stale sample, in a process of its own again: its feeds put the kernel in
+  # footprint mode for the life of the process, which a simulator's sampler cannot keep fresh.
+  TopoUserlandBrakeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - Packages/TopoUserland/Tests/TopoUserlandBrakeTests
+      - Packages/TopoUserland/Tests/Support
+    dependencies:
+      - package: TopoUserland
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.userlandbraketests
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   # The one test that presses the microphone: an XCUITest that launches the iOS
   # app in the simulator and taps, holds and releases the button. In the Topo
   # scheme's test action, so the PR check runs it with the suite above.
@@ -247,11 +290,11 @@ targets:
 schemes:
   Topo:
     build:
-      targets: { Topo: all, TopoTests: [test], TopoUITests: [test] }
+      targets: { Topo: all, TopoTests: [test], TopoUserlandTests: [test], TopoUserlandBrakeTests: [test], TopoUITests: [test] }
     run: { config: Debug }
     test:
       config: Debug
-      targets: [TopoTests, TopoUITests]
+      targets: [TopoTests, TopoUserlandTests, TopoUserlandBrakeTests, TopoUITests]
   TopoTalk:
     build:
       targets: { Topo: all, TopoTalkTests: [test] }
