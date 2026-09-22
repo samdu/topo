@@ -72,7 +72,10 @@ final class MemoryBrakeTests: XCTestCase {
 
     /// The same two cases through a guest program's own allocations: a shell that builds a
     /// megabyte string after the sample went stale. Renewed, it runs; not renewed, the guest is
-    /// refused its memory.
+    /// refused its memory. The hook's count is exact in both: renewed, the first stale ask
+    /// refreshes the sample and every ask after it lands inside the fresh two seconds; not
+    /// renewed, the shell's allocator asks twice before it gives up, each ask on a sample still
+    /// stale — the same on every run measured.
     func testAGuestAllocatingOnAStaleSampleIsServedWhenTheAppRenewsIt() async throws {
         _ = try SharedGuest.booted()
         MemorySampler.shared.stop()
@@ -81,10 +84,15 @@ final class MemoryBrakeTests: XCTestCase {
         MemoryBrake.setRefresh(Self.hook)
         try await Task.sleep(for: .seconds(Self.stale))
 
+        let started = ContinuousClock.now
         let exit = try await Guest.shared.run("/bin/sh", ["-c", Self.allocate])
+        let took = ContinuousClock.now - started
         XCTAssertEqual(exit.status, 0, exit.errors)
         XCTAssertEqual(exit.output, "1048576\n")
-        XCTAssertGreaterThanOrEqual(Self.calls, 1, "the guest's allocation did not go through the hook")
+        // One refresh covers the run only while the run is shorter than the sample stays fresh;
+        // a host that slow is said here rather than read as a second call.
+        XCTAssertLessThan(took, .milliseconds(2000), "the run outlasted the fresh sample, so a second refresh would be right")
+        XCTAssertEqual(Self.calls, 1, "the guest's allocations did not go through the hook exactly once")
     }
 
     func testAGuestAllocatingOnAStaleSampleTheAppCannotRenewIsRefused() async throws {
@@ -98,7 +106,7 @@ final class MemoryBrakeTests: XCTestCase {
         let exit = try await Guest.shared.run("/bin/sh", ["-c", Self.allocate])
         XCTAssertNotEqual(exit.status, 0, "the guest was given memory on a dead sample")
         XCTAssertNotEqual(exit.output, "1048576\n")
-        XCTAssertGreaterThanOrEqual(Self.calls, 1)
+        XCTAssertEqual(Self.calls, 2, "each of the shell's two refused asks goes through the hook once")
     }
 
     /// A megabyte string in the shell, and its length.
