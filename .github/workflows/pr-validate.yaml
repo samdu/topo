@@ -113,7 +113,7 @@ env:
   XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
   RESULTS: ${{ github.workspace }}/ci-results
   # The simulator clones the Topo suite is spread over.
-  TEST_WORKERS: "3"
+  TEST_WORKERS: "2"
   # The one test only the full lane runs: Parakeet hearing the fixture.
   REAL_EAR_TEST: TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 
