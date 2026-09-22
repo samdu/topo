@@ -1,0 +1,82 @@
+# What every macOS job in pr-validate.yaml does before its own work: the pinned toolchain, one
+# iPhone simulator from the pinned runtime (its UDID in SIMULATOR_UDID), the XcodeGen projects
+# generated from project.yml, and with `guest: true` the guest's framework every Topo scheme
+# resolves. The versions and hashes are the workflow's env (DEVELOPER_DIR,
+# IOS_SIMULATOR_RUNTIME, XCODEGEN_VERSION, XCODEGEN_SHA256, RESULTS).
+#
+# The runner and compiler are pinned rather than `macos-latest`, so a new image cannot silently
+# change what the suite is compiled with; a runner without Xcode 26.6 or the iOS 26.5 simulator
+# runtime fails in the Toolchain step with a message saying which. Arm64 is required: FluidAudio
+# ships an arm64-only binary and project.yml excludes x86_64 simulators.
+name: Prepare a macOS runner
+description: The pinned toolchain, a simulator, the XcodeGen projects and optionally the guest's framework.
+inputs:
+  guest:
+    description: Restore or build Packages/TopoUserland/Frameworks/TopoIsh.xcframework.
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RESULTS"
+        [ "$(uname -m)" = arm64 ] || { echo "::error::Runner is $(uname -m), not arm64."; exit 1; }
+        [ -d "$DEVELOPER_DIR" ] || { echo "::error::$DEVELOPER_DIR is not on this runner image; pick the Xcode it has on purpose."; exit 1; }
+        sw_vers
+        xcodebuild -version
+        swift --version
+        # One iPhone from the pinned runtime, the first by name, so every run
+        # on an image uses the same device.
+        udid="$(xcrun simctl list devices available --json | jq -r --arg rt "$IOS_SIMULATOR_RUNTIME" '
+          [.devices[$rt] // [] | .[] | select(.name | startswith("iPhone"))]
+          | sort_by(.name) | .[0] | if . then "\(.udid) \(.name)" else empty end')"
+        [ -n "$udid" ] || { echo "::error::No iPhone simulator for $IOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
+        echo "Simulator: $udid ($IOS_SIMULATOR_RUNTIME)"
+        echo "SIMULATOR_UDID=${udid%% *}" >> "$GITHUB_ENV"
+
+    # The projects are generated from project.yml before anything builds, so a
+    # file on disk that the committed project does not list is still compiled.
+    - name: Generate Xcode projects (XcodeGen)
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+          "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+        echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+        unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+        xcodegen="$RUNNER_TEMP/xcodegen/bin/xcodegen"
+        "$xcodegen" --version | grep -qx "Version: $XCODEGEN_VERSION"
+        "$xcodegen" generate --spec project.yml
+        (cd Womble && "$xcodegen" generate --spec project.yml)
+        # Informational: what generation changed against the committed
+        # projects. Not a gate — Womble's generation reorders resource IDs.
+        git status --short -- '*.xcodeproj'
+
+    # The guest's kernel: OpenMinis/ish-arm64 at its pin with Topo's patches,
+    # built into Packages/TopoUserland/Frameworks/TopoIsh.xcframework, which
+    # is never committed and which every Topo scheme resolves, so it is built
+    # before any xcodebuild of one. Cached on everything the script folds into
+    # its own inputs stamp; a restored framework whose stamp matches is kept.
+    - name: Cache the guest's framework
+      if: inputs.guest == 'true'
+      uses: actions/cache@v4
+      with:
+        path: Packages/TopoUserland/Frameworks
+        key: topo-ish-${{ hashFiles('scripts/build-ish.sh', 'patches/ish/**', 'Packages/TopoUserland/Guest/**') }}
+    - name: Build the guest's framework (scripts/build-ish.sh)
+      if: inputs.guest == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        brew install meson ninja llvm lld
+        scripts/build-ish.sh
+        # The memory brake's refresh is what the patch adds and the app sets:
+        # a library without it is a kernel built from the fork unpatched.
+        for slice in Packages/TopoUserland/Frameworks/TopoIsh.xcframework/*/libTopoIsh.a; do
+          symbols="$(nm -gU "$slice")"
+          grep -q ' _ish_mem_refresh_hook$' <<< "$symbols" \
+            || { echo "::error::$slice does not export ish_mem_refresh_hook."; exit 1; }
+          echo "$slice exports ish_mem_refresh_hook"
+        done
