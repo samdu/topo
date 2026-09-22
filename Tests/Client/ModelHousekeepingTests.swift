@@ -96,6 +96,36 @@ final class ModelHousekeepingTests: XCTestCase {
         XCTAssertTrue(exists(fakefs.appendingPathComponent("meta.db")))
     }
 
+    /// Claude Code as the phone has it: the binary in its manifest home under `Models/`, executable
+    /// once the installer has verified it, and mounted into the guest from there — so that home is
+    /// the only copy, and the sweep has to leave it, whole or halfway down, as an entry of the
+    /// manifest the app ships.
+    @MainActor
+    func testTheSweepLeavesClaudeCodeWholeOrHalfwayDown() throws {
+        let bundled = try ModelManifest.bundled()
+        let pinned = try XCTUnwrap(bundled.model(ModelManifest.claudeCode), "Claude Code is not in the shipped manifest")
+        let (store, voices) = try realStore()
+        XCTAssertEqual(store.directory(for: pinned), store.root.appendingPathComponent(ModelManifest.claudeCode, isDirectory: true))
+        XCTAssertTrue(store.owns(pinned), "Claude Code's home is Topo's, under Models/")
+
+        // The shipped entry's id and path, with a file of the test's own in place of 226 MB.
+        let claude = try filled(store, id: pinned.id, files: [pinned.files[0].path: "a binary"])
+        let binary = store.location(of: claude.files[0], in: claude)
+        try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binary.path)
+        let manifest = ModelManifest(models: voices.models + [claude])
+        store.sweep(manifest)
+        XCTAssertTrue(store.isPresent(claude), "Claude Code was swept")
+        XCTAssertEqual((try fm.attributesOfItem(atPath: binary.path)[.posixPermissions] as? Int).map { $0 & 0o111 }, 0o111,
+                       "the sweep changed the binary")
+
+        // Halfway down: the file not yet admitted, its resume data waiting.
+        try fm.removeItem(at: binary)
+        let resume = URL(fileURLWithPath: binary.path + ModelStore.resumeSuffix)
+        try write(resume)
+        store.sweep(manifest)
+        XCTAssertTrue(exists(resume), "a Claude Code download in progress was swept")
+    }
+
     /// A model's directory built from a manifest entry the way the downloader fills one:
     /// repository-relative paths, `.mlmodelc` directories, the ledger beside them, resume data
     /// for a file. Orphans at every depth go; everything the entry or the downloader put there

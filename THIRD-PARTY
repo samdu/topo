@@ -41,6 +41,11 @@ Licence: Each package's own: chiefly BusyBox (GPL-2.0), musl (MIT), apk-tools (G
 Where: https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz, pinned by size and sha256 in `Apps/Topo/Resources/models.json`
 Use: The guest's root filesystem (4 MB). Not in the bundle: Topo downloads it into the app's Application Support on the first run, checks it against the pinned digest, and makes a fakefs of it there with the fork's importer.
 
+## Claude Code
+Licence: Anthropic's commercial terms (https://www.anthropic.com/legal/commercial-terms), © Anthropic PBC
+Where: https://downloads.claude.ai/claude-code-releases/2.1.278/linux-arm64-musl/claude, pinned by version, size and sha256 in `Apps/Topo/Resources/models.json` from that release's `manifest.json`
+Use: The guest's Claude Code, Anthropic's native `linux-arm64-musl` build (227 MB). Not in the bundle: Topo downloads it into the app's Application Support on the first run, checks it against the pinned digest, and mounts it into the guest from there, with its own updater off.
+
 ## XcodeGen
 Licence: MIT, © Yonas Kolb
 Where: https://github.com/yonaskolb/XcodeGen

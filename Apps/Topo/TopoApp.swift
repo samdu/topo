@@ -94,8 +94,9 @@ struct TopoApp: App {
                     if phase == .active {
                         voice.prepare()
                         speaker.prepare()
-                        // The guest's rootfs, fetched and imported on the same cue, so the
-                        // userland is on the phone before anything needs it. Nothing boots it.
+                        // The guest's rootfs and Claude Code, fetched (and the rootfs imported)
+                        // on the same cue, so the userland is on the phone before anything
+                        // needs it. Nothing boots it.
                         Userland.shared.prepare()
                         // The memory catches up with what the other devices wrote while this
                         // phone was away, and anything edited in Files here goes out, before

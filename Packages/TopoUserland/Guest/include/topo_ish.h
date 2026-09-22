@@ -38,6 +38,20 @@ int topo_ish_spawn(const char *path, const char *const *argv, const char *const 
 /// 128 + the signal that ended it. 0 on success, a negative guest errno otherwise.
 int topo_ish_wait(int pid, int *status);
 
+/// Bind-mounts the host directory `host_dir` at `point` in the guest through the fork's realfs,
+/// making `point` and its parents directories in the fakefs first where they are not. A mount
+/// already standing at `point` from the same host directory is left as it is; one from anywhere
+/// else is refused with `_EBUSY`. The host's own mode bits are what the guest sees, so a file is
+/// executable there only if it is executable on the host. 0 on success, a negative guest errno
+/// otherwise. Requires a booted kernel.
+int topo_ish_mount(const char *host_dir, const char *point);
+
+/// Makes `path` in the guest a symbolic link to `target`, its parents made where they are not. A
+/// link already pointing at `target` is left untouched; one pointing elsewhere is replaced; a path
+/// that is something other than a link is refused with `_EEXIST`. 0 on success, a negative guest
+/// errno otherwise. Requires a booted kernel.
+int topo_ish_link(const char *target, const char *path);
+
 /// Feeds the memory brake a sample: `limit` is footprint plus what is still available (the live
 /// jetsam line), `avail` what is still available. The first feed turns the brake on.
 void topo_ish_memory_feed(uint64_t limit, uint64_t avail, bool critical);

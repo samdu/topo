@@ -7,11 +7,11 @@ import UIKit
 import FluidAudio
 #endif
 
-/// Every file the phone downloads for its on-device models and its guest's rootfs, pinned: where
-/// each comes from, and the flattened file list with sizes and digests.
-/// `Apps/Topo/Resources/models.json`, written by `scripts/model-manifest.sh` — the models from the
-/// Hugging Face tree API at the pinned revisions, the rootfs from its pinned URL — so a bump is a
-/// bump there and a re-run of the script. A `.mlmodelc` bundle is a directory of several files on
+/// Every file the phone downloads for its on-device models and its guest, pinned: where each comes
+/// from, and the flattened file list with sizes and digests. `Apps/Topo/Resources/models.json`,
+/// written by `scripts/model-manifest.sh` — the models from the Hugging Face tree API at the pinned
+/// revisions, the rootfs from its pinned URL, Claude Code from Anthropic's release distribution at
+/// its pinned version — so a bump is a bump there and a re-run of the script. A `.mlmodelc` bundle is a directory of several files on
 /// the Hub, which is why the list is flat.
 struct ModelManifest: Codable, Sendable {
     struct File: Codable, Sendable, Equatable {
@@ -30,13 +30,18 @@ struct ModelManifest: Codable, Sendable {
         /// The explicit source of an entry that is not on the Hub: each file is fetched from this
         /// base plus its path.
         let url: String?
+        /// The release an entry with a `url` is pinned to, where its publisher names one: Claude
+        /// Code's version, which the guest's `claude --version` prints.
+        let version: String?
         let files: [File]
 
-        init(id: String, repo: String? = nil, revision: String? = nil, url: String? = nil, files: [File]) {
+        init(id: String, repo: String? = nil, revision: String? = nil, url: String? = nil, version: String? = nil,
+             files: [File]) {
             self.id = id
             self.repo = repo
             self.revision = revision
             self.url = url
+            self.version = version
             self.files = files
         }
 
@@ -63,6 +68,9 @@ struct ModelManifest: Codable, Sendable {
     /// The guest's rootfs: Alpine's aarch64 minirootfs, one tarball, which the userland imports
     /// into a fakefs once it is here and verified (`Apps/Topo/Userland.swift`).
     static let rootfs = "alpine-minirootfs"
+    /// Claude Code: Anthropic's `linux-arm64-musl` build, one binary, which the guest runs from
+    /// its home here through a mount (`TopoUserland.ClaudeCodeInstaller`), never a copy.
+    static let claudeCode = "claude-code"
 
     static func load(from url: URL) throws -> ModelManifest {
         try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: url))

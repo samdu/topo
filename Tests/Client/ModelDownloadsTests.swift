@@ -40,6 +40,17 @@ final class ModelDownloadsTests: XCTestCase {
                        "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz")
         XCTAssertEqual(rootfs.files[0].sha256.count, 64)
         XCTAssertGreaterThan(rootfs.files[0].size, 0)
+        // Claude Code is Anthropic's own release distribution, the one the official installer
+        // reads: the musl arm64 build at the pinned version, one binary, checked by digest.
+        let claude = try XCTUnwrap(manifest.model(ModelManifest.claudeCode))
+        XCTAssertNil(claude.repo)
+        let version = try XCTUnwrap(claude.version)
+        XCTAssertNotNil(version.range(of: #"^\d+\.\d+\.\d+$"#, options: .regularExpression), version)
+        XCTAssertEqual(claude.files.map(\.path), ["claude"])
+        XCTAssertEqual(claude.url(for: claude.files[0]).absoluteString,
+                       "https://downloads.claude.ai/claude-code-releases/\(version)/linux-arm64-musl/claude")
+        XCTAssertEqual(claude.files[0].sha256.count, 64)
+        XCTAssertGreaterThan(claude.files[0].size, 100_000_000)
         // The CoreML bundles arrive flattened: a bundle is several files on the Hub.
         let parakeet = try XCTUnwrap(manifest.model(ModelManifest.parakeet))
         XCTAssertTrue(parakeet.files.contains { $0.path == "Encoder.mlmodelc/weights/weight.bin" })

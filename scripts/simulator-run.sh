@@ -15,6 +15,7 @@
 #   scripts/simulator-run.sh --userland "echo hi" --expect hi   # boot the guest, run a command
 #   scripts/simulator-run.sh --userland "echo hi" --fresh --expect-rootfs fetched
 #   scripts/simulator-run.sh --userland "echo hi" --no-build --expect-rootfs reused
+#   scripts/simulator-run.sh --userland "claude --version" --fresh --expect-claude fetched
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
@@ -36,11 +37,14 @@
 # passes only when scripts/ci-require-tests.sh finds the test ran and passed, never skipped. The
 # lane is stopped and the Mac's defaults restored on every exit. Its turn is a real one.
 #
-# A --userland run needs no token. The app fetches or reuses the guest's rootfs, boots the guest and
-# runs the command under /bin/sh -c (DebugRun.userland, TOPO_DEBUG_USERLAND); the run passes only
-# when the app printed `userland done`, no `userland error:`, and `guest exit: 0`, and, when asked,
-# the exact guest line --expect names and the rootfs line --expect-rootfs names (`fetched`: this
-# launch downloaded and imported it; `reused`: it found the fakefs whole and fetched nothing).
+# A --userland run needs no token. The app fetches or reuses the guest's rootfs and Claude Code,
+# boots the guest, verifies and mounts Claude Code at /usr/local/bin/claude, and runs the command
+# under /bin/sh -c (DebugRun.userland, TOPO_DEBUG_USERLAND); the run passes only when the app
+# printed `userland done`, no `userland error:`, a line saying Claude Code was verified and
+# mounted, and `guest exit: 0`, and, when asked, the exact guest line --expect names, the rootfs
+# line --expect-rootfs names (`fetched`: this launch downloaded and imported it; `reused`: it found
+# the fakefs whole and fetched nothing) and the Claude Code line --expect-claude names (`fetched`:
+# this launch downloaded it; `reused`: it was on the phone, and nothing was fetched or copied).
 # --fresh uninstalls the app first, which takes its data container, fakefs and all, with it.
 #
 # Building runs scripts/build-ish.sh first: the guest's framework is built from the fork's pin and
@@ -65,6 +69,7 @@ talk=no
 userland=""
 expect=""
 expect_rootfs=""
+expect_claude=""
 fresh=no
 timeout="${TIMEOUT:-180}"
 
@@ -80,8 +85,9 @@ while [ $# -gt 0 ]; do
     --userland) userland="$2"; shift 2 ;;
     --expect) expect="$2"; shift 2 ;;
     --expect-rootfs) expect_rootfs="$2"; shift 2 ;;
+    --expect-claude) expect_claude="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
-    -h|--help) sed -n '2,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -111,6 +117,10 @@ read_token() {
 case "$expect_rootfs" in
   ""|fetched|reused) ;;
   *) echo "--expect-rootfs takes fetched or reused, not '$expect_rootfs'" >&2; exit 2 ;;
+esac
+case "$expect_claude" in
+  ""|fetched|reused) ;;
+  *) echo "--expect-claude takes fetched or reused, not '$expect_claude'" >&2; exit 2 ;;
 esac
 
 if [ "$build" = yes ]; then
@@ -248,6 +258,8 @@ fi
 if [ -n "$userland" ]; then
   lines="$(grep '\[topo-debug\]' "$log" | tr -d '\r')"
   grep -q '\[topo-debug\] userland error:' <<< "$lines" && fail "the guest reported an error"
+  grep -Eq '^\[topo-debug\] userland: claude code [^ ]+ verified in [0-9]+ ms, mounted at /usr/local/bin/claude$' <<< "$lines" \
+    || fail "Claude Code was not verified and mounted"
   grep -Fxq '[topo-debug] guest exit: 0' <<< "$lines" || fail "the guest command did not exit 0"
   if [ -n "$expect" ]; then
     grep -Fxq "[topo-debug] guest: $expect" <<< "$lines" || fail "the guest did not print '$expect'"
@@ -257,6 +269,12 @@ if [ -n "$userland" ]; then
                || fail "this launch did not fetch and import the rootfs" ;;
     reused) grep -Fxq '[topo-debug] userland: rootfs reused: nothing fetched, nothing imported' <<< "$lines" \
               || fail "this launch did not reuse the fakefs" ;;
+  esac
+  case "$expect_claude" in
+    fetched) grep -Eq '^\[topo-debug\] userland: claude code [^ ]+ fetched$' <<< "$lines" \
+               || fail "this launch did not fetch Claude Code" ;;
+    reused) grep -Eq '^\[topo-debug\] userland: claude code [^ ]+ reused: nothing fetched, nothing copied$' <<< "$lines" \
+              || fail "this launch did not reuse Claude Code" ;;
   esac
   echo "==> the guest booted and ran the command"
 fi
