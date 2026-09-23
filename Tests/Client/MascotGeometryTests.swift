@@ -152,9 +152,11 @@ final class MascotGeometryTests: XCTestCase {
         narrow.widthFraction = 0.1
         let with = try stage(Look.Mascot(), composer: narrow)
         defer { with.window.isHidden = true }
-        if let canvas = with.canvas {
-            XCTAssertLessThanOrEqual(canvas.maxX, well(narrow).minX + 0.5)
-        }
+        XCTAssertNil(with.canvas, "a pane with no flank drew him anyway")
+        // And the arithmetic: a flank with no width is no placement, whatever the inset and the
+        // spacing around it would give.
+        XCTAssertTrue(MascotPlacement.of(flank: CGRect(x: 10, y: 36, width: 0, height: 0), row: row,
+                                         composer: Look.Composer(), mascot: Look.Mascot()).isEmpty)
     }
 
     // MARK: The placement, as arithmetic

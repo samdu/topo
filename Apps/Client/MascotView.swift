@@ -30,7 +30,13 @@ struct MascotPlacement: Equatable, Sendable {
     /// nothing.
     var isEmpty: Bool { frame.width <= 0 || frame.height <= 0 }
 
+    /// No placement at all: what a flank with no width gets.
+    static let none = MascotPlacement(frame: .zero, home: .zero, scale: 1, corner: 0)
+
     static func of(flank: CGRect, row: CGSize, composer: Look.Composer, mascot: Look.Mascot) -> MascotPlacement {
+        // No flank is no Topo: the inset and the spacing around a flank with no width are the
+        // pane's edge and the well's margin, not room of his.
+        guard flank.width > 0 else { return .none }
         let scale = mascot.scale
         let left = flank.minX - composer.horizontalInset
         let right = max(left, flank.maxX + composer.spacing)
