@@ -200,8 +200,10 @@ struct ResidentConversation: GuestConversation {
         return try await session.send(text, id: id)
     }
 
-    func settle() async {
-        await GuestResident.shared.session?.settle()
+    func settle() async -> Bool {
+        // No guest has run in this process, and the last process's guest ended with it: what it
+        // wrote is final.
+        await GuestResident.shared.session?.settle() ?? true
     }
 
     func forget() async {

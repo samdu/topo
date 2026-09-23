@@ -23,8 +23,10 @@ protocol GuestConversation: Sendable {
     func residentPID() async -> Int32?
     /// Sends one input under `id`. Throws, having written nothing, when it is refused.
     func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate>
-    /// Returns once a process being ended has been, so its transcript is final.
-    func settle() async
+    /// Returns once nothing the guest is doing can still write about an input — no turn in flight,
+    /// one nobody listens to any more included, and no process being ended — and answers whether
+    /// the last process ended was confirmed gone, so that its transcript is final.
+    func settle() async -> Bool
     /// Forgets the conversation: the next process starts a fresh session.
     func forget() async
     /// Where the guest stands, for the diagnostics screen.
@@ -121,6 +123,8 @@ struct GuestLedger: Codable, Equatable, Sendable {
         enum State: String, Codable, Sendable {
             /// Sent, and what became of it not known yet.
             case sent
+            /// Answered by the guest: the reply is its own, still to be in the log.
+            case answered
             /// Received and cut off with no answer: not sent again unless the person asks.
             case unresolved
         }
@@ -181,13 +185,17 @@ enum Reconciliation: Equatable {
     case superseded
     /// Nothing is being asked, and the outstanding input was cut off: it stays unresolved.
     case hold
-    /// The transcript could not be read: nothing is known, so the record stays as it is, nothing
-    /// is sent, and the next attempt reads again.
+    /// The transcript could not be read, or may still be being written: nothing is known, so the
+    /// record stays as it is, nothing is sent, and the next attempt reads again.
     case unknown
 
     /// `request` is the nonce of the reply being asked for now, nil when only asked what is owed.
     static func of(_ pending: GuestLedger.Pending, verdict: GuestTranscript.Verdict,
                    request: String?) -> Reconciliation {
+        // A record already known received — the guest answered it, or read it and was cut off —
+        // stays received whatever a later read finds: a transcript not written yet, or since
+        // cleared away, is no evidence that it never arrived.
+        let verdict = verdict == .notReceived && pending.state != .sent ? .unresolved : verdict
         switch verdict {
         case .unreadable:
             return .unknown
@@ -271,10 +279,7 @@ actor GuestBridge: Brain {
         let login = self.login
         if asking { await withCheckedContinuation { queue.append($0) } }
         asking = true
-        defer {
-            // Handed to the next request waiting, if there is one, so nothing slips in between.
-            if queue.isEmpty { asking = false } else { queue.removeFirst().resume() }
-        }
+        defer { release() }
 
         // A ledger that cannot be read may hold an input the guest received: nothing is sent
         // until it can be read and that input reconciled.
@@ -285,13 +290,20 @@ actor GuestBridge: Brain {
         if let known = recent.last(where: { $0.nonce == request.nonce }) {
             return reply(known.text, to: request, usage: nil, model: nil)
         }
-        if let pending = ledger.pending {
-            switch Reconciliation.of(pending, verdict: verdict(on: pending), request: request.nonce) {
+        reconciling: while let pending = ledger.pending {
+            let verdict = await verdict(on: pending)
+            // The read waited on the guest: a sign-out meanwhile makes it about a login that has
+            // gone, and a record that moved meanwhile is read again.
+            try stillCurrent(login)
+            guard ledger.pending == pending else { continue reconciling }
+            switch Reconciliation.of(pending, verdict: verdict, request: request.nonce) {
             case .clear:
                 try record(nil)
             case .answered(let text):
                 // The ledger keeps the input until the reply is in the log (`landed`).
                 provenance[request.nonce] = (pending.session, nil)
+                ledger.pending?.state = .answered
+                try? save()
                 return reply(text, to: request, usage: nil, model: nil)
             case .owed:
                 // The runner writes an owed reply before it asks; one still here is a write that
@@ -309,8 +321,9 @@ actor GuestBridge: Brain {
             case .hold:
                 break
             case .unknown:
-                throw GuestBridgeError.failed(Self.unreadable)
+                throw GuestBridgeError.failed(Self.unknown)
             }
+            break reconciling
         }
 
         await conversation.use(model: ClaudeModel.effective(request.model).rawValue)
@@ -374,7 +387,17 @@ actor GuestBridge: Brain {
         }
         await observe(.gone(answering: answering))
 
+        guard let end else {
+            // This task stopped listening — cancelled — with the turn still the guest's. Nothing
+            // is known of it: the record stays as it was sent, and the next request reads the
+            // transcript once the guest's turn is over (`settle`).
+            throw CancellationError()
+        }
         if case .answered(let result) = end {
+            if ledger.pending?.input == id {
+                ledger.pending?.state = .answered
+                try? save()
+            }
             return reply(result.text ?? "", to: request, usage: usage, model: model)
         }
         if case .failed(.result) = end {
@@ -387,14 +410,19 @@ actor GuestBridge: Brain {
             }
             throw GuestBridgeError.unresolved
         }
-        // Anything else is read off the transcript once the process it went to is gone.
-        await conversation.settle()
+        // Anything else is read off the transcript once nothing can still be writing it.
+        let final = await conversation.settle()
         guard let pending = ledger.pending, pending.input == id else { throw GuestBridgeError.failed(Self.describe(end)) }
+        // A process not confirmed gone may still be writing: the record stays, and the next
+        // request reads again.
+        guard final else { throw GuestBridgeError.failed(Self.unknown) }
         switch GuestTranscript.verdict(for: id, home: conversation.home, session: pending.session, since: pending.sentAt) {
         case .notReceived:
             try? record(nil)
             throw GuestBridgeError.failed(Self.describe(end))
         case .answered(let text):
+            ledger.pending?.state = .answered
+            try? save()
             return reply(text, to: request, usage: usage, model: model)
         case .unresolved:
             ledger.pending?.state = .unresolved
@@ -402,12 +430,13 @@ actor GuestBridge: Brain {
             throw GuestBridgeError.unresolved
         case .unreadable:
             // The record stays: the next request reads again before it sends anything.
-            throw GuestBridgeError.failed(Self.unreadable)
+            throw GuestBridgeError.failed(Self.unknown)
         }
     }
 
-    /// Why a turn waits when the guest's transcript could not be read.
-    static let unreadable = "the guest's transcript could not be read, so whether it received the turn is not known; nothing is sent until it can be"
+    /// Why a turn waits when the guest's transcript could not be read, or the process the turn
+    /// went to is not confirmed gone, so its transcript may still be being written.
+    static let unknown = "whether the guest received the turn is not known yet (its transcript could not be read, or may still be being written); nothing is sent until it is"
 
     /// Why a turn waits when the bridge's own ledger could not be read.
     static let ledgerUnreadable = "the record of what the guest was sent could not be read, so whether it received the turn is not known; nothing is sent until it can be"
@@ -416,9 +445,16 @@ actor GuestBridge: Brain {
         // Unread, the ledger stays as it is on disk; the reply is in the log under its nonce, and
         // the record is reconciled against it once the ledger can be read.
         guard readLedger(), let pending = ledger.pending, pending.nonce == nonce else { return }
-        ledger.seen.formUnion(pending.covers)
-        ledger.seen.insert([reply.ref])
-        if let session = pending.session { ledger.session = session }
+        // What the input covered is seen only once the guest is known to have received it: it
+        // answered, or read it and was cut off. A reply another device wrote under the nonce, for
+        // an input whose fate here is not known, settles the request and counts nothing, so
+        // those turns go with the next input rather than never. The reply is seen only when it is
+        // the guest's own.
+        if pending.state != .sent {
+            ledger.seen.formUnion(pending.covers)
+            if let session = pending.session { ledger.session = session }
+        }
+        if pending.state == .answered { ledger.seen.insert([reply.ref]) }
         try? record(nil)
     }
 
@@ -429,10 +465,18 @@ actor GuestBridge: Brain {
 
     func owed() async -> OwedReply? {
         guard !asking, readLedger(), let pending = ledger.pending else { return nil }
-        switch Reconciliation.of(pending, verdict: verdict(on: pending), request: nil) {
+        // The read waits on the guest; holding the requests' one slot while it does keeps any
+        // request from reconciling or replacing the record meanwhile.
+        asking = true
+        defer { release() }
+        let verdict = await verdict(on: pending)
+        guard ledger.pending == pending else { return nil }
+        switch Reconciliation.of(pending, verdict: verdict, request: nil) {
         case .clear:
             try? record(nil)
         case .owed(let owed):
+            ledger.pending?.state = .answered
+            try? save()
             return owed
         case .hold where pending.state != .unresolved:
             ledger.pending?.state = .unresolved
@@ -466,7 +510,11 @@ actor GuestBridge: Brain {
         }
         parts.append("seen \(ledger.seen.count) turns" + (ledger.session.map { " of session \($0)" } ?? ""))
         if let pending = ledger.pending {
-            parts.append(pending.state == .unresolved ? "a turn cut off, waiting to be asked again" : "a turn with the guest")
+            switch pending.state {
+            case .sent: parts.append("a turn with the guest")
+            case .answered: parts.append("a reply from the guest still to be written")
+            case .unresolved: parts.append("a turn cut off, waiting to be asked again")
+            }
         }
         return parts.joined(separator: "; ")
     }
@@ -528,9 +576,19 @@ actor GuestBridge: Brain {
         }
     }
 
-    private func verdict(on pending: GuestLedger.Pending) -> GuestTranscript.Verdict {
-        GuestTranscript.verdict(for: pending.input, home: conversation.home, session: pending.session,
-                                since: pending.sentAt)
+    /// Hands the requests' one slot to the next waiting, if there is one, so nothing slips in
+    /// between.
+    private func release() {
+        if queue.isEmpty { asking = false } else { queue.removeFirst().resume() }
+    }
+
+    /// What the guest's transcript says became of `pending`, read only once nothing the guest is
+    /// doing can still write it (`settle`): `unreadable`, nothing known, while the last process
+    /// ended is not confirmed gone.
+    private func verdict(on pending: GuestLedger.Pending) async -> GuestTranscript.Verdict {
+        guard await conversation.settle() else { return .unreadable }
+        return GuestTranscript.verdict(for: pending.input, home: conversation.home, session: pending.session,
+                                       since: pending.sentAt)
     }
 
     private func reply(_ text: String, to request: BrainRequest, usage: StreamEvent.Usage?, model: String?) -> Reply {

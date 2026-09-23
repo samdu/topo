@@ -26,6 +26,9 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case answeredThenExited(String)
         /// Received, and then nothing: the stream never ends, as for an app killed mid-turn.
         case hang
+        /// Received, and still being answered, with its transcript entry not written yet: the
+        /// turn ends when `finishHanging` says.
+        case hangUnwritten
         /// Received, and ended with an error result while the process lives on, before its
         /// transcript has the input on disk: a read now would say it never arrived.
         case errorResult(String)
@@ -41,7 +44,10 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private var _ids: [String] = []
     private var _models: [String?] = []
     private var refusal: String?
-    private var hanging: [AsyncStream<GuestSession.TurnUpdate>.Continuation] = []
+    /// Turns the guest still has: `settle` waits for them, as the resident session does.
+    private var hanging: [(continuation: AsyncStream<GuestSession.TurnUpdate>.Continuation, id: String, text: String,
+                           session: String, written: Bool)] = []
+    private var confirmed = true
     private var messages = 0
     private var holdingReady = false
     private var readyGate: CheckedContinuation<Void, Never>?
@@ -61,6 +67,26 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
 
     /// Refuses every turn as not ready, with `why`, until it is nil again.
     func refuse(_ why: String?) { lock.withLock { refusal = why } }
+
+    /// Whether the ends of processes are confirmed, which `settle` reports.
+    func confirmEnds(_ on: Bool) { lock.withLock { confirmed = on } }
+
+    /// Ends every turn the guest still has with `reply`, written to the transcript after its
+    /// input (written now if it was not yet) before the turn ends, as Claude Code writes its
+    /// transcript before its result: `settle` returns only once it is on disk.
+    func finishHanging(with reply: String) {
+        let turns = lock.withLock { hanging }
+        for turn in turns {
+            if !turn.written { write(input: turn.text, id: turn.id, session: turn.session) }
+            write(reply: reply, model: "claude-haiku-4-5-20251001", session: turn.session)
+        }
+        lock.withLock { hanging = [] }
+        for turn in turns {
+            turn.continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: reply,
+                                                           session: turn.session, duration: .milliseconds(10)))))
+            turn.continuation.finish()
+        }
+    }
 
     /// Adds answers to the script.
     func then(_ answers: Answer...) { lock.withLock { script += answers } }
@@ -153,12 +179,18 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case .hang:
             write(input: text, id: id, session: session)
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
-            lock.withLock { hanging.append(continuation) }
+            lock.withLock { hanging.append((continuation, id, text, session, true)) }
+        case .hangUnwritten:
+            continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
+            lock.withLock { hanging.append((continuation, id, text, session, false)) }
         }
         return stream
     }
 
-    func settle() async {}
+    func settle() async -> Bool {
+        while lock.withLock({ !hanging.isEmpty }) { try? await Task.sleep(for: .milliseconds(5)) }
+        return lock.withLock { confirmed }
+    }
 
     func forget() async { lock.withLock { session = nil } }
 

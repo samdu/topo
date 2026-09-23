@@ -173,6 +173,9 @@ public actor GuestSession {
     private var startTask: Task<Void, Never>?
     /// The ending of a process under way, which a background call waits out before it answers.
     private var teardown: Task<GuestProcess.Termination, Never>?
+    /// How the last teardown ended. Every teardown signals every guest task, so the newest
+    /// says whether anything of any process ended before it may still be running.
+    private var lastTermination: GuestProcess.Termination?
     private var readiness: [CheckedContinuation<Void, Error>] = []
     private var backgroundWait: CheckedContinuation<Wake, Never>?
     private var backgroundTimer: Task<Void, Never>?
@@ -223,6 +226,8 @@ public actor GuestSession {
         /// Counts every line while the turn is in flight, so the watchdog can tell silence.
         var ticks = 0
         var watchdog: Task<Void, Never>?
+        /// Callers of `settle()` waiting for the turn to end, whoever is listening to it.
+        var settling: [CheckedContinuation<Void, Never>] = []
 
         init(continuation: AsyncStream<TurnUpdate>.Continuation) { self.continuation = continuation }
     }
@@ -362,10 +367,20 @@ public actor GuestSession {
         try await withCheckedThrowingContinuation { readiness.append($0) }
     }
 
-    /// Returns once a process being ended has been: the turn that ended with it is over, and
-    /// nothing it wrote is still being written.
-    public func settle() async {
-        if let teardown { _ = await teardown.value }
+    /// Returns once nothing the resident is doing can still write about an input: no turn in
+    /// flight — one whose caller stopped listening included — and no process being ended. Answers
+    /// whether the last process ended was confirmed gone, so that what it wrote is final; true
+    /// when none has been ended.
+    public func settle() async -> Bool {
+        while true {
+            if case .resident(let resident) = phase, let turn = resident.turn {
+                await withCheckedContinuation { turn.settling.append($0) }
+            } else if let teardown {
+                _ = await teardown.value
+            } else {
+                return lastTermination?.confirmed ?? true
+            }
+        }
     }
 
     /// Sends the person's `text` as a turn. Refused while another turn is in flight and while
@@ -568,6 +583,7 @@ public actor GuestSession {
 
     private func ended(_ termination: GuestProcess.Termination, reason: String, restart: Bool) {
         log("ended after \(reason): \(termination)")
+        lastTermination = termination
         teardown = nil
         phase = .idle
         if inForeground && (restart || !readiness.isEmpty) { startResident() }
@@ -579,6 +595,8 @@ public actor GuestSession {
         turn.watchdog?.cancel()
         turn.continuation.yield(.ended(end))
         turn.continuation.finish()
+        turn.settling.forEach { $0.resume() }
+        turn.settling = []
         wakeBackground(.turnEnded)
         // A change that waited for the turn is made now that it has ended — on the actor's next
         // turn, so a path ending the process itself (an exit, the way out) has done so first.

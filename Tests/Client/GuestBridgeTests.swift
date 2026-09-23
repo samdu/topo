@@ -72,6 +72,18 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(Reconciliation.of(askedAgain, verdict: .unresolved, request: "answer/a"), .askAgain)
         XCTAssertEqual(Reconciliation.of(pending, verdict: .unresolved, request: "answer/b"), .superseded)
         XCTAssertEqual(Reconciliation.of(pending, verdict: .unresolved, request: nil), .hold)
+
+        // Known received — answered, or read and cut off — is never cleared by a read that does
+        // not find the input.
+        for state in [GuestLedger.Pending.State.unresolved, .answered] {
+            var known = pending
+            known.state = state
+            XCTAssertEqual(Reconciliation.of(known, verdict: .notReceived, request: "answer/a"), .unresolved, "\(state)")
+            XCTAssertEqual(Reconciliation.of(known, verdict: .notReceived, request: "answer/b"), .superseded, "\(state)")
+            XCTAssertEqual(Reconciliation.of(known, verdict: .notReceived, request: nil), .hold, "\(state)")
+            known.askAgain = true
+            XCTAssertEqual(Reconciliation.of(known, verdict: .notReceived, request: "answer/a"), .askAgain, "\(state)")
+        }
     }
 
     func testCoverageIsASetOfRefsKeptAsRuns() throws {
@@ -187,7 +199,7 @@ final class GuestBridgeTests: XCTestCase {
             _ = try await second.answerPending(model: .sonnet5)
             XCTFail("a turn was answered over a transcript that could not be read")
         } catch let error as GuestBridgeError {
-            XCTAssertEqual(error, .failed(GuestBridge.unreadable))
+            XCTAssertEqual(error, .failed(GuestBridge.unknown))
         }
         XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over an unreadable transcript")
         let kept = await bridge.current.pending
@@ -223,7 +235,7 @@ final class GuestBridgeTests: XCTestCase {
             _ = try await second.answerPending(model: .sonnet5)
             XCTFail("a turn was answered over a folder of transcripts that could not be listed")
         } catch let error as GuestBridgeError {
-            XCTAssertEqual(error, .failed(GuestBridge.unreadable))
+            XCTAssertEqual(error, .failed(GuestBridge.unknown))
         }
         XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over an unlisted folder")
         let kept = await bridge.current.pending
@@ -477,6 +489,113 @@ final class GuestBridgeTests: XCTestCase {
         let answered = try await runner.answerPending(model: .sonnet5)
         XCTAssertNil(answered)
         XCTAssertEqual(guest.inputs, ["run the report"], "a turn the guest received was sent again")
+    }
+
+    /// The error result said Claude Code received the turn, and its transcript never shows the
+    /// input: a record known received is not cleared by a read that does not find it, so no
+    /// later pass sends the turn again.
+    func testAnErrorResultStaysUnresolvedWhateverTheTranscriptLaterSays() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .errorResult("API Error: 529 Overloaded"), .reply("Too late."))
+        let failed = try? await runner.run("run the report", model: .sonnet5)
+        XCTAssertNil(failed)
+        for _ in 0..<3 {
+            let answered = try await runner.answerPending(model: .sonnet5)
+            XCTAssertNil(answered)
+        }
+        XCTAssertEqual(guest.inputs, ["run the report"], "a turn the guest received was sent again")
+        let state = await bridge.current.pending?.state
+        XCTAssertEqual(state, .unresolved)
+        let unresolved = await bridge.unresolved()
+        XCTAssertEqual(unresolved.count, 1)
+    }
+
+    /// The answer stopped listening — its task cancelled — while the guest still had the turn,
+    /// before Claude Code wrote the input to its transcript. Nothing is concluded: the record
+    /// stays as sent, the next pass waits for the guest's turn to end, and then writes its reply
+    /// without asking again.
+    func testAnAnswerCancelledMidTurnConcludesNothingAndTheNextPassWaitsForTheTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .hangUnwritten)
+        let asking = Task { try await runner.run("delete my old drafts", model: .sonnet5) }
+        try await eventually("the guest to take the input") { guest.inputs.count == 1 }
+        asking.cancel()
+        if case .success = await asking.result { XCTFail("a cancelled answer was answered") }
+        let kept = await bridge.current.pending
+        XCTAssertEqual(kept?.state, .sent, "a turn still with the guest was concluded")
+
+        let pass = Task { try await runner.answerPending(model: .sonnet5) }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(guest.inputs.count, 1, "the input was sent again while the guest still had it")
+        guest.finishHanging(with: "Deleted three.")
+        _ = try await pass.value
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["delete my old drafts", "Deleted three."])
+        XCTAssertEqual(guest.inputs.count, 1)
+        let pending = await bridge.current.pending
+        XCTAssertNil(pending)
+    }
+
+    /// The process a turn went to exited, and its end was not confirmed: what it wrote may still
+    /// be being written, so a transcript without the input says nothing yet. The record stays and
+    /// nothing is sent until an end is confirmed; then the turn, never received, goes.
+    func testAnEndNotConfirmedConcludesNothingUntilOneIs() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .notReceived("exited"), .reply("Here."))
+        guest.confirmEnds(false)
+        let first = try? await runner.run("where?", model: .sonnet5)
+        XCTAssertNil(first)
+        let kept = await bridge.current.pending
+        XCTAssertEqual(kept?.state, .sent, "a record was concluded from a process not confirmed gone")
+        do {
+            _ = try await runner.answerPending(model: .sonnet5)
+            XCTFail("a turn was answered while its process was not confirmed gone")
+        } catch let error as GuestBridgeError {
+            XCTAssertEqual(error, .failed(GuestBridge.unknown))
+        }
+        XCTAssertEqual(guest.inputs, ["where?"])
+
+        guest.confirmEnds(true)
+        let reply = try await runner.answerPending(model: .sonnet5)
+        XCTAssertEqual(reply?.text, "Here.")
+        XCTAssertEqual(guest.inputs, ["where?", "where?"])
+    }
+
+    /// Another device answered a turn this phone sent while what became of it here is not known
+    /// (the transcripts unlisted). The reply found under its nonce settles the request, and counts
+    /// nothing seen the guest may never have been told: the next input tells it both.
+    func testAReplyFoundForAnInputNotKnownReceivedCountsNothingSeen() async throws {
+        let db = InMemoryRecordDatabase()
+        let (first, _, firstGuest) = try await launch(db, .reply("Noted."), .hangUnwritten)
+        _ = try await first.run("hello", model: .sonnet5)
+        let killed = Task { try await first.run("call Helen", model: .sonnet5, nonce: "said-once") }
+        try await eventually("the input to go") { firstGuest.inputs.count == 2 }
+        _ = killed
+        let logged = try await log(db)
+        let call = try XCTUnwrap(logged.first { $0.text == "call Helen" })
+        _ = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+            .append(.assistant, "Calling.", parents: [call.ref], nonce: TurnRunner.replyNonce(for: [call.ref]))
+
+        let folder = home.appendingPathComponent(".claude/projects/-home-topo")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        try XCTSkipIf((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) != nil,
+                      "missing coverage: this host lists a folder with no permissions")
+        let (second, bridge, guest) = try await launch(db, .reply("You asked me to call Helen."))
+        let retried = try await second.run("call Helen", model: .sonnet5, nonce: "said-once")
+        XCTAssertEqual(retried.assistant.text, "Calling.")
+        XCTAssertTrue(guest.inputs.isEmpty)
+        let ledger = await bridge.current
+        XCTAssertNil(ledger.pending)
+        XCTAssertFalse(ledger.seen.contains(call.ref), "a turn the guest may never have had was counted seen")
+        XCTAssertFalse(ledger.seen.contains(retried.assistant.ref), "another device's reply was counted the guest's")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        _ = try await second.run("what did I ask?", model: .sonnet5)
+        let input = try XCTUnwrap(guest.inputs.last)
+        XCTAssertTrue(input.contains("Them: call Helen"), input)
+        XCTAssertTrue(input.contains("You, answering on another device: Calling."), input)
+        XCTAssertTrue(input.hasSuffix("what did I ask?"), input)
     }
 
     /// The process ended after writing its reply and before its result line: the transcript has

@@ -48,6 +48,13 @@ final class GuestSessionTests: XCTestCase {
         }
     }
 
+    private final class Settled: @unchecked Sendable {
+        private let lock = NSLock()
+        private var marked = false
+        var done: Bool { lock.withLock { marked } }
+        func mark() { lock.withLock { marked = true } }
+    }
+
     private func collect(_ stream: AsyncStream<GuestSession.TurnUpdate>) -> (Collected, Task<Void, Never>) {
         let collected = Collected()
         let task = Task { for await update in stream { collected.add(update) } }
@@ -144,6 +151,48 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(result.text, "API Error: 529 overloaded")
         XCTAssertFalse(process.terminated, "an error Claude Code reported itself restarted a healthy process")
         _ = try await session.send("again")
+    }
+
+    /// `settle` waits out a turn nobody listens to any more — its caller stopped listening, and
+    /// the guest still has it — and answers once that turn has ended.
+    func testSettleWaitsForATurnInFlightWhoseCallerStoppedListening() async throws {
+        let (session, process) = try await resident()
+        _ = try await session.send("hi")
+        await eventually("written") { process.turns.count == 1 }
+        let settled = Settled()
+        let settling = Task {
+            let final = await session.settle()
+            settled.mark()
+            return final
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(settled.done, "settle answered while the guest still had a turn")
+        answer(process, "done")
+        let final = await settling.value
+        XCTAssertTrue(final)
+    }
+
+    /// An end the bound ran out on is not final: `settle` says so until an end is confirmed.
+    func testSettleSaysWhetherTheLastEndWasConfirmed() async throws {
+        let (session, process) = try await resident()
+        let before = await session.settle()
+        XCTAssertTrue(before, "nothing ended yet is final")
+        process.answerNextEnd(with: .init(status: nil, signalled: 1, running: 1, pipesClosed: false,
+                                          stragglers: ["claude: running"]))
+        let (_, done) = collect(try await session.send("hi"))
+        await eventually("written") { process.turns.count == 1 }
+        process.close()
+        await done.value
+        let unconfirmed = await session.settle()
+        XCTAssertFalse(unconfirmed, "an end that was not confirmed was reported final")
+
+        await eventually("a replacement") { launcher.processes.count == 2 }
+        try await session.ready()
+        await session.use(model: "claude-opus-5")
+        try await session.ready()
+        XCTAssertEqual(launcher.processes.count, 3)
+        let confirmed = await session.settle()
+        XCTAssertTrue(confirmed, "a confirmed end after it did not make it final")
     }
 
     func testTheProcessEndingMidTurnFailsItWithItsStderrAndNothingOfItReachesTheNext() async throws {
