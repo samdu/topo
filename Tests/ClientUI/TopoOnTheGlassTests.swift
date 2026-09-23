@@ -2,8 +2,10 @@ import XCTest
 
 /// Topo on the glass takes nothing from the microphone: with him at home and with him as close to
 /// the well as `look.json` can put him, a press on the well — in its middle, and at the edge
-/// nearest him — reaches `VoiceInput`, counted in the button's debug report. Every end of every
-/// range is `MascotGeometryTests`', which needs no launch per look.
+/// nearest him — reaches `VoiceInput`, counted in the button's debug report. Those three looks
+/// are the only ones pressed. The other combinations of the ranges' ends are `MascotGeometryTests`',
+/// which holds at every one that his canvas ends before the well and that a hit test does not
+/// land on him; no test delivers a press at them.
 ///
 /// This is the one place a touch is delivered. SwiftUI puts no view of its own under a gesture,
 /// so a UIKit hit test lands on the hosting view wherever it is asked and cannot tell the
