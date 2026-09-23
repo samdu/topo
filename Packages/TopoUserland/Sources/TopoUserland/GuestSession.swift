@@ -21,9 +21,10 @@ extension GuestProcess: ResidentProcess {
     public func end(within bound: Duration) async -> Termination { await terminate(within: bound) }
 }
 
-/// What starts the resident process: resuming a session by its id, or starting a fresh one.
+/// What starts the resident process: resuming a session by its id, or starting a fresh one, asking
+/// every turn of `model` (nil leaves the model to Claude Code).
 public protocol ResidentLauncher: Sendable {
-    func launch(resume session: String?) async throws -> any ResidentProcess
+    func launch(resume session: String?, model: String?) async throws -> any ResidentProcess
 }
 
 /// The one session id kept on disk: the id of the conversation the next process resumes. A file of
@@ -60,6 +61,11 @@ public typealias Sleep = @Sendable (Duration) async throws -> Void
 /// process that foreground wants. A startup still pending when the app goes to the background
 /// ends the process it made the moment it lands; a teardown still running when the app comes back
 /// ends only the process it was started for, and the replacement starts once it is done.
+///
+/// The model the process asks is the session's (`use(model:)`), and so is whether the next process
+/// resumes the kept conversation (`forgetSession()`). Either changing makes the resident process
+/// stale, and a stale process is replaced at the next idle moment: at once when no turn is in
+/// flight, and otherwise once the turn has ended, never in the middle of one.
 public actor GuestSession {
     public enum Refusal: Error, Equatable, CustomStringConvertible {
         /// A turn is in flight; turns are never interleaved.
@@ -150,6 +156,13 @@ public actor GuestSession {
 
     private let launcher: any ResidentLauncher
     private let store: SessionFile
+    /// The model every process is started with.
+    private var model: String?
+    /// Counts `forgetSession()`: a process started under an older count holds a conversation
+    /// that has been forgotten.
+    private var conversation = 0
+    /// The next process starts a fresh session rather than resuming the kept one.
+    private var freshNext = false
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
@@ -186,6 +199,9 @@ public actor GuestSession {
         let process: any ResidentProcess
         /// The session id it was started to resume, nil for a fresh one.
         let resumed: String?
+        /// The model it was started with, and the conversation count it was started under.
+        let model: String?
+        let conversation: Int
         var reader: Task<Void, Never>?
         var turn: Turn?
         /// Whether it ever began a turn (`system/init`), which a resume that failed never does.
@@ -193,9 +209,11 @@ public actor GuestSession {
         /// A result that arrived with no turn in flight — what a failed resume writes before it exits.
         var strayResult: StreamEvent.TurnResult?
 
-        init(process: any ResidentProcess, resumed: String?) {
+        init(process: any ResidentProcess, resumed: String?, model: String?, conversation: Int) {
             self.process = process
             self.resumed = resumed
+            self.model = model
+            self.conversation = conversation
         }
     }
 
@@ -209,12 +227,13 @@ public actor GuestSession {
         init(continuation: AsyncStream<TurnUpdate>.Continuation) { self.continuation = continuation }
     }
 
-    public init(launcher: any ResidentLauncher, store: SessionFile,
+    public init(launcher: any ResidentLauncher, store: SessionFile, model: String? = nil,
                 turnBound: Duration = GuestSession.defaultTurnBound,
                 sleep: @escaping Sleep = { try await Task.sleep(for: $0) },
                 log: @escaping @Sendable (String) -> Void = { _ in }) {
         self.launcher = launcher
         self.store = store
+        self.model = model
         self.turnBound = turnBound
         self.sleep = sleep
         self.log = log
@@ -246,6 +265,30 @@ public actor GuestSession {
     /// The session id the next process resumes, as kept on disk.
     public var sessionID: String? { store.load() }
 
+    /// The model processes are started with.
+    public var currentModel: String? { model }
+
+    // MARK: - What the process is started with
+
+    /// Every process from here on asks `model`. A resident process started with another is
+    /// replaced at the next idle moment: now if no turn is in flight, otherwise once it ends.
+    public func use(model: String?) {
+        guard model != self.model else { return }
+        self.model = model
+        log("the model is now \(model ?? "Claude Code's own"); the resident process is replaced once idle")
+        renewIfStale()
+    }
+
+    /// Forgets the conversation: the kept session id is cleared, the next process starts a fresh
+    /// session, and a resident process holding the old one is replaced at the next idle moment.
+    /// Its replacement reads its environment afresh, the guest's token included.
+    public func forgetSession() {
+        store.clear()
+        freshNext = true
+        conversation += 1
+        log("the conversation is forgotten; the next process starts a fresh session")
+        renewIfStale()
+    }
     // MARK: - The lifecycle
 
     /// The app came to the foreground: the resident process starts, or — when the app is back
@@ -319,9 +362,16 @@ public actor GuestSession {
         try await withCheckedThrowingContinuation { readiness.append($0) }
     }
 
+    /// Returns once a process being ended has been: the turn that ended with it is over, and
+    /// nothing it wrote is still being written.
+    public func settle() async {
+        if let teardown { _ = await teardown.value }
+    }
+
     /// Sends the person's `text` as a turn. Refused while another turn is in flight and while
     /// nothing is resident; otherwise the turn's events arrive on the stream, then how it ended.
-    public func send(_ text: String) async throws -> AsyncStream<TurnUpdate> {
+    /// `id` is the input's uuid, which Claude Code keeps on the transcript entry it writes for it.
+    public func send(_ text: String, id: String? = nil) async throws -> AsyncStream<TurnUpdate> {
         guard case .resident(let resident) = phase else { throw Refusal.notResident }
         guard resident.turn == nil else { throw Refusal.turnInFlight }
         let (stream, continuation) = AsyncStream<TurnUpdate>.makeStream()
@@ -329,7 +379,7 @@ public actor GuestSession {
         resident.turn = turn
         turn.watchdog = watch(turn, of: resident)
         do {
-            try await resident.process.write(StreamJSON.userTurn(text))
+            try await resident.process.write(StreamJSON.userTurn(text, id: id))
         } catch {
             if resident.turn === turn {
                 finish(turn, of: resident, with: .failed(.input(String(describing: error))))
@@ -352,18 +402,37 @@ public actor GuestSession {
 
     private func startResident() {
         guard case .idle = phase, inForeground else { return }
+        if freshNext {
+            store.clear()
+            freshNext = false
+        }
         let resume = store.load()
         phase = .starting
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
-        let launcher = launcher
+        let launcher = launcher, model = model, conversation = conversation
         startTask = Task {
             let result: Result<any ResidentProcess, Error>
-            do { result = .success(try await launcher.launch(resume: resume)) } catch { result = .failure(error) }
-            await self.launched(result, resume: resume)
+            do { result = .success(try await launcher.launch(resume: resume, model: model)) } catch { result = .failure(error) }
+            await self.launched(result, resume: resume, model: model, conversation: conversation)
         }
     }
 
-    private func launched(_ result: Result<any ResidentProcess, Error>, resume: String?) async {
+    /// Whether `resident` was started with what the session now says: its model, and the
+    /// conversation that has not been forgotten since.
+    private func isStale(_ resident: Resident) -> Bool {
+        resident.model != model || resident.conversation != conversation
+    }
+
+    /// Replaces a stale resident process, but only while it is idle and the app is in front: a
+    /// turn in flight finishes first (`finish` asks again once it has), and in the background
+    /// the process is being ended anyway.
+    private func renewIfStale() {
+        guard inForeground, case .resident(let resident) = phase, resident.turn == nil, isStale(resident) else { return }
+        _ = end(resident, reason: "a change of model or conversation", restart: true)
+    }
+
+    private func launched(_ result: Result<any ResidentProcess, Error>, resume: String?, model: String?,
+                          conversation: Int) async {
         startTask = nil
         switch result {
         case .failure(let error):
@@ -371,7 +440,7 @@ public actor GuestSession {
             log("Claude Code did not start: \(error)")
             settleReadiness(.failure(error))
         case .success(let process):
-            let resident = Resident(process: process, resumed: resume)
+            let resident = Resident(process: process, resumed: resume, model: model, conversation: conversation)
             guard inForeground else {
                 // The app left while the start was pending: nothing may stay resident.
                 settleReadiness(.failure(Refusal.notResident))
@@ -384,6 +453,12 @@ public actor GuestSession {
                     await self?.received(line, from: resident)
                 }
                 await self?.closed(resident)
+            }
+            // What changed while it was starting replaces it before any turn goes to it; whoever
+            // is waiting for a process waits for the replacement.
+            if isStale(resident) {
+                _ = end(resident, reason: "a change of model or conversation while it started", restart: true)
+                return
             }
             settleReadiness(.success(()))
         }
@@ -484,6 +559,9 @@ public actor GuestSession {
         turn.continuation.yield(.ended(end))
         turn.continuation.finish()
         wakeBackground(.turnEnded)
+        // A change that waited for the turn is made now that it has ended — on the actor's next
+        // turn, so a path ending the process itself (an exit, the way out) has done so first.
+        Task { await self.renewIfStale() }
     }
 
     /// Ends the turn with an error, and restarts the process, once nothing has arrived for the

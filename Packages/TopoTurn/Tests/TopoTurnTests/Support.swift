@@ -50,5 +50,5 @@ func makeRunner(database: any RecordDatabase, device: String = "phone", transpor
     let writer = try await log.writer(for: id)
     let lease = PrimaryLease(database: database, device: id, endpoint: nil, probe: probe, sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
     let api = MessagesAPI(transport: transport, tokens: FixedToken())
-    return (TurnRunner(log: log, writer: writer, lease: lease, api: api), lease)
+    return (TurnRunner(log: log, writer: writer, lease: lease, brain: MessagesAPIBrain(api: api)), lease)
 }

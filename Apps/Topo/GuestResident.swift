@@ -25,9 +25,10 @@ final class ApplicationBackgroundTime: BackgroundTime {
 /// `Documents/home` mounted as its home, the API proxy on loopback, and the one `GuestSession`,
 /// carried through the app's lifecycle by a `GuestLifecycle` — started on the foreground, ended on
 /// the way out once the grace is spent. The session id the next process resumes is kept in
-/// `Documents/.guest-session`, beside the home. Nothing starts it in a user build: the chat still
-/// answers through the Messages API, and only a debug launch (`DebugRun.guestTurn`) brings the
-/// resident process up.
+/// `Documents/.guest-session`, beside the home, and the bridge's ledger in
+/// `Documents/.guest-bridge.json` beside that. The chat's harness brings it up
+/// (`ResidentConversation`), once the userland is on the phone; so does a debug launch
+/// (`DebugRun.guestTurn`).
 @MainActor
 final class GuestResident {
     static let shared = GuestResident()
@@ -38,12 +39,26 @@ final class GuestResident {
     private var observers: [NSObjectProtocol] = []
 
     /// The app's `Documents/home`, mounted at `ClaudeLauncher.home`.
-    static var homeDirectory: URL {
+    nonisolated static var homeDirectory: URL {
         URL.documentsDirectory.appendingPathComponent("home", isDirectory: true)
     }
 
-    static var sessionFile: SessionFile {
+    nonisolated static var sessionFile: SessionFile {
         SessionFile(url: URL.documentsDirectory.appendingPathComponent(".guest-session"))
+    }
+
+    /// The bridge's ledger: what the guest has seen of the log, and the input outstanding.
+    nonisolated static var ledgerFile: URL {
+        URL.documentsDirectory.appendingPathComponent(".guest-bridge.json")
+    }
+
+    /// The session once `start` has made it, nil before.
+    private(set) var session: GuestSession?
+
+    /// The model a process is started with: the setting, as the debug pin makes it.
+    static var model: String {
+        let setting = UserDefaults.standard.string(forKey: Harness.modelKey).flatMap(ClaudeModel.init(rawValue:))
+        return ClaudeModel.effective(setting ?? .default).rawValue
     }
 
     /// Brings the guest and the session up, once per process, and starts following the app's
@@ -61,10 +76,11 @@ final class GuestResident {
             let port = try await proxy.start()
             self.proxy = proxy
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            let launcher = ClaudeLauncher(model: ClaudeModel.pinned?.rawValue) {
+            let launcher = ClaudeLauncher {
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile, log: log)
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model, log: log)
+            self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in log("background: \(outcome)") })
             self.lifecycle = lifecycle
@@ -86,6 +102,98 @@ final class GuestResident {
                 MainActor.assumeIsolated { lifecycle.willEnterForeground() }
             },
         ]
+    }
+}
+
+/// The resident Claude Code as the bridge's conversation: the guest brought up through
+/// `GuestResident` once the userland is on the phone, and the one `GuestSession` from then on.
+/// Until the rootfs and Claude Code are both fetched nothing is started and a turn is refused with
+/// the userland's own status line, which is what the chat shows.
+struct ResidentConversation: GuestConversation {
+    let tokens: StoredTokenProvider
+
+    var home: URL { GuestResident.homeDirectory }
+
+    /// The session, started if it was not: refused, as not ready, while the userland is still on
+    /// its way or the guest could not start.
+    @MainActor
+    private func session() async throws -> GuestSession {
+        let userland = Userland.shared
+        guard userland.isReady else {
+            userland.prepare()
+            throw GuestBridgeError.notReady(userland.summary)
+        }
+        do {
+            return try await GuestResident.shared.start(tokens: tokens, log: GuestResident.log)
+        } catch {
+            throw GuestBridgeError.notReady("the guest did not start: \(error)")
+        }
+    }
+
+    func ready() async throws {
+        let session = try await session()
+        do {
+            try await session.ready()
+        } catch GuestSession.Refusal.notResident {
+            throw GuestBridgeError.notReady("Claude Code is not resident while the app is in the background")
+        } catch {
+            throw GuestBridgeError.notReady("Claude Code did not start: \(error)")
+        }
+    }
+
+    func warm() async {
+        guard let session = try? await session() else { return }
+        try? await session.ready()
+    }
+
+    func use(model: String?) async {
+        // A session not started yet starts with the setting (`GuestResident.model`).
+        await GuestResident.shared.session?.use(model: model)
+    }
+
+    func sessionID() async -> String? {
+        if let session = await GuestResident.shared.session { return await session.sessionID }
+        return GuestResident.sessionFile.load()
+    }
+
+    func residentPID() async -> Int32? {
+        await GuestResident.shared.session?.residentPID
+    }
+
+    func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
+        let session = try await session()
+        return try await session.send(text, id: id)
+    }
+
+    func settle() async {
+        await GuestResident.shared.session?.settle()
+    }
+
+    func forget() async {
+        if let session = await GuestResident.shared.session {
+            await session.forgetSession()
+        } else {
+            GuestResident.sessionFile.clear()
+        }
+    }
+
+    func status() async -> String {
+        let summary = await Userland.shared.summary
+        guard let session = await GuestResident.shared.session else { return "\(summary); not started" }
+        let phase = await session.currentPhase
+        let pid = await session.residentPID.map { ", pid \($0)" } ?? ""
+        let model = await session.currentModel ?? "Claude Code's own model"
+        return "\(summary); \(phase)\(pid), \(model)"
+    }
+}
+
+extension GuestResident {
+    /// Where the session's and the proxy's lines go: printed in a debug build, where a simulator
+    /// run reads them, and nowhere in a release one.
+    nonisolated static let log: @Sendable (String) -> Void = { line in
+        #if DEBUG
+        DebugRun.say("guest: \(line)")
+        #endif
     }
 }
 

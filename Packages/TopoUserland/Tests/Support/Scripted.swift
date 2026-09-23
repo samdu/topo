@@ -77,6 +77,13 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         }
     }
 
+    /// The `uuid` each turn written to it carried, nil for one that carried none.
+    var ids: [String?] {
+        lock.withLock { sent }.map { line in
+            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["uuid"] as? String
+        }
+    }
+
     var terminated: Bool { lock.withLock { ended } }
 
     func write(_ line: String) async throws {
@@ -131,11 +138,14 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     private let lock = NSLock()
     private var made: [ScriptedProcess] = []
     private var resumes: [String?] = []
+    private var asked: [String?] = []
     private var holdNext = false
     private var gate: CheckedContinuation<Void, Never>?
 
     var processes: [ScriptedProcess] { lock.withLock { made } }
     var resumed: [String?] { lock.withLock { resumes } }
+    /// The model each launch was asked for, in order.
+    var models: [String?] { lock.withLock { asked } }
     var last: ScriptedProcess? { processes.last }
 
     func holdNextLaunch() { lock.withLock { holdNext = true } }
@@ -151,9 +161,10 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
         waiting?.resume()
     }
 
-    func launch(resume session: String?) async throws -> any ResidentProcess {
+    func launch(resume session: String?, model: String?) async throws -> any ResidentProcess {
         let hold = lock.withLock { () -> Bool in
             resumes.append(session)
+            asked.append(model)
             return holdNext
         }
         if hold {
@@ -206,5 +217,16 @@ enum Recording {
             .appendingPathComponent("StreamJSON/\(name).jsonl")
         return try String(contentsOf: url, encoding: .utf8).split(separator: "\n", omittingEmptySubsequences: false)
             .map(String.init).filter { !$0.isEmpty }
+    }
+}
+
+/// Claude Code's own session transcripts under `Tests/Transcripts`, recorded from real runs with
+/// the paths and the environment taken out.
+enum Transcripts {
+    static func lines(_ name: String) throws -> [String] {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Transcripts/\(name).jsonl")
+        return try String(contentsOf: url, encoding: .utf8).split(separator: "\n").map(String.init)
     }
 }

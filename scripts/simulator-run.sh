@@ -2,11 +2,15 @@
 # Builds Topo, boots a simulator, signs it in with the long-lived Claude setup token, and
 # optionally makes it say something and asserts the reply landed in the log.
 #
-# A --send run passes only when the app printed `done`, printed no `error:`, and printed
-# `reply to <turn> in run <id>:` under the id this script launched it with (the reply DebugRun
-# found by the sent turn's nonce and the reply's parents). A launcher that exits before `done`,
-# or non-zero at all, a turn not finished within TIMEOUT seconds (180), and a missing or foreign
-# reply each exit non-zero. scripts/tests/simulator-run-test.sh holds this against a fake xcrun.
+# A --send run takes the turn through the chat's own harness, which the guest's resident Claude
+# Code answers. It passes only when the app printed `done`, printed no `error:`, printed
+# `reply to <turn> in run <id> from session <session>, process <pid>:` under the id this script
+# launched it with (the reply DebugRun found by the sent turn's nonce and the reply's parents,
+# written by the resident process it names), and printed `mascot: turn began` and `mascot: turn
+# gone` (Topo on the glass following the turn, with every pose between them). A launcher that
+# exits before `done`, or non-zero at all, a turn not finished within TIMEOUT seconds (180), a
+# missing or foreign reply, and a reply no resident session wrote each exit non-zero.
+# scripts/tests/simulator-run-test.sh holds this against a fake xcrun.
 #
 #   scripts/simulator-run.sh                        # build, boot, install, launch signed in
 #   scripts/simulator-run.sh --send "hello"         # ... and send one turn, asserting the reply
@@ -262,9 +266,14 @@ fi
 
 if [ -n "$send" ]; then
   grep -q '\[topo-debug\] error:' "$log" && fail "the turn reported an error"
-  grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run: " "$log" \
+  grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run from " "$log" \
     || fail "no reply to the turn this run sent (run $run)"
-  echo "==> the message landed and was answered"
+  grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run from session [^ ,]+, process [0-9]+: " "$log" \
+    && ! grep -Eq "\[topo-debug\] reply to [^ ]+ in run $run from session none," "$log" \
+    || fail "the reply to this run's turn was not written by a resident guest session"
+  grep -q '\[topo-debug\] mascot: turn began' "$log" && grep -q '\[topo-debug\] mascot: turn gone' "$log" \
+    || fail "Topo on the glass did not follow the guest's turn"
+  echo "==> the message landed and was answered by the guest"
 fi
 
 if [ -n "$userland" ]; then

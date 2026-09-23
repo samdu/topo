@@ -67,8 +67,9 @@ final class DownloadedEntry: DownloadSource {
 /// verifies and mounts it into a booted guest (`ClaudeCodeInstaller`), so nothing here copies it.
 /// Both are asked for on every foreground, like the ear's and the voice's models. A fetch that
 /// fails ends in `failed` with its reason, and the next `prepare` fetches afresh. `bootGuest` boots
-/// the guest once per process; only the debug launches call it (`DebugRun.userland`,
-/// `DebugRun.guestTurn`), and the tests boot their own.
+/// the guest once per process: the resident Claude Code's start calls it (`GuestResident`, which
+/// the chat's harness and `DebugRun.guestTurn` bring up), and so does the debug guest command
+/// (`DebugRun.userland`); the tests boot their own.
 @MainActor
 @Observable
 final class Userland {
@@ -246,6 +247,13 @@ final class Userland {
             readiness.append(continuation)
             prepare()
         }
+    }
+
+    /// Whether both downloads are on the phone: the fakefs whole and Claude Code fetched at its
+    /// pin. Until they are, the phone does not answer.
+    var isReady: Bool {
+        guard case .ready = phase, case .fetched = claude else { return false }
+        return true
     }
 
     /// The diagnostics screen's `userland` row, one clause per download, so it says which of the

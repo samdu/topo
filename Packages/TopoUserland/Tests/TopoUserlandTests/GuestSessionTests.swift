@@ -369,4 +369,64 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(turn.ends.count, 1)
         XCTAssertEqual(store.load(), "S2")
     }
+
+    // MARK: - The model and the conversation
+
+    /// A change of model during a turn is made once the turn has ended: the process answering it is
+    /// not ended under it, and the next process is started with the new model.
+    func testAModelChangeDuringATurnRestartsTheProcessOnlyAfterTheTurnEnds() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let (turn, done) = collect(try await session.send("a long one", id: "input-1"))
+        await eventually("written") { first.turns.count == 1 }
+        XCTAssertEqual(first.ids, ["input-1"], "the input's id went out with it")
+
+        await session.use(model: "claude-opus-5")
+        // Give the actor every chance to act on the change while the turn is in flight.
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(first.terminated, "the model change ended the process mid-turn")
+        XCTAssertEqual(launcher.processes.count, 1)
+
+        answer(first, "done")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        await eventually("the process replaced after the turn") { launcher.processes.count == 2 }
+        XCTAssertTrue(first.terminated)
+        XCTAssertEqual(launcher.models, ["claude-sonnet-5", "claude-opus-5"])
+        XCTAssertEqual(launcher.resumed, [nil, "S1"], "the replacement resumes the conversation")
+        try await session.ready()
+        _ = try await session.send("next")
+        await eventually("the replacement took the next turn") { launcher.last?.turns == ["next"] }
+    }
+
+    /// An idle process is replaced at once, and the same model again changes nothing.
+    func testAModelChangeWhileIdleRestartsAtOnceAndTheSameModelDoesNot() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        await session.use(model: "claude-sonnet-5")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(launcher.processes.count, 1, "the same model restarted the process")
+        await session.use(model: "claude-fable-5-1")
+        await eventually("replaced") { launcher.processes.count == 2 }
+        XCTAssertEqual(launcher.models, ["claude-sonnet-5", "claude-fable-5-1"])
+        let model = await session.currentModel
+        XCTAssertEqual(model, "claude-fable-5-1")
+    }
+
+    /// Forgetting the conversation clears the kept id, and the replacement starts fresh.
+    func testForgettingTheConversationStartsAFreshSession() async throws {
+        store.save("OLD")
+        let session = session()
+        await session.foreground()
+        try await session.ready()
+        await session.forgetSession()
+        XCTAssertNil(store.load())
+        await eventually("replaced") { launcher.processes.count == 2 }
+        XCTAssertEqual(launcher.resumed, ["OLD", nil])
+    }
 }

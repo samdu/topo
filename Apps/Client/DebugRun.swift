@@ -143,19 +143,61 @@ import TopoTurn
 
 extension DebugRun {
     /// One turn, driven from the launch environment rather than the keyboard: the words go through
-    /// the same harness the chat screen uses — the lease, the log, the Messages API — and what came
-    /// back is printed. A script asserts on those lines; there is no other way to send a message to
-    /// a simulator from a shell without an XCUITest target and a screenful of taps.
+    /// the same harness the chat screen uses — the lease, the log, the guest's resident Claude
+    /// Code — and what came back is printed. A script asserts on those lines; there is no other
+    /// way to send a message to a simulator from a shell without an XCUITest target and a
+    /// screenful of taps.
+    ///
+    /// It waits first for the guest to be able to take a turn (the userland fetched, the resident
+    /// process up), printing the userland's line while it waits, so the turn is the guest's
+    /// answer rather than a refusal. Topo on the glass follows the turn as the chat's does, and
+    /// every change of his pose is printed as `mascot:`, between `mascot: turn began` and
+    /// `mascot: turn gone`.
     ///
     /// The reply printed is the one to the turn this run sent, found by that turn's nonce and the
-    /// reply's parents, never merely the newest reply in the log; and it carries `TOPO_DEBUG_RUN`,
-    /// the id the script launched this run under, so a line from any other launch matches nothing.
+    /// reply's parents, never merely the newest reply in the log; it carries `TOPO_DEBUG_RUN`,
+    /// the id the script launched this run under, so a line from any other launch matches nothing;
+    /// and it names the guest session and the resident process that wrote it.
     @MainActor
-    static func send(with harness: Harness,
+    static func send(with harness: Harness, mascot: Mascot,
                      environment: [String: String] = ProcessInfo.processInfo.environment) async {
         guard let text = words(environment) else { return }
         let run = environment[runVariable] ?? ""
         say("model: \(ClaudeModel.effective(harness.model).rawValue) (setting: \(harness.model.rawValue))")
+        if let guest = harness.guest {
+            var said = ""
+            while true {
+                do {
+                    try await guest.ready()
+                    break
+                } catch {
+                    let line = "\(error)"
+                    if line != said { say("guest: waiting: \(line)") }
+                    said = line
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
+            say("guest: ready")
+        }
+        let chat = harness.onGuest
+        var pose = mascot.state.activity
+        harness.onGuest = { activity in
+            chat?(activity)
+            switch activity {
+            case .began(let pid):
+                pose = mascot.state.activity
+                say("mascot: turn began, process \(pid.map(String.init) ?? "none"), \(pose.rawValue)")
+            case .update:
+                if mascot.state.activity != pose {
+                    pose = mascot.state.activity
+                    say("mascot: \(pose.rawValue)")
+                }
+            case .gone:
+                pose = mascot.state.activity
+                say("mascot: turn gone, \(pose.rawValue)")
+            }
+        }
+        defer { harness.onGuest = chat }
         say("sending: \(text)")
         let nonce = harness.willSend(text)
         await harness.retry()
@@ -163,7 +205,10 @@ extension DebugRun {
         if let error = harness.error {
             say("error: \(error)")
         }
-        say(line(for: answer(to: nonce, in: harness.turns), nonce: nonce, run: run))
+        let answered = answer(to: nonce, in: harness.turns)
+        var by: (session: String?, pid: Int32?)?
+        if case .answered(_, let reply) = answered { by = await harness.guest?.provenance(of: reply.nonce) }
+        say(line(for: answered, nonce: nonce, run: run, by: by))
         say("turns in the log: \(harness.turns.count)")
         say("done")
     }
@@ -192,15 +237,20 @@ extension DebugRun {
         return .answered(person, reply: reply)
     }
 
-    /// The line `scripts/simulator-run.sh` asserts on. Only `reply to <ref> in run <run>: ` passes.
-    static func line(for answer: Answer, nonce: String, run: String) -> String {
+    /// The line `scripts/simulator-run.sh` asserts on. Only `reply to <ref> in run <run> from
+    /// session <id>, process <pid>: ` passes: `by` is the guest session and resident process that
+    /// wrote the reply, `none` for each this launch did not see write it.
+    static func line(for answer: Answer, nonce: String, run: String,
+                     by: (session: String?, pid: Int32?)? = nil) -> String {
         switch answer {
         case .notInLog:
-            "not in the log: no turn under \(nonce) in run \(run)"
+            return "not in the log: no turn under \(nonce) in run \(run)"
         case .unanswered(let person):
-            "no reply to \(person.ref) in run \(run)"
+            return "no reply to \(person.ref) in run \(run)"
         case .answered(let person, let reply):
-            "reply to \(person.ref) in run \(run): \(reply.text.replacingOccurrences(of: "\n", with: " "))"
+            let session = by?.session ?? "none", process = by?.pid.map(String.init) ?? "none"
+            return "reply to \(person.ref) in run \(run) from session \(session), process \(process): "
+                + reply.text.replacingOccurrences(of: "\n", with: " ")
         }
     }
 
