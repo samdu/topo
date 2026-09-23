@@ -207,6 +207,36 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.inputs, ["and Germany?"])
     }
 
+    /// The guest finished a reply whose write failed, and another device then said something and
+    /// had it answered, so the log's head is a reply and no person's turn waits. The next pass
+    /// still writes the owed reply, under its own nonce, without asking the guest.
+    func testAnOwedReplyIsWrittenByTheAnsweringPassWhenTheHeadIsAReply() async throws {
+        let db = RefusingReplies()
+        let (first, _, _) = try await launch(db, .reply("Paris."))
+        await db.refuse(true)
+        let refused = try? await first.run("capital of France?", model: .sonnet5)
+        XCTAssertNil(refused)
+        await db.refuse(false)
+        try await write(db, .person, "and Spain?", device: "watch")
+        try await write(db, .assistant, "Madrid.", device: "hub")
+
+        let (second, bridge, guest) = try await launch(db)
+        _ = try await second.answerPending(model: .sonnet5)
+        XCTAssertTrue(guest.inputs.isEmpty, "the guest was asked again")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.filter { $0.text == "Paris." }.count, 1)
+        let paris = try XCTUnwrap(turns.first { $0.text == "Paris." })
+        let question = try XCTUnwrap(turns.first { $0.text == "capital of France?" })
+        XCTAssertEqual(paris.parents, [question.ref])
+        XCTAssertEqual(paris.nonce, TurnRunner.replyNonce(for: [question.ref]))
+        let pending = await bridge.current.pending
+        XCTAssertNil(pending)
+        let again = try await second.answerPending(model: .sonnet5)
+        XCTAssertNil(again)
+        let after = try await log(db)
+        XCTAssertEqual(after.count, turns.count, "a second pass wrote something")
+    }
+
     /// Two limbs spoke at once: one reply joins both, and the guest hears both.
     func testAnsweringAForkWritesOneReply() async throws {
         let db = InMemoryRecordDatabase()

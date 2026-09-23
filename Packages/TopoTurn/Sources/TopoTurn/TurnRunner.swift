@@ -128,18 +128,25 @@ public actor TurnRunner {
     /// caller reads again later. Otherwise this device takes the lease, and runs only as primary.
     ///
     /// A head the brain holds as unresolved is not answered: it was asked once and cut off, and
-    /// only the person asks again. A reply the brain owes the log is written first.
+    /// only the person asks again. A reply the brain owes the log is written first, and is
+    /// written even when no person's turn waits.
     public func answerPending(model: ClaudeModel) async throws -> Turn? {
         var transcript = try await log.read()
-        let unresolved = await brain.unresolved()
-        guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return nil }
+        guard transcript.isComplete else { return nil }
+        // An owed reply is written whatever the head is: another device may have answered past
+        // the turn it belongs to, and nothing else would ever write it.
+        let waiting = Self.awaitsReply(transcript, skipping: await brain.unresolved())
+        if !waiting {
+            guard await brain.owed() != nil else { return nil }
+        }
         let outcome = try await lease.acquire()
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
         if try await settleOwed() {
             // The owed reply moved the log; what waits is read again.
             transcript = try await log.read()
-            guard transcript.isComplete, Self.awaitsReply(transcript, skipping: await brain.unresolved()) else { return nil }
         }
+        let unresolved = await brain.unresolved()
+        guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return nil }
         let nonce = Self.replyNonce(for: transcript.heads)
         if let answered = try await log.turn(appendedUnder: nonce) {
             await brain.landed(answered, nonce: nonce)
