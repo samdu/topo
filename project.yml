@@ -39,6 +39,10 @@ packages:
   # on 127.0.0.1, TLS out. The iOS app only.
   TopoProxy:
     path: Packages/TopoProxy
+  # Topo the octopus, drawn in pixels from the agent's state, on the composer's glass. Sam's own
+  # engine from samdu/experiments (topo-mascot-swift at 91139e8), unchanged. The iOS app only.
+  TopoMascot:
+    path: Packages/TopoMascot
   # The phone's ear and its voice: NVIDIA Parakeet as CoreML with its CTC keyword spotter for
   # the vocabulary rescoring (Apps/Client/Ear.swift), and Kyutai's Pocket TTS as CoreML
   # (Apps/Client/Voice.swift). Pinned exactly: neither the vocabulary-boosting API the ear
@@ -78,6 +82,7 @@ targets:
       - package: FluidAudio
       - package: TopoUserland
       - package: TopoProxy
+      - package: TopoMascot
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built

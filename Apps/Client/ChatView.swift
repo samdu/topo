@@ -17,7 +17,11 @@ struct ChatView: View {
     @Environment(Speaker.self) private var speaker
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(Mascot.self) private var mascot
     @AppStorage("readAloud") private var readAloud = true
+    /// The model the settings sheet chose, which is the head Topo wears while the chat's own
+    /// harness is what answers.
+    @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
     /// The row at the end of the transcript: what is written, whether the keyboard has it, and
     /// the turn those words are on their way under. It is a `NextTurn` rather than this screen's
     /// own state because what the row holds outlives the screen — an app killed with words on the
@@ -218,6 +222,10 @@ struct ChatView: View {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
+        // Topo on the glass wears the model the harness asks and the context of its last reply.
+        .onChange(of: harnessFacts, initial: true) { _, facts in
+            mascot.harness(model: facts.model, tokens: facts.context)
+        }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { row.text = text } }
         // The row holds the turn's words until the turn is in the log, and the log is what ends
         // it: a turn whose reply failed is in the log like any other, so the row clears and the
@@ -356,12 +364,25 @@ struct ChatView: View {
     @ViewBuilder private var composer: some View {
         let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
                             micPressed: { down in Task { await micPressed(down) } },
-                            micReport: micReport)
+                            micReport: micReport, mascot: mascot.state,
+                            covered: showSettings || showDiagnostics || showMemory)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {
             view
         }
+    }
+
+    /// What the chat's harness says of the model and the context, for Topo: the model the debug
+    /// build's pin makes of the setting, since that is the model that answers.
+    private var harnessFacts: HarnessFacts {
+        HarnessFacts(model: ClaudeModel.effective(ClaudeModel(rawValue: modelSetting) ?? .default).rawValue,
+                     context: harness.context)
+    }
+
+    private struct HarnessFacts: Equatable {
+        var model: String
+        var context: Int?
     }
 
     /// What the UI suites decode off the microphone after a press. A debug build only, so

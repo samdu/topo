@@ -30,6 +30,10 @@ struct Composer: View {
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
+    /// Topo, in the leading flank: what he stands for, or nil for no Topo at all.
+    var mascot: MascotState?
+    /// A sheet is over the chat, so he is not seen and is not drawn.
+    var covered = false
     @Environment(\.look) private var look
 
     /// What the microphone is doing, and which of the four the glass draws for it. The chat
@@ -87,12 +91,27 @@ struct Composer: View {
             // never changes size.
             leading
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .opacity(mic.holding ? look.composer.flank.heldOpacity : 1)
+                .opacity(flankOpacity)
+                .anchorPreference(key: LeadingFlank.self, value: .bounds) { $0 }
             micButton
             trailing
                 .etched(look.composer.flank, ink: ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(mic.holding ? look.composer.flank.heldOpacity : 1)
+                .opacity(flankOpacity)
+        }
+        // Topo lives in the leading flank. He is laid over the row rather than in it, so he
+        // takes no room and moves nothing, and he is placed from the flank as it was measured:
+        // the microphone is where it would be without him, and he is clipped short of its well.
+        .overlayPreferenceValue(LeadingFlank.self) { flank in
+            if let mascot, let flank {
+                GeometryReader { row in
+                    MascotOnGlass(state: mascot, flank: row[flank], row: row.size,
+                                  opacity: flankOpacity, covered: covered)
+                        .opacity(flankOpacity)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
         }
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, look.composer.verticalInset)
@@ -105,13 +124,16 @@ struct Composer: View {
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
     }
 
+    /// How much of the two ends is drawn: all of it, except under a thumb on the microphone.
+    private var flankOpacity: Double { mic.holding ? look.composer.flank.heldOpacity : 1 }
+
     /// The ink both ends are etched in: Topo's colour on clear glass, white once the glass
     /// itself has taken that colour.
     private var ink: Color { mic.open ? look.composer.flank.openInk : look.composer.flank.ink }
 
-    /// Nothing yet: what else can come in besides words has no path into the log, and a control
+    /// No control: what else can come in besides words has no path into the log, and a control
     /// that does nothing is worse in the person's reach than no control. It keeps the space so
-    /// the microphone stays in the middle.
+    /// the microphone stays in the middle, and Topo is drawn over it.
     private var leading: some View {
         Color.clear.frame(width: 0, height: 0)
     }
@@ -191,6 +213,14 @@ struct Composer: View {
             // VoiceOver on a release build hears the label alone.
             .accessibilityValue(micReport ?? "")
             #endif
+    }
+}
+
+/// Where the leading flank is, for Topo to be placed from.
+private struct LeadingFlank: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = value ?? nextValue()
     }
 }
 

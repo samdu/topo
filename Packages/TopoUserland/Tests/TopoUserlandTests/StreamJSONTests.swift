@@ -31,6 +31,52 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertTrue(events.contains(.other("user")), "a tool's result coming back")
     }
 
+    /// A turn that searched, wrote a note, wrote code, read, edited and ran a command, recorded in
+    /// the guest from Claude Code 2.1.278 and redacted the same way. A file tool carries the file
+    /// it names and nothing else of its input; no other tool carries a path; every thinking block
+    /// is an event, in order with the tools.
+    func testARecordedToolTurnNamesTheFilesItWroteAndThatItThought() throws {
+        let events = try events("tool-turn")
+        let tools = events.compactMap { event -> StreamEvent? in
+            switch event {
+            case .toolUse, .thinking: event
+            default: nil
+            }
+        }
+        XCTAssertEqual(tools, [
+            .thinking, .toolUse(name: "WebSearch"),
+            .thinking, .toolUse(name: "Write", path: "/root/memory/capital.md"),
+            .thinking, .toolUse(name: "Write", path: "/root/work/capital.py"),
+            .thinking, .toolUse(name: "Read"),
+            .thinking, .toolUse(name: "Edit", path: "/root/memory/capital.md"),
+            .thinking, .toolUse(name: "Bash"),
+            .thinking,
+        ])
+        XCTAssertFalse(events.contains { if case .malformed = $0 { return true } else { return false } })
+        guard case .result(let result)? = events.last else { return XCTFail("no result at the end") }
+        XCTAssertFalse(result.isError)
+    }
+
+    /// The two-turn recording's thinking blocks are events too.
+    func testTheTwoTurnRecordingThinksBeforeEachAnswer() throws {
+        XCTAssertEqual(try events("two-turns").filter { $0 == .thinking }.count, 3)
+    }
+
+    /// Only the file tools' own key is read, and a path of any other type is none.
+    func testOnlyAFileToolsOwnKeyIsItsPath() {
+        func tool(_ name: String, _ input: String) -> [StreamEvent] {
+            StreamJSON.events(in: #"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"\#(name)","input":\#(input)}]}}"#)
+        }
+        XCTAssertEqual(tool("NotebookEdit", #"{"notebook_path":"/a.ipynb","new_source":"x"}"#),
+                       [.toolUse(name: "NotebookEdit", path: "/a.ipynb")])
+        XCTAssertEqual(tool("MultiEdit", #"{"file_path":"/b.swift","edits":[]}"#), [.toolUse(name: "MultiEdit", path: "/b.swift")])
+        XCTAssertEqual(tool("Read", #"{"file_path":"/c.md"}"#), [.toolUse(name: "Read")], "Read writes nothing")
+        XCTAssertEqual(tool("Write", #"{"file_path":7}"#), [.toolUse(name: "Write")])
+        XCTAssertEqual(tool("Write", #"{"path":"/d.md"}"#), [.toolUse(name: "Write")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"assistant","message":{"content":[{"type":"redacted_thinking","data":"x"}]}}"#),
+                       [.thinking])
+    }
+
     func testTheFailedResumeIsAnErrorResult() throws {
         let events = try events("resume-failed")
         guard case .result(let result)? = events.first, events.count == 1 else { return XCTFail("\(events)") }

@@ -21,6 +21,13 @@ enum DebugRun {
     static let replyDelayVariable = "TOPO_DEBUG_REPLY_DELAY"
     static let loopVariable = "TOPO_DEBUG_LOOP_SECONDS"
     static let outboxVariable = "TOPO_DEBUG_OUTBOX"
+    static let lookVariable = "TOPO_DEBUG_LOOK"
+
+    /// `TOPO_DEBUG_LOOK=<look.json>`: a look worn in place of the vault's, read by the same
+    /// `LookDocument` field by field, so a UI suite can put the screen at the ends of the ranges
+    /// the document accepts with no vault behind it. Nil when the variable is absent, which is
+    /// every ordinary run.
+    static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
 
     /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
     /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be

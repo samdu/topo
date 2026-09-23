@@ -11,6 +11,11 @@ Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the 
 Where: samdu/daphne-assistant, `clients/ios`
 Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swift` (record claims on the audio session, screen claims on the idle timer, hold claims on the background), the audio session categories and options and the reason the Bluetooth wideband option is not taken, the one-gate-per-microphone rule in `Apps/Client/VoiceInput.swift`, the refusal to install a tap on a dead input format, the on-device ear in `Apps/Client/Ear.swift` (the FluidAudio session, the measured vocabulary configuration, the locked sample sink and the caption glance, from `BuddyEar.swift`), the on-device voice in `Apps/Client/Voice.swift` (the Pocket manager, its measured `.ane` placement and per-stage compute units, from `FluidPocketEngine`) and the frame-streamed play queue with its time-pitch unit in `Apps/Client/Speaker.swift` (from `VoiceQueue`), with the silence keeper that holds the process open behind the lock screen and its counted owners (from `AudioIO.holdAlive` and `startKeeper`, and the cap on a wait in `TurnController.holdThroughLock`) and the rebuild of the queue on an audio engine configuration change (from `VoiceQueue.rebuild`).
 
+## Topo mascot engine
+Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
+Where: samdu/experiments, `topo-mascot-swift/Sources/TopoMascot` at 91139e8, the Swift port of `topo-mascot-engine/topo-engine.js` at e93fe1f
+Use: `Packages/TopoMascot`, unchanged from the experiment: the engine that draws Topo the octopus on the composer's glass in pixels from the model, the context and what the turn is doing. Its golden frames are digests the JavaScript engine rendered (`oracle/golden.mjs` in the same experiment).
+
 ## FluidAudio
 Licence: Apache-2.0, © FluidInference; its own bundled pieces are fastcluster (BSD-3, © Daniel Müllner and Google), vbx (Apache-2.0) and the text-processing-rs xcframework (Apache-2.0, FluidInference)
 Where: https://github.com/FluidInference/FluidAudio, pinned to 0.15.7

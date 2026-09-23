@@ -1,0 +1,493 @@
+{
+ "engine": "topo-mascot-engine/topo-engine.js at e93fe1f",
+ "width": 184,
+ "height": 160,
+ "scenarios": [
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-00-idle-l1-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 1,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "bb2ef2840b05346d703387bfc442b3fdac86e4a91a2afa13ecd095aff9c2d6e8",
+    "40": "ecb0e0172926491741f85cf6525fd5d43e938335c118e9e37960680956fecd14",
+    "65": "a13b9a0ffd5a72aaa2d2b9e2ded9ccb23f09373d77032a8728ad9e766565e3ca"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-01-idle-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "a1c59c49e6e590a8f2013a197e59e3e37b17cca0d5de4e08a0f2002ae0f83a0a",
+    "40": "ad586ca998e1a2d49d2c14886fd0c677a2c340ccb9511b8d515976fa087b18fd",
+    "65": "a3c427e1b688d397e70e3c754c05efc25a4cef225aad1a88f9f37683fd97ef5d"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-02-idle-l3-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 3,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "6bbf2ee16531ee262cfb3ac09f2e8c15a6a471352609843fee356e97e1001dea",
+    "40": "32271e25a2429012ab7723cf68e11f1d117034f42893dfd63134bf6f98178acd",
+    "65": "a3d8c3de6ba524a356f2ddcae6dff3be98a948fe68b5662a365751b67eaead8e"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-03-idle-l4-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 4,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "907beb489c25f5f9ed8b4dce550e3cfd3646fa32ca76a28f56a5c9e40a0498ce",
+    "40": "2e4ece6fac877af3d4ab9e0c1a207fae46a50aa75088f7b37ca7a8ca41906363",
+    "65": "b2dfdf6a56cbd2e24d2cb3b980f671fd5f655e533886f69dedeabf25703835f8"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-04-idle-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "a1c59c49e6e590a8f2013a197e59e3e37b17cca0d5de4e08a0f2002ae0f83a0a",
+    "40": "ad586ca998e1a2d49d2c14886fd0c677a2c340ccb9511b8d515976fa087b18fd",
+    "65": "a3c427e1b688d397e70e3c754c05efc25a4cef225aad1a88f9f37683fd97ef5d"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-05-idle-l2-warning",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "warning",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "212750a7c520d389ba4957f818623f0a16eeac070488559213633d63c37a108d",
+    "40": "fe8a38012922ef8cbed34a25fa02f0f51133442a90183973f3cf9ebc8638bc28",
+    "65": "b7fa4e4585998272f7fa7c09a2bbbfd18553f881ac9c07157bcd1cdfb4af7f79"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-06-idle-l2-reset",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "reset",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "0c57c0bf4f1c5438db1049fd836a8d1cab83803651e62b40c345ef8e82e249b3",
+    "40": "63162ee6eb5f872f66ad67c2852776e4eb96823c604126711077a396923842f8",
+    "65": "d143fc3bb2e5678de99f9f5ecd259a2fd464f4cf86f557ebfe54666b02f12edf"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-07-idle-l2-untrusted",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "untrusted",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "a8285742981806f971e45aa737ca42352003cdaad3c0637db563bff2064edca8",
+    "40": "8a9063205409285619de59fc99e9389d05b2c28585cb0c79ad7d5af31b01c8c4",
+    "65": "3c4b54be5e976e507a5c2d082e192f1bbff862f6a6d062244e330acdd30d9e08"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-08-front-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "front"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "6c3a9f9653b727ff3f09ae77e8f2fcfae514b4504918a376d23c2487e906ec19",
+    "40": "05bf4b27b9b924acc724ea3c18b5cb097c4ce98705b28dd7704ad6b55c53069e",
+    "65": "e62d895e28aaedb2fbc48f5d6c0687e4c290e0b8d1434d8d6bdec01a717dd0f3"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-09-walk-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "walk"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "ac5b0d663e7d4cf404e9e0e3820d77ae79f220aa5a3401c2c6eaf52a322cbe94",
+    "40": "a8618a27fc69daf812beb28b4cc8a6da82f4a9e947038836828d471108259b69",
+    "65": "0e0f344bc01a59eb83add8b4d5d501d8c60c34ebdf4ffe0d2b2f1b30189c4b91"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-10-corner-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "corner"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "9b5e4625ec678011d1c7a757e235c7a8ec912baa787623bf3493b8e2b749c1c2",
+    "40": "c54458d07c375927ebe6e0e7f3794c001f9dd4aaee28ccebee69b7256a52c4a8",
+    "65": "b2602a99b2c49da248b3e4a72c548c4ca7bc8d6ec197598946516e61eefa5e5f"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-11-yoga-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "yoga"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "01069a6d6bba5a9324cf076b947014c97941151bd51641a779cc20f729bace7e",
+    "40": "564bc388f6f7d1d151103856452afea9e881fe27526cb73798de3cb0966a4a8d",
+    "65": "9090be2384a1f419e7fbc219ee5a4ce1a68d8f16359e2f2e0e4dc43dc45bea80"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-12-sign-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "sign"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "eca0d57393ca7e25021917515f9a00a575015861528a55d09171b2412ccdbe99",
+    "40": "2882118c7a9355f1827d005b0b748f9dee25a2ae48fdb098a88da7a897f3065b",
+    "65": "3ee365f8ee643dac9ef84289be5dc81ac23b2ac745758ba5bfd96d711039da84"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-13-building-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "building"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "ea83ae33f023999e660c6959537d25cf7203d87377c621fc31ca7acb2c621398",
+    "40": "c52f7bae60a4fa7595f4b8a9f08d3ae5bd31b6f092e0f1508e9e0a7c4100f026",
+    "65": "63013dcae1182fe2ecf0f900cef66e34b002f2c2337adfce12a7dce57c438dc6"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-14-writing-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "writing"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "79f3c76fe2ba45008434d02b1606faaac84da23cb6a7bf7db4afac67d6f5d091",
+    "40": "348899baa77d4e8fe5d730e501af017844488306e441e26769dd619dbfa1c7fb",
+    "65": "69cbc3582ab8b5086ae6ae3ce3c45ae89c10702cb2cd443799f2765ae10e4093"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-15-calendar-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "calendar"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "02a0dc5a2eaa50231744bbb42e9d5dd6a4d568fb6b55221c8e7d31547bb946f0",
+    "40": "c4e9e0339f6bdb8bb63f461969731f430586bb22f76ed8eae09d86b6f8955340",
+    "65": "4685694202f80b3ca6b7c9ebc0ccca8fe5ade71677107b0b9b2675bd44acacf5"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-16-searching-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "searching"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "966f737f92acbc08076d74d60c1c6a3ba33329be5ed79551456d68baa32b3b00",
+    "40": "69d177e7fdb5c725c6c61fa4adbb4b35074b880a878b75b27926bc5fe2f8632d",
+    "65": "4bf1129b16a431a0b9a41d76b94ad7a317e7af5b60a03df43354d8fb9affcfa4"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "sheet-17-thinking-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "thinking"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "10": "d5cc2a70a2f058b7b1af19c2515733c8893508e3d2751d6307c0be5ddb6fe70f",
+    "40": "5d13381c0128755922d87439e222abbd6d4f9c124e5122147e0906170af02e88",
+    "65": "52faf89c0921be6a32e4a114212e4f99b3a1dd762efe5757fdae0d5e975ccb6a"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "models",
+   "seconds": 4,
+   "script": [
+    [
+     0,
+     {
+      "model": "claude-haiku-4-5-20251001",
+      "activity": "idle"
+     }
+    ],
+    [
+     1,
+     {
+      "model": "claude-sonnet-5",
+      "activity": "idle"
+     }
+    ],
+    [
+     2,
+     {
+      "model": "claude-opus-5",
+      "activity": "idle"
+     }
+    ],
+    [
+     3,
+     {
+      "model": "claude-fable-5-1",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 120,
+   "digests": {
+    "20": "197f68ab9483449ad841b8a78610855c56585de53cff6ee9e39ae06c76222280",
+    "50": "2e10b2e75ae551cf105fe350f8a1642ad6949f2e59b0d3bf11b4c84b7c9d0b88",
+    "80": "b8f049cdcf6647326ad9d081c48ecaf60f3ce66d1bf88a445af3dfafba42e3b1",
+    "119": "8d6bab2d46267bb6d8b294d9761a89d84f61caed265cd4c3f272a9e11fe88921"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "tokens",
+   "seconds": 4,
+   "script": [
+    [
+     0,
+     {
+      "model": "claude-sonnet-5",
+      "tokens": 60000,
+      "activity": "writing"
+     }
+    ],
+    [
+     1,
+     {
+      "model": "claude-sonnet-5",
+      "tokens": 205000,
+      "activity": "writing"
+     }
+    ],
+    [
+     2,
+     {
+      "model": "claude-sonnet-5",
+      "tokens": 255000,
+      "activity": "writing"
+     }
+    ],
+    [
+     3,
+     {
+      "model": "claude-sonnet-5",
+      "tokens": 310000,
+      "activity": "writing"
+     }
+    ]
+   ],
+   "frames": 120,
+   "digests": {
+    "20": "d30093855c367ca4bad38773f7f4b9acec55cfc34fc3391494e60eb563e6fcfc",
+    "50": "f67c302302919c87b923dfe4366704dcf18af0fa179a7638e53cbac5035d836f",
+    "80": "669947d97c30294b1bfe0427be89ba9c2fa6742477b6af0e78ab1c1a54d198d7",
+    "119": "7bd2c1414480348cb1ea6e69d1419174aedf80cf2e6047655a7081a3b9815045"
+   }
+  }
+ ]
+}

@@ -18,6 +18,11 @@ final class Harness {
     private(set) var error: String?
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// The tokens of context the last reply this phone asked for was written over, as the API
+    /// counted them — input and both cache counts (`Reply.context`); nil until one has been answered here, and again after
+    /// a sign-out, since the context was the last login's. A reply another primary wrote, or one found already in the log,
+    /// says nothing of its context and leaves this as it was.
+    private(set) var context: Int?
     /// Told about every reply the log has brought, however it arrived: one this device wrote, or
     /// one another primary wrote that a pass read. One decision point for reading a reply aloud,
     /// rather than a view's observer, because behind the lock nothing is drawn and whether a
@@ -195,6 +200,7 @@ final class Harness {
         error = nil
         status = nil
         busy = false
+        context = nil
         pending = []
         spokenNonces = []
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
@@ -375,6 +381,7 @@ final class Harness {
             guard inFlight == generation, !Task.isCancelled else { return false }
             show(result.person)
             show(result.assistant)
+            if result.reply.context > 0 { context = result.reply.context }
             status = nil
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.

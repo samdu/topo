@@ -13,6 +13,8 @@ struct TopoApp: App {
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
+    /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
+    @State private var mascot = Mascot()
     private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
@@ -74,14 +76,14 @@ struct TopoApp: App {
     /// the guest, carried through the app's lifecycle. Nothing at all in a release one.
     private func debugGuestTurn() async {
         #if DEBUG
-        await DebugRun.guestTurn(tokens: tokens)
+        await DebugRun.guestTurn(tokens: tokens, mascot: mascot)
         #endif
     }
 
     var body: some Scene {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
-                .environment(voice).environment(speaker).environment(memory)
+                .environment(voice).environment(speaker).environment(memory).environment(mascot)
                 // What every view draws with, which is the vault's `look.json` read onto the
                 // compiled look. It is worn here rather than on the chat so that the first run,
                 // the sign-in and the viewer screen are drawn by the same document; the memory

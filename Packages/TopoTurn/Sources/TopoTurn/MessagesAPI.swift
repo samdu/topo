@@ -87,13 +87,23 @@ public struct Reply: Sendable, Equatable {
     public var stopReason: String?
     public var inputTokens: Int
     public var outputTokens: Int
+    /// The prompt read from the cache, and the prompt written to it: both are context the reply
+    /// was written over, and in a cached conversation they are most of it.
+    public var cacheReadInputTokens: Int
+    public var cacheCreationInputTokens: Int
 
-    public init(text: String, model: String, stopReason: String?, inputTokens: Int, outputTokens: Int) {
+    /// Every token of context the reply was written over: input and both cache counts.
+    public var context: Int { inputTokens + cacheReadInputTokens + cacheCreationInputTokens }
+
+    public init(text: String, model: String, stopReason: String?, inputTokens: Int, outputTokens: Int,
+                cacheReadInputTokens: Int = 0, cacheCreationInputTokens: Int = 0) {
         self.text = text
         self.model = model
         self.stopReason = stopReason
         self.inputTokens = inputTokens
         self.outputTokens = outputTokens
+        self.cacheReadInputTokens = cacheReadInputTokens
+        self.cacheCreationInputTokens = cacheCreationInputTokens
     }
 
     /// A reply found already in the log: its text is the turn's, and nothing else is known.
@@ -153,7 +163,9 @@ public struct MessagesAPI: Sendable {
             model: body.model,
             stopReason: body.stop_reason,
             inputTokens: body.usage?.input_tokens ?? 0,
-            outputTokens: body.usage?.output_tokens ?? 0
+            outputTokens: body.usage?.output_tokens ?? 0,
+            cacheReadInputTokens: body.usage?.cache_read_input_tokens ?? 0,
+            cacheCreationInputTokens: body.usage?.cache_creation_input_tokens ?? 0
         )
     }
 
@@ -167,7 +179,12 @@ public struct MessagesAPI: Sendable {
 
     struct Response: Decodable {
         struct Block: Decodable { var type: String; var text: String? }
-        struct Usage: Decodable { var input_tokens: Int; var output_tokens: Int }
+        struct Usage: Decodable {
+            var input_tokens: Int
+            var output_tokens: Int
+            var cache_read_input_tokens: Int?
+            var cache_creation_input_tokens: Int?
+        }
         struct StopDetails: Decodable { var category: String? }
         var model: String
         var content: [Block]
