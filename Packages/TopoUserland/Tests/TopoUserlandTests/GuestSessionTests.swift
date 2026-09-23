@@ -505,4 +505,36 @@ final class GuestSessionTests: XCTestCase {
         await eventually("replaced") { launcher.processes.count == 2 }
         XCTAssertEqual(launcher.resumed, ["OLD", nil])
     }
+
+    /// Forgotten during a turn: the old process goes on to name its session — in its
+    /// `system/init` and its result — before it is ended. Neither is kept: with the process's end
+    /// held, so the replacement has not started (the app exiting there), the kept id is still
+    /// none, and the next process starts fresh. The replacement's own session is kept.
+    func testAForgottenConversationsProcessNeverWritesItsSessionBack() async throws {
+        store.save("OLD")
+        let (session, old) = try await resident()
+        XCTAssertEqual(launcher.resumed, ["OLD"])
+        let (turn, done) = collect(try await session.send("a long one"))
+        await eventually("written") { old.turns.count == 1 }
+
+        await session.forgetSession()
+        XCTAssertNil(store.load())
+        old.holdNextTermination()
+        answer(old, "done", session: "OLD")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        await eventually("the old process being ended") { old.terminationHeld }
+        XCTAssertNil(store.load(), "a forgotten conversation's process wrote its session back")
+
+        old.release()
+        await eventually("replaced") { launcher.processes.count == 2 }
+        XCTAssertEqual(launcher.resumed, ["OLD", nil], "the replacement resumed the forgotten session")
+        try await session.ready()
+        let fresh = try XCTUnwrap(launcher.last)
+        let (_, freshDone) = collect(try await session.send("hello"))
+        await eventually("written") { fresh.turns.count == 1 }
+        answer(fresh, "hi", session: "NEW")
+        await freshDone.value
+        XCTAssertEqual(store.load(), "NEW", "the replacement's own session was not kept")
+    }
 }

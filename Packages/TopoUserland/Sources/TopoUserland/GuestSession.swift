@@ -514,9 +514,9 @@ public actor GuestSession {
             switch event {
             case .started(let session, _):
                 resident.began = true
-                keep(session)
+                keep(session, of: resident)
             case .result(let result):
-                if let session = result.session, resident.began { keep(session) }
+                if let session = result.session, resident.began { keep(session, of: resident) }
             default:
                 break
             }
@@ -531,7 +531,12 @@ public actor GuestSession {
         }
     }
 
-    private func keep(_ session: String) {
+    /// Keeps the session `resident` names as the one the next process resumes — unless its
+    /// conversation has been forgotten since it started: a process started before a sign-out goes
+    /// on naming the session that went with it, and writing that back would have the next launch
+    /// resume it.
+    private func keep(_ session: String, of resident: Resident) {
+        guard resident.conversation == conversation else { return }
         if store.load() != session { store.save(session) }
     }
 
