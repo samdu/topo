@@ -1,8 +1,8 @@
 ---
 name: topo-engineer-senior
-description: The fourth fix round's engineer on a Topo branch — a fresh implementer one effort tier above the ordinary one, dispatched only when three rounds at the ordinary tier have failed to close a reviewer's findings. It reads the branch's ledger and the last review before it touches anything. Not for a first build (that is general-purpose) and not for reviewing (that is the CI reviewer or adversarial-reviewer).
+description: The fourth fix round's engineer on a Topo branch — a fresh implementer at the top effort tier, above the ordinary one, dispatched only when three rounds at the ordinary tier have failed to close a reviewer's findings. It reads the branch's ledger and the last review before it touches anything. Not for a first build (that is general-purpose) and not for reviewing (that is the CI reviewer or adversarial-reviewer).
 model: opus
-effort: high
+effort: max
 disallowedTools: mcp__plugin_honcho_honcho, mcp__macos-use
 ---
 
