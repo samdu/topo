@@ -57,7 +57,7 @@ final class MascotDriverTests: XCTestCase {
     }
 
     /// Under Reduce Motion no tick draws. What is drawn is one still of the idle pose, once per
-    /// model and load; a change of pose draws nothing, since he is held in his idle one.
+    /// head and load band; a change of pose draws nothing, since he is held in his idle one.
     func testReduceMotionIsOneStillPerStateAndNoFrames() throws {
         var still = seen; still.reduceMotion = true
         let driver = driver(still)
@@ -80,6 +80,29 @@ final class MascotDriverTests: XCTestCase {
         driver.conditions = hidden
         driver.input = MascotState(model: "claude-haiku-4-5", tokens: 1, activity: .idle).input
         XCTAssertEqual(driver.frames, 2)
+    }
+
+    /// The still is drawn again only for what the engine draws differently: the head the model
+    /// picks and the band the tokens fall in. Tokens moving within a band, or another id of the
+    /// same model, is the same picture and draws nothing; crossing into the next band draws one.
+    func testReduceMotionDrawsANewStillOnlyForANewHeadOrLoadBand() throws {
+        var still = seen; still.reduceMotion = true
+        let driver = driver(still)
+        XCTAssertEqual(driver.frames, 1)
+        let first = try XCTUnwrap(driver.image)
+
+        driver.input = MascotState(model: "claude-sonnet-5", tokens: 1_001).input
+        XCTAssertEqual(driver.frames, 1, "a token more in the same load drew another still")
+        driver.input = MascotState(model: "claude-sonnet-5", tokens: 199_999).input
+        XCTAssertEqual(driver.frames, 1, "tokens within the default load drew another still")
+        driver.input = MascotState(model: "claude-sonnet-5-20260801", tokens: 199_999).input
+        XCTAssertEqual(driver.frames, 1, "another id of the same model drew another still")
+
+        driver.input = MascotState(model: "claude-sonnet-5", tokens: 200_000).input
+        XCTAssertEqual(driver.frames, 2, "the warning load drew no still")
+        driver.input = MascotState(model: "claude-opus-5", tokens: 200_000).input
+        XCTAssertEqual(driver.frames, 3, "a new head drew no still")
+        XCTAssertNotEqual(bytes(first), bytes(try XCTUnwrap(driver.image)))
     }
 
     /// The still is the idle pose whatever the state's pose is: the same picture for building as

@@ -104,9 +104,28 @@ final class MascotDriver {
     private let engine = Topo()
     private var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
     private let space = CGColorSpaceCreateDeviceRGB()
-    /// The model and the context the still frame on the canvas was drawn for, so Reduce Motion
-    /// draws once per state rather than once per call. Nothing else of the input reaches a still.
-    private var stillFor: String?
+    /// What the still frame on the canvas was drawn for, so Reduce Motion draws once per picture
+    /// rather than once per input.
+    private var stillFor: Still?
+
+    /// What of the input the still is drawn differently for, as the engine reads it: the head the
+    /// model picks (`levelForModel`, by family, so two ids of one model are one head) and the band
+    /// the tokens fall in (`loadForTokens`). Tokens moving within a band, a pose, a sign or the
+    /// stroll's corner change nothing of the idle still, and `MascotState` sets nothing else it is
+    /// drawn with: style, shading and relief are left at the engine's own.
+    struct Still: Equatable {
+        var level: Double
+        var load: Load
+
+        init(_ input: TopoInput) {
+            let rest = Self.rest
+            level = input.model.flatMap { $0.isEmpty ? nil : levelForModel($0) } ?? input.level ?? rest.level
+            load = input.tokens.map(loadForTokens) ?? input.load.flatMap(Load.init(rawValue:)) ?? rest.load
+        }
+
+        /// A fresh engine's, which is what the still starts from and keeps where the input is silent.
+        private static let rest = Topo().state
+    }
 
     /// One frame, `dt` seconds after the last: the engine moved on and drawn, if he animates.
     func tick(_ dt: Double) {
@@ -130,7 +149,7 @@ final class MascotDriver {
     /// engine's first glance (3 s) and its second blink (at least 2.5 s after the first at 2 s):
     /// a still of the engine's own face at rest, with no eye half shut.
     private func holdStill() {
-        let key = "\(input.model ?? "")|\(input.tokens ?? 0)"
+        let key = Still(input)
         guard conditions.still, stillFor != key else { return }
         stillFor = key
         let still = Topo(random: { 0.5 })
