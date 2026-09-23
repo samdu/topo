@@ -142,12 +142,15 @@ extension DebugRun {
                         continue
                     }
                 }
+                // The process the turn went to, named on every line that says what took it, so a
+                // run can hold that its turns all went to one resident process.
+                let pid = await session.residentPID.map(String.init) ?? "none"
                 say("guest turn \(number) sent: \(text)")
                 guard let updates else { continue }
                 for await update in updates {
                     switch update {
                     case .event(.started(let id, let model)):
-                        say("guest turn \(number) model: \(model), session \(id)")
+                        say("guest turn \(number) model: \(model), session \(id), process \(pid)")
                     case .event(.toolUse(let name)):
                         say("guest turn \(number) tool: \(name)")
                     case .event(.malformed(let line)):

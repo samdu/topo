@@ -2,6 +2,8 @@ import Foundation
 
 /// A process the session talks to: the resident Claude Code in the guest, or a test's scripted one.
 public protocol ResidentProcess: AnyObject, Sendable {
+    /// Its pid in the guest, which names this process among the ones a session starts.
+    var pid: Int32 { get }
     /// stdout, line by line, finishing when the process has let go of it.
     var lines: AsyncStream<String> { get }
     /// The end of what it wrote to stderr.
@@ -227,6 +229,12 @@ public actor GuestSession {
         case .resident: .resident
         case .stopping: .stopping
         }
+    }
+
+    /// The pid of the resident process, nil when none is resident.
+    public var residentPID: Int32? {
+        if case .resident(let resident) = phase { return resident.process.pid }
+        return nil
     }
 
     /// Whether a turn is in flight.

@@ -50,7 +50,8 @@
 #
 # A --guest-turn run launches signed in with TOPO_DEBUG_GUEST_TURN (DebugRun.guestTurn): the resident
 # Claude Code in the guest takes the turns, separated by " || ", one after another in one process.
-# It passes only when the app printed `guest turn done`, no `guest turn error:`, no turn that
+# It passes only when every turn names the same session and resident process, the app printed
+# `guest turn done`, no `guest turn error:`, no turn that
 # failed or was abandoned, and for every turn a `model:` line naming the model it ran on (Haiku,
 # since the build is Debug) and an `answered in <seconds> s:` line.
 #
@@ -96,7 +97,7 @@ while [ $# -gt 0 ]; do
     --expect-rootfs) expect_rootfs="$2"; shift 2 ;;
     --expect-claude) expect_claude="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
-    -h|--help) sed -n '2,61p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -295,13 +296,20 @@ if [ -n "$guestturn" ]; then
   grep -q '\[topo-debug\] guest turn error:' <<< "$lines" && fail "the guest's turns reported an error"
   grep -Eq '^\[topo-debug\] guest turn [0-9]+ (failed|abandoned)' <<< "$lines" && fail "a guest turn failed or was abandoned"
   count="$(awk -F ' \\|\\| ' '{ n = 0; for (i = 1; i <= NF; i++) if ($i ~ /[^ ]/) n++; print n }' <<< "$guestturn")"
+  resident=""
   for n in $(seq 1 "$count"); do
-    grep -Eq "^\[topo-debug\] guest turn $n model: claude-haiku-4-5[^ ]*, session [^ ]+$" <<< "$lines" \
-      || fail "guest turn $n did not start on Haiku"
+    started="$(grep -E "^\[topo-debug\] guest turn $n model: claude-haiku-4-5[^ ]*, session [^ ]+, process [0-9]+$" <<< "$lines" | head -1 || true)"
+    [ -n "$started" ] || fail "guest turn $n did not start on Haiku in a named session and process"
     grep -Eq "^\[topo-debug\] guest turn $n answered in [0-9.]+ s: " <<< "$lines" \
       || fail "guest turn $n was not answered"
+    # Every turn of a run goes to one resident process in one session: a turn answered by a
+    # process started after the first is a restart the run did not ask for.
+    this="${started#*, session }"
+    [ -z "$resident" ] || [ "$this" = "$resident" ] \
+      || fail "guest turn $n went to session and process ${this/, process / in process }, not ${resident/, process / in process }"
+    resident="$this"
   done
-  echo "==> the resident Claude Code answered $count turns"
+  echo "==> the resident Claude Code answered $count turns in one process (session ${resident})"
 fi
 
 if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then

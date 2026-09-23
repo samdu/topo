@@ -1,5 +1,6 @@
 import Foundation
 import XCTest
+import os
 @testable import TopoUserland
 
 /// A clock the test moves by hand: every sleep waits until `advance` passes its deadline, and a
@@ -46,6 +47,8 @@ actor ManualClock {
 /// and a termination that can be held open to play a teardown that is still running.
 final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
     let lines: AsyncStream<String>
+    let pid: Int32
+    private static let pids = OSAllocatedUnfairLock(initialState: Int32(100))
     private let continuation: AsyncStream<String>.Continuation
     private let lock = NSLock()
     private var sent: [String] = []
@@ -62,6 +65,7 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
 
     init() {
         (lines, continuation) = AsyncStream<String>.makeStream()
+        pid = Self.pids.withLock { $0 += 1; return $0 }
     }
 
     /// The turns written to it, as the text of each `user` message.
