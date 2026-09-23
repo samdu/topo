@@ -37,6 +37,25 @@
 # decided, and an answer that is not a valid verdict passes through untouched
 # so review_gate's no-verdict handling still sees it.
 #
+# The reviewer reads a PR two ways. The first review is exhaustive: the
+# prompt asks for every finding that meets the evidence rule, most serious
+# first, since a defect left for a later round costs a full run. Every
+# verdict post_feedback posts opens with two marker lines, the codex marker
+# `<!-- agent-review: codex -->`, which the githubpr channel routes the review
+# back to the session by and which never changes, and
+# `<!-- agent-review-sha: <sha> -->`, the PR head that run reviewed
+# (`pull_request.head.sha`, never the merge ref). A later run on the same PR
+# is a re-review: scripts/review-prompt.sh finds the newest codex verdict,
+# and when its SHA is an ancestor of this run's PR head, adds that verdict
+# (fenced as the reviewer's own earlier output) and the commits and diff
+# between the two PR heads after the description. The re-review verifies
+# each earlier finding as closed, still open or moot in `summary`, then reads
+# the whole PR again; a new finding in code the diff since does not touch
+# blocks only if it loses or corrupts a record, splits the primary, leaks a
+# secret, or makes the description untrue at runtime. No earlier verdict, one
+# with no SHA marker, a SHA that is not an ancestor, or a `gh` that fails is
+# a first review, said in the prompt step's log.
+#
 # The verdict then travels as an artifact rather than a job output. GitHub
 # drops a job output wholesale when its text contains the value of any
 # registered secret, so a review that happened to quote one was discarded after
@@ -515,6 +534,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/build-ish-test.sh
 
+      # scripts/review-prompt.sh against a fake gh and a scratch repository,
+      # fed the comment post_feedback itself posts: a first review whenever
+      # the previous one is missing or unusable, and otherwise that verdict
+      # verbatim with exactly the PR head's diff since it.
+      - name: The review prompt carries the previous verdict and the diff since
+        if: ${{ !cancelled() }}
+        run: scripts/tests/review-prompt-test.sh
+
       # Named, not globbed: a package that disappears fails here instead of
       # leaving the loop with one fewer iteration. Every package runs even
       # after one fails, so the log shows them all.
@@ -695,6 +722,8 @@ jobs:
       contents: read
       # Read-only, for the PR's changed-file list in the scoping step.
       pull-requests: read
+      # Read-only, for the previous Codex verdict the prompt step reads.
+      issues: read
     outputs:
       has_verdict: ${{ steps.sanitise.outputs.has_verdict }}
     steps:
@@ -737,6 +766,86 @@ jobs:
           git fetch --no-tags origin \
             "$PR_BASE_REF" \
             "+refs/pull/$PR_NUMBER/head"
+
+      # The prompt, assembled by scripts/review-prompt.sh before the login is
+      # on disk: the instructions below, the PR description, and — when this
+      # PR has an earlier Codex verdict naming the head it read — that verdict
+      # and the commits and diff from that head to this run's PR head, with
+      # the instruction to verify each earlier finding and then read the
+      # whole PR again. Anything missing or unusable there is a first review,
+      # said in this step's log. scripts/tests/review-prompt-test.sh holds it.
+      - name: Assemble the review prompt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          # The PR head this run reviews, never the merge ref the checkout is on.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PROMPT: |
+            Review PR #${{ github.event.pull_request.number }} in this
+            repository. Review ONLY the changes it introduces.
+
+            Be exhaustive. This is the one read the PR gets before it merges:
+            report every finding that meets the evidence rule below, not the
+            first few, ranked most serious first with the blocking ones
+            first. A defect left for a later round costs a full CI run and a
+            fix round to find.
+
+            The question you answer is: does the code do what the PR
+            description says it does, and does the evidence it claims hold?
+            Read the project's CLAUDE.md for general context, and read
+            docs/design.md for invariants the diff will not spell out.
+
+            Attack the description's claims. For each thing it says was done,
+            find the input, state or ordering that makes the code not do it;
+            for each thing its Proof section says was verified, check that the
+            test actually fails when the behaviour is wrong. A test that
+            cannot fail is a finding. A claim with no test behind it is a
+            finding.
+
+            Evidence rule: every finding cites `path:line` and names the
+            concrete input or sequence that breaks the claim. A finding with
+            neither is reported as low-confidence — say so in its text — and
+            never blocks.
+
+            The test suite has already passed, this runner has no Swift
+            toolchain and your sandbox is read-only; do not try to build or run
+            anything — review the tests by reading them. You can read any file
+            in the checkout; do that rather than guessing. Skip style and
+            formatting; report only what would actually break something, and
+            say plainly if you find nothing.
+
+            Review the diff, not the repository. A defect in a file the PR
+            does not touch is not this PR's to fix: mention it in `summary`
+            as pre-existing, never as a blocking finding. In particular the
+            workflows under `.github/workflows/` run PR-authored code with a
+            reviewer credential and a write token for same-repository
+            branches; that exposure is accepted by design, documented in this
+            file's header, and is not a finding on any PR that does not
+            change those workflows.
+
+            Return JSON matching the schema. Set `blocking` true only for a
+            finding that meets the evidence rule and would break at runtime,
+            make the description untrue, lose or corrupt a record, split the
+            primary, leak a secret, or ship code the licence forbids.
+            `summary` is what a reader sees; `findings` is one string per
+            issue.
+
+            If you cannot complete the review — the checkout is unreadable,
+            the diff will not load, anything that stops you reading — set
+            `blocking` true and say why in `summary`. A review you could not
+            do is not a clean review. A build or test command the sandbox
+            refuses is not that: you review by reading, and every file you
+            need is in the checkout.
+
+        run: |
+          set -euo pipefail
+          scripts/review-prompt.sh > "$RUNNER_TEMP/prompt.txt"
+          if grep -q '^----- PREVIOUS REVIEW AND THE CHANGE SINCE -----$' "$RUNNER_TEMP/prompt.txt"; then
+            echo "The prompt carries the previous-review section."
+          else
+            echo "The prompt carries no previous-review section: a first review."
+          fi
 
       - name: Write the Codex login
         env:
@@ -788,59 +897,6 @@ jobs:
           # a schema makes "does this block the merge" a field.
           OUTPUT_SCHEMA: |
             {"type": "object", "additionalProperties": false, "properties": {"blocking": {"type": "boolean"}, "summary": {"type": "string"}, "findings": {"type": "array", "items": {"type": "string"}}}, "required": ["blocking", "summary", "findings"]}
-          PR_BODY: ${{ github.event.pull_request.body }}
-          PROMPT: |
-            Review PR #${{ github.event.pull_request.number }} in this
-            repository. Review ONLY the changes it introduces.
-
-            The question you answer is: does the code do what the PR
-            description says it does, and does the evidence it claims hold?
-            Read the project's CLAUDE.md for general context, and read
-            docs/design.md for invariants the diff will not spell out.
-
-            Attack the description's claims. For each thing it says was done,
-            find the input, state or ordering that makes the code not do it;
-            for each thing its Proof section says was verified, check that the
-            test actually fails when the behaviour is wrong. A test that
-            cannot fail is a finding. A claim with no test behind it is a
-            finding.
-
-            Evidence rule: every finding cites `path:line` and names the
-            concrete input or sequence that breaks the claim. A finding with
-            neither is reported as low-confidence — say so in its text — and
-            never blocks.
-
-            The test suite has already passed, this runner has no Swift
-            toolchain and your sandbox is read-only; do not try to build or run
-            anything — review the tests by reading them. You can read any file
-            in the checkout; do that rather than guessing. Skip style and
-            formatting; report only what would actually break something, and
-            say plainly if you find nothing.
-
-            Review the diff, not the repository. A defect in a file the PR
-            does not touch is not this PR's to fix: mention it in `summary`
-            as pre-existing, never as a blocking finding. In particular the
-            workflows under `.github/workflows/` run PR-authored code with a
-            reviewer credential and a write token for same-repository
-            branches; that exposure is accepted by design, documented in this
-            file's header, and is not a finding on any PR that does not
-            change those workflows.
-
-            Return JSON matching the schema. Set `blocking` true only for a
-            finding that meets the evidence rule and would break at runtime,
-            make the description untrue, lose or corrupt a record, split the
-            primary, leak a secret, or ship code the licence forbids.
-            `summary` is what a reader sees; `findings` is one string per
-            issue.
-
-            If you cannot complete the review — the checkout is unreadable,
-            the diff will not load, anything that stops you reading — set
-            `blocking` true and say why in `summary`. A review you could not
-            do is not a clean review. A build or test command the sandbox
-            refuses is not that: you review by reading, and every file you
-            need is in the checkout.
-
-            ----- BEGIN PR DESCRIPTION -----
         run: |
           set -euo pipefail
           printf '%s' "$OUTPUT_SCHEMA" > "$RUNNER_TEMP/schema.json"
@@ -848,7 +904,7 @@ jobs:
           # writes, so a prompt-injected `curl` of the login has nowhere to go.
           # The model call itself is made by the codex process, outside the
           # sandbox.
-          { printf '%s\n' "$PROMPT"; printf '%s\n' "$PR_BODY"; echo "----- END PR DESCRIPTION -----"; } | codex exec \
+          codex exec < "$RUNNER_TEMP/prompt.txt" \
             --model "$CODEX_MODEL" \
             --sandbox read-only \
             --skip-git-repo-check \
@@ -1027,6 +1083,9 @@ jobs:
         uses: actions/github-script@v7
         env:
           CODEX_VERDICT_PATH: ${{ runner.temp }}/codex-verdict/verdict.json
+          # The PR head this verdict read, which the next run's prompt step
+          # diffs from.
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         with:
           github-token: ${{ github.token }}
           script: |
@@ -1045,10 +1104,12 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              // The marker is what the githubpr channel matches on to deliver
-              // this review back to the session that opened the PR. Removing it
-              // does not break the review; it breaks the fix loop, silently.
-              body: `<!-- agent-review: codex -->\n### Codex review\n\n${lines.join('\n')}`,
+              // The first line is what the githubpr channel matches on to
+              // deliver this review back to the session that opened the PR.
+              // Changing it does not break the review; it breaks the fix loop,
+              // silently. The second names the PR head this verdict read, which
+              // scripts/review-prompt.sh diffs the next review from.
+              body: `<!-- agent-review: codex -->\n<!-- agent-review-sha: ${process.env.HEAD_SHA} -->\n### Codex review\n\n${lines.join('\n')}`,
             })
 
   # "The reviewer said no" and "there is no verdict" are different answers, and
