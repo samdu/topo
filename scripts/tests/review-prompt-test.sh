@@ -160,7 +160,14 @@ chmod +x "$work/bin/gh"
 # comment <login> <body> — one issue comment as the API returns it.
 comment() { jq -nc --arg login "$1" --arg body "$2" '{id: 1, user: {login: $login, type: "Bot"}, body: $body}'; }
 
-INSTRUCTIONS='Review PR #7 in this repository. The instructions line.'
+# The instructions are the workflow's own, read out of the prompt step, so an instruction taken out
+# of the yaml is taken out of what this test assembles.
+INSTRUCTIONS="$(ruby -ryaml -e '
+  w = YAML.load_file(ARGV[0])
+  step = w.fetch("jobs").fetch("codex").fetch("steps").find { |s| s["name"] == "Assemble the review prompt" } or abort "no step Assemble the review prompt in codex"
+  print step.fetch("env").fetch("PROMPT")
+' "$workflow")" || exit 2
+[ -n "$INSTRUCTIONS" ] || { echo "the workflow's PROMPT is empty" >&2; exit 2; }
 DESCRIPTION='What was done, and the Proof.'
 expected_first="$work/expected-first.txt"
 printf '%s\n----- BEGIN PR DESCRIPTION -----\n%s\n----- END PR DESCRIPTION -----\n' \
@@ -229,6 +236,12 @@ fi
 echo '[]' > "$work/none.json"
 run none "$work/none.json"
 first_review none "no previous Codex review"
+if grep -qx "Be exhaustive. This is the one read the PR gets before it merges:" "$work/none.out" \
+  && grep -qx "report every finding that meets the evidence rule below, not the" "$work/none.out"; then
+  pass "none: the first-review prompt asks for an exhaustive read"
+else
+  fail "none: the first-review prompt does not carry the exhaustive instruction"
+fi
 if grep -qx "api --paginate repos/samdu/topo/issues/7/comments --jq .*" "$work/none.gh"; then
   pass "none: read this PR's issue comments"
 else
