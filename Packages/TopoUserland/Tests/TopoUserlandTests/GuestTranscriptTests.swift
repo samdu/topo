@@ -97,4 +97,23 @@ final class GuestTranscriptTests: XCTestCase {
                        .notReceived, "only files changed since the input went are searched beyond the named one")
         XCTAssertEqual(GuestTranscript.verdict(for: "never-sent", home: home, session: "S1", since: before), .notReceived)
     }
+
+    /// A transcript that cannot be read is no answer: not received is never concluded from it.
+    func testATranscriptThatCannotBeReadIsUnreadable() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("home-\(UUID().uuidString)")
+        let project = home.appendingPathComponent(".claude/projects/-home-topo", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let file = project.appendingPathComponent("S1.jsonl")
+        let answered = try Transcripts.lines("answered-with-tool").joined(separator: "\n") + "\n"
+        try Data(answered.utf8).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+            try? FileManager.default.removeItem(at: home)
+        }
+        try XCTSkipIf((try? Data(contentsOf: file)) != nil, "missing coverage: this host reads a file with no permissions")
+        let before = Date(timeIntervalSinceNow: -60)
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: "S1", since: before), .unreadable)
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: nil, since: before), .unreadable)
+    }
 }

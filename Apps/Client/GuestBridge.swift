@@ -174,11 +174,16 @@ enum Reconciliation: Equatable {
     case superseded
     /// Nothing is being asked, and the outstanding input was cut off: it stays unresolved.
     case hold
+    /// The transcript could not be read: nothing is known, so the record stays as it is, nothing
+    /// is sent, and the next attempt reads again.
+    case unknown
 
     /// `request` is the nonce of the reply being asked for now, nil when only asked what is owed.
     static func of(_ pending: GuestLedger.Pending, verdict: GuestTranscript.Verdict,
                    request: String?) -> Reconciliation {
         switch verdict {
+        case .unreadable:
+            return .unknown
         case .notReceived:
             return .clear
         case .answered(let text):
@@ -278,6 +283,8 @@ actor GuestBridge: Brain {
                 try record(nil)
             case .hold:
                 break
+            case .unknown:
+                throw GuestBridgeError.failed(Self.unreadable)
             }
         }
 
@@ -351,8 +358,14 @@ actor GuestBridge: Brain {
             ledger.pending?.state = .unresolved
             try? save()
             throw GuestBridgeError.unresolved
+        case .unreadable:
+            // The record stays: the next request reads again before it sends anything.
+            throw GuestBridgeError.failed(Self.unreadable)
         }
     }
+
+    /// Why a turn waits when the guest's transcript could not be read.
+    static let unreadable = "the guest's transcript could not be read, so whether it received the turn is not known; nothing is sent until it can be"
 
     func landed(_ reply: Turn, nonce: String) async {
         guard let pending = ledger.pending, pending.nonce == nonce else { return }

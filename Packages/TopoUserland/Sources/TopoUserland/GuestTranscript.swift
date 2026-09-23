@@ -20,6 +20,9 @@ public enum GuestTranscript {
         /// The input is there and no finished reply follows it: it was cut off, or failed. It may
         /// have run tools, so sending it again could repeat what they did.
         case unresolved
+        /// A transcript that could hold the input could not be read: nothing is known, so nothing
+        /// may be concluded — least of all that it was never received.
+        case unreadable
     }
 
     /// The stop reasons that end a reply rather than wait on a tool's result.
@@ -65,17 +68,23 @@ public enum GuestTranscript {
 
     /// The verdict on `id` from the transcripts under `home`: the session's own file first, then
     /// any other session file changed since `since` — an input sent while the session id was not
-    /// yet known lands in whichever session the process began. Not received when no file holds it.
+    /// yet known lands in whichever session the process began. Not received only when every file
+    /// that could hold it was read and none does; a file that could not be read, with no other
+    /// holding the input, is `unreadable`.
     public static func verdict(for id: String, home: URL, session: String?, since: Date) -> Verdict {
+        var unread = false
         for file in files(home: home, session: session, since: since) {
-            guard let data = try? Data(contentsOf: file) else { continue }
+            guard let data = try? Data(contentsOf: file) else {
+                unread = true
+                continue
+            }
             let text = String(decoding: data, as: UTF8.self)
             // Cheap first: a file that does not mention the id has nothing to say about it.
             guard text.contains(id) else { continue }
             let verdict = verdict(for: id, in: text.split(separator: "\n").lazy.map(String.init))
             if verdict != .notReceived { return verdict }
         }
-        return .notReceived
+        return unread ? .unreadable : .notReceived
     }
 
     /// The session transcripts under `home`, the named session's first and then the rest changed

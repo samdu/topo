@@ -60,6 +60,9 @@ final class GuestBridgeTests: XCTestCase {
         askedAgain.askAgain = true
         XCTAssertEqual(Reconciliation.of(pending, verdict: .notReceived, request: "answer/a"), .clear)
         XCTAssertEqual(Reconciliation.of(pending, verdict: .notReceived, request: nil), .clear)
+        XCTAssertEqual(Reconciliation.of(pending, verdict: .unreadable, request: "answer/a"), .unknown)
+        XCTAssertEqual(Reconciliation.of(pending, verdict: .unreadable, request: "answer/b"), .unknown)
+        XCTAssertEqual(Reconciliation.of(pending, verdict: .unreadable, request: nil), .unknown)
         XCTAssertEqual(Reconciliation.of(pending, verdict: .answered("hi"), request: "answer/a"), .answered("hi"))
         XCTAssertEqual(Reconciliation.of(pending, verdict: .answered("hi"), request: "answer/b"),
                        .owed(OwedReply(parents: [], nonce: "answer/a", text: "hi")))
@@ -161,6 +164,42 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.inputs, ["delete my old drafts"], "asked again once, because the person asked")
         let noneLeft = await bridge.unresolved()
         XCTAssertTrue(noneLeft.isEmpty)
+    }
+
+    /// The input was sent and the app was killed; on the next launch the guest's transcript cannot
+    /// be read. A read that failed is not an answer: the record stays, nothing is sent, and once
+    /// the transcript reads again the turn is what it is — here, received and cut off.
+    func testATranscriptThatCannotBeReadSendsNothingAndKeepsTheRecord() async throws {
+        let db = InMemoryRecordDatabase()
+        let (first, _, firstGuest) = try await launch(db, .hang)
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
+        _ = killed
+
+        let transcript = home.appendingPathComponent(".claude/projects/-home-topo/S1.jsonl")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: transcript.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path) }
+        try XCTSkipIf((try? Data(contentsOf: transcript)) != nil, "missing coverage: this host reads a file with no permissions")
+
+        let (second, bridge, guest) = try await launch(db, .reply("Deleted."))
+        let before = await bridge.current.pending
+        do {
+            _ = try await second.answerPending(model: .sonnet5)
+            XCTFail("a turn was answered over a transcript that could not be read")
+        } catch let error as GuestBridgeError {
+            XCTAssertEqual(error, .failed(GuestBridge.unreadable))
+        }
+        XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over an unreadable transcript")
+        let kept = await bridge.current.pending
+        XCTAssertNotNil(kept)
+        XCTAssertEqual(kept, before, "the record changed on a read that failed")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path)
+        let answered = try await second.answerPending(model: .sonnet5)
+        XCTAssertNil(answered)
+        XCTAssertTrue(guest.inputs.isEmpty)
+        let state = await bridge.current.pending?.state
+        XCTAssertEqual(state, .unresolved)
     }
 
     /// CloudKit took the reply and the app died before the bookkeeping moved. The next launch finds
