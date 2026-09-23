@@ -234,6 +234,9 @@ actor GuestBridge: Brain {
     /// of them that was waiting behind the request that got it is handed the same words rather
     /// than asking the guest a second time.
     private var recent: [(nonce: String, text: String)] = []
+    /// Counts sign-outs. An answer started under an earlier count was for a login that has gone:
+    /// it records nothing and sends nothing, wherever it was waiting when the count moved.
+    private var login = 0
 
     /// `file` is the ledger; everything the bridge knows across launches is read from it here.
     init(conversation: any GuestConversation, ledger file: URL,
@@ -247,6 +250,7 @@ actor GuestBridge: Brain {
     // MARK: - Brain
 
     func answer(_ request: BrainRequest) async throws -> Reply {
+        let login = self.login
         if asking { await withCheckedContinuation { queue.append($0) } }
         asking = true
         defer {
@@ -304,18 +308,21 @@ actor GuestBridge: Brain {
         var covers = Coverage(request.context.map(\.ref) + request.answering.map(\.ref))
         covers.formUnion(received)
         let id = UUID().uuidString.lowercased()
+        // `ready` can wait a long time, and a sign-out can come while it does.
+        try stillCurrent(login)
         // Written before the input goes: after a crash this is how the transcript is asked.
         try record(GuestLedger.Pending(input: id, nonce: request.nonce, parents: request.parents,
                                        answering: request.answering.map(\.ref),
                                        covers: covers,
                                        session: session, sentAt: Date(), state: .sent))
         let pid = await conversation.residentPID()
+        try stillCurrent(login)
         let updates: AsyncStream<GuestSession.TurnUpdate>
         do {
             updates = try await conversation.send(input, id: id)
         } catch {
             // Refused before anything was written: not received.
-            try? record(nil)
+            if self.login == login { try? record(nil) }
             throw GuestBridgeError.failed(String(describing: error))
         }
 
@@ -411,6 +418,7 @@ actor GuestBridge: Brain {
     }
 
     func forget() async {
+        login += 1
         ledger = GuestLedger()
         try? FileManager.default.removeItem(at: file)
         provenance = [:]
@@ -460,6 +468,13 @@ actor GuestBridge: Brain {
     var current: GuestLedger { ledger }
 
     // MARK: - Inside
+
+    /// Throws when the answer was begun under a login that has since signed out, or its task was
+    /// cancelled: what it would record or send belongs to nobody now.
+    private func stillCurrent(_ login: Int) throws {
+        guard login == self.login else { throw CancellationError() }
+        try Task.checkCancellation()
+    }
 
     private func verdict(on pending: GuestLedger.Pending) -> GuestTranscript.Verdict {
         GuestTranscript.verdict(for: pending.input, home: conversation.home, session: pending.session,

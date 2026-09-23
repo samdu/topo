@@ -43,6 +43,8 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private var refusal: String?
     private var hanging: [AsyncStream<GuestSession.TurnUpdate>.Continuation] = []
     private var messages = 0
+    private var holdingReady = false
+    private var readyGate: CheckedContinuation<Void, Never>?
 
     init(home: URL, script: [Answer] = [], transport: (any Transport)? = nil, session: String? = "S1") {
         self.home = home
@@ -69,7 +71,29 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
 
     // MARK: - GuestConversation
 
+    /// Holds the next `ready` until `releaseReady`, as a userland still downloading does.
+    func holdReady() { lock.withLock { holdingReady = true } }
+    var readyHeld: Bool { lock.withLock { readyGate != nil } }
+    func releaseReady() {
+        let gate = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            holdingReady = false
+            defer { readyGate = nil }
+            return readyGate
+        }
+        gate?.resume()
+    }
+
     func ready() async throws {
+        if lock.withLock({ holdingReady }) {
+            await withCheckedContinuation { continuation in
+                let open = lock.withLock { () -> Bool in
+                    guard holdingReady else { return true }
+                    readyGate = continuation
+                    return false
+                }
+                if open { continuation.resume() }
+            }
+        }
         if let why = lock.withLock({ refusal }) { throw GuestBridgeError.notReady(why) }
     }
 

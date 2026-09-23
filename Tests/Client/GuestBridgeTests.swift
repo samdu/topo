@@ -640,6 +640,41 @@ final class GuestBridgeTests: XCTestCase {
         }
     }
 
+    /// Sign-out while an answer waits for the guest to be ready: when the wait ends, the answer
+    /// belongs to a login that has gone, so it records nothing and sends nothing.
+    func testSignOutWhileAnAnswerWaitsForTheGuestRecordsAndSendsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Noted."), .reply("Too late.")])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        await harness.send("the word is marmalade")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ledgerFile.path), "no ledger to forget")
+
+        guest.holdReady()
+        // Asked through the runner directly, as the answering pass asks, so no cancellation of
+        // the chat's own task is what stops it: only the sign-out.
+        let log = TurnLog(database: db)
+        try await log.writer(for: DeviceID("watch")).append(.person, "and now?", continuing: try await log.read())
+        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
+        let waiting = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the answer to wait at ready") { guest.readyHeld }
+
+        harness.forget()
+        try await eventually("the ledger to go") { !FileManager.default.fileExists(atPath: ledgerFile.path) }
+        guest.releaseReady()
+        let result = await waiting.result
+        if case .success = result { XCTFail("an answer begun before the sign-out finished after it") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a record was written after the sign-out")
+        XCTAssertEqual(guest.inputs, ["the word is marmalade"], "an input was sent after the sign-out")
+        let ledger = await bridge.current
+        XCTAssertNil(ledger.pending)
+    }
+
     /// The person's control for a cut-off turn: shown, and asking again sends it once.
     func testAnUnfinishedTurnIsShownAndAskedAgainOnlyWhenThePersonAsks() async throws {
         let db = InMemoryRecordDatabase()
