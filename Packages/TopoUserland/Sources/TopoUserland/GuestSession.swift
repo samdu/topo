@@ -371,8 +371,10 @@ public actor GuestSession {
     /// Sends the person's `text` as a turn. Refused while another turn is in flight and while
     /// nothing is resident; otherwise the turn's events arrive on the stream, then how it ended.
     /// `id` is the input's uuid, which Claude Code keeps on the transcript entry it writes for it.
+    /// A turn never goes to a process started with a model or conversation the session no longer
+    /// says: an idle stale process is replaced first, and one being replaced is waited for.
     public func send(_ text: String, id: String? = nil) async throws -> AsyncStream<TurnUpdate> {
-        guard case .resident(let resident) = phase else { throw Refusal.notResident }
+        let resident = try await current()
         guard resident.turn == nil else { throw Refusal.turnInFlight }
         let (stream, continuation) = AsyncStream<TurnUpdate>.makeStream()
         let turn = Turn(continuation: continuation)
@@ -390,6 +392,25 @@ public actor GuestSession {
     }
 
     // MARK: - Inside
+
+    /// The resident process a turn goes to. A stale one with no turn in flight is replaced now
+    /// rather than at the change's own idle moment, which may not have come yet; a process
+    /// starting or being ended in the foreground is waited for. Nothing resident, or the
+    /// background, is refused.
+    private func current() async throws -> Resident {
+        while true {
+            switch phase {
+            case .resident(let resident):
+                guard resident.turn == nil, inForeground, isStale(resident) else { return resident }
+                renewIfStale()
+            case .idle:
+                throw Refusal.notResident
+            case .starting, .stopping:
+                guard inForeground else { throw Refusal.notResident }
+            }
+            try await withCheckedThrowingContinuation { readiness.append($0) }
+        }
+    }
 
     /// Whether a lifecycle call is current: no older than the newest seen. A call with no
     /// generation takes the next one.

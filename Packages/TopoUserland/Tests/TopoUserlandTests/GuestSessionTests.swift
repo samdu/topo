@@ -402,6 +402,33 @@ final class GuestSessionTests: XCTestCase {
         await eventually("the replacement took the next turn") { launcher.last?.turns == ["next"] }
     }
 
+    /// The next turn sent the moment the first ends, without waiting for the replacement the
+    /// model change asked for, goes to the replacement on the new model and never to the old one.
+    func testATurnSentAsTheTurnBeforeItEndsGoesToTheNewModel() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let (turn, _) = collect(try await session.send("a long one"))
+        await eventually("written") { first.turns.count == 1 }
+        await session.use(model: "claude-opus-5")
+
+        // The replacement's launch is held, so the turn is sent before it can be up.
+        launcher.holdNextLaunch()
+        answer(first, "done")
+        await eventually("the first turn ended") { turn.ends.count == 1 }
+        let next = Task { _ = try await session.send("next") }
+        await eventually("the replacement launching") { launcher.launchHeld }
+        XCTAssertEqual(first.turns, ["a long one"], "the next turn rode the old process")
+        launcher.release()
+        try await next.value
+        XCTAssertEqual(launcher.processes.count, 2)
+        let second = try XCTUnwrap(launcher.last)
+        await eventually("the replacement took the next turn") { second.turns == ["next"] }
+        XCTAssertEqual(launcher.models, ["claude-sonnet-5", "claude-opus-5"])
+    }
+
     /// An idle process is replaced at once, and the same model again changes nothing.
     func testAModelChangeWhileIdleRestartsAtOnceAndTheSameModelDoesNot() async throws {
         let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
