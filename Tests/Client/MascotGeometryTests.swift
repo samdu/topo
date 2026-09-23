@@ -16,12 +16,14 @@ final class MascotGeometryTests: XCTestCase {
     private let narrowest = CGSize(width: 320, height: 420)
 
     /// The ends of every range `look.json` accepts for his fields (`LookDocument`'s readers), in
-    /// every combination.
-    private var extremes: [Look.Mascot] {
+    /// every combination: scale 0.25 and 4, the offset's width -4000 and 4000 and its height 0
+    /// and 200, and a stroll of 0 and 4000. What the document refuses is `LookDocumentTests`';
+    /// what the placement does with a value past these ends is `testPastTheDocumentsEnds…`.
+    static var extremes: [Look.Mascot] {
         var all: [Look.Mascot] = [Look.Mascot()]
         for scale in [0.25, 4] as [CGFloat] {
             for x in [-4000, 4000] as [CGFloat] {
-                for y in [-4000, 4000] as [CGFloat] {
+                for y in [0, 200] as [CGFloat] {
                     for stroll in [0, 4000] as [CGFloat] {
                         var mascot = Look.Mascot()
                         mascot.scale = scale
@@ -114,7 +116,7 @@ final class MascotGeometryTests: XCTestCase {
         let paneFoot = homeCanvas.maxY
         let paneHeight = homeCanvas.height - CGFloat(Topo.shelfY)
 
-        for mascot in extremes {
+        for mascot in Self.extremes {
             let with = try stage(mascot)
             defer { with.window.isHidden = true }
             let canvas = try XCTUnwrap(with.canvas, "\(mascot): he was not drawn")
@@ -149,7 +151,9 @@ final class MascotGeometryTests: XCTestCase {
             }
             XCTAssertGreaterThan(seen, 0, "\(mascot): nothing of him is drawn in his canvas")
 
-            // A touch on the well reaches the hosting view, never him.
+            // A touch on the well reaches the hosting view, never him. SwiftUI puts no view of its
+            // own under a gesture, so UIKit can say no more than that he is not what is hit: that
+            // the press reaches the microphone is `TopoOnTheGlassTests`, which presses it.
             for point in [CGPoint(x: well.midX, y: narrowest.height - 50), CGPoint(x: well.minX + 2, y: narrowest.height - 50)] {
                 let hit = with.window.hitTest(point, with: nil)
                 XCTAssertFalse(hit is MascotCanvas, "\(mascot): a touch on the well reached him")
@@ -222,11 +226,27 @@ final class MascotGeometryTests: XCTestCase {
         // The frame interval is the clock's, in `MascotDriverTests.testTheLinkRunsExactlyWhileHeAnimates`.
     }
 
+    /// A value past the document's ends — a look built in code, or a range widened later — is
+    /// still drawn inside his band: the placement clamps what it is handed rather than trusting
+    /// the reader to have.
+    func testPastTheDocumentsEndsHeStaysInHisBand() {
+        let composer = Look.Composer()
+        for height in [-4000, -1, 201, 4000] as [CGFloat] {
+            var mascot = Look.Mascot()
+            mascot.offset.height = height
+            let placement = MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: mascot)
+            let shelf = placement.frame.minY + placement.home.y
+            XCTAssertGreaterThanOrEqual(shelf, -composer.verticalInset, "\(height)")
+            XCTAssertLessThanOrEqual(shelf, row.height + composer.verticalInset, "\(height)")
+            XCTAssertGreaterThanOrEqual(placement.frame.minY, -composer.verticalInset - CGFloat(Topo.shelfY) - 1e-9, "\(height)")
+        }
+    }
+
     /// Whatever the look says, he stands between the pane's leading end and the well, and his
     /// stroll ends at the pane's end.
     func testTheFieldsAreClampedToTheFlank() {
         let composer = Look.Composer()
-        for mascot in extremes {
+        for mascot in Self.extremes {
             let placement = MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: mascot)
             XCTAssertEqual(placement.frame.maxX, flank.maxX + composer.spacing, "\(mascot)")
             XCTAssertGreaterThanOrEqual(placement.home.x, 0, "\(mascot)")
