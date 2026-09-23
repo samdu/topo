@@ -345,6 +345,16 @@ actor GuestBridge: Brain {
         if case .answered(let result) = end {
             return reply(result.text ?? "", to: request, usage: usage, model: model)
         }
+        if case .failed(.result) = end {
+            // An error result is Claude Code's own word that it received the turn and ended it
+            // without an answer. The process lives on and may still be writing its transcript,
+            // so the transcript is not read: the turn is unresolved, never sent again by itself.
+            if ledger.pending?.input == id {
+                ledger.pending?.state = .unresolved
+                try? save()
+            }
+            throw GuestBridgeError.unresolved
+        }
         // Anything else is read off the transcript once the process it went to is gone.
         await conversation.settle()
         guard let pending = ledger.pending, pending.input == id else { throw GuestBridgeError.failed(Self.describe(end)) }

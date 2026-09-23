@@ -348,6 +348,24 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.inputs.count, 2)
     }
 
+    /// Claude Code ended the turn with an error result and lives on, its transcript not yet
+    /// written: the bridge does not read it, the turn is unresolved, and nothing is sent again.
+    func testAnErrorResultIsUnresolvedAndNothingIsSentAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .errorResult("API Error: 529 Overloaded"), .reply("Too late."))
+        do {
+            _ = try await runner.run("run the report", model: .sonnet5)
+            XCTFail("a turn that ended in an error result was answered")
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            XCTAssertEqual(underlying as? GuestBridgeError, .unresolved)
+        }
+        let state = await bridge.current.pending?.state
+        XCTAssertEqual(state, .unresolved)
+        let answered = try await runner.answerPending(model: .sonnet5)
+        XCTAssertNil(answered)
+        XCTAssertEqual(guest.inputs, ["run the report"], "a turn the guest received was sent again")
+    }
+
     /// The process ended after writing its reply and before its result line: the transcript has
     /// the answer, so it is written, not asked for again.
     func testAReplyTheProcessWroteBeforeItExitedIsWritten() async throws {
