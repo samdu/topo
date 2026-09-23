@@ -69,11 +69,12 @@ public enum GuestTranscript {
     /// The verdict on `id` from the transcripts under `home`: the session's own file first, then
     /// any other session file changed since `since` — an input sent while the session id was not
     /// yet known lands in whichever session the process began. Not received only when every file
-    /// that could hold it was read and none does; a file that could not be read, with no other
-    /// holding the input, is `unreadable`.
+    /// that could hold it was read and none does; a file that could not be read, or a folder of
+    /// them that could not be listed, with no file read holding the input, is `unreadable`.
     public static func verdict(for id: String, home: URL, session: String?, since: Date) -> Verdict {
-        var unread = false
-        for file in files(home: home, session: session, since: since) {
+        let (candidates, listed) = files(home: home, session: session, since: since)
+        var unread = !listed
+        for file in candidates {
             guard let data = try? Data(contentsOf: file) else {
                 unread = true
                 continue
@@ -88,15 +89,33 @@ public enum GuestTranscript {
     }
 
     /// The session transcripts under `home`, the named session's first and then the rest changed
-    /// since `since`, newest first.
-    static func files(home: URL, session: String?, since: Date) -> [URL] {
+    /// since `since`, newest first, and whether every folder that could hold one was listed. No
+    /// `.claude/projects` at all is every folder listed: Claude Code has written no transcript. A
+    /// listing that failed, or an entry that cannot be told a folder or not, is not.
+    static func files(home: URL, session: String?, since: Date) -> (files: [URL], listed: Bool) {
         let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
         let manager = FileManager.default
-        let folders = (try? manager.contentsOfDirectory(at: projects, includingPropertiesForKeys: nil)) ?? []
+        let folders: [URL]
+        do {
+            folders = try manager.contentsOfDirectory(at: projects, includingPropertiesForKeys: [.isDirectoryKey])
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return ([], true)
+        } catch {
+            return ([], false)
+        }
+        var listed = true
         var named: [URL] = []
         var others: [(URL, Date)] = []
         for folder in folders {
-            let entries = (try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+            guard let isDirectory = (try? folder.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory else {
+                listed = false
+                continue
+            }
+            guard isDirectory else { continue }
+            guard let entries = try? manager.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey]) else {
+                listed = false
+                continue
+            }
             for file in entries where file.pathExtension == "jsonl" {
                 if let session, file.deletingPathExtension().lastPathComponent == session {
                     named.append(file)
@@ -106,7 +125,7 @@ public enum GuestTranscript {
                 if modified >= since.addingTimeInterval(-1) { others.append((file, modified)) }
             }
         }
-        return named + others.sorted { $0.1 > $1.1 }.map(\.0)
+        return (named + others.sorted { $0.1 > $1.1 }.map(\.0), listed)
     }
 
     /// A `user` entry that is a prompt rather than tool results coming back, or a note Claude Code

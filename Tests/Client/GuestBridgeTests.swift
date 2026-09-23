@@ -202,6 +202,41 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(state, .unresolved)
     }
 
+    /// The same with the folder of transcripts unlistable rather than the file unreadable: a
+    /// listing that failed is no answer, so the record stays and nothing is sent until it lists.
+    func testATranscriptFolderThatCannotBeListedSendsNothingAndKeepsTheRecord() async throws {
+        let db = InMemoryRecordDatabase()
+        let (first, _, firstGuest) = try await launch(db, .hang)
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
+        _ = killed
+
+        let folder = home.appendingPathComponent(".claude/projects/-home-topo")
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path) }
+        try XCTSkipIf((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) != nil,
+                      "missing coverage: this host lists a folder with no permissions")
+
+        let (second, bridge, guest) = try await launch(db, .reply("Deleted."))
+        let before = await bridge.current.pending
+        do {
+            _ = try await second.answerPending(model: .sonnet5)
+            XCTFail("a turn was answered over a folder of transcripts that could not be listed")
+        } catch let error as GuestBridgeError {
+            XCTAssertEqual(error, .failed(GuestBridge.unreadable))
+        }
+        XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over an unlisted folder")
+        let kept = await bridge.current.pending
+        XCTAssertEqual(kept, before, "the record changed on a listing that failed")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        let answered = try await second.answerPending(model: .sonnet5)
+        XCTAssertNil(answered)
+        XCTAssertTrue(guest.inputs.isEmpty)
+        let state = await bridge.current.pending?.state
+        XCTAssertEqual(state, .unresolved)
+    }
+
     /// The input was sent and the app was killed; on the next launch the bridge's own ledger is
     /// not a ledger (torn in half). A ledger that cannot be read is not an empty one: nothing is
     /// sent, nothing is written over the file, and once it reads again — in the same launch — the

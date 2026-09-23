@@ -116,4 +116,48 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: "S1", since: before), .unreadable)
         XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: nil, since: before), .unreadable)
     }
+
+    /// A folder of transcripts that cannot be listed is no answer either: the projects folder, or
+    /// one project's, unlisted is `unreadable`, never not received.
+    func testAFolderOfTranscriptsThatCannotBeListedIsUnreadable() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("home-\(UUID().uuidString)")
+        let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        let project = projects.appendingPathComponent("-home-topo", isDirectory: true)
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let answered = try Transcripts.lines("answered-with-tool").joined(separator: "\n") + "\n"
+        try Data(answered.utf8).write(to: project.appendingPathComponent("S1.jsonl"))
+        defer {
+            for folder in [projects, project] {
+                try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            }
+            try? FileManager.default.removeItem(at: home)
+        }
+        let before = Date(timeIntervalSinceNow: -60)
+
+        for folder in [project, projects] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: folder.path)
+            try XCTSkipIf((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) != nil,
+                          "missing coverage: this host lists a folder with no permissions")
+            for session in ["S1", nil] {
+                XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: session, since: before),
+                               .unreadable, "\(folder.lastPathComponent) unlisted, session \(session ?? "none")")
+            }
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        }
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: "S1", since: before),
+                       .answered("marmalade"), "listed again, the transcript says what it says")
+    }
+
+    /// What is not there is an answer: no projects folder at all is a Claude Code that never wrote
+    /// a transcript, and a file beside the project folders is not a folder that failed to list.
+    func testNoTranscriptsAtAllIsNotReceived() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("home-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let before = Date(timeIntervalSinceNow: -60)
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: "S1", since: before), .notReceived)
+        let projects = home.appendingPathComponent(".claude/projects", isDirectory: true)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        try Data("not a folder".utf8).write(to: projects.appendingPathComponent(".DS_Store"))
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, home: home, session: nil, since: before), .notReceived)
+    }
 }
