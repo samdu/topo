@@ -64,8 +64,9 @@ public typealias Sleep = @Sendable (Duration) async throws -> Void
 ///
 /// The model the process asks is the session's (`use(model:)`), and so is whether the next process
 /// resumes the kept conversation (`forgetSession()`). Either changing makes the resident process
-/// stale, and a stale process is replaced at the next idle moment: at once when no turn is in
-/// flight, and otherwise once the turn has ended, never in the middle of one.
+/// stale. A change of model replaces it at the next idle moment: at once when no turn is in
+/// flight, and otherwise once the turn has ended, never in the middle of one. A forgotten
+/// conversation — a sign-out — ends it at once, abandoning a turn in flight.
 public actor GuestSession {
     public enum Refusal: Error, Equatable, CustomStringConvertible {
         /// A turn is in flight; turns are never interleaved.
@@ -284,15 +285,20 @@ public actor GuestSession {
         renewIfStale()
     }
 
-    /// Forgets the conversation: the kept session id is cleared, the next process starts a fresh
-    /// session, and a resident process holding the old one is replaced at the next idle moment.
-    /// Its replacement reads its environment afresh, the guest's token included.
+    /// Forgets the conversation (sign-out): the kept session id is cleared, the next process
+    /// starts a fresh session, and a resident process holding the old one is ended now, a turn in
+    /// flight abandoned — unlike a change of model, which waits for the turn. What it holds is the
+    /// login that went: its token is in its environment, and a turn left running would run its
+    /// tools and go on writing that session's transcript for nobody. The replacement, started in
+    /// the foreground, reads its environment afresh, the guest's token included.
     public func forgetSession() {
         store.clear()
         freshNext = true
         conversation += 1
         log("the conversation is forgotten; the next process starts a fresh session")
-        renewIfStale()
+        guard case .resident(let resident) = phase else { return }
+        if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
+        _ = end(resident, reason: "a forgotten conversation", restart: true)
     }
     // MARK: - The lifecycle
 

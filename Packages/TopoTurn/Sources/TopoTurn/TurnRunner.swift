@@ -43,7 +43,8 @@ public struct NoSocketProbe: LeaseProbe {
 /// requests that is in the log, whichever way it got there.
 ///
 /// A caller that is cancelled writes nothing from then on: the task is checked immediately before
-/// each reply is appended, which is how a sign-out stops a turn or a pass already under way.
+/// the person's turn and each reply is appended, which is how a sign-out stops a turn or a pass
+/// already under way.
 public actor TurnRunner {
     public struct Result: Sendable {
         public var person: Turn
@@ -92,6 +93,8 @@ public actor TurnRunner {
         await progress?(.saving)
         try await settleOwed()
         let before = try await log.read()
+        // A caller that stopped before the person's turn is in the log writes nothing at all.
+        try Task.checkCancellation()
         let at = Date()
         let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
         await progress?(.asking(person: person))

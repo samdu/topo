@@ -506,24 +506,27 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(launcher.resumed, ["OLD", nil])
     }
 
-    /// Forgotten during a turn: the old process goes on to name its session — in its
-    /// `system/init` and its result — before it is ended. Neither is kept: with the process's end
-    /// held, so the replacement has not started (the app exiting there), the kept id is still
-    /// none, and the next process starts fresh. The replacement's own session is kept.
-    func testAForgottenConversationsProcessNeverWritesItsSessionBack() async throws {
+    /// Forgotten during a turn (sign-out): the turn is abandoned and the process ended at once,
+    /// never waiting for the turn, since what it holds is the login that went. The old process
+    /// names its session — in its `system/init` and its result — while it is being ended, and
+    /// neither is kept: with its end held, so the replacement has not started (the app exiting
+    /// there), the kept id is still none, and the next process starts fresh. The replacement's own
+    /// session is kept.
+    func testAForgottenConversationsProcessIsEndedMidTurnAndNeverWritesItsSessionBack() async throws {
         store.save("OLD")
         let (session, old) = try await resident()
         XCTAssertEqual(launcher.resumed, ["OLD"])
-        let (turn, done) = collect(try await session.send("a long one"))
+        let (turn, _) = collect(try await session.send("a long one"))
         await eventually("written") { old.turns.count == 1 }
 
+        old.holdNextTermination()
         await session.forgetSession()
         XCTAssertNil(store.load())
-        old.holdNextTermination()
+        await eventually("the turn ended by the sign-out") { !turn.ends.isEmpty }
+        XCTAssertEqual(turn.ends, [.abandoned], "the turn outlived the sign-out")
+        await eventually("the old process ended at once") { old.terminationHeld }
         answer(old, "done", session: "OLD")
-        await done.value
-        XCTAssertEqual(turn.ends.count, 1)
-        await eventually("the old process being ended") { old.terminationHeld }
+        for _ in 0..<20 { await Task.yield() }
         XCTAssertNil(store.load(), "a forgotten conversation's process wrote its session back")
 
         old.release()

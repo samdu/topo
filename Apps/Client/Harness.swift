@@ -262,14 +262,15 @@ final class Harness {
         sleeping?.cancel()
     }
 
-    /// The far end of a takeover: this device is a viewer now. The turn in flight is cancelled;
-    /// what is waiting to be sent goes into the log as a limb's turns, in order, so nothing said
-    /// is lost to the handover, and whichever device is primary answers it there. A turn that
-    /// will not go stays on disk for the next launch. Then the harness is dropped as `forget`
-    /// drops it, but the transcript stays on screen.
+    /// The far end of a takeover: this device is a viewer now. The turn and the answering pass in
+    /// flight are cancelled and the loop ends, as at a sign-out; what is waiting to be sent goes
+    /// into the log as a limb's turns, in order, so nothing said is lost to the handover, and
+    /// whichever device is primary answers it there. A turn that will not go stays on disk for the
+    /// next launch. Then the harness is dropped as `forget` drops it, but the transcript stays on
+    /// screen, and the brain forgets the conversation: a viewer holds no login, so it keeps none of
+    /// the guest's session either.
     func demote() async {
-        inFlight?.cancel()
-        inFlight = nil
+        stopAnswering()
         busy = false
         status = nil
         do {
@@ -288,6 +289,7 @@ final class Harness {
         lease = nil
         writer = nil
         info = nil
+        await brain.forget()
     }
 
     /// Reads the log into the screen, and answers whether it read it: a log that is not there
@@ -462,13 +464,15 @@ final class Harness {
             do {
                 status = "Saving what you said…"
                 let transcript = try await log.read()
-                guard let writer else { return false }
+                // A sign-out during the read: the outbox went with it, and so do these words.
+                guard inFlight == generation, !Task.isCancelled, let writer else { return false }
                 let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
                 show(person)
                 info = Self.describe(outcome) + " What you said is in the log; the reply will appear here."
                 status = nil
                 return true
             } catch {
+                guard inFlight == generation else { return false }
                 self.error = Self.describe(error)
                 onTurnFailed?(attempt.nonce)
             }

@@ -1000,6 +1000,56 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertNil(harness.error)
     }
 
+    /// The far end of a takeover signs this device out: what was waiting goes into the log as a
+    /// limb's, and the brain forgets the conversation as a sign-out does — a viewer holds no login,
+    /// so it keeps no ledger and no session of the guest's.
+    func testADemotionForgetsTheLedgerAndTheGuestSession() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Noted.")])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!,
+                              brain: GuestBridge(conversation: guest, ledger: ledgerFile), leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        await harness.send("the word is marmalade")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: ledgerFile.path), "no ledger to forget")
+        harness.willSend("and then")
+
+        await harness.demote()
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["the word is marmalade", "Noted.", "and then"], "what was waiting was lost")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a viewer kept the ledger")
+        let session = await guest.sessionID()
+        XCTAssertNil(session, "a viewer kept the guest's session")
+        XCTAssertEqual(guest.inputs, ["the word is marmalade"])
+    }
+
+    /// Sign-out while a send has not yet written the person's turn — iCloud still being reached:
+    /// the outbox went with the login, and so do the words. Nothing reaches the log, and the guest
+    /// is asked nothing.
+    func testSignOutBeforeTheTurnIsInTheLogWritesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Too late.")])
+        let zone = Gate()
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone,
+                              ensureZone: { await zone.pass() }, defaults: UserDefaults(suiteName: name)!,
+                              brain: GuestBridge(conversation: guest, ledger: ledgerFile), leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        let sending = Task { await harness.send("hello") }
+        try await eventually("the send to reach iCloud") { await zone.waiting }
+
+        await harness.forget()
+        await zone.open()
+        await sending.value
+        let turns = try await log(db)
+        XCTAssertTrue(turns.isEmpty, "words from before the sign-out were written after it: \(turns.map(\.text))")
+        XCTAssertTrue(guest.inputs.isEmpty, "the guest was asked after the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the sign-out")
+    }
+
     /// The person's control for a cut-off turn: shown, and asking again sends it once.
     func testAnUnfinishedTurnIsShownAndAskedAgainOnlyWhenThePersonAsks() async throws {
         let db = InMemoryRecordDatabase()
@@ -1104,6 +1154,25 @@ private actor RefusingReplies: RecordDatabase {
 }
 
 private struct Refused: Error {}
+
+/// A wait the test opens: whoever passes it waits until `open`.
+private actor Gate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    var waiting: Bool { !waiters.isEmpty }
+
+    func pass() async {
+        guard !opened else { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
+}
 
 private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }
 
