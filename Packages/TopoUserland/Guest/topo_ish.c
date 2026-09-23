@@ -11,6 +11,7 @@
 #include <limits.h>
 #include <os/proc.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +41,7 @@ extern const char *uname_hostname_override;
 int do_wait(int idtype, pid_t_ id, struct siginfo_ *info, struct rusage_ *rusage, int options);
 #define TOPO_P_PID 1
 #define TOPO_WEXITED (1 << 2)
+#define TOPO_WNOHANG 1
 
 static pthread_mutex_t boot_lock = PTHREAD_MUTEX_INITIALIZER;
 static int kernels = 0;
@@ -177,7 +179,7 @@ static ssize_t pack(const char *const *strings, char *out, size_t size, size_t *
 }
 
 int topo_ish_spawn(const char *path, const char *const *argv, const char *const *envp,
-                   int *stdout_fd, int *stderr_fd) {
+                   int *stdin_fd, int *stdout_fd, int *stderr_fd) {
     if (!booted)
         return _ENODEV;
     char args[16384], env[16384];
@@ -185,16 +187,33 @@ int topo_ish_spawn(const char *path, const char *const *argv, const char *const 
     if (pack(argv, args, sizeof(args), &argc) < 0 || argc == 0 || pack(envp, env, sizeof(env), NULL) < 0)
         return _E2BIG;
 
-    int out[2], err[2];
-    if (pipe(out) < 0)
+    int in[2] = {-1, -1}, out[2], err[2];
+    if (stdin_fd != NULL && pipe(in) < 0)
         return _EMFILE;
+    if (pipe(out) < 0) {
+        if (in[0] >= 0) {
+            close(in[0]);
+            close(in[1]);
+        }
+        return _EMFILE;
+    }
     if (pipe(err) < 0) {
+        if (in[0] >= 0) {
+            close(in[0]);
+            close(in[1]);
+        }
         close(out[0]);
         close(out[1]);
         return _EMFILE;
     }
     fcntl(out[0], F_SETFD, FD_CLOEXEC);
     fcntl(err[0], F_SETFD, FD_CLOEXEC);
+    if (in[1] >= 0) {
+        fcntl(in[1], F_SETFD, FD_CLOEXEC);
+        // A write after the guest has closed its end is an EPIPE the caller reads, never a signal
+        // that ends the app.
+        fcntl(in[1], F_SETNOSIGPIPE, 1);
+    }
 
     pthread_mutex_lock(&spawn_lock);
     struct task *previous = current;
@@ -203,13 +222,18 @@ int topo_ish_spawn(const char *path, const char *const *argv, const char *const 
         goto fail;
     struct task *task = current;
 
-    int null = open("/dev/null", O_RDONLY | O_CLOEXEC);
-    task->files->files[0] = null >= 0 ? guest_fd(null) : NULL;
+    if (in[0] >= 0) {
+        task->files->files[0] = guest_fd(in[0]);
+    } else {
+        int null = open("/dev/null", O_RDONLY | O_CLOEXEC);
+        task->files->files[0] = null >= 0 ? guest_fd(null) : NULL;
+    }
     task->files->files[1] = guest_fd(out[1]);
     task->files->files[2] = guest_fd(err[1]);
-    // The guest owns the write ends now: they close when the last guest fd on them does, which
-    // is what ends the reads.
-    out[1] = err[1] = -1;
+    // The guest owns its ends now — stdin's read end and the two write ends: they close when the
+    // last guest fd on them does, which is what ends the reads (and what makes a write to stdin
+    // fail once nothing in the guest is left to read it).
+    in[0] = out[1] = err[1] = -1;
 
     result = do_execve(path, argc, args, env);
     if (result < 0) {
@@ -218,15 +242,28 @@ int topo_ish_spawn(const char *path, const char *const *argv, const char *const 
         goto fail;
     }
     int pid = task->pid;
+    // A guest task's thread, and every thread it forks, inherits the mask of the thread that
+    // starts it — here a GCD worker, which blocks SIGUSR1. SIGUSR1 is how iSH interrupts a task
+    // parked in a host call (a nanosleep, a read), so with it blocked a signal, SIGKILL included,
+    // never reaches a task that is not running guest code. The task is started with it open.
+    sigset_t usr1, mask;
+    sigemptyset(&usr1);
+    sigaddset(&usr1, SIGUSR1);
+    pthread_sigmask(SIG_UNBLOCK, &usr1, &mask);
     result = task_start(task);
+    pthread_sigmask(SIG_SETMASK, &mask, NULL);
     current = previous;
     if (result < 0) {
         pthread_mutex_unlock(&spawn_lock);
         close(out[0]);
         close(err[0]);
+        if (in[1] >= 0)
+            close(in[1]);
         return result;
     }
     pthread_mutex_unlock(&spawn_lock);
+    if (stdin_fd != NULL)
+        *stdin_fd = in[1];
     *stdout_fd = out[0];
     *stderr_fd = err[0];
     return pid;
@@ -240,6 +277,10 @@ fail:
         close(out[1]);
     if (err[1] >= 0)
         close(err[1]);
+    if (in[0] >= 0)
+        close(in[0]);
+    if (in[1] >= 0)
+        close(in[1]);
     return result;
 }
 
@@ -260,6 +301,98 @@ int topo_ish_wait(int pid, int *status) {
     int raw = (int) info.child.status;
     *status = (raw & 0x7f) != 0 ? 128 + (raw & 0x7f) : (raw >> 8) & 0xff;
     return 0;
+}
+
+// The most tasks one tree walk follows. Claude Code and whatever its tools start are a handful; a
+// tree larger than this is signalled as far as the walk reached and reported at that size.
+#define TOPO_TREE_MAX 512
+
+int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
+    if (!booted)
+        return _ENODEV;
+    if (sig < 0 || sig >= NUM_SIGS)
+        return _EINVAL;
+    // One walk and every signal under the pid table's lock: a task that dies meanwhile cannot
+    // hand its children to init between the walk finding them and the signal reaching them.
+    lock(&pids_lock);
+    struct task *root = pid_get_task(pid);
+    if (root == NULL) {
+        unlock(&pids_lock);
+        return 0;
+    }
+    static struct task *queue[TOPO_TREE_MAX];
+    int head = 0, tail = 0, live = 0;
+    queue[tail++] = root;
+    while (head < tail) {
+        struct task *task = queue[head++];
+        struct task *child;
+        list_for_each_entry(&task->children, child, siblings) {
+            if (tail < TOPO_TREE_MAX)
+                queue[tail++] = child;
+        }
+    }
+    struct siginfo_ info = {.code = SI_KERNEL_};
+    for (int i = 0; i < tail; i++) {
+        struct task *task = queue[i];
+        if (task->zombie || task->exiting)
+            continue;
+        if (pids != NULL && live < capacity)
+            pids[live] = task->pid;
+        live++;
+        if (sig == 0)
+            continue;
+        // iSH queues a signal already pending without waking the task again, and its one wake
+        // (SIGUSR1 to the host thread) is lost if it lands between the syscall's own check and a
+        // host nanosleep — which then sleeps its whole length with a SIGKILL pending. So a second
+        // SIGKILL wakes the thread again, as iSH's first one did.
+        bool pending = false;
+        if (sig == TOPO_ISH_SIGKILL && task->sighand != NULL) {
+            lock(&task->sighand->lock);
+            pending = sigset_has(task->pending, SIGKILL_);
+            unlock(&task->sighand->lock);
+        }
+        if (!pending) {
+            send_signal(task, sig, info);
+            continue;
+        }
+        pthread_kill(task->thread, SIGUSR1);
+        lock(&task->waiting_cond_lock);
+        if (task->waiting_cond != NULL)
+            notify(task->waiting_cond);
+        unlock(&task->waiting_cond_lock);
+        cpu_poke(&task->cpu);
+    }
+    unlock(&pids_lock);
+    return live;
+}
+
+int topo_ish_running(const int *pids, int count) {
+    if (!booted)
+        return _ENODEV;
+    int running = 0, orphans[TOPO_TREE_MAX], found = 0;
+    lock(&pids_lock);
+    struct task *init = pid_get_task(1);
+    for (int i = 0; i < count; i++) {
+        struct task *task = pid_get_task_zombie(pids[i]);
+        if (task == NULL)
+            continue;
+        if (!task->zombie) {
+            running++;
+        } else if (task->parent == init && found < TOPO_TREE_MAX) {
+            orphans[found++] = pids[i];
+        }
+    }
+    unlock(&pids_lock);
+    // Reaped as init, as `topo_ish_wait` reaps, and without waiting: each of these is already a
+    // zombie, and one another reaper took meanwhile is simply not found.
+    struct task *previous = current;
+    current = init;
+    for (int i = 0; i < found; i++) {
+        struct siginfo_ info = {0};
+        do_wait(TOPO_P_PID, orphans[i], &info, NULL, TOPO_WEXITED | TOPO_WNOHANG);
+    }
+    current = previous;
+    return running;
 }
 
 // Makes every directory on the way to `path` (a normalised, absolute guest path), and `path`

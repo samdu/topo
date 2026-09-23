@@ -101,7 +101,7 @@ public final class Guest: Sendable {
         let envp = environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         var out: Int32 = -1, err: Int32 = -1
         let pid = withCStrings(argv) { argv in
-            withCStrings(envp) { envp in topo_ish_spawn(path, argv, envp, &out, &err) }
+            withCStrings(envp) { envp in topo_ish_spawn(path, argv, envp, nil, &out, &err) }
         }
         guard pid > 0 else { throw Failure.spawn(pid) }
 
@@ -135,7 +135,7 @@ public final class Guest: Sendable {
 }
 
 /// `strings` as a NULL-terminated array of C strings for the length of `body`.
-private func withCStrings<T>(_ strings: [String], _ body: (UnsafePointer<UnsafePointer<CChar>?>) -> T) -> T {
+func withCStrings<T>(_ strings: [String], _ body: (UnsafePointer<UnsafePointer<CChar>?>) -> T) -> T {
     let copies = strings.map { strdup($0) }
     defer { copies.forEach { free($0) } }
     let pointers: [UnsafePointer<CChar>?] = copies.map { $0.map { UnsafePointer($0) } } + [nil]

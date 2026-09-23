@@ -70,6 +70,14 @@ struct TopoApp: App {
         #endif
     }
 
+    /// The turns `TOPO_DEBUG_GUEST_TURN` asks for, in a debug build: the resident Claude Code in
+    /// the guest, carried through the app's lifecycle. Nothing at all in a release one.
+    private func debugGuestTurn() async {
+        #if DEBUG
+        await DebugRun.guestTurn(tokens: tokens)
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
@@ -113,6 +121,7 @@ struct TopoApp: App {
                 // behaves as it always does either way.
                 .task { await debugTurn() }
                 .task { await debugUserland() }
+                .task { await debugGuestTurn() }
         }
     }
 }
