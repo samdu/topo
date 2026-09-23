@@ -137,29 +137,42 @@ public final class GuestProcess: Sendable {
         inputQueue.async { [state, input] in state.closeInput(input) }
     }
 
-    /// Ends the process and everything under it and confirms it: stdin closed, SIGKILL to the
-    /// whole tree as the pid table stands, then, until `bound` runs out, the process reaped, every
-    /// task of the tree (and any it started meanwhile, killed as it is found) no longer running and
-    /// both pipes at their end. Answers what it came to; a termination that is not `confirmed` is
-    /// one the bound ran out on.
-    public func terminate(within bound: Duration = .seconds(5)) async -> Termination {
+    /// What a termination ends.
+    public enum Reach: Sendable {
+        /// The process and every task found under it by its parent links.
+        case tree
+        /// Every task in the guest but init: for a process that is the only thing the guest runs,
+        /// where a descendant orphaned to init while the teardown is under way — a fork finishing
+        /// as its parent dies — is still ended and still waited for.
+        case guest
+    }
+
+    /// Ends the process and everything `reach` covers and confirms it: stdin closed, SIGKILL to
+    /// all of it as the pid table stands, then, until `bound` runs out, the process reaped, every
+    /// task of it (and any started meanwhile, killed as it is found) no longer running and both
+    /// pipes at their end. Answers what it came to; a termination that is not `confirmed` is one
+    /// the bound ran out on.
+    public func terminate(within bound: Duration = .seconds(5), reach: Reach = .tree) async -> Termination {
         // Refused first so nothing new is written; closed after the kill, which is what fails a
         // write already blocked on a full pipe and lets the close behind it run.
         state.refuseInput()
         return await withCheckedContinuation { (done: CheckedContinuation<Termination, Never>) in
             queue.async { [self] in
-                let termination = self.killAndConfirm(within: bound)
+                let termination = self.killAndConfirm(within: bound, reach: reach)
                 self.closeInput()
                 done.resume(returning: termination)
             }
         }
     }
 
-    private func killAndConfirm(within bound: Duration) -> Termination {
+    private func killAndConfirm(within bound: Duration, reach: Reach) -> Termination {
         let start = ContinuousClock.now
         let deadline = start + bound
         var walked = true
-        let first = Self.signalTree(pid, TOPO_ISH_SIGKILL)
+        let kill = { [pid] () -> [Int32]? in
+            reach == .guest ? Self.signalAll(TOPO_ISH_SIGKILL) : Self.signalTree(pid, TOPO_ISH_SIGKILL)
+        }
+        let first = kill()
         if first == nil { walked = false }
         let signalled = first?.count ?? 0
         // The process itself is its waiter's to reap; the rest are this loop's to watch.
@@ -169,10 +182,13 @@ public final class GuestProcess: Sendable {
             // Anything of the tree still running is killed again, and whatever it started since
             // the first walk is found and killed with it.
             var alive: [Int32] = []
-            if !hasExited {
+            if reach == .guest {
+                // The whole guest again: whatever is not init and not a zombie is still there.
+                if let all = kill() { alive += all } else { walked = false }
+            } else if !hasExited {
                 if let tree = Self.signalTree(pid, TOPO_ISH_SIGKILL) { alive += tree } else { walked = false }
             }
-            for task in others where Self.running([task]) != 0 {
+            for task in others where reach == .tree && Self.running([task]) != 0 {
                 if let tree = Self.signalTree(task, TOPO_ISH_SIGKILL) { alive += tree } else { walked = false }
             }
             others.formUnion(alive.filter { $0 != pid })
@@ -206,6 +222,23 @@ public final class GuestProcess: Sendable {
             if live <= capacity { return Array(pids.prefix(live)) }
             // The walk signalled every task; the list is read again, signalling nothing, into room
             // for what it found and whatever started since.
+            capacity = live + 64
+            signal = 0
+        }
+    }
+
+    /// Every task in the guest but init that is not a zombie, having sent each `signal`; nil when
+    /// the kernel refused.
+    static func signalAll(_ signal: Int32) -> [Int32]? {
+        var capacity = 512
+        var signal = signal
+        while true {
+            var pids = [Int32](repeating: 0, count: capacity)
+            let live = Int(pids.withUnsafeMutableBufferPointer {
+                topo_ish_signal_all(signal, $0.baseAddress, Int32($0.count))
+            })
+            if live < 0 { return nil }
+            if live <= capacity { return Array(pids.prefix(live)) }
             capacity = live + 64
             signal = 0
         }

@@ -56,6 +56,13 @@ int topo_ish_wait(int pid, int *status);
 /// Requires a booted kernel.
 int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity);
 
+/// Sends `sig` to every task in the guest but init, and writes the pids of those that are not
+/// zombies (exiting ones included, which are listed and not signalled again) into `pids` up to
+/// `capacity`. Answers how many there were, which may be more than `capacity`, or a negative guest
+/// errno. Signal 0 only lists. For a guest that runs one program and what it starts, whatever
+/// became of the links between them. Requires a booted kernel.
+int topo_ish_signal_all(int sig, int *pids, int capacity);
+
 /// How many of `pids` are still running: a task that exists and is not a zombie. A zombie whose
 /// parent is init — a descendant orphaned when the process above it died — is reaped here, since
 /// init never runs a program and so never reaps one itself. Never pass a pid a `topo_ish_wait`

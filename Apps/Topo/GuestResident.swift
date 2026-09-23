@@ -129,12 +129,19 @@ extension DebugRun {
     /// or resuming which session), each way out's outcome and the termination it confirmed.
     /// Nothing is sent twice: a turn abandoned at the teardown point is reported and the next
     /// turn goes on the next foreground. Ends in `guest turn done`. Nothing at all when the
-    /// variable is absent.
+    /// variable is absent; refused beside `TOPO_DEBUG_USERLAND`, since the resident's end ends
+    /// every guest task.
     @MainActor
     static func guestTurn(tokens: StoredTokenProvider,
                           environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let turns = guestTurns(environment)
         guard !turns.isEmpty else { return }
+        // The resident's end is every guest task's, so nothing else may run in the guest beside it.
+        if let command = environment[userlandVariable], !command.isEmpty {
+            say("guest turn error: \(guestTurnVariable) and \(userlandVariable) are separate launches")
+            say("guest turn done")
+            return
+        }
         say("guest: \(Userland.shared.summary)")
         do {
             let session = try await GuestResident.shared.start(tokens: tokens) { line in say("guest: \(line)") }

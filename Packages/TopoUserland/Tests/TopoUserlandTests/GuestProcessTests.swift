@@ -120,6 +120,30 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertTrue(termination.confirmed, "\(termination)")
     }
 
+    func testTheResidentsEndReachesWhatWasOrphanedToInitMidTeardown() async throws {
+        _ = try SharedGuest.booted()
+        let before = Self.guestTasks()
+        // A program that keeps forking a child which forks a sleep and exits at once: every sleep
+        // is handed to init as it starts, before, during and after the kill, so no parent link
+        // leads from the program to it.
+        let resident = try await Guest.shared.spawn("/bin/sh", ["-c", """
+            echo started
+            while :; do (sleep 300 </dev/null >/dev/null 2>&1 &); done
+            """])
+        var lines = resident.lines.makeAsyncIterator()
+        _ = await lines.next()
+        await eventually("orphans made") { Self.guestTasks().subtracting(before).count >= 4 }
+        let termination = await resident.end(within: .seconds(5))
+        let left = Self.guestTasks().subtracting(before)
+        XCTAssertEqual(left, [], "\(left.map(GuestProcess.describe)); \(termination)")
+        XCTAssertTrue(termination.confirmed, "\(termination)")
+    }
+
+    /// Every guest task but init that is not a zombie, read pid by pid.
+    private static func guestTasks() -> Set<Int32> {
+        Set((2...Int32(1 << 15)).filter { GuestProcess.running([$0]) > 0 })
+    }
+
     func testATerminationTheBoundRunsOutOnSaysWhatStayed() {
         let termination = GuestProcess.Termination(status: nil, signalled: 3, running: 1, pipesClosed: false,
                                                    elapsed: .milliseconds(7_004), stragglers: ["41 (node): running"])

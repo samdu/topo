@@ -303,6 +303,30 @@ int topo_ish_wait(int pid, int *status) {
     return 0;
 }
 
+// Sends `sig` to `task`, with pids_lock held. iSH queues a signal already pending without waking
+// the task again, and its one wake (SIGUSR1 to the host thread) is lost if it lands between the
+// syscall's own check and a host nanosleep — which then sleeps its whole length with a SIGKILL
+// pending. So a second SIGKILL wakes the thread again, as iSH's first one did.
+static void signal_task(struct task *task, int sig) {
+    struct siginfo_ info = {.code = SI_KERNEL_};
+    bool pending = false;
+    if (sig == TOPO_ISH_SIGKILL && task->sighand != NULL) {
+        lock(&task->sighand->lock);
+        pending = sigset_has(task->pending, SIGKILL_);
+        unlock(&task->sighand->lock);
+    }
+    if (!pending) {
+        send_signal(task, sig, info);
+        return;
+    }
+    pthread_kill(task->thread, SIGUSR1);
+    lock(&task->waiting_cond_lock);
+    if (task->waiting_cond != NULL)
+        notify(task->waiting_cond);
+    unlock(&task->waiting_cond_lock);
+    cpu_poke(&task->cpu);
+}
+
 int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
     if (!booted)
         return _ENODEV;
@@ -349,7 +373,6 @@ int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
             queue[tail++] = child;
         }
     }
-    struct siginfo_ info = {.code = SI_KERNEL_};
     for (int i = 0; i < tail; i++) {
         struct task *task = queue[i];
         if (task->zombie || task->exiting)
@@ -359,29 +382,33 @@ int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
         live++;
         if (sig == 0)
             continue;
-        // iSH queues a signal already pending without waking the task again, and its one wake
-        // (SIGUSR1 to the host thread) is lost if it lands between the syscall's own check and a
-        // host nanosleep — which then sleeps its whole length with a SIGKILL pending. So a second
-        // SIGKILL wakes the thread again, as iSH's first one did.
-        bool pending = false;
-        if (sig == TOPO_ISH_SIGKILL && task->sighand != NULL) {
-            lock(&task->sighand->lock);
-            pending = sigset_has(task->pending, SIGKILL_);
-            unlock(&task->sighand->lock);
-        }
-        if (!pending) {
-            send_signal(task, sig, info);
-            continue;
-        }
-        pthread_kill(task->thread, SIGUSR1);
-        lock(&task->waiting_cond_lock);
-        if (task->waiting_cond != NULL)
-            notify(task->waiting_cond);
-        unlock(&task->waiting_cond_lock);
-        cpu_poke(&task->cpu);
+        signal_task(task, sig);
     }
     unlock(&pids_lock);
     free(queue);
+    return live;
+}
+
+int topo_ish_signal_all(int sig, int *pids, int capacity) {
+    if (!booted)
+        return _ENODEV;
+    if (sig < 0 || sig >= NUM_SIGS)
+        return _EINVAL;
+    // Every task but init, whoever its parent is: a task orphaned to init mid-teardown is found
+    // here where no walk of parent links would reach it.
+    lock(&pids_lock);
+    int live = 0;
+    for (int id = 2; id <= MAX_PID; id++) {
+        struct task *task = pid_get_task_zombie(id);
+        if (task == NULL || task->zombie)
+            continue;
+        if (pids != NULL && live < capacity)
+            pids[live] = id;
+        live++;
+        if (sig != 0 && !task->exiting)
+            signal_task(task, sig);
+    }
+    unlock(&pids_lock);
     return live;
 }
 

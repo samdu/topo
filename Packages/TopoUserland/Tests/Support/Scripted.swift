@@ -98,7 +98,7 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
 
     var terminationHeld: Bool { lock.withLock { gate != nil } }
 
-    func terminate(within bound: Duration) async -> GuestProcess.Termination {
+    func end(within bound: Duration) async -> GuestProcess.Termination {
         lock.withLock { asked.append(bound) }
         let hold = lock.withLock { holdTermination }
         if hold {

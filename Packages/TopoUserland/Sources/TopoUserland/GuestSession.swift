@@ -8,11 +8,16 @@ public protocol ResidentProcess: AnyObject, Sendable {
     var errors: String { get }
     /// Writes one line to its stdin.
     func write(_ line: String) async throws
-    /// Ends it and everything under it, and says whether that was confirmed within `bound`.
-    func terminate(within bound: Duration) async -> GuestProcess.Termination
+    /// Ends it and everything it started, and says whether that was confirmed within `bound`.
+    func end(within bound: Duration) async -> GuestProcess.Termination
 }
 
-extension GuestProcess: ResidentProcess {}
+extension GuestProcess: ResidentProcess {
+    /// The resident Claude Code is the only program the guest runs, so its end is every guest
+    /// task's but init's: what it started is ended whatever became of the parent links between
+    /// them.
+    public func end(within bound: Duration) async -> Termination { await terminate(within: bound, reach: .guest) }
+}
 
 /// What starts the resident process: resuming a session by its id, or starting a fresh one.
 public protocol ResidentLauncher: Sendable {
@@ -449,7 +454,7 @@ public actor GuestSession {
         phase = .stopping
         let bound = expired ? GraceBudget.expiredTeardownBound : GraceBudget.teardownBound
         let task = Task {
-            let termination = await resident.process.terminate(within: bound)
+            let termination = await resident.process.end(within: bound)
             await self.ended(termination, reason: reason, restart: restart)
             return termination
         }
