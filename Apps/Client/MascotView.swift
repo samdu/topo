@@ -112,10 +112,11 @@ final class MascotDriver {
         let start = CACurrentMediaTime()
         engine.update(dt, input)
         engine.draw(&rgba)
-        let spent = CACurrentMediaTime() - start
         publish(x: engine.x)
         #if DEBUG
-        measure(spent)
+        // The whole frame: the engine, the picture made from its buffer and its hand-off to the
+        // layer, since all three are the main thread's.
+        measure(CACurrentMediaTime() - start)
         #endif
     }
 
@@ -158,7 +159,7 @@ final class MascotDriver {
     private var spent: [Double] = []
 
     /// What the frames cost where they run: the mean, the 95th percentile and the worst of the
-    /// last `reportEvery`, in milliseconds, update and draw together.
+    /// last `reportEvery`, in milliseconds, the whole frame: update, draw, picture and layer.
     private func measure(_ seconds: Double) {
         spent.append(seconds * 1000)
         guard spent.count >= Self.reportEvery else { return }
