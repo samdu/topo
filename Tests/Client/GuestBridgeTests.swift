@@ -35,7 +35,7 @@ final class GuestBridgeTests: XCTestCase {
         let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
         let device = device ?? phone
         let log = TurnLog(database: database)
-        let lease = PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        let lease = steadyLease(database, device)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: device), lease: lease, brain: bridge)
         return (runner, bridge, guest)
     }
@@ -212,7 +212,14 @@ final class GuestBridgeTests: XCTestCase {
         do {
             _ = try await first.run("capital of France?", model: .sonnet5)
             XCTFail("the acknowledgement arrived")
-        } catch TurnRunnerError.replyFailed {}
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            // The lost acknowledgement, and not the reply refused for any other reason.
+            guard case RecordDatabaseError.unavailable = underlying else {
+                return XCTFail("the reply failed before its save: \(underlying)")
+            }
+        }
+        let armed = await db.acknowledgementStillToLose
+        XCTAssertFalse(armed, "the reply's save never reached the log")
         let logged2 = try await log(db)
         XCTAssertEqual(logged2.map(\.text), ["capital of France?", "Paris."], "the reply is in the log")
 
@@ -573,7 +580,7 @@ final class GuestBridgeTests: XCTestCase {
         let owed = await bridge.owed()
         XCTAssertNil(owed)
         let log = TurnLog(database: db)
-        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        let lease = steadyLease(db, phone)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
         _ = try await runner.run("hello", model: .sonnet5)
         let input = try XCTUnwrap(relaunched.inputs.first)
@@ -659,7 +666,7 @@ final class GuestBridgeTests: XCTestCase {
         // the chat's own task is what stops it: only the sign-out.
         let log = TurnLog(database: db)
         try await log.writer(for: DeviceID("watch")).append(.person, "and now?", continuing: try await log.read())
-        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        let lease = steadyLease(db, phone)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
         let waiting = Task { try await runner.answerPending(model: .sonnet5) }
         try await eventually("the answer to wait at ready") { guest.readyHeld }
@@ -757,6 +764,7 @@ private actor RefusingReplies: RecordDatabase {
 
     func refuse(_ on: Bool) { refusing = on }
     func loseNextReplyAcknowledgement() { loseNext = true }
+    var acknowledgementStillToLose: Bool { loseNext }
 
     private func isReply(_ records: [Record]) -> Bool {
         records.contains { Turn(record: $0)?.role == .assistant }
@@ -780,6 +788,15 @@ private actor RefusingReplies: RecordDatabase {
 private struct Refused: Error {}
 
 private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }
+
+/// A lease whose clocks stand still, so it never lapses under a runner however long a step takes:
+/// these suites are about the bridge, and a lease lapsing on a slow host would fail a reply's
+/// append as displaced — nothing written — and read as the bridge's fault.
+private func steadyLease(_ database: any RecordDatabase, _ device: DeviceID) -> PrimaryLease {
+    let epoch = Date(timeIntervalSince1970: 1_800_000_000)
+    return PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(),
+                        now: { epoch }, monotonic: { 0 }, sleep: parked)
+}
 
 private extension InMemoryTokenStore {
     var provider: StoredTokenProvider { StoredTokenProvider(store: self) }
