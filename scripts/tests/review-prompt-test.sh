@@ -6,9 +6,9 @@
 # with a fake GitHub client, so the two ends of the contract are tested against each other rather
 # than against a copy.
 #
-# The scratch repository is a PR whose first cut was reviewed, then took two fix commits while the
-# base branch moved on, checked out the way the codex job checks out: a shallow fetch of the merge
-# ref. It holds that:
+# The scratch repository is a PR whose first cut was reviewed; then the base moved on and the PR
+# merged it in, took two fix commits, and the base moved on again. It is checked out the way the
+# codex job checks out: a shallow fetch of the merge ref. It holds that:
 #   - the posted comment's first line is exactly `<!-- agent-review: codex -->`, and its second
 #     names the PR head it was given;
 #   - no codex comment, a codex marker posted by anyone but github-actions[bot], a newest codex
@@ -16,8 +16,8 @@
 #     not have, and a `gh` that fails are each a first review — the instructions and the
 #     description alone — with the reason on stderr;
 #   - otherwise the newest verdict is quoted verbatim inside its fence, and the change since is
-#     exactly the fix commits' messages and `git diff <reviewed head> <head>`: never the base's
-#     advance, never the merge ref, never the reviewed commit's own message;
+#     exactly the two fix commits, each with its patch: never the base's advances, the merge that
+#     brought one into the branch, the merge ref, or the reviewed commit;
 #   - text in the verdict cannot close its fence, and both bounds truncate with a marker.
 #
 #   scripts/tests/review-prompt-test.sh
@@ -89,12 +89,20 @@ git_ -C "$dev" add -A && git_ -C "$dev" commit -qm "The base moves on"
 git_ -C "$dev" push -q origin main
 
 git_ -C "$dev" checkout -q pr
+git_ -C "$dev" merge -q --no-ff -m "Merge the base into the PR" main
 printf 'feature, fixed\n' > "$dev/feature.txt"
 git_ -C "$dev" commit -qam "Round 1, finding 1"
+fix1="$(git -C "$dev" rev-parse HEAD)"
 printf 'the second fix\n' > "$dev/fix.txt"
 git_ -C "$dev" add -A && git_ -C "$dev" commit -qm "Round 1, finding 2" -m "With a body line."
 head="$(git -C "$dev" rev-parse HEAD)"
 git_ -C "$dev" push -q origin pr:refs/pull/7/head
+
+git_ -C "$dev" checkout -q main
+printf 'the base moved on again\n' > "$dev/base-again.txt"
+git_ -C "$dev" add -A && git_ -C "$dev" commit -qm "The base moves on again"
+git_ -C "$dev" push -q origin main
+base="$(git -C "$dev" rev-parse HEAD)"
 
 git_ -C "$dev" checkout -q main
 git_ -C "$dev" merge -q --no-ff -m "Merge the PR into the base" pr
@@ -115,18 +123,18 @@ git -C "$ci" remote add origin "file://$origin"
 git -C "$ci" fetch -q --depth 1 --no-tags origin refs/pull/7/merge
 git -C "$ci" checkout -q --detach FETCH_HEAD
 
-for sha in "$reviewed" "$head" "$rewritten" "$(git -C "$ci" rev-parse HEAD 2>/dev/null)"; do
+for sha in "$reviewed" "$fix1" "$head" "$base" "$rewritten" "$(git -C "$ci" rev-parse HEAD 2>/dev/null)"; do
   [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "the scratch repository did not build" >&2; exit 2; }
 done
 
 expected_since="$work/expected-since.txt"
 {
-  echo "Commits since the previous review, oldest first:"
+  echo "The PR's own commits since the previous review, oldest first, each with its patch:"
   echo
-  git -C "$dev" log --reverse --no-color --format='commit %H%n%n%B' "$reviewed..$head"
-  echo "Diff since the previous review (git diff $reviewed $head):"
-  echo
-  git -C "$dev" diff --no-color --no-ext-diff "$reviewed" "$head"
+  for commit in "$fix1" "$head"; do
+    git -C "$dev" show --no-color --no-ext-diff --format='commit %H%n%n%B' "$commit"
+    echo
+  done
 } > "$expected_since"
 
 # --- the fake gh ------------------------------------------------------------------------------
@@ -167,7 +175,7 @@ run() {
     cd "$ci" || exit 2
     env PATH="$work/bin:$PATH" FAKE_GH_LOG="$work/$name.gh" FAKE_GH_PAGES="$pages" \
       PROMPT="$INSTRUCTIONS" PR_BODY="$DESCRIPTION" PR_NUMBER=7 HEAD_SHA="$head" \
-      GITHUB_REPOSITORY=samdu/topo "$@" \
+      BASE_SHA="$base" GITHUB_REPOSITORY=samdu/topo "$@" \
       "$script" > "$work/$name.out" 2> "$work/$name.err"
   )
   echo "$?" > "$work/$name.status"
@@ -284,12 +292,12 @@ else
     fail "rereview: the fenced verdict is not the newest comment verbatim"; diff <(printf '%s\n' "$body") <(section rereview "PREVIOUS VERDICT") | head -n 20
   fi
   if diff -q "$expected_since" <(section rereview "CHANGE SINCE") >/dev/null; then
-    pass "rereview: the change since is exactly the fix commits and git diff <reviewed> <head>"
+    pass "rereview: the change since is exactly the two fix commits, each with its patch"
   else
     fail "rereview: the change since is not the PR head's diff since the review"; diff "$expected_since" <(section rereview "CHANGE SINCE") | head -n 20
   fi
   since="$(section rereview "CHANGE SINCE")"
-  for absent in "base-only.txt" "The base moves on" "Merge the PR into the base" "The feature, first cut" "$rewritten"; do
+  for absent in "base-only.txt" "base-again.txt" "The base moves on" "Merge the base into the PR" "Merge the PR into the base" "The feature, first cut" "$rewritten"; do
     if grep -qF -- "$absent" <<<"$since"; then
       fail "rereview: the change since carries '$absent'"
     fi

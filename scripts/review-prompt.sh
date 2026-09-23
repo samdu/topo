@@ -4,14 +4,18 @@
 # PR has an earlier Codex verdict the reviewer can build on — the previous-review section.
 #
 #   PROMPT="$instructions" PR_BODY="$body" PR_NUMBER=143 HEAD_SHA=<pr head sha> \
-#     GITHUB_REPOSITORY=samdu/topo scripts/review-prompt.sh > prompt.txt
+#     BASE_SHA=<base branch sha> GITHUB_REPOSITORY=samdu/topo scripts/review-prompt.sh > prompt.txt
 #
 # The previous verdict is the newest issue comment on the PR posted by `github-actions[bot]` whose
 # body begins with the codex marker (`<!-- agent-review: codex -->`), read through `gh api`. Its
 # second marker line, `<!-- agent-review-sha: <sha> -->`, names the PR head that review read.
-# Both ends of the diff since are PR head SHAs, fetched explicitly from the remote: the one the
-# marker names and HEAD_SHA, the run's `pull_request.head.sha`. The checkout's own HEAD is the
-# merge ref, which carries every advance of the base, and is never read.
+# The change since is the PR's own commits between two PR heads, fetched explicitly from the
+# remote: the one the marker names and HEAD_SHA, the run's `pull_request.head.sha`. The checkout's
+# own HEAD is the merge ref, which carries every advance of the base, and is never read. A branch
+# that merged its base in between carries the base's commits too, so the commits are those reachable
+# from HEAD_SHA and from neither the reviewed head nor BASE_SHA (`pull_request.base.sha`), merge
+# commits left out, each shown with its own patch: the base's commits and the merges that brought
+# them in are absent, and so is any conflict resolution a merge made, which the prompt says.
 #
 # Every way the previous review can be missing or unusable is a first review, said on stderr and
 # never a failure: no codex comment, a newest codex comment with no SHA marker, a `gh` that fails,
@@ -26,6 +30,7 @@ set -euo pipefail
 : "${PROMPT:?PROMPT is the review instructions}"
 : "${PR_NUMBER:?PR_NUMBER is the pull request number}"
 : "${HEAD_SHA:?HEAD_SHA is the PR head SHA this run reviews}"
+: "${BASE_SHA:?BASE_SHA is the base branch SHA the PR merges into}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is owner/repo}"
 PR_BODY="${PR_BODY:-}"
 REMOTE="${REVIEW_REMOTE:-origin}"
@@ -81,8 +86,8 @@ if [ -z "$prev_sha" ]; then
   exit 0
 fi
 
-if ! out="$(git fetch --no-tags --quiet "$REMOTE" "$prev_sha" "$HEAD_SHA" 2>&1)"; then
-  log "::warning::could not fetch $prev_sha and $HEAD_SHA, so this is a first review: $(head -n 1 <<<"$out")"
+if ! out="$(git fetch --no-tags --quiet "$REMOTE" "$prev_sha" "$HEAD_SHA" "$BASE_SHA" 2>&1)"; then
+  log "::warning::could not fetch $prev_sha, $HEAD_SHA and $BASE_SHA, so this is a first review: $(head -n 1 <<<"$out")"
   first_review
   exit 0
 fi
@@ -95,16 +100,16 @@ fi
 since="$(mktemp)"
 trap 'rm -f "$since"' EXIT
 {
-  echo "Commits since the previous review, oldest first:"
+  echo "The PR's own commits since the previous review, oldest first, each with its patch:"
   echo
-  git log --reverse --no-color --format='commit %H%n%n%B' "$prev_sha..$HEAD_SHA"
-  echo "Diff since the previous review (git diff $prev_sha $HEAD_SHA):"
-  echo
-  git diff --no-color --no-ext-diff "$prev_sha" "$HEAD_SHA"
+  git rev-list --reverse --no-merges "$HEAD_SHA" --not "$prev_sha" "$BASE_SHA" | while read -r commit; do
+    git show --no-color --no-ext-diff --format='commit %H%n%n%B' "$commit"
+    echo
+  done
 } > "$since"
 
 tag="$(od -An -N6 -tx1 /dev/urandom | tr -d ' \n')"
-log "re-review: previous review of $prev_sha, diff since to $HEAD_SHA ($(wc -c < "$since" | tr -d ' ') bytes, bounded at $DIFF_LIMIT)"
+log "re-review: previous review of $prev_sha, the PR's own commits since to $HEAD_SHA ($(wc -c < "$since" | tr -d ' ') bytes, bounded at $DIFF_LIMIT)"
 
 first_review
 cat <<EOF
@@ -123,8 +128,11 @@ cat <<EOF
 ----- END PREVIOUS VERDICT $tag -----
 
 Since that review the branch has moved from $prev_sha to $HEAD_SHA.
-The commits and the diff between the two follow; both ends are the PR's
-own head, so nothing here is the base branch's.
+What follows is the PR's own commits between the two, each with its
+patch: commits the base branch also has are left out, and so are merge
+commits, so a base change the branch merged in is not shown, and nor is
+any conflict resolution a merge made. A commit that copies a base change
+by hand still carries it. The checkout has the whole PR.
 
 ----- BEGIN CHANGE SINCE $tag -----
 EOF

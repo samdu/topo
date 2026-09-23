@@ -47,8 +47,10 @@
 # (`pull_request.head.sha`, never the merge ref). A later run on the same PR
 # is a re-review: scripts/review-prompt.sh finds the newest codex verdict,
 # and when its SHA is an ancestor of this run's PR head, adds that verdict
-# (fenced as the reviewer's own earlier output) and the commits and diff
-# between the two PR heads after the description. The re-review verifies
+# (fenced as the reviewer's own earlier output) and the PR's own commits
+# between the two PR heads, each with its patch, after the description:
+# commits the base also has and merge commits are left out, so a base merged
+# into the branch is not shown as the fix. The re-review verifies
 # each earlier finding as closed, still open or moot in `summary`, then reads
 # the whole PR again; a new finding in code the diff since does not touch
 # blocks only if it loses or corrupts a record, splits the primary, leaks a
@@ -770,7 +772,7 @@ jobs:
       # The prompt, assembled by scripts/review-prompt.sh before the login is
       # on disk: the instructions below, the PR description, and — when this
       # PR has an earlier Codex verdict naming the head it read — that verdict
-      # and the commits and diff from that head to this run's PR head, with
+      # and the PR's own commits from that head to this run's PR head, with
       # the instruction to verify each earlier finding and then read the
       # whole PR again. Anything missing or unusable there is a first review,
       # said in this step's log. scripts/tests/review-prompt-test.sh holds it.
@@ -780,6 +782,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           # The PR head this run reviews, never the merge ref the checkout is on.
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The base the PR merges into: its commits are not the fix's.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
           PROMPT: |
             Review PR #${{ github.event.pull_request.number }} in this
