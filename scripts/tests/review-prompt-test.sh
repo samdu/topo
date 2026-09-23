@@ -274,11 +274,18 @@ fi
 echo '[]' > "$work/none.json"
 run none "$work/none.json"
 first_review none "no previous Codex review"
-if grep -qx "Be exhaustive. This is the one read the PR gets before it merges:" "$work/none.out" \
-  && grep -qx "report every finding that meets the evidence rule below, not the" "$work/none.out"; then
-  pass "none: the first-review prompt asks for an exhaustive read"
+# The whole paragraph, word for word: a sentence taken out of it is an instruction the reviewer no
+# longer gets.
+exhaustive='Be exhaustive. This is the one read the PR gets before it merges:
+report every finding that meets the evidence rule below, not the
+first few, ranked most serious first with the blocking ones
+first. A defect left for a later round costs a full CI run and a
+fix round to find.'
+if python3 -c 'import sys; sys.exit(0 if ("\n" + sys.argv[1] + "\n\n") in open(sys.argv[2]).read() else 1)' \
+    "$exhaustive" "$work/none.out"; then
+  pass "none: the first-review prompt carries the exhaustive paragraph whole"
 else
-  fail "none: the first-review prompt does not carry the exhaustive instruction"
+  fail "none: the first-review prompt does not carry the exhaustive paragraph whole"
 fi
 if grep -qx "api --paginate repos/samdu/topo/issues/7/comments --jq .*" "$work/none.gh"; then
   pass "none: read this PR's issue comments"
