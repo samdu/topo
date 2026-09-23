@@ -9,6 +9,8 @@
 # The scratch repository is a PR whose first cut was reviewed; then the base moved on and the PR
 # merged it in, took two fix commits, and the base moved on again. It is checked out the way the
 # codex job checks out: a shallow fetch of the merge ref. It holds that:
+#   - the codex job's checkout guard passes a merge ref merging the event's head and fails one
+#     merging anything else;
 #   - the posted comment's first line is exactly `<!-- agent-review: codex -->`, and its second
 #     names the PR head it was given;
 #   - no codex comment, a codex marker posted by anyone but github-actions[bot], a newest codex
@@ -241,6 +243,30 @@ if [ "$head_source" = '${{ github.event.pull_request.head.sha }}' ]; then
   pass "post_feedback: HEAD_SHA is the PR head, github.event.pull_request.head.sha"
 else
   fail "post_feedback: HEAD_SHA is '$head_source', not \${{ github.event.pull_request.head.sha }}"
+fi
+
+# --- the checkout guard -----------------------------------------------------------------------
+
+# The codex job's guard, run out of the workflow in the CI checkout: the merge ref merges the event's
+# head, or the job stops before anything is reviewed.
+ruby -ryaml -e '
+  w = YAML.load_file(ARGV[0])
+  step = w.fetch("jobs").fetch("codex").fetch("steps").find { |s| s["name"] == "The checkout is the event'"'"'s head" } or abort "no step The checkout is the event'"'"'s head in codex"
+  print step.fetch("run")
+' "$workflow" > "$work/guard.sh" || exit 2
+[ -s "$work/guard.sh" ] || { echo "extracted an empty checkout guard" >&2; exit 2; }
+if (cd "$ci" && HEAD_SHA="$head" bash "$work/guard.sh") > "$work/guard-ok.out" 2>&1; then
+  pass "guard: a merge ref merging the event's head passes"
+else
+  fail "guard: refused the event's own head: $(cat "$work/guard-ok.out")"
+fi
+# The event named the reviewed first cut; the merge ref has since moved on to the fixes.
+if (cd "$ci" && HEAD_SHA="$reviewed" bash "$work/guard.sh") > "$work/guard-moved.out" 2>&1; then
+  fail "guard: a merge ref whose second parent is not the event's head passed"
+elif grep -q "not this event's PR head $reviewed" "$work/guard-moved.out"; then
+  pass "guard: a merge ref whose second parent is not the event's head fails, and says so"
+else
+  fail "guard: failed without saying why: $(cat "$work/guard-moved.out")"
 fi
 
 # --- first reviews ----------------------------------------------------------------------------

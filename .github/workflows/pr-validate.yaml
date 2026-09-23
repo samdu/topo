@@ -760,6 +760,26 @@ jobs:
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
 
+      # The merge ref moves with every push, while the verdict's second marker
+      # records the event's head. A push landing between the event and the
+      # checkout would have the reviewer read one commit and the verdict name
+      # another, and the next re-review diff from the wrong boundary, so the
+      # merge ref's second parent must be the event's head or nothing is
+      # reviewed (the newer push's own run reviews it). The parent is read
+      # from the raw commit, since the shallow checkout grafts HEAD parentless.
+      # scripts/tests/review-prompt-test.sh runs this step out of this file.
+      - name: The checkout is the event's head
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          merged="$(git cat-file -p HEAD | sed -n 's/^parent //p' | sed -n 2p)"
+          if [ "$merged" != "$HEAD_SHA" ]; then
+            echo "::error::The merge ref merges ${merged:-no second parent}, not this event's PR head $HEAD_SHA: a newer push moved it. This run reviews nothing; the newer push's run reviews that."
+            exit 1
+          fi
+          echo "The merge ref merges the event's PR head, $HEAD_SHA."
+
       - name: Pre-fetch base and head refs for the PR
         env:
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
