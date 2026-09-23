@@ -1,8 +1,9 @@
 import XCTest
 
-/// Topo on the glass takes nothing from the microphone: at every end of the ranges `look.json`
-/// accepts for his size, offset and stroll, a press on the well — in its middle, and at the edge
-/// nearest him — reaches `VoiceInput`, counted in the button's debug report.
+/// Topo on the glass takes nothing from the microphone: with him at home and with him as close to
+/// the well as `look.json` can put him, a press on the well — in its middle, and at the edge
+/// nearest him — reaches `VoiceInput`, counted in the button's debug report. Every end of every
+/// range is `MascotGeometryTests`', which needs no launch per look.
 ///
 /// This is the one place a touch is delivered. SwiftUI puts no view of its own under a gesture,
 /// so a UIKit hit test lands on the hosting view wherever it is asked and cannot tell the
@@ -14,26 +15,20 @@ import XCTest
 /// `MicrophonePressTests`, so in the suite that class meets the one prompt a cleared lane raises
 /// and counts it, and none is left here; run alone, this answers the prompt itself.
 final class TopoOnTheGlassTests: XCTestCase {
-    /// `LookDocument`'s ends for his fields, in every combination, and the default.
-    static var extremes: [[String: Any]] {
-        var all: [[String: Any]] = [[:]]
-        for scale in [0.25, 4] {
-            for x in [-4000, 4000] {
-                for y in [0, 200] {
-                    for stroll in [0, 4000] {
-                        all.append(["scale": scale, "offset": ["width": x, "height": y], "stroll": stroll])
-                    }
-                }
-            }
-        }
-        return all
-    }
+    /// The default, and the ends of `LookDocument`'s ranges that bring him nearest the
+    /// microphone: the largest he is drawn, the furthest he strolls, pushed right toward the well,
+    /// standing on the pane's top edge and down at its foot beside the jewel.
+    static var extremes: [[String: Any]] { [
+        [:],
+        ["scale": 4, "offset": ["width": 4000, "height": 0], "stroll": 4000],
+        ["scale": 4, "offset": ["width": 4000, "height": 200], "stroll": 4000],
+    ] }
 
     override func setUp() {
         continueAfterFailure = false
     }
 
-    func testAPressOnTheWellReachesTheMicrophoneAtEveryExtreme() throws {
+    func testAPressOnTheWellReachesTheMicrophoneWithHimNearestIt() throws {
         for mascot in Self.extremes {
             let look = String(decoding: try JSONSerialization.data(withJSONObject: ["mascot": mascot], options: [.sortedKeys]),
                               as: UTF8.self)
