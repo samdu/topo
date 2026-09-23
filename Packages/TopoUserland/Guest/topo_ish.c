@@ -303,10 +303,6 @@ int topo_ish_wait(int pid, int *status) {
     return 0;
 }
 
-// The most tasks one tree walk follows. Claude Code and whatever its tools start are a handful; a
-// tree larger than this is signalled as far as the walk reached and reported at that size.
-#define TOPO_TREE_MAX 512
-
 int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
     if (!booted)
         return _ENODEV;
@@ -320,15 +316,37 @@ int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
         unlock(&pids_lock);
         return 0;
     }
-    static struct task *queue[TOPO_TREE_MAX];
-    int head = 0, tail = 0, live = 0;
+    // The whole tree, however large: a walk that stopped short would leave the rest running
+    // and report the tree as ended.
+    int size = 64, head = 0, tail = 0, live = 0;
+    struct task **queue = malloc(size * sizeof(*queue));
+    if (queue == NULL) {
+        unlock(&pids_lock);
+        return _ENOMEM;
+    }
     queue[tail++] = root;
     while (head < tail) {
         struct task *task = queue[head++];
         struct task *child;
         list_for_each_entry(&task->children, child, siblings) {
-            if (tail < TOPO_TREE_MAX)
-                queue[tail++] = child;
+            // A task is queued once: the kernel can list a thread among its own children (its
+            // parent is itself), and a walk that followed that would never end.
+            bool queued = false;
+            for (int i = 0; i < tail && !queued; i++)
+                queued = queue[i] == child;
+            if (queued)
+                continue;
+            if (tail == size) {
+                struct task **grown = realloc(queue, 2 * size * sizeof(*queue));
+                if (grown == NULL) {
+                    free(queue);
+                    unlock(&pids_lock);
+                    return _ENOMEM;
+                }
+                queue = grown;
+                size *= 2;
+            }
+            queue[tail++] = child;
         }
     }
     struct siginfo_ info = {.code = SI_KERNEL_};
@@ -363,13 +381,19 @@ int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
         cpu_poke(&task->cpu);
     }
     unlock(&pids_lock);
+    free(queue);
     return live;
 }
 
 int topo_ish_running(const int *pids, int count) {
     if (!booted)
         return _ENODEV;
-    int running = 0, orphans[TOPO_TREE_MAX], found = 0;
+    if (count <= 0)
+        return 0;
+    int running = 0, found = 0;
+    int *orphans = malloc(count * sizeof(*orphans));
+    if (orphans == NULL)
+        return _ENOMEM;
     lock(&pids_lock);
     struct task *init = pid_get_task(1);
     for (int i = 0; i < count; i++) {
@@ -378,7 +402,7 @@ int topo_ish_running(const int *pids, int count) {
             continue;
         if (!task->zombie) {
             running++;
-        } else if (task->parent == init && found < TOPO_TREE_MAX) {
+        } else if (task->parent == init) {
             orphans[found++] = pids[i];
         }
     }
@@ -392,7 +416,44 @@ int topo_ish_running(const int *pids, int count) {
         do_wait(TOPO_P_PID, orphans[i], &info, NULL, TOPO_WEXITED | TOPO_WNOHANG);
     }
     current = previous;
+    free(orphans);
     return running;
+}
+
+int topo_ish_describe(int pid, char *out, int length) {
+    if (!booted)
+        return _ENODEV;
+    if (out == NULL || length <= 0)
+        return _EINVAL;
+    lock(&pids_lock);
+    struct task *task = pid_get_task_zombie(pid);
+    if (task == NULL) {
+        unlock(&pids_lock);
+        snprintf(out, length, "%d: gone", pid);
+        return 0;
+    }
+    char comm[sizeof(task->comm) + 1] = {0};
+    lock(&task->general_lock);
+    memcpy(comm, task->comm, sizeof(task->comm));
+    unlock(&task->general_lock);
+    bool killed = false;
+    if (task->sighand != NULL) {
+        lock(&task->sighand->lock);
+        killed = sigset_has(task->pending, SIGKILL_);
+        unlock(&task->sighand->lock);
+    }
+    char thread[32] = "";
+    if (task->tgid != task->pid)
+        snprintf(thread, sizeof(thread), ", thread of %d", task->tgid);
+    char parent[32] = "";
+    if (task->parent != NULL)
+        snprintf(parent, sizeof(parent), ", parent %d", task->parent->pid);
+    snprintf(out, length, "%d (%s%s%s): %s%s, last syscall %u%s", pid, comm, thread, parent,
+             task->zombie ? "zombie" : task->exiting ? "exiting" : "running",
+             task->blocking ? ", blocking" : "", task->syscall_restart_num,
+             killed ? ", SIGKILL pending" : "");
+    unlock(&pids_lock);
+    return 0;
 }
 
 // Makes every directory on the way to `path` (a normalised, absolute guest path), and `path`

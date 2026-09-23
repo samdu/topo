@@ -48,8 +48,11 @@ int topo_ish_wait(int pid, int *status);
 /// Sends `sig` to `pid` and to every task under it — its children, theirs, and so on — as the
 /// pid table stands at one instant (the walk and the signals are made under its lock, so no task
 /// can be reparented away between the two), and writes the pids of the live ones, `pid` first,
-/// into `pids` up to `capacity`. Signal 0 signals nothing and only reports the tree. Answers how
-/// many live tasks the tree held (0 when `pid` is not a live task), or a negative guest errno.
+/// into `pids` up to `capacity`. The walk has no ceiling: every task is signalled whatever
+/// `capacity` is, and an answer larger than `capacity` says the list was cut and a larger buffer is
+/// needed. Signal 0 signals nothing and only reports the tree. Answers how many live tasks the tree
+/// held (0 when `pid` is not a live task), or a negative guest errno (`_ENOMEM` when the walk could
+/// not be made, in which case nothing was signalled).
 /// Requires a booted kernel.
 int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity);
 
@@ -58,6 +61,13 @@ int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity);
 /// init never runs a program and so never reaps one itself. Never pass a pid a `topo_ish_wait`
 /// is waiting on: that wait is the one reaper of its process. Requires a booted kernel.
 int topo_ish_running(const int *pids, int count);
+
+/// One line about `pid` for a log, into `out` (NUL-terminated, cut at `length`): its name, whether
+/// it is a thread and of what, its parent, whether it is running, exiting or a zombie, whether it
+/// is parked in a blocking call, the last syscall it entered, and whether a SIGKILL is pending —
+/// what a teardown that did not finish says about what stayed. 0, or a negative guest errno.
+/// Requires a booted kernel.
+int topo_ish_describe(int pid, char *out, int length);
 
 /// Bind-mounts the host directory `host_dir` at `point` in the guest through the fork's realfs,
 /// making `point` and its parents directories in the fakefs first where they are not. A mount

@@ -78,4 +78,55 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertEqual(termination.signalled, 0)
         XCTAssertEqual(termination.status, 0)
     }
+
+    func testATreeLargerThanTheListIsWalkedWholeAndKilledWhole() async throws {
+        _ = try SharedGuest.booted()
+        let tree = try await Guest.shared.spawn("/bin/sh", ["-c", """
+            sleep 300 &
+            sleep 300 &
+            sh -c 'sleep 300 & wait' &
+            echo started
+            wait
+            """])
+        var lines = tree.lines.makeAsyncIterator()
+        _ = await lines.next()
+        await eventually("the tree grown") { await tree.tree().count >= 5 }
+        let whole = await tree.tree()
+        // A list with room for two: the walk still reaches, reports and kills every task.
+        let listed = try XCTUnwrap(GuestProcess.signalTree(tree.pid, 0, capacity: 2))
+        XCTAssertEqual(Set(listed), Set(whole), "a tree larger than the list was reported cut short")
+        let killed = try XCTUnwrap(GuestProcess.signalTree(tree.pid, 9 /* SIGKILL */, capacity: 1))
+        XCTAssertEqual(Set(killed), Set(whole))
+        await eventually("every task ended") { await GuestProcess.running(whole.filter { $0 != tree.pid }) == 0 }
+        await eventually("the shell reaped") { tree.hasExited }
+    }
+
+    func testATerminationIsConfirmedOnlyWhenTheWholeTreeHasEnded() async throws {
+        _ = try SharedGuest.booted()
+        // Sleeps holding none of the pipes, so the pipes closing says nothing about them: only a
+        // walk that reached every one of them can say the tree ended.
+        let tree = try await Guest.shared.spawn("/bin/sh", ["-c", """
+            for i in 1 2 3 4; do sleep 300 </dev/null >/dev/null 2>&1 & done
+            echo started
+            wait
+            """])
+        var lines = tree.lines.makeAsyncIterator()
+        _ = await lines.next()
+        await eventually("the tree grown") { await tree.tree().count >= 5 }
+        let whole = await tree.tree()
+        let termination = await tree.terminate(within: .seconds(5))
+        let survivors = await GuestProcess.running(whole.filter { $0 != tree.pid })
+        XCTAssertEqual(survivors, 0, "\(termination)")
+        XCTAssertTrue(termination.confirmed, "\(termination)")
+    }
+
+    func testATerminationTheBoundRunsOutOnSaysWhatStayed() {
+        let termination = GuestProcess.Termination(status: nil, signalled: 3, running: 1, pipesClosed: false,
+                                                   elapsed: .milliseconds(7_004), stragglers: ["41 (node): running"])
+        XCTAssertFalse(termination.confirmed)
+        XCTAssertEqual(termination.description,
+                       "not reaped, 3 signalled, 1 still running, pipes open, in 7004 ms; still there: 41 (node): running")
+        XCTAssertFalse(GuestProcess.Termination(status: 137, signalled: 0, running: 0, pipesClosed: true, walked: false).confirmed,
+                       "a tree that could not be walked was confirmed ended")
+    }
 }

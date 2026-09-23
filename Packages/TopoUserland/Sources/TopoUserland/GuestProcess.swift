@@ -32,19 +32,35 @@ public final class GuestProcess: Sendable {
         public let running: Int
         /// Whether stdout and stderr both reached their end.
         public let pipesClosed: Bool
+        /// Whether every walk of the tree was made whole; one that could not be made signalled
+        /// nothing and saw nothing, so its tree cannot be said to have ended.
+        public let walked: Bool
+        /// How long it took, to the confirmation or to the bound.
+        public let elapsed: Duration
+        /// What was still there at the end, one line per task (`topo_ish_describe`): empty when
+        /// it was confirmed.
+        public let stragglers: [String]
 
-        public init(status: Int32?, signalled: Int, running: Int, pipesClosed: Bool) {
+        public init(status: Int32?, signalled: Int, running: Int, pipesClosed: Bool, walked: Bool = true,
+                    elapsed: Duration = .zero, stragglers: [String] = []) {
             self.status = status
             self.signalled = signalled
             self.running = running
             self.pipesClosed = pipesClosed
+            self.walked = walked
+            self.elapsed = elapsed
+            self.stragglers = stragglers
         }
 
-        public var confirmed: Bool { status != nil && running == 0 && pipesClosed }
+        public var confirmed: Bool { status != nil && running == 0 && pipesClosed && walked }
 
         public var description: String {
             let reaped = status.map { "reaped (status \($0))" } ?? "not reaped"
-            return "\(reaped), \(signalled) signalled, \(running) still running, pipes \(pipesClosed ? "closed" : "open")"
+            var line = "\(reaped), \(signalled) signalled, \(running) still running, pipes \(pipesClosed ? "closed" : "open")"
+            if !walked { line += ", the tree could not be walked" }
+            line += ", in \(elapsed.milliseconds) ms"
+            if !stragglers.isEmpty { line += "; still there: " + stragglers.joined(separator: "; ") }
+            return line
         }
     }
 
@@ -140,37 +156,66 @@ public final class GuestProcess: Sendable {
     }
 
     private func killAndConfirm(within bound: Duration) -> Termination {
-        let deadline = ContinuousClock.now + bound
-        var tree = Self.signalTree(pid, TOPO_ISH_SIGKILL)
-        let signalled = tree.count
+        let start = ContinuousClock.now
+        let deadline = start + bound
+        var walked = true
+        let first = Self.signalTree(pid, TOPO_ISH_SIGKILL)
+        if first == nil { walked = false }
+        let signalled = first?.count ?? 0
         // The process itself is its waiter's to reap; the rest are this loop's to watch.
-        var others = Set(tree.filter { $0 != pid })
+        var others = Set((first ?? []).filter { $0 != pid })
         var running = others.count
         while true {
             // Anything of the tree still running is killed again, and whatever it started since
             // the first walk is found and killed with it.
-            var alive: [Int32] = hasExited ? [] : Self.signalTree(pid, TOPO_ISH_SIGKILL)
-            for task in others where Self.running([task]) > 0 {
-                tree = Self.signalTree(task, TOPO_ISH_SIGKILL)
-                alive.append(contentsOf: tree)
+            var alive: [Int32] = []
+            if !hasExited {
+                if let tree = Self.signalTree(pid, TOPO_ISH_SIGKILL) { alive += tree } else { walked = false }
+            }
+            for task in others where Self.running([task]) != 0 {
+                if let tree = Self.signalTree(task, TOPO_ISH_SIGKILL) { alive += tree } else { walked = false }
             }
             others.formUnion(alive.filter { $0 != pid })
             running = Self.running(Array(others))
             if !hasExited { running += 1 }
-            if running == 0 && state.pipesClosed { break }
+            if running == 0 && state.pipesClosed && walked { break }
             if ContinuousClock.now >= deadline { break }
             Thread.sleep(forTimeInterval: 0.05)
         }
-        return Termination(status: exitStatus, signalled: signalled, running: running, pipesClosed: state.pipesClosed)
+        let stragglers = running == 0 ? [] : ([pid] + others.sorted()).compactMap { task -> String? in
+            if task == pid && hasExited { return nil }
+            if task != pid && Self.running([task]) == 0 { return nil }
+            return Self.describe(task)
+        }
+        return Termination(status: exitStatus, signalled: signalled, running: running, pipesClosed: state.pipesClosed,
+                           walked: walked, elapsed: ContinuousClock.now - start, stragglers: stragglers)
     }
 
-    /// The pids of the live tree under `pid`, having sent it `signal` (0 sends nothing).
-    static func signalTree(_ pid: Int32, _ signal: Int32) -> [Int32] {
-        var pids = [Int32](repeating: 0, count: 512)
-        let live = pids.withUnsafeMutableBufferPointer {
-            topo_ish_signal_tree(pid, signal, $0.baseAddress, Int32($0.count))
+    /// The pids of the live tree under `pid`, having sent it `signal` (0 sends nothing), however
+    /// many there are: a list cut short by `capacity` is read again into one large enough. Nil when
+    /// the kernel could not make the walk, which signals nothing.
+    static func signalTree(_ pid: Int32, _ signal: Int32, capacity: Int = 512) -> [Int32]? {
+        var capacity = max(1, capacity)
+        var signal = signal
+        while true {
+            var pids = [Int32](repeating: 0, count: capacity)
+            let live = Int(pids.withUnsafeMutableBufferPointer {
+                topo_ish_signal_tree(pid, signal, $0.baseAddress, Int32($0.count))
+            })
+            if live < 0 { return nil }
+            if live <= capacity { return Array(pids.prefix(live)) }
+            // The walk signalled every task; the list is read again, signalling nothing, into room
+            // for what it found and whatever started since.
+            capacity = live + 64
+            signal = 0
         }
-        return live > 0 ? Array(pids.prefix(Int(min(live, 512)))) : []
+    }
+
+    /// One line about `pid` as the kernel sees it now.
+    static func describe(_ pid: Int32) -> String {
+        var line = [CChar](repeating: 0, count: 256)
+        let status = line.withUnsafeMutableBufferPointer { topo_ish_describe(pid, $0.baseAddress, Int32($0.count)) }
+        return status < 0 ? "\(pid): not described (\(status))" : String(cString: line)
     }
 
     /// How many of `pids` are still running, reaping any that init was left holding.
@@ -182,7 +227,7 @@ public final class GuestProcess: Sendable {
     /// The live tree under this process, the process first, as the pid table stands now.
     public func tree() async -> [Int32] {
         await withCheckedContinuation { (done: CheckedContinuation<[Int32], Never>) in
-            queue.async { [pid] in done.resume(returning: Self.signalTree(pid, 0)) }
+            queue.async { [pid] in done.resume(returning: Self.signalTree(pid, 0) ?? []) }
         }
     }
 
@@ -322,4 +367,9 @@ extension Guest {
         guard pid > 0 else { throw Failure.spawn(pid) }
         return GuestProcess(pid: pid, input: input, output: out, errors: err)
     }
+}
+
+extension Duration {
+    /// Whole milliseconds, for a log line.
+    var milliseconds: Int64 { components.seconds * 1000 + components.attoseconds / 1_000_000_000_000_000 }
 }
