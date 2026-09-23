@@ -43,7 +43,9 @@ struct MascotPlacement: Equatable, Sendable {
         let paneTop = -composer.verticalInset
         let paneFoot = row.height + composer.verticalInset
         let homeX = min(max((left + right) / 2 + mascot.offset.width, left), right)
-        let shelf = paneTop + mascot.offset.height
+        // The edge he stands on is between the pane's top edge and its foot, whatever the look
+        // says: lifted above it he would float over the transcript, below it he is out of sight.
+        let shelf = paneTop + min(max(mascot.offset.height, 0), paneFoot - paneTop)
         let top = min(shelf - CGFloat(Topo.shelfY) * scale, paneTop)
         let stroll = min(max(mascot.stroll, 0), homeX - left)
         return MascotPlacement(frame: CGRect(x: left, y: top, width: right - left, height: max(0, paneFoot - top)),

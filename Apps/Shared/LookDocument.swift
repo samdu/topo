@@ -195,7 +195,9 @@ enum LookDocument {
 
     private static func mascot(_ value: inout Look.Mascot, _ r: Reader) {
         r.pixelScale("scale", &value.scale)
-        r.size("offset", &value.offset, signed: true)
+        // Down only, and no further than a pane is tall: his shelf is the pane's top edge, and
+        // the band he stands in runs from it to the pane's foot.
+        r.size("offset", &value.offset, signed: true, heights: 0...200)
         r.length("stroll", &value.stroll)
         r.frameInterval("frameInterval", &value.frameInterval)
     }
@@ -624,7 +626,8 @@ enum LookDocument {
         }
 
         /// A width and a height. `signed` is an offset rather than a size, and may be negative.
-        func size(_ key: String, _ value: inout CGSize, signed: Bool = false) {
+        /// `heights` narrows the height's range where a field's own reading does.
+        func size(_ key: String, _ value: inout CGSize, signed: Bool = false, heights: ClosedRange<Double>? = nil) {
             guard let raw = take(key) else { return }
             guard let object = raw as? [String: Any] else {
                 return note(key, "is not an object naming a width and a height")
@@ -637,7 +640,7 @@ enum LookDocument {
                     size.width = CGFloat(width)
                     named = true
                 }
-                if let height = r.amount("height", in: range, "a length in points") {
+                if let height = r.amount("height", in: heights ?? range, "a length in points") {
                     size.height = CGFloat(height)
                     named = true
                 }

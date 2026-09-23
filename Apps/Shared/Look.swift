@@ -385,7 +385,8 @@ struct Look: Equatable, Sendable {
         /// pixels. One is the size the engine's poses were drawn at.
         var scale: CGFloat = 1
         /// Where his body stands, from home: the middle of the flank, his shelf row on the pane's
-        /// top edge. Positive is right and down.
+        /// top edge. Positive is right and down; the height is down only, 0 to 200, and drawn no
+        /// lower than the pane's foot, so he stands between its top edge and its foot.
         var offset = CGSize.zero
         /// How far towards the pane's leading end he strolls when idle, in points.
         var stroll: CGFloat = 36

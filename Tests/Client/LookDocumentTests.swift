@@ -130,11 +130,17 @@ final class LookDocumentTests: XCTestCase {
         let reading = LookDocument.read(#"{"mascot": {"scale": 0.1, "frameInterval": 0, "stroll": -1, "offset": {"width": 9000}}}"#)
         XCTAssertEqual(reading.look.mascot, Look.Mascot())
         XCTAssertEqual(reading.notes.count, 4, "\(reading.notes)")
-        let fine = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "stroll": 4000, "offset": {"width": -4000, "height": 4000}}}"#)
+        let fine = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "stroll": 4000, "offset": {"width": -4000, "height": 200}}}"#)
         XCTAssertEqual(fine.notes, [])
         XCTAssertEqual(fine.look.mascot.scale, 4)
         XCTAssertEqual(fine.look.mascot.frameInterval, 1)
-        XCTAssertEqual(fine.look.mascot.offset, CGSize(width: -4000, height: 4000))
+        XCTAssertEqual(fine.look.mascot.offset, CGSize(width: -4000, height: 200))
+        // His height is down only, and no further than a pane is tall: the width stands alone.
+        for height in [-1, 201, 4000] {
+            let lifted = LookDocument.read(#"{"mascot": {"offset": {"width": 5, "height": \#(height)}}}"#)
+            XCTAssertEqual(lifted.look.mascot.offset, CGSize(width: 5, height: 0), "\(height)")
+            XCTAssertEqual(lifted.notes.count, 1, "\(height): \(lifted.notes)")
+        }
         XCTAssertEqual(LookDocument.read(#"{"mascot": {"scale": 5}}"#).look.mascot.scale, 1)
         XCTAssertEqual(LookDocument.read(#"{"mascot": {"frameInterval": 2}}"#).look.mascot.frameInterval, 1.0 / 30)
     }

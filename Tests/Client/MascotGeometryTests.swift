@@ -106,12 +106,25 @@ final class MascotGeometryTests: XCTestCase {
         let well = well()
         let scale = Int(without.image.scale)
         let width = Int(narrowest.width) * scale
+        // The pane's foot and height, read off him at home: his canvas runs from the top of him,
+        // standing on the pane's top edge at one point a pixel, to the pane's foot.
+        let home = try stage(Look.Mascot())
+        defer { home.window.isHidden = true }
+        let homeCanvas = try XCTUnwrap(home.canvas)
+        let paneFoot = homeCanvas.maxY
+        let paneHeight = homeCanvas.height - CGFloat(Topo.shelfY)
 
         for mascot in extremes {
             let with = try stage(mascot)
             defer { with.window.isHidden = true }
             let canvas = try XCTUnwrap(with.canvas, "\(mascot): he was not drawn")
             XCTAssertLessThanOrEqual(canvas.maxX, well.minX + 0.5, "\(mascot): his canvas reaches the well")
+
+            // He stays in his slot's band: his canvas ends at the pane's foot and reaches no
+            // higher than he stands tall over the pane's top edge.
+            XCTAssertEqual(canvas.maxY, paneFoot, accuracy: 0.5, "\(mascot): his canvas left the pane's foot")
+            XCTAssertLessThanOrEqual(canvas.height, paneHeight + CGFloat(Topo.shelfY) * mascot.scale + 0.5,
+                                     "\(mascot): his canvas grew past his band")
 
             // Every pixel of the well's column is the same, with a shade for the render server's
             // rounding on a curve's edge.
@@ -124,6 +137,17 @@ final class MascotGeometryTests: XCTestCase {
                 }
             }
             XCTAssertEqual(differing, 0, "\(mascot): the well's column changed with him on the glass")
+
+            // And he is to be seen in it, not pushed out of his own canvas.
+            var seen = 0
+            let box = canvas.intersection(CGRect(origin: .zero, size: narrowest))
+            for y in Int(box.minY) * scale..<Int(box.maxY) * scale {
+                for x in Int(box.minX) * scale..<Int(box.maxX) * scale {
+                    let i = (y * width + x) * 4
+                    if (0..<4).contains(where: { abs(Int(drawn[i + $0]) - Int(bare[i + $0])) > 2 }) { seen += 1 }
+                }
+            }
+            XCTAssertGreaterThan(seen, 0, "\(mascot): nothing of him is drawn in his canvas")
 
             // A touch on the well reaches the hosting view, never him.
             for point in [CGPoint(x: well.midX, y: narrowest.height - 50), CGPoint(x: well.minX + 2, y: narrowest.height - 50)] {
@@ -189,10 +213,10 @@ final class MascotGeometryTests: XCTestCase {
         let scaled = MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: big)
         XCTAssertEqual(scaled.sprite(x: 0).width, base.sprite(x: 0).width * 2)
         XCTAssertEqual(scaled.corner, base.corner / 2, "the stroll is points, so fewer art pixels at twice the size")
-        var moved = Look.Mascot(); moved.offset = CGSize(width: -10, height: -6)
+        var moved = Look.Mascot(); moved.offset = CGSize(width: -10, height: 6)
         let offset = MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: moved)
         XCTAssertEqual(offset.frame.minX + offset.home.x, base.frame.minX + base.home.x - 10)
-        XCTAssertEqual(offset.frame.minY + offset.home.y, base.frame.minY + base.home.y - 6)
+        XCTAssertEqual(offset.frame.minY + offset.home.y, base.frame.minY + base.home.y + 6)
         var far = Look.Mascot(); far.stroll = 10
         XCTAssertEqual(MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: far).corner, -10)
         // The frame interval is the clock's, in `MascotDriverTests.testTheLinkRunsExactlyWhileHeAnimates`.
@@ -210,6 +234,14 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertLessThanOrEqual(-placement.corner * Double(placement.scale), Double(placement.home.x) + 1e-9,
                                      "\(mascot): the stroll goes past the pane's end")
             XCTAssertLessThanOrEqual(placement.corner, 0)
+            // He stands between the pane's top edge and its foot, and the canvas reaches no
+            // higher than he stands tall over the top edge.
+            let shelf = placement.frame.minY + placement.home.y
+            XCTAssertGreaterThanOrEqual(shelf, -composer.verticalInset, "\(mascot): lifted off the pane")
+            XCTAssertLessThanOrEqual(shelf, row.height + composer.verticalInset, "\(mascot): below the pane")
+            XCTAssertGreaterThanOrEqual(placement.frame.minY,
+                                        -composer.verticalInset - CGFloat(Topo.shelfY) * placement.scale - 1e-9,
+                                        "\(mascot): the canvas grew past his band")
         }
         // A flank with no room at all is no placement.
         let none = MascotPlacement.of(flank: CGRect(x: 0, y: 0, width: 0, height: 0), row: row,
