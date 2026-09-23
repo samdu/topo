@@ -230,6 +230,18 @@ if [ "$(sed -n 2p <<<"$body")" = "<!-- agent-review-sha: $reviewed -->" ]; then
 else
   fail "post_feedback: the second line is $(sed -n 2p <<<"$body" | head -c 80)"
 fi
+# What it is given is the workflow's to decide: the PR head, never the merge ref's SHA.
+head_source="$(ruby -ryaml -e '
+  w = YAML.load_file(ARGV[0])
+  step = w.fetch("jobs").fetch("post_feedback").fetch("steps").find { |s| s["name"] == "Report Codex feedback" }
+  print step.fetch("env", {}).fetch("HEAD_SHA", "")
+' "$workflow")"
+# shellcheck disable=SC2016 # the literal expression, not a shell one
+if [ "$head_source" = '${{ github.event.pull_request.head.sha }}' ]; then
+  pass "post_feedback: HEAD_SHA is the PR head, github.event.pull_request.head.sha"
+else
+  fail "post_feedback: HEAD_SHA is '$head_source', not \${{ github.event.pull_request.head.sha }}"
+fi
 
 # --- first reviews ----------------------------------------------------------------------------
 
