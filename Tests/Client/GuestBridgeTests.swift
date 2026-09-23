@@ -437,6 +437,53 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertNil(harness.error)
     }
 
+    /// Sign-out forgets the bridge's ledger — the input outstanding and what the guest has seen —
+    /// together with the guest's session, so the next login's first turn goes to a fresh session
+    /// that is given the log as the conversation so far, and nothing of the last one is reconciled.
+    func testSignOutForgetsTheLedgerAndTheGuestSession() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Noted."), .cutOff])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!,
+                              brain: GuestBridge(conversation: guest, ledger: ledgerFile), leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        await harness.send("the word is marmalade")
+        await harness.send("run the report")
+        XCTAssertNotNil(harness.unfinished)
+        let before = GuestLedger.load(ledgerFile)
+        XCTAssertNotNil(before.pending, "no input outstanding to forget")
+        XCTAssertGreaterThan(before.seen.count, 0)
+        let resident = await guest.sessionID()
+        XCTAssertEqual(resident, "S1")
+
+        harness.forget()
+        try await eventually("the ledger to go") { !FileManager.default.fileExists(atPath: ledgerFile.path) }
+        let forgotten = await guest.sessionID()
+        XCTAssertNil(forgotten, "the guest's session outlived the sign-out")
+        XCTAssertNil(harness.unfinished)
+
+        // The next launch: the session id the guest kept (none), the ledger on disk (none).
+        let relaunched = ScriptedGuest(home: home, script: [.reply("Hello.")], session: forgotten)
+        let bridge = GuestBridge(conversation: relaunched, ledger: ledgerFile)
+        let ledger = await bridge.current
+        XCTAssertNil(ledger.pending)
+        XCTAssertNil(ledger.session)
+        XCTAssertEqual(ledger.seen.count, 0)
+        let unresolved = await bridge.unresolved()
+        XCTAssertTrue(unresolved.isEmpty)
+        let owed = await bridge.owed()
+        XCTAssertNil(owed)
+        let log = TurnLog(database: db)
+        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
+        _ = try await runner.run("hello", model: .sonnet5)
+        let input = try XCTUnwrap(relaunched.inputs.first)
+        XCTAssertTrue(input.hasPrefix("[The conversation so far"), input)
+        XCTAssertTrue(input.contains("Them: run the report"), input)
+    }
+
     /// The person's control for a cut-off turn: shown, and asking again sends it once.
     func testAnUnfinishedTurnIsShownAndAskedAgainOnlyWhenThePersonAsks() async throws {
         let db = InMemoryRecordDatabase()
