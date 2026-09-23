@@ -28,15 +28,53 @@ int topo_ish_boot(const char *fakefs_dir);
 /// How many times this process has made a kernel: 0 before a boot, 1 after, never more.
 int topo_ish_kernels(void);
 
-/// Starts `path` in the guest as a child of init, with `argv` and `envp` (NULL-terminated), stdin
-/// on /dev/null and stdout and stderr on pipes whose read ends are returned; the caller closes
-/// them. The pid on success, a negative guest errno otherwise. Requires a booted kernel.
+/// Starts `path` in the guest as a child of init, with `argv` and `envp` (NULL-terminated), stdout
+/// and stderr on pipes whose read ends are returned, and stdin on /dev/null when `stdin_fd` is
+/// NULL or on a pipe whose write end is returned there otherwise. The caller closes every end it
+/// is handed; the write end never raises SIGPIPE in the app (a write after the guest has let go
+/// fails with EPIPE instead). The pid on success, a negative guest errno otherwise. Requires a
+/// booted kernel.
 int topo_ish_spawn(const char *path, const char *const *argv, const char *const *envp,
-                   int *stdout_fd, int *stderr_fd);
+                   int *stdin_fd, int *stdout_fd, int *stderr_fd);
 
 /// Waits for a pid `topo_ish_spawn` returned, reaps it, and writes its status: the exit code, or
 /// 128 + the signal that ended it. 0 on success, a negative guest errno otherwise.
 int topo_ish_wait(int pid, int *status);
+
+/// The two signals the app sends a guest process tree, in the guest's (Linux) numbering.
+#define TOPO_ISH_SIGKILL 9
+#define TOPO_ISH_SIGTERM 15
+
+/// Sends `sig` to `pid` and to every task under it — its children, theirs, and so on — as the
+/// pid table stands at one instant (the walk and the signals are made under its lock, so no task
+/// can be reparented away between the two), and writes the pids of the live ones, `pid` first,
+/// into `pids` up to `capacity`. The walk has no ceiling: every task is signalled whatever
+/// `capacity` is, and an answer larger than `capacity` says the list was cut and a larger buffer is
+/// needed. Signal 0 signals nothing and only reports the tree. Answers how many live tasks the tree
+/// held (0 when `pid` is not a live task), or a negative guest errno (`_ENOMEM` when the walk could
+/// not be made, in which case nothing was signalled).
+/// Requires a booted kernel.
+int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity);
+
+/// Sends `sig` to every task in the guest but init, and writes the pids of those that are not
+/// zombies (exiting ones included, which are listed and not signalled again) into `pids` up to
+/// `capacity`. Answers how many there were, which may be more than `capacity`, or a negative guest
+/// errno. Signal 0 only lists. For a guest that runs one program and what it starts, whatever
+/// became of the links between them. Requires a booted kernel.
+int topo_ish_signal_all(int sig, int *pids, int capacity);
+
+/// How many of `pids` are still running: a task that exists and is not a zombie. A zombie whose
+/// parent is init — a descendant orphaned when the process above it died — is reaped here, since
+/// init never runs a program and so never reaps one itself. Never pass a pid a `topo_ish_wait`
+/// is waiting on: that wait is the one reaper of its process. Requires a booted kernel.
+int topo_ish_running(const int *pids, int count);
+
+/// One line about `pid` for a log, into `out` (NUL-terminated, cut at `length`): its name, whether
+/// it is a thread and of what, its parent, whether it is running, exiting or a zombie, whether it
+/// is parked in a blocking call, the last syscall it entered, and whether a SIGKILL is pending —
+/// what a teardown that did not finish says about what stayed. 0, or a negative guest errno.
+/// Requires a booted kernel.
+int topo_ish_describe(int pid, char *out, int length);
 
 /// Bind-mounts the host directory `host_dir` at `point` in the guest through the fork's realfs,
 /// making `point` and its parents directories in the fakefs first where they are not. A mount

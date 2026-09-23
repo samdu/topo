@@ -16,6 +16,7 @@
 #   scripts/simulator-run.sh --userland "echo hi" --fresh --expect-rootfs fetched
 #   scripts/simulator-run.sh --userland "echo hi" --no-build --expect-rootfs reused
 #   scripts/simulator-run.sh --userland "claude --version" --fresh --expect-claude fetched
+#   scripts/simulator-run.sh --guest-turn "say hi || what did I ask?"   # turns to the resident Claude Code
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
@@ -47,6 +48,13 @@
 # this launch downloaded it; `reused`: it was on the phone, and nothing was fetched or copied).
 # --fresh uninstalls the app first, which takes its data container, fakefs and all, with it.
 #
+# A --guest-turn run launches signed in with TOPO_DEBUG_GUEST_TURN (DebugRun.guestTurn): the resident
+# Claude Code in the guest takes the turns, separated by " || ", one after another in one process.
+# It passes only when every turn names the same session and resident process, the app printed
+# `guest turn done`, no `guest turn error:`, no turn that
+# failed or was abandoned, and for every turn a `model:` line naming the model it ran on (Haiku,
+# since the build is Debug) and an `answered in <seconds> s:` line.
+#
 # Building runs scripts/build-ish.sh first: the guest's framework is built from the fork's pin and
 # is not in the repository.
 #
@@ -67,6 +75,7 @@ build=yes
 pressmic=no
 talk=no
 userland=""
+guestturn=""
 expect=""
 expect_rootfs=""
 expect_claude=""
@@ -83,11 +92,12 @@ while [ $# -gt 0 ]; do
     --no-build) build=no; shift ;;
     --talk) talk=yes; shift ;;
     --userland) userland="$2"; shift 2 ;;
+    --guest-turn) guestturn="$2"; shift 2 ;;
     --expect) expect="$2"; shift 2 ;;
     --expect-rootfs) expect_rootfs="$2"; shift 2 ;;
     --expect-claude) expect_claude="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
-    -h|--help) sed -n '2,54p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -206,6 +216,7 @@ echo "==> launching (run $run)"
 SIMCTL_CHILD_TOPO_CLAUDE_SETUP_TOKEN="$token" \
 SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" \
 SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland" \
+SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" \
 SIMCTL_CHILD_TOPO_DEBUG_RUN="$run" \
   xcrun simctl launch --console-pty --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
 launcher=$!
@@ -235,7 +246,8 @@ wait_for() {
 
 [ -z "$send" ] || wait_for done "the turn"
 [ -z "$userland" ] || wait_for "userland done" "the guest command"
-if [ -n "$send" ] || [ -n "$userland" ]; then
+[ -z "$guestturn" ] || wait_for "guest turn done" "the guest's turns"
+if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
   # The closing lines are printed; a launcher already gone by now has to have gone cleanly.
   if [ -n "$launcher" ] && ! kill -0 "$launcher" 2>/dev/null; then
     wait "$launcher" && status=0 || status=$?; launcher=""
@@ -279,7 +291,28 @@ if [ -n "$userland" ]; then
   echo "==> the guest booted and ran the command"
 fi
 
-if [ -n "$send" ] || [ -n "$userland" ]; then
+if [ -n "$guestturn" ]; then
+  lines="$(grep '\[topo-debug\]' "$log" | tr -d '\r')"
+  grep -q '\[topo-debug\] guest turn error:' <<< "$lines" && fail "the guest's turns reported an error"
+  grep -Eq '^\[topo-debug\] guest turn [0-9]+ (failed|abandoned)' <<< "$lines" && fail "a guest turn failed or was abandoned"
+  count="$(awk -F ' \\|\\| ' '{ n = 0; for (i = 1; i <= NF; i++) if ($i ~ /[^ ]/) n++; print n }' <<< "$guestturn")"
+  resident=""
+  for n in $(seq 1 "$count"); do
+    started="$(grep -E "^\[topo-debug\] guest turn $n model: claude-haiku-4-5[^ ]*, session [^ ]+, process [0-9]+$" <<< "$lines" | head -1 || true)"
+    [ -n "$started" ] || fail "guest turn $n did not start on Haiku in a named session and process"
+    grep -Eq "^\[topo-debug\] guest turn $n answered in [0-9.]+ s: " <<< "$lines" \
+      || fail "guest turn $n was not answered"
+    # Every turn of a run goes to one resident process in one session: a turn answered by a
+    # process started after the first is a restart the run did not ask for.
+    this="${started#*, session }"
+    [ -z "$resident" ] || [ "$this" = "$resident" ] \
+      || fail "guest turn $n went to session and process ${this/, process / in process }, not ${resident/, process / in process }"
+    resident="$this"
+  done
+  echo "==> the resident Claude Code answered $count turns in one process (session ${resident})"
+fi
+
+if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
   grep '\[topo-debug\]' "$log"
 else
   wait "$launcher" && status=0 || status=$?; launcher=""

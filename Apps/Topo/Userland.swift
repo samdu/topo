@@ -66,8 +66,9 @@ final class DownloadedEntry: DownloadSource {
 /// another pinned entry, which stays in its manifest home and is handed out as the installer that
 /// verifies and mounts it into a booted guest (`ClaudeCodeInstaller`), so nothing here copies it.
 /// Both are asked for on every foreground, like the ear's and the voice's models. A fetch that
-/// fails ends in `failed` with its reason, and the next `prepare` fetches afresh. Nothing boots
-/// the guest here: only a debug launch does (`DebugRun.userland`), and the tests.
+/// fails ends in `failed` with its reason, and the next `prepare` fetches afresh. `bootGuest` boots
+/// the guest once per process; only the debug launches call it (`DebugRun.userland`,
+/// `DebugRun.guestTurn`), and the tests boot their own.
 @MainActor
 @Observable
 final class Userland {
@@ -106,6 +107,7 @@ final class Userland {
     private var readiness: [CheckedContinuation<URL, Error>] = []
     private var claudeReadiness: [CheckedContinuation<ClaudeCodeInstaller, Error>] = []
     private var claudeInstaller: ClaudeCodeInstaller?
+    private var booting: Task<ClaudeCodeInstaller.Installed, Error>?
 
     init(installer: RootfsInstaller = .standard(), source: (any DownloadSource)? = nil,
          claudeSource: (any DownloadSource)? = nil) {
@@ -188,6 +190,26 @@ final class Userland {
             claudeReadiness.append(continuation)
             prepareClaude()
         }
+    }
+
+    /// The guest booted with Claude Code mounted, once per process: waits for both downloads,
+    /// boots the kernel on the fakefs, and verifies and mounts Claude Code off the main thread
+    /// (the digest reads the whole binary). Every caller after the first gets the first's
+    /// answer, failure included, since the kernel boots at most once.
+    func bootGuest() async throws -> ClaudeCodeInstaller.Installed {
+        if let booting { return try await booting.value }
+        let task = Task { @MainActor in
+            let fakefs = try await self.ready()
+            let claude = try await self.claudeCode()
+            try Guest.shared.boot(fakefs: fakefs)
+            return try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(with: Result { try claude.install(into: Guest.shared) })
+                }
+            }
+        }
+        booting = task
+        return try await task.value
     }
 
     private func install(_ tarball: URL, _ pin: RootfsPin) {
@@ -330,7 +352,7 @@ extension DebugRun {
         guard let command = environment[userlandVariable], !command.isEmpty else { return }
         say("userland: \(userland.summary)")
         do {
-            let fakefs = try await userland.ready()
+            _ = try await userland.ready()
             switch userland.phase {
             case .ready(.reused): say("userland: rootfs reused: nothing fetched, nothing imported")
             case .ready(.imported):
@@ -341,14 +363,8 @@ extension DebugRun {
             let version = claude.pin.version
             say("userland: claude code \(version) "
                 + (userland.claudeFetchedThisLaunch ? "fetched" : "reused: nothing fetched, nothing copied"))
-            try Guest.shared.boot(fakefs: fakefs)
+            let installed = try await userland.bootGuest()
             say("userland: booted")
-            let installed = try await withCheckedThrowingContinuation { continuation in
-                // The digest reads the whole binary: a queue of its own, not the cooperative pool.
-                DispatchQueue.global(qos: .userInitiated).async {
-                    continuation.resume(with: Result { try claude.install(into: Guest.shared) })
-                }
-            }
             let milliseconds = Int(installed.verification / .milliseconds(1))
             say("userland: claude code \(installed.version) verified in \(milliseconds) ms, mounted at \(installed.command)")
             let proxy = try APIProxy(log: { line in say("proxy: \(line)") })

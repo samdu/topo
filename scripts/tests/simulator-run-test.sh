@@ -75,6 +75,36 @@ case "$2" in
                              say "userland: claude code 2.1.278 verified in 290 ms, mounted at /usr/local/bin/claude"
                              say "guest: hi there"; say "guest exit: 0"; say "userland done"; exec sleep 600 ;;
       userland-dies) say "userland: booted"; exit 42 ;;
+      guest-answered) say "userland: booted"; say "guest: starting Claude Code, a fresh session"
+                      say "guest turn 1 sent: a"; say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                      say "guest turn 1 answered in 9.10 s: ok"; say "guest turn 2 sent: b"
+                      say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
+                      say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-one-failed) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                        say "guest turn 1 failed in 12.00 s: the process ended mid-turn"
+                        say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
+                        say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-abandoned) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                       say "guest turn 1 abandoned after 15.00 s"; say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 7"
+                       say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-two-processes) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                           say "guest turn 1 answered in 9.10 s: ok"
+                           say "guest turn 2 model: claude-haiku-4-5-20251001, session S1, process 12"
+                           say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-two-sessions) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                          say "guest turn 1 answered in 9.10 s: ok"
+                          say "guest turn 2 model: claude-haiku-4-5-20251001, session S2, process 7"
+                          say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-no-process) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1"
+                        say "guest turn 1 answered in 9.10 s: ok"
+                        say "guest turn 2 model: claude-haiku-4-5-20251001, session S1"
+                        say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-error) say "guest turn error: Claude Code did not start"; say "guest turn done"; exec sleep 600 ;;
+      guest-opus) say "guest turn 1 model: claude-opus-5, session S1, process 7"; say "guest turn 1 answered in 3.00 s: ok"
+                  say "guest turn 2 model: claude-opus-5, session S1, process 7"; say "guest turn 2 answered in 1.00 s: ok"
+                  say "guest turn done"; exec sleep 600 ;;
+      guest-one-short) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                       say "guest turn 1 answered in 3.00 s: ok"; say "guest turn done"; exec sleep 600 ;;
       *) echo "fake xcrun: no scenario '$FAKE_LAUNCH'" >&2; exit 99 ;;
     esac ;;
   *) exit 0 ;;
@@ -141,6 +171,16 @@ case_ userland-claude-reused-as-expected   pass userland-reused      5  --userla
 case_ userland-claude-fetched-not-reused   fail userland-fetched     5  --userland "claude --version" --expect-claude reused
 case_ userland-claude-reused-not-fetched   fail userland-reused      5  --userland "claude --version" --expect-claude fetched
 case_ userland-claude-not-mounted          fail userland-unmounted   5  --userland "echo hi"
+case_ guest-turns-answered                 pass guest-answered       5  --guest-turn "a || b"
+case_ guest-turn-failed                    fail guest-one-failed     5  --guest-turn "a || b"
+case_ guest-turn-abandoned                 fail guest-abandoned      5  --guest-turn "a || b"
+case_ guest-turns-two-processes           fail guest-two-processes  5  --guest-turn "a || b"
+case_ guest-turns-two-sessions            fail guest-two-sessions   5  --guest-turn "a || b"
+case_ guest-turns-no-process-named        fail guest-no-process     5  --guest-turn "a || b"
+case_ guest-turn-error                     fail guest-error          5  --guest-turn "a || b"
+case_ guest-turns-not-on-haiku             fail guest-opus           5  --guest-turn "a || b"
+case_ guest-turn-missing                   fail guest-one-short      5  --guest-turn "a || b"
+case_ guest-turns-times-out-silent         fail silent               12 --guest-turn "a || b"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"
