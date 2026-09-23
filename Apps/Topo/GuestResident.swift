@@ -33,7 +33,10 @@ final class ApplicationBackgroundTime: BackgroundTime {
 final class GuestResident {
     static let shared = GuestResident()
 
-    private var starting: Task<GuestSession, Error>?
+    private let starting = StartOnce<GuestSession>()
+    /// What of the start is done, so a start tried again after a failure does not do it twice.
+    private var homeMounted = false
+    private var proxyPort: UInt16?
     private var lifecycle: GuestLifecycle?
     private var proxy: APIProxy?
     private var observers: [NSObjectProtocol] = []
@@ -62,19 +65,34 @@ final class GuestResident {
     }
 
     /// Brings the guest and the session up, once per process, and starts following the app's
-    /// lifecycle from the foreground it is in now. `tokens` is the app's one provider over the
+    /// lifecycle from the foreground it is in now. A start that fails is not kept: the next call
+    /// tries again from the step that failed (the kernel's own boot is once per process, and its
+    /// answer is `Userland.bootGuest`'s to keep). `tokens` is the app's one provider over the
     /// ordinary tokens; `log` hears the session's and the proxy's lines, and each way out's outcome.
     func start(tokens: StoredTokenProvider, userland: Userland = .shared,
                log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
-        if let starting { return try await starting.value }
-        let task = Task { @MainActor in
+        try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
-            let home = Self.homeDirectory
-            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            try Guest.shared.mount(home, at: ClaudeLauncher.home)
-            let proxy = try APIProxy(log: { log("proxy: \($0)") })
-            let port = try await proxy.start()
-            self.proxy = proxy
+            if !self.homeMounted {
+                let home = Self.homeDirectory
+                try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+                try Guest.shared.mount(home, at: ClaudeLauncher.home)
+                self.homeMounted = true
+            }
+            let port: UInt16
+            if let running = self.proxyPort {
+                port = running
+            } else {
+                let proxy = try APIProxy(log: { log("proxy: \($0)") })
+                do {
+                    port = try await proxy.start()
+                } catch {
+                    await proxy.stop()
+                    throw error
+                }
+                self.proxy = proxy
+                self.proxyPort = port
+            }
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
             let launcher = ClaudeLauncher {
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
@@ -88,8 +106,6 @@ final class GuestResident {
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
         }
-        starting = task
-        return try await task.value
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {
@@ -102,6 +118,25 @@ final class GuestResident {
                 MainActor.assumeIsolated { lifecycle.willEnterForeground() }
             },
         ]
+    }
+}
+
+/// One start at a time, whose success is kept and whose failure is not: every caller while a start
+/// runs gets its answer, and a call after one that failed starts again.
+@MainActor
+final class StartOnce<Value: Sendable> {
+    private var task: Task<Value, Error>?
+
+    func value(_ start: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        if let task { return try await task.value }
+        let task = Task { @MainActor in try await start() }
+        self.task = task
+        do {
+            return try await task.value
+        } catch {
+            if self.task == task { self.task = nil }
+            throw error
+        }
     }
 }
 

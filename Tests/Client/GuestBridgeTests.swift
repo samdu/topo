@@ -569,6 +569,51 @@ final class GuestBridgeTests: XCTestCase {
     }
 }
 
+/// The guest's start: a failure is not kept, so the start that follows it tries again.
+@MainActor
+final class StartOnceTests: XCTestCase {
+    func testAFailedStartIsTriedAgainAndASuccessIsKept() async throws {
+        let once = StartOnce<Int>()
+        var attempts = 0
+        let start: @MainActor () async throws -> Int = {
+            attempts += 1
+            if attempts == 1 { throw Refused() }
+            return 42
+        }
+        do {
+            _ = try await once.value(start)
+            XCTFail("the first start succeeded")
+        } catch is Refused {}
+        let second = try await once.value(start)
+        XCTAssertEqual(second, 42, "a start after a failure was not tried again")
+        let third = try await once.value(start)
+        XCTAssertEqual(third, 42)
+        XCTAssertEqual(attempts, 2, "a start that worked was run again")
+    }
+
+    /// Every caller waiting on a start that fails hears the failure; the next call starts afresh.
+    func testCallersWaitingOnAFailingStartShareItsFailure() async throws {
+        let once = StartOnce<Int>()
+        var attempts = 0
+        var gate: CheckedContinuation<Void, Never>?
+        let failing: @MainActor () async throws -> Int = {
+            attempts += 1
+            await withCheckedContinuation { gate = $0 }
+            throw Refused()
+        }
+        let first = Task { @MainActor in try await once.value(failing) }
+        let second = Task { @MainActor in try await once.value(failing) }
+        while gate == nil { await Task.yield() }
+        for _ in 0..<10 { await Task.yield() }
+        gate?.resume()
+        let answers = [await first.result, await second.result]
+        XCTAssertTrue(answers.allSatisfy { if case .failure = $0 { true } else { false } })
+        XCTAssertEqual(attempts, 1, "two callers started twice")
+        let recovered = try await once.value { 7 }
+        XCTAssertEqual(recovered, 7)
+    }
+}
+
 // MARK: - Doubles
 
 /// The in-memory log, able to refuse every reply's save (nothing written) and to commit the next
