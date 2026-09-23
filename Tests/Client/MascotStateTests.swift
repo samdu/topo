@@ -191,8 +191,9 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(mascot.state, MascotState(model: "claude-haiku-4-5-20251001", tokens: 0, activity: .idle))
         mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 4_210)
         XCTAssertEqual(mascot.state.tokens, 4_210)
+        mascot.harness(model: "claude-opus-5", tokens: 4_210)
+        XCTAssertEqual(mascot.state, MascotState(model: "claude-opus-5", tokens: 4_210, activity: .idle))
         mascot.harness(model: "claude-opus-5", tokens: nil)
-        XCTAssertEqual(mascot.state.tokens, 4_210, "a reply with no usage does not empty the context")
-        XCTAssertEqual(mascot.state.activity, .idle)
+        XCTAssertEqual(mascot.state.tokens, 0, "a harness with no context left him wearing the last one")
     }
 }

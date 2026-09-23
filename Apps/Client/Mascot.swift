@@ -103,11 +103,13 @@ enum MascotMapping {
     }
 
     /// The chat's own harness, when no guest turn runs: the model it asks and the context of the
-    /// last reply it got, and no tools, since the Messages API turn runs none.
+    /// last reply it got, and no tools, since the Messages API turn runs none. No context — no
+    /// reply answered here yet, or a sign-out since — is an empty one: what he wore before was
+    /// another login's.
     static func harness(_ state: MascotState, model: String, tokens: Int?) -> MascotState {
         var next = state
         next.model = model
-        if let tokens { next.tokens = tokens }
+        next.tokens = tokens ?? 0
         return next
     }
 

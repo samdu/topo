@@ -122,6 +122,26 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(mascot.state.tokens, 92_510)
     }
 
+    /// A sign-out takes the last reply's context with it. The app keeps one `Mascot` across logins
+    /// and the chat hands it the harness's context as it appears, so a context left behind is the
+    /// last person's load worn by the next one until their first reply.
+    func testASignOutTakesTheContextAndTopoWearsNone() async throws {
+        let db = InMemoryRecordDatabase()
+        let full = #"{"id":"msg","type":"message","model":"claude-haiku-4-5","content":[{"type":"text","text":"Tonight."}],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":259000,"cache_creation_input_tokens":0,"output_tokens":4}}"#
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, full)))
+        let mascot = Mascot(model: "claude-haiku-4-5")
+
+        await harness.send("When are the bins?")
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
+        XCTAssertEqual(mascot.state.tokens, 259_010)
+
+        harness.forget()
+        XCTAssertNil(harness.context, "the last login's context outlived the sign-out")
+        // The next sign-in's chat appears and hands Topo what the harness has.
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
+        XCTAssertEqual(mascot.state.tokens, 0, "Topo wore the last login's load after a sign-out")
+    }
+
     // MARK: A failed model call
 
     func testAFailedModelCallLeavesTheTurnInTheLogAndTheNextPassAnswersItOnce() async throws {
