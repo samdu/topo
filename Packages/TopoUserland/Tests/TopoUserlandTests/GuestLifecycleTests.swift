@@ -172,4 +172,26 @@ final class GuestLifecycleTests: XCTestCase {
         await eventually("the teardown waiting on the turn, not ended at once") { await clock.pending == 2 }
         XCTAssertFalse(process.terminated)
     }
+
+    func testAnEndTheBoundRunsOutOnStillEndsTheTaskAndSaysNotConfirmed() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let stuck = GuestProcess.Termination(status: nil, signalled: 13, running: 2, pipesClosed: false,
+                                             elapsed: .milliseconds(7_010),
+                                             stragglers: ["2 (claude, parent 1): exiting, last syscall 22"])
+        process.answerNextEnd(with: stuck)
+        lifecycle.didEnterBackground()
+        time.remaining = 28
+        await eventually("the first tick asleep") { await clock.pending == 1 }
+        await clock.advance(by: GraceBudget.firstTick)
+        // Holding the task past the grace gets the app killed, so an end the bound ran out on
+        // lets the task go and says so, naming what stayed.
+        await eventually("the background task ended") { time.open.isEmpty }
+        XCTAssertEqual(process.bounds, [GraceBudget.teardownBound])
+        XCTAssertEqual(outcomes.all, [.ended(turn: nil, termination: stuck)])
+        XCTAssertEqual(outcomes.all.first?.description,
+                       "ended, no turn in flight; termination NOT confirmed: not reaped, 13 signalled, 2 still running, pipes open, in 7010 ms; still there: 2 (claude, parent 1): exiting, last syscall 22")
+    }
 }

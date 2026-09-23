@@ -525,3 +525,24 @@ public actor GuestSession {
         waiting.resume(returning: wake)
     }
 }
+
+extension GuestSession.BackgroundOutcome: CustomStringConvertible {
+    /// The line the app logs for the way out. An unconfirmed termination says NOT confirmed and
+    /// carries the termination's own account of what stayed.
+    public var description: String {
+        switch self {
+        case .nothingResident: return "nothing resident"
+        case .kept: return "kept: the app came back before the teardown"
+        case .ended(let turn, let termination):
+            let fate = switch turn {
+            case .finished: "the turn in flight finished inside the grace"
+            case .abandoned: "the turn in flight was abandoned at the teardown point"
+            case nil: "no turn in flight"
+            }
+            let confirmed = termination.confirmed ? "confirmed" : "NOT confirmed"
+            return "ended, \(fate); termination \(confirmed): \(termination)"
+        case .outOfTime:
+            return "background time ran out before the termination answered; the background task was ended with the teardown still running"
+        }
+    }
+}

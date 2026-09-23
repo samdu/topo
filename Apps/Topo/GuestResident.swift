@@ -66,7 +66,7 @@ final class GuestResident {
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, log: log)
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
-                                           report: { outcome in log("background: \(Self.describe(outcome))") })
+                                           report: { outcome in log("background: \(outcome)") })
             self.lifecycle = lifecycle
             self.follow(lifecycle)
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
@@ -86,23 +86,6 @@ final class GuestResident {
                 MainActor.assumeIsolated { lifecycle.willEnterForeground() }
             },
         ]
-    }
-
-    nonisolated static func describe(_ outcome: GuestSession.BackgroundOutcome) -> String {
-        switch outcome {
-        case .nothingResident: return "nothing resident"
-        case .kept: return "kept: the app came back before the teardown"
-        case .ended(let turn, let termination):
-            let fate = switch turn {
-            case .finished: "the turn in flight finished inside the grace"
-            case .abandoned: "the turn in flight was abandoned at the teardown point"
-            case nil: "no turn in flight"
-            }
-            let confirmed = termination.confirmed ? "confirmed" : "NOT confirmed"
-            return "ended, \(fate); termination \(confirmed): \(termination)"
-        case .outOfTime:
-            return "background time ran out before the termination answered; the background task was ended with the teardown still running"
-        }
     }
 }
 

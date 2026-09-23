@@ -54,6 +54,9 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
     private var holdTermination = false
     var errors: String = ""
     private var asked: [Duration] = []
+    private var answer: GuestProcess.Termination?
+    /// What the next end answers instead of a confirmed one: an end the bound ran out on.
+    func answerNextEnd(with termination: GuestProcess.Termination) { lock.withLock { answer = termination } }
     /// The bound each termination was asked for.
     var bounds: [Duration] { lock.withLock { asked } }
 
@@ -113,7 +116,8 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
         }
         lock.withLock { ended = true }
         continuation.finish()
-        return .init(status: 137, signalled: 1, running: 0, pipesClosed: true)
+        let scripted = lock.withLock { () -> GuestProcess.Termination? in defer { answer = nil }; return answer }
+        return scripted ?? .init(status: 137, signalled: 1, running: 0, pipesClosed: true)
     }
 }
 
