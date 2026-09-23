@@ -484,6 +484,65 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertTrue(input.contains("Them: run the report"), input)
     }
 
+    /// Topo on the glass follows the chat's guest through the real wiring — the bridge's
+    /// activity, the relay, `onGuest` as `Mascot.follow(_:)` installs it — in order: the turn
+    /// begins, each update moves him, and the turn going leaves him idle.
+    func testTheMascotFollowsTheGuestsTurnInOrder() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi.", context: 1234), .cutOff])
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!, brain: bridge, relay: relay,
+                              leaseSleep: parked, pause: { _ in throw CancellationError() })
+        let mascot = Mascot(model: "claude-sonnet-5")
+        mascot.follow(harness)
+        let installed = try XCTUnwrap(harness.onGuest, "following the harness installed nothing")
+        var seen: [String] = []
+        harness.onGuest = { activity in
+            installed(activity)
+            let state = mascot.state
+            seen.append("\(Self.label(activity)) -> \(state.activity.rawValue) \(state.tokens)")
+        }
+
+        await harness.send("hello")
+        XCTAssertEqual(seen, [
+            "began 7 -> idle 0",
+            "started -> idle 0",
+            "text -> idle 0",
+            "usage -> idle 1234",
+            "ended answered -> idle 1234",
+            "gone -> idle 1234",
+        ])
+        XCTAssertEqual(mascot.state.model, "claude-haiku-4-5-20251001")
+
+        seen = []
+        await harness.send("run the report")
+        XCTAssertEqual(seen, [
+            "began 7 -> idle 1234",
+            "started -> idle 1234",
+            "tool Bash -> building 1234",
+            "ended abandoned -> idle 1234",
+            "gone -> idle 1234",
+        ])
+    }
+
+    private static func label(_ activity: GuestActivity) -> String {
+        switch activity {
+        case .began(let pid): "began \(pid.map(String.init) ?? "none")"
+        case .gone: "gone"
+        case .update(.event(.started)): "started"
+        case .update(.event(.text)): "text"
+        case .update(.event(.usage)): "usage"
+        case .update(.event(.toolUse(let name, _))): "tool \(name)"
+        case .update(.event(let other)): "\(other)"
+        case .update(.ended(.answered)): "ended answered"
+        case .update(.ended(.abandoned)): "ended abandoned"
+        case .update(.ended(.failed)): "ended failed"
+        }
+    }
+
     /// The person's control for a cut-off turn: shown, and asking again sends it once.
     func testAnUnfinishedTurnIsShownAndAskedAgainOnlyWhenThePersonAsks() async throws {
         let db = InMemoryRecordDatabase()

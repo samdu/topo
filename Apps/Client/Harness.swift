@@ -193,10 +193,16 @@ final class Harness {
     /// `database` is the suites' seam; the app passes nothing.
     static func standard(tokens: StoredTokenProvider,
                          database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database()) -> Harness {
-        let relay = GuestRelay()
-        let bridge = GuestBridge(conversation: ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile,
-                                 observe: { activity in await relay.tell(activity) })
+        let (bridge, relay) = guestBrain(ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile)
         return Harness(database: database(), tokens: tokens, brain: bridge, relay: relay)
+    }
+
+    /// The guest as the brain, and the relay its activity reaches `onGuest` through.
+    static func guestBrain(_ conversation: any GuestConversation, ledger: URL) -> (GuestBridge, GuestRelay) {
+        let relay = GuestRelay()
+        let bridge = GuestBridge(conversation: conversation, ledger: ledger,
+                                 observe: { activity in await relay.tell(activity) })
+        return (bridge, relay)
     }
 
     /// The guest, when it is what answers.

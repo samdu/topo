@@ -36,7 +36,7 @@ struct TopoApp: App {
         let harness = Harness.standard(tokens: tokens)
         let mascot = Mascot()
         // The guest answering the chat moves Topo as it works: each turn's events set his pose.
-        harness.onGuest = { mascot.follow($0) }
+        mascot.follow(harness)
         _harness = State(initialValue: harness)
         _mascot = State(initialValue: mascot)
         _memory = State(initialValue: Memory.standard())

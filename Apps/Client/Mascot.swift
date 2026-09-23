@@ -169,6 +169,11 @@ final class Mascot {
     /// doing it now.
     func guestTurnGone() { state = MascotMapping.ended(state) }
 
+    /// Topo follows the chat's guest: every turn the harness's brain sends it moves him.
+    func follow(_ harness: Harness) {
+        harness.onGuest = { [self] activity in follow(activity) }
+    }
+
     /// What the chat's guest is doing, as the harness's brain tells it.
     func follow(_ activity: GuestActivity) {
         switch activity {
