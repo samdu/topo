@@ -46,13 +46,19 @@ public struct ClaudeLauncher: ResidentLauncher {
         ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", command] + Self.arguments(model: model, resume: resume)
     }
 
-    public func launch(resume session: String?) async throws -> any ResidentProcess {
+    /// The resident's environment: the guest's, `HOME` at the mount, `IS_SANDBOX=1`, and what
+    /// `environment` answers now. `IS_SANDBOX` is the resident's alone: the guest runs everything
+    /// as root, and Claude Code refuses to bypass permissions as root unless it is told it is in a
+    /// sandbox, which it is.
+    public func launchEnvironment() async throws -> [String: String] {
         var environment = Guest.environment
         environment["HOME"] = home
-        // The guest runs everything as root, and Claude Code refuses to bypass permissions as root
-        // unless it is told it is in a sandbox, which it is.
         environment["IS_SANDBOX"] = "1"
         environment.merge(try await self.environment()) { _, new in new }
-        return try await guest.spawn("/bin/sh", commandLine(resume: session), environment: environment)
+        return environment
+    }
+
+    public func launch(resume session: String?) async throws -> any ResidentProcess {
+        try await guest.spawn("/bin/sh", commandLine(resume: session), environment: try await launchEnvironment())
     }
 }
