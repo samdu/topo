@@ -97,6 +97,7 @@
 		4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		4FFF92184855CF46623E033B /* AudioLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98D3BE114E74EF949FD68B7B /* AudioLog.swift */; };
 		5085BBEFC04DEA12CCDB38DB /* Userland.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F25015F931190C1B4C01A00 /* Userland.swift */; };
+		508EB5B8E3D4A3679611A869 /* TopoOnTheGlassTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD2BEF1581B6D3DF49DF650C /* TopoOnTheGlassTests.swift */; };
 		50B378B1C1B86503B32F9583 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		510B82888095A483E442BA47 /* TVRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7905C0DCB97E97379C3533 /* TVRootView.swift */; };
 		51836B7F6FB4BD51CBA11825 /* PressRefusalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */; };
@@ -397,6 +398,7 @@
 		B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceTokens.swift; sourceTree = "<group>"; };
 		B82E94F64E76CD6727BEB803 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
 		BCD2D48725224C0E601F432D /* MemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryTests.swift; sourceTree = "<group>"; };
+		BD2BEF1581B6D3DF49DF650C /* TopoOnTheGlassTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoOnTheGlassTests.swift; sourceTree = "<group>"; };
 		BD6A5FA002CAE78588A94E39 /* GuestLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestLifecycleTests.swift; sourceTree = "<group>"; };
 		BE9C965D7E36544A4F9526C9 /* TopoHub.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoHub.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyTests.swift; sourceTree = "<group>"; };
@@ -790,6 +792,7 @@
 				06CCA9A5FEFF96C67A16956F /* BadgeGestureTests.swift */,
 				7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */,
 				91354032F5443E868316550B /* MicrophonePressTests.swift */,
+				BD2BEF1581B6D3DF49DF650C /* TopoOnTheGlassTests.swift */,
 			);
 			path = ClientUI;
 			sourceTree = "<group>";
@@ -1223,6 +1226,7 @@
 				D376D05DBF93FC051675810E /* BadgeGestureTests.swift in Sources */,
 				40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */,
 				A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */,
+				508EB5B8E3D4A3679611A869 /* TopoOnTheGlassTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

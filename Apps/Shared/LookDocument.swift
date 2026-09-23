@@ -688,7 +688,11 @@ extension View {
     /// from it, and a join nothing can hold is a document that decodes perfectly and is never
     /// worn.
     func wearing(_ memory: Memory) -> some View {
+        #if DEBUG
+        environment(\.look, DebugRun.look ?? memory.look)
+        #else
         environment(\.look, memory.look)
+        #endif
     }
 }
 #endif
