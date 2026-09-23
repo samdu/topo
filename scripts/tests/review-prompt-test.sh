@@ -12,7 +12,7 @@
 #   - the posted comment's first line is exactly `<!-- agent-review: codex -->`, and its second
 #     names the PR head it was given;
 #   - no codex comment, a codex marker posted by anyone but github-actions[bot], a newest codex
-#     comment with no SHA marker, a SHA that is not an ancestor of the head, a SHA the remote does
+#     comment with no SHA marker on its second line (none at all, or one elsewhere), a SHA that is not an ancestor of the head, a SHA the remote does
 #     not have, and a `gh` that fails are each a first review — the instructions and the
 #     description alone — with the reason on stderr;
 #   - otherwise the newest verdict is quoted verbatim inside its fence, and the change since is
@@ -251,6 +251,13 @@ no_sha_body="$(sed 2d <<<"$body")"
 { echo "["; comment 'github-actions[bot]' "$body"; echo ","; comment 'github-actions[bot]' "$no_sha_body"; echo "]"; } > "$work/nosha.json"
 run nosha "$work/nosha.json"
 first_review nosha "names no commit"
+
+# A legacy verdict whose text carries the marker, but not on line two: not a record of a review.
+stray_body="$no_sha_body
+<!-- agent-review-sha: $reviewed -->"
+{ echo "["; comment 'github-actions[bot]' "$stray_body"; echo "]"; } > "$work/stray.json"
+run stray "$work/stray.json"
+first_review stray "names no commit"
 
 { echo "["; comment 'github-actions[bot]' "$old_body"; echo "]"; } > "$work/rewritten.json"
 run rewritten "$work/rewritten.json"

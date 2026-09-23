@@ -8,7 +8,8 @@
 #
 # The previous verdict is the newest issue comment on the PR posted by `github-actions[bot]` whose
 # body begins with the codex marker (`<!-- agent-review: codex -->`), read through `gh api`. Its
-# second marker line, `<!-- agent-review-sha: <sha> -->`, names the PR head that review read.
+# second line, `<!-- agent-review-sha: <sha> -->` and read there alone, names the PR head that
+# review read.
 # The change since is the PR's own commits between two PR heads, fetched explicitly from the
 # remote: the one the marker names and HEAD_SHA, the run's `pull_request.head.sha`. The checkout's
 # own HEAD is the merge ref, which carries every advance of the base, and is never read. A branch
@@ -79,7 +80,9 @@ if [ -z "$previous" ]; then
   exit 0
 fi
 
-prev_sha="$(sed -n 's/^<!-- agent-review-sha: \([0-9a-f]\{40\}\) -->$/\1/p' <<<"$previous" | head -n 1)"
+# Line two and no other: the contract is the line post_feedback writes under the codex marker, and
+# the same text anywhere else in a verdict is words, not a record of what was reviewed.
+prev_sha="$(sed -n '2s/^<!-- agent-review-sha: \([0-9a-f]\{40\}\) -->$/\1/p' <<<"$previous")"
 if [ -z "$prev_sha" ]; then
   log "first review: the previous Codex review names no commit (no agent-review-sha marker)"
   first_review
