@@ -38,6 +38,20 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: torn), .unresolved)
     }
 
+    /// Cut after the final message's thinking block, which carries `end_turn`, and before its
+    /// text block: a finished message with no words is no reply.
+    func testATranscriptCutBetweenTheFinalThinkingAndItsTextIsUnresolved() throws {
+        let lines = try Transcripts.lines("answered-with-tool")
+        let text = try XCTUnwrap(lines.lastIndex { $0.contains(#""stop_reason":"end_turn""#) })
+        let thinking = try XCTUnwrap(lines.firstIndex { $0.contains(#""stop_reason":"end_turn""#) })
+        XCTAssertLessThan(thinking, text)
+        XCTAssertTrue(lines[thinking].contains(#""type":"thinking""#))
+        XCTAssertTrue(lines[text].contains(#""type":"text""#))
+        let cut = Array(lines[...thinking])
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: cut), .unresolved)
+        XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: Array(lines[...text])), .answered("marmalade"))
+    }
+
     /// An error Claude Code wrote in the model's place is no reply.
     func testASyntheticErrorIsNoReply() {
         let lines = [

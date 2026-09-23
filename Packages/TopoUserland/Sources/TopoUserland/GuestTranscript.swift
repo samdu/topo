@@ -27,7 +27,7 @@ public enum GuestTranscript {
 
     /// The verdict on the input `id` over a transcript's lines. Only what follows the input and
     /// comes before the next prompt counts: the reply is the last main-chain assistant message
-    /// there, and it is finished when its stop reason is one that ends a turn. An error Claude
+    /// there, and it is finished when its stop reason is one that ends a turn and it holds text. An error Claude
     /// Code wrote in the model's place (`isApiErrorMessage`, or the `<synthetic>` model) is no
     /// reply. A line that is not a JSON object is skipped, since the last line of a transcript a
     /// process was killed while writing can be half a line.
@@ -56,7 +56,11 @@ public enum GuestTranscript {
         }
         guard received else { return .notReceived }
         guard let last, let stop = last.stop, finished.contains(stop) else { return .unresolved }
-        return .answered(texts.filter { $0.id == last.id }.map(\.text).joined())
+        // Every block of the final message carries its stop reason, the thinking before the text
+        // included, so a transcript cut between them ends on a finished message with no words
+        // yet: no reply.
+        let reply = texts.filter { $0.id == last.id }.map(\.text).joined()
+        return reply.isEmpty ? .unresolved : .answered(reply)
     }
 
     /// The verdict on `id` from the transcripts under `home`: the session's own file first, then
