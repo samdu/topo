@@ -83,7 +83,7 @@ final class StreamJSONTests: XCTestCase {
     func testClaudeCodesArguments() {
         XCTAssertEqual(ClaudeLauncher.arguments(model: "claude-haiku-4-5-20251001", resume: nil),
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                        "--model", "claude-haiku-4-5-20251001"])
+                        "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001"])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
         let launcher = ClaudeLauncher(model: nil) { [:] }
         XCTAssertEqual(Array(launcher.commandLine(resume: nil).prefix(4)),

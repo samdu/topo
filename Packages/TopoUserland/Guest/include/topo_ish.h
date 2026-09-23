@@ -45,17 +45,6 @@ int topo_ish_wait(int pid, int *status);
 #define TOPO_ISH_SIGKILL 9
 #define TOPO_ISH_SIGTERM 15
 
-/// Sends `sig` to `pid` and to every task under it — its children, theirs, and so on — as the
-/// pid table stands at one instant (the walk and the signals are made under its lock, so no task
-/// can be reparented away between the two), and writes the pids of the live ones, `pid` first,
-/// into `pids` up to `capacity`. The walk has no ceiling: every task is signalled whatever
-/// `capacity` is, and an answer larger than `capacity` says the list was cut and a larger buffer is
-/// needed. Signal 0 signals nothing and only reports the tree. Answers how many live tasks the tree
-/// held (0 when `pid` is not a live task), or a negative guest errno (`_ENOMEM` when the walk could
-/// not be made, in which case nothing was signalled).
-/// Requires a booted kernel.
-int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity);
-
 /// Sends `sig` to every task in the guest but init, and writes the pids of those that are not
 /// zombies (exiting ones included, which are listed and not signalled again) into `pids` up to
 /// `capacity`. Answers how many there were, which may be more than `capacity`, or a negative guest
