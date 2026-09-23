@@ -91,6 +91,7 @@ enum LookDocument {
             r.object("badge") { badge(&look.badge, $0) }
             r.object("settings") { settings(&look.settings, $0) }
             r.object("composer") { composer(&look.composer, $0) }
+            r.object("mascot") { mascot(&look.mascot, $0) }
         }
         return Reading(look: look, state: .read(fields: reader.applied), notes: reader.notes)
     }
@@ -190,6 +191,13 @@ enum LookDocument {
         r.object("openJewel") { jewel(&value.openJewel, $0) }
         r.saturation("dimmedSaturation", &value.dimmedSaturation)
         r.alpha("dimmedOpacity", &value.dimmedOpacity)
+    }
+
+    private static func mascot(_ value: inout Look.Mascot, _ r: Reader) {
+        r.pixelScale("scale", &value.scale)
+        r.size("offset", &value.offset, signed: true)
+        r.length("stroll", &value.stroll)
+        r.frameInterval("frameInterval", &value.frameInterval)
     }
 
     private static func flank(_ value: inout Look.Composer.Flank, _ r: Reader) {
@@ -320,6 +328,25 @@ enum LookDocument {
         /// thing to ask for; the bound is where it stops meaning anything.
         func saturation(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0...4, "a number between 0 and 4") {
+                applied += 1
+                value = number
+            }
+        }
+
+        /// Points to a pixel of a picture drawn in pixels: a quarter of a point to four. Under a
+        /// quarter nothing of a pixel is left to see; over four one pixel is a block.
+        func pixelScale(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0.25...4, "a number of points to a pixel between 0.25 and 4") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
+        /// How long a frame of an animation stays up: from a hundred-and-twentieth of a second,
+        /// the fastest display, to one. Never nothing, since a frame that lasts no time is a
+        /// clock asked to tick without end.
+        func frameInterval(_ key: String, _ value: inout Double) {
+            if let number = amount(key, in: (1.0 / 120)...1, "a time in seconds between 1/120 and 1") {
                 applied += 1
                 value = number
             }

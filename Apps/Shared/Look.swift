@@ -36,6 +36,8 @@ struct Look: Equatable, Sendable {
     var composer: Composer
     /// The person's next turn, written at the end of the transcript.
     var draft: Draft
+    /// Topo himself, on the composer's glass.
+    var mascot: Mascot
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -47,6 +49,7 @@ struct Look: Equatable, Sendable {
         settings = Settings()
         composer = Composer()
         draft = Draft(screen)
+        mascot = Mascot()
     }
 
     /// The three screens the client is drawn on.
@@ -368,6 +371,27 @@ struct Look: Equatable, Sendable {
             /// into pale stone has no ink to flip.
             var openCast = Theme.primary.opacity(0.5)
         }
+    }
+
+    /// Topo on the composer's glass: where he perches in the flank left of the microphone, how
+    /// big, how far he strolls when idle and how often he is drawn. His pixels and colours are
+    /// the engine's (`Packages/TopoMascot`); what is here is where they go.
+    ///
+    /// Each field is read in the range the document names, and then clamped again to the flank
+    /// he is drawn in (`MascotPlacement`): whatever the look says, he is drawn between the pane's
+    /// leading end and the well, and never over the microphone.
+    struct Mascot: Equatable, Sendable {
+        /// Points to one of the engine's art pixels, scaled nearest-neighbour so pixels stay
+        /// pixels. One is the size the engine's poses were drawn at.
+        var scale: CGFloat = 1
+        /// Where his body stands, from home: the middle of the flank, his shelf row on the pane's
+        /// top edge. Positive is right and down.
+        var offset = CGSize.zero
+        /// How far towards the pane's leading end he strolls when idle, in points.
+        var stroll: CGFloat = 36
+        /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
+        /// motion was judged at and half the work of the display's rate.
+        var frameInterval = 1.0 / 30
     }
 
     /// The person's next turn, written at the end of the transcript rather than in the glass.

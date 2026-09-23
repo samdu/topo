@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 141
+    static let fields = 145
 
     static let full = """
     {
@@ -126,6 +126,12 @@ enum LookFixture {
           "openCast": ["#7F00FF", "#FF7F00"]
         },
         "openJewel": \(jewel)
+      },
+      "mascot": {
+        "scale": 2,
+        "offset": { "width": -6, "height": 3 },
+        "stroll": 12,
+        "frameInterval": 0.05
       }
     }
     """

@@ -124,6 +124,21 @@ final class LookDocumentTests: XCTestCase {
 
     /// JSON gives every number as an `NSNumber`, and a `Bool` is one. A true where a length goes
     /// would otherwise be a padding of one point.
+    /// Topo's scale and frame interval are read in ranges of their own: a scale under a quarter
+    /// or over four, and a frame that lasts no time or over a second, are refused, each alone.
+    func testTopoIsReadInItsOwnRanges() {
+        let reading = LookDocument.read(#"{"mascot": {"scale": 0.1, "frameInterval": 0, "stroll": -1, "offset": {"width": 9000}}}"#)
+        XCTAssertEqual(reading.look.mascot, Look.Mascot())
+        XCTAssertEqual(reading.notes.count, 4, "\(reading.notes)")
+        let fine = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "stroll": 4000, "offset": {"width": -4000, "height": 4000}}}"#)
+        XCTAssertEqual(fine.notes, [])
+        XCTAssertEqual(fine.look.mascot.scale, 4)
+        XCTAssertEqual(fine.look.mascot.frameInterval, 1)
+        XCTAssertEqual(fine.look.mascot.offset, CGSize(width: -4000, height: 4000))
+        XCTAssertEqual(LookDocument.read(#"{"mascot": {"scale": 5}}"#).look.mascot.scale, 1)
+        XCTAssertEqual(LookDocument.read(#"{"mascot": {"frameInterval": 2}}"#).look.mascot.frameInterval, 1.0 / 30)
+    }
+
     func testABooleanIsNotANumber() {
         let reading = LookDocument.read("""
         { "bubble": { "strokeWidth": true } }

@@ -115,7 +115,7 @@ extension DebugRun {
     /// variable is absent; refused beside `TOPO_DEBUG_USERLAND`, since the resident's end ends
     /// every guest task.
     @MainActor
-    static func guestTurn(tokens: StoredTokenProvider,
+    static func guestTurn(tokens: StoredTokenProvider, mascot: Mascot,
                           environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let turns = guestTurns(environment)
         guard !turns.isEmpty else { return }
@@ -147,12 +147,21 @@ extension DebugRun {
                 let pid = await session.residentPID.map(String.init) ?? "none"
                 say("guest turn \(number) sent: \(text)")
                 guard let updates else { continue }
+                // Topo on the glass follows the turn: each update moves him, and the turn going,
+                // however it went, leaves him idle. Every change of pose is printed.
+                mascot.guestTurnBegan()
+                var pose = mascot.state.activity
                 for await update in updates {
+                    mascot.guest(update)
+                    if mascot.state.activity != pose {
+                        pose = mascot.state.activity
+                        say("guest turn \(number) mascot: \(pose.rawValue)")
+                    }
                     switch update {
                     case .event(.started(let id, let model)):
                         say("guest turn \(number) model: \(model), session \(id), process \(pid)")
-                    case .event(.toolUse(let name)):
-                        say("guest turn \(number) tool: \(name)")
+                    case .event(.toolUse(let name, let path)):
+                        say("guest turn \(number) tool: \(name)" + (path.map { " \($0)" } ?? ""))
                     case .event(.malformed(let line)):
                         say("guest turn \(number) malformed line: \(line)")
                     case .event:
@@ -169,6 +178,8 @@ extension DebugRun {
                         }
                     }
                 }
+                mascot.guestTurnGone()
+                if pose != .idle { say("guest turn \(number) mascot: idle") }
             }
         } catch {
             say("guest turn error: \(error)")

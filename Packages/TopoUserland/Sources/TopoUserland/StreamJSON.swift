@@ -1,16 +1,22 @@
 import Foundation
 
 /// One event of Claude Code's `--output-format stream-json --verbose` output, as far as the app
-/// reads it: what a turn said, which tools it called, the model and how much context it holds, and
-/// how it ended. Everything else in a line is left unread.
+/// reads it: what a turn said, that it thought, which tools it called and the file a writing tool
+/// names, the model and how much context it holds, and how it ended. Everything else in a line is
+/// left unread.
 public enum StreamEvent: Sendable, Equatable {
     /// `system`/`init`: the session and the model the process answers with. Claude Code writes it
     /// once the first input arrives, not at start, and again before every turn after that.
     case started(session: String, model: String)
     /// A text block of an assistant message.
     case text(String)
-    /// A tool the assistant called, by name.
-    case toolUse(name: String)
+    /// A tool the assistant called, by name. For a tool that writes a file — `Write`, `Edit`,
+    /// `MultiEdit`, `NotebookEdit` (`StreamJSON.fileTools`) — `path` is the file it names, which is
+    /// what says whether the turn is writing code, prose or the memory; nothing else of a tool's
+    /// input is read, and every other tool's path is nil.
+    case toolUse(name: String, path: String? = nil)
+    /// A thinking block of an assistant message: that the model thought, and nothing of what.
+    case thinking
     /// An assistant message's usage.
     case usage(Usage)
     /// The turn's end, answered or failed.
@@ -96,7 +102,13 @@ public enum StreamJSON {
             case "text":
                 if let text = block["text"] as? String, !text.isEmpty { events.append(.text(text)) }
             case "tool_use":
-                if let name = block["name"] as? String { events.append(.toolUse(name: name)) }
+                if let name = block["name"] as? String {
+                    events.append(.toolUse(name: name, path: fileTools[name].flatMap { key in
+                        (block["input"] as? [String: Any])?[key] as? String
+                    }))
+                }
+            case "thinking", "redacted_thinking":
+                events.append(.thinking)
             default:
                 break
             }
@@ -109,6 +121,12 @@ public enum StreamJSON {
         }
         return events
     }
+
+    /// The tools that write a file, and the key of their input that names it. The one thing read
+    /// from any tool's input.
+    public static let fileTools: [String: String] = [
+        "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path", "NotebookEdit": "notebook_path",
+    ]
 
     private static func result(_ object: [String: Any], subtype: String?) -> StreamEvent.TurnResult {
         let subtype = subtype ?? ""
