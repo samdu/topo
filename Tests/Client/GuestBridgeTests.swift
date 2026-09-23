@@ -405,15 +405,25 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertTrue(input.contains("You, answering on another device: Noted."), input)
     }
 
-    /// At most `contextLimit` unseen turns go in one input.
-    func testAFreshSessionIsGivenAtMostTheLimit() {
-        let turns = (1...60).map { Turn(ref: TurnRef(device: DeviceID("pad"), sequence: Int64($0)), parents: [],
-                                        role: .person, text: "t\($0)", at: Date()) }
-        let answering = Turn(ref: TurnRef(device: phone, sequence: 1), parents: [], role: .person, text: "now", at: Date())
-        let input = GuestBridge.render(unseen: Array(turns.suffix(GuestBridge.contextLimit)), answering: [answering], fresh: true)
+    /// At most `contextLimit` unseen turns go in one input, cut at the bridge: 60 turns the guest
+    /// has not seen, and the input carries the newest 40.
+    func testAFreshSessionIsGivenAtMostTheLimitOfUnseenTurns() async throws {
+        let db = InMemoryRecordDatabase()
+        for n in 1...60 {
+            try await write(db, n.isMultiple(of: 2) ? .assistant : .person, "t\(n)", device: "pad")
+        }
+        let (runner, _, guest) = try await launch(db, .reply("Caught up."))
+        _ = try await runner.run("now", model: .sonnet5)
+        let input = try XCTUnwrap(guest.inputs.first)
+        let lines = input.components(separatedBy: "\n\n")
+        let turns = lines.filter { $0.hasPrefix("Them: ") || $0.hasPrefix("You, answering on another device: ") }
+        XCTAssertEqual(turns.count, GuestBridge.contextLimit)
+        XCTAssertEqual(GuestBridge.contextLimit, 40)
         XCTAssertTrue(input.contains("the last 40 turns"), input)
-        XCTAssertFalse(input.contains("Them: t20\n"), input)
-        XCTAssertTrue(input.contains("Them: t21"), input)
+        XCTAssertEqual(turns.first, "Them: t21")
+        XCTAssertEqual(turns.last, "You, answering on another device: t60")
+        XCTAssertFalse(lines.contains("You, answering on another device: t20"))
+        XCTAssertEqual(lines.last, "now")
     }
 
     // MARK: - The model
