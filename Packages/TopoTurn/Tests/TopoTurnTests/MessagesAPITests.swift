@@ -23,6 +23,20 @@ import TopoCore
         #expect(out == Reply(text: "hi", model: "claude-sonnet-5", stopReason: "end_turn", inputTokens: 10, outputTokens: 5))
     }
 
+    @Test func theContextIsTheInputAndBothCacheCounts() async throws {
+        let transport = RecordingTransport(
+            (200, #"{"model":"m","content":[{"type":"text","text":"a"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":90000,"cache_creation_input_tokens":2500,"output_tokens":4}}"#),
+            (200, reply("b"))
+        )
+        let api = MessagesAPI(transport: transport, tokens: FixedToken())
+        let m = [ChatMessage(role: .user, content: "x")]
+        let cached = try await api.complete(m, model: .sonnet5, system: "")
+        #expect(cached.cacheReadInputTokens == 90000)
+        #expect(cached.cacheCreationInputTokens == 2500)
+        #expect(cached.context == 92510)
+        #expect(try await api.complete(m, model: .sonnet5, system: "").context == 10, "no cache counts is input alone")
+    }
+
     @Test func joinsTextBlocksAndSurfacesErrors() async throws {
         let transport = RecordingTransport(
             (200, #"{"model":"m","content":[{"type":"thinking","thinking":""},{"type":"text","text":"a"},{"type":"text","text":"b"}],"stop_reason":"end_turn"}"#),

@@ -105,6 +105,23 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(Lease(record: try XCTUnwrap(lease))?.holder, phone)
     }
 
+    /// The context Topo wears is everything the reply was written over: input and both cache
+    /// counts. A cached conversation is mostly cache reads, so input alone would show him a
+    /// nearly empty context on a nearly full one.
+    func testTheContextOfAReplyCountsItsCacheAndReachesTopo() async throws {
+        let db = InMemoryRecordDatabase()
+        let cached = #"{"id":"msg","type":"message","model":"claude-haiku-4-5","content":[{"type":"text","text":"Tonight."}],"stop_reason":"end_turn","usage":{"input_tokens":10,"cache_read_input_tokens":90000,"cache_creation_input_tokens":2500,"output_tokens":4}}"#
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, cached)))
+
+        await harness.send("When are the bins?")
+
+        XCTAssertNil(harness.error)
+        XCTAssertEqual(harness.context, 92_510)
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
+        XCTAssertEqual(mascot.state.tokens, 92_510)
+    }
+
     // MARK: A failed model call
 
     func testAFailedModelCallLeavesTheTurnInTheLogAndTheNextPassAnswersItOnce() async throws {

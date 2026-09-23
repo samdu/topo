@@ -19,7 +19,7 @@ final class Harness {
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
     /// The tokens of context the last reply this phone asked for was written over, as the API
-    /// counted them; nil until one has been answered here. A reply another primary wrote, or one
+    /// counted them — input and both cache counts (`Reply.context`); nil until one has been answered here. A reply another primary wrote, or one
     /// found already in the log, says nothing of its context and leaves this as it was.
     private(set) var context: Int?
     /// Told about every reply the log has brought, however it arrived: one this device wrote, or
@@ -379,7 +379,7 @@ final class Harness {
             guard inFlight == generation, !Task.isCancelled else { return false }
             show(result.person)
             show(result.assistant)
-            if result.reply.inputTokens > 0 { context = result.reply.inputTokens }
+            if result.reply.context > 0 { context = result.reply.context }
             status = nil
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.
