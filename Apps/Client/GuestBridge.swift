@@ -248,6 +248,9 @@ actor GuestBridge: Brain {
             if queue.isEmpty { asking = false } else { queue.removeFirst().resume() }
         }
 
+        // What an input the log moved past carried: the guest received it, so it is not told
+        // again, but it is counted seen only when this request's reply lands, which covers it.
+        var received = Coverage()
         if let known = recent.last(where: { $0.nonce == request.nonce }) {
             return reply(known.text, to: request, usage: nil, model: nil)
         }
@@ -270,7 +273,7 @@ actor GuestBridge: Brain {
             case .askAgain:
                 break
             case .superseded:
-                ledger.seen.formUnion(pending.covers)
+                received = pending.covers
                 try record(nil)
             case .hold:
                 break
@@ -285,15 +288,18 @@ actor GuestBridge: Brain {
             // A fresh session, or another one than the ledger's, has seen none of the log.
             ledger.session = session
             ledger.seen = Coverage()
+            received = Coverage()
         }
-        let unseen = request.context.filter { !ledger.seen.contains($0.ref) }
+        let unseen = request.context.filter { !ledger.seen.contains($0.ref) && !received.contains($0.ref) }
         let input = Self.render(unseen: Array(unseen.suffix(Self.contextLimit)), answering: request.answering,
                                 fresh: fresh && !unseen.isEmpty)
+        var covers = Coverage(request.context.map(\.ref) + request.answering.map(\.ref))
+        covers.formUnion(received)
         let id = UUID().uuidString.lowercased()
         // Written before the input goes: after a crash this is how the transcript is asked.
         try record(GuestLedger.Pending(input: id, nonce: request.nonce, parents: request.parents,
                                        answering: request.answering.map(\.ref),
-                                       covers: Coverage(request.context.map(\.ref) + request.answering.map(\.ref)),
+                                       covers: covers,
                                        session: session, sentAt: Date(), state: .sent))
         let pid = await conversation.residentPID()
         let updates: AsyncStream<GuestSession.TurnUpdate>

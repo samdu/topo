@@ -279,6 +279,36 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertTrue(unresolved.isEmpty)
     }
 
+    /// A turn cut off and then moved past: the guest is not told it again, but nothing it carried
+    /// counts as seen until the reply to the turn that moved past it is in the log. With that
+    /// reply's append refused, the coverage has not moved; once it is written, it has.
+    func testMovingPastACutOffTurnAdvancesTheCoverageOnlyWhenTheReplyLands() async throws {
+        let db = RefusingReplies()
+        let (runner, bridge, guest) = try await launch(db, .cutOff, .reply("Fine."))
+        let cut = try? await runner.run("run the report", model: .sonnet5)
+        XCTAssertNil(cut)
+        let seenBefore = await bridge.current.seen
+        let logged = try await log(db)
+        let report = try XCTUnwrap(logged.first)
+
+        await db.refuse(true)
+        let refused = try? await runner.run("never mind", model: .sonnet5)
+        XCTAssertNil(refused)
+        XCTAssertEqual(guest.inputs, ["run the report", "never mind"], "the guest was told the cut-off turn again")
+        let afterRefusal = await bridge.current
+        XCTAssertEqual(afterRefusal.seen, seenBefore, "the coverage moved before the reply landed")
+        XCTAssertFalse(afterRefusal.seen.contains(report.ref))
+        XCTAssertNotNil(afterRefusal.pending)
+
+        await db.refuse(false)
+        _ = try await runner.answerPending(model: .sonnet5)
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["run the report", "never mind", "Fine."])
+        let landed = await bridge.current
+        XCTAssertTrue(turns.allSatisfy { landed.seen.contains($0.ref) }, "the coverage did not catch up once it landed")
+        XCTAssertEqual(guest.inputs.count, 2)
+    }
+
     /// The process ended after writing its reply and before its result line: the transcript has
     /// the answer, so it is written, not asked for again.
     func testAReplyTheProcessWroteBeforeItExitedIsWritten() async throws {
