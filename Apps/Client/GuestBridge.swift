@@ -222,8 +222,9 @@ enum Reconciliation: Equatable {
 /// the reply is written without asking again; received and unanswered, it is unresolved — shown,
 /// and asked again only when the person asks, since it may have run tools.
 actor GuestBridge: Brain {
-    /// How many turns of the log a session that has seen nothing is given, and the most unseen
-    /// turns any input carries; the oldest beyond it are counted seen without being sent.
+    /// How many turns of the log a session that has seen nothing is given; the older ones are its
+    /// history, counted seen without being told. A session that has seen the log is told every
+    /// turn it has not seen, however many: what it was told is all it knows of the conversation.
     static let contextLimit = 40
 
     private let conversation: any GuestConversation
@@ -323,10 +324,14 @@ actor GuestBridge: Brain {
             received = Coverage()
         }
         let unseen = request.context.filter { !ledger.seen.contains($0.ref) && !received.contains($0.ref) }
-        let input = Self.render(unseen: Array(unseen.suffix(Self.contextLimit)), answering: request.answering,
-                                fresh: fresh && !unseen.isEmpty)
-        var covers = Coverage(request.context.map(\.ref) + request.answering.map(\.ref))
+        let told = fresh ? Array(unseen.suffix(Self.contextLimit)) : unseen
+        let input = Self.render(unseen: told, answering: request.answering, fresh: fresh && !told.isEmpty)
+        // What the guest has seen once this is answered: what the input tells it, what it received
+        // of an input the log moved past, and, for a fresh session alone, the history before the
+        // last `contextLimit` turns, which it is never told.
+        var covers = Coverage(told.map(\.ref) + request.answering.map(\.ref))
         covers.formUnion(received)
+        if fresh { covers.insert(request.context.map(\.ref)) }
         let id = UUID().uuidString.lowercased()
         // `ready` can wait a long time, and a sign-out can come while it does.
         try stillCurrent(login)

@@ -596,6 +596,35 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(lines.last, "now")
     }
 
+    /// A session that has seen the log is told every turn it has not seen, however many: 41 turns
+    /// from another device between two of the phone's all reach the guest, oldest first, and the
+    /// next input carries none of them again.
+    func testAnExistingSessionIsToldEveryTurnItHasNotSeenBeyondTheLimit() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("Noted."), .reply("Caught up."), .reply("Fine."))
+        _ = try await runner.run("first", model: .sonnet5)
+        let missed = GuestBridge.contextLimit + 1
+        for n in 1...missed {
+            try await write(db, n.isMultiple(of: 2) ? .assistant : .person, "m\(n)", device: "pad")
+        }
+        _ = try await runner.run("now", model: .sonnet5)
+        XCTAssertEqual(guest.inputs.count, 2)
+        let input = guest.inputs[1]
+        XCTAssertTrue(input.hasPrefix("[Meanwhile"), input)
+        let lines = input.components(separatedBy: "\n\n")
+        let told = lines.filter { $0.hasPrefix("Them: ") || $0.hasPrefix("You, answering on another device: ") }
+        XCTAssertEqual(told.count, missed, "an unseen turn was left out of the input")
+        XCTAssertEqual(told.first, "Them: m1")
+        XCTAssertEqual(told.last, "Them: m\(missed)")
+        XCTAssertFalse(input.contains("Them: first"), "the guest was told what it had seen")
+
+        _ = try await runner.run("again", model: .sonnet5)
+        XCTAssertEqual(guest.inputs.last, "again", "the next input told the guest something again")
+        let ledger = await bridge.current
+        let turns = try await log(db)
+        XCTAssertTrue(turns.allSatisfy { ledger.seen.contains($0.ref) })
+    }
+
     // MARK: - The model
 
     func testTheModelSettingReachesTheGuest() async throws {
