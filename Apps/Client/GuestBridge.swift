@@ -141,10 +141,17 @@ struct GuestLedger: Codable, Equatable, Sendable {
         var askAgain = false
     }
 
-    static func load(_ url: URL) -> GuestLedger {
-        guard let data = try? Data(contentsOf: url),
-              let ledger = try? JSONDecoder().decode(GuestLedger.self, from: data) else { return GuestLedger() }
-        return ledger
+    /// The ledger on disk. No file is an empty ledger: nothing was ever sent, or sign-out took it
+    /// away. A file that cannot be read or decoded throws, and is never taken for an empty one,
+    /// since what it cannot say is whether an input it records was received.
+    static func load(_ url: URL) throws -> GuestLedger {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return GuestLedger()
+        }
+        return try JSONDecoder().decode(GuestLedger.self, from: data)
     }
 
     func save(_ url: URL) throws {
@@ -222,7 +229,11 @@ actor GuestBridge: Brain {
     private let conversation: any GuestConversation
     private let file: URL
     private let observe: @Sendable (GuestActivity) async -> Void
-    private var ledger: GuestLedger
+    private var ledger = GuestLedger()
+    /// Whether `ledger` is the one on disk. Until it is, nothing is sent, nothing is written over
+    /// the file, and every request reads it again; `ledgerUnread` says why the last read failed.
+    private var loaded = false
+    private var ledgerUnread: String?
     /// Whether a request is with the guest; the next waits its turn in `queue`, since the guest
     /// takes one turn at a time.
     private var asking = false
@@ -238,13 +249,19 @@ actor GuestBridge: Brain {
     /// it records nothing and sends nothing, wherever it was waiting when the count moved.
     private var login = 0
 
-    /// `file` is the ledger; everything the bridge knows across launches is read from it here.
+    /// `file` is the ledger; everything the bridge knows across launches is read from it here, or,
+    /// when it cannot be read, at each request until it can.
     init(conversation: any GuestConversation, ledger file: URL,
          observe: @escaping @Sendable (GuestActivity) async -> Void = { _ in }) {
         self.conversation = conversation
         self.file = file
         self.observe = observe
-        ledger = GuestLedger.load(file)
+        do {
+            ledger = try GuestLedger.load(file)
+            loaded = true
+        } catch {
+            ledgerUnread = String(describing: error)
+        }
     }
 
     // MARK: - Brain
@@ -258,6 +275,9 @@ actor GuestBridge: Brain {
             if queue.isEmpty { asking = false } else { queue.removeFirst().resume() }
         }
 
+        // A ledger that cannot be read may hold an input the guest received: nothing is sent
+        // until it can be read and that input reconciled.
+        guard readLedger() else { throw GuestBridgeError.failed(Self.ledgerUnreadable) }
         // What an input the log moved past carried: the guest received it, so it is not told
         // again, but it is counted seen only when this request's reply lands, which covers it.
         var received = Coverage()
@@ -384,8 +404,13 @@ actor GuestBridge: Brain {
     /// Why a turn waits when the guest's transcript could not be read.
     static let unreadable = "the guest's transcript could not be read, so whether it received the turn is not known; nothing is sent until it can be"
 
+    /// Why a turn waits when the bridge's own ledger could not be read.
+    static let ledgerUnreadable = "the record of what the guest was sent could not be read, so whether it received the turn is not known; nothing is sent until it can be"
+
     func landed(_ reply: Turn, nonce: String) async {
-        guard let pending = ledger.pending, pending.nonce == nonce else { return }
+        // Unread, the ledger stays as it is on disk; the reply is in the log under its nonce, and
+        // the record is reconciled against it once the ledger can be read.
+        guard readLedger(), let pending = ledger.pending, pending.nonce == nonce else { return }
         ledger.seen.formUnion(pending.covers)
         ledger.seen.insert([reply.ref])
         if let session = pending.session { ledger.session = session }
@@ -393,12 +418,12 @@ actor GuestBridge: Brain {
     }
 
     func unresolved() async -> Set<TurnRef> {
-        guard let pending = ledger.pending, pending.state == .unresolved, !pending.askAgain else { return [] }
+        guard readLedger(), let pending = ledger.pending, pending.state == .unresolved, !pending.askAgain else { return [] }
         return Set(pending.answering)
     }
 
     func owed() async -> OwedReply? {
-        guard !asking, let pending = ledger.pending else { return nil }
+        guard !asking, readLedger(), let pending = ledger.pending else { return nil }
         switch Reconciliation.of(pending, verdict: verdict(on: pending), request: nil) {
         case .clear:
             try? record(nil)
@@ -420,6 +445,8 @@ actor GuestBridge: Brain {
     func forget() async {
         login += 1
         ledger = GuestLedger()
+        loaded = true
+        ledgerUnread = nil
         try? FileManager.default.removeItem(at: file)
         provenance = [:]
         recent = []
@@ -428,6 +455,10 @@ actor GuestBridge: Brain {
 
     func describe() async -> String {
         var parts = ["Claude Code in the guest: \(await conversation.status())"]
+        if let why = ledgerUnread {
+            parts.append("the bridge's ledger could not be read (\(why)); nothing is sent until it can be")
+            return parts.joined(separator: "; ")
+        }
         parts.append("seen \(ledger.seen.count) turns" + (ledger.session.map { " of session \($0)" } ?? ""))
         if let pending = ledger.pending {
             parts.append(pending.state == .unresolved ? "a turn cut off, waiting to be asked again" : "a turn with the guest")
@@ -439,7 +470,7 @@ actor GuestBridge: Brain {
 
     /// The person chose to ask again the turn that was cut off: the next request for it is sent.
     func askAgain() {
-        guard ledger.pending?.state == .unresolved else { return }
+        guard readLedger(), ledger.pending?.state == .unresolved else { return }
         ledger.pending?.askAgain = true
         try? save()
     }
@@ -474,6 +505,22 @@ actor GuestBridge: Brain {
     private func stillCurrent(_ login: Int) throws {
         guard login == self.login else { throw CancellationError() }
         try Task.checkCancellation()
+    }
+
+    /// Reads the ledger from disk while the last read of it failed, and answers whether the
+    /// ledger in memory is the one on disk. Only then may anything be sent or recorded.
+    @discardableResult
+    private func readLedger() -> Bool {
+        guard !loaded else { return true }
+        do {
+            ledger = try GuestLedger.load(file)
+            ledgerUnread = nil
+            loaded = true
+            return true
+        } catch {
+            ledgerUnread = String(describing: error)
+            return false
+        }
     }
 
     private func verdict(on pending: GuestLedger.Pending) -> GuestTranscript.Verdict {

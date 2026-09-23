@@ -202,6 +202,77 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(state, .unresolved)
     }
 
+    /// The input was sent and the app was killed; on the next launch the bridge's own ledger is
+    /// not a ledger (torn in half). A ledger that cannot be read is not an empty one: nothing is
+    /// sent, nothing is written over the file, and once it reads again — in the same launch — the
+    /// turn is what it is: received and cut off.
+    func testALedgerThatCannotBeDecodedSendsNothingAndIsNotWrittenOver() async throws {
+        let db = InMemoryRecordDatabase()
+        let (first, _, firstGuest) = try await launch(db, .hang)
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
+        _ = killed
+        let recorded = try Data(contentsOf: ledgerFile)
+        let torn = Data(recorded.prefix(recorded.count / 2))
+        try torn.write(to: ledgerFile)
+
+        let (second, bridge, guest) = try await launch(db, .reply("Deleted."))
+        try await assertRefusedOverAnUnreadLedger(second, bridge)
+        XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over a ledger that could not be read")
+        XCTAssertEqual(try Data(contentsOf: ledgerFile), torn, "the ledger was written over")
+
+        try recorded.write(to: ledgerFile)
+        let answered = try await second.answerPending(model: .sonnet5)
+        XCTAssertNil(answered)
+        XCTAssertTrue(guest.inputs.isEmpty, "an input the guest received was sent again")
+        let state = await bridge.current.pending?.state
+        XCTAssertEqual(state, .unresolved)
+    }
+
+    /// The same with a ledger the process cannot open: refused, not written over, and read again
+    /// by the next request once it can be.
+    func testALedgerThatCannotBeOpenedSendsNothingAndIsReadAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let (first, _, firstGuest) = try await launch(db, .hang)
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
+        _ = killed
+        let recorded = try Data(contentsOf: ledgerFile)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: ledgerFile.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: ledgerFile.path) }
+        try XCTSkipIf((try? Data(contentsOf: ledgerFile)) != nil, "missing coverage: this host reads a file with no permissions")
+
+        let (second, bridge, guest) = try await launch(db, .reply("Deleted."))
+        try await assertRefusedOverAnUnreadLedger(second, bridge)
+        XCTAssertTrue(guest.inputs.isEmpty, "the input was sent again over a ledger that could not be read")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: ledgerFile.path)
+        XCTAssertEqual(try Data(contentsOf: ledgerFile), recorded, "the ledger was written over")
+        let answered = try await second.answerPending(model: .sonnet5)
+        XCTAssertNil(answered)
+        XCTAssertTrue(guest.inputs.isEmpty, "an input the guest received was sent again")
+        let state = await bridge.current.pending?.state
+        XCTAssertEqual(state, .unresolved)
+    }
+
+    /// Two passes over a ledger that cannot be read: each refused with the reason, nothing owed,
+    /// nothing held as unresolved, and the diagnostics row saying why.
+    private func assertRefusedOverAnUnreadLedger(_ runner: TurnRunner, _ bridge: GuestBridge) async throws {
+        for _ in 0..<2 {
+            do {
+                _ = try await runner.answerPending(model: .sonnet5)
+                XCTFail("a turn was answered over a ledger that could not be read")
+            } catch let error as GuestBridgeError {
+                XCTAssertEqual(error, .failed(GuestBridge.ledgerUnreadable))
+            }
+        }
+        let owed = await bridge.owed()
+        XCTAssertNil(owed)
+        await bridge.askAgain()
+        let described = await bridge.describe()
+        XCTAssertTrue(described.contains("ledger could not be read"), described)
+    }
+
     /// CloudKit took the reply and the app died before the bookkeeping moved. The next launch finds
     /// the reply in the log by its nonce and catches up; nothing is sent for it, and the next turn
     /// is told nothing it has already seen.
@@ -556,7 +627,7 @@ final class GuestBridgeTests: XCTestCase {
         await harness.send("the word is marmalade")
         await harness.send("run the report")
         XCTAssertNotNil(harness.unfinished)
-        let before = GuestLedger.load(ledgerFile)
+        let before = try GuestLedger.load(ledgerFile)
         XCTAssertNotNil(before.pending, "no input outstanding to forget")
         XCTAssertGreaterThan(before.seen.count, 0)
         let resident = await guest.sessionID()
