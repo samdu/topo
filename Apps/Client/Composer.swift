@@ -106,7 +106,7 @@ struct Composer: View {
             if let mascot, let flank {
                 GeometryReader { row in
                     MascotOnGlass(state: mascot, flank: row[flank], row: row.size,
-                                  shown: flankOpacity > 0, covered: covered)
+                                  opacity: flankOpacity, covered: covered)
                         .opacity(flankOpacity)
                 }
                 .allowsHitTesting(false)

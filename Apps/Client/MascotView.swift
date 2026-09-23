@@ -75,15 +75,16 @@ final class MascotDriver {
         var active = false
         /// The canvas is in a window.
         var onScreen = false
-        /// His flank is drawn at all: the microphone's hold fades both flanks, and at nothing
-        /// there is nothing to draw.
-        var shown = true
+        /// How opaque his flank is drawn: the microphone's hold fades both flanks to
+        /// `composer.flank.heldOpacity`. Any opacity above zero is him seen, so frames go on;
+        /// at zero there is nothing to draw, and they stop.
+        var opacity = 1.0
         /// A sheet is over the chat.
         var covered = false
         /// Reduce Motion: he is held still in his idle pose.
         var reduceMotion = false
 
-        var visible: Bool { active && onScreen && shown && !covered }
+        var visible: Bool { active && onScreen && opacity > 0 && !covered }
         /// Frames run: he is seen and may move.
         var animates: Bool { visible && !reduceMotion }
         /// One still frame, drawn once per state: he is seen and may not move.
@@ -304,8 +305,8 @@ struct MascotOnGlass: View {
     let state: MascotState
     let flank: CGRect
     let row: CGSize
-    /// His flank is drawn: false while the microphone's hold has faded the flanks to nothing.
-    let shown: Bool
+    /// How opaque his flank is drawn; frames stop only at zero.
+    let opacity: Double
     /// A sheet is over the chat.
     let covered: Bool
     @Environment(\.look) private var look
@@ -317,7 +318,7 @@ struct MascotOnGlass: View {
         if !placement.isEmpty {
             MascotPerch(input: input(corner: placement.corner), placement: placement,
                         interval: look.mascot.frameInterval,
-                        conditions: .init(active: scenePhase == .active, shown: shown, covered: covered,
+                        conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                           reduceMotion: reduceMotion))
                 .frame(width: placement.frame.width, height: placement.frame.height)
                 .position(x: placement.frame.midX, y: placement.frame.midY)

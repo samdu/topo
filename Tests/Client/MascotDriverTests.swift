@@ -10,7 +10,7 @@ import XCTest
 /// asks for frames runs exactly while frames are wanted.
 @MainActor
 final class MascotDriverTests: XCTestCase {
-    private let seen = MascotDriver.Conditions(active: true, onScreen: true, shown: true, covered: false,
+    private let seen = MascotDriver.Conditions(active: true, onScreen: true, opacity: 1, covered: false,
                                                reduceMotion: false)
 
     private func driver(_ conditions: MascotDriver.Conditions) -> MascotDriver {
@@ -27,12 +27,24 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertNotNil(driver.image)
     }
 
-    /// Inactive or backgrounded, out of the window, his flank faded out by the microphone's hold,
+    /// His flank faded part of the way by the microphone's hold is still him seen, so frames go
+    /// on; faded to nothing, they stop.
+    func testAPartlyFadedFlankKeepsHisFramesAndANoneStopsThem() {
+        for (opacity, drawn) in [(0.5, true), (0.01, true), (0, false)] as [(Double, Bool)] {
+            var conditions = seen
+            conditions.opacity = opacity
+            let driver = driver(conditions)
+            for _ in 0..<5 { driver.tick(1.0 / 30) }
+            XCTAssertEqual(driver.frames, drawn ? 5 : 0, "at \(opacity)")
+        }
+    }
+
+    /// Inactive or backgrounded, out of the window, his flank faded to nothing by the microphone's hold,
     /// or a sheet over him: each alone stops every frame.
     func testNoFramesWhileUnseen() {
         var inactive = seen; inactive.active = false
         var offScreen = seen; offScreen.onScreen = false
-        var faded = seen; faded.shown = false
+        var faded = seen; faded.opacity = 0
         var covered = seen; covered.covered = true
         for (why, conditions) in [("inactive", inactive), ("off screen", offScreen), ("faded", faded),
                                   ("covered", covered)] {
@@ -106,7 +118,7 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(canvas.frameRate, 10, "the look's frame interval does not reach the clock")
 
         var inactive = seen; inactive.active = false
-        var faded = seen; faded.shown = false
+        var faded = seen; faded.opacity = 0
         var covered = seen; covered.covered = true
         var still = seen; still.reduceMotion = true
         for conditions in [inactive, faded, covered, still] {
