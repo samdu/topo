@@ -103,6 +103,16 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)
         XCTAssertEqual(environment["ANTHROPIC_BASE_URL"], "http://127.0.0.1:4242")
         XCTAssertNil(Guest.environment["IS_SANDBOX"], "a launch path besides the resident's sets IS_SANDBOX")
+    }
+
+    /// The launcher's own keys are applied after what the callback supplies, so nothing supplied
+    /// turns the sandbox off or moves the home.
+    func testTheCallbackCannotOverrideTheLaunchersOwnKeys() async throws {
+        let launcher = ClaudeLauncher(model: nil) { ["IS_SANDBOX": "0", "HOME": "/root", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
+        let environment = try await launcher.launchEnvironment()
+        XCTAssertEqual(environment["IS_SANDBOX"], "1")
+        XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)
+        XCTAssertEqual(environment["CLAUDE_CODE_OAUTH_TOKEN"], "t", "what the callback supplies for its own keys stands")
         XCTAssertFalse(Guest.environment.values.contains { $0.contains("dangerously") })
     }
 }
