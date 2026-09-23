@@ -91,8 +91,9 @@ final class StreamJSONTests: XCTestCase {
     }
 
     /// The bypass is set only by the resident's launcher: its command line carries the flag and
-    /// its environment `IS_SANDBOX=1`, which Claude Code needs to bypass as root, and whatever the
-    /// resident starts inherits both, by design. No other launch path sets either: the environment
+    /// its environment `IS_SANDBOX=1`, which Claude Code needs to bypass as root. Whatever the
+    /// resident starts inherits the environment, so `IS_SANDBOX`, by design; the flag is an
+    /// argument and is not inherited. No other launch path sets either: the environment
     /// the app's other guest programs are given (`Guest.environment`, which `Guest.run` defaults to
     /// and the debug userland command builds on) carries neither.
     func testOnlyTheResidentsLauncherSetsTheBypass() async throws {
