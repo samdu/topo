@@ -137,13 +137,14 @@ public final class GuestProcess: Sendable {
         inputQueue.async { [state, input] in state.closeInput(input) }
     }
 
-    /// Ends the process and every other task in the guest but init, and confirms it: stdin
-    /// closed, SIGKILL to every one of them as the pid table stands, then, until `bound` runs out,
-    /// the process reaped, every task that was found (and any started meanwhile, killed as it is
-    /// found) no longer running and both pipes at their end. The guest runs this one program and
-    /// what it starts, so its end is the guest's: a descendant orphaned to init while the teardown
-    /// is under way — a fork finishing as its parent dies — is ended and waited for all the same,
-    /// with no parent link to follow. Answers what it came to; a termination that is not
+    /// Ends every task in the guest but init — not just this program: any other program running
+    /// beside it is ended too — and confirms it: stdin closed, SIGKILL to every one of them as the
+    /// pid table stands, then, until `bound` runs out, the process reaped, every task that was
+    /// found (and any started meanwhile, killed as it is found) no longer running and both pipes
+    /// at their end. That is the design: the guest runs one program at a time (the debug launch
+    /// that would run two is refused), so its end is the guest's, and a descendant orphaned to init
+    /// while the teardown is under way — a fork finishing as its parent dies — is ended and waited
+    /// for with no parent link to follow. Answers what it came to; a termination that is not
     /// `confirmed` is one the bound ran out on.
     public func terminate(within bound: Duration = .seconds(5)) async -> Termination {
         // Refused first so nothing new is written; closed after the kill, which is what fails a

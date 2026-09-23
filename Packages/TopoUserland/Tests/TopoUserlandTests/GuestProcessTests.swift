@@ -61,6 +61,23 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertEqual(tail.dropLast("MARKER".count).allSatisfy { $0 == "a" }, true)
     }
 
+    func testTerminatingOneProgramEndsEveryOtherInTheGuest() async throws {
+        _ = try SharedGuest.booted()
+        // Two programs side by side, neither under the other: ending one ends the guest.
+        let one = try await Guest.shared.spawn("/bin/sh", ["-c", "echo started; exec sleep 300"])
+        let other = try await Guest.shared.spawn("/bin/sh", ["-c", "echo started; exec sleep 300"])
+        var oneLines = one.lines.makeAsyncIterator()
+        var otherLines = other.lines.makeAsyncIterator()
+        _ = await oneLines.next()
+        _ = await otherLines.next()
+        let termination = await one.terminate(within: .seconds(5))
+        XCTAssertTrue(termination.confirmed, "\(termination)")
+        await eventually("the other program ended") { other.hasExited }
+        XCTAssertEqual(other.exitStatus, 128 + 9, "the other program was not killed")
+        let left = await GuestProcess.guestTasks()
+        XCTAssertEqual(left, [], "\(left.map(GuestProcess.describe))")
+    }
+
     func testTerminateEndsTheWholeTreeAndConfirmsIt() async throws {
         _ = try SharedGuest.booted()
         // A shell holding two children, one of which holds a grandchild, all sharing the pipes.
