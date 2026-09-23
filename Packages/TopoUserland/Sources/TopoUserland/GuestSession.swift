@@ -18,7 +18,7 @@ extension GuestProcess: ResidentProcess {
     /// The resident Claude Code is the only program the guest runs, so its end is every guest
     /// task's but init's: what it started is ended whatever became of the parent links between
     /// them.
-    public func end(within bound: Duration) async -> Termination { await terminate(within: bound, reach: .guest) }
+    public func end(within bound: Duration) async -> Termination { await terminate(within: bound) }
 }
 
 /// What starts the resident process: resuming a session by its id, or starting a fresh one.

@@ -327,68 +327,6 @@ static void signal_task(struct task *task, int sig) {
     cpu_poke(&task->cpu);
 }
 
-int topo_ish_signal_tree(int pid, int sig, int *pids, int capacity) {
-    if (!booted)
-        return _ENODEV;
-    if (sig < 0 || sig >= NUM_SIGS)
-        return _EINVAL;
-    // One walk and every signal under the pid table's lock: a task that dies meanwhile cannot
-    // hand its children to init between the walk finding them and the signal reaching them.
-    lock(&pids_lock);
-    struct task *root = pid_get_task(pid);
-    if (root == NULL) {
-        unlock(&pids_lock);
-        return 0;
-    }
-    // The whole tree, however large: a walk that stopped short would leave the rest running
-    // and report the tree as ended.
-    int size = 64, head = 0, tail = 0, live = 0;
-    struct task **queue = malloc(size * sizeof(*queue));
-    if (queue == NULL) {
-        unlock(&pids_lock);
-        return _ENOMEM;
-    }
-    queue[tail++] = root;
-    while (head < tail) {
-        struct task *task = queue[head++];
-        struct task *child;
-        list_for_each_entry(&task->children, child, siblings) {
-            // A task is queued once: the kernel can list a thread among its own children (its
-            // parent is itself), and a walk that followed that would never end.
-            bool queued = false;
-            for (int i = 0; i < tail && !queued; i++)
-                queued = queue[i] == child;
-            if (queued)
-                continue;
-            if (tail == size) {
-                struct task **grown = realloc(queue, 2 * size * sizeof(*queue));
-                if (grown == NULL) {
-                    free(queue);
-                    unlock(&pids_lock);
-                    return _ENOMEM;
-                }
-                queue = grown;
-                size *= 2;
-            }
-            queue[tail++] = child;
-        }
-    }
-    for (int i = 0; i < tail; i++) {
-        struct task *task = queue[i];
-        if (task->zombie || task->exiting)
-            continue;
-        if (pids != NULL && live < capacity)
-            pids[live] = task->pid;
-        live++;
-        if (sig == 0)
-            continue;
-        signal_task(task, sig);
-    }
-    unlock(&pids_lock);
-    free(queue);
-    return live;
-}
-
 int topo_ish_signal_all(int sig, int *pids, int capacity) {
     if (!booted)
         return _ENODEV;

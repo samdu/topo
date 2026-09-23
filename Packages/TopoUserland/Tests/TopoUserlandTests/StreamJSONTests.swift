@@ -83,10 +83,37 @@ final class StreamJSONTests: XCTestCase {
     func testClaudeCodesArguments() {
         XCTAssertEqual(ClaudeLauncher.arguments(model: "claude-haiku-4-5-20251001", resume: nil),
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                        "--model", "claude-haiku-4-5-20251001"])
+                        "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001"])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
         let launcher = ClaudeLauncher(model: nil) { [:] }
         XCTAssertEqual(Array(launcher.commandLine(resume: nil).prefix(4)),
                        ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", "/usr/local/bin/claude"])
+    }
+
+    /// The bypass is set only by the resident's launcher: its command line carries the flag and
+    /// its environment `IS_SANDBOX=1`, which Claude Code needs to bypass as root. Whatever the
+    /// resident starts inherits the environment, so `IS_SANDBOX`, by design; the flag is an
+    /// argument and is not inherited. No other launch path sets either: the environment
+    /// the app's other guest programs are given (`Guest.environment`, which `Guest.run` defaults to
+    /// and the debug userland command builds on) carries neither.
+    func testOnlyTheResidentsLauncherSetsTheBypass() async throws {
+        let launcher = ClaudeLauncher(model: nil) { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:4242"] }
+        XCTAssertTrue(launcher.commandLine(resume: "S1").contains("--dangerously-skip-permissions"))
+        let environment = try await launcher.launchEnvironment()
+        XCTAssertEqual(environment["IS_SANDBOX"], "1")
+        XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)
+        XCTAssertEqual(environment["ANTHROPIC_BASE_URL"], "http://127.0.0.1:4242")
+        XCTAssertNil(Guest.environment["IS_SANDBOX"], "a launch path besides the resident's sets IS_SANDBOX")
+    }
+
+    /// The launcher's own keys are applied after what the callback supplies, so nothing supplied
+    /// turns the sandbox off or moves the home.
+    func testTheCallbackCannotOverrideTheLaunchersOwnKeys() async throws {
+        let launcher = ClaudeLauncher(model: nil) { ["IS_SANDBOX": "0", "HOME": "/root", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
+        let environment = try await launcher.launchEnvironment()
+        XCTAssertEqual(environment["IS_SANDBOX"], "1")
+        XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)
+        XCTAssertEqual(environment["CLAUDE_CODE_OAUTH_TOKEN"], "t", "what the callback supplies for its own keys stands")
+        XCTAssertFalse(Guest.environment.values.contains { $0.contains("dangerously") })
     }
 }

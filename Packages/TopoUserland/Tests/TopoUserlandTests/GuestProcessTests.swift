@@ -43,6 +43,41 @@ final class GuestProcessTests: XCTestCase {
         }
     }
 
+    func testStderrKeepsItsLast16KB() async throws {
+        _ = try SharedGuest.booted()
+        // A start that must be dropped, 20 KB after it, then a marker that must be kept.
+        let noisy = try await Guest.shared.spawn("/bin/sh", ["-c", """
+            printf EARLIEST >&2
+            head -c 20480 /dev/zero | tr '\\0' a >&2
+            printf MARKER >&2
+            """])
+        for await _ in noisy.lines {}
+        await eventually("exited") { noisy.hasExited }
+        await eventually("stderr read to its end") { noisy.errors.hasSuffix("MARKER") }
+        let tail = noisy.errors
+        XCTAssertEqual(tail.utf8.count, 16 * 1024, "the tail is not exactly 16 KB")
+        XCTAssertTrue(tail.hasSuffix("MARKER"), "the marker written last was not kept")
+        XCTAssertFalse(tail.contains("EARLIEST"), "the earliest bytes were kept")
+        XCTAssertEqual(tail.dropLast("MARKER".count).allSatisfy { $0 == "a" }, true)
+    }
+
+    func testTerminatingOneProgramEndsEveryOtherInTheGuest() async throws {
+        _ = try SharedGuest.booted()
+        // Two programs side by side, neither under the other: ending one ends the guest.
+        let one = try await Guest.shared.spawn("/bin/sh", ["-c", "echo started; exec sleep 300"])
+        let other = try await Guest.shared.spawn("/bin/sh", ["-c", "echo started; exec sleep 300"])
+        var oneLines = one.lines.makeAsyncIterator()
+        var otherLines = other.lines.makeAsyncIterator()
+        _ = await oneLines.next()
+        _ = await otherLines.next()
+        let termination = await one.terminate(within: .seconds(5))
+        XCTAssertTrue(termination.confirmed, "\(termination)")
+        await eventually("the other program ended") { other.hasExited }
+        XCTAssertEqual(other.exitStatus, 128 + 9, "the other program was not killed")
+        let left = await GuestProcess.guestTasks()
+        XCTAssertEqual(left, [], "\(left.map(GuestProcess.describe))")
+    }
+
     func testTerminateEndsTheWholeTreeAndConfirmsIt() async throws {
         _ = try SharedGuest.booted()
         // A shell holding two children, one of which holds a grandchild, all sharing the pipes.
@@ -55,9 +90,9 @@ final class GuestProcessTests: XCTestCase {
         var lines = tree.lines.makeAsyncIterator()
         let started = await lines.next()
         XCTAssertEqual(started, "started")
-        await eventually("the tree grown") { await tree.tree().count >= 4 }
-        let pids = await tree.tree()
-        XCTAssertEqual(pids.first, tree.pid)
+        await eventually("the tree grown") { await GuestProcess.guestTasks().count >= 4 }
+        let pids = await GuestProcess.guestTasks()
+        XCTAssertTrue(pids.contains(tree.pid))
 
         let termination = await tree.terminate(within: .seconds(5))
         XCTAssertTrue(termination.confirmed, "\(termination)")
@@ -79,32 +114,10 @@ final class GuestProcessTests: XCTestCase {
         XCTAssertEqual(termination.status, 0)
     }
 
-    func testATreeLargerThanTheListIsWalkedWholeAndKilledWhole() async throws {
-        _ = try SharedGuest.booted()
-        let tree = try await Guest.shared.spawn("/bin/sh", ["-c", """
-            sleep 300 &
-            sleep 300 &
-            sh -c 'sleep 300 & wait' &
-            echo started
-            wait
-            """])
-        var lines = tree.lines.makeAsyncIterator()
-        _ = await lines.next()
-        await eventually("the tree grown") { await tree.tree().count >= 5 }
-        let whole = await tree.tree()
-        // A list with room for two: the walk still reaches, reports and kills every task.
-        let listed = try XCTUnwrap(GuestProcess.signalTree(tree.pid, 0, capacity: 2))
-        XCTAssertEqual(Set(listed), Set(whole), "a tree larger than the list was reported cut short")
-        let killed = try XCTUnwrap(GuestProcess.signalTree(tree.pid, 9 /* SIGKILL */, capacity: 1))
-        XCTAssertEqual(Set(killed), Set(whole))
-        await eventually("every task ended") { await GuestProcess.running(whole.filter { $0 != tree.pid }) == 0 }
-        await eventually("the shell reaped") { tree.hasExited }
-    }
-
     func testATerminationIsConfirmedOnlyWhenTheWholeTreeHasEnded() async throws {
         _ = try SharedGuest.booted()
         // Sleeps holding none of the pipes, so the pipes closing says nothing about them: only a
-        // walk that reached every one of them can say the tree ended.
+        // termination that reached every one of them can say the guest ended.
         let tree = try await Guest.shared.spawn("/bin/sh", ["-c", """
             for i in 1 2 3 4; do sleep 300 </dev/null >/dev/null 2>&1 & done
             echo started
@@ -112,8 +125,8 @@ final class GuestProcessTests: XCTestCase {
             """])
         var lines = tree.lines.makeAsyncIterator()
         _ = await lines.next()
-        await eventually("the tree grown") { await tree.tree().count >= 5 }
-        let whole = await tree.tree()
+        await eventually("the tree grown") { await GuestProcess.guestTasks().count >= 5 }
+        let whole = await GuestProcess.guestTasks()
         let termination = await tree.terminate(within: .seconds(5))
         let survivors = await GuestProcess.running(whole.filter { $0 != tree.pid })
         XCTAssertEqual(survivors, 0, "\(termination)")
