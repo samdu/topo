@@ -53,9 +53,10 @@ enum GuestBridgeError: Error, Equatable, CustomStringConvertible {
 /// What the guest is doing, for Topo on the glass: a turn sent (to which process), each of its
 /// updates, and the turn gone.
 enum GuestActivity: Sendable {
-    case began(pid: Int32?)
+    /// `answering` is the person's turns the input answers, so each line of a turn names it.
+    case began(pid: Int32?, answering: [TurnRef])
     case update(GuestSession.TurnUpdate)
-    case gone
+    case gone(answering: [TurnRef])
 }
 
 /// Which turns of the log the guest has seen, as graph coverage rather than a position: a set of
@@ -311,7 +312,8 @@ actor GuestBridge: Brain {
             throw GuestBridgeError.failed(String(describing: error))
         }
 
-        await observe(.began(pid: pid))
+        let answering = request.answering.map(\.ref)
+        await observe(.began(pid: pid, answering: answering))
         var model: String?, usage: StreamEvent.Usage?, end: GuestSession.TurnEnd?
         for await update in updates {
             await observe(.update(update))
@@ -331,7 +333,7 @@ actor GuestBridge: Brain {
                 break
             }
         }
-        await observe(.gone)
+        await observe(.gone(answering: answering))
 
         if case .answered(let result) = end {
             return reply(result.text ?? "", to: request, usage: usage, model: model)

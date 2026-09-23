@@ -151,8 +151,8 @@ extension DebugRun {
     /// It waits first for the guest to be able to take a turn (the userland fetched, the resident
     /// process up), printing the userland's line while it waits, so the turn is the guest's
     /// answer rather than a refusal. Topo on the glass follows the turn as the chat's does, and
-    /// every change of his pose is printed as `mascot:`, between `mascot: turn began` and
-    /// `mascot: turn gone`.
+    /// every change of his pose is printed as `mascot:`, between `mascot: turn began for <refs>`
+    /// and `mascot: turn gone for <refs>`, the refs being the turns that guest turn answers.
     ///
     /// The reply printed is the one to the turn this run sent, found by that turn's nonce and the
     /// reply's parents, never merely the newest reply in the log; it carries `TOPO_DEBUG_RUN`,
@@ -184,17 +184,17 @@ extension DebugRun {
         harness.onGuest = { activity in
             chat?(activity)
             switch activity {
-            case .began(let pid):
+            case .began(let pid, let answering):
                 pose = mascot.state.activity
-                say("mascot: turn began, process \(pid.map(String.init) ?? "none"), \(pose.rawValue)")
+                say("mascot: turn began for \(refs(answering)), process \(pid.map(String.init) ?? "none"), \(pose.rawValue)")
             case .update:
                 if mascot.state.activity != pose {
                     pose = mascot.state.activity
                     say("mascot: \(pose.rawValue)")
                 }
-            case .gone:
+            case .gone(let answering):
                 pose = mascot.state.activity
-                say("mascot: turn gone, \(pose.rawValue)")
+                say("mascot: turn gone for \(refs(answering)), \(pose.rawValue)")
             }
         }
         defer { harness.onGuest = chat }
@@ -211,6 +211,12 @@ extension DebugRun {
         say(line(for: answered, nonce: nonce, run: run, by: by))
         say("turns in the log: \(harness.turns.count)")
         say("done")
+    }
+
+    /// The turns a guest turn answers as the mascot's lines name them, joined by `+`: the refs
+    /// the reply line names its turn by, so the script ties the two.
+    static func refs(_ answering: [TurnRef]) -> String {
+        answering.isEmpty ? "none" : answering.map(\.description).joined(separator: "+")
     }
 
     static let runVariable = "TOPO_DEBUG_RUN"

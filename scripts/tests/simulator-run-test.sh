@@ -52,14 +52,18 @@ case "$2" in
                 say "done"; exec sleep 600 ;;
       done-then-exits-1) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                          say "done"; exit 1 ;;
-      answered) say "sending: hello"; say "mascot: turn began, process 7, idle"; say "mascot: thinking"
-                say "mascot: turn gone, idle"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+      answered) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: thinking"
+                say "mascot: turn gone for phone/2, idle"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                 say "done"; exec sleep 600 ;;
-      answered-by-nobody) say "sending: hello"; say "mascot: turn began, process 7, idle"; say "mascot: turn gone, idle"
+      answered-by-nobody) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                           say "reply to phone/2 in run $run from session none, process none: hi"; say "done"; exec sleep 600 ;;
+      answered-other-mascot) say "sending: hello"; say "mascot: turn began for phone/1, process 7, idle"
+                             say "mascot: turn gone for phone/1, idle"; say "mascot: turn began for phone/12, process 7, idle"
+                             say "mascot: turn gone for phone/12, idle"
+                             say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
       answered-no-mascot) say "sending: hello"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                           say "done"; exec sleep 600 ;;
-      answered-old-format) say "sending: hello"; say "mascot: turn began, process 7, idle"; say "mascot: turn gone, idle"
+      answered-old-format) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                            say "reply to phone/2 in run $run: hi"; say "done"; exec sleep 600 ;;
       launched) exit 0 ;;
       userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"
@@ -164,6 +168,7 @@ case_ send-done-then-launcher-exits-1      fail done-then-exits-1    5  --send h
 case_ send-answered                        pass answered             5  --send hello
 case_ send-answered-by-no-resident         fail answered-by-nobody   5  --send hello
 case_ send-answered-mascot-silent          fail answered-no-mascot   5  --send hello
+case_ send-answered-mascot-other-turn      fail answered-other-mascot 5 --send hello
 case_ send-answered-no-provenance          fail answered-old-format  5  --send hello
 case_ no-send-launched                     pass launched             5
 case_ userland-ran                         pass userland-fetched     5  --userland "echo hi" --expect hi

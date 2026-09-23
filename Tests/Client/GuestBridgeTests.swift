@@ -548,30 +548,30 @@ final class GuestBridgeTests: XCTestCase {
 
         await harness.send("hello")
         XCTAssertEqual(seen, [
-            "began 7 -> idle 0",
+            "began 7 for phone/1 -> idle 0",
             "started -> idle 0",
             "text -> idle 0",
             "usage -> idle 1234",
             "ended answered -> idle 1234",
-            "gone -> idle 1234",
+            "gone for phone/1 -> idle 1234",
         ])
         XCTAssertEqual(mascot.state.model, "claude-haiku-4-5-20251001")
 
         seen = []
         await harness.send("run the report")
         XCTAssertEqual(seen, [
-            "began 7 -> idle 1234",
+            "began 7 for phone/3 -> idle 1234",
             "started -> idle 1234",
             "tool Bash -> building 1234",
             "ended abandoned -> idle 1234",
-            "gone -> idle 1234",
+            "gone for phone/3 -> idle 1234",
         ])
     }
 
     private static func label(_ activity: GuestActivity) -> String {
         switch activity {
-        case .began(let pid): "began \(pid.map(String.init) ?? "none")"
-        case .gone: "gone"
+        case .began(let pid, let answering): "began \(pid.map(String.init) ?? "none") for \(DebugRun.refs(answering))"
+        case .gone(let answering): "gone for \(DebugRun.refs(answering))"
         case .update(.event(.started)): "started"
         case .update(.event(.text)): "text"
         case .update(.event(.usage)): "usage"
