@@ -8,13 +8,11 @@ public protocol ResidentProcess: AnyObject, Sendable {
     var errors: String { get }
     /// Writes one line to its stdin.
     func write(_ line: String) async throws
-    /// Ends it and everything under it, and says whether that was confirmed.
-    func terminate() async -> GuestProcess.Termination
+    /// Ends it and everything under it, and says whether that was confirmed within `bound`.
+    func terminate(within bound: Duration) async -> GuestProcess.Termination
 }
 
-extension GuestProcess: ResidentProcess {
-    public func terminate() async -> Termination { await terminate(within: .seconds(5)) }
-}
+extension GuestProcess: ResidentProcess {}
 
 /// What starts the resident process: resuming a session by its id, or starting a fresh one.
 public protocol ResidentLauncher: Sendable {
@@ -121,6 +119,9 @@ public actor GuestSession {
         /// The process was ended. `turn` is what became of a turn in flight when the app left:
         /// finished inside the grace, or abandoned at the teardown point; nil when none was.
         case ended(turn: TurnFate?, termination: GuestProcess.Termination)
+        /// iOS's background time ran out before the teardown answered; the background task was
+        /// ended with it still running (`GuestLifecycle`, never the session).
+        case outOfTime
     }
 
     public enum TurnFate: Sendable, Equatable {
@@ -155,6 +156,9 @@ public actor GuestSession {
     private var readiness: [CheckedContinuation<Void, Error>] = []
     private var backgroundWait: CheckedContinuation<Wake, Never>?
     private var backgroundTimer: Task<Void, Never>?
+    /// iOS's expiration handler has fired for this background: whatever waits stops waiting, and
+    /// a teardown begun from here on is bounded by what the handler leaves.
+    private var expired = false
 
     private enum State {
         case idle
@@ -237,6 +241,7 @@ public actor GuestSession {
     public func foreground(generation given: Int? = nil) {
         guard admit(given) else { return }
         inForeground = true
+        expired = false
         wakeBackground(.foreground)
         if case .idle = phase { startResident() }
     }
@@ -278,8 +283,12 @@ public actor GuestSession {
     }
 
     /// The grace is ending now (iOS's expiration handler): a teardown waiting on a turn stops
-    /// waiting and ends the process.
-    public func expire() {
+    /// waiting and ends the process, and any teardown from here on is bounded by what the handler
+    /// leaves. The lifecycle holds the background task until the teardown answers.
+    public func expire(generation given: Int? = nil) {
+        // An expiry older than a foreground already seen belongs to a background that is over.
+        guard (given ?? generation) >= generation else { return }
+        expired = true
         wakeBackground(.deadline)
     }
 
@@ -438,8 +447,9 @@ public actor GuestSession {
     /// if a caller is waiting for one. Whatever the app did meanwhile, this ends only `resident`.
     private func end(_ resident: Resident, reason: String, restart: Bool) -> Task<GuestProcess.Termination, Never> {
         phase = .stopping
+        let bound = expired ? GraceBudget.expiredTeardownBound : GraceBudget.teardownBound
         let task = Task {
-            let termination = await resident.process.terminate()
+            let termination = await resident.process.terminate(within: bound)
             await self.ended(termination, reason: reason, restart: restart)
             return termination
         }
@@ -492,6 +502,7 @@ public actor GuestSession {
     }
 
     private func waitForTurn(budget: Duration) async -> Wake {
+        if expired { return .deadline }
         let sleep = sleep
         backgroundTimer = Task { [weak self] in
             do { try await sleep(budget) } catch { return }

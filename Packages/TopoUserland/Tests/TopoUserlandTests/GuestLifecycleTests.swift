@@ -101,8 +101,37 @@ final class GuestLifecycleTests: XCTestCase {
         XCTAssertEqual(launcher.processes.count, 1)
     }
 
-    func testTheExpirationHandlerEndsTheTaskAndTheTurn() async throws {
-        let (lifecycle, session, launcher, clock, time, _) = make()
+    func testTheExpirationHandlerHoldsTheTaskUntilTheTeardownIsConfirmed() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        let turn = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        lifecycle.didEnterBackground()
+        time.remaining = 28
+        await eventually("the first tick asleep") { await clock.pending == 2 }
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the teardown waiting") { await clock.pending == 2 }
+        let task = try XCTUnwrap(time.open.first)
+        process.holdNextTermination()
+        time.expirations[task]?()
+        await eventually("the teardown running") { process.terminationHeld }
+        XCTAssertEqual(time.open, [task], "the background task ended with the process still alive")
+        process.release()
+        await eventually("the background task ended") { time.open.isEmpty }
+        XCTAssertTrue(process.terminated)
+        XCTAssertEqual(process.bounds, [GraceBudget.expiredTeardownBound],
+                       "a teardown after the expiry was not bounded by what the handler leaves")
+        guard case .ended(.abandoned, let termination)? = outcomes.all.first else { return XCTFail("\(outcomes.all)") }
+        XCTAssertTrue(termination.confirmed)
+        var ends: [GuestSession.TurnEnd] = []
+        for await update in turn { if case .ended(let end) = update { ends.append(end) } }
+        XCTAssertEqual(ends, [.abandoned])
+    }
+
+    func testATeardownStillRunningJustShortOfTheEndIsLetGoAndSaidSo() async throws {
+        let (lifecycle, session, launcher, clock, time, outcomes) = make()
         lifecycle.willEnterForeground()
         await eventually("resident") { await session.currentPhase == .resident }
         let process = try XCTUnwrap(launcher.last)
@@ -114,8 +143,33 @@ final class GuestLifecycleTests: XCTestCase {
         await clock.advance(by: GraceBudget.firstTick)
         await eventually("the teardown waiting") { await clock.pending == 2 }
         let task = try XCTUnwrap(time.open.first)
+        process.holdNextTermination()
         time.expirations[task]?()
-        XCTAssertTrue(time.open.isEmpty, "the expiration handler left its task open")
-        await eventually("the process ended") { process.terminated }
+        await eventually("the teardown running") { process.terminationHeld }
+        await eventually("the hold asleep") { await clock.pending == 1 }
+        await clock.advance(by: GraceBudget.expiryHold - .milliseconds(1))
+        XCTAssertEqual(time.open, [task], "the task was let go before the hold ran out")
+        await clock.advance(by: .milliseconds(1))
+        await eventually("the background task ended") { time.open.isEmpty }
+        XCTAssertEqual(outcomes.all, [.outOfTime])
+        process.release()
+        await eventually("the teardown answered") { outcomes.all.count == 2 }
+        XCTAssertEqual(time.ended.count, 1, "the task was ended twice")
+    }
+
+    func testAnExpiryFromABackgroundThatIsOverChangesNothing() async throws {
+        let (lifecycle, session, launcher, clock, time, _) = make()
+        lifecycle.willEnterForeground()
+        await eventually("resident") { await session.currentPhase == .resident }
+        let process = try XCTUnwrap(launcher.last)
+        _ = try await session.send("long")
+        await eventually("written") { process.turns.count == 1 }
+        await session.expire(generation: 0)
+        lifecycle.didEnterBackground()
+        time.remaining = 28
+        await eventually("the first tick asleep") { await clock.pending == 2 }
+        await clock.advance(by: GraceBudget.firstTick)
+        await eventually("the teardown waiting on the turn, not ended at once") { await clock.pending == 2 }
+        XCTAssertFalse(process.terminated)
     }
 }

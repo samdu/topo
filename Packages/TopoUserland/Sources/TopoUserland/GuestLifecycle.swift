@@ -27,6 +27,14 @@ public enum GraceBudget {
     /// What is assumed when the reading is not a grant (still infinite, or absurd): the measured
     /// grant less the tick already spent.
     public static let assumedRemaining: TimeInterval = 28
+    /// How long a teardown may take to be confirmed: the reserve less a second for ending the
+    /// background task after it.
+    public static let teardownBound: Duration = .seconds(7)
+    /// The same once the expiration handler has fired: what the handler leaves, less a second.
+    public static let expiredTeardownBound: Duration = .seconds(4)
+    /// How long after the expiration handler the background task is held for a teardown still
+    /// running before it is ended without it: just short of what the handler leaves.
+    public static let expiryHold: Duration = .milliseconds(4_500)
 
     /// How long a turn in flight may run, from the first tick, before the process is ended.
     public static func teardownDelay(remaining: TimeInterval) -> Duration {
@@ -74,10 +82,12 @@ public final class GuestLifecycle {
         let mine = generation
         let session = session
         tasks[mine] = time.begin { [weak self] in
-            // The backstop: the teardown is budgeted to land before this. iOS requires the task
-            // ended here, so it is, with the process told to end now.
-            Task { await session.expire() }
-            self?.endTask(mine)
+            // The backstop: the teardown is budgeted to land before this. The process is told to
+            // end now, and the task stays open until the teardown answers below, so iOS does not
+            // suspend the app with the process alive — or, if the teardown has not answered just
+            // short of what the handler leaves, it is ended without it and that is said.
+            Task { await session.expire(generation: mine) }
+            self?.holdAfterExpiry(mine)
         }
         Task { [weak self, sleep] in
             try? await sleep(GraceBudget.firstTick)
@@ -91,6 +101,15 @@ public final class GuestLifecycle {
             let outcome = await session.background(budget: budget, generation: mine)
             self.report(outcome)
             self.endTask(mine)
+        }
+    }
+
+    private func holdAfterExpiry(_ generation: Int) {
+        Task { [weak self, sleep] in
+            try? await sleep(GraceBudget.expiryHold)
+            guard let self, self.tasks[generation] != nil else { return }
+            self.report(.outOfTime)
+            self.endTask(generation)
         }
     }
 

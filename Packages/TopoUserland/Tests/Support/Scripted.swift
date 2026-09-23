@@ -53,6 +53,9 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
     private var gate: CheckedContinuation<Void, Never>?
     private var holdTermination = false
     var errors: String = ""
+    private var asked: [Duration] = []
+    /// The bound each termination was asked for.
+    var bounds: [Duration] { lock.withLock { asked } }
 
     init() {
         (lines, continuation) = AsyncStream<String>.makeStream()
@@ -95,7 +98,8 @@ final class ScriptedProcess: ResidentProcess, @unchecked Sendable {
 
     var terminationHeld: Bool { lock.withLock { gate != nil } }
 
-    func terminate() async -> GuestProcess.Termination {
+    func terminate(within bound: Duration) async -> GuestProcess.Termination {
+        lock.withLock { asked.append(bound) }
         let hold = lock.withLock { holdTermination }
         if hold {
             await withCheckedContinuation { continuation in

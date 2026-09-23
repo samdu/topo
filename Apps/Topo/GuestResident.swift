@@ -100,6 +100,8 @@ final class GuestResident {
             }
             let confirmed = termination.confirmed ? "confirmed" : "NOT confirmed"
             return "ended, \(fate); termination \(confirmed): \(termination)"
+        case .outOfTime:
+            return "background time ran out before the termination answered; the background task was ended with the teardown still running"
         }
     }
 }
