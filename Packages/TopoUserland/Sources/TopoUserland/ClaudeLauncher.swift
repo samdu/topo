@@ -47,9 +47,10 @@ public struct ClaudeLauncher: ResidentLauncher {
     }
 
     /// The resident's environment: the guest's, `HOME` at the mount, `IS_SANDBOX=1`, and what
-    /// `environment` answers now. `IS_SANDBOX` is the resident's alone: the guest runs everything
-    /// as root, and Claude Code refuses to bypass permissions as root unless it is told it is in a
-    /// sandbox, which it is.
+    /// `environment` answers now. `IS_SANDBOX` is set by this launcher and no other launch path, and
+    /// inherited by whatever the resident starts, which runs in the same sandbox: the guest runs
+    /// everything as root, and Claude Code refuses to bypass permissions as root unless it is told
+    /// it is in a sandbox, which it is.
     public func launchEnvironment() async throws -> [String: String] {
         var environment = Guest.environment
         environment["HOME"] = home

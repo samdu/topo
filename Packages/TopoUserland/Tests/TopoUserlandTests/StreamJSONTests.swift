@@ -90,18 +90,19 @@ final class StreamJSONTests: XCTestCase {
                        ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", "/usr/local/bin/claude"])
     }
 
-    /// The bypass is the resident's alone: its command line carries the flag and its environment
-    /// `IS_SANDBOX=1`, which Claude Code needs to bypass as root; the environment every other
-    /// guest program is given (`Guest.environment`, which `Guest.run` defaults to and the debug
-    /// userland command builds on) carries neither.
-    func testTheResidentAloneRunsBypassedAndSandboxed() async throws {
+    /// The bypass is set only by the resident's launcher: its command line carries the flag and
+    /// its environment `IS_SANDBOX=1`, which Claude Code needs to bypass as root, and whatever the
+    /// resident starts inherits both, by design. No other launch path sets either: the environment
+    /// the app's other guest programs are given (`Guest.environment`, which `Guest.run` defaults to
+    /// and the debug userland command builds on) carries neither.
+    func testOnlyTheResidentsLauncherSetsTheBypass() async throws {
         let launcher = ClaudeLauncher(model: nil) { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:4242"] }
         XCTAssertTrue(launcher.commandLine(resume: "S1").contains("--dangerously-skip-permissions"))
         let environment = try await launcher.launchEnvironment()
         XCTAssertEqual(environment["IS_SANDBOX"], "1")
         XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)
         XCTAssertEqual(environment["ANTHROPIC_BASE_URL"], "http://127.0.0.1:4242")
-        XCTAssertNil(Guest.environment["IS_SANDBOX"], "every guest program would run as if sandboxed")
+        XCTAssertNil(Guest.environment["IS_SANDBOX"], "a launch path besides the resident's sets IS_SANDBOX")
         XCTAssertFalse(Guest.environment.values.contains { $0.contains("dangerously") })
     }
 }
