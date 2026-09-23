@@ -255,7 +255,8 @@ actor GuestBridge: Brain {
     /// than asking the guest a second time.
     private var recent: [(nonce: String, text: String)] = []
     /// Counts sign-outs. An answer started under an earlier count was for a login that has gone:
-    /// it records nothing and sends nothing, wherever it was waiting when the count moved.
+    /// it records nothing, sends nothing and hands no reply back, wherever it was waiting when the
+    /// count moved — the guest's own turn included — and neither does `owed`.
     private var login = 0
 
     /// `file` is the ledger; everything the bridge knows across launches is read from it here, or,
@@ -280,6 +281,8 @@ actor GuestBridge: Brain {
         if asking { await withCheckedContinuation { queue.append($0) } }
         asking = true
         defer { release() }
+        // The wait for the slot can span a sign-out: a request from before it asks nothing now.
+        try stillCurrent(login)
 
         // A ledger that cannot be read may hold an input the guest received: nothing is sent
         // until it can be read and that input reconciled.
@@ -372,6 +375,8 @@ actor GuestBridge: Brain {
             switch update {
             case .event(.started(let started, let startedModel)):
                 model = startedModel
+                // After a sign-out the ledger is the next login's, and the session is not.
+                guard self.login == login else { break }
                 if ledger.pending?.input == id {
                     ledger.pending?.session = started
                     try? save()
@@ -387,6 +392,10 @@ actor GuestBridge: Brain {
         }
         await observe(.gone(answering: answering))
 
+        // The turn ran while nothing held the actor: a sign-out meanwhile makes whatever it came
+        // to a login's that has gone. Nothing is recorded — the ledger went with the login — and
+        // no reply is handed to the runner to write.
+        guard self.login == login else { throw CancellationError() }
         guard let end else {
             // This task stopped listening — cancelled — with the turn still the guest's. Nothing
             // is known of it: the record stays as it was sent, and the next request reads the
@@ -412,6 +421,7 @@ actor GuestBridge: Brain {
         }
         // Anything else is read off the transcript once nothing can still be writing it.
         let final = await conversation.settle()
+        guard self.login == login else { throw CancellationError() }
         guard let pending = ledger.pending, pending.input == id else { throw GuestBridgeError.failed(Self.describe(end)) }
         // A process not confirmed gone may still be writing: the record stays, and the next
         // request reads again.
@@ -465,12 +475,15 @@ actor GuestBridge: Brain {
 
     func owed() async -> OwedReply? {
         guard !asking, readLedger(), let pending = ledger.pending else { return nil }
+        let login = self.login
         // The read waits on the guest; holding the requests' one slot while it does keeps any
         // request from reconciling or replacing the record meanwhile.
         asking = true
         defer { release() }
         let verdict = await verdict(on: pending)
-        guard ledger.pending == pending else { return nil }
+        // A sign-out while the transcript was waited for leaves nothing owed: the reply was the
+        // last login's, and it is never written after it.
+        guard self.login == login, ledger.pending == pending else { return nil }
         switch Reconciliation.of(pending, verdict: verdict, request: nil) {
         case .clear:
             try? record(nil)

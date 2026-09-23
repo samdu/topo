@@ -280,7 +280,7 @@ struct ChatView: View {
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
-        SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { harness.forget() },
+        SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
                 forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
     }
 

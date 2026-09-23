@@ -110,6 +110,11 @@ final class Harness {
     /// device's primary and the reply is on its way. Cleared by the next send.
     private(set) var info: String?
     private var inFlight: Task<Bool, Never>?
+    /// The answering passes running now, which a sign-out cancels as it cancels the turn in flight.
+    private var passes: Set<Task<Void, Never>> = []
+    /// Counts sign-outs and demotions. A pass or a loop begun under an earlier count belongs to a
+    /// login that has gone: it shows nothing and writes nothing, and the loop ends.
+    private var login = 0
 
     /// What the person said that is not settled yet, oldest first, each under the nonce it was
     /// first attempted with and written to disk before any attempt. So a relaunch after a lost
@@ -219,12 +224,13 @@ final class Harness {
         }
     }
 
-    /// Sign-out: the turn in flight is cancelled and its result dropped, the runner and screen
-    /// are cleared, and the next sign-in starts at the first question. The log itself stays where
-    /// it is, in the person's own iCloud; nothing of it is on this device to remove.
-    func forget() {
-        inFlight?.cancel()
-        inFlight = nil
+    /// Sign-out: the turn in flight and the answering pass in flight are cancelled and write
+    /// nothing more, the answering loop ends, the runner and screen are cleared, and the next
+    /// sign-in starts at the first question. Returns once the brain has forgotten the login's
+    /// conversation, so what the guest kept of it is gone before the login is. The log itself
+    /// stays where it is, in the person's own iCloud; nothing of it is on this device to remove.
+    func forget() async {
+        stopAnswering()
         runner = nil
         lease = nil
         writer = nil
@@ -238,11 +244,22 @@ final class Harness {
         unfinished = nil
         pending = []
         spokenNonces = []
-        // What the guest kept of the last login's conversation goes with it.
-        let brain = brain
-        Task { await brain.forget() }
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
+        // What the guest kept of the last login's conversation goes with it.
+        await brain.forget()
+    }
+
+    /// Ends everything under way for this login: the turn in flight, every answering pass and
+    /// the loop's pause, each cancelled, and the count moved so none of them shows or writes
+    /// anything once it wakes. The runner checks its task before each reply it appends.
+    private func stopAnswering() {
+        login += 1
+        inFlight?.cancel()
+        inFlight = nil
+        passes.forEach { $0.cancel() }
+        passes = []
+        sleeping?.cancel()
     }
 
     /// The far end of a takeover: this device is a viewer now. The turn in flight is cancelled;
@@ -522,6 +539,7 @@ final class Harness {
     /// `wake()` cuts the pause short: the next pass runs now rather than at the end of the
     /// interval. It never runs a pass of its own, so passes never overlap.
     func answering(every interval: Duration) async {
+        let login = self.login
         answeringLoop = true
         defer {
             answeringLoop = false
@@ -529,7 +547,8 @@ final class Harness {
             wakers = []
             left.forEach { $0.resume() }
         }
-        while !Task.isCancelled {
+        // A sign-out ends the loop: whatever answers next is the next login's.
+        while !Task.isCancelled, self.login == login {
             // A wake asked for before this pass began is served by it; one asked for during it
             // may have missed what this pass read, so it gets the next.
             woken = false
@@ -562,15 +581,29 @@ final class Harness {
     }
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
+    /// The pass is a task of its own, so a sign-out can cancel it as it cancels a send; cancelling
+    /// the caller cancels it too.
     func answerPending() async {
         guard !busy else { return }
+        let login = self.login
+        let pass = Task { await self.pass(under: login) }
+        passes.insert(pass)
+        await withTaskCancellationHandler { await pass.value } onCancel: { pass.cancel() }
+        passes.remove(pass)
+    }
+
+    private func pass(under login: Int) async {
         do {
             if runner == nil {
                 try await ensureZone()
+                guard self.login == login else { return }
                 runner = try await makeRunner()
             }
-            guard let runner else { return }
-            if let reply = try await runner.answerPending(model: model) {
+            guard let runner, self.login == login else { return }
+            let answered = try await runner.answerPending(model: model)
+            // A sign-out during the pass: what it found is for a screen that has gone.
+            guard self.login == login else { return }
+            if let reply = answered {
                 show(reply)
                 error = nil
                 await refresh()
@@ -585,6 +618,7 @@ final class Harness {
         } catch is CancellationError {
             return
         } catch {
+            guard self.login == login else { return }
             self.error = Self.describe(error)
             await refreshUnfinished()
         }

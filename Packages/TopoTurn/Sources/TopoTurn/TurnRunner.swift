@@ -41,6 +41,9 @@ public struct NoSocketProbe: LeaseProbe {
 /// before the app was killed) has it written first, under its own nonce; a person turn the brain
 /// holds as unresolved is not answered by `answerPending`; and the brain hears every reply of its
 /// requests that is in the log, whichever way it got there.
+///
+/// A caller that is cancelled writes nothing from then on: the task is checked immediately before
+/// each reply is appended, which is how a sign-out stops a turn or a pass already under way.
 public actor TurnRunner {
     public struct Result: Sendable {
         public var person: Turn
@@ -109,6 +112,8 @@ public actor TurnRunner {
                                        parents: [person.ref], nonce: replyNonce, model: model)
             let reply = try await brain.answer(request)
             await progress?(.savingReply)
+            // A caller that stopped — a sign-out cancels the turn in flight — writes nothing more.
+            try Task.checkCancellation()
             // The reply and a heartbeat of the lease are one atomic batch: a claim made during
             // the call, or between the call and this write, refuses the batch and nothing lands.
             guard let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref],
@@ -162,6 +167,8 @@ public actor TurnRunner {
                                    answering: answering, history: Array(ordered.suffix(historyLimit)),
                                    parents: transcript.heads, nonce: nonce, model: model)
         let reply = try await brain.answer(request)
+        // A pass that was stopped — a sign-out cancels the one in flight — writes nothing.
+        try Task.checkCancellation()
         guard let assistant = try await writer.append(.assistant, reply.text, continuing: transcript,
                                                       nonce: nonce, renewing: lease) else {
             throw TurnRunnerError.displaced
@@ -180,6 +187,7 @@ public actor TurnRunner {
             await brain.landed(there, nonce: owed.nonce)
             return false
         }
+        try Task.checkCancellation()
         guard let turn = try await writer.append(.assistant, owed.text, parents: owed.parents,
                                                  nonce: owed.nonce, renewing: lease) else {
             throw TurnRunnerError.displaced

@@ -152,7 +152,7 @@ class HarnessIntegrationTests: XCTestCase {
         mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
         XCTAssertEqual(mascot.state.tokens, 259_010)
 
-        harness.forget()
+        await harness.forget()
         XCTAssertNil(harness.context, "the last login's context outlived the sign-out")
         // The next sign-in's chat appears and hands Topo what the harness has.
         mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)

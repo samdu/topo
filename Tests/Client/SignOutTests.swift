@@ -22,29 +22,29 @@ final class SignOutTests: XCTestCase {
         return (signOut, calls)
     }
 
-    func testSigningOutEndsEveryOneOfThem() {
+    func testSigningOutEndsEveryOneOfThem() async {
         let (signOut, calls) = signOut()
-        signOut.act()
+        await signOut.act()
         XCTAssertEqual(Set(calls.ended), ["speaker", "harness", "memory", "login"])
     }
 
-    func testTheLoginGoesLast() {
+    func testTheLoginGoesLast() async {
         let (signOut, calls) = signOut()
-        signOut.act()
+        await signOut.act()
         XCTAssertEqual(calls.ended.last, "login",
                        "the tokens go last, so nothing above runs without an account to run against")
     }
 
-    func testTheSpeakerIsStoppedFirst() {
+    func testTheSpeakerIsStoppedFirst() async {
         let (signOut, calls) = signOut()
-        signOut.act()
+        await signOut.act()
         XCTAssertEqual(calls.ended.first, "speaker",
                        "a reply still being read would hold the process open past the login")
     }
 
-    func testTheOrderIsTheWholeOrder() {
+    func testTheOrderIsTheWholeOrder() async {
         let (signOut, calls) = signOut()
-        signOut.act()
+        await signOut.act()
         XCTAssertEqual(calls.ended, ["speaker", "harness", "memory", "login"])
     }
 

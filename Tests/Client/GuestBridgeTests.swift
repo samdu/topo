@@ -816,7 +816,7 @@ final class GuestBridgeTests: XCTestCase {
         let resident = await guest.sessionID()
         XCTAssertEqual(resident, "S1")
 
-        harness.forget()
+        await harness.forget()
         try await eventually("the ledger to go") { !FileManager.default.fileExists(atPath: ledgerFile.path) }
         let forgotten = await guest.sessionID()
         XCTAssertNil(forgotten, "the guest's session outlived the sign-out")
@@ -925,7 +925,7 @@ final class GuestBridgeTests: XCTestCase {
         let waiting = Task { try await runner.answerPending(model: .sonnet5) }
         try await eventually("the answer to wait at ready") { guest.readyHeld }
 
-        harness.forget()
+        await harness.forget()
         try await eventually("the ledger to go") { !FileManager.default.fileExists(atPath: ledgerFile.path) }
         guest.releaseReady()
         let result = await waiting.result
@@ -934,6 +934,70 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.inputs, ["the word is marmalade"], "an input was sent after the sign-out")
         let ledger = await bridge.current
         XCTAssertNil(ledger.pending)
+    }
+
+    /// Sign-out while an answering pass is mid-turn: the guest has the input and holds its result
+    /// until after the sign-out. Asked through the runner directly, so nothing cancels the pass —
+    /// only the login it began under going. The guest's answer comes back to a bridge whose login
+    /// has gone: no reply is handed to the runner, nothing is appended, and no ledger is written.
+    func testSignOutWhileAPassIsMidTurnAppendsNothingAndWritesNoLedger() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Noted."), .hang])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        await harness.send("the word is marmalade")
+
+        let log = TurnLog(database: db)
+        try await log.writer(for: DeviceID("watch")).append(.person, "and now?", continuing: try await log.read())
+        let lease = steadyLease(db, phone)
+        let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
+        let answering = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the guest to take the watch's turn") { guest.inputs.count == 2 }
+
+        await harness.forget()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "the sign-out left the ledger")
+        guest.finishHanging(with: "Too late.")
+        let result = await answering.result
+        if case .success(let reply) = result { XCTFail("a pass begun before the sign-out wrote \(reply?.text ?? "nil") after it") }
+
+        let turns = try await self.log(db)
+        XCTAssertEqual(turns.map(\.text), ["the word is marmalade", "Noted.", "and now?"], "a reply was appended after the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the sign-out")
+        let ledger = await bridge.current
+        XCTAssertNil(ledger.pending)
+        XCTAssertEqual(ledger.seen.count, 0)
+    }
+
+    /// The same through the harness's own pass, as the answering loop runs it: the sign-out
+    /// cancels the pass in flight, the guest's late answer reaches nobody, and nothing is appended
+    /// or recorded.
+    func testSignOutCancelsTheHarnessPassInFlightAndNothingLands() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.reply("Noted."), .hang])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!, brain: bridge, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        await harness.send("the word is marmalade")
+        try await write(db, .person, "and now?", device: "watch")
+
+        let pass = Task { await harness.answerPending() }
+        try await eventually("the guest to take the watch's turn") { guest.inputs.count == 2 }
+        await harness.forget()
+        guest.finishHanging(with: "Too late.")
+        await pass.value
+
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["the word is marmalade", "Noted.", "and now?"], "a reply was appended after the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the sign-out")
+        XCTAssertTrue(harness.turns.isEmpty, "the pass drew on a screen the sign-out cleared")
+        XCTAssertNil(harness.error)
     }
 
     /// The person's control for a cut-off turn: shown, and asking again sends it once.
