@@ -1,0 +1,59 @@
+diff --git a/kernel/pidfd.c b/kernel/pidfd.c
+index 38724f2..5875aca 100644
+--- a/kernel/pidfd.c
++++ b/kernel/pidfd.c
+@@ -24,28 +24,41 @@ int_t sys_pidfd_open(pid_t_ pid, uint_t flags) {
+     if (flags & ~(O_NONBLOCK_))
+         return _EINVAL;
+ 
+-    lock(&pids_lock);
+-    struct task *task = pid_get_task(pid);
+-    if (task == NULL) {
+-        unlock(&pids_lock);
+-        return _ESRCH;
+-    }
+-    // Linux restricts pidfd_open to thread-group leaders.
+-    bool is_leader = (task->group != NULL && task->group->leader == task);
+-    unlock(&pids_lock);
+-    if (!is_leader)
+-        return _EINVAL;
+-
+     struct fd *fd = adhoc_fd_create(&pidfd_ops);
+     if (fd == NULL)
+         return _ENOMEM;
+     fd->pidfd.pid = pid;
+-    atomic_store_explicit(&fd->pidfd.exited, false, memory_order_relaxed);
+     fd->flags = flags;
+ 
++    // A zombie is still a process until it is reaped, and Linux opens it: the
++    // pidfd reads as exited at once. ESRCH is only for a pid that is gone.
++    // bun opens a pidfd on every child it spawns, and a child that exits
++    // before the open (a failed exec, a quick `git`) gets ESRCH here unless
++    // zombies count; bun's ESRCH path then registers fd 0 with its epoll, its
++    // stdin reader's own registration fails EEXIST, and it reads its stdin as
++    // ended without reading a byte of it.
++    //
++    // The exit path marks the zombie and wakes pidfds under pids_lock, then
++    // pidfd_lock; taking both in that order here, around the check and the
++    // registration, means an exit is either seen as `zombie` or wakes this fd.
++    lock(&pids_lock);
++    struct task *task = pid_get_task_zombie(pid);
++    int_t err = 0;
++    if (task == NULL)
++        err = _ESRCH;
++    // Linux restricts pidfd_open to thread-group leaders.
++    else if (task->group == NULL || task->group->leader != task)
++        err = _EINVAL;
++    if (err < 0) {
++        unlock(&pids_lock);
++        fd_close(fd);
++        return err;
++    }
++    atomic_store_explicit(&fd->pidfd.exited, task->zombie, memory_order_relaxed);
+     lock(&pidfd_lock);
+     list_add(&pidfd_list, &fd->pidfd_links);
+     unlock(&pidfd_lock);
++    unlock(&pids_lock);
+ 
+     // Linux always creates pidfds with O_CLOEXEC (there is no way to get a
+     // non-cloexec pidfd from pidfd_open). PIDFD_NONBLOCK does not change that.
