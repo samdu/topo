@@ -7,6 +7,29 @@ let W = 184, H = 160
 let BX = 80.0, BY = 128.0          // where the body sits: the head's base, centre
 let SHELF_Y = BY + 7                // the top edge of the glass he perches on
 
+// ── at rest ─────────────────────────────────────────────────────────────────────
+// Idle, he sits on the shelf: he breathes, blinks and looks about, and his arms drift. Now and then
+// he goes on an excursion: a stroll to the corner of the glass to hang there dangling and come home,
+// or, a tenth as often, yoga on his mat where he sits. Every wait is counted from his arrival where
+// he waits, never from his leaving, so walking time never eats the rest. These are tuned by eye.
+let FIRST_REST = 20.0                      // s on the shelf before the first excursion, once he has settled
+let REST = (30.0, 60.0)                    // s on the shelf between excursions, uniform
+let CORNER_STAY = (6.0, 10.0)              // s hanging at the corner
+let YOGA_STAY = (10.0, 14.0)               // s in yoga
+let YOGA_PER_CORNER = 1.0 / 10             // yoga excursions for every corner one, on average
+// The arms at rest: each curvature key drifts round the shelf pose, slowly and a little, at a rate
+// and phase of each arm's own, so no two arms move alike. Degrees of turn per whole length at the
+// tip keys, the root's less, so the arm stays where it sits and only its curl breathes: under 20 the
+// silhouette barely changes from frame to frame, which is what reads as comfortable rather than busy.
+// A tenth of a cycle a second is slower than his breath (1.7 rad/s, a cycle in 3.7 s), so the two
+// never beat together.
+let WIGGLE_DEG = 16.0
+let WIGGLE_HZ = 0.1
+let WIGGLE_KEYS = [0.35, 0.6, 1, 1]        // how much of the drift each key takes, root to tip
+let REST_EASE = 1.5                        // how fast the wave of work gives way to the drift, and back
+// Poses the idle cycle reaches and work does not: a host asking for one is asking for nothing he has.
+let CYCLE_ONLY = ["yoga"]
+
 // ── palette ─────────────────────────────────────────────────────────────────────
 // A ten-tone ramp per load state, darkest first, then the fixed colours, then every material's ramp
 // at a multiple of ten, so (index - 1) % 10 is the tone in any ramp.

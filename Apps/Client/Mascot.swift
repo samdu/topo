@@ -23,8 +23,9 @@ struct MascotState: Equatable, Sendable {
 
     /// The poses the engine has for work, and the one for none. A pose that is not idle is shown
     /// only while a turn is in flight: the working animation is the honest sign that work is.
+    /// Yoga is not one: it is part of his rest, which the engine runs by itself while he is idle.
     enum Activity: String, CaseIterable, Sendable {
-        case idle, thinking, searching, building, writing, calendar, yoga
+        case idle, thinking, searching, building, writing, calendar
     }
 
     /// What the engine is handed for this state, a frame at a time.
@@ -43,16 +44,13 @@ enum MascotMapping {
     /// What a turn is doing when it calls `tool`, which for a file tool names `path`; nil for a
     /// tool that says nothing about the work, which leaves the pose as it was.
     ///
-    /// - A file tool writing under the memory's mount is yoga: editing its own memory is the mind
-    ///   improving itself. `memory` is where that mount is in the guest, and there is none until
-    ///   the notes folder is mounted, so today nothing in the guest is yoga.
     /// - Bash, and a file tool writing a file that is code by its extension, is building.
     /// - WebSearch and WebFetch are searching.
-    /// - A file tool writing anything else is writing: prose, notes, a file named with no path.
+    /// - A file tool writing anything else is writing: prose, notes, the memory, a file named with
+    ///   no path.
     /// - Nothing maps to calendar yet: the phone's own tools are not in the guest.
-    static func activity(tool: String, path: String?, memory: String?) -> MascotState.Activity? {
+    static func activity(tool: String, path: String?) -> MascotState.Activity? {
         if StreamJSON.fileTools[tool] != nil {
-            if let path, let memory, isUnder(path, memory) { return .yoga }
             if let path, isCode(path) { return .building }
             return .writing
         }
@@ -64,7 +62,7 @@ enum MascotMapping {
     }
 
     /// One of the turn's events onto the state.
-    static func next(_ state: MascotState, _ event: StreamEvent, memory: String?) -> MascotState {
+    static func next(_ state: MascotState, _ event: StreamEvent) -> MascotState {
         var next = state
         switch event {
         case .started(_, let model):
@@ -75,7 +73,7 @@ enum MascotMapping {
         case .thinking:
             next.activity = .thinking
         case .toolUse(let name, let path):
-            if let activity = activity(tool: name, path: path, memory: memory) { next.activity = activity }
+            if let activity = activity(tool: name, path: path) { next.activity = activity }
         case .text, .toolResult, .result, .other, .malformed:
             break
         }
@@ -83,10 +81,10 @@ enum MascotMapping {
     }
 
     /// A turn's update: its events, then its end. Answered, failed or abandoned, the end is idle.
-    static func next(_ state: MascotState, _ update: GuestSession.TurnUpdate, memory: String?) -> MascotState {
+    static func next(_ state: MascotState, _ update: GuestSession.TurnUpdate) -> MascotState {
         switch update {
         case .event(let event):
-            return next(state, event, memory: memory)
+            return next(state, event)
         case .ended:
             return ended(state)
         }
@@ -128,14 +126,6 @@ enum MascotMapping {
         let ext = (name as NSString).pathExtension
         return !ext.isEmpty && codeExtensions.contains(ext)
     }
-
-    /// Whether `path` is `root` or inside it, once both are standardised, so `..` cannot walk a
-    /// path in or out of the memory.
-    static func isUnder(_ path: String, _ root: String) -> Bool {
-        let path = (path as NSString).standardizingPath, root = (root as NSString).standardizingPath
-        guard path.hasPrefix("/"), root.hasPrefix("/") else { return false }
-        return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
-    }
 }
 
 /// Topo's state as the app holds it: one value the glass reads, moved by the chat's harness and
@@ -145,8 +135,6 @@ enum MascotMapping {
 @Observable
 final class Mascot {
     private(set) var state: MascotState
-    /// Where the memory is mounted in the guest, for the yoga pose. Nil: nothing mounts it yet.
-    var memory: String?
 
     init(model: String = ClaudeModel.effective(.default).rawValue) {
         state = MascotState(model: model)
@@ -162,7 +150,7 @@ final class Mascot {
 
     /// One of a guest turn's updates.
     func guest(_ update: GuestSession.TurnUpdate) {
-        state = MascotMapping.next(state, update, memory: memory)
+        state = MascotMapping.next(state, update)
     }
 
     /// A guest turn's updates stopped, with or without an end: whatever it was doing, it is not

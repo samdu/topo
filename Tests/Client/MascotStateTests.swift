@@ -18,11 +18,11 @@ final class MascotStateTests: XCTestCase {
     }
 
     /// Every pose the turn passes through, with a repeat of the one before left out.
-    private func poses(through events: [StreamEvent], memory: String?) -> [MascotState.Activity] {
+    private func poses(through events: [StreamEvent]) -> [MascotState.Activity] {
         var state = MascotState(model: "")
         var seen: [MascotState.Activity] = []
         for event in events {
-            state = MascotMapping.next(state, .event(event), memory: memory)
+            state = MascotMapping.next(state, .event(event))
             if seen.last != state.activity { seen.append(state.activity) }
         }
         return seen
@@ -32,16 +32,14 @@ final class MascotStateTests: XCTestCase {
 
     /// The plan's table, tool by tool.
     func testTheActivityTable() {
-        let memory = "/home/topo/memory"
-        func activity(_ tool: String, _ path: String? = nil, memory: String? = memory) -> MascotState.Activity? {
-            MascotMapping.activity(tool: tool, path: path, memory: memory)
+        func activity(_ tool: String, _ path: String? = nil) -> MascotState.Activity? {
+            MascotMapping.activity(tool: tool, path: path)
         }
-        // A file tool under the memory's mount is yoga, whatever the file is.
+        // A file tool writing the memory is writing, as any other write is; its code is building.
         for tool in ["Write", "Edit", "MultiEdit", "NotebookEdit"] {
-            XCTAssertEqual(activity(tool, "/home/topo/memory/Groceries.md"), .yoga, tool)
-            XCTAssertEqual(activity(tool, "/home/topo/memory/scripts/tidy.py"), .yoga, tool)
+            XCTAssertEqual(activity(tool, "/home/topo/memory/Groceries.md"), .writing, tool)
+            XCTAssertEqual(activity(tool, "/home/topo/memory/scripts/tidy.py"), .building, tool)
         }
-        XCTAssertEqual(activity("Write", "/home/topo/memory"), .yoga)
         // Code by its extension is building; anything else is writing.
         XCTAssertEqual(activity("Write", "/root/work/capital.py"), .building)
         XCTAssertEqual(activity("Edit", "/root/App/View.swift"), .building)
@@ -50,13 +48,6 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(activity("Write", "/root/notes/letter.md"), .writing)
         XCTAssertEqual(activity("Edit", "/root/README"), .writing)
         XCTAssertEqual(activity("Write", nil), .writing, "a write naming no file is still a write")
-        // A path only looks like it is in the memory: a sibling, and a walk out of it.
-        XCTAssertEqual(activity("Write", "/home/topo/memory-old/a.md"), .writing)
-        XCTAssertEqual(activity("Write", "/home/topo/memory/../elsewhere/a.md"), .writing)
-        XCTAssertEqual(activity("Write", "/home/topo/other/../memory/a.md"), .yoga)
-        XCTAssertEqual(activity("Write", "memory/a.md"), .writing, "a relative path is in no mount")
-        // With nothing mounted, which is today, nothing is yoga.
-        XCTAssertEqual(activity("Write", "/home/topo/memory/Groceries.md", memory: nil), .writing)
         // Bash builds; the web searches.
         XCTAssertEqual(activity("Bash"), .building)
         XCTAssertEqual(activity("WebSearch"), .searching)
@@ -73,19 +64,29 @@ final class MascotStateTests: XCTestCase {
     // MARK: Over recorded turns
 
     /// The recorded tool turn — a search, a note written, code written, a file read, the note
-    /// edited, a command run — with the note's folder standing in for the memory's mount, which
-    /// is the only way yoga is reached until the notes folder is mounted in the guest.
+    /// edited, a command run — goes through its poses, the note being writing.
     func testARecordedToolTurnGoesThroughItsPoses() throws {
         let events = try recorded("tool-turn")
-        XCTAssertEqual(poses(through: events, memory: "/root/memory"), [
-            .idle, .thinking, .searching, .thinking, .yoga, .thinking, .building, .thinking,
-            .yoga, .thinking, .building, .thinking,
-        ])
-        // Today, with no memory mounted, the note is writing.
-        XCTAssertEqual(poses(through: events, memory: nil), [
+        XCTAssertEqual(poses(through: events), [
             .idle, .thinking, .searching, .thinking, .writing, .thinking, .building, .thinking,
             .writing, .thinking, .building, .thinking,
         ])
+    }
+
+    /// Yoga is the engine's own, part of his rest while he is idle: no activity is yoga, so nothing
+    /// a turn does asks the engine for it.
+    func testNoActivityIsYoga() {
+        XCTAssertNil(MascotState.Activity(rawValue: "yoga"))
+        for activity in MascotState.Activity.allCases {
+            XCTAssertNotEqual(MascotState(model: "", activity: activity).input.activity, "yoga")
+        }
+        var tools = ["Bash", "WebSearch", "WebFetch", "Read", "Task"]
+        tools += StreamJSON.fileTools.keys
+        for tool in tools {
+            for path in ["/home/topo/memory/a.md", "/root/memory/Groceries.md", "/root/a.py", "a.md"] {
+                XCTAssertNotEqual(MascotMapping.activity(tool: tool, path: path)?.rawValue, "yoga", "\(tool) \(path)")
+            }
+        }
     }
 
     /// `system/init` names the model and every assistant message's usage the context; he wears
@@ -93,12 +94,12 @@ final class MascotStateTests: XCTestCase {
     func testInitNamesTheModelAndUsageTheContext() throws {
         let events = try recorded("tool-turn")
         var state = MascotState(model: "")
-        state = MascotMapping.next(state, .event(events[0]), memory: nil)
+        state = MascotMapping.next(state, .event(events[0]))
         guard case .started(_, let model) = events[0] else { return XCTFail("the recording does not start with init") }
         XCTAssertEqual(state.model, model)
         XCTAssertEqual(state.tokens, 0)
 
-        for event in events { state = MascotMapping.next(state, .event(event), memory: nil) }
+        for event in events { state = MascotMapping.next(state, .event(event)) }
         let usages = events.compactMap { if case .usage(let usage) = $0 { usage } else { nil } }
         let last = try XCTUnwrap(usages.last)
         XCTAssertGreaterThan(last.context, 0)
