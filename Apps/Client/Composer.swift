@@ -238,6 +238,10 @@ struct Composer: View {
             // VoiceOver on a release build hears the label alone.
             .accessibilityValue(micReport ?? "")
             #endif
+            // The well keeps its resting width in the row at every share, so the flanks stay
+            // where they are and the pane, whose width a wide look's content can set, never
+            // narrows under the keyboard.
+            .frame(width: geometry.slot)
     }
 }
 
@@ -275,7 +279,9 @@ private struct LeadingFlank: PreferenceKey {
 /// Under the keyboard the well, the jewel and the mark are drawn at `compactShare` of their
 /// resting size, and the vertical inset with them, so the pane is that share of its resting height
 /// wherever the well is what sets it. The flanks keep their size: a pane whose flanks are taller
-/// than its short well is as short as they let it be. The well is never drawn under
+/// than its short well is as short as they let it be. The well keeps its resting width in the row
+/// (`slot`), so the flanks do not move and neither does the pane's width, even on a look whose
+/// content is wider than its share of the screen. The well is never drawn under
 /// `Look.Composer.Well.pressable` for the keyboard — one a look makes smaller than that at rest
 /// stays at its own size — so the share the whole microphone is drawn at is the larger of the two.
 struct ComposerGeometry: Equatable, Sendable {
@@ -287,6 +293,9 @@ struct ComposerGeometry: Equatable, Sendable {
     var restingJewel: CGFloat
     /// The room above and below the row, as drawn.
     var verticalInset: CGFloat
+    /// The width the well takes in the row: its resting size at every share, so the flanks and
+    /// the pane's width do not move under the keyboard.
+    var slot: CGFloat
 
     /// The jewel as drawn.
     var jewel: CGFloat { restingJewel * scale }
@@ -295,12 +304,13 @@ struct ComposerGeometry: Equatable, Sendable {
         let resting = composer.well.size
         let jewel = min(composer.well.jewelSize, resting)
         guard keyboard, resting > 0 else {
-            return ComposerGeometry(scale: 1, well: resting, restingJewel: jewel, verticalInset: composer.verticalInset)
+            return ComposerGeometry(scale: 1, well: resting, restingJewel: jewel, verticalInset: composer.verticalInset,
+                                    slot: resting)
         }
         let short = max(resting * min(max(composer.compactShare, 0), 1), min(resting, Look.Composer.Well.pressable))
         let scale = short / resting
         return ComposerGeometry(scale: scale, well: short, restingJewel: jewel,
-                                verticalInset: composer.verticalInset * scale)
+                                verticalInset: composer.verticalInset * scale, slot: resting)
     }
 }
 

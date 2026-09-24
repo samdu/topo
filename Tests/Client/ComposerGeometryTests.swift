@@ -127,6 +127,8 @@ final class ComposerGeometryTests: XCTestCase {
                 XCTAssertTrue(geometry.well.isFinite && geometry.verticalInset.isFinite, "\(composer)")
             }
             XCTAssertLessThanOrEqual(short.verticalInset, rest.verticalInset + 1e-9, "\(composer)")
+            XCTAssertEqual(short.slot, rest.slot, "\(composer): the well's width in the row changed")
+            XCTAssertGreaterThanOrEqual(short.slot, short.well - 1e-9, "\(composer)")
             // The pane the well sets: never taller under the keyboard, and the well inside it.
             let restPane = rest.well + 2 * rest.verticalInset
             let shortPane = short.well + 2 * short.verticalInset
@@ -195,7 +197,7 @@ final class ComposerGeometryTests: XCTestCase {
     /// never under the pressable floor, sits inside the short pane from top to foot, and is inside
     /// it side to side wherever the resting well is — a look whose well is wider than its pane
     /// is that at rest, and the keyboard makes it no worse. The short pane is no taller than the
-    /// resting one and sits on the same foot.
+    /// resting one, sits on the same foot and is exactly as wide, in the same place.
     func testTheShortWellIsInsideTheShortPaneOnTheSmallestPhone() throws {
         for composer in Self.hosted {
             let rest = try frames(composer, keyboard: false)
@@ -215,14 +217,10 @@ final class ComposerGeometryTests: XCTestCase {
             }
             XCTAssertLessThanOrEqual(short.pane.height, rest.pane.height + 0.5, "\(composer): the pane grew under the keyboard")
             XCTAssertEqual(short.pane.maxY, rest.pane.maxY, accuracy: 0.5, "\(composer): the pane left its foot")
-            // A pane the look gives the width its content needs is that width at both heights; one
-            // whose content is wider than its share of the screen is as wide as the content, which
-            // the short well makes narrower and never wider.
-            if abs(rest.pane.width - narrowest.width * composer.widthFraction) <= 0.5 {
-                XCTAssertEqual(short.pane.width, rest.pane.width, accuracy: 0.5, "\(composer): the pane's width changed")
-            } else {
-                XCTAssertLessThanOrEqual(short.pane.width, rest.pane.width + 0.5, "\(composer): the pane widened")
-            }
+            // The width is the resting content's at every share, including a look whose content
+            // is wider than its share of the screen.
+            XCTAssertEqual(short.pane.width, rest.pane.width, accuracy: 0.5, "\(composer): the pane's width changed")
+            XCTAssertEqual(short.pane.minX, rest.pane.minX, accuracy: 0.5, "\(composer): the pane moved sideways")
         }
     }
 

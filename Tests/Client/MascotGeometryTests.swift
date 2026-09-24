@@ -302,9 +302,8 @@ final class MascotGeometryTests: XCTestCase {
         let composer = Look.Composer()
         for keyboard in [false, true] {
             let geometry = ComposerGeometry.of(composer, keyboard: keyboard)
-            // The flank widens by what the well gave up, since the two ends take what is left.
-            let give = (composer.well.size - geometry.well) / 2
-            let flank = CGRect(x: 0, y: geometry.well / 2, width: self.flank.width + give, height: 0)
+            // The flank keeps its width: the well keeps its resting width in the row.
+            let flank = CGRect(x: 0, y: geometry.well / 2, width: self.flank.width, height: 0)
             let row = CGSize(width: self.row.width, height: geometry.well)
             let wellEdge = flank.maxX + composer.spacing
             for mascot in Self.extremes + [{ var m = Look.Mascot(); m.bobAmplitude = 32; m.bobPeriod = 0.5; return m }()] {
