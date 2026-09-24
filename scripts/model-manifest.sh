@@ -10,6 +10,8 @@
 #
 #   scripts/model-manifest.sh            # regenerate the manifest
 #   scripts/model-manifest.sh --check    # regenerate to a temp file and diff against the committed one
+#   scripts/model-manifest.sh --closure <APKINDEX> <installed db> <name-version>...
+#                                        # only the packages' dependency check, offline, on those files
 #
 # A `.mlmodelc` bundle is a directory of several files on the Hub, so a model's entry is the
 # flattened file list; the tree API is asked recursively and paged through its `link` header,
@@ -24,6 +26,101 @@ out="$root/Apps/Topo/Resources/models.json"
 cache="$root/build/models"
 check=no
 [ "${1:-}" = "--check" ] && check=yes
+
+# One line per package record: name, version, size, dependencies, provides (space-separated, each
+# as the record writes it, version constraint and all). Reads an APKINDEX or an installed database
+# on stdin.
+apk_records() {
+  awk 'function flush() { if (name != "") print name "|" version "|" size "|" deps "|" provides; name = version = size = deps = provides = "" }
+       /^$/ { flush(); next }
+       /^P:/ { name = substr($0, 3) } /^V:/ { version = substr($0, 3) } /^S:/ { size = substr($0, 3) }
+       /^D:/ { deps = substr($0, 3) } /^p:/ { provides = substr($0, 3) }
+       END { flush() }'
+}
+
+# Compares two apk versions: prints -1, 0 or 1. The order is `sort -V`'s, which agrees with apk's
+# on dotted numbers, the `-r<n>` release and a `_p<n>` patch suffix — every version the pinned set
+# and its dependencies carry — and not on apk's pre-release suffixes: apk puts `1.0_rc1` (and
+# `_alpha`, `_beta`, `_pre`) before `1.0`, where `sort -V` puts it after. apk's own `apk version -t`
+# is not available on macOS.
+vercmp() {
+  [ "$1" = "$2" ] && { echo 0; return; }
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)" = "$1" ] && echo -1 || echo 1
+}
+
+# Whether version $1 meets the constraint $2 $3: an operator (=, <, <=, >, >=, ~ for "this
+# version or one beginning with it") and a version. A provider with no version ("-") meets none.
+satisfies() {
+  local have="$1" op="$2" want="$3" c
+  [ "$have" = - ] && return 1
+  if [ "$op" = "~" ]; then
+    case "$have" in "$want"|"$want".*|"$want"-*|"$want"_*) return 0 ;; *) return 1 ;; esac
+  fi
+  c="$(vercmp "$have" "$want")"
+  case "$op" in
+    "=") [ "$c" = 0 ] ;;
+    "<") [ "$c" = -1 ] ;;
+    "<=") [ "$c" != 1 ] ;;
+    ">") [ "$c" = 1 ] ;;
+    ">=") [ "$c" != -1 ] ;;
+    *) return 1 ;;
+  esac
+}
+
+# closed <what> <index records> <installed records> <name-version>...: fails, naming the package
+# and the requirement, unless every dependency of every named package is provided — by a named
+# package or by one the minirootfs installed, each under its own name and everything it provides —
+# at a version that meets the dependency's constraint. A conflict (`!name`) is not a requirement.
+closed() {
+  local what="$1" index="$2" installed="$3" table reqs pkg name version record requires provides p d
+  local dep dname rest op want providers have ok
+  shift 3
+  table="$(mktemp)"
+  reqs="$(mktemp)"
+  awk -F'|' '{ print $1, $2; n = split($5, p, " "); for (i = 1; i <= n; i++) { k = index(p[i], "=");
+               if (k) print substr(p[i], 1, k - 1), substr(p[i], k + 1); else print p[i], "-" } }' "$installed" > "$table"
+  for pkg in "$@"; do
+    name="${pkg%-*-*}"
+    version="${pkg#"$name"-}"
+    record="$(awk -F'|' -v n="$name" '$1 == n' "$index")"
+    [ -n "$record" ] || { echo "$what: $name is not in the index" >&2; rm -f "$table" "$reqs"; return 1; }
+    IFS='|' read -r _ _ _ requires provides <<< "$record"
+    echo "$name $version" >> "$table"
+    for p in $provides; do
+      case "$p" in *=*) echo "${p%%=*} ${p#*=}" ;; *) echo "$p -" ;; esac >> "$table"
+    done
+    for d in $requires; do echo "$name $d" >> "$reqs"; done
+  done
+  while read -r pkg dep; do
+    case "$dep" in "!"*) continue ;; esac
+    dname="${dep%%[<>=~]*}"
+    rest="${dep#"$dname"}"
+    op="${rest%%[!<>=~]*}"
+    want="${rest#"$op"}"
+    case "$op" in ""|"="|"<"|"<="|">"|">="|"~") ;;
+      *) echo "$what: $pkg requires $dep, a constraint this script cannot read" >&2; rm -f "$table" "$reqs"; return 1 ;;
+    esac
+    providers="$(awk -v n="$dname" '$1 == n { print $2 }' "$table")"
+    [ -n "$providers" ] || { echo "$what: $pkg requires $dep, and nothing pinned or in the minirootfs provides $dname" >&2
+                             rm -f "$table" "$reqs"; return 1; }
+    [ -n "$op" ] || continue
+    ok=no
+    for have in $providers; do satisfies "$have" "$op" "$want" && ok=yes; done
+    [ "$ok" = yes ] || { echo "$what: $pkg requires $dep, but $dname is $(echo $providers)" >&2; rm -f "$table" "$reqs"; return 1; }
+  done < "$reqs"
+  rm -f "$table" "$reqs"
+}
+
+if [ "${1:-}" = "--closure" ]; then
+  [ $# -ge 4 ] || { echo "usage: $0 --closure <APKINDEX> <installed db> <name-version>..." >&2; exit 2; }
+  work="$(mktemp -d)"
+  trap 'rm -rf "$work"' EXIT
+  apk_records < "$2" > "$work/index"
+  apk_records < "$3" > "$work/installed"
+  closed closure "$work/index" "$work/installed" "${@:4}"
+  echo "closed" >&2
+  exit 0
+fi
 
 # id | repo | revision | file selectors (a path, or a directory prefix ending in /)
 #
@@ -64,8 +161,8 @@ alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|
 # minirootfs has only BusyBox's sh), and exactly what `apk add bash` pulls on top of the pinned
 # minirootfs: readline, libncursesw and ncurses-terminfo-base. Each file is checked against the
 # repository's APKINDEX — the version it lists for the name, and the size — and the set is checked
-# closed: every dependency of every package here is provided by a package here or by one the
-# minirootfs installed. The repository keeps only the newest build of each package, so a package
+# closed (`closed`): every dependency of every package here is provided by a package here or by one
+# the minirootfs installed, at a version that meets the dependency's constraint. The repository keeps only the newest build of each package, so a package
 # superseded upstream is a bump here and a re-run, or its URL answers 404.
 packages="
 alpine-bash|https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/|bash-5.2.37-r0 readline-8.2.13-r1 libncursesw-6.5_p20250503-r0 ncurses-terminfo-base-6.5_p20250503-r0
@@ -101,9 +198,11 @@ while IFS='|' read -r id repo revision selectors; do
   files=()
   for selector in $selectors; do
     if [[ "$selector" == */ ]]; then
-      mapfile -t matched < <(jq -r --arg p "$selector" '.[] | select(.type=="file" and (.path|startswith($p))) | .path' "$tree")
+      matched=()
+      while IFS= read -r path; do matched+=("$path"); done < <(jq -r --arg p "$selector" '.[] | select(.type=="file" and (.path|startswith($p))) | .path' "$tree")
     else
-      mapfile -t matched < <(jq -r --arg p "$selector" '.[] | select(.type=="file" and .path==$p) | .path' "$tree")
+      matched=()
+      while IFS= read -r path; do matched+=("$path"); done < <(jq -r --arg p "$selector" '.[] | select(.type=="file" and .path==$p) | .path' "$tree")
     fi
     [ "${#matched[@]}" -gt 0 ] || { echo "nothing in $repo matches $selector" >&2; exit 1; }
     files+=("${matched[@]}")
@@ -147,31 +246,19 @@ while IFS='|' read -r id base names; do
   entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg u "$base" '{id:$id,url:$u,files:.}')")
 done <<< "$direct"
 
-# One line per package record: name, version, size, dependencies, provides (space-separated, each
-# without its version constraint). Reads an APKINDEX or an installed database on stdin.
-apk_records() {
-  awk 'function flush() { if (name != "") print name "|" version "|" size "|" deps "|" provides; name = version = size = deps = provides = "" }
-       /^$/ { flush(); next }
-       /^P:/ { name = substr($0, 3) } /^V:/ { version = substr($0, 3) } /^S:/ { size = substr($0, 3) }
-       /^D:/ { deps = substr($0, 3) } /^p:/ { provides = substr($0, 3) }
-       END { flush() }' | sed -E 's/([^ |])[<>=~][^ |]*/\1/g'
-}
-
 rootfs_file="$cache/direct/alpine-minirootfs/$(echo "$direct" | awk -F'|' 'NF { print $3 }')"
 while IFS='|' read -r id base names; do
   [ -z "$id" ] && continue
   echo "== $base" >&2
   curl -sSfL "${base}APKINDEX.tar.gz" | tar xzOf - APKINDEX | apk_records > "$tmp/index"
   tar xzOf "$rootfs_file" lib/apk/db/installed | apk_records > "$tmp/installed"
-  provided=" $(awk -F'|' '{ print $1, $5 }' "$tmp/installed" | tr '\n' ' ') "
-  deps=""
   entry_files=()
   for pkg in $names; do
     name="${pkg%-*-*}"
     version="${pkg#"$name"-}"
     record="$(awk -F'|' -v n="$name" '$1 == n' "$tmp/index")"
     [ -n "$record" ] || { echo "$name is not in ${base}APKINDEX.tar.gz" >&2; exit 1; }
-    IFS='|' read -r _ listed size requires provides <<< "$record"
+    IFS='|' read -r _ listed size _ _ <<< "$record"
     [ "$listed" = "$version" ] || { echo "$name: pinned $version, but the repository has $listed" >&2; exit 1; }
     local_file="$cache/packages/$id/$pkg.apk"
     if [ ! -f "$local_file" ] || [ "$(stat -f %z "$local_file")" != "$size" ]; then
@@ -182,13 +269,8 @@ while IFS='|' read -r id base names; do
     [ "$(stat -f %z "$local_file")" = "$size" ] || { echo "$pkg.apk: got $(stat -f %z "$local_file") bytes, the index says $size" >&2; exit 1; }
     digest="$(shasum -a 256 "$local_file" | cut -d' ' -f1)"
     entry_files+=("$(jq -cn --arg p "$pkg.apk" --argjson s "$size" --arg d "$digest" '{path:$p,size:$s,sha256:$d}')")
-    provided+="$name $provides "
-    deps+="$requires "
   done
-  for dep in $deps; do
-    [[ "$dep" == !* ]] && continue
-    [[ "$provided" == *" $dep "* ]] || { echo "$id: nothing pinned or in the minirootfs provides $dep" >&2; exit 1; }
-  done
+  closed "$id" "$tmp/index" "$tmp/installed" $names
   entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg u "$base" '{id:$id,url:$u,files:.}')")
 done <<< "$packages"
 
