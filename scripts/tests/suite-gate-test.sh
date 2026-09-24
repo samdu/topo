@@ -129,6 +129,13 @@ for job in "${suite[@]}" test; do
       expect fail "reviewer_ran: $job result=$result" "the suite did not pass.* $job ($result)" "$work/ran.sh"
   done
 done
+# A red suite says whether a verdict was posted anyway: topo_ui runs beside the reviewer.
+SUITE_RESULTS="$(results topo_ui failure test)" \
+  expect fail "reviewer_ran: red suite, verdict posted" "its verdict is posted on the PR" "$work/ran.sh"
+for feedback in skipped failure cancelled; do
+  SUITE_RESULTS="$(results topo_ui failure test)" FEEDBACK_RESULT="$feedback" \
+    expect fail "reviewer_ran: red suite, post_feedback $feedback" "no review verdict was posted.*post_feedback: $feedback" "$work/ran.sh"
+done
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

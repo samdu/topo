@@ -1223,8 +1223,15 @@ jobs:
           for pair in $SUITE_RESULTS; do
             [ "${pair#*=}" = success ] || red="$red ${pair%%=*} (${pair#*=})"
           done
+          # topo_ui runs beside the reviewer, so a red suite can still come
+          # with a verdict on the PR; the message says which, so a reader
+          # knows whether there is a review to act on as well.
           if [ -n "$red" ]; then
-            echo "::error::Not mergeable: the suite did not pass —$red — whatever any verdict says, and a red fast job means the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
+            if [ "$FEEDBACK_RESULT" = success ]; then
+              echo "::error::Not mergeable: the suite did not pass —$red — though the reviewer ran and its verdict is posted on the PR. Fix the suite, and act on the verdict as usual — nothing here is a review decision."
+            else
+              echo "::error::Not mergeable: the suite did not pass —$red — and no review verdict was posted (codex: $CODEX_RESULT, post_feedback: $FEEDBACK_RESULT); a red fast job means the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
+            fi
             exit 1
           fi
           if [ "$CODEX_RESULT" != "success" ]; then
