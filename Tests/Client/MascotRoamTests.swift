@@ -326,6 +326,51 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertNil(roam.move)
     }
 
+    /// A look changing the clearance alone, with the chat as it was, decides his roost again: a
+    /// Topo standing 8 points from a turn under a clearance of 64 is moved to where 64 holds, at
+    /// once and with no glide, and the threshold that keeps small shuffles from being moves does
+    /// not keep him where the new clearance refuses.
+    func testAClearanceChangeAloneDecidesTheRoostAgain() throws {
+        let (placed, start) = settled(Self.field([]))
+        var roam = placed
+        let picture = try XCTUnwrap(roam.picture)
+        // A turn lands 8 points under him: at a clearance of 8 he stays.
+        let turn = CGRect(x: 0, y: picture.maxY + 8, width: 402, height: 20)
+        roam.observe(Self.field([turn]), at: start)
+        var time = start
+        while roam.needsTime, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.picture, picture)
+
+        var wide = Self.settings
+        wide.clearance = 64
+        roam.use(wide)
+        let moved = try XCTUnwrap(roam.picture)
+        XCTAssertNotEqual(moved, picture, "a clearance of 64 left him where 8 put him")
+        XCTAssertNil(roam.move, "a look change glided")
+        XCTAssertFalse(moved.insetBy(dx: -64 + 0.001, dy: -64 + 0.001).intersects(turn),
+                       "\(moved) is inside 64 points of \(turn)")
+        XCTAssertFalse(roam.needsTime)
+    }
+
+    /// A clearance change arriving during a glide is decided on arrival, with no threshold.
+    func testAClearanceChangeMidGlideIsDecidedOnArrival() throws {
+        let (placed, start) = settled(Self.field([]))
+        var roam = placed
+        let picture = try XCTUnwrap(roam.picture)
+        let turn = CGRect(x: 0, y: picture.minY - 4, width: 402, height: 628 - picture.minY + 4)
+        roam.observe(Self.field([turn]), at: start)
+        var time = start
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertNotNil(roam.move)
+        var wide = Self.settings
+        wide.clearance = 64
+        roam.use(wide)
+        XCTAssertNotNil(roam.move, "a look change cut a glide short")
+        while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
+        let arrived = try XCTUnwrap(roam.picture)
+        XCTAssertLessThanOrEqual(arrived.maxY, turn.minY - 64 + 0.001, "the new clearance was not kept")
+    }
+
     /// Under Reduce Motion he is placed with no glide.
     func testReduceMotionPlacesHimWithNoGlide() throws {
         var settings = Self.settings

@@ -317,6 +317,8 @@ struct MascotRoam: Equatable, Sendable {
     private var advanced = 0.0
     /// The time a frame lasts, which is the quiet a covered Topo waits for.
     var frame: Double
+    /// The next decision is owed to a look change and moves him however near the answer is.
+    private var forced = false
 
     init(_ settings: Settings, frame: Double = 1.0 / 30) {
         self.settings = settings
@@ -345,15 +347,18 @@ struct MascotRoam: Equatable, Sendable {
         covered = picture.map(field.covers) ?? false
     }
 
-    /// The settings, which a look or Reduce Motion can change: a new size is a new geometry to
-    /// him, so it is decided again.
+    /// The settings, which a look or Reduce Motion can change. A new size or clearance is a new
+    /// answer to where he may stand, so it is decided again with no threshold, since where he
+    /// stands may be exactly what the new value refuses: at once with no glide when he is standing
+    /// still, and on arrival when he is gliding.
     mutating func use(_ settings: Settings) {
         guard settings != self.settings else { return }
-        let resized = settings.size != self.settings.size
+        let reroost = settings.size != self.settings.size || settings.clearance != self.settings.clearance
         self.settings = settings
-        if resized {
+        if reroost {
             changed = now
             unsettled = true
+            forced = true
             if move == nil, position != nil { decide(glide: false) }
         }
         covered = picture.flatMap { picture in field.map { $0.covers(picture) } } ?? false
@@ -386,6 +391,8 @@ struct MascotRoam: Equatable, Sendable {
 
     private mutating func decide(glide: Bool) {
         unsettled = false
+        let forced = self.forced
+        self.forced = false
         guard let field else { return }
         let next = MascotRoost.of(field, size: settings.size, clearance: settings.clearance, from: position)
         guard let to = next.frame?.origin else {
@@ -400,7 +407,8 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         // Within his own room of where he stands is where he stands.
-        if hypot(to.x - from.x, to.y - from.y) <= settings.clearance, !field.covers(CGRect(origin: from, size: settings.size)) {
+        if !forced, hypot(to.x - from.x, to.y - from.y) <= settings.clearance,
+           !field.covers(CGRect(origin: from, size: settings.size)) {
             return
         }
         roost = next
