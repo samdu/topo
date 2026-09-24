@@ -5,19 +5,23 @@ import XCTest
 @testable import Topo
 
 /// The glass under the keyboard: the pane goes short and the microphone with it, and the
-/// microphone never goes out of reach. Held twice — as the arithmetic `ComposerGeometry` is, and
-/// as a composer laid out on the narrowest screen the app runs on, where the well is the area a
-/// press lands in (`ComposerFrames.Well`, the frame the gesture is on) and the pane is the edge of
-/// the glass (`ComposerFrames.Pane`) — at every combination of the ends of the ranges `look.json`
-/// reads the fields that bound containment in: the new share, the well and the jewel set into it,
-/// the pane's width and both of its insets.
+/// microphone never goes out of reach. Held twice. As the arithmetic `ComposerGeometry` is, at
+/// every combination of the ends of the ranges `look.json` reads the fields that bound
+/// containment in: the new share, the well and the jewel set into it, the pane's width and both
+/// of its insets. And as a composer laid out in a window the size of the smallest phone the app
+/// runs on, where the well is the area a press lands in (`ComposerFrames.Well`, the frame the
+/// gesture is on) and the pane is the edge of the glass (`ComposerFrames.Pane`), at the looks
+/// among those whose resting pane fits on that screen: a 4000-point well or inset already spills
+/// off the screen at rest, so hosting one proves nothing about the keyboard, and a window big
+/// enough to hold it is a texture bigger than the renderer will make.
 ///
 /// That a press at the short well's edge reaches the microphone is `TopoOnTheGlassTests`', which
 /// raises the keyboard and presses it.
 @MainActor
 final class ComposerGeometryTests: XCTestCase {
-    /// The narrowest layout the iOS target supports: an iPad's Slide Over column, 320 points.
-    private let narrowest = CGSize(width: 320, height: 20000)
+    /// The smallest phone layout the iOS target supports: 320 by 568 points, which is also the
+    /// width of an iPad's Slide Over column.
+    private let narrowest = CGSize(width: 320, height: 568)
 
     /// The ends of `LookDocument`'s ranges for every field that bounds where the microphone is:
     /// `compactShare` 0.5 and 1, the well's size and the jewel's 8 and 4000 (with the default and
@@ -31,6 +35,34 @@ final class ComposerGeometryTests: XCTestCase {
                     for width in [0.1, 1] as [CGFloat] {
                         for horizontal in [0, 4000] as [CGFloat] {
                             for vertical in [0, 4000] as [CGFloat] {
+                                var composer = Look.Composer()
+                                composer.compactShare = share
+                                composer.well.size = well
+                                composer.well.jewelSize = jewel
+                                composer.widthFraction = width
+                                composer.horizontalInset = horizontal
+                                composer.verticalInset = vertical
+                                all.append(composer)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return all
+    }
+
+    /// The looks hosted in a window: the ends of the share, the width and the jewel as above, with
+    /// the well at its floor, the pressable floor and the default, and both insets at nothing and
+    /// at 100 points — every combination whose resting pane fits on the smallest phone.
+    static var hosted: [Look.Composer] {
+        var all: [Look.Composer] = [Look.Composer()]
+        for share in [0.5, 1] as [CGFloat] {
+            for well in [8, Look.Composer.Well.pressable, 72] as [CGFloat] {
+                for jewel in [8, 4000] as [CGFloat] {
+                    for width in [0.1, 1] as [CGFloat] {
+                        for horizontal in [0, 100] as [CGFloat] {
+                            for vertical in [0, 100] as [CGFloat] {
                                 var composer = Look.Composer()
                                 composer.compactShare = share
                                 composer.well.size = well
@@ -95,6 +127,13 @@ final class ComposerGeometryTests: XCTestCase {
                 XCTAssertTrue(geometry.well.isFinite && geometry.verticalInset.isFinite, "\(composer)")
             }
             XCTAssertLessThanOrEqual(short.verticalInset, rest.verticalInset + 1e-9, "\(composer)")
+            // The pane the well sets: never taller under the keyboard, and the well inside it.
+            let restPane = rest.well + 2 * rest.verticalInset
+            let shortPane = short.well + 2 * short.verticalInset
+            XCTAssertLessThanOrEqual(shortPane, restPane + 1e-9, "\(composer): the pane grew under the keyboard")
+            XCTAssertLessThanOrEqual(short.well, shortPane + 1e-9, "\(composer)")
+            XCTAssertEqual(shortPane, restPane * short.scale, accuracy: 1e-6,
+                           "\(composer): the pane is not the share the well is drawn at")
         }
     }
 
@@ -152,13 +191,13 @@ final class ComposerGeometryTests: XCTestCase {
         var well: CGRect?
     }
 
-    /// Laid out, at every end of the ranges together: the short well is the geometry's size, is
+    /// Laid out, at every hosted look: the short well is the geometry's size, is
     /// never under the pressable floor, sits inside the short pane from top to foot, and is inside
     /// it side to side wherever the resting well is — a look whose well is wider than its pane
     /// is that at rest, and the keyboard makes it no worse. The short pane is no taller than the
     /// resting one and sits on the same foot.
-    func testTheShortWellIsInsideTheShortPaneAtEveryExtreme() throws {
-        for composer in Self.extremes {
+    func testTheShortWellIsInsideTheShortPaneOnTheSmallestPhone() throws {
+        for composer in Self.hosted {
             let rest = try frames(composer, keyboard: false)
             let short = try frames(composer, keyboard: true)
             let geometry = ComposerGeometry.of(composer, keyboard: true)
