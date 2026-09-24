@@ -194,16 +194,18 @@ enum MascotRoost: Equatable, Sendable {
     /// Where he stands, from the chat's geometry, the size of his picture, the room he keeps and
     /// where he stands now (`from`, his picture's origin; nil before he has stood anywhere).
     ///
-    /// A gap is a place in `field.open` where his picture with `clearance` all round it overlaps
-    /// nothing he may not cover. Of the gaps that hold him the nearest to `from` wins — so a new
-    /// turn moves him the least — and with no `from` the nearest to the transcript's bottom
-    /// trailing corner, the right margin just above the glass. With no gap he stands nowhere and
-    /// is not drawn: never on the glass, never over the microphone.
+    /// A gap is a place in `field.open` for his picture where it, with `clearance` all round it,
+    /// overlaps nothing he may not cover. The clearance is kept from what he may not cover and
+    /// not from the transcript's own edges, so the margin beside a reply holds him flush with the
+    /// screen's edge. Of the gaps that hold him the nearest to `from` wins — so a new turn moves
+    /// him the least — and with no `from` the nearest to the transcript's bottom trailing corner,
+    /// the right margin just above the glass. With no gap he stands nowhere and is not drawn:
+    /// never on the glass, never over the microphone.
     static func of(_ field: MascotField, size: CGSize, clearance: CGFloat, from: CGPoint?) -> MascotRoost {
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let open = field.open
-        let home = CGPoint(x: open.maxX - size.width - margin, y: open.maxY - size.height - margin)
+        let home = CGPoint(x: open.maxX - size.width, y: open.maxY - size.height)
         if let spot = nearestGap(field, size: size, margin: margin, to: from ?? home) {
             return .gap(CGRect(origin: spot, size: size))
         }
@@ -212,17 +214,18 @@ enum MascotRoost: Equatable, Sendable {
 
     /// The origin of his picture in the nearest gap to `target`, or nil for none.
     ///
-    /// The gap is found for his picture grown by the margin, whose origin is allowed anywhere in
-    /// `open` that leaves it inside and outside every obstacle grown by its size. The nearest
+    /// The gap is found for his picture grown by the margin, whose origin is allowed anywhere that
+    /// leaves the picture itself inside `open` and the grown picture outside every obstacle grown
+    /// by its size. The nearest
     /// allowed point to the target is the target itself or lies on the edge of one of those
     /// regions, at the target's own x or y or at a corner of two of them, so the lines through
     /// the target and every edge, crossed, hold it.
     private static func nearestGap(_ field: MascotField, size: CGSize, margin: CGFloat, to target: CGPoint) -> CGPoint? {
         let open = field.open
         let grown = CGSize(width: size.width + 2 * margin, height: size.height + 2 * margin)
-        guard grown.width <= open.width, grown.height <= open.height else { return nil }
-        let allowedX = open.minX...(open.maxX - grown.width)
-        let allowedY = open.minY...(open.maxY - grown.height)
+        guard size.width <= open.width, size.height <= open.height else { return nil }
+        let allowedX = (open.minX - margin)...(open.maxX - size.width - margin)
+        let allowedY = (open.minY - margin)...(open.maxY - size.height - margin)
         let forbidden = field.covering.map {
             CGRect(x: $0.minX - grown.width, y: $0.minY - grown.height,
                    width: $0.width + grown.width, height: $0.height + grown.height)
@@ -250,13 +253,13 @@ enum MascotRoost: Equatable, Sendable {
         return best.map { CGPoint(x: $0.point.x + margin, y: $0.point.y + margin) }
     }
 
-    /// Whether `frame` is a roost as it stands: a gap — inside `field.open` with `clearance` all round
-    /// it and nothing he may not cover within that. The small-move threshold keeps him only
-    /// where this holds.
+    /// Whether `frame` is a roost as it stands: a gap — inside `field.open`, with nothing he may
+    /// not cover within `clearance` of it. The small-move threshold keeps him only where this
+    /// holds.
     static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat) -> Bool {
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let grown = frame.insetBy(dx: -margin, dy: -margin)
-        guard field.open.insetBy(dx: -epsilon, dy: -epsilon).contains(grown) else { return false }
+        guard field.open.insetBy(dx: -epsilon, dy: -epsilon).contains(frame) else { return false }
         return !field.covering.contains { overlap($0, grown) }
     }
 

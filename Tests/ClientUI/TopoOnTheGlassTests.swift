@@ -166,7 +166,7 @@ final class TopoOnTheGlassTests: XCTestCase {
     }
 
     /// Where each transcript puts him at the default look.
-    static let roosts = [("full", "none"), ("empty", "gap")]
+    static let roosts = [("full", "gap"), ("empty", "gap")]
 
     /// His picture, as he read it, is clear of the pane, as he read it: above its top edge, or not
     /// drawn at all.

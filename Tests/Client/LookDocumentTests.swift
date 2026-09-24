@@ -216,6 +216,26 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(reading.notes, [])
     }
 
+    /// The margin after Topo's turns: 150 points on the phone and none on the watch or the
+    /// television, read from 0 to 200, so a reply keeps a column of words on the narrowest
+    /// phone; past either end the field alone falls back.
+    func testTheReplyTrailingInsetIsReadInItsRange() {
+        XCTAssertEqual(Look.Transcript(.phone).replyTrailingInset, 150)
+        XCTAssertEqual(Look.Transcript(.watch).replyTrailingInset, 0)
+        XCTAssertEqual(Look.Transcript(.tv).replyTrailingInset, 0)
+        for inset in [0, 200] as [CGFloat] {
+            let reading = LookDocument.read(#"{"transcript": {"replyTrailingInset": \#(inset), "spacing": 9}}"#)
+            XCTAssertEqual(reading.look.transcript.replyTrailingInset, inset)
+            XCTAssertEqual(reading.notes, [])
+        }
+        for inset in ["-1", "201", "\"wide\""] {
+            let reading = LookDocument.read(#"{"transcript": {"replyTrailingInset": \#(inset), "spacing": 9}}"#)
+            XCTAssertEqual(reading.look.transcript.replyTrailingInset, Look().transcript.replyTrailingInset, inset)
+            XCTAssertEqual(reading.look.transcript.spacing, 9, "\(inset) took another field down")
+            XCTAssertEqual(reading.notes.count, 1, "\(inset): \(reading.notes)")
+        }
+    }
+
     func testANullIsNotAValue() {
         let reading = LookDocument.read("""
         { "bubble": { "accent": null } }

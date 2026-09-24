@@ -115,6 +115,9 @@ struct TurnRow: View {
         // An enclosed turn is its enclosure and the time as drawn, before the row takes the
         // column's width: Topo stands clear of them, and beside a short bubble is room for him.
         .mascotObstacle(!bare)
+        // Topo's turns keep a margin on their trailing side, which is where he stands beside
+        // them; the person's keep the column's width.
+        .padding(.trailing, mine ? .zero : look.transcript.replyTrailingInset)
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
         // Held, never tapped: a turn brushed in passing must not start talking. What is offered

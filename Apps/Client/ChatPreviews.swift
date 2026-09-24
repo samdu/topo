@@ -41,8 +41,8 @@ enum PreviewTurns {
         (.assistant, "Any time."),
     ])
 
-    /// Long turns only, each wrapping across the whole column: a transcript with no gap in it
-    /// anywhere Topo could stand, so he is not drawn.
+    /// Long turns only, each wrapping across the whole column: the person's bubbles span it, and
+    /// the only room Topo has is the margin beside the replies.
     static let full: [Turn] = make((0..<10).map { index in
         (index.isMultiple(of: 2) ? .assistant : .person,
          "Air scatters short wavelengths more than long ones, so blue light bounces around the whole sky. "
@@ -65,8 +65,8 @@ enum PreviewTurns {
         (turn.role, index == 1 ? "Nothing,\njust testing :p" : turn.text)
     })
 
-    /// The same, with Topo's last reply ending in short lines: the room at the end of them, on
-    /// the right, is the one place on the screen his picture fits.
+    /// The same, with Topo's last reply ending in short lines: the room at the end of them joins
+    /// the margin beside the reply.
     static let ragged: [Turn] = make(continuity.enumerated().map { index, turn in
         (turn.role, index == 2 ? turn.text + "\n\nSay the word.\n\nOr don't :)" : turn.text)
     })

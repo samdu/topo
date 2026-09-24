@@ -78,6 +78,12 @@ struct Look: Equatable, Sendable {
         var horizontalPadding: CGFloat
         /// How wide the column is allowed to become on a screen wider than it.
         var maximumLineWidth: CGFloat
+        /// Room kept clear after Topo's own turns, in points, on their trailing side: the margin
+        /// he stands in beside his replies. On the phone it is 150, which with the column's
+        /// padding holds his picture at a scale of 1 and its clearance from the words, and the
+        /// ends of lines that stop short of the column's edge add to it; none on the watch and the
+        /// television, where he is not drawn. The person's bubbles keep the column's width.
+        var replyTrailingInset: CGFloat
         /// A turn's words.
         var bodyFont: Font
         /// A time.
@@ -96,6 +102,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 2
                 horizontalPadding = 2
                 maximumLineWidth = .infinity
+                replyTrailingInset = 0
                 bodyFont = .system(.footnote)
                 labelFont = .system(.caption2).weight(.semibold)
                 noticeFont = .system(.caption2)
@@ -104,6 +111,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 4
                 horizontalPadding = 48
                 maximumLineWidth = 1100
+                replyTrailingInset = 0
                 bodyFont = .system(.title3)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)
@@ -112,6 +120,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 2
                 horizontalPadding = 16
                 maximumLineWidth = 672
+                replyTrailingInset = 150
                 bodyFont = .system(.body)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)
@@ -403,10 +412,10 @@ struct Look: Equatable, Sendable {
         /// Points to one of the engine's art pixels, scaled nearest-neighbour so pixels stay
         /// pixels: two thirds, which is two device pixels an art pixel on a 3x screen.
         var scale: CGFloat = 2.0 / 3
-        /// The room he keeps from every word, the row being written and the lines under the
-        /// transcript, in points, on every side of his picture. A gap he stands in holds his
-        /// picture with this all round it, and a new roost within this of where he stands is not
-        /// a move.
+        /// The room he keeps from every word, the row being written, the lines under the
+        /// transcript, the composer's pane and the keyboard, in points, on every side of his
+        /// picture; not from the transcript's own edges, so the margin beside a reply holds him
+        /// flush with the screen's edge. A new roost within this of where he stands is not a move.
         var clearance: CGFloat = 8
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
