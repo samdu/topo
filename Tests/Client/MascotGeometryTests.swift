@@ -334,6 +334,14 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// On iOS 17 there is no scroll geometry and the presence is 1, so he never floats there: the
+    /// presence 1 is no lift at any moment of any bob the look can name.
+    func testAPresenceOfOneIsNoLiftWhichIsIOS17() {
+        for time in stride(from: 0.0, through: 20, by: 0.1) {
+            XCTAssertEqual(MascotHover(amplitude: 32, period: 0.5, presence: 1).lift(at: time, reduceMotion: false), 0)
+        }
+    }
+
     /// The bob, as arithmetic: nothing at the start of a period, the whole amplitude halfway, a
     /// share of it at a share of the presence, and nothing at all under Reduce Motion or on the
     /// glass whole.
