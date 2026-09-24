@@ -15,8 +15,10 @@
 #     names the PR head it was given;
 #   - no codex comment, a codex marker posted by anyone but github-actions[bot], a newest codex
 #     comment with no SHA marker on its second line (none at all, or one elsewhere), a SHA that is not an ancestor of the head, a SHA the remote does
-#     not have, and a `gh` that fails are each a first review — the instructions and the
-#     description alone — with the reason on stderr;
+#     not have are each a first review — the instructions and the description alone — with the
+#     reason on stderr;
+#   - a `gh` that fails is retried, and one that keeps failing exits nonzero with no prompt and an
+#     `::error::` on stderr, since the review round rests on what it reads;
 #   - otherwise the newest verdict is quoted verbatim inside its fence, and the change since is
 #     exactly the two fix commits, each with its patch: never the base's advances, the merge that
 #     brought one into the branch, the merge ref, or the reviewed commit;
@@ -148,8 +150,9 @@ cat > "$work/bin/gh" <<'SH'
 #!/usr/bin/env bash
 # Answers `gh api --paginate <endpoint> --jq <expr>` from $FAKE_GH_PAGES, a file of one JSON array
 # per page, applying the expression to each page as gh does; or fails as gh does.
+# FAKE_GH_FAIL=1 fails every call; FAKE_GH_FAIL_TIMES=<n> fails the first n.
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
-if [ -n "${FAKE_GH_FAIL:-}" ]; then
+if [ -n "${FAKE_GH_FAIL:-}" ] || [ "$(wc -l < "$FAKE_GH_LOG")" -le "${FAKE_GH_FAIL_TIMES:-0}" ]; then
   echo "HTTP 502: Bad Gateway (https://api.github.com/repos/samdu/topo/issues/7/comments)" >&2
   exit 1
 fi
@@ -354,8 +357,41 @@ missing_body="$(sed "2s/.*/<!-- agent-review-sha: $(printf '%040d' 7 | tr 0 d) -
 run missing "$work/missing.json"
 first_review missing "could not fetch"
 
-run ghfails "$work/none.json" FAKE_GH_FAIL=1
-first_review ghfails "::warning::could not read this PR's comments.*HTTP 502"
+# --- a gh that fails --------------------------------------------------------------------------
+
+# Every attempt fails: no prompt, a nonzero exit and the reason, so the job errors and is re-run
+# rather than reviewing as round 1 a PR that may be on round 3.
+run ghfails "$work/none.json" FAKE_GH_FAIL=1 REVIEW_GH_BACKOFF=0
+if [ "$(cat "$work/ghfails.status")" = 0 ]; then
+  fail "ghfails: exited 0 when gh never answered"
+elif [ -s "$work/ghfails.out" ]; then
+  fail "ghfails: printed a prompt when gh never answered"
+elif ! grep -q "::error::could not read this PR's comments after 4 attempts.*HTTP 502" "$work/ghfails.err"; then
+  fail "ghfails: stderr does not say why: $(cat "$work/ghfails.err")"
+elif [ "$(wc -l < "$work/ghfails.gh" | tr -d ' ')" != 4 ]; then
+  fail "ghfails: gh was called $(wc -l < "$work/ghfails.gh" | tr -d ' ') times, not 4"
+else
+  pass "ghfails: tried gh 4 times, then failed with no prompt and said why"
+fi
+
+# Two failures, then an answer: the run carries on as if gh had answered first time.
+{
+  echo "["; comment 'github-actions[bot]' "$old_body"; echo "]"
+  echo "["; comment samdu "Pushed the fixes."; echo ","; comment 'github-actions[bot]' "$body"; echo "]"
+} > "$work/flaky.json"
+run flaky "$work/flaky.json" FAKE_GH_FAIL_TIMES=2 REVIEW_GH_BACKOFF=0
+if [ "$(cat "$work/flaky.status")" != 0 ]; then
+  fail "flaky: exited $(cat "$work/flaky.status"): $(cat "$work/flaky.err")"
+elif [ "$(wc -l < "$work/flaky.gh" | tr -d ' ')" != 3 ]; then
+  fail "flaky: gh was called $(wc -l < "$work/flaky.gh" | tr -d ' ') times, not 3"
+elif ! grep -qx -- "----- PREVIOUS REVIEW AND THE CHANGE SINCE -----" "$work/flaky.out"; then
+  fail "flaky: no previous-review section once gh answered"
+elif [ "$(grep -c "attempt [12] of 4" "$work/flaky.err")" != 2 ]; then
+  fail "flaky: stderr does not log both retries: $(cat "$work/flaky.err")"
+else
+  pass "flaky: retried gh twice, then assembled the re-review"
+fi
+round_is flaky 3
 
 # --- a re-review ------------------------------------------------------------------------------
 

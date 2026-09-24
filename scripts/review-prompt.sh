@@ -21,11 +21,13 @@
 # The round is one more than the codex verdicts already on the PR. From round 3 on the prompt ends
 # with the convergence rule (docs/process.md, *The fix loop*): only a bug a real user would hit
 # blocks, and everything else is reported non-blocking for the PM to file as an issue. That holds on
-# every path below, a first review included; a `gh` that fails is round 1.
+# every path below, a first review included. The count comes from `gh`, tried REVIEW_GH_ATTEMPTS
+# times (4) with a linear backoff of REVIEW_GH_BACKOFF seconds (5, then 10, then 15); a `gh` that
+# still fails exits 1 with an `::error::`, because a guessed round is a review under the wrong rule.
 #
-# Every way the previous review can be missing or unusable is a first review, said on stderr and
-# never a failure: no codex comment, a newest codex comment with no SHA marker, a `gh` that fails,
-# a SHA that cannot be fetched, or one that is not an ancestor of HEAD_SHA (a rewritten branch).
+# Every other way the previous review can be missing or unusable is a first review, said on stderr
+# and never a failure: no codex comment, a newest codex comment with no SHA marker, a SHA that
+# cannot be fetched, or one that is not an ancestor of HEAD_SHA (a rewritten branch).
 #
 # The previous verdict and the diff since are bounded, REVIEW_VERDICT_LIMIT and REVIEW_DIFF_LIMIT
 # bytes (32 KB and 200 KB), and truncated with a marker rather than failing: the whole PR is in the
@@ -42,6 +44,8 @@ PR_BODY="${PR_BODY:-}"
 REMOTE="${REVIEW_REMOTE:-origin}"
 VERDICT_LIMIT="${REVIEW_VERDICT_LIMIT:-32768}"
 DIFF_LIMIT="${REVIEW_DIFF_LIMIT:-204800}"
+GH_ATTEMPTS="${REVIEW_GH_ATTEMPTS:-4}"
+GH_BACKOFF="${REVIEW_GH_BACKOFF:-5}"
 MARKER='<!-- agent-review: codex -->'
 
 log() { echo "review-prompt: $*" >&2; }
@@ -97,13 +101,21 @@ first_only() {
   exit 0
 }
 
-# The newest codex verdict's body, or nothing.
+# Every codex verdict's body, one JSON string per line, oldest first. The round and so the rule the
+# reviewer works under rest on this count, so a `gh` that keeps failing is fatal rather than a
+# first review: the step errors and the job is re-run, instead of reviewing under the wrong rule.
 previous=""
-if ! bodies="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-    --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .body | @json" 2>&1)"; then
-  log "::warning::could not read this PR's comments, so this is a first review: $(head -n 1 <<<"$bodies")"
-  first_only
-fi
+attempt=1
+until bodies="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+    --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .body | @json" 2>&1)"; do
+  if [ "$attempt" -ge "$GH_ATTEMPTS" ]; then
+    log "::error::could not read this PR's comments after $GH_ATTEMPTS attempts, so the review round is unknown; re-run the job: $(head -n 1 <<<"$bodies")"
+    exit 1
+  fi
+  log "could not read this PR's comments (attempt $attempt of $GH_ATTEMPTS), retrying in $(( GH_BACKOFF * attempt ))s: $(head -n 1 <<<"$bodies")"
+  sleep "$(( GH_BACKOFF * attempt ))"
+  attempt=$(( attempt + 1 ))
+done
 if [ -n "$bodies" ]; then
   previous="$(tail -n 1 <<<"$bodies" | jq -r .)"
   round=$(( $(grep -c . <<<"$bodies") + 1 ))

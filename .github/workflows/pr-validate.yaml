@@ -56,8 +56,9 @@
 # the whole PR again; a new finding in code the diff since does not touch
 # blocks only if it loses or corrupts a record, splits the primary, leaks a
 # secret, or makes the description untrue at runtime. No earlier verdict, one
-# with no SHA marker, a SHA that is not an ancestor, or a `gh` that fails is
-# a first review, said in the prompt step's log.
+# with no SHA marker, or a SHA that is not an ancestor is a first review,
+# said in the prompt step's log; a `gh` that still fails after its retries
+# fails the step, since the review round rests on what it reads.
 #
 # The verdict then travels as an artifact rather than a job output. GitHub
 # drops a job output wholesale when its text contains the value of any
@@ -824,7 +825,10 @@ jobs:
       # and the PR's own commits from that head to this run's PR head, with
       # the instruction to verify each earlier finding and then read the
       # whole PR again. Anything missing or unusable there is a first review,
-      # said in this step's log. scripts/tests/review-prompt-test.sh holds it.
+      # said in this step's log; a `gh` that cannot read the PR's comments
+      # after its retries fails the step, so the job errors and is re-run
+      # rather than reviewing under a guessed round.
+      # scripts/tests/review-prompt-test.sh holds it.
       - name: Assemble the review prompt
         env:
           GH_TOKEN: ${{ github.token }}
