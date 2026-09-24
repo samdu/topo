@@ -135,6 +135,10 @@ case "$2" in
       guest-bash-in-reply-prefix-only) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
                                        say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: answered"
                                        say "guest turn 1 answered in 4.00 s: done"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash-result-echoed-in-sent) say "guest turn 1 sent: [topo-debug] guest turn 1 tool result: Bash: ok: topo-42"
+                                        say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                                        say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: wrong output"
+                                        say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
       guest-error) say "guest turn error: Claude Code did not start"; say "guest turn done"; exec sleep 600 ;;
       guest-opus) say "guest turn 1 model: claude-opus-5, session S1, process 7"; say "guest turn 1 answered in 3.00 s: ok"
                   say "guest turn 2 model: claude-opus-5, session S1, process 7"; say "guest turn 2 answered in 1.00 s: ok"
@@ -228,6 +232,7 @@ case_ guest-turn-bash-output-from-another  fail guest-bash-other-tool 5  --guest
 case_ guest-turn-bash-reply-without-it     fail guest-bash-reply-silent 5 --guest-turn "a" --expect-bash topo-42
 case_ guest-turn-bash-ok-only-in-prefix    fail guest-bash-ok-only-in-prefix 5 --guest-turn "a" --expect-bash ok
 case_ guest-turn-bash-reply-prefix-only    fail guest-bash-in-reply-prefix-only 5 --guest-turn "a" --expect-bash answered
+case_ guest-turn-bash-result-echoed-in-sent fail guest-bash-result-echoed-in-sent 5 --guest-turn "a" --expect-bash topo-42
 case_ guest-turns-times-out-silent         fail silent               12 --guest-turn "a || b"
 
 if [ "$failures" -gt 0 ]; then

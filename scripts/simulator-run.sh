@@ -334,13 +334,16 @@ if [ -n "$guestturn" ]; then
   if [ -n "$expect_bash" ]; then
     ran=""
     for n in $(seq 1 "$count"); do
+      # Every line is matched from its start: the call as a whole line, and the result and the
+      # reply by their fixed prefixes (`sed -n 's/^…//p'` keeps only the lines that begin with
+      # one, and only the text after it), so a prefix echoed inside another line — the turn's own
+      # `sent:` line, a reply quoting one — never counts. The status is read from the prefix and
+      # OUTPUT from the text after it alone, so no word of a prefix stands in for it.
       grep -Fxq "[topo-debug] guest turn $n tool: Bash" <<< "$lines" || continue
-      # The status is read from the fixed prefix and OUTPUT from the text after it alone, so a
-      # word of the prefix (`ok`, `Bash`, `answered`, the turn's number) never stands in for it.
-      grep -F "[topo-debug] guest turn $n tool result: Bash: ok: " <<< "$lines" \
-        | sed "s/^\[topo-debug\] guest turn $n tool result: Bash: ok: //" | grep -Fq -- "$expect_bash" || continue
-      grep -E "^\[topo-debug\] guest turn $n answered in [0-9.]+ s: " <<< "$lines" \
-        | sed -E "s/^\[topo-debug\] guest turn $n answered in [0-9.]+ s: //" | grep -Fq -- "$expect_bash" || continue
+      sed -n "s/^\[topo-debug\] guest turn $n tool result: Bash: ok: //p" <<< "$lines" \
+        | grep -Fq -- "$expect_bash" || continue
+      sed -En "s/^\[topo-debug\] guest turn $n answered in [0-9.]+ s: //p" <<< "$lines" \
+        | grep -Fq -- "$expect_bash" || continue
       ran="$n"
       break
     done
