@@ -61,8 +61,8 @@
 # failed or was abandoned, and for every turn a `model:` line naming the model it ran on (Haiku,
 # since the build is Debug) and an `answered in <seconds> s:` line. With --expect-bash OUTPUT it
 # passes only when one turn made a Bash tool call (`guest turn N tool: Bash`), that call's result
-# came back without an error and carrying OUTPUT (`guest turn N tool result: Bash: ok: …`), and
-# the same turn's reply carries OUTPUT too: a reply alone proves nothing, since the model can
+# came back without an error (`guest turn N tool result: Bash: ok: …`) with OUTPUT in its text,
+# the part after that prefix alone, and the same turn's reply text carries OUTPUT too: a reply alone proves nothing, since the model can
 # write the output without running anything or after a call that failed.
 #
 # Building runs scripts/build-ish.sh first: the guest's framework is built from the fork's pin and
@@ -335,8 +335,12 @@ if [ -n "$guestturn" ]; then
     ran=""
     for n in $(seq 1 "$count"); do
       grep -Fxq "[topo-debug] guest turn $n tool: Bash" <<< "$lines" || continue
-      grep -F "[topo-debug] guest turn $n tool result: Bash: ok: " <<< "$lines" | grep -Fq -- "$expect_bash" || continue
-      grep -E "^\[topo-debug\] guest turn $n answered in [0-9.]+ s: " <<< "$lines" | grep -Fq -- "$expect_bash" || continue
+      # The status is read from the fixed prefix and OUTPUT from the text after it alone, so a
+      # word of the prefix (`ok`, `Bash`, `answered`, the turn's number) never stands in for it.
+      grep -F "[topo-debug] guest turn $n tool result: Bash: ok: " <<< "$lines" \
+        | sed "s/^\[topo-debug\] guest turn $n tool result: Bash: ok: //" | grep -Fq -- "$expect_bash" || continue
+      grep -E "^\[topo-debug\] guest turn $n answered in [0-9.]+ s: " <<< "$lines" \
+        | sed -E "s/^\[topo-debug\] guest turn $n answered in [0-9.]+ s: //" | grep -Fq -- "$expect_bash" || continue
       ran="$n"
       break
     done
