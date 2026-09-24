@@ -18,9 +18,16 @@
 # commits left out, each shown with its own patch: the base's commits and the merges that brought
 # them in are absent, and so is any conflict resolution a merge made, which the prompt says.
 #
-# Every way the previous review can be missing or unusable is a first review, said on stderr and
-# never a failure: no codex comment, a newest codex comment with no SHA marker, a `gh` that fails,
-# a SHA that cannot be fetched, or one that is not an ancestor of HEAD_SHA (a rewritten branch).
+# The round is one more than the codex verdicts already on the PR. From round 3 on the prompt ends
+# with the convergence rule (docs/process.md, *The fix loop*): only a bug a real user would hit
+# blocks, and everything else is reported non-blocking for the PM to file as an issue. That holds on
+# every path below, a first review included. The count comes from `gh`, tried REVIEW_GH_ATTEMPTS
+# times (4) with a linear backoff of REVIEW_GH_BACKOFF seconds (5, then 10, then 15); a `gh` that
+# still fails exits 1 with an `::error::`, because a guessed round is a review under the wrong rule.
+#
+# Every other way the previous review can be missing or unusable is a first review, said on stderr
+# and never a failure: no codex comment, a newest codex comment with no SHA marker, a SHA that
+# cannot be fetched, or one that is not an ancestor of HEAD_SHA (a rewritten branch).
 #
 # The previous verdict and the diff since are bounded, REVIEW_VERDICT_LIMIT and REVIEW_DIFF_LIMIT
 # bytes (32 KB and 200 KB), and truncated with a marker rather than failing: the whole PR is in the
@@ -37,6 +44,8 @@ PR_BODY="${PR_BODY:-}"
 REMOTE="${REVIEW_REMOTE:-origin}"
 VERDICT_LIMIT="${REVIEW_VERDICT_LIMIT:-32768}"
 DIFF_LIMIT="${REVIEW_DIFF_LIMIT:-204800}"
+GH_ATTEMPTS="${REVIEW_GH_ATTEMPTS:-4}"
+GH_BACKOFF="${REVIEW_GH_BACKOFF:-5}"
 MARKER='<!-- agent-review: codex -->'
 
 log() { echo "review-prompt: $*" >&2; }
@@ -63,21 +72,58 @@ first_review() {
   echo "----- END PR DESCRIPTION -----"
 }
 
-# The newest codex verdict's body, or nothing.
-previous=""
-if ! bodies="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-    --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .body | @json" 2>&1)"; then
-  log "::warning::could not read this PR's comments, so this is a first review: $(head -n 1 <<<"$bodies")"
+round=1
+round_rule() {
+  [ "$round" -ge 3 ] || return 0
+  cat <<EOF
+
+----- REVIEW ROUND $round -----
+
+This is review round $round of this PR. From round 3 on, \`blocking\` is
+true only for a bug a real user of Topo would hit: a runtime defect that
+ordinary use of the app reaches, which a person holding the device would
+see, or lose something to. A lost or corrupted record, a split primary
+or a leaked secret blocks when ordinary use reaches it. Everything else
+is reported, says in its text that it is not blocking, and does not set
+\`blocking\`: a claim in the description or a comment worded stronger
+than the code, a test or Proof entry that could be stronger, a defect in
+CI, the scripts or the test harness, a sequence reachable only through a
+debug path or one no user can produce. This holds for an earlier finding
+still open as much as for a new one, and it overrides any other bar in
+this prompt. The PM files the non-blocking findings as issues.
+EOF
+}
+
+# first_only — the first-review prompt, and done.
+first_only() {
   first_review
+  round_rule
   exit 0
-fi
+}
+
+# Every codex verdict's body, one JSON string per line, oldest first. The round and so the rule the
+# reviewer works under rest on this count, so a `gh` that keeps failing is fatal rather than a
+# first review: the step errors and the job is re-run, instead of reviewing under the wrong rule.
+previous=""
+attempt=1
+until bodies="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
+    --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .body | @json" 2>&1)"; do
+  if [ "$attempt" -ge "$GH_ATTEMPTS" ]; then
+    log "::error::could not read this PR's comments after $GH_ATTEMPTS attempts, so the review round is unknown; re-run the job: $(head -n 1 <<<"$bodies")"
+    exit 1
+  fi
+  log "could not read this PR's comments (attempt $attempt of $GH_ATTEMPTS), retrying in $(( GH_BACKOFF * attempt ))s: $(head -n 1 <<<"$bodies")"
+  sleep "$(( GH_BACKOFF * attempt ))"
+  attempt=$(( attempt + 1 ))
+done
 if [ -n "$bodies" ]; then
   previous="$(tail -n 1 <<<"$bodies" | jq -r .)"
+  round=$(( $(grep -c . <<<"$bodies") + 1 ))
+  log "review round $round"
 fi
 if [ -z "$previous" ]; then
   log "first review: this PR has no previous Codex review"
-  first_review
-  exit 0
+  first_only
 fi
 
 # Line two and no other: the contract is the line post_feedback writes under the codex marker, and
@@ -85,19 +131,16 @@ fi
 prev_sha="$(sed -n '2s/^<!-- agent-review-sha: \([0-9a-f]\{40\}\) -->$/\1/p' <<<"$previous")"
 if [ -z "$prev_sha" ]; then
   log "first review: the previous Codex review names no commit (no agent-review-sha marker)"
-  first_review
-  exit 0
+  first_only
 fi
 
 if ! out="$(git fetch --no-tags --quiet "$REMOTE" "$prev_sha" "$HEAD_SHA" "$BASE_SHA" 2>&1)"; then
   log "::warning::could not fetch $prev_sha, $HEAD_SHA and $BASE_SHA, so this is a first review: $(head -n 1 <<<"$out")"
-  first_review
-  exit 0
+  first_only
 fi
 if ! git merge-base --is-ancestor "$prev_sha" "$HEAD_SHA" 2>/dev/null; then
   log "first review: the previous review's commit $prev_sha is not an ancestor of $HEAD_SHA"
-  first_review
-  exit 0
+  first_only
 fi
 
 since="$(mktemp)"
@@ -162,3 +205,4 @@ in its text that it is not blocking, and does not by itself set
 \`blocking\`. A new finding in the change since, and an earlier finding
 still open, block by the ordinary rule.
 EOF
+round_rule

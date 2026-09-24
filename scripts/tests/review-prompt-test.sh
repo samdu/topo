@@ -15,12 +15,16 @@
 #     names the PR head it was given;
 #   - no codex comment, a codex marker posted by anyone but github-actions[bot], a newest codex
 #     comment with no SHA marker on its second line (none at all, or one elsewhere), a SHA that is not an ancestor of the head, a SHA the remote does
-#     not have, and a `gh` that fails are each a first review — the instructions and the
-#     description alone — with the reason on stderr;
+#     not have are each a first review — the instructions and the description alone — with the
+#     reason on stderr;
+#   - a `gh` that fails is retried, and one that keeps failing exits nonzero with no prompt and an
+#     `::error::` on stderr, since the review round rests on what it reads;
 #   - otherwise the newest verdict is quoted verbatim inside its fence, and the change since is
 #     exactly the two fix commits, each with its patch: never the base's advances, the merge that
 #     brought one into the branch, the merge ref, or the reviewed commit;
-#   - text in the verdict cannot close its fence, and both bounds truncate with a marker.
+#   - text in the verdict cannot close its fence, and both bounds truncate with a marker;
+#   - the round is one more than the codex verdicts on the PR, and from round 3 on, and only then,
+#     the prompt ends with the convergence rule, on a first review as on a re-review.
 #
 #   scripts/tests/review-prompt-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/review-prompt-test.sh
@@ -146,8 +150,9 @@ cat > "$work/bin/gh" <<'SH'
 #!/usr/bin/env bash
 # Answers `gh api --paginate <endpoint> --jq <expr>` from $FAKE_GH_PAGES, a file of one JSON array
 # per page, applying the expression to each page as gh does; or fails as gh does.
+# FAKE_GH_FAIL=1 fails every call; FAKE_GH_FAIL_TIMES=<n> fails the first n.
 printf '%s\n' "$*" >> "$FAKE_GH_LOG"
-if [ -n "${FAKE_GH_FAIL:-}" ]; then
+if [ -n "${FAKE_GH_FAIL:-}" ] || [ "$(wc -l < "$FAKE_GH_LOG")" -le "${FAKE_GH_FAIL_TIMES:-0}" ]; then
   echo "HTTP 502: Bad Gateway (https://api.github.com/repos/samdu/topo/issues/7/comments)" >&2
   exit 1
 fi
@@ -190,14 +195,60 @@ run() {
   echo "$?" > "$work/$name.status"
 }
 
-# first_review <case> <reason pattern> — the case produced the first-review prompt, exactly, and
-# said why on stderr.
+# before_round <case> — the case's prompt up to the round section, which is the whole prompt when it
+# has none.
+before_round() {
+  python3 -c 'import sys; sys.stdout.write(open(sys.argv[1]).read().split("\n----- REVIEW ROUND ")[0])' "$work/$1.out"
+}
+
+# round_is <case> <round or empty> — the prompt ends with the convergence rule for that round, or,
+# given no round, carries none.
+round_is() {
+  local name="$1" want="$2"
+  if [ -z "$want" ]; then
+    if grep -q -- "^----- REVIEW ROUND" "$work/$name.out"; then
+      fail "$name: carries a round section before round 3"
+    else
+      pass "$name: no round section before round 3"
+    fi
+  elif ! grep -qx -- "----- REVIEW ROUND $want -----" "$work/$name.out" \
+    || [ "$(tail -n 1 "$work/$name.out")" != "this prompt. The PM files the non-blocking findings as issues." ]; then
+    fail "$name: does not end with the round $want convergence rule"
+  else
+    # Each clause of the rule, matched across its line breaks: a clause dropped from it is a class of
+    # finding the reviewer goes back to blocking on.
+    local rule clause missing=""
+    rule="$(sed -n "/^----- REVIEW ROUND $want -----\$/,\$p" "$work/$name.out" | tr '\n' ' ' | tr -s ' ')"
+    for clause in \
+      "This is review round $want of this PR." \
+      "true only for a bug a real user of Topo would hit" \
+      "A lost or corrupted record, a split primary or a leaked secret blocks when ordinary use reaches it." \
+      "Everything else is reported, says in its text that it is not blocking, and does not set" \
+      "a claim in the description or a comment worded stronger than the code" \
+      "a test or Proof entry that could be stronger" \
+      "a defect in CI, the scripts or the test harness" \
+      "a sequence reachable only through a debug path or one no user can produce" \
+      "This holds for an earlier finding still open as much as for a new one" \
+      "it overrides any other bar in this prompt"; do
+      grep -qF -- "$clause" <<<"$rule" || missing="$missing [$clause]"
+    done
+    if [ -n "$missing" ]; then
+      fail "$name: the round $want rule is missing:$missing"
+    else
+      pass "$name: ends with the round $want convergence rule, every clause of it"
+    fi
+  fi
+}
+
+# first_review <case> <reason pattern> [round] — the case produced the first-review prompt, exactly,
+# said why on stderr, and carries the round section for [round] or none.
 first_review() {
-  local name="$1" reason="$2"
+  local name="$1" reason="$2" round="${3:-}"
+  round_is "$name" "$round"
   if [ "$(cat "$work/$name.status")" != 0 ]; then
     fail "$name: exited $(cat "$work/$name.status"): $(cat "$work/$name.err")"
-  elif ! cmp -s "$expected_first" "$work/$name.out"; then
-    fail "$name: the prompt is not the first-review prompt"; diff "$expected_first" "$work/$name.out" | head -n 20
+  elif ! cmp -s "$expected_first" <(before_round "$name"); then
+    fail "$name: the prompt is not the first-review prompt"; diff "$expected_first" <(before_round "$name") | head -n 20
   elif ! grep -Eq "$reason" "$work/$name.err"; then
     fail "$name: stderr does not say why ($reason): $(cat "$work/$name.err")"
   else
@@ -308,7 +359,7 @@ first_review others "no previous Codex review"
 no_sha_body="$(sed 2d <<<"$body")"
 { echo "["; comment 'github-actions[bot]' "$body"; echo ","; comment 'github-actions[bot]' "$no_sha_body"; echo "]"; } > "$work/nosha.json"
 run nosha "$work/nosha.json"
-first_review nosha "names no commit"
+first_review nosha "names no commit" 3
 
 # A legacy verdict whose text carries the marker, but not on line two: not a record of a review.
 stray_body="$no_sha_body
@@ -326,10 +377,57 @@ missing_body="$(sed "2s/.*/<!-- agent-review-sha: $(printf '%040d' 7 | tr 0 d) -
 run missing "$work/missing.json"
 first_review missing "could not fetch"
 
-run ghfails "$work/none.json" FAKE_GH_FAIL=1
-first_review ghfails "::warning::could not read this PR's comments.*HTTP 502"
+# --- a gh that fails --------------------------------------------------------------------------
+
+# Every attempt fails: no prompt, a nonzero exit and the reason, so the job errors and is re-run
+# rather than reviewing as round 1 a PR that may be on round 3.
+run ghfails "$work/none.json" FAKE_GH_FAIL=1 REVIEW_GH_BACKOFF=0
+if [ "$(cat "$work/ghfails.status")" = 0 ]; then
+  fail "ghfails: exited 0 when gh never answered"
+elif [ -s "$work/ghfails.out" ]; then
+  fail "ghfails: printed a prompt when gh never answered"
+elif ! grep -q "::error::could not read this PR's comments after 4 attempts.*HTTP 502" "$work/ghfails.err"; then
+  fail "ghfails: stderr does not say why: $(cat "$work/ghfails.err")"
+elif [ "$(wc -l < "$work/ghfails.gh" | tr -d ' ')" != 4 ]; then
+  fail "ghfails: gh was called $(wc -l < "$work/ghfails.gh" | tr -d ' ') times, not 4"
+else
+  pass "ghfails: tried gh 4 times, then failed with no prompt and said why"
+fi
+
+# Two failures, then an answer: the run carries on as if gh had answered first time.
+{
+  echo "["; comment 'github-actions[bot]' "$old_body"; echo "]"
+  echo "["; comment samdu "Pushed the fixes."; echo ","; comment 'github-actions[bot]' "$body"; echo "]"
+} > "$work/flaky.json"
+run flaky "$work/flaky.json" FAKE_GH_FAIL_TIMES=2 REVIEW_GH_BACKOFF=0
+if [ "$(cat "$work/flaky.status")" != 0 ]; then
+  fail "flaky: exited $(cat "$work/flaky.status"): $(cat "$work/flaky.err")"
+elif [ "$(wc -l < "$work/flaky.gh" | tr -d ' ')" != 3 ]; then
+  fail "flaky: gh was called $(wc -l < "$work/flaky.gh" | tr -d ' ') times, not 3"
+elif ! grep -qx -- "----- PREVIOUS REVIEW AND THE CHANGE SINCE -----" "$work/flaky.out"; then
+  fail "flaky: no previous-review section once gh answered"
+elif [ "$(grep -c "attempt [12] of 4" "$work/flaky.err")" != 2 ]; then
+  fail "flaky: stderr does not log both retries: $(cat "$work/flaky.err")"
+else
+  pass "flaky: retried gh twice, then assembled the re-review"
+fi
+round_is flaky 3
 
 # --- a re-review ------------------------------------------------------------------------------
+
+# Round 2: one verdict before it, so no round section.
+{ echo "["; comment 'github-actions[bot]' "$body"; echo "]"; } > "$work/second.json"
+run second "$work/second.json"
+if [ "$(cat "$work/second.status")" != 0 ]; then
+  fail "second: exited $(cat "$work/second.status"): $(cat "$work/second.err")"
+elif [ ! -s "$work/second.out" ]; then
+  fail "second: the prompt is empty"
+elif ! grep -qx -- "----- PREVIOUS REVIEW AND THE CHANGE SINCE -----" "$work/second.out"; then
+  fail "second: no previous-review section"
+else
+  pass "second: exited 0 with a re-review prompt"
+fi
+round_is second ""
 
 # Two pages, the newest verdict last on the second, an older one and a human's between.
 {
@@ -376,6 +474,7 @@ else
   else
     fail "rereview: the instruction to verify earlier findings and read again is missing"
   fi
+  round_is rereview 3
   if grep -q "re-review: previous review of $reviewed" "$work/rereview.err"; then
     pass "rereview: says on stderr which review it builds on"
   else
