@@ -13,7 +13,7 @@ Use: The pattern of the counted audio resources in `Apps/Client/AudioSession.swi
 
 ## Topo mascot engine
 Licence: Sam du Rose's own code, as Topo is; no licence terms apply between the two
-Where: samdu/experiments, `topo-mascot-swift/Sources/TopoMascot` at 91139e8, the Swift port of `topo-mascot-engine/topo-engine.js` at e93fe1f
+Where: samdu/experiments, `topo-mascot-swift/Sources/TopoMascot` at df42ed3 (and its `Tests/TopoMascotTests/RestTests.swift`), the Swift port of `topo-mascot-engine/topo-engine.js` at 3ba6246
 Use: `Packages/TopoMascot`, unchanged from the experiment: the engine that draws Topo the octopus on the composer's glass in pixels from the model, the context and what the turn is doing. Its golden frames are digests the JavaScript engine rendered (`oracle/golden.mjs` in the same experiment).
 
 ## FluidAudio

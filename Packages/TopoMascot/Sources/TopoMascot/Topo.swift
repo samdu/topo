@@ -31,6 +31,9 @@ public struct TopoState: Sendable {
 public final class Topo {
     public static let width = W, height = H, scale = S
     public static let bodyX = BX, shelfY = SHELF_Y
+    /// The idle cycle's waits, in seconds from his arrival, and how many yoga excursions he takes for every corner one.
+    public static let firstRest = FIRST_REST, rest = REST, cornerStay = CORNER_STAY, yogaStay = YOGA_STAY
+    public static let yogaPerCorner = YOGA_PER_CORNER
 
     // A part is rasterised into planes before it is composited: `mask` is its silhouette, `nX`/`nY` the
     // surface normal's lean in the picture plane, and `open` the share of it that takes an outline.
@@ -52,7 +55,9 @@ public final class Topo {
     private var poseKey = "shelf", pose = POSES["shelf"]!, since = 0.0     // the pose in force, and for how long
     private var targets = POSES["shelf"]!.params
     private var lift = 0.0                                                    // how far he has stood up off the shelf
-    private var x_ = 0.0, goal = 0.0, strollAt = 8.0                          // where he is along the shelf, in art pixels from home
+    private var rest = 1.0                                                    // how far the drift at rest has taken over from the wave of work
+    private var x_ = 0.0, goal = 0.0                                          // where he is along the shelf, in art pixels from home, and where he is going
+    private var outing_: String? = nil, dueAt: Double? = FIRST_REST           // the excursion he is on, and when the wait where he is ends; nil until he arrives
     public private(set) var state = TopoState()
 
     private let lettering: ((String) -> Lettering?)?
@@ -79,6 +84,8 @@ public final class Topo {
     /// How far along the shelf he has walked, in art pixels: the host moves the sprite by it.
     public var x: Double { x_ }
     public var poseName: String { poseKey }
+    /// The excursion he is on, "corner" or "yoga", or nil at home.
+    public var outing: String? { outing_ }
 
     public func update(_ dt: Double, _ next: TopoInput = TopoInput()) {
         if let v = next.level { state.level = v }
@@ -97,18 +104,32 @@ public final class Topo {
         if state.load != loadTo { loadFrom = loadTo; loadTo = state.load; loadMix = 0 }
         loadMix = jmin(1, loadMix + dt / 0.7)
 
-        // Idle, he strolls to the corner of the glass now and then, hangs there, and comes home.
-        // Any work calls him home first: the props stand where home is.
+        // The idle cycle (see "at rest"). Any work calls him home first, since the props stand where home is,
+        // and abandons the excursion: back at rest he starts a fresh wait on the shelf rather than resuming it.
         let idle = state.activity == "idle"
-        if !idle { goal = 0; strollAt = t + 6 }
-        else if t > strollAt { goal = goal == 0 ? state.corner : 0; strollAt = t + (goal == 0 ? 14 + random() * 10 : 7 + random() * 4) }
+        func span(_ r: (Double, Double)) -> Double { r.0 + random() * (r.1 - r.0) }
+        if !idle { outing_ = nil; goal = 0; dueAt = nil }
+        else if let due = dueAt, t > due {
+            if outing_ == nil {
+                outing_ = random() < YOGA_PER_CORNER / (1 + YOGA_PER_CORNER) ? "yoga" : "corner"
+                if outing_ == "yoga" { dueAt = t + span(YOGA_STAY) }         // on his mat where he sits: he has arrived
+                else { goal = state.corner; dueAt = nil }
+            } else {
+                if outing_ == "yoga" { dueAt = t + span(REST) }
+                else { goal = 0; dueAt = nil }
+                outing_ = nil
+            }
+        }
         let gap = goal - x_, step = (idle ? 9 : 22) * dt
         x_ = abs(gap) <= step ? goal : x_ + (gap > 0 ? 1 : gap < 0 ? -1 : gap) * step
-        let want = abs(goal - x_) > 0.5 ? "walk" : idle ? (goal == 0 ? "shelf" : "corner") : POSES[state.activity] != nil ? state.activity : "shelf"
+        if idle && dueAt == nil && x_ == goal { dueAt = t + span(outing_ == "corner" ? CORNER_STAY : REST) }   // arrived: the wait starts now
+        let work = POSES[state.activity] != nil && !CYCLE_ONLY.contains(state.activity) ? state.activity : "shelf"
+        let want = abs(goal - x_) > 0.5 ? "walk" : idle ? outing_ ?? "shelf" : work
         if want != poseKey { poseKey = want; pose = POSES[want]!; targets = pose.params; since = 0 }
         since += dt
         let poseLift = pose.lift ?? 0
         lift += ((poseLift + (poseLift != 0 ? sin(t * 1.1) : 0)) * S - lift) * (1 - exp(-dt * 5))
+        rest += ((poseKey == "shelf" ? 1 : 0) - rest) * (1 - exp(-dt * REST_EASE))
 
         for i in 0..<8 {
             let rate = 1 - exp(-dt * (4 + Double(i * 5 % 8) * 0.6))   // staggered, so arms never land together
@@ -301,7 +322,9 @@ public final class Topo {
     private func drawArm(_ i: Int) {
         let o = i * 9, side: Double = i < 4 ? 1 : -1, settle = jmin(1, since / 0.6)
         let L = Double(arms[o + 3]) * S, n = Int(jmin(99, (L / 0.5).rounded(.up))), phase = Double(i) * 2.4
-        let sway = pose.rigid.contains(i) ? 0 : (pose.still.contains(i) ? 12 : pose.sway ?? 70) + (poseKey == "walk" ? 60 : 0)
+        let sway = (pose.rigid.contains(i) ? 0 : (pose.still.contains(i) ? 12 : pose.sway ?? 70) + (poseKey == "walk" ? 60 : 0)) * (1 - rest)
+        // at rest, each key drifts at this arm's own rate and phase
+        let drift = (0..<4).map { j in rest * WIGGLE_DEG * WIGGLE_KEYS[j] * sin(t * WIGGLE_HZ * 2 * Double.pi * (0.7 + Double(i * 3 % 8) * 0.09) + Double(i) * 2.4 + Double(j) * 1.3) }
         let motion = pose.motion.filter { $0.arm == i }
         func swing(_ param: Int) -> Double {
             var sum = 0.0
@@ -317,6 +340,7 @@ public final class Topo {
         for s in 0...n {
             let u = Double(s) / nD, f = u * 3, a = Int(jmin(2, f.rounded(.down)))
             var k = Double(arms[o + 4 + a]) + (Double(arms[o + 5 + a]) - Double(arms[o + 4 + a])) * (f - Double(a)) + swings[Int(jround(f))]
+                + drift[a] + (drift[a + 1] - drift[a]) * (f - Double(a))
             k += sway * u * sin(t * 1.3 + phase - u * 3)            // a wave travelling down the arm
             th += k / nD
             let rad = th * Double.pi / 180

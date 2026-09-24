@@ -6,18 +6,21 @@ import TopoMascot
 /// The engine against the pinned JavaScript it was ported from, frame for frame.
 ///
 /// `golden.json` is what the reference rendered, made in samdu/experiments by
-/// `topo-mascot-swift/oracle/golden.mjs` from `topo-mascot-engine/topo-engine.js` at e93fe1f: the
+/// `topo-mascot-swift/oracle/golden.mjs` from `topo-mascot-engine/topo-engine.js` at 3ba6246: the
 /// eighteen cells of the engine's own sheet — the four heads idle, the four loads idle, and every
-/// pose but the shelf he rests on (front, walk, corner, yoga, sign, building, writing, calendar,
+/// pose but the shelf he rests on (front, walk, corner, sign, building, writing, calendar,
 /// searching, thinking) — each at frames 10, 40 and 65 of the 2.2 s it settles for, which catches
-/// the arms on their way and settled; and two films of what the app actually hands over, the four
-/// model names one a second and four token counts across the load thresholds while writing, at
-/// four frames each. Each is the SHA-256 of the whole buffer after that frame's draw, the buffer
-/// carried from one frame to the next as the host carries it.
+/// the arms on their way and settled, and yoga, which is the idle cycle's and not an activity, at
+/// three frames into the first excursion (seed 1 makes it yoga); two films of what the app actually
+/// hands over, the four model names one a second and four token counts across the load thresholds
+/// while writing, at four frames each; and the idle cycle — the arms' drift on the shelf, a stroll
+/// to the corner and the stay there, yoga, work cutting into a stroll, a corner stay and yoga (on
+/// the way, the work worn, the shelf after), and yoga asked for and not taken. Each is the SHA-256
+/// of the whole buffer after that frame's draw, the buffer carried from one frame to the next as
+/// the host carries it.
 ///
-/// A frame of the port that differs from the reference by one pixel fails here. The stroll (idle
-/// for eight seconds before he first walks) and the sign's words beyond its default are not in
-/// the set, to keep the suite to seconds; the experiment's own oracle covers them on 5,880 frames.
+/// A frame of the port that differs from the reference by one pixel fails here. The sign's words
+/// beyond its default are not in the set; the experiment's own oracle covers them on 12,450 frames.
 @Suite struct GoldenFramesTests {
     struct Golden: Decodable {
         let width: Int, height: Int
@@ -46,8 +49,8 @@ import TopoMascot
 
     @Test func theSetIsTheOneTheReferenceRendered() {
         #expect(Self.golden.width == Topo.width && Self.golden.height == Topo.height)
-        #expect(Self.golden.scenarios.count == 20)
-        #expect(Self.golden.scenarios.reduce(0) { $0 + $1.digests.count } == 62)
+        #expect(Self.golden.scenarios.count == 25)
+        #expect(Self.golden.scenarios.reduce(0) { $0 + $1.digests.count } == 81)
     }
 
     @Test(arguments: golden.scenarios.map(\.name))
