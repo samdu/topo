@@ -213,6 +213,61 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertGreaterThan(canvas.driver.frames, before, "a covered Topo drew no frame")
     }
 
+    /// At a frame interval of a second the link calls back once a second, and the roam's clock is
+    /// real time: the settle is 0.6 s of it and the glide goes at the look's speed, not at the
+    /// tenth of it a per-callback cap under the interval would make it. A stall longer than a frame
+    /// moves the clock two frames on.
+    func testTheClockIsRealTimeAtAFrameIntervalOfASecond() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let input = MascotState(model: "claude-sonnet-5").input
+        func apply(_ field: MascotField) {
+            canvas.apply(input: input, field: field, settings: Self.settings, interval: 1, conditions: seen)
+        }
+        // A full chat: he settles on the flank.
+        var full = Self.open
+        full.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 600)]
+        apply(full)
+        // Real-shaped timestamps: host time in seconds, one callback a second, with the jitter a
+        // display link's target timestamps carry.
+        var stamp: CFTimeInterval = 81_234.567
+        canvas.fire(at: stamp)
+        XCTAssertEqual(canvas.clock, 1, accuracy: 1e-9)
+        XCTAssertEqual(canvas.roam?.roost.name, "flank", "a 0.6 s settle was not over a second in")
+        // Room opens on the left, straight above the flank: he strolls up to it, clear of
+        // everything the whole way.
+        var roomy = Self.open
+        roomy.obstacles = [CGRect(x: 200, y: 0, width: 200, height: 600)]
+        apply(roomy)
+        for jitter in [1.0002, 0.9997] {
+            stamp += jitter
+            canvas.fire(at: stamp)
+        }
+        XCTAssertEqual(canvas.clock, 1 + 1.0002 + 0.9997, accuracy: 1e-6, "the clock is not real time")
+        let glide = try XCTUnwrap(canvas.roam?.move, "no glide once the settle was over")
+        XCTAssertEqual(canvas.roam?.covered, false)
+        // Each second of callbacks is a second of the stroll: the glide's pace is the look's,
+        // whatever the frame interval.
+        var steps = 0
+        while let move = canvas.roam?.move, steps < 30 {
+            stamp += 1
+            canvas.fire(at: stamp)
+            if let after = canvas.roam?.move { XCTAssertEqual(after.elapsed - move.elapsed, 1, accuracy: 1e-6) }
+            steps += 1
+        }
+        XCTAssertNil(canvas.roam?.move, "the glide did not end")
+        XCTAssertEqual(Double(steps), glide.duration - glide.elapsed, accuracy: 1.001,
+                       "a glide of \(glide.duration) s at the look's speed took \(steps) callbacks of a second")
+        // A stall of a minute moves the clock by the cap, two frames.
+        let clock = canvas.clock
+        stamp += 60
+        canvas.fire(at: stamp)
+        XCTAssertEqual(canvas.clock - clock, 2, accuracy: 1e-9)
+        XCTAssertEqual(MascotCanvas.stepCap(interval: 1.0 / 30), 0.1)
+    }
+
     /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
     /// for, so a thinking guest goes on thinking rather than being put back to idle.
     func testTheWalkIsWornOnlyWhileHeGlidesAndHisActivitySurvivesIt() throws {

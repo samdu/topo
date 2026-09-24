@@ -286,12 +286,23 @@ final class MascotCanvas: UIView {
         }
     }
 
-    fileprivate func fire(_ link: CADisplayLink) {
-        // The first frame after a pause moves him one frame on, not by the whole pause.
-        let dt = last == 0 ? interval : min(link.targetTimestamp - last, 0.1)
-        last = link.targetTimestamp
+    fileprivate func fire(_ link: CADisplayLink) { fire(at: link.targetTimestamp) }
+
+    /// A display-link callback for the frame shown at `timestamp`: the clock moves on by the real
+    /// time since the last one, so the settle, the glide and the engine run at their own pace at
+    /// any frame interval. The step is capped at `Self.stepCap(interval:)`, two frames at a slow
+    /// rate, room for a timestamp's jitter, so a stall — the main thread held, the app suspended with the link standing — moves
+    /// him on by at most that much rather than by the whole of it; and the first callback after
+    /// the link is made, which has no last timestamp, moves him one frame.
+    func fire(at timestamp: CFTimeInterval) {
+        let dt = last == 0 ? interval : min(max(timestamp - last, 0), Self.stepCap(interval: interval))
+        last = timestamp
         step(dt)
     }
+
+    /// The most one callback moves the clock: two frame intervals, or a tenth of a second where
+    /// that is shorter, so a frame or two dropped at 30 a second is still real time.
+    static func stepCap(interval: Double) -> Double { max(interval * 2, 0.1) }
 
     /// One frame, `dt` seconds on: the roam's clock and the engine moved on together.
     func step(_ dt: Double) {
