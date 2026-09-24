@@ -32,8 +32,9 @@ final class TopoOnTheGlassTests: XCTestCase {
             let app = launch(look: "{}", transcript: transcript)
             let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
             XCTAssertTrue(mic.waitForExistence(timeout: 60), "\(transcript): the chat screen, with its microphone")
-            let placed = try waitForTopo(in: app) { $0.roost == roost && !$0.hidden }
-            XCTAssertEqual(placed.roost, roost, "\(transcript): he is not where the transcript leaves him: \(placed)")
+            _ = try waitForTopo(in: app, "\(transcript): standing in the \(roost)") {
+                $0.roost == roost && !$0.hidden && !$0.walking && $0.frame == $0.to
+            }
             attach(app, "topo-\(transcript)-\(roost)")
             for point in ["the well's middle", "the well's edge nearest the flank"] {
                 let before = try report(mic)
@@ -70,7 +71,9 @@ final class TopoOnTheGlassTests: XCTestCase {
         let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
         let resting = mic.frame
-        let placed = try waitForTopo(in: app) { $0.roost == "gap" && !$0.hidden }
+        let placed = try waitForTopo(in: app, "standing in a gap of the empty chat") {
+            $0.roost == "gap" && !$0.hidden && !$0.walking && $0.frame == $0.to
+        }
 
         let flank = app.buttons["Type instead"]
         XCTAssertTrue(flank.waitForExistence(timeout: 10), "the keyboard flank")
@@ -95,14 +98,14 @@ final class TopoOnTheGlassTests: XCTestCase {
         shot.name = "glass-under-the-keyboard"
         shot.lifetime = .keepAlways
         add(shot)
-        // The keyboard takes the room he stood in, and he strolls to room above it: one glide,
-        // ending in a gap clear of the keyboard.
-        let now = try waitForTopo(in: app) {
-            $0.moves > placed.moves && $0.roost == "gap" && !$0.hidden && $0.frame != placed.frame
+        // The keyboard takes the room he stood in, and he hurries to room above it: a glide that
+        // has ended, with his picture where he is now — not where he was going — in a gap and
+        // with nothing over it, the keyboard included.
+        let now = try waitForTopo(in: app, "out from under the keyboard") {
+            $0.moves > placed.moves && $0.roost == "gap" && !$0.hidden && !$0.walking && !$0.covered
+                && $0.frame == $0.to && $0.frame != placed.frame
         }
-        XCTAssertGreaterThan(now.moves, placed.moves, "the keyboard came up over him and he did not move: \(now)")
-        XCTAssertEqual(now.roost, "gap", "\(now)")
-        XCTAssertFalse(now.hidden, "\(now)")
+        XCTAssertNotEqual(now.frame, placed.frame, "the keyboard came up over him and he did not move: \(now)")
         attach(app, "topo-keyboard-up")
 
         let before = try report(mic)
@@ -166,20 +169,27 @@ final class TopoOnTheGlassTests: XCTestCase {
     struct Topo: Decodable, CustomStringConvertible {
         var roost = ""
         var frame: [Double]?
+        var to: [Double]?
         var hidden = true
+        var walking = false
+        var covered = false
         var moves = 0
-        var description: String { "\(roost) \(frame ?? []) hidden \(hidden) moves \(moves)" }
+        var description: String {
+            "\(roost) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) covered \(covered) moves \(moves)"
+        }
     }
 
     private struct ChatReport: Decodable { var mascot: Topo? }
+    private struct TopoNotThere: Error { var message: String }
 
     private func topo(in app: XCUIApplication) -> Topo? {
         let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
         return (try? JSONDecoder().decode(ChatReport.self, from: Data(raw.utf8)))?.mascot
     }
 
-    /// Waits for him to be placed as `wanted` says, answering whatever he is by the deadline.
-    private func waitForTopo(in app: XCUIApplication, timeout: TimeInterval = 20,
+    /// Waits for him to be as `wanted` says, and fails the test, naming what he was instead, when
+    /// he is not by the deadline.
+    private func waitForTopo(in app: XCUIApplication, _ what: String, timeout: TimeInterval = 20,
                              _ wanted: (Topo) -> Bool) throws -> Topo {
         let deadline = Date().addingTimeInterval(timeout)
         var seen = topo(in: app)
@@ -187,7 +197,12 @@ final class TopoOnTheGlassTests: XCTestCase {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
             seen = topo(in: app)
         }
-        return try XCTUnwrap(seen, "Topo was never placed")
+        guard let seen, wanted(seen) else {
+            let message = "Topo was not \(what) in \(timeout) s: \(seen.map(String.init(describing:)) ?? "never reported")"
+            XCTFail(message)
+            throw TopoNotThere(message: message)
+        }
+        return seen
     }
 
     private struct Report: Decodable {

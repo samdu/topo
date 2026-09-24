@@ -327,19 +327,24 @@ final class MascotCanvas: UIView {
 }
 
 extension MascotRoam {
-    /// What a debug build reports of him: where he stands, the frame of his picture there, whether
-    /// he stands nowhere and how many glides he has begun.
+    /// What a debug build reports of him: the roost he stands in or is going to, the frame of his
+    /// picture where he is now (`frame`) and at that roost (`to`), which differ only mid-glide,
+    /// whether he stands nowhere, is gliding or has anything over him, and how many glides he has
+    /// begun.
     struct Report: Codable, Equatable, Sendable {
         var roost: String
         var frame: [Double]?
+        var to: [Double]?
         var hidden: Bool
+        var walking: Bool
+        var covered: Bool
         var moves: Int
     }
 
     var report: Report {
-        Report(roost: roost.name,
-               frame: roost.frame.map { [$0.minX, $0.minY, $0.width, $0.height].map { Double($0) } },
-               hidden: hidden, moves: moves)
+        func numbers(_ rect: CGRect) -> [Double] { [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) } }
+        return Report(roost: roost.name, frame: picture.map(numbers), to: roost.frame.map(numbers),
+                      hidden: hidden, walking: walking, covered: covered, moves: moves)
     }
 }
 
