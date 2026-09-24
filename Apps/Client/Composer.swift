@@ -124,7 +124,7 @@ struct Composer: View {
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, geometry.verticalInset)
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
-        .background(lozenge.opacity(presence))
+        .background(lozenge(geometry).opacity(presence))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
         .containerRelativeFrame(.horizontal) { width, _ in width * look.composer.widthFraction }
         .padding(.bottom, look.composer.bottomPadding)
@@ -169,12 +169,15 @@ struct Composer: View {
     /// is the same value at nothing while the microphone is shut, so what happens when it opens
     /// is an animation of one value and not a swap of one view for another.
     ///
+    /// Its corners are the geometry's: the short pane is the resting one scaled, so its radius is
+    /// the resting radius at the same share as the well.
+    ///
     /// It is drawn at the presence, which is one value again rather than a branch: the whole
     /// surface goes, its edge with it, where there is nothing behind the pane to lens. It is a
     /// background and the glow is a shadow, so neither moves anything and what the pane is drawn
     /// at cannot change where its own edge is measured to be.
-    @ViewBuilder private var lozenge: some View {
-        let shape = RoundedRectangle(cornerRadius: look.composer.cornerRadius, style: .continuous)
+    @ViewBuilder private func lozenge(_ geometry: ComposerGeometry) -> some View {
+        let shape = RoundedRectangle(cornerRadius: geometry.cornerRadius, style: .continuous)
         let tint = look.composer.tint.opacity(mic.open ? look.composer.tintOpacity : 0)
         switch look.composer.surface {
         case .glass:
@@ -277,8 +280,8 @@ private struct LeadingFlank: PreferenceKey {
 /// a test holds at every end of the document's ranges rather than a screen it has to photograph.
 ///
 /// Under the keyboard the well, the jewel and the mark are drawn at `compactShare` of their
-/// resting size, and the vertical inset with them, so the pane is that share of its resting height
-/// wherever the well is what sets it. The flanks keep their size: a pane whose flanks are taller
+/// resting size, and the vertical inset and the pane's corner radius with them, so the pane is that
+/// share of its resting height wherever the well is what sets it. The flanks keep their size: a pane whose flanks are taller
 /// than its short well is as short as they let it be. The well keeps its resting width in the row
 /// (`slot`), so the flanks do not move and neither does the pane's width, even on a look whose
 /// content is wider than its share of the screen. The well is never drawn under
@@ -296,6 +299,9 @@ struct ComposerGeometry: Equatable, Sendable {
     /// The width the well takes in the row: its resting size at every share, so the flanks and
     /// the pane's width do not move under the keyboard.
     var slot: CGFloat
+    /// The pane's corner radius as drawn: the resting radius at the same share as the well, since
+    /// the short pane is the resting one scaled.
+    var cornerRadius: CGFloat
 
     /// The jewel as drawn.
     var jewel: CGFloat { restingJewel * scale }
@@ -305,12 +311,13 @@ struct ComposerGeometry: Equatable, Sendable {
         let jewel = min(composer.well.jewelSize, resting)
         guard keyboard, resting > 0 else {
             return ComposerGeometry(scale: 1, well: resting, restingJewel: jewel, verticalInset: composer.verticalInset,
-                                    slot: resting)
+                                    slot: resting, cornerRadius: composer.cornerRadius)
         }
         let short = max(resting * min(max(composer.compactShare, 0), 1), min(resting, Look.Composer.Well.pressable))
         let scale = short / resting
         return ComposerGeometry(scale: scale, well: short, restingJewel: jewel,
-                                verticalInset: composer.verticalInset * scale, slot: resting)
+                                verticalInset: composer.verticalInset * scale, slot: resting,
+                                cornerRadius: composer.cornerRadius * scale)
     }
 }
 

@@ -108,6 +108,28 @@ final class ComposerGeometryTests: XCTestCase {
                        "the look's share does not reach the geometry")
     }
 
+    /// The short pane is the resting one scaled, so its corners are too: at rest the radius is the
+    /// look's, and under the keyboard it is the look's at the same share as the well — two thirds
+    /// by default, and wherever the pressable floor holds the well up, that share and not the
+    /// look's — at every end of the ranges and at a radius of nothing and of a great deal.
+    func testTheShortPanesCornerRadiusIsTheRestingOneAtTheShare() {
+        let composer = Look.Composer()
+        XCTAssertEqual(ComposerGeometry.of(composer, keyboard: false).cornerRadius, composer.cornerRadius)
+        XCTAssertEqual(ComposerGeometry.of(composer, keyboard: true).cornerRadius, composer.cornerRadius * 2 / 3,
+                       accuracy: 1e-9, "the default pane's corners are not two thirds of their radius")
+        for var composer in Self.extremes {
+            for radius in [0, 32, 4000] as [CGFloat] {
+                composer.cornerRadius = radius
+                let rest = ComposerGeometry.of(composer, keyboard: false)
+                let short = ComposerGeometry.of(composer, keyboard: true)
+                XCTAssertEqual(rest.cornerRadius, radius, "\(composer)")
+                XCTAssertEqual(short.cornerRadius, radius * short.scale, accuracy: 1e-9, "\(composer)")
+                XCTAssertEqual(short.cornerRadius * rest.well, rest.cornerRadius * short.well, accuracy: 1e-6,
+                               "\(composer): the corners are not scaled as the well is")
+            }
+        }
+    }
+
     /// Whatever the look says, the short well is no bigger than the resting one and no smaller
     /// than the pressable floor, or than the resting one where that is already under it; the
     /// jewel is inside the well at both heights; and the short pane is no taller than the resting
