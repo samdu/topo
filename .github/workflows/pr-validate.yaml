@@ -539,6 +539,28 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/build-ish-test.sh
 
+      # The guest's Alpine packages checked closed against hand-written indexes:
+      # a dependency the pinned set does not meet at its version fails, naming
+      # the package and the requirement.
+      - name: model-manifest.sh holds the packages' dependencies to their versions
+        if: ${{ !cancelled() }}
+        run: scripts/tests/model-manifest-test.sh
+
+      # The committed manifest is what scripts/model-manifest.sh writes from its
+      # pins today: every file fetched and hashed (cached here on the script and
+      # the manifest), every package checked against Alpine's index and closed.
+      # A hand edit of models.json, or a pin the script and the manifest
+      # disagree on, fails here.
+      - name: Cache the manifest's files
+        if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: build/models
+          key: manifest-files-${{ hashFiles('scripts/model-manifest.sh', 'Apps/Topo/Resources/models.json') }}
+      - name: The manifest is the script's
+        if: ${{ !cancelled() }}
+        run: scripts/model-manifest.sh --check
+
       # scripts/review-prompt.sh against a fake gh and a scratch repository,
       # fed the comment post_feedback itself posts: a first review whenever
       # the previous one is missing or unusable, and otherwise that verdict
