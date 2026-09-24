@@ -213,13 +213,14 @@ enum MascotRoost: Equatable, Sendable {
     /// A gap is a place in `field.open` where his picture with `clearance` all round it overlaps
     /// nothing he may not cover. Of the gaps that hold him the nearest to `from` wins — so a new
     /// turn moves him the least — and with no `from` the nearest to the middle of the pane's
-    /// trailing flank, where he would sit otherwise. With no gap he sits in the middle of that
-    /// flank, and a flank that cannot hold his whole picture draws nothing, never a Topo over the
-    /// microphone.
+    /// trailing flank, where he would sit otherwise. With no gap he sits on that flank
+    /// (`flank(_:size:)`), and a flank narrower than his picture draws nothing, never a Topo over
+    /// the microphone.
     static func of(_ field: MascotField, size: CGSize, clearance: CGFloat, from: CGPoint?) -> MascotRoost {
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
         let margin = clearance.isFinite ? max(clearance, 0) : 0
-        let home = field.flank.map { CGPoint(x: $0.midX - size.width / 2, y: $0.midY - size.height / 2) }
+        let home = flank(field, size: size).frame?.origin
+            ?? field.flank.map { CGPoint(x: $0.midX - size.width / 2, y: $0.midY - size.height / 2) }
             ?? CGPoint(x: field.open.minX, y: field.open.maxY - size.height)
         if let spot = nearestGap(field, size: size, margin: margin, to: from ?? home) {
             return .gap(CGRect(origin: spot, size: size))
@@ -227,15 +228,15 @@ enum MascotRoost: Equatable, Sendable {
         return flank(field, size: size)
     }
 
-    /// The middle of the pane's trailing flank, or nowhere when the flank cannot hold his whole
-    /// picture.
+    /// The middle of the pane's trailing flank; on a pane shorter than his picture — the glass
+    /// under the keyboard — the middle of its width, standing on its foot and rising above its top
+    /// edge, so a chat with no gap and the keyboard up still has him on the glass rather than
+    /// nowhere; and nowhere when the flank is narrower than his picture.
     static func flank(_ field: MascotField, size: CGSize) -> MascotRoost {
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
-        if let flank = field.flank, size.width <= flank.width, size.height <= flank.height {
-            return .flank(CGRect(x: flank.midX - size.width / 2, y: flank.midY - size.height / 2,
-                                 width: size.width, height: size.height))
-        }
-        return .none
+        guard let flank = field.flank, size.width <= flank.width else { return .none }
+        let y = size.height <= flank.height ? flank.midY - size.height / 2 : flank.maxY - size.height
+        return .flank(CGRect(x: flank.midX - size.width / 2, y: y, width: size.width, height: size.height))
     }
 
     /// The origin of his picture in the nearest gap to `target`, or nil for none.
@@ -279,10 +280,13 @@ enum MascotRoost: Equatable, Sendable {
     }
 
     /// Whether `frame` is a roost as it stands: a gap — inside `field.open` with `clearance` all round
-    /// it and nothing he may not cover within that — or on the flank whole. The small-move
+    /// it and nothing he may not cover within that — or on the flank whole, or where the flank
+    /// stands him on a pane shorter than he is (`flank(_:size:)`). The small-move
     /// threshold keeps him only where this holds.
     static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat) -> Bool {
         if let flank = field.flank, flank.insetBy(dx: -epsilon, dy: -epsilon).contains(frame) { return true }
+        if let standing = flank(field, size: frame.size).frame,
+           abs(standing.minX - frame.minX) <= epsilon, abs(standing.minY - frame.minY) <= epsilon { return true }
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let grown = frame.insetBy(dx: -margin, dy: -margin)
         guard field.open.insetBy(dx: -epsilon, dy: -epsilon).contains(grown) else { return false }

@@ -74,7 +74,7 @@ final class MascotGeometryTests: XCTestCase {
         Fixture(name: "the keyboard up, turns above it", field: field(rows(height: 40, personMinX: 300, topoMaxX: 150, until: 400),
                                                                       keyboard: true), roost: "gap"),
         Fixture(name: "the keyboard up, no gap", field: field([CGRect(x: 0, y: 0, width: 402, height: 400)], keyboard: true),
-                roost: "none"),
+                roost: "flank"),
     ]
 
     static let size = MascotSprite.size(scale: Look.Mascot().scale)
@@ -142,6 +142,28 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertEqual(MascotRoost.of(narrow, size: Self.size, clearance: 8, from: nil), .none)
     }
 
+    /// Under the keyboard the glass is shorter than he is: with no gap he stands on the flank's
+    /// foot, rising above the pane's top edge, rather than nowhere, and a flank narrower than he is
+    /// is still nowhere. Standing there is a roost as it stands, so the small-move threshold keeps
+    /// him there.
+    func testUnderTheKeyboardHeStandsOnTheShortGlass() throws {
+        let field = Self.fixtures[5].field
+        let flank = try XCTUnwrap(field.flank)
+        XCTAssertLessThan(flank.height, Self.size.height, "the fixture's glass is not shorter than he is")
+        let roost = MascotRoost.of(field, size: Self.size, clearance: 8, from: nil)
+        XCTAssertEqual(roost.name, "flank")
+        let frame = try XCTUnwrap(roost.frame)
+        XCTAssertEqual(frame.maxY, flank.maxY, accuracy: 0.001)
+        XCTAssertEqual(frame.midX, flank.midX, accuracy: 0.001)
+        XCTAssertLessThan(frame.minY, flank.minY, "he does not rise above the short glass")
+        XCTAssertFalse(MascotRoost.overlap(frame, try XCTUnwrap(field.controls)))
+        XCTAssertTrue(MascotRoost.holds(field, frame: frame, clearance: 8))
+        XCTAssertFalse(MascotRoost.holds(field, frame: frame.offsetBy(dx: 0, dy: -1), clearance: 8))
+        var narrow = field
+        narrow.well = CGRect(x: flank.maxX - Self.size.width + 1 - 48, y: 345, width: 48, height: 48)
+        XCTAssertEqual(MascotRoost.of(narrow, size: Self.size, clearance: 8, from: nil), .none)
+    }
+
     // MARK: The bounds, from geometry, at every end
 
     /// At every fixture, at the ends of the look's ranges for his size (0.25 and 4, and the
@@ -168,12 +190,15 @@ final class MascotGeometryTests: XCTestCase {
                              _ label: String, file: StaticString = #filePath, line: UInt = #line) {
         guard let frame = roost.frame else { return }
         XCTAssertEqual(frame.size, size, label, file: file, line: line)
+        // On a pane shorter than he is, the flank stands him on its foot and he rises above its top
+        // edge, over whatever is there; what is judged against the words is the part on the glass.
+        let judged = roost.name == "flank" ? frame.intersection(field.flank!) : frame
         let well = field.well ?? .null
         let controls = field.controls ?? .null
         XCTAssertFalse(MascotRoost.overlap(frame, well), "\(label): over the well", file: file, line: line)
         XCTAssertFalse(MascotRoost.overlap(frame, controls), "\(label): over the controls", file: file, line: line)
         for obstacle in field.obstacles where MascotRoost.overlap(obstacle, field.seen) {
-            XCTAssertFalse(MascotRoost.overlap(frame, obstacle.intersection(field.seen)), "\(label): over \(obstacle)",
+            XCTAssertFalse(MascotRoost.overlap(judged, obstacle.intersection(field.seen)), "\(label): over \(obstacle)",
                            file: file, line: line)
         }
         switch roost {
@@ -186,8 +211,16 @@ final class MascotGeometryTests: XCTestCase {
                                file: file, line: line)
             }
         case .flank:
-            XCTAssertTrue(field.flank!.insetBy(dx: -0.001, dy: -0.001).contains(frame), "\(label): out of the flank",
-                          file: file, line: line)
+            let flank = field.flank!
+            if size.height <= flank.height {
+                XCTAssertTrue(flank.insetBy(dx: -0.001, dy: -0.001).contains(frame), "\(label): out of the flank",
+                              file: file, line: line)
+            } else {
+                XCTAssertTrue(frame.minX >= flank.minX - 0.001 && frame.maxX <= flank.maxX + 0.001,
+                              "\(label): wider than the flank", file: file, line: line)
+                XCTAssertEqual(frame.maxY, flank.maxY, accuracy: 0.001, "\(label): not on the glass's foot",
+                               file: file, line: line)
+            }
         case .none:
             break
         }

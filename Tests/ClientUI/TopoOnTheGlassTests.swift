@@ -127,6 +127,35 @@ final class TopoOnTheGlassTests: XCTestCase {
         app.terminate()
     }
 
+    /// A chat with no gap above the keyboard — `continuity`, the layout of Sam's screenshot — has
+    /// him on the short glass's trailing flank once the keyboard is up, drawn and standing still,
+    /// right of the microphone: the glass is shorter than he is, so he stands on its foot.
+    func testWithTheKeyboardUpOverAFullChatHeStandsOnTheShortGlass() throws {
+        let app = launch(look: "{}", transcript: "continuity", softwareKeyboard: true)
+        let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        _ = try waitForTopo(in: app, "on the flank of a chat with no gap") {
+            $0.roost == "flank" && !$0.hidden && !$0.walking && $0.frame == $0.to
+        }
+        let flank = app.buttons["Type instead"]
+        XCTAssertTrue(flank.waitForExistence(timeout: 10), "the keyboard flank")
+        for _ in 0..<3 where !app.keyboards.element.exists {
+            flank.tap()
+            if app.keyboards.element.waitForExistence(timeout: 5) { break }
+            dismissAccountAlert()
+        }
+        let keyboard = app.keyboards.element
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the flank raised no keyboard")
+        let up = try waitForTopo(in: app, "on the short glass above the keyboard") {
+            $0.roost == "flank" && !$0.hidden && !$0.walking && $0.frame == $0.to
+                && ($0.frame.map { $0[1] + $0[3] } ?? .infinity) <= Double(keyboard.frame.minY)
+        }
+        let frame = try XCTUnwrap(up.frame)
+        XCTAssertGreaterThanOrEqual(frame[0], Double(mic.frame.maxX) - 0.5, "not right of the microphone: \(up)")
+        attach(app, "topo-keyboard-up-full-chat")
+        app.terminate()
+    }
+
     /// The button's three labels, `VoiceInput`'s state in words.
     static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send"]
 
