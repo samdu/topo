@@ -144,8 +144,9 @@ final class MascotDriver {
 }
 
 /// The view he is drawn in, laid over the whole of the chat: one layer holding the engine's
-/// picture, cut to the part of it he is ever drawn in (`MascotSprite.box`), magnified
-/// nearest-neighbour and put where his roam says he is. It takes no touch and is nothing to
+/// whole picture, magnified nearest-neighbour and put so that the part he takes up at rest
+/// (`MascotSprite.box`) is where his roam says he is; what a pose draws past that box is drawn
+/// over whatever is there. It takes no touch and is nothing to
 /// accessibility, so everything under it is found and pressed exactly as it would be without him.
 @MainActor
 final class MascotCanvas: UIView {
@@ -180,10 +181,6 @@ final class MascotCanvas: UIView {
         clipsToBounds = true
         sprite.magnificationFilter = .nearest
         sprite.minificationFilter = .nearest
-        sprite.contentsRect = CGRect(x: MascotSprite.box.minX / CGFloat(Topo.width),
-                                     y: MascotSprite.box.minY / CGFloat(Topo.height),
-                                     width: MascotSprite.box.width / CGFloat(Topo.width),
-                                     height: MascotSprite.box.height / CGFloat(Topo.height))
         // The layer is moved every frame; an implicit animation would smear what is pixels.
         sprite.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "frame": NSNull(),
                           "opacity": NSNull()]
@@ -211,8 +208,10 @@ final class MascotCanvas: UIView {
         sync()
     }
 
-    /// His picture where the roam has it now, in the canvas.
-    var spriteFrame: CGRect { sprite.frame }
+    /// His box where the roam has it now, in the canvas: what the roost holds.
+    var spriteFrame: CGRect { roam?.picture ?? .zero }
+    /// The whole of the engine's picture as the layer draws it, round that box.
+    var drawnFrame: CGRect { sprite.frame }
     /// Whether he is being drawn at all.
     var showing: Bool { sprite.opacity > 0 }
 
@@ -246,7 +245,7 @@ final class MascotCanvas: UIView {
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if let picture = roam.picture { sprite.frame = picture }
+        if let picture = roam.picture { sprite.frame = MascotSprite.drawn(around: picture) }
         sprite.opacity = roam.hidden ? 0 : 1
         CATransaction.commit()
         report(roam)

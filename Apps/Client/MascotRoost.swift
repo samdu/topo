@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import TopoMascot
+#endif
 
 /// Where the things are that Topo stands clear of, reported by the views that draw them: the
 /// transcript's frame, which is where he may stand, every turn, the row being written and the
@@ -102,17 +105,27 @@ private struct LineReader: TextRenderer {
 }
 
 #if os(iOS)
-/// The part of the engine's 184×160 picture he is ever drawn in, in art pixels: the union of every
-/// pose on every head, yoga's lift and the sign included, with two pixels round it
-/// (`MascotGeometryTests.testEveryPoseIsDrawnInsideTheBox` runs every pose and holds that nothing is drawn outside it). The canvas
-/// shows this part and no more, so the picture he takes up on the screen is the box a gap has to
-/// hold, and not the engine's whole canvas, most of which is nothing.
+/// The part of the engine's 184×160 picture he takes up at rest, in art pixels: the union of what he
+/// draws sitting on the shelf at home — breathing, blinking, looking about, his arms drifting — on
+/// every head and load band, with two pixels round it
+/// (`MascotGeometryTests.testHeRestsInsideTheBox` runs the idle state and holds that nothing is drawn
+/// outside it). The box is what a gap has to hold, what the roost and the hurry judge and what
+/// "covered" means. The canvas draws the whole picture round it, so an excursion, a working pose or
+/// the sign reaches past the box and over whatever is there, and that reach is nothing the roam
+/// answers: they are brief, and he comes back to the box.
 enum MascotSprite {
-    static let box = CGRect(x: 15, y: 47, width: 154, height: 113)
+    static let box = CGRect(x: 35, y: 67, width: 92, height: 89)
 
     /// His picture on the screen, in points, at `scale` points an art pixel.
     static func size(scale: CGFloat) -> CGSize {
         CGSize(width: box.width * scale, height: box.height * scale)
+    }
+
+    /// The whole of the engine's picture on the screen, for the box drawn at `picture`.
+    static func drawn(around picture: CGRect) -> CGRect {
+        let scale = picture.width / box.width
+        return CGRect(x: picture.minX - box.minX * scale, y: picture.minY - box.minY * scale,
+                      width: CGFloat(Topo.width) * scale, height: CGFloat(Topo.height) * scale)
     }
 }
 

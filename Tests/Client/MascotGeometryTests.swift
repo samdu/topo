@@ -232,28 +232,81 @@ final class MascotGeometryTests: XCTestCase {
 
     // MARK: His picture
 
-    /// Every pose on every head — yoga's lift and the sign included — is drawn inside
-    /// `MascotSprite.box`, the part of the engine's picture the canvas shows: what is cut away is
-    /// nothing, and the box a gap holds is the whole of him.
-    func testEveryPoseIsDrawnInsideTheBox() {
+    /// He rests inside `MascotSprite.box`: sitting on the shelf at home, breathing, blinking,
+    /// looking about and his arms drifting, on every head and every load band, nothing is drawn
+    /// outside it. Each run is two minutes of the idle cycle, which is more than one turn of the
+    /// slowest arm's drift, drawn only while he has sat at home for a second — an excursion's
+    /// walk home, the corner and yoga are not rest.
+    func testHeRestsInsideTheBox() {
         let box = MascotSprite.box
-        for model in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"] {
-            for activity in ["yoga", "idle", "thinking", "searching", "building", "writing", "calendar", "walk", "sign"] {
+        var reached = Reach()
+        for (m, model) in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated() {
+            // One token count in each band: default, warning, reset, untrusted.
+            for (b, tokens) in [1_000.0, 210_000, 260_000, 320_000].enumerated() {
+                var random = Mulberry32(seed: UInt32(m * 4 + b + 1))
+                let engine = Topo(random: { random.next() })
+                var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+                var home = 0.0
+                for frame in 0..<(120 * 30) {
+                    engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: "idle", corner: 0))
+                    let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
+                    home = resting ? home + 1.0 / 30 : 0
+                    // The head and the load settle from the engine's start in under two seconds.
+                    guard frame >= 60, home > 1, frame % 3 == 0 else { continue }
+                    engine.draw(&rgba)
+                    reached.add(rgba)
+                }
+            }
+        }
+        XCTAssertFalse(reached.isEmpty, "he never rested")
+        let rest = reached.rect
+        XCTAssertTrue(box.contains(rest), "at rest he reaches \(rest), outside the box \(box)")
+        // Two pixels round him and no more, so the box is his rest and not a guess.
+        XCTAssertEqual(box, rest.insetBy(dx: -2, dy: -2), "the box is not his rest with two pixels round it")
+    }
+
+    /// How far past the box each other pose reaches — work, the walk, the corner, yoga and the
+    /// sign — recorded and not held: those are drawn over whatever is there, and he comes back.
+    func testWhatReachesPastTheBoxIsRecorded() {
+        let box = MascotSprite.box
+        for activity in ["corner", "yoga", "thinking", "searching", "building", "writing", "calendar", "walk", "sign"] {
+            var reached = Reach()
+            for model in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"] {
+                // A random source of 0.05 sends him to yoga at the first excursion, 0.5 to the corner.
                 let engine = Topo(random: { activity == "yoga" ? 0.05 : 0.5 })
                 var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
-                let seconds = activity == "yoga" ? 36 : activity == "idle" ? 32 : 6
-                for frame in 0..<(seconds * 30) {
+                let excursion = activity == "yoga" || activity == "corner"
+                for frame in 0..<((excursion ? 36 : 6) * 30) {
                     engine.update(1.0 / 30, TopoInput(model: model, tokens: 1_000,
-                                                      activity: activity == "yoga" ? "idle" : activity,
-                                                      sign: activity == "sign" ? "updating memory" : nil, corner: 0))
-                    guard frame % 6 == 0 else { continue }
+                                                      activity: excursion ? "idle" : activity,
+                                                      sign: activity == "sign" ? "updating memory" : nil,
+                                                      corner: activity == "corner" ? 40 : 0))
+                    guard frame % 6 == 0, !excursion || engine.outing != nil else { continue }
                     engine.draw(&rgba)
-                    for y in 0..<Topo.height {
-                        for x in 0..<Topo.width where rgba[(y * Topo.width + x) * 4 + 3] > 0 {
-                            XCTAssertTrue(box.contains(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5)),
-                                          "\(model) \(activity): drawn at \(x),\(y), outside the box")
-                            if !box.contains(CGPoint(x: Double(x) + 0.5, y: Double(y) + 0.5)) { return }
-                        }
+                    reached.add(rgba)
+                }
+            }
+            let r = reached.rect
+            let past = (left: max(0, box.minX - r.minX), top: max(0, box.minY - r.minY),
+                        right: max(0, r.maxX - box.maxX), bottom: max(0, r.maxY - box.maxY))
+            let line = "\(activity): past the box by \(Int(past.left)) left, \(Int(past.top)) up, "
+                + "\(Int(past.right)) right, \(Int(past.bottom)) down, in art pixels"
+            print("[topo-debug] mascot reach: \(line)")
+            XCTContext.runActivity(named: line) { _ in }
+        }
+    }
+
+    /// The union of the pixels drawn across frames of the engine's picture.
+    private struct Reach {
+        var x0 = Topo.width, y0 = Topo.height, x1 = -1, y1 = -1
+        var isEmpty: Bool { x1 < 0 }
+        var rect: CGRect { CGRect(x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1) }
+
+        mutating func add(_ rgba: [UInt8]) {
+            rgba.withUnsafeBufferPointer { pixels in
+                for y in 0..<Topo.height {
+                    for x in 0..<Topo.width where pixels[(y * Topo.width + x) * 4 + 3] > 0 {
+                        x0 = min(x0, x); y0 = min(y0, y); x1 = max(x1, x); y1 = max(y1, y)
                     }
                 }
             }
@@ -350,13 +403,19 @@ final class MascotGeometryTests: XCTestCase {
                 XCTAssertEqual(roam.roost, expected, label)
                 XCTAssertEqual(canvas.showing, expected != .none,
                                "\(label): drawn \(canvas.showing), where a roost \(expected.name == "none" ? "holds nothing" : "holds him")")
-                // Every look here holds him but the largest: a full chat holds him in the margin
-                // beside its replies.
-                let held = mascot.scale < 4
+                // Every look here holds him but the largest in a full chat: a full chat holds him in
+                // the margin beside its replies, and an empty one holds even the largest.
+                let held = mascot.scale < 4 || name == "empty"
                 XCTAssertEqual(canvas.showing, held, "\(label): \(expected.name)")
                 if canvas.showing {
                     let drawn = canvas.spriteFrame
                     XCTAssertEqual(drawn.size, MascotSprite.size(scale: mascot.scale), label)
+                    // The whole picture is drawn, its box where the roost has him.
+                    let whole = canvas.drawnFrame
+                    XCTAssertEqual(whole.width, CGFloat(Topo.width) * mascot.scale, accuracy: 0.001, label)
+                    XCTAssertEqual(whole.height, CGFloat(Topo.height) * mascot.scale, accuracy: 0.001, label)
+                    XCTAssertEqual(whole.minX + MascotSprite.box.minX * mascot.scale, drawn.minX, accuracy: 0.001, label)
+                    XCTAssertEqual(whole.minY + MascotSprite.box.minY * mascot.scale, drawn.minY, accuracy: 0.001, label)
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.well!), "\(label): drawn over the well")
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.pane!), "\(label): drawn over the pane")
                     for obstacle in field.covering {
@@ -392,14 +451,15 @@ final class MascotGeometryTests: XCTestCase {
     /// leaves on its left is room. On the 393-point phone Sam's screenshot came from
     /// (`device-a70490e-trapped-on-flank.png`), the turn "Nothing, just testing the continuity
     /// feature :p" wraps to a bubble 294 points wide at x 83 — as drawn there — and the room left
-    /// of it holds his picture at a scale of 0.4 with its clearance and not at 0.5. A narrower
-    /// turn of two lines in the same place (`continuityShort`) leaves room a picture at 0.5 fits.
+    /// of it holds his picture 60 points wide with its clearance and not one 78 points wide. A
+    /// narrower turn of two lines in the same place (`continuityShort`) leaves room a picture 74
+    /// points wide fits.
     func testTheRoomBesideAShortBubbleIsAGap() throws {
         let phone = CGSize(width: 393, height: 852)
         let clearance = Look.Mascot().clearance
-        /// His picture at `scale`, left of `bubble` by the clearance and level with its middle.
-        func beside(_ bubble: CGRect, scale: CGFloat) -> CGRect {
-            let size = MascotSprite.size(scale: scale)
+        /// His picture `width` points wide, left of `bubble` by the clearance and level with its middle.
+        func beside(_ bubble: CGRect, width: CGFloat) -> CGRect {
+            let size = MascotSprite.size(scale: width / MascotSprite.box.width)
             return CGRect(x: bubble.minX - clearance - size.width, y: bubble.midY - size.height / 2,
                           width: size.width, height: size.height)
         }
@@ -409,15 +469,15 @@ final class MascotGeometryTests: XCTestCase {
         let bubble = try XCTUnwrap(field.obstacles.first { $0.minX > 40 }, "no turn reported less than the row: \(field.obstacles)")
         XCTAssertEqual(bubble.minX, 83, accuracy: 2, "the bubble is not where the phone drew it: \(bubble)")
         XCTAssertEqual(bubble.maxX, 377, accuracy: 2)
-        XCTAssertTrue(MascotRoost.holds(field, frame: beside(bubble, scale: 0.4), clearance: clearance),
+        XCTAssertTrue(MascotRoost.holds(field, frame: beside(bubble, width: 60), clearance: clearance),
                       "the room left of the bubble is not room: \(field.covering)")
-        XCTAssertFalse(MascotRoost.holds(field, frame: beside(bubble, scale: 0.5), clearance: clearance))
+        XCTAssertFalse(MascotRoost.holds(field, frame: beside(bubble, width: 78), clearance: clearance))
 
         let short = try stage(PreviewTurns.continuityShort, mascot: Look.Mascot(), size: phone)
         defer { short.window.isHidden = true }
         let shortField = try XCTUnwrap(short.canvas?.roam?.field)
         let shortBubble = try XCTUnwrap(shortField.obstacles.first { $0.minX > 150 }, "\(shortField.obstacles)")
-        XCTAssertTrue(MascotRoost.holds(shortField, frame: beside(shortBubble, scale: 0.5), clearance: clearance),
+        XCTAssertTrue(MascotRoost.holds(shortField, frame: beside(shortBubble, width: 74), clearance: clearance),
                       "the room left of the narrow bubble is not room: \(shortField.covering)")
     }
 
