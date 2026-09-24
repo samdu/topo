@@ -334,6 +334,21 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// The share is animated with the presence, so halfway through the keyboard's rise he is
+    /// drawn at a scale between his resting one and his short one, not at either end.
+    func testAnIntermediateShareIsAnIntermediateScale() {
+        var glass = MascotOnGlass(state: MascotState(model: "claude-opus-5"), flank: flank, row: row,
+                                  share: 1, presence: 1, opacity: 1, covered: false)
+        let short = ComposerGeometry.of(Look.Composer(), keyboard: true).scale
+        glass.animatableData = AnimatablePair(0.5, (1 + short) / 2)
+        XCTAssertEqual(glass.presence, 0.5)
+        XCTAssertEqual(glass.share, (1 + short) / 2, accuracy: 1e-9)
+        let scale = MascotPlacement.of(flank: flank, row: row, composer: Look.Composer(), mascot: Look.Mascot(),
+                                       share: glass.share).scale
+        XCTAssertLessThan(scale, Look.Mascot().scale)
+        XCTAssertGreaterThan(scale, Look.Mascot().scale * short)
+    }
+
     /// On iOS 17 there is no scroll geometry and the presence is 1, so he never floats there: the
     /// presence 1 is no lift at any moment of any bob the look can name.
     func testAPresenceOfOneIsNoLiftWhichIsIOS17() {

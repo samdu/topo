@@ -380,8 +380,8 @@ struct MascotPerch: UIViewRepresentable {
 /// Topo in the composer's leading flank: placed from the flank's measured bounds and the row's
 /// size, drawn from the state he is handed, and told what decides whether he is drawn.
 ///
-/// The presence is animated through it, so the bob eases out over the same time the pane's
-/// surface arrives in rather than stopping when the value lands.
+/// The presence and the share are animated through it, so the bob eases out over the same time
+/// the pane's surface arrives in, and his scale goes short with the well rather than jumping.
 struct MascotOnGlass: View, Animatable {
     let state: MascotState
     let flank: CGRect
@@ -398,9 +398,14 @@ struct MascotOnGlass: View, Animatable {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    nonisolated var animatableData: Double {
-        get { presence }
-        set { presence = newValue }
+    /// The presence and the share, animated together: the bob eases out as the pane arrives, and
+    /// his scale follows the well over `compactDuration` rather than jumping as the keyboard rises.
+    nonisolated var animatableData: AnimatablePair<Double, CGFloat> {
+        get { AnimatablePair(presence, share) }
+        set {
+            presence = newValue.first
+            share = newValue.second
+        }
     }
 
     var body: some View {
