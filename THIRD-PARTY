@@ -39,12 +39,17 @@ Use: The guest's kernel: an arm64 Linux userland run in the app's own process, i
 ## libarchive
 Licence: BSD-2-Clause, © Tim Kientzle and the libarchive contributors; a few files are also under a 3-clause UC Regents copyright, and archive_getdate.c is public domain
 Where: https://github.com/libarchive/libarchive at fc6563f5130d8a7ee1fc27c0e55baef35119f26c, the iSH fork's `deps/libarchive` submodule
-Use: Reads the rootfs tarball for the fork's fakefs importer (`tools/fakefs.c`). Built by `scripts/build-ish.sh` with no crypto library and no XML reader, and linked into the iOS app with the fork.
+Use: Reads the rootfs tarball and the Alpine packages, and writes the one archive they are combined into (`topo_ish_combine`), for the fork's fakefs importer (`tools/fakefs.c`). Built by `scripts/build-ish.sh` with no crypto library and no XML reader, and linked into the iOS app with the fork.
 
 ## Alpine Linux minirootfs
 Licence: Each package's own: chiefly BusyBox (GPL-2.0), musl (MIT), apk-tools (GPL-2.0) and the Alpine base files
 Where: https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz, pinned by size and sha256 in `Apps/Topo/Resources/models.json`
 Use: The guest's root filesystem (4 MB). Not in the bundle: Topo downloads it into the app's Application Support on the first run, checks it against the pinned digest, and makes a fakefs of it there with the fork's importer.
+
+## Alpine Linux packages: bash, readline, libncursesw, ncurses-terminfo-base
+Licence: bash and readline GPL-3.0-or-later, © the Free Software Foundation; ncurses MIT-style (X11), © Thomas E. Dickey and the Free Software Foundation
+Where: https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/ — `bash-5.2.37-r0.apk`, `readline-8.2.13-r1.apk`, `libncursesw-6.5_p20250503-r0.apk`, `ncurses-terminfo-base-6.5_p20250503-r0.apk`, each pinned by size and sha256 in `Apps/Topo/Resources/models.json`
+Use: The guest's shell, which Claude Code's Bash tool runs in (4 MB installed). Not in the bundle: Topo downloads them beside the rootfs, checks each against its pinned digest, and lays their files into the same fakefs.
 
 ## Claude Code
 Licence: Anthropic's commercial terms (https://www.anthropic.com/legal/commercial-terms), © Anthropic PBC

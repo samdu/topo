@@ -1,7 +1,7 @@
 import XCTest
 import TopoUserland
 
-/// The kernel booted on Alpine's minirootfs, running programs as init's children.
+/// The kernel booted on Alpine's minirootfs with bash laid in, running programs as init's children.
 final class GuestTests: XCTestCase {
     func testEchoRunsInTheGuest() async throws {
         _ = try SharedGuest.booted()
@@ -26,6 +26,26 @@ final class GuestTests: XCTestCase {
         let exit = try await Guest.shared.run("/bin/uname", ["-n"])
         XCTAssertEqual(exit.status, 0, exit.errors)
         XCTAssertEqual(exit.output, "topo\n")
+    }
+
+    /// bash is in the userland — Alpine's package and the libraries it links, laid in beside the
+    /// rootfs — and runs: the version it reports is the pinned package's.
+    func testBashRunsInTheGuest() async throws {
+        _ = try SharedGuest.booted()
+        let exit = try await Guest.shared.run("/bin/bash", ["-c", "echo $BASH_VERSION"])
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        XCTAssertEqual(exit.output, "5.2.37(1)-release\n")
+        XCTAssertEqual(exit.errors, "")
+    }
+
+    /// The shell every guest program is handed is bash, and it is the one at that path: what
+    /// Claude Code's Bash tool finds, and what anything it starts inherits.
+    func testTheShellInTheEnvironmentIsBash() async throws {
+        _ = try SharedGuest.booted()
+        XCTAssertEqual(Guest.environment["SHELL"], "/bin/bash")
+        let exit = try await Guest.shared.run("/bin/sh", ["-c", #""$SHELL" -c 'echo "topo-$((6*7)) ${BASH_VERSINFO[0]}"'"#])
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        XCTAssertEqual(exit.output, "topo-42 5\n")
     }
 
     func testAMissingProgramIsRefusedAtTheStart() async throws {

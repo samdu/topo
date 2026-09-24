@@ -252,7 +252,9 @@ extension DebugRun {
     /// (`GuestResident`, the guest booted and Claude Code mounted as `TOPO_DEBUG_USERLAND` does,
     /// the proxy started, the home mounted) and send the turns to it one at a time, each once the
     /// app is in the foreground and the process is resident, printing each turn's model and
-    /// session from its `system/init`, the tools it called, its reply and its wall time from send
+    /// session from its `system/init`, the tools it called and what each one's result said (named
+    /// by the call it answers, in the order the calls were made, as `toolResultLine` writes it),
+    /// its reply and its wall time from send
     /// to result — or that it failed or was abandoned — and every lifecycle line: the start (fresh
     /// or resuming which session), each way out's outcome and the termination it confirmed.
     /// Nothing is sent twice: a turn abandoned at the teardown point is reported and the next
@@ -296,6 +298,8 @@ extension DebugRun {
                 // however it went, leaves him idle. Every change of pose is printed.
                 mascot.guestTurnBegan()
                 var pose = mascot.state.activity
+                // The calls whose results have not come back yet, oldest first.
+                var calls: [String] = []
                 for await update in updates {
                     mascot.guest(update)
                     if mascot.state.activity != pose {
@@ -306,7 +310,11 @@ extension DebugRun {
                     case .event(.started(let id, let model)):
                         say("guest turn \(number) model: \(model), session \(id), process \(pid)")
                     case .event(.toolUse(let name, let path)):
+                        calls.append(name)
                         say("guest turn \(number) tool: \(name)" + (path.map { " \($0)" } ?? ""))
+                    case .event(.toolResult(let isError, let text)):
+                        let name = calls.isEmpty ? "(no call)" : calls.removeFirst()
+                        say("guest turn \(number) " + toolResultLine(tool: name, isError: isError, text: text))
                     case .event(.malformed(let line)):
                         say("guest turn \(number) malformed line: \(line)")
                     case .event:
@@ -330,6 +338,24 @@ extension DebugRun {
             say("guest turn error: \(error)")
         }
         say("guest turn done")
+    }
+
+    /// One tool result as the guest-turn run prints it: `tool result: <tool>: ok: <text>` or
+    /// `…: error: <text>`, the text on one line (a newline written `\n`), a credential in it
+    /// redacted — an `sk-ant-` key, a `Bearer` value, the guest's token variable — and anything past
+    /// 300 characters cut, since a result can be a whole file.
+    static func toolResultLine(tool: String, isError: Bool, text: String) -> String {
+        var shown = text.trimmingCharacters(in: .newlines)
+        for (pattern, replacement) in [
+            (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
+            (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
+            (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
+        ] {
+            shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        shown = shown.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "\\n")
+        if shown.count > 300 { shown = String(shown.prefix(300)) + "…" }
+        return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
     }
 
     /// Waits until the app is in the foreground and the resident process is up.

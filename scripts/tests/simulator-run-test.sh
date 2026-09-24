@@ -110,6 +110,25 @@ case "$2" in
                         say "guest turn 1 answered in 9.10 s: ok"
                         say "guest turn 2 model: claude-haiku-4-5-20251001, session S1"
                         say "guest turn 2 answered in 1.20 s: yes"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                  say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: topo-42"
+                  say "guest turn 1 answered in 6.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash-no-call) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                          say "guest turn 1 answered in 2.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash-failed) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                         say "guest turn 1 tool: Bash"
+                         say "guest turn 1 tool result: Bash: error: No suitable shell found. topo-42"
+                         say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash-other-output) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                               say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: topo-41"
+                               say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash-other-tool) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                             say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: error: no shell"
+                             say "guest turn 1 tool: Read"; say "guest turn 1 tool result: Read: ok: topo-42"
+                             say "guest turn 1 answered in 4.00 s: topo-42"; say "guest turn done"; exec sleep 600 ;;
+      guest-bash-reply-silent) say "guest turn 1 model: claude-haiku-4-5-20251001, session S1, process 7"
+                               say "guest turn 1 tool: Bash"; say "guest turn 1 tool result: Bash: ok: topo-42"
+                               say "guest turn 1 answered in 4.00 s: done"; say "guest turn done"; exec sleep 600 ;;
       guest-error) say "guest turn error: Claude Code did not start"; say "guest turn done"; exec sleep 600 ;;
       guest-opus) say "guest turn 1 model: claude-opus-5, session S1, process 7"; say "guest turn 1 answered in 3.00 s: ok"
                   say "guest turn 2 model: claude-opus-5, session S1, process 7"; say "guest turn 2 answered in 1.00 s: ok"
@@ -195,6 +214,12 @@ case_ guest-turns-no-process-named        fail guest-no-process     5  --guest-t
 case_ guest-turn-error                     fail guest-error          5  --guest-turn "a || b"
 case_ guest-turns-not-on-haiku             fail guest-opus           5  --guest-turn "a || b"
 case_ guest-turn-missing                   fail guest-one-short      5  --guest-turn "a || b"
+case_ guest-turn-ran-bash                  pass guest-bash           5  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-no-call              fail guest-bash-no-call   5  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-failed               fail guest-bash-failed    5  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-other-output         fail guest-bash-other-output 5 --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-output-from-another  fail guest-bash-other-tool 5  --guest-turn "a" --expect-bash topo-42
+case_ guest-turn-bash-reply-without-it     fail guest-bash-reply-silent 5 --guest-turn "a" --expect-bash topo-42
 case_ guest-turns-times-out-silent         fail silent               12 --guest-turn "a || b"
 
 if [ "$failures" -gt 0 ]; then

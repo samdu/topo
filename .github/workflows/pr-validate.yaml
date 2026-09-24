@@ -273,13 +273,16 @@ jobs:
         with:
           guest: "true"
 
-      # Alpine's minirootfs and Claude Code, fetched from the manifest's entries
-      # and verified by digest, for the userland suites to import, boot and run.
-      - name: The rootfs and Claude Code for the userland suites
+      # Alpine's minirootfs, bash and its packages, and Claude Code, fetched from
+      # the manifest's entries and verified by digest, for the userland suites to
+      # import, boot and run.
+      - name: The rootfs, bash and Claude Code for the userland suites
         run: |
           set -euo pipefail
           rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$HOME/rootfs")"
           echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
+          shell="$(scripts/fetch-pinned.sh alpine-bash "$HOME/alpine-bash")"
+          echo "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" >> "$GITHUB_ENV"
           claude="$(scripts/fetch-pinned.sh claude-code "$HOME/claude-code")"
           echo "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" >> "$GITHUB_ENV"
 

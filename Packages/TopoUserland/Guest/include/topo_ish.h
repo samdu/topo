@@ -19,6 +19,16 @@
 /// the importer's reason in `error` (truncated to `error_size`).
 int topo_ish_import(const char *tarball, const char *fakefs_dir, char *error, size_t error_size);
 
+/// Writes one uncompressed tarball at `out` (which must not exist) for `topo_ish_import` to make a
+/// fakefs from: every entry of the gzipped tarball `rootfs`, then the file entries of each Alpine
+/// package in `packages` in order, each entry's header — mode, owner, link target — as the
+/// package carries it. A package's control entries (every name at its root that begins with a
+/// dot: `.PKGINFO`, `.SIGN.*`, the install scripts and `.trigger`) are left out, and no script
+/// runs. 0 on success; otherwise non-zero with libarchive's reason and the archive it was reading
+/// in `error`, and `out` left for the caller to remove.
+int topo_ish_combine(const char *rootfs, const char *const *packages, size_t package_count, const char *out,
+                     char *error, size_t error_size);
+
 /// Boots the kernel on the fakefs at `fakefs_dir`: mounts it as root, makes init (pid 1, which
 /// never runs a program, so it never exits and never halts the process), the device nodes, /proc
 /// and /dev/pts. 0 on success, a negative guest errno on failure, and `TOPO_ISH_ALREADY_BOOTED`

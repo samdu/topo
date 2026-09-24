@@ -24,6 +24,23 @@ final class DebugRunTests: XCTestCase {
         XCTAssertEqual(try guest.load(), tokens)
     }
 
+    /// A tool result as the guest-turn run prints it for `simulator-run.sh --guest-turn`: the tool,
+    /// ok or error, the text on one line, a credential redacted and a long result cut.
+    func testAToolResultLineIsOneLineWithNoCredentialInIt() {
+        XCTAssertEqual(DebugRun.toolResultLine(tool: "Bash", isError: false, text: "topo-42\n"),
+                       "tool result: Bash: ok: topo-42")
+        XCTAssertEqual(DebugRun.toolResultLine(tool: "Bash", isError: true, text: "No suitable shell found.\nTry again"),
+                       #"tool result: Bash: error: No suitable shell found.\nTry again"#)
+        let secret = "sk-ant-oat01-" + String(repeating: "x", count: 40)
+        let leaked = DebugRun.toolResultLine(tool: "Bash", isError: false,
+                                             text: "CLAUDE_CODE_OAUTH_TOKEN=\(secret)\nAuthorization: Bearer abc.def\nkey \(secret)")
+        XCTAssertFalse(leaked.contains(secret), leaked)
+        XCTAssertFalse(leaked.contains("abc.def"), leaked)
+        XCTAssertFalse(leaked.contains("oat01"), leaked)
+        let long = DebugRun.toolResultLine(tool: "Read", isError: false, text: String(repeating: "a", count: 1000))
+        XCTAssertEqual(long, "tool result: Read: ok: " + String(repeating: "a", count: 300) + "…")
+    }
+
     /// The device run's evidence of the guest's authorization: its scope and the days its token
     /// has left, never a value.
     func testTheMintLineNamesTheScopeAndExpiryAndNeverAValue() {

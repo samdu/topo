@@ -40,6 +40,17 @@ final class ModelDownloadsTests: XCTestCase {
                        "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz")
         XCTAssertEqual(rootfs.files[0].sha256.count, 64)
         XCTAssertGreaterThan(rootfs.files[0].size, 0)
+        // bash for the guest: Alpine's own packages for the same branch and architecture, bash
+        // first, each an `.apk` from the branch's repository, checked by digest like the rootfs.
+        let shell = try XCTUnwrap(manifest.model(ModelManifest.shell))
+        XCTAssertNil(shell.repo)
+        XCTAssertEqual(shell.url, "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/")
+        XCTAssertTrue(shell.files.first?.path.hasPrefix("bash-") ?? false, "\(shell.files.map(\.path))")
+        for file in shell.files {
+            XCTAssertTrue(file.path.hasSuffix(".apk"), file.path)
+            XCTAssertEqual(file.sha256.count, 64, file.path)
+            XCTAssertGreaterThan(file.size, 0, file.path)
+        }
         // Claude Code is Anthropic's own release distribution, the one the official installer
         // reads: the musl arm64 build at the pinned version, one binary, checked by digest.
         let claude = try XCTUnwrap(manifest.model(ModelManifest.claudeCode))

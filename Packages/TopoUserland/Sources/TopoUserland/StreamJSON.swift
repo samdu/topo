@@ -2,7 +2,8 @@ import Foundation
 
 /// One event of Claude Code's `--output-format stream-json --verbose` output, as far as the app
 /// reads it: what a turn said, that it thought, which tools it called and the file a writing tool
-/// names, the model and how much context it holds, and how it ended. Everything else in a line is
+/// names, what each tool's result said and whether it was an error, the model and how much
+/// context it holds, and how it ended. Everything else in a line is
 /// left unread.
 public enum StreamEvent: Sendable, Equatable {
     /// `system`/`init`: the session and the model the process answers with. Claude Code writes it
@@ -15,6 +16,11 @@ public enum StreamEvent: Sendable, Equatable {
     /// what says whether the turn is writing code, prose or the memory; nothing else of a tool's
     /// input is read, and every other tool's path is nil.
     case toolUse(name: String, path: String? = nil)
+    /// A tool's result coming back, in a `user` message: whether Claude Code marked it an error
+    /// (`is_error`), and its text — the result's string, or its text blocks joined by newlines.
+    /// It names the call it answers only by `tool_use_id`, which is not read: calls made one at a
+    /// time come back in the order they were made (`Tests/StreamJSON/tool-turn.jsonl`).
+    case toolResult(isError: Bool, text: String)
     /// A thinking block of an assistant message: that the model thought, and nothing of what.
     case thinking
     /// An assistant message's usage.
@@ -22,7 +28,7 @@ public enum StreamEvent: Sendable, Equatable {
     /// The turn's end, answered or failed.
     case result(TurnResult)
     /// A well-formed event of a kind the app does not read — a hook's lines, a rate-limit notice,
-    /// a tool's result coming back — named by its `type` and `subtype`.
+    /// a `user` message carrying no tool result — named by its `type` and `subtype`.
     case other(String)
     /// A line that is not an event: not JSON, not an object, or an object with no `type`. It is
     /// reported and never read as anything.
@@ -86,6 +92,9 @@ public enum StreamJSON {
             return [.started(session: session, model: model)]
         case ("assistant", _):
             return assistant(object) ?? [.malformed(clip(trimmed))]
+        case ("user", _):
+            let results = toolResults(object)
+            return results.isEmpty ? [.other(subtype.map { "\(type)/\($0)" } ?? type)] : results
         case ("result", _):
             return [.result(result(object, subtype: subtype))]
         default:
@@ -120,6 +129,28 @@ public enum StreamJSON {
                                        output: int(usage["output_tokens"]))))
         }
         return events
+    }
+
+    /// The `tool_result` blocks of a `user` message, in order.
+    private static func toolResults(_ object: [String: Any]) -> [StreamEvent] {
+        guard let message = object["message"] as? [String: Any],
+              let content = message["content"] as? [Any] else { return [] }
+        return content.compactMap { item -> StreamEvent? in
+            guard let block = item as? [String: Any], block["type"] as? String == "tool_result" else { return nil }
+            let text: String
+            switch block["content"] {
+            case let string as String:
+                text = string
+            case let parts as [Any]:
+                text = parts.compactMap { part in
+                    guard let part = part as? [String: Any], part["type"] as? String == "text" else { return nil }
+                    return part["text"] as? String
+                }.joined(separator: "\n")
+            default:
+                text = ""
+            }
+            return .toolResult(isError: (block["is_error"] as? Bool) ?? false, text: text)
+        }
     }
 
     /// The tools that write a file, and the key of their input that names it. The one thing read

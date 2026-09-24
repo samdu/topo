@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Writes Apps/Topo/Resources/models.json: the pinned list of every file the phone downloads for
 # its on-device models and its guest, with sizes and sha256 digests: the models from the Hugging
-# Face tree API at the revision pinned below, the rootfs from the URL pinned below, and Claude Code
-# from Anthropic's release distribution at the version pinned below. The app downloads exactly this
+# Face tree API at the revision pinned below, the rootfs from the URL pinned below, bash and the
+# packages it depends on from Alpine's package repository at the versions pinned below, and Claude
+# Code from Anthropic's release distribution at the version pinned below. The app downloads exactly this
 # list through its background session and admits a file only when its digest matches, so a bump of
 # a model is a bump of a revision here, a bump of Claude Code a bump of its version, and either a
 # re-run of this script.
@@ -55,6 +56,19 @@ pocket-tts-coreml|FluidInference/pocket-tts-coreml|91748676fe3c8b2eb3007b3125253
 # (Packages/TopoUserland).
 direct="
 alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|alpine-minirootfs-3.22.6-aarch64.tar.gz
+"
+
+# id | repository URL | packages: Alpine's own packages for the guest, each `<name>-<version>.apk`
+# from the branch's repository, laid into the fakefs beside the rootfs on the phone
+# (Packages/TopoUserland's RootfsInstaller). bash, which Claude Code's Bash tool needs (the
+# minirootfs has only BusyBox's sh), and exactly what `apk add bash` pulls on top of the pinned
+# minirootfs: readline, libncursesw and ncurses-terminfo-base. Each file is checked against the
+# repository's APKINDEX — the version it lists for the name, and the size — and the set is checked
+# closed: every dependency of every package here is provided by a package here or by one the
+# minirootfs installed. The repository keeps only the newest build of each package, so a package
+# superseded upstream is a bump here and a re-run, or its URL answers 404.
+packages="
+alpine-bash|https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/|bash-5.2.37-r0 readline-8.2.13-r1 libncursesw-6.5_p20250503-r0 ncurses-terminfo-base-6.5_p20250503-r0
 "
 
 # id | version | platform: Claude Code, from the release distribution the official installer reads
@@ -132,6 +146,51 @@ while IFS='|' read -r id base names; do
   done
   entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg u "$base" '{id:$id,url:$u,files:.}')")
 done <<< "$direct"
+
+# One line per package record: name, version, size, dependencies, provides (space-separated, each
+# without its version constraint). Reads an APKINDEX or an installed database on stdin.
+apk_records() {
+  awk 'function flush() { if (name != "") print name "|" version "|" size "|" deps "|" provides; name = version = size = deps = provides = "" }
+       /^$/ { flush(); next }
+       /^P:/ { name = substr($0, 3) } /^V:/ { version = substr($0, 3) } /^S:/ { size = substr($0, 3) }
+       /^D:/ { deps = substr($0, 3) } /^p:/ { provides = substr($0, 3) }
+       END { flush() }' | sed -E 's/([^ |])[<>=~][^ |]*/\1/g'
+}
+
+rootfs_file="$cache/direct/alpine-minirootfs/$(echo "$direct" | awk -F'|' 'NF { print $3 }')"
+while IFS='|' read -r id base names; do
+  [ -z "$id" ] && continue
+  echo "== $base" >&2
+  curl -sSfL "${base}APKINDEX.tar.gz" | tar xzOf - APKINDEX | apk_records > "$tmp/index"
+  tar xzOf "$rootfs_file" lib/apk/db/installed | apk_records > "$tmp/installed"
+  provided=" $(awk -F'|' '{ print $1, $5 }' "$tmp/installed" | tr '\n' ' ') "
+  deps=""
+  entry_files=()
+  for pkg in $names; do
+    name="${pkg%-*-*}"
+    version="${pkg#"$name"-}"
+    record="$(awk -F'|' -v n="$name" '$1 == n' "$tmp/index")"
+    [ -n "$record" ] || { echo "$name is not in ${base}APKINDEX.tar.gz" >&2; exit 1; }
+    IFS='|' read -r _ listed size requires provides <<< "$record"
+    [ "$listed" = "$version" ] || { echo "$name: pinned $version, but the repository has $listed" >&2; exit 1; }
+    local_file="$cache/packages/$id/$pkg.apk"
+    if [ ! -f "$local_file" ] || [ "$(stat -f %z "$local_file")" != "$size" ]; then
+      mkdir -p "$(dirname "$local_file")"
+      echo "   fetching $pkg.apk ($size bytes)" >&2
+      curl -sSfL "$base$pkg.apk" -o "$local_file"
+    fi
+    [ "$(stat -f %z "$local_file")" = "$size" ] || { echo "$pkg.apk: got $(stat -f %z "$local_file") bytes, the index says $size" >&2; exit 1; }
+    digest="$(shasum -a 256 "$local_file" | cut -d' ' -f1)"
+    entry_files+=("$(jq -cn --arg p "$pkg.apk" --argjson s "$size" --arg d "$digest" '{path:$p,size:$s,sha256:$d}')")
+    provided+="$name $provides "
+    deps+="$requires "
+  done
+  for dep in $deps; do
+    [[ "$dep" == !* ]] && continue
+    [[ "$provided" == *" $dep "* ]] || { echo "$id: nothing pinned or in the minirootfs provides $dep" >&2; exit 1; }
+  done
+  entries+=("$(printf '%s\n' "${entry_files[@]}" | jq -cs --arg id "$id" --arg u "$base" '{id:$id,url:$u,files:.}')")
+done <<< "$packages"
 
 while IFS='|' read -r id version platform; do
   [ -z "$id" ] && continue
