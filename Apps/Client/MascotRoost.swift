@@ -246,46 +246,55 @@ private extension Comparable {
 /// of a scroll — or a single frame of it while something is over him, so a covered Topo gets out
 /// of the way as soon as the scroll or the landing turn stops rather than a settle later. It
 /// is never made mid-move, and a roost within `clearance` of where he stands is not a move. A move
-/// is one eased glide at `speed` points a second on average, which under Reduce Motion is a
-/// placement with no glide. He is drawn above everything but the keyboard wherever he is, so
+/// is one eased glide at `speed` points a second on average — `hurry` times that on every frame
+/// anything is over him, and back to the stroll the frame he is clear — which under Reduce Motion
+/// is a placement with no glide. He is drawn above everything but the keyboard wherever he is, so
 /// nothing is judged about whether he may be seen: he is drawn whenever he stands anywhere.
 struct MascotRoam: Equatable, Sendable {
     struct Settings: Equatable, Sendable {
         var size: CGSize
         var clearance: CGFloat
         var speed: CGFloat
+        var hurry: CGFloat
         var settle: Double
         var reduceMotion = false
 
-        init(size: CGSize, clearance: CGFloat, speed: CGFloat, settle: Double, reduceMotion: Bool = false) {
+        init(size: CGSize, clearance: CGFloat, speed: CGFloat, hurry: CGFloat = 10, settle: Double,
+             reduceMotion: Bool = false) {
             self.size = size
             self.clearance = clearance
             self.speed = speed
+            self.hurry = hurry
             self.settle = settle
             self.reduceMotion = reduceMotion
         }
 
         init(_ mascot: Look.Mascot, reduceMotion: Bool) {
             self.init(size: MascotSprite.size(scale: mascot.scale), clearance: mascot.clearance,
-                      speed: mascot.roamSpeed, settle: mascot.roamSettle, reduceMotion: reduceMotion)
+                      speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
+                      reduceMotion: reduceMotion)
         }
     }
 
-    /// One glide, from one picture origin to another, eased at both ends.
+    /// One glide, from one picture origin to another, eased at both ends. `duration` is the
+    /// glide at the stroll, and `elapsed` how far along it he is, in the stroll's seconds: a frame
+    /// in a hurry moves it on by `hurry` frames' worth, so the ease is the same curve run faster.
     struct Move: Equatable, Sendable {
         var from: CGPoint
         var to: CGPoint
-        var start: Double
         var duration: Double
+        var elapsed = 0.0
 
-        func at(_ time: Double) -> CGPoint {
+        /// Where he is `elapsed` stroll-seconds along it.
+        func at(_ elapsed: Double) -> CGPoint {
             guard duration > 0 else { return to }
-            let u = min(max((time - start) / duration, 0), 1)
+            let u = min(max(elapsed / duration, 0), 1)
             let eased = CGFloat((1 - cos(.pi * u)) / 2)
             return CGPoint(x: from.x + (to.x - from.x) * eased, y: from.y + (to.y - from.y) * eased)
         }
 
-        func done(at time: Double) -> Bool { time - start >= duration }
+        var point: CGPoint { at(elapsed) }
+        var done: Bool { elapsed >= duration }
     }
 
     var settings: Settings
@@ -304,6 +313,8 @@ struct MascotRoam: Equatable, Sendable {
     /// When the geometry last changed, and when the roam was last moved on.
     private var changed = -Double.infinity
     private var now = 0.0
+    /// When the clock last moved the glide on, which a geometry arriving between frames does not.
+    private var advanced = 0.0
     /// The time a frame lasts, which is the quiet a covered Topo waits for.
     var frame: Double
 
@@ -351,12 +362,18 @@ struct MascotRoam: Equatable, Sendable {
     /// The clock at `time`: the glide moved on, whether he is covered judged where he now is, and
     /// the roost decided if the geometry has been quiet long enough.
     mutating func advance(to time: Double) {
+        let dt = max(time - advanced, 0)
+        advanced = max(advanced, time)
         now = max(now, time)
-        if let move {
-            position = move.at(now)
-            if move.done(at: now) {
+        if var move {
+            // The pace this frame is judged where he was over it: in a hurry while covered.
+            move.elapsed += dt * Double(covered ? max(settings.hurry, 1) : 1)
+            position = move.point
+            if move.done {
                 position = move.to
                 self.move = nil
+            } else {
+                self.move = move
             }
         }
         covered = picture.flatMap { picture in field.map { $0.covers(picture) } } ?? false
@@ -393,7 +410,7 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         let speed = max(settings.speed, 1)
-        move = Move(from: from, to: to, start: now, duration: Double(distance / speed))
+        move = Move(from: from, to: to, duration: Double(distance / speed))
         moves += 1
     }
 }

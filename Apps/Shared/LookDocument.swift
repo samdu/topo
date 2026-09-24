@@ -198,6 +198,7 @@ enum LookDocument {
         r.pixelScale("scale", &value.scale)
         r.clearance("clearance", &value.clearance)
         r.roamSpeed("roamSpeed", &value.roamSpeed)
+        r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
     }
@@ -341,6 +342,15 @@ enum LookDocument {
         /// ends in under a minute rather than never, and at most 400, past which it is a jump.
         func roamSpeed(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 10...400, "a speed in points a second between 10 and 400") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
+        /// How many times his stroll Topo goes while something is over him: 1, no hurry at all, to
+        /// 20, past which a move out from under a turn is a jump.
+        func hurry(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 1...20, "a multiple of the roam speed between 1 and 20") {
                 applied += 1
                 value = CGFloat(number)
             }

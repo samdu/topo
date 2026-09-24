@@ -109,7 +109,7 @@ final class MascotRoamTests: XCTestCase {
     /// The glide is at the look's speed on average and eased at both ends: it takes the distance
     /// over the speed, and it starts and ends slower than it goes in the middle.
     func testTheGlideIsAtTheLooksSpeedEasedAtBothEnds() {
-        let move = MascotRoam.Move(from: .zero, to: CGPoint(x: 400, y: 0), start: 0, duration: 10)
+        let move = MascotRoam.Move(from: .zero, to: CGPoint(x: 400, y: 0), duration: 10)
         let first = move.at(1).x - move.at(0).x
         let middle = move.at(5.5).x - move.at(4.5).x
         let last = move.at(10).x - move.at(9).x
@@ -128,6 +128,96 @@ final class MascotRoamTests: XCTestCase {
         let glide = try! XCTUnwrap(roam.move)
         let distance = hypot(glide.to.x - glide.from.x, glide.to.y - glide.from.y)
         XCTAssertEqual(glide.duration, Double(distance / 40), accuracy: 1e-9)
+    }
+
+    /// While anything is over him he goes at `hurry` times the stroll, and at the stroll the frame
+    /// he is clear: a glide across a turn is fast over it and slow either side of it, frame by
+    /// frame, and still ends where it was going.
+    func testAGlideAcrossATurnIsFastOverItAndSlowEitherSide() throws {
+        // He stands low; a turn lands over him and another lies between him and the only gap, at
+        // the top, so his way up starts covered, comes clear, crosses the second and comes clear.
+        // A clearance of 40 makes the room between the turns too little for a roost, though his
+        // picture fits in it.
+        var settings = Self.settings
+        settings.clearance = 40
+        let (placed, start) = settled(Self.field([]), settings)
+        var roam = placed
+        let rows = [CGRect(x: 0, y: 170, width: 402, height: 90), CGRect(x: 0, y: 380, width: 402, height: 160)]
+        roam.observe(Self.field(rows), at: start)
+        var time = start
+        var fast = 0
+        var slow = 0
+        var pace: [Bool] = []
+        while time < start + 60 {
+            let wasCovered = roam.covered
+            let before = roam.move
+            time += Self.frame
+            roam.advance(to: time)
+            if let before, let after = roam.move {
+                let stepped = after.elapsed - before.elapsed
+                XCTAssertEqual(stepped, Self.frame * (wasCovered ? 10 : 1), accuracy: 1e-9,
+                               "covered \(wasCovered) at \(time)")
+                if wasCovered { fast += 1 } else { slow += 1 }
+                if pace.last != wasCovered { pace.append(wasCovered) }
+            }
+            if roam.moves > 0, !roam.walking, !roam.needsTime { break }
+        }
+        XCTAssertEqual(roam.moves, 1)
+        XCTAssertGreaterThan(fast, 0, "never in a hurry over a turn")
+        XCTAssertGreaterThan(slow, 0, "never back to the stroll")
+        XCTAssertEqual(pace, [true, false, true, false], "fast over each turn and slow either side")
+        let to = try XCTUnwrap(roam.picture)
+        XCTAssertLessThanOrEqual(to.maxY, 170 - 40 + 0.001, "he did not arrive in the gap at the top")
+        XCTAssertFalse(roam.covered)
+    }
+
+    /// The keyboard rising over him sends him out at the hurry: he is off after one quiet frame,
+    /// goes at `hurry` times the stroll while any of him is under it, and is out in a tenth of the
+    /// time the stroll would take for as long as it covers him.
+    func testAKeyboardRisingOverHimSendsHimOutInAHurry() throws {
+        let (placed, start) = settled(Self.field([]))
+        var roam = placed
+        let picture = try XCTUnwrap(roam.picture)
+        var up = Self.field([])
+        up.keyboard = CGRect(x: 0, y: picture.minY - 60, width: 402, height: 1000)
+        roam.observe(up, at: start)
+        XCTAssertTrue(roam.covered, "the keyboard over him did not cover him")
+        // One quiet frame, with a frame's slack for the clock's rounding.
+        var time = start
+        for _ in 0..<2 where roam.move == nil { time += Self.frame; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move, "a covered Topo did not go after one quiet frame")
+        var covered = 0.0
+        while roam.covered, roam.move != nil, time < start + 60 {
+            let before = roam.move!.elapsed
+            time += Self.frame
+            roam.advance(to: time)
+            covered += Self.frame
+            if let after = roam.move {
+                XCTAssertEqual(after.elapsed - before, Self.frame * 10, accuracy: 1e-9)
+            }
+        }
+        XCTAssertFalse(roam.covered, "still under the keyboard")
+        XCTAssertLessThan(covered, glide.duration, "no faster than the stroll under the keyboard")
+        while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
+        let out = try XCTUnwrap(roam.picture)
+        XCTAssertLessThanOrEqual(out.maxY, up.keyboard!.minY)
+    }
+
+    /// The hurry is the look's: at 1 there is none, and he strolls out from under a turn.
+    func testAHurryOfOneIsTheStroll() throws {
+        var settings = Self.settings
+        settings.hurry = 1
+        let (placed, start) = settled(Self.field([]), settings)
+        var roam = placed
+        let picture = try XCTUnwrap(roam.picture)
+        roam.observe(Self.field([CGRect(x: 0, y: picture.minY - 4, width: 402, height: 628 - picture.minY + 4)]), at: start)
+        var time = start
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertTrue(roam.covered)
+        let before = try XCTUnwrap(roam.move).elapsed
+        time += Self.frame
+        roam.advance(to: time)
+        XCTAssertEqual(try XCTUnwrap(roam.move).elapsed - before, Self.frame, accuracy: 1e-9)
     }
 
     /// The transcript reports its geometry on every frame of a scroll. While it streams with no
@@ -220,7 +310,10 @@ final class MascotRoamTests: XCTestCase {
             time += Self.frame
             roam.observe(Self.field([CGRect(x: 0, y: 200 + CGFloat(step), width: 402, height: 340)]), at: time)
             roam.advance(to: time)
-            if roam.move != nil { XCTAssertEqual(roam.move, glide, "the glide was restarted") }
+            if let move = roam.move {
+                XCTAssertEqual([move.from, move.to], [glide.from, glide.to], "the glide was restarted")
+                XCTAssertGreaterThan(move.elapsed, glide.elapsed, "the glide was restarted")
+            }
         }
         XCTAssertEqual(roam.moves, 1)
     }

@@ -409,6 +409,9 @@ struct Look: Equatable, Sendable {
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
         var roamSpeed: CGFloat = 40
+        /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
+        /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
+        var hurry: CGFloat = 10
         /// How long the chat's geometry has to hold still before he picks a new roost, in
         /// seconds: the transcript reports its geometry on every frame of a scroll, and he goes
         /// once it settles, not on every frame of it.
