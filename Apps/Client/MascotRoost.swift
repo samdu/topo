@@ -328,8 +328,6 @@ struct MascotRoam: Equatable, Sendable {
     private var advanced = 0.0
     /// The time a frame lasts, which is the quiet a covered Topo waits for.
     var frame: Double
-    /// The next decision is owed to a look change and moves him however near the answer is.
-    private var forced = false
 
     init(_ settings: Settings, frame: Double = 1.0 / 30) {
         self.settings = settings
@@ -358,11 +356,11 @@ struct MascotRoam: Equatable, Sendable {
         covered = picture.map(field.covers) ?? false
     }
 
-    /// The settings, which a look or Reduce Motion can change. A new size or clearance is a new
-    /// answer to where he may stand, so it is decided again with no threshold, since where he
-    /// stands may be exactly what the new value refuses: at once with no glide when he is standing
-    /// still, and on arrival when he is gliding. Reduce Motion coming on ends a glide at its
-    /// destination at once.
+    /// The settings, which a look or Reduce Motion can change. Reduce Motion coming on ends a glide
+    /// at its destination at once. A new size or clearance is a new answer to where he may stand,
+    /// so it is decided at once, with no glide, whether he is standing or gliding: a glide under
+    /// the old values goes to a roost the new ones may refuse — a larger picture across the well,
+    /// a clearance a turn is inside — and he is never drawn at a size no roost was decided for.
     mutating func use(_ settings: Settings) {
         guard settings != self.settings else { return }
         let reroost = settings.size != self.settings.size || settings.clearance != self.settings.clearance
@@ -371,11 +369,9 @@ struct MascotRoam: Equatable, Sendable {
             position = move.to
             self.move = nil
         }
-        if reroost {
-            changed = now
-            unsettled = true
-            forced = true
-            if move == nil, position != nil { decide(glide: false) }
+        if reroost, position != nil {
+            move = nil
+            decide(glide: false)
         }
         covered = picture.flatMap { picture in field.map { $0.covers(picture) } } ?? false
     }
@@ -407,8 +403,6 @@ struct MascotRoam: Equatable, Sendable {
 
     private mutating func decide(glide: Bool) {
         unsettled = false
-        let forced = self.forced
-        self.forced = false
         guard let field else { return }
         let next = MascotRoost.of(field, size: settings.size, clearance: settings.clearance, from: position)
         guard let to = next.frame?.origin else {
@@ -424,7 +418,7 @@ struct MascotRoam: Equatable, Sendable {
         }
         // Within his own room of where he stands is where he stands — where that is a roost as it
         // stands; one that is not moves however short the move.
-        if !forced, hypot(to.x - from.x, to.y - from.y) <= settings.clearance,
+        if hypot(to.x - from.x, to.y - from.y) <= settings.clearance,
            MascotRoost.holds(field, frame: CGRect(origin: from, size: settings.size), clearance: settings.clearance) {
             return
         }

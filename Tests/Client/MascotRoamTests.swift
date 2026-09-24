@@ -358,8 +358,10 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertFalse(roam.needsTime)
     }
 
-    /// A clearance change arriving during a glide is decided on arrival, with no threshold.
-    func testAClearanceChangeMidGlideIsDecidedOnArrival() throws {
+    /// A clearance change arriving during a glide — near its end, well inside a settle of
+    /// arrival — is decided on the frame it arrives: the glide under the old clearance ends there
+    /// and he is placed where the new one holds, with nothing left for the clock to decide.
+    func testAClearanceChangeMidGlideIsDecidedOnTheFrameItArrives() throws {
         let (placed, start) = settled(Self.field([]))
         var roam = placed
         let picture = try XCTUnwrap(roam.picture)
@@ -367,14 +369,54 @@ final class MascotRoamTests: XCTestCase {
         roam.observe(Self.field([turn]), at: start)
         var time = start
         while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        // Run the glide to within a tenth of a settle of its end.
+        while let move = roam.move, move.duration - move.elapsed > 0.06 { time += Self.frame; roam.advance(to: time) }
         XCTAssertNotNil(roam.move)
         var wide = Self.settings
         wide.clearance = 64
         roam.use(wide)
-        XCTAssertNotNil(roam.move, "a look change cut a glide short")
-        while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
-        let arrived = try XCTUnwrap(roam.picture)
-        XCTAssertLessThanOrEqual(arrived.maxY, turn.minY - 64 + 0.001, "the new clearance was not kept")
+        XCTAssertNil(roam.move, "a glide under the old clearance went on")
+        let placedNow = try XCTUnwrap(roam.picture)
+        XCTAssertLessThanOrEqual(placedNow.maxY, turn.minY - 64 + 0.001, "the new clearance was not kept")
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: placedNow, clearance: 64))
+        XCTAssertFalse(roam.needsTime, "the decision was left for the clock")
+    }
+
+    /// A look changing his scale during a glide from the flank is decided on that frame: at the
+    /// scale's maximum no roost holds him, so nothing is drawn, and at no frame is his picture
+    /// over the well or the controls beyond it.
+    func testAScaleChangeMidGlideFromTheFlankNeverDrawsHimOverTheWell() throws {
+        let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
+        let (placed, start) = settled(full)
+        var roam = placed
+        XCTAssertEqual(roam.roost.name, "flank")
+        roam.observe(Self.field([CGRect(x: 200, y: 0, width: 202, height: 628)]), at: start)
+        var time = start
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        for _ in 0..<5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertNotNil(roam.move, "no glide from the flank")
+        func assertClearOfTheControls(_ label: String) {
+            guard let picture = roam.picture, let field = roam.field else { return }
+            XCTAssertFalse(MascotRoost.overlap(picture, field.well!), "\(label): \(picture) over the well")
+            XCTAssertFalse(MascotRoost.overlap(picture, field.controls!), "\(label): \(picture) over the controls")
+        }
+        var largest = Self.settings
+        largest.size = MascotSprite.size(scale: 4)
+        roam.use(largest)
+        XCTAssertNil(roam.move, "the glide under the old size went on")
+        XCTAssertNil(roam.picture, "at a scale of 4 no roost holds him, and he was drawn")
+        XCTAssertEqual(roam.roost, .none)
+        for _ in 0..<120 {
+            time += Self.frame
+            roam.advance(to: time)
+            assertClearOfTheControls("t \(time)")
+        }
+        // Back to a scale that fits, he is placed where it holds.
+        var middle = Self.settings
+        middle.size = MascotSprite.size(scale: 1)
+        roam.use(middle)
+        roam.advance(to: time + 1)
+        assertClearOfTheControls("scale 1")
     }
 
     /// Reduce Motion coming on during a glide ends it at its destination at once.
