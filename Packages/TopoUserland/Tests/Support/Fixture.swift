@@ -21,6 +21,27 @@ enum Fixture {
         return RootfsPin(size: file.size, sha256: file.sha256)
     }
 
+    static let shellVariable = "TOPO_USERLAND_SHELL"
+
+    /// bash and the packages it depends on, the pinned `.apk` files, in a directory handed to the
+    /// test runner as `TEST_RUNNER_TOPO_USERLAND_SHELL` (`scripts/fetch-pinned.sh alpine-bash`
+    /// fetches and verifies them into it), each with the manifest's pin, in the manifest's order.
+    static func shell() throws -> [RootfsLayer] {
+        guard let path = ProcessInfo.processInfo.environment[shellVariable], !path.isEmpty else {
+            throw XCTSkip("missing coverage: no shell packages; set TEST_RUNNER_\(shellVariable) (scripts/fetch-pinned.sh alpine-bash)")
+        }
+        let directory = URL(fileURLWithPath: path, isDirectory: true)
+        return try entry("alpine-bash").files.map {
+            RootfsLayer(file: directory.appendingPathComponent($0.path), pin: RootfsPin(size: $0.size, sha256: $0.sha256))
+        }
+    }
+
+    /// The rootfs and the packages, as the app installs them.
+    static func layers() throws -> (rootfs: RootfsLayer, packages: [RootfsLayer]) {
+        let rootfs = try rootfs()
+        return (RootfsLayer(file: rootfs.url, pin: rootfs.pin), try shell())
+    }
+
     static let claudeVariable = "TOPO_USERLAND_CLAUDE"
 
     /// Claude Code, the pinned binary, handed to the test runner as
@@ -41,7 +62,7 @@ enum Fixture {
                              size: file.size, sha256: file.sha256)
     }
 
-    private struct File: Decodable { let size: Int64; let sha256: String }
+    private struct File: Decodable { let path: String; let size: Int64; let sha256: String }
     private struct Model: Decodable { let id: String; let version: String?; let files: [File] }
     private struct Manifest: Decodable { let models: [Model] }
 
@@ -55,15 +76,16 @@ enum Fixture {
     }
 }
 
-/// The one kernel this test process boots, on a fakefs imported once from the fixture. The kernel
-/// is process-global, so every test that needs it shares this boot.
+/// The one kernel this test process boots, on a fakefs imported once from the fixture's rootfs and
+/// packages, as the app imports it. The kernel is process-global, so every test that needs it
+/// shares this boot.
 enum SharedGuest {
     private static let result: Result<URL, Error> = Result {
-        let rootfs = try Fixture.rootfs()
+        let layers = try Fixture.layers()
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("guest-\(UUID().uuidString)", isDirectory: true)
         let installer = RootfsInstaller(directory: directory)
-        try installer.install(from: rootfs.url, pin: rootfs.pin)
+        try installer.install(rootfs: layers.rootfs, packages: layers.packages)
         try Guest.shared.boot(fakefs: installer.fakefs)
         return installer.fakefs
     }

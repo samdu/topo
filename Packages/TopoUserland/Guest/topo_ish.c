@@ -19,6 +19,8 @@
 #include <unistd.h>
 #include <mach/mach.h>
 #include <TargetConditionals.h>
+#include <archive.h>
+#include <archive_entry.h>
 
 #include "kernel/calls.h"
 #include "kernel/init.h"
@@ -64,6 +66,108 @@ int topo_ish_import(const char *tarball, const char *fakefs_dir, char *error, si
                  err.line, err.code);
     free(err.message);
     return err.code != 0 ? err.code : -1;
+}
+
+// Whether `path` is a control entry of an Alpine package: a name at the archive's root that
+// begins with a dot (`.PKGINFO`, `.SIGN.RSA.*`, `.post-install`, `.trigger`, …), which apk reads
+// and never installs.
+static bool is_package_control(const char *path) {
+    while (path[0] == '.' && path[1] == '/')
+        path += 2;
+    while (path[0] == '/')
+        path++;
+    if (path[0] != '.' || path[1] == '\0')
+        return false;
+    const char *slash = strchr(path, '/');
+    return slash == NULL || slash[1] == '\0';
+}
+
+// Copies every entry of the archive at `from` into `to`, less a package's control entries when
+// `package` is set. 0, or -1 with the reason in `error`.
+static int combine_one(struct archive *to, const char *from, bool package, char *error, size_t error_size) {
+    struct archive *in = archive_read_new();
+    if (in == NULL) {
+        snprintf(error, error_size, "%s: out of memory", from);
+        return -1;
+    }
+    archive_read_support_filter_gzip(in);
+    archive_read_support_format_tar(in);
+    int result = -1;
+    if (archive_read_open_filename(in, from, 65536) != ARCHIVE_OK) {
+        snprintf(error, error_size, "%s: %s", from, archive_error_string(in));
+        goto out;
+    }
+    struct archive_entry *entry;
+    int r;
+    while ((r = archive_read_next_header(in, &entry)) == ARCHIVE_OK) {
+        if (package && is_package_control(archive_entry_pathname(entry))) {
+            if (archive_read_data_skip(in) != ARCHIVE_OK) {
+                snprintf(error, error_size, "%s: %s", from, archive_error_string(in));
+                goto out;
+            }
+            continue;
+        }
+        if (archive_write_header(to, entry) != ARCHIVE_OK) {
+            snprintf(error, error_size, "%s: %s: %s", from, archive_entry_pathname(entry), archive_error_string(to));
+            goto out;
+        }
+        const void *block;
+        size_t size;
+        la_int64_t offset;
+        while ((r = archive_read_data_block(in, &block, &size, &offset)) == ARCHIVE_OK) {
+            if (archive_write_data(to, block, size) < 0) {
+                snprintf(error, error_size, "%s: %s: %s", from, archive_entry_pathname(entry), archive_error_string(to));
+                goto out;
+            }
+        }
+        if (r != ARCHIVE_EOF) {
+            snprintf(error, error_size, "%s: %s: %s", from, archive_entry_pathname(entry), archive_error_string(in));
+            goto out;
+        }
+    }
+    if (r != ARCHIVE_EOF) {
+        snprintf(error, error_size, "%s: %s", from, archive_error_string(in));
+        goto out;
+    }
+    result = 0;
+out:
+    archive_read_free(in);
+    return result;
+}
+
+int topo_ish_combine(const char *rootfs, const char *const *packages, size_t package_count, const char *out,
+                     char *error, size_t error_size) {
+    char scratch[512];
+    if (error == NULL || error_size == 0) {
+        error = scratch;
+        error_size = sizeof(scratch);
+    }
+    struct archive *to = archive_write_new();
+    if (to == NULL) {
+        snprintf(error, error_size, "out of memory");
+        return -1;
+    }
+    int result = -1;
+    // pax, so a long name or a large owner id survives; no filter, since the importer reads it once.
+    if (archive_write_set_format_pax_restricted(to) != ARCHIVE_OK
+        || archive_write_open_filename(to, out) != ARCHIVE_OK) {
+        snprintf(error, error_size, "%s: %s", out, archive_error_string(to));
+        goto done;
+    }
+    if (combine_one(to, rootfs, false, error, error_size) != 0)
+        goto done;
+    for (size_t i = 0; i < package_count; i++) {
+        if (combine_one(to, packages[i], true, error, error_size) != 0)
+            goto done;
+    }
+    if (archive_write_close(to) != ARCHIVE_OK) {
+        snprintf(error, error_size, "%s: %s", out, archive_error_string(to));
+        goto done;
+    }
+    result = 0;
+done:
+    archive_write_free(to);
+    return result;
 }
 
 // The ledger cap the brake falls back on before the first sample: 80% of what the process may

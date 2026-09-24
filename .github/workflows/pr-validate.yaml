@@ -273,13 +273,16 @@ jobs:
         with:
           guest: "true"
 
-      # Alpine's minirootfs and Claude Code, fetched from the manifest's entries
-      # and verified by digest, for the userland suites to import, boot and run.
-      - name: The rootfs and Claude Code for the userland suites
+      # Alpine's minirootfs, bash and its packages, and Claude Code, fetched from
+      # the manifest's entries and verified by digest, for the userland suites to
+      # import, boot and run.
+      - name: The rootfs, bash and Claude Code for the userland suites
         run: |
           set -euo pipefail
           rootfs="$(scripts/fetch-pinned.sh alpine-minirootfs "$HOME/rootfs")"
           echo "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" >> "$GITHUB_ENV"
+          shell="$(scripts/fetch-pinned.sh alpine-bash "$HOME/alpine-bash")"
+          echo "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" >> "$GITHUB_ENV"
           claude="$(scripts/fetch-pinned.sh claude-code "$HOME/claude-code")"
           echo "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" >> "$GITHUB_ENV"
 
@@ -535,6 +538,28 @@ jobs:
       - name: build-ish.sh refuses what it should
         if: ${{ !cancelled() }}
         run: scripts/tests/build-ish-test.sh
+
+      # The guest's Alpine packages checked closed against hand-written indexes:
+      # a dependency the pinned set does not meet at its version fails, naming
+      # the package and the requirement.
+      - name: model-manifest.sh holds the packages' dependencies to their versions
+        if: ${{ !cancelled() }}
+        run: scripts/tests/model-manifest-test.sh
+
+      # The committed manifest is what scripts/model-manifest.sh writes from its
+      # pins today: every file fetched and hashed (cached here on the script and
+      # the manifest), every package checked against Alpine's index and closed.
+      # A hand edit of models.json, or a pin the script and the manifest
+      # disagree on, fails here.
+      - name: Cache the manifest's files
+        if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: build/models
+          key: manifest-files-${{ hashFiles('scripts/model-manifest.sh', 'Apps/Topo/Resources/models.json') }}
+      - name: The manifest is the script's
+        if: ${{ !cancelled() }}
+        run: scripts/model-manifest.sh --check
 
       # scripts/review-prompt.sh against a fake gh and a scratch repository,
       # fed the comment post_feedback itself posts: a first review whenever
@@ -1266,9 +1291,18 @@ jobs:
           fi
 
           # Everything below records the outcome for the status-pane step, then
-          # exits with it; `state` is pass|block, `summary` is one line.
+          # exits with it; `state` is pass|block, `summary` is the verdict's
+          # summary, which a re-review writes as several lines (its list of
+          # earlier findings), so it goes to the output file as a delimited
+          # block and never as `summary=` on one line, which the runner
+          # refuses for a value with a newline in it and fails the step. The
+          # block's delimiter is random per call, since the summary is the
+          # reviewer's text and a fixed delimiter is a line it could contain,
+          # which would end the block early and fail the step on what follows.
           finish() {
-            { echo "state=$1"; echo "summary=$2"; } >> "$GITHUB_OUTPUT"
+            local eom
+            eom="TOPO_SUMMARY_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+            { echo "state=$1"; echo "summary<<$eom"; echo "$2"; echo "$eom"; } >> "$GITHUB_OUTPUT"
             exit "$3"
           }
 

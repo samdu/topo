@@ -22,6 +22,7 @@
 #   scripts/simulator-run.sh --userland "echo hi" --no-build --expect-rootfs reused
 #   scripts/simulator-run.sh --userland "claude --version" --fresh --expect-claude fetched
 #   scripts/simulator-run.sh --guest-turn "say hi || what did I ask?"   # turns to the resident Claude Code
+#   scripts/simulator-run.sh --guest-turn "run echo topo-\$((6*7)) in bash" --expect-bash topo-42
 #   scripts/simulator-run.sh --screenshot ~/s.png   # ... and capture the screen
 #   scripts/simulator-run.sh --erase                # tear the simulator down, keychain and all
 #   DEVICE="iPad Pro 13-inch (M4)" scripts/simulator-run.sh   # a name, or a UDID when names repeat
@@ -58,7 +59,11 @@
 # It passes only when every turn names the same session and resident process, the app printed
 # `guest turn done`, no `guest turn error:`, no turn that
 # failed or was abandoned, and for every turn a `model:` line naming the model it ran on (Haiku,
-# since the build is Debug) and an `answered in <seconds> s:` line.
+# since the build is Debug) and an `answered in <seconds> s:` line. With --expect-bash OUTPUT it
+# passes only when one turn made a Bash tool call (`guest turn N tool: Bash`), that call's result
+# came back without an error (`guest turn N tool result: Bash: ok: …`) with OUTPUT in its text,
+# the part after that prefix alone, and the same turn's reply text carries OUTPUT too: a reply alone proves nothing, since the model can
+# write the output without running anything or after a call that failed.
 #
 # Building runs scripts/build-ish.sh first: the guest's framework is built from the fork's pin and
 # is not in the repository.
@@ -84,6 +89,7 @@ guestturn=""
 expect=""
 expect_rootfs=""
 expect_claude=""
+expect_bash=""
 fresh=no
 timeout="${TIMEOUT:-180}"
 
@@ -101,8 +107,9 @@ while [ $# -gt 0 ]; do
     --expect) expect="$2"; shift 2 ;;
     --expect-rootfs) expect_rootfs="$2"; shift 2 ;;
     --expect-claude) expect_claude="$2"; shift 2 ;;
+    --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
-    -h|--help) sed -n '2,62p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,67p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -324,6 +331,25 @@ if [ -n "$guestturn" ]; then
       || fail "guest turn $n went to session and process ${this/, process / in process }, not ${resident/, process / in process }"
     resident="$this"
   done
+  if [ -n "$expect_bash" ]; then
+    ran=""
+    for n in $(seq 1 "$count"); do
+      # Every line is matched from its start: the call as a whole line, and the result and the
+      # reply by their fixed prefixes (`sed -n 's/^…//p'` keeps only the lines that begin with
+      # one, and only the text after it), so a prefix echoed inside another line — the turn's own
+      # `sent:` line, a reply quoting one — never counts. The status is read from the prefix and
+      # OUTPUT from the text after it alone, so no word of a prefix stands in for it.
+      grep -Fxq "[topo-debug] guest turn $n tool: Bash" <<< "$lines" || continue
+      sed -n "s/^\[topo-debug\] guest turn $n tool result: Bash: ok: //p" <<< "$lines" \
+        | grep -Fq -- "$expect_bash" || continue
+      sed -En "s/^\[topo-debug\] guest turn $n answered in [0-9.]+ s: //p" <<< "$lines" \
+        | grep -Fq -- "$expect_bash" || continue
+      ran="$n"
+      break
+    done
+    [ -n "$ran" ] || fail "no guest turn ran Bash and got back '$expect_bash' from it, in its tool result and its reply"
+    echo "==> guest turn $ran ran Bash in the guest and got back '$expect_bash'"
+  fi
   echo "==> the resident Claude Code answered $count turns in one process (session ${resident})"
 fi
 

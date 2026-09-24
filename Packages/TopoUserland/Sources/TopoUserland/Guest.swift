@@ -43,13 +43,16 @@ public final class Guest: Sendable {
         public let errors: String
     }
 
-    /// The environment a program gets when it is given none: root's home, the usual path, and
-    /// Claude Code's updater off. The binary is a pin the app fetches (`ClaudeCodeInstaller`), a
-    /// bump is a new pin, and the updater's own fetch speaks TLS through a library that never
+    /// The environment a program gets when it is given none: root's home, the usual path, bash as
+    /// the shell, and Claude Code's updater off. `SHELL` is what Claude Code's Bash tool runs its
+    /// commands in, and `/bin/bash` is where Alpine's bash package installs it
+    /// (`RootfsInstaller` lays it in). The binary is a pin the app fetches (`ClaudeCodeInstaller`),
+    /// a bump is a new pin, and the updater's own fetch speaks TLS through a library that never
     /// completes a handshake under the emulator.
     public static let environment = [
         "HOME": "/root",
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "SHELL": "/bin/bash",
         "DISABLE_AUTOUPDATER": "1",
     ]
 

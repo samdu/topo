@@ -92,15 +92,48 @@ sanitise() {
   return 0
 }
 
-# gate <case> <has_verdict> <verdict file> <expected: pass|block> — runs the gate snippet as
-# review_gate does after a successful reviewer job, leaving its state in $gate_state.
+# read_outputs <file> — parses a GITHUB_OUTPUT file the way the runner does: `name=value` on
+# one line, or `name<<DELIM` opening a block that runs to the line that is exactly DELIM, and
+# nothing else. Leaves the values in $gate_state and $gate_summary; fails on a line the runner
+# would refuse (which is how `summary=` with a newline in it, or a block whose delimiter the
+# summary itself contains, failed the step on the runner).
+read_outputs() {
+  local file="$1" line delim
+  gate_state="" gate_summary=""
+  exec 3< "$file"
+  while IFS= read -r line <&3; do
+    case "$line" in
+      state=*) gate_state="${line#state=}" ;;
+      summary\<\<*)
+        delim="${line#summary<<}"
+        gate_summary=""
+        while IFS= read -r line <&3; do
+          [ "$line" = "$delim" ] && break
+          gate_summary="${gate_summary}${line}"$'\n'
+        done
+        [ "$line" = "$delim" ] || { exec 3<&-; echo "unterminated summary block" >&2; return 1; }
+        gate_summary="${gate_summary%$'\n'}"
+        ;;
+      *) exec 3<&-; echo "line the runner would refuse: $line" >&2; return 1 ;;
+    esac
+  done
+  exec 3<&-
+}
+
+# gate <case> <has_verdict> <verdict file> <expected: pass|block> [summary] — runs the gate
+# snippet as review_gate does after a successful reviewer job, leaving its state in $gate_state,
+# and holds the recorded summary to the fifth argument when one is given.
 gate() {
   local name="$1" flag="$2" file="$3" want="$4" got
   PRECHECK_RESULT=success CODEX_RESULT=success HAS_VERDICT="$flag" VERDICT_FILE="$file" \
   GITHUB_OUTPUT="$work/$name.gate-output" \
     bash "$work/gate.sh" > "$work/$name.gate.log" 2>&1
   local status=$?
-  gate_state="$(sed -n 's/^state=//p' "$work/$name.gate-output" | tail -1)"
+  if ! read_outputs "$work/$name.gate-output" 2> "$work/$name.outputs.err"; then
+    fail "$name: the gate wrote an output file the runner would refuse: $(cat "$work/$name.outputs.err")"
+    sed 's/^/    | /' "$work/$name.gate-output"
+    return 1
+  fi
   if [ "$status" = 0 ]; then got=pass; else got=block; fi
   if [ "$got" != "$want" ]; then
     fail "$name: wanted the gate to $want, it exited $status ($got)"
@@ -109,6 +142,11 @@ gate() {
   fi
   if [ "$gate_state" != "$want" ]; then
     fail "$name: the gate exited as wanted but recorded state=$gate_state for the status pane"
+    return 1
+  fi
+  if [ $# -ge 5 ] && [ "$gate_summary" != "$5" ]; then
+    fail "$name: the gate recorded a summary other than the verdict's"
+    printf '    | wanted: %q\n    | got:    %q\n' "$5" "$gate_summary"
     return 1
   fi
   echo "ok   $name: gate $got"
@@ -178,6 +216,12 @@ if sanitise prose "$work/prose-scoped.json"; then
     echo "ok   prose-sanitised: no secret value, has_verdict false"
   fi
 fi
+
+# A re-review's summary is several lines (its list of earlier findings), and one of them is the
+# very line a fixed block delimiter would be, so the recorded summary has to survive both intact.
+multiline=$'Nothing blocking.\nTOPO_SUMMARY_EOF\n1. Ear.swift:12 — closed by 0a38fbb.\n2. Voice.swift:40 — moot.'
+jq -n --arg s "$multiline" '{blocking: false, codex_blocking: false, summary: $s, findings: [], demoted: []}' > "$work/multiline.json"
+gate multiline-summary true "$work/multiline.json" pass "$multiline"
 
 # has_verdict true and no file: the artifact never arrived, which is no verdict, not a pass.
 gate no-file true "$work/absent/verdict.json" block
