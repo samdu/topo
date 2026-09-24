@@ -268,6 +268,32 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(MascotCanvas.stepCap(interval: 1.0 / 30), 0.1)
     }
 
+    /// On the flank with no gap the link stops, since nothing waits on the clock; a geometry
+    /// change — the keyboard rising, a scroll — starts it again, and the room it opens takes him
+    /// off the flank.
+    func testAGeometryChangeOnTheFlankStartsTheClockAgain() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let input = MascotState(model: "claude-sonnet-5").input
+        func apply(_ field: MascotField) {
+            canvas.apply(input: input, field: field, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
+        }
+        var full = Self.open
+        full.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 600)]
+        apply(full)
+        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        XCTAssertEqual(canvas.roam?.roost.name, "flank")
+        XCTAssertEqual(canvas.roam?.needsTime, false)
+        var scrolled = Self.open
+        scrolled.obstacles = [CGRect(x: 0, y: 150, width: 400, height: 450)]
+        apply(scrolled)
+        XCTAssertTrue(canvas.isTicking, "a geometry change on the flank asked for no frame")
+        for _ in 0..<600 where canvas.roam?.needsTime == true { canvas.step(1.0 / 30) }
+        XCTAssertEqual(canvas.roam?.roost.name, "gap")
+    }
+
     /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
     /// for, so a thinking guest goes on thinking rather than being put back to idle.
     func testTheWalkIsWornOnlyWhileHeGlidesAndHisActivitySurvivesIt() throws {

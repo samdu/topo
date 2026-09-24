@@ -289,6 +289,47 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.roost.name, "gap")
     }
 
+    /// On the flank with no gap, every geometry change asks for a new roost: the keyboard rising,
+    /// which lifts the glass and the transcript's end, opens room above the glass and he glides
+    /// off the flank into it; with the keyboard down again and the chat full he is back on the
+    /// flank. A scroll that opens room does the same.
+    func testOnTheFlankAGeometryChangeThatOpensAGapTakesHimOffIt() throws {
+        let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
+        let (placed, start) = settled(full)
+        var roam = placed
+        XCTAssertEqual(roam.roost.name, "flank")
+        XCTAssertFalse(roam.needsTime)
+
+        // The keyboard rises: the glass sits on it, full height, and the transcript's end rises
+        // with it, leaving room between the last turn and the glass.
+        var up = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 628),
+                             obstacles: [CGRect(x: 0, y: -300, width: 402, height: 480)],
+                             pane: CGRect(x: 41, y: 300, width: 320, height: 80),
+                             well: CGRect(x: 165, y: 304, width: 72, height: 72),
+                             keyboard: CGRect(x: 0, y: 390, width: 402, height: 1000))
+        roam.observe(up, at: start)
+        XCTAssertTrue(roam.needsTime, "a keyboard rising asked for no new roost")
+        var time = start
+        while roam.needsTime, time < start + 30 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "gap", "the keyboard opened room and he stayed on the flank")
+        let gap = try XCTUnwrap(roam.picture)
+        XCTAssertTrue(MascotRoost.holds(up, frame: gap, clearance: 8))
+        XCTAssertGreaterThanOrEqual(roam.moves, 1)
+
+        // Down again, into a full chat: nothing holds him but the flank.
+        roam.observe(full, at: time)
+        while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "flank")
+
+        // A scroll opening room at the top of the chat takes him there.
+        up.keyboard = nil
+        roam.observe(Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)]), at: time)
+        let before = roam.moves
+        while roam.needsTime, time < start + 90 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "gap", "a scroll opened room and he stayed on the flank")
+        XCTAssertGreaterThan(roam.moves, before, "he did not glide off the flank")
+    }
+
     /// Where he stands lacking the clearance is not a roost, and he moves however short the move
     /// to one is; and a geometry change mid-glide does not restart a glide.
     func testAShortMoveOutOfAPlaceLackingTheClearanceIsAMoveAndAGlideIsNeverRestarted() throws {
