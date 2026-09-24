@@ -50,6 +50,21 @@ enum PreviewTurns {
             + "scattered away, leaving the reds and oranges that travel straighter.")
     })
 
+    /// The end of a long conversation as it stood on a phone (`device-a70490e-trapped-on-flank`):
+    /// long replies either side of the person's one short turn, whose bubble wraps on a 393-point
+    /// phone and leaves room on its left.
+    static let continuity: [Turn] = make([
+        (.assistant, "None of this is an accusation — could just be you enjoying the bit, could be a genuine architecture you're building. Either way, I'm happy to help with the real thing once it exists and I can verify it (new tools showing up, actual API access, etc.). I just won't narrate capabilities I can't check.\n\nWhat would you actually like to do right now, with what's really in front of me?"),
+        (.person, "Nothing, just testing the continuity feature :p"),
+        (.assistant, "Ha, fair enough — good stress test. For the record: continuity of conversation held up fine throughout; I just wasn't going to sign off on unverified claims about where I'm running. Say the word whenever you want something built. And if you do want to test it properly some time, the useful version is a turn from the phone and one from the Mac on the same thread, a few minutes apart, and then asking me what the first one said: that exercises the log, the lease and the guest's own memory of the conversation in one go, which is the whole of what continuity has to mean here."),
+    ])
+
+    /// The same, with the person's turn narrow and two lines tall, so the room beside its bubble
+    /// holds his picture with its clearance (a one-line bubble's row leaves too little height).
+    static let continuityShort: [Turn] = make(continuity.enumerated().map { index, turn in
+        (turn.role, index == 1 ? "Nothing,\njust testing :p" : turn.text)
+    })
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?

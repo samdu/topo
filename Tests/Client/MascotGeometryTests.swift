@@ -245,7 +245,8 @@ final class MascotGeometryTests: XCTestCase {
         let canvas: MascotCanvas?
     }
 
-    private func stage(_ turns: [Turn], mascot: Look.Mascot?) throws -> Stage {
+    private func stage(_ turns: [Turn], mascot: Look.Mascot?, size: CGSize? = nil) throws -> Stage {
+        let screen = size ?? screen
         var look = Look()
         look.composer.surface = .flat
         if let mascot { look.mascot = mascot }
@@ -357,6 +358,47 @@ final class MascotGeometryTests: XCTestCase {
 
     /// With him drawn somewhere, the stage is different somewhere: the test above is not holding
     /// two pictures of nothing.
+    /// A person's turn reports its bubble and not the row's width, so the room a short bubble
+    /// leaves on its left is room. On the 393-point phone Sam's screenshot came from
+    /// (`device-a70490e-trapped-on-flank.png`), the turn "Nothing, just testing the continuity
+    /// feature :p" wraps to a bubble 294 points wide at x 83 — as drawn there — and the room left
+    /// of it, 83 points, is narrower than his picture at the default look (103 points, 119 with
+    /// its clearance), so no roost holds him there and he is on the flank; at a scale whose
+    /// picture fits that room he stands in it. A narrower turn of two lines in the same place
+    /// leaves room his default picture fits — a one-line bubble's row, about 85 points with the
+    /// spacing either side, is shorter than his 91 — and he takes it.
+    func testTheRoomBesideAShortBubbleIsAGap() throws {
+        let phone = CGSize(width: 393, height: 852)
+        let screenshot = try stage(PreviewTurns.continuity, mascot: Look.Mascot(), size: phone)
+        defer { screenshot.window.isHidden = true }
+        let field = try XCTUnwrap(screenshot.canvas?.roam?.field)
+        let bubble = try XCTUnwrap(field.obstacles.first { $0.minX > 40 }, "no turn reported less than the row: \(field.obstacles)")
+        XCTAssertEqual(bubble.minX, 83, accuracy: 2, "the bubble is not where the phone drew it: \(bubble)")
+        XCTAssertEqual(bubble.maxX, 377, accuracy: 2)
+        let size = MascotSprite.size(scale: Look.Mascot().scale)
+        XCTAssertLessThan(bubble.minX, size.width + 2 * Look.Mascot().clearance, "the room left of it holds him")
+        XCTAssertEqual(screenshot.canvas?.roam?.roost.name, "flank")
+
+        var small = Look.Mascot()
+        small.scale = 0.4
+        let fits = try stage(PreviewTurns.continuity, mascot: small, size: phone)
+        defer { fits.window.isHidden = true }
+        let roost = try XCTUnwrap(fits.canvas?.roam?.roost.frame, "at a scale of 0.4 he stands nowhere")
+        XCTAssertLessThanOrEqual(roost.maxX, bubble.minX - small.clearance + 0.001, "not beside the bubble: \(roost)")
+        XCTAssertTrue(roost.minY < bubble.maxY && roost.maxY > bubble.minY, "not beside the bubble: \(roost) \(bubble)")
+
+        let short = try stage(PreviewTurns.continuityShort, mascot: Look.Mascot(), size: phone)
+        defer { short.window.isHidden = true }
+        let shortField = try XCTUnwrap(short.canvas?.roam?.field)
+        let shortBubble = try XCTUnwrap(shortField.obstacles.first { $0.minX > 150 }, "\(shortField.obstacles)")
+        let beside = try XCTUnwrap(short.canvas?.roam?.roost.frame, "he stands nowhere")
+        XCTAssertEqual(short.canvas?.roam?.roost.name, "gap")
+        XCTAssertLessThanOrEqual(beside.maxX, shortBubble.minX - 8 + 0.001, "not beside the bubble: \(beside) \(shortBubble)")
+        XCTAssertTrue(beside.minY < shortBubble.maxY && beside.maxY > shortBubble.minY,
+                      "not beside the bubble: \(beside) \(shortBubble)")
+        XCTAssertTrue(short.canvas?.showing ?? false)
+    }
+
     func testHeIsDrawnAtAll() throws {
         for turns in [[], PreviewTurns.full] {
             let without = try stage(turns, mascot: nil)
