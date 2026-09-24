@@ -1291,9 +1291,18 @@ jobs:
           fi
 
           # Everything below records the outcome for the status-pane step, then
-          # exits with it; `state` is pass|block, `summary` is one line.
+          # exits with it; `state` is pass|block, `summary` is the verdict's
+          # summary, which a re-review writes as several lines (its list of
+          # earlier findings), so it goes to the output file as a delimited
+          # block and never as `summary=` on one line, which the runner
+          # refuses for a value with a newline in it and fails the step. The
+          # block's delimiter is random per call, since the summary is the
+          # reviewer's text and a fixed delimiter is a line it could contain,
+          # which would end the block early and fail the step on what follows.
           finish() {
-            { echo "state=$1"; echo "summary=$2"; } >> "$GITHUB_OUTPUT"
+            local eom
+            eom="TOPO_SUMMARY_$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
+            { echo "state=$1"; echo "summary<<$eom"; echo "$2"; echo "$eom"; } >> "$GITHUB_OUTPUT"
             exit "$3"
           }
 
