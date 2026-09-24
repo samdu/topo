@@ -325,7 +325,7 @@ final class MascotGeometryTests: XCTestCase {
             defer { without.window.isHidden = true }
             XCTAssertNil(without.canvas)
             var looks = [Look.Mascot()]
-            for (scale, clearance) in [(0.25, 0), (0.25, 64), (4, 0), (1, 8)] as [(CGFloat, CGFloat)] {
+            for (scale, clearance) in [(0.25, 0), (0.25, 64), (4, 0), (2.0 / 3, 8)] as [(CGFloat, CGFloat)] {
                 var mascot = Look.Mascot()
                 mascot.scale = scale
                 mascot.clearance = clearance

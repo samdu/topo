@@ -410,8 +410,8 @@ struct Look: Equatable, Sendable {
     /// takes what it is handed as it comes, so no value puts him over a word or the microphone.
     struct Mascot: Equatable, Sendable {
         /// Points to one of the engine's art pixels, scaled nearest-neighbour so pixels stay
-        /// pixels: two thirds, which is two device pixels an art pixel on a 3x screen.
-        var scale: CGFloat = 2.0 / 3
+        /// pixels: one, his original size, three device pixels an art pixel on a 3x screen.
+        var scale: CGFloat = 1
         /// The room he keeps from every word, the row being written, the lines under the
         /// transcript, the composer's pane and the keyboard, in points, on every side of his
         /// picture; not from the transcript's own edges, so the margin beside a reply holds him
