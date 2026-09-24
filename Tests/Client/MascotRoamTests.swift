@@ -171,36 +171,24 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertFalse(roam.covered)
     }
 
-    /// The keyboard rising over him sends him out at the hurry: he is off after one quiet frame,
-    /// goes at `hurry` times the stroll while any of him is under it, and is out in a tenth of the
-    /// time the stroll would take for as long as it covers him.
-    func testAKeyboardRisingOverHimSendsHimOutInAHurry() throws {
+    /// The keyboard rising over him — laid out in one step, the glass riding on it past him —
+    /// places him at once above it, with no glide and no quiet frame, since a glide out from
+    /// under it would cross the glass.
+    func testAKeyboardRisingOverHimPlacesHimAboveItAtOnce() throws {
         let (placed, start) = settled(Self.field([]))
         var roam = placed
         let picture = try XCTUnwrap(roam.picture)
+        let moves = roam.moves
         var up = Self.field([])
         up.keyboard = CGRect(x: 0, y: picture.minY - 60, width: 402, height: 1000)
+        up.pane = CGRect(x: 41, y: up.keyboard!.minY - 60, width: 320, height: 53)
+        up.well = CGRect(x: 177, y: up.keyboard!.minY - 59, width: 48, height: 48)
         roam.observe(up, at: start)
-        XCTAssertTrue(roam.covered, "the keyboard over him did not cover him")
-        // One quiet frame, with a frame's slack for the clock's rounding.
-        var time = start
-        for _ in 0..<2 where roam.move == nil { time += Self.frame; roam.advance(to: time) }
-        let glide = try XCTUnwrap(roam.move, "a covered Topo did not go after one quiet frame")
-        var covered = 0.0
-        while roam.covered, roam.move != nil, time < start + 60 {
-            let before = roam.move!.elapsed
-            time += Self.frame
-            roam.advance(to: time)
-            covered += Self.frame
-            if let after = roam.move {
-                XCTAssertEqual(after.elapsed - before, Self.frame * 10, accuracy: 1e-9)
-            }
-        }
-        XCTAssertFalse(roam.covered, "still under the keyboard")
-        XCTAssertLessThan(covered, glide.duration, "no faster than the stroll under the keyboard")
-        while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
-        let out = try XCTUnwrap(roam.picture)
-        XCTAssertLessThanOrEqual(out.maxY, up.keyboard!.minY)
+        let out = try XCTUnwrap(roam.picture, "nowhere above the keyboard")
+        XCTAssertNil(roam.move, "a glide out from under the keyboard")
+        XCTAssertEqual(roam.moves, moves)
+        XCTAssertLessThanOrEqual(out.maxY, up.pane!.minY - 8 + 0.001, "\(out) is not above the glass")
+        XCTAssertFalse(roam.covered)
     }
 
     /// The hurry is the look's: at 1 there is none, and he strolls out from under a turn.
@@ -523,6 +511,112 @@ final class MascotRoamTests: XCTestCase {
         roam.advance(to: time + 1)
         XCTAssertNotNil(roam.picture, "back at scale 1 he was not placed")
         assertClearOfTheGlass("scale 1")
+    }
+
+    /// The keyboard rising mid-glide, the short pane landing on where he was going: the glide is
+    /// decided again on the geometry it arrives in, with no settle, and turns to a roost that
+    /// holds; on no frame, before or after, is his picture over the pane, the well or the
+    /// keyboard.
+    func testTheKeyboardRisingOverWhereHeIsGoingTurnsTheGlide() throws {
+        // Room at the top right; then turns fill the top, leaving room on the right lower down,
+        // and he glides down to it.
+        let (placed, start) = settled(Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)]))
+        var roam = placed
+        roam.observe(Self.field([CGRect(x: 0, y: 0, width: 402, height: 280),
+                                 CGRect(x: 0, y: 280, width: 200, height: 260)]), at: start)
+        var time = start
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        for _ in 0..<3 { time += Self.frame; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move, "no glide down")
+        XCTAssertGreaterThan(glide.to.y, 280)
+        // The keyboard rises: the transcript scrolls up with it and the short pane lands across
+        // where he was going.
+        let up = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 628),
+                             obstacles: [CGRect(x: 0, y: -200, width: 402, height: 280),
+                                         CGRect(x: 0, y: 80, width: 200, height: 260)],
+                             pane: CGRect(x: 41, y: 300, width: 320, height: 53),
+                             well: CGRect(x: 177, y: 301, width: 48, height: 48),
+                             keyboard: CGRect(x: 0, y: 360, width: 402, height: 500))
+        XCTAssertFalse(MascotRoost.holds(up, frame: CGRect(origin: glide.to, size: Self.size), clearance: 8),
+                       "the fixture's keyboard leaves where he was going a roost")
+        let moves = roam.moves
+        roam.observe(up, at: time)
+        let turned = try XCTUnwrap(roam.roost.frame, "nowhere to turn to")
+        XCTAssertNotEqual(turned.origin, glide.to, "the glide went on to where the pane is")
+        XCTAssertTrue(MascotRoost.holds(up, frame: turned, clearance: 8))
+        XCTAssertTrue(roam.move == nil || roam.moves > moves, "no new decision on the geometry it arrived in")
+        func assertOffLimitsClear(_ label: String) {
+            guard let picture = roam.picture else { return }
+            for limit in up.offLimits {
+                XCTAssertFalse(MascotRoost.overlap(picture, limit), "\(label): \(picture) over \(limit)")
+            }
+        }
+        assertOffLimitsClear("as the keyboard arrived")
+        while roam.needsTime, time < start + 60 {
+            time += Self.frame
+            roam.advance(to: time)
+            assertOffLimitsClear("t \(time)")
+        }
+        let arrived = try XCTUnwrap(roam.picture)
+        XCTAssertTrue(MascotRoost.holds(up, frame: arrived, clearance: 8), "\(arrived) is not a roost")
+    }
+
+    /// The glass rising with the keyboard onto where he stands, in the steps of its animation,
+    /// places him on the geometry it arrives in with no glide and no quiet frame: on no frame is
+    /// his picture over the pane or the well, and he ends in a roost above the short glass.
+    func testTheGlassRisingOntoWhereHeStandsPlacesHimAtOnce() throws {
+        let (placed, start) = settled(Self.field([]))
+        var roam = placed
+        let standing = try XCTUnwrap(roam.picture)
+        var time = start
+        // The keyboard and the short pane on it rise from the foot of the screen, a frame at a time.
+        for step in 0...20 {
+            let top = 628 - CGFloat(step) * 16
+            var up = Self.field([])
+            up.keyboard = CGRect(x: 0, y: top, width: 402, height: 1000)
+            up.pane = CGRect(x: 41, y: top - 60, width: 320, height: 53)
+            up.well = CGRect(x: 177, y: top - 59, width: 48, height: 48)
+            roam.observe(up, at: time)
+            if let picture = roam.picture {
+                XCTAssertFalse(MascotRoost.overlap(picture, up.pane!), "step \(step): \(picture) over the pane")
+                XCTAssertFalse(MascotRoost.overlap(picture, up.well!), "step \(step): \(picture) over the well")
+            }
+            time += Self.frame
+            roam.advance(to: time)
+            if let picture = roam.picture {
+                XCTAssertFalse(MascotRoost.overlap(picture, up.pane!), "step \(step) tick: \(picture) over the pane")
+            }
+        }
+        while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
+        let above = try XCTUnwrap(roam.picture, "nowhere above the short glass")
+        XCTAssertNotEqual(above, standing)
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: above, clearance: 8))
+    }
+
+    /// The keyboard rising mid-glide with where he is going still a roost, and the way to it
+    /// clear of the pane, the well and the keyboard, leaves the glide as it was.
+    func testTheKeyboardRisingClearOfTheGlideKeepsIt() throws {
+        // He glides up from the bottom right to room at the top.
+        let (placed, start) = settled(Self.field([]))
+        var roam = placed
+        roam.observe(Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)]), at: start)
+        var time = start
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        for _ in 0..<3 { time += Self.frame; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move, "no glide up")
+        let moves = roam.moves
+        // The keyboard rises below him, the short pane with it, far from his way up.
+        var up = Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)])
+        up.pane = CGRect(x: 41, y: 560, width: 320, height: 53)
+        up.well = CGRect(x: 177, y: 561, width: 48, height: 48)
+        up.keyboard = CGRect(x: 0, y: 620, width: 402, height: 500)
+        roam.observe(up, at: time)
+        let kept = try XCTUnwrap(roam.move, "the glide was dropped")
+        XCTAssertEqual([kept.from, kept.to], [glide.from, glide.to], "the glide was decided again")
+        XCTAssertEqual(roam.moves, moves)
+        time += Self.frame
+        roam.advance(to: time)
+        XCTAssertGreaterThan(try XCTUnwrap(roam.move).elapsed, kept.elapsed, "the glide did not go on")
     }
 
     /// Reduce Motion coming on during a glide ends it at its destination at once.

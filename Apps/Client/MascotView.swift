@@ -254,11 +254,22 @@ final class MascotCanvas: UIView {
 
     private func report(_ roam: MascotRoam) {
         guard let onReport else { return }
-        let now = roam.report
+        var now = roam.report
         guard now != reported else { return }
         reported = now
+        sequence += 1
+        recent.append(.init(sequence: sequence, frame: now.frame, pane: now.pane, hidden: now.hidden))
+        if recent.count > Self.recentReports { recent.removeFirst(recent.count - Self.recentReports) }
+        now.sequence = sequence
+        now.recent = recent
         onReport(now)
     }
+
+    /// How many reports the debug report carries back: about seven seconds of a glide at 30
+    /// frames a second.
+    private static let recentReports = 200
+    private var sequence = 0
+    private var recent: [MascotRoam.Report.Glimpse] = []
 
     private func show(_ image: CGImage) {
         CATransaction.begin()
@@ -343,6 +354,19 @@ extension MascotRoam {
         var covered: Bool
         var moves: Int
         var pane: [Double]?
+        /// Counts the reports the canvas has made, one more each time, so a reader polling the
+        /// latest can tell it missed none.
+        var sequence = 0
+        /// The last reports, oldest first, each as its sequence, his frame, the pane and whether
+        /// he stood nowhere: a reader polling the latest report sees every frame in between.
+        var recent: [Glimpse] = []
+
+        struct Glimpse: Codable, Equatable, Sendable {
+            var sequence: Int
+            var frame: [Double]?
+            var pane: [Double]?
+            var hidden: Bool
+        }
     }
 
     var report: Report {

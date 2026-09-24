@@ -65,8 +65,8 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// press at the short well's edge still reaches `VoiceInput`: the gesture is on the well as
     /// drawn, not as it rests. The keyboard is raised by the flank that raises it, and the press
     /// is delivered through the system, counted in the button's debug report. The keyboard comes
-    /// up over where Topo stood in the empty chat, so he glides to room above it:
-    /// it is held that he moved and ended clear, photographed there.
+    /// up over where Topo stood in the empty chat, so he is placed in room above it: it is held
+    /// that he moved and ended clear, photographed there.
     func testAPressAtTheShortWellsEdgeReachesTheMicrophoneUnderTheKeyboard() throws {
         let app = launch(look: "{}", transcript: "empty", softwareKeyboard: true)
         let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
@@ -99,11 +99,10 @@ final class TopoOnTheGlassTests: XCTestCase {
         shot.name = "glass-under-the-keyboard"
         shot.lifetime = .keepAlways
         add(shot)
-        // The keyboard takes the room he stood in, and he hurries to room above it: a glide that
-        // has ended, with his picture where he is now — not where he was going — in a gap and
-        // with nothing over it, the keyboard included.
+        // The keyboard takes the room he stood in, and he is placed in room above it: standing
+        // still, in a gap and with nothing over it, the keyboard included.
         let now = try waitForTopo(in: app, "out from under the keyboard") {
-            $0.moves > placed.moves && $0.roost == "gap" && !$0.hidden && !$0.walking && !$0.covered
+            $0.roost == "gap" && !$0.hidden && !$0.walking && !$0.covered
                 && $0.frame == $0.to && $0.frame != placed.frame
         }
         XCTAssertNotEqual(now.frame, placed.frame, "the keyboard came up over him and he did not move: \(now)")
@@ -130,7 +129,9 @@ final class TopoOnTheGlassTests: XCTestCase {
 
     /// Over `continuity`, the layout of Sam's screenshot, with the keyboard up the short glass is
     /// as off limits as the tall one: every report from the keyboard rising to his standing still
-    /// has his picture clear of the pane — above its top edge, or not drawn.
+    /// has his picture clear of the pane — above its top edge, or not drawn. Every report, and not
+    /// only the ones a poll happens to read: each carries the ones before it (`recent`) under a
+    /// sequence, and the test holds the sequence has no gap.
     func testWithTheKeyboardUpOverAFullChatHeIsNeverOnTheGlass() throws {
         let app = launch(look: "{}", transcript: "continuity", softwareKeyboard: true)
         let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
@@ -151,9 +152,13 @@ final class TopoOnTheGlassTests: XCTestCase {
         // Every report for five seconds as the keyboard rises and he settles, then the one he
         // settles on under the short glass: none has him over the pane.
         let restingPane = try XCTUnwrap(resting.pane)
+        var glimpses: [Int: Topo.Glimpse] = [:]
+        for glimpse in resting.recent { glimpses[glimpse.sequence] = glimpse }
         let watch = Date().addingTimeInterval(5)
         while Date() < watch {
-            if let seen = topo(in: app) { assertOffTheGlass(seen, "as the keyboard rose") }
+            if let seen = topo(in: app) {
+                for glimpse in seen.recent { glimpses[glimpse.sequence] = glimpse }
+            }
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
         let up = try waitForTopo(in: app, "settled over the short glass") {
@@ -161,6 +166,17 @@ final class TopoOnTheGlassTests: XCTestCase {
             return !$0.walking && $0.frame == $0.to && pane[3] < restingPane[3] - 1
         }
         assertOffTheGlass(up, "with the keyboard up")
+        for glimpse in up.recent { glimpses[glimpse.sequence] = glimpse }
+        let sequences = glimpses.keys.sorted()
+        let first = try XCTUnwrap(sequences.first), last = try XCTUnwrap(sequences.last)
+        XCTAssertEqual(sequences, Array(first...last), "reports were missed between reads")
+        XCTAssertGreaterThanOrEqual(last, up.sequence, "the last report read is not in the record")
+        XCTAssertGreaterThan(sequences.count, 1, "the keyboard rising changed nothing he reported")
+        for sequence in sequences {
+            let glimpse = glimpses[sequence]!
+            assertOffTheGlass(Topo(roost: "", frame: glimpse.frame, to: nil, hidden: glimpse.hidden, pane: glimpse.pane),
+                              "report \(sequence)")
+        }
         attach(app, "topo-keyboard-up-full-chat")
         app.terminate()
     }
@@ -229,6 +245,16 @@ final class TopoOnTheGlassTests: XCTestCase {
         var covered = false
         var moves = 0
         var pane: [Double]?
+        var sequence = 0
+        var recent: [Glimpse] = []
+
+        struct Glimpse: Decodable {
+            var sequence: Int
+            var frame: [Double]?
+            var pane: [Double]?
+            var hidden: Bool
+        }
+
         var description: String {
             "\(roost) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) covered \(covered) moves \(moves) pane \(pane ?? [])"
         }

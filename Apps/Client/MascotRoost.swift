@@ -164,6 +164,27 @@ struct MascotField: Equatable, Sendable {
         return all
     }
 
+    /// What he is never drawn over, even in passing: the composer's pane and well and the keyboard.
+    /// A turn or a line he may cross at the hurry; these he goes round.
+    var offLimits: [CGRect] {
+        [pane, well, keyboard].compactMap { $0 }
+    }
+
+    /// Whether his picture, `size` big, crosses anything off limits on the straight way from one
+    /// origin to another, judged every point of the way.
+    func crossesOffLimits(from: CGPoint, to: CGPoint, size: CGSize) -> Bool {
+        let limits = offLimits
+        guard !limits.isEmpty else { return false }
+        let steps = max(Int((hypot(to.x - from.x, to.y - from.y)).rounded(.up)), 1)
+        for step in 0...steps {
+            let u = CGFloat(step) / CGFloat(steps)
+            let frame = CGRect(x: from.x + (to.x - from.x) * u, y: from.y + (to.y - from.y) * u,
+                               width: size.width, height: size.height)
+            if limits.contains(where: { MascotRoost.overlap($0, frame) }) { return true }
+        }
+        return false
+    }
+
     /// Whether anything he may not cover overlaps `frame`.
     func covers(_ frame: CGRect) -> Bool {
         covering.contains { MascotRoost.overlap($0, frame) }
@@ -384,6 +405,16 @@ struct MascotRoam: Equatable, Sendable {
     /// still for a settle places him with no glide, since there is nowhere to glide from: a chat
     /// still laying itself out — the glass rising into place as the screen appears — is not where
     /// he is put.
+    ///
+    /// Mid-glide, a geometry that leaves where he is going no roost, or puts the pane, the well or
+    /// the keyboard on the rest of his way, is decided at once, with no settle: the glide turns
+    /// from where he is to the new roost, at the hurry while anything is over him. A destination
+    /// that still holds, with the way to it clear, keeps the glide. A geometry that leaves any of
+    /// him below the pane's top edge or the keyboard's — the glass rising with the keyboard onto
+    /// or past where he stands, which SwiftUI lays out in one step while the render server
+    /// animates it across him — places him at once, with no glide, since a glide out from under
+    /// the glass or the keyboard would draw him over the glass on its way; with nowhere to go he is
+    /// not drawn.
     mutating func observe(_ field: MascotField, at time: Double) {
         now = max(now, time)
         guard field != self.field else { return }
@@ -391,6 +422,25 @@ struct MascotRoam: Equatable, Sendable {
         changed = now
         unsettled = true
         covered = picture.map(field.covers) ?? false
+        if let picture, picture.maxY > field.open.maxY + MascotRoost.epsilon
+            || [field.pane, field.well].contains(where: { $0.map { MascotRoost.overlap($0, picture) } ?? false }) {
+            move = nil
+            decide(glide: false)
+            unsettled = true
+            covered = self.picture.map(field.covers) ?? false
+            return
+        }
+        if let move, let from = position {
+            let destination = CGRect(origin: move.to, size: settings.size)
+            if !MascotRoost.holds(field, frame: destination, clearance: settings.clearance)
+                || field.crossesOffLimits(from: from, to: move.to, size: settings.size) {
+                self.move = nil
+                decide(glide: true)
+                // The geometry may still be moving: the settled decision follows as ever.
+                unsettled = true
+                covered = picture.map(field.covers) ?? false
+            }
+        }
     }
 
     /// Whether the transcript is still to be read. While it is, every decision is nowhere; once it
@@ -474,6 +524,8 @@ struct MascotRoam: Equatable, Sendable {
         // stands; one that is not moves however short the move.
         if hypot(to.x - from.x, to.y - from.y) <= settings.clearance,
            MascotRoost.holds(field, frame: CGRect(origin: from, size: settings.size), clearance: settings.clearance) {
+            // Where he stands is his roost, which a glide cut short leaves somewhere else.
+            roost = .gap(CGRect(origin: from, size: settings.size))
             return
         }
         roost = next
