@@ -199,7 +199,6 @@ enum LookDocument {
         r.clearance("clearance", &value.clearance)
         r.roamSpeed("roamSpeed", &value.roamSpeed)
         r.roamSettle("roamSettle", &value.roamSettle)
-        r.hideDuration("hideDuration", &value.hideDuration)
         r.frameInterval("frameInterval", &value.frameInterval)
     }
 
@@ -352,15 +351,6 @@ enum LookDocument {
         /// where he no longer fits.
         func roamSettle(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0.1...5, "a time in seconds between 0.1 and 5") {
-                applied += 1
-                value = number
-            }
-        }
-
-        /// How long Topo takes to fade out when something comes over him: none to two seconds,
-        /// since a longer fade is him drawn over a word for longer.
-        func hideDuration(_ key: String, _ value: inout Double) {
-            if let number = amount(key, in: 0...2, "a time in seconds between 0 and 2") {
                 applied += 1
                 value = number
             }

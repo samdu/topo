@@ -184,8 +184,8 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     /// A line under the transcript — the error line, the one saying what is waiting, the offer
-    /// card — is outside the transcript's frame and above the glass, and he is hidden over it as
-    /// over a turn; a turn scrolled under the glass or the navigation bar is not over him.
+    /// card — is outside the transcript's frame and above the glass, and it covers him as a turn
+    /// does; a turn scrolled under the glass or the navigation bar is not over him.
     func testALineUnderTheTranscriptCoversHimAndTextUnderTheGlassDoesNot() {
         let field = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 500),
                                 obstacles: [CGRect(x: 16, y: 510, width: 300, height: 20),
@@ -249,7 +249,6 @@ final class MascotGeometryTests: XCTestCase {
         var look = Look()
         look.composer.surface = .flat
         if let mascot { look.mascot = mascot }
-        look.mascot.hideDuration = 0
         let view = ChatCanvas(turns: turns, mascot: mascot == nil ? nil : MascotState(model: "claude-opus-5", activity: .searching))
             .environment(\.look, look)
             // A view hosted outside the app's scene reads as backgrounded, and he draws nothing there.

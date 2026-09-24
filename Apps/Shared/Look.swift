@@ -413,9 +413,6 @@ struct Look: Equatable, Sendable {
         /// seconds: the transcript reports its geometry on every frame of a scroll, and he goes
         /// once it settles, not on every frame of it.
         var roamSettle = 0.6
-        /// How long he takes to fade out when something comes over him, and back in when it has
-        /// gone, in seconds.
-        var hideDuration = 0.25
         /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
         /// motion was judged at and half the work of the display's rate.
         var frameInterval = 1.0 / 30

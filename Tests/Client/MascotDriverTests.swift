@@ -133,7 +133,7 @@ final class MascotDriverTests: XCTestCase {
         let input = MascotState(model: "claude-sonnet-5").input
         func apply(_ conditions: MascotDriver.Conditions, interval: Double = 1.0 / 30) {
             canvas.apply(input: input, field: Self.open, settings: Self.settings, interval: interval,
-                         hideDuration: 0, conditions: conditions)
+                         conditions: conditions)
         }
 
         apply(seen)
@@ -166,19 +166,18 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertFalse(canvas.isTicking, "a canvas taken out of the window kept asking for frames")
     }
 
-    /// Hidden is not animating: no frame is drawn for a Topo something is over, and once his roam
-    /// has nothing waiting on the clock the link stops, so a hidden Topo standing still costs
-    /// nothing.
-    func testAHiddenTopoDrawsNoFrameAndStopsTheLink() throws {
-        var hidden = seen
-        hidden.hidden = true
-        let driver = driver(hidden)
+    /// Standing nowhere is not animating: no frame is drawn for a Topo with nowhere to stand, and
+    /// once his roam has nothing waiting on the clock the link stops, so he costs nothing.
+    func testATopoStandingNowhereDrawsNoFrameAndStopsTheLink() throws {
+        var nowhere = seen
+        nowhere.hidden = true
+        let driver = driver(nowhere)
         for _ in 0..<10 { driver.tick(1.0 / 30) }
         XCTAssertEqual(driver.frames, 0)
-        XCTAssertFalse(hidden.animates)
-        XCTAssertTrue(hidden.present, "a hidden Topo's glide still has the clock")
+        XCTAssertFalse(nowhere.animates)
+        XCTAssertTrue(nowhere.present, "a Topo standing nowhere lost the clock that places him")
 
-        // A chat with no room anywhere, not even a pane: he stands nowhere and is hidden.
+        // A chat with no room anywhere, not even a pane: he stands nowhere.
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
         defer { window.isHidden = true }
@@ -186,12 +185,32 @@ final class MascotDriverTests: XCTestCase {
         let none = MascotField(visible: CGRect(x: 0, y: 0, width: 400, height: 600),
                                obstacles: [CGRect(x: 0, y: 0, width: 400, height: 600)])
         canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: none, settings: Self.settings,
-                     interval: 1.0 / 30, hideDuration: 0, conditions: seen)
+                     interval: 1.0 / 30, conditions: seen)
         XCTAssertEqual(canvas.roam?.hidden, true)
         for _ in 0..<30 { canvas.step(1.0 / 30) }
-        XCTAssertEqual(canvas.driver.frames, 0, "a hidden Topo was drawn")
-        XCTAssertFalse(canvas.isTicking, "a hidden Topo standing still kept the link running")
+        XCTAssertEqual(canvas.driver.frames, 0, "a Topo standing nowhere was drawn")
+        XCTAssertFalse(canvas.isTicking, "a Topo standing nowhere kept the link running")
         XCTAssertFalse(canvas.showing)
+    }
+
+    /// Something over him does not stop him being drawn: he is above everything in the chat.
+    func testACoveredTopoIsStillDrawn() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let input = MascotState(model: "claude-sonnet-5").input
+        canvas.apply(input: input, field: Self.open, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
+        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        let picture = try XCTUnwrap(canvas.roam?.picture)
+        var over = Self.open
+        over.obstacles = [picture.insetBy(dx: 4, dy: 4)]
+        canvas.apply(input: input, field: over, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
+        XCTAssertEqual(canvas.roam?.covered, true)
+        let before = canvas.driver.frames
+        canvas.step(1.0 / 30)
+        XCTAssertTrue(canvas.showing, "a covered Topo was not drawn")
+        XCTAssertGreaterThan(canvas.driver.frames, before, "a covered Topo drew no frame")
     }
 
     /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
@@ -204,7 +223,7 @@ final class MascotDriverTests: XCTestCase {
         let thinking = MascotState(model: "claude-sonnet-5", activity: .thinking).input
         func apply(_ field: MascotField) {
             canvas.apply(input: thinking, field: field, settings: Self.settings, interval: 1.0 / 30,
-                         hideDuration: 0, conditions: seen)
+                         conditions: seen)
         }
         apply(Self.open)
         for _ in 0..<30 { canvas.step(1.0 / 30) }

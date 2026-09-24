@@ -4,8 +4,9 @@ import XCTest
 @testable import Topo
 
 /// Topo's going from roost to roost over a scripted stream of geometry and a scripted clock: the
-/// decision where to go waits for the geometry to settle and is never taken mid-glide; the
-/// decision whether he may be seen is taken on every frame and every geometry, with no wait.
+/// decision where to go waits for the geometry to settle and is never taken mid-glide; whether
+/// anything is over him is judged on every frame and every geometry, with no wait, and never
+/// stops him being drawn.
 final class MascotRoamTests: XCTestCase {
     static let size = MascotSprite.size(scale: 2.0 / 3)
     static let settings = MascotRoam.Settings(size: size, clearance: 8, speed: 40, settle: 0.6)
@@ -29,12 +30,13 @@ final class MascotRoamTests: XCTestCase {
         return (roam, time)
     }
 
-    /// Whatever he is drawn over, frame by frame: he is hidden exactly when anything he may not
-    /// cover overlaps his picture where it is.
-    private func assertHiddenExactlyWhenCovered(_ roam: MascotRoam, _ label: String,
-                                                file: StaticString = #filePath, line: UInt = #line) {
+    /// Whatever he is drawn over, frame by frame: he is covered exactly when anything he may not
+    /// cover overlaps his picture where it is, and drawn either way.
+    private func assertCoveredExactlyWhenOverlapped(_ roam: MascotRoam, _ label: String,
+                                                    file: StaticString = #filePath, line: UInt = #line) {
         guard let picture = roam.picture, let field = roam.field else { return }
-        XCTAssertEqual(roam.hidden, field.covers(picture), "\(label): \(picture)", file: file, line: line)
+        XCTAssertEqual(roam.covered, field.covers(picture), "\(label): \(picture)", file: file, line: line)
+        XCTAssertFalse(roam.hidden, "\(label): a Topo standing somewhere was not drawn", file: file, line: line)
     }
 
     /// The first geometry that holds still for a settle places him, with no glide; before it he
@@ -53,22 +55,24 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.roost.name, "gap")
     }
 
-    /// Text scrolled into where he stands hides him on the geometry it arrives in, before any
-    /// frame of the clock.
-    func testTextScrollingIntoHimHidesHimTheSameFrame() throws {
+    /// Text scrolled into where he stands covers him on the geometry it arrives in, before any
+    /// frame of the clock, and he is drawn over it.
+    func testTextScrollingIntoHimCoversHimTheSameFrameAndHeIsStillDrawn() throws {
         let (placed, time) = settled(Self.field([]))
         var roam = placed
         let picture = try XCTUnwrap(roam.picture)
         roam.observe(Self.field([CGRect(x: 0, y: picture.midY, width: 402, height: 20)]), at: time)
-        XCTAssertTrue(roam.hidden, "text over him and he is still drawn")
+        XCTAssertTrue(roam.covered, "text over him and he is not covered")
+        XCTAssertFalse(roam.hidden, "text over him and he is not drawn")
         // And back as it goes, the same way.
         roam.observe(Self.field([]), at: time)
+        XCTAssertFalse(roam.covered)
         XCTAssertFalse(roam.hidden)
     }
 
-    /// A glide whose straight path crosses a turn hides him while he is over it and shows him
-    /// again past it, and the glide goes on underneath: it ends where it was going.
-    func testAGlideAcrossATurnHidesHimOnlyWhileHeIsOverIt() throws {
+    /// A glide whose straight path crosses a turn is covered while he is over it and clear past
+    /// it, he is drawn all the way, and it ends where it was going.
+    func testAGlideAcrossATurnIsCoveredOnlyWhileHeIsOverIt() throws {
         // He stands low on the left, over the glass; then a turn lands over him and another lies
         // between him and the only gap, at the top, so his way up crosses both.
         let (placed, start) = settled(Self.field([]))
@@ -76,7 +80,7 @@ final class MascotRoamTests: XCTestCase {
         let from = try XCTUnwrap(roam.position)
         let rows = [CGRect(x: 0, y: 150, width: 402, height: 170), CGRect(x: 0, y: 380, width: 402, height: 160)]
         roam.observe(Self.field(rows), at: start)
-        XCTAssertTrue(roam.hidden, "the turn that landed on him did not hide him")
+        XCTAssertTrue(roam.covered, "the turn that landed on him did not cover him")
         var time = start
         var hiddenOnTheWay = false
         var shownOnTheWay = false
@@ -84,9 +88,9 @@ final class MascotRoamTests: XCTestCase {
         while time < start + 60 {
             time += Self.frame
             roam.advance(to: time)
-            assertHiddenExactlyWhenCovered(roam, "t \(time)")
+            assertCoveredExactlyWhenOverlapped(roam, "t \(time)")
             if roam.walking {
-                if roam.hidden { hiddenOnTheWay = true } else {
+                if roam.covered { hiddenOnTheWay = true } else {
                     shownOnTheWay = true
                     if hiddenOnTheWay { shownAfterHidden = true }
                 }
@@ -94,8 +98,8 @@ final class MascotRoamTests: XCTestCase {
             if roam.moves > 0, !roam.walking, !roam.needsTime { break }
         }
         XCTAssertEqual(roam.moves, 1, "one glide, never restarted")
-        XCTAssertTrue(hiddenOnTheWay, "he was drawn over the turns he crossed")
-        XCTAssertTrue(shownOnTheWay || shownAfterHidden, "he was never seen gliding")
+        XCTAssertTrue(hiddenOnTheWay, "his way never crossed the turns")
+        XCTAssertTrue(shownOnTheWay || shownAfterHidden, "he was never clear while gliding")
         let to = try XCTUnwrap(roam.picture)
         XCTAssertLessThanOrEqual(to.maxY, 150 - 8 + 0.001, "he did not arrive in the gap at the top")
         XCTAssertFalse(roam.hidden)
@@ -127,9 +131,9 @@ final class MascotRoamTests: XCTestCase {
     }
 
     /// The transcript reports its geometry on every frame of a scroll. While it streams with no
-    /// pause, no glide begins, and on every frame he is hidden exactly when text is over him;
-    /// once it stops, he goes.
-    func testContinuousScrollingBeginsNoGlideUntilItPausesAndNeverDrawsHimOverText() {
+    /// pause, no glide begins, and on every frame he is covered exactly when text is over him;
+    /// once it stops, a covered Topo goes after one quiet frame and ends clear of text.
+    func testContinuousScrollingBeginsNoGlideUntilItPausesAndLeavesHimClearOfText() {
         // Rows of text, scrolling up past him at 300 points a second, updated at 60 Hz while the
         // clock ticks at 30.
         func rows(_ offset: CGFloat) -> [CGRect] {
@@ -145,24 +149,24 @@ final class MascotRoamTests: XCTestCase {
             time = start + Double(step) / 60
             offset += 5
             roam.observe(Self.field(rows(offset)), at: time)
-            assertHiddenExactlyWhenCovered(roam, "scroll \(offset)")
+            assertCoveredExactlyWhenOverlapped(roam, "scroll \(offset)")
             if step.isMultiple(of: 2) { roam.advance(to: time) }
-            assertHiddenExactlyWhenCovered(roam, "tick \(time)")
+            assertCoveredExactlyWhenOverlapped(roam, "tick \(time)")
             if roam.covered { hiddenSeen = true }
             XCTAssertNotNil(roam.position)
             XCTAssertEqual(roam.moves, 0, "a glide began mid-scroll at \(time)")
         }
         XCTAssertTrue(hiddenSeen, "the scroll never passed over him, so this held nothing")
-        // The scroll stops. A hidden Topo waits one quiet frame; a seen one waits the settle.
-        let wasHidden = roam.hidden
+        // The scroll stops. A covered Topo waits one quiet frame; a clear one waits the settle.
+        let wasHidden = roam.covered
         let stopped = time
         while roam.needsTime, time < stopped + 30 {
             time += Self.frame
             roam.advance(to: time)
-            assertHiddenExactlyWhenCovered(roam, "after \(time)")
+            assertCoveredExactlyWhenOverlapped(roam, "after \(time)")
         }
         if wasHidden { XCTAssertEqual(roam.moves, 1, "a covered Topo did not get out of the way") }
-        XCTAssertFalse(roam.hidden, "he ended the scroll under text")
+        XCTAssertFalse(roam.covered, "he ended the scroll under text")
     }
 
     /// A geometry change that lands within the settle of the last one defers the decision; the

@@ -247,9 +247,8 @@ private extension Comparable {
 /// of the way as soon as the scroll or the landing turn stops rather than a settle later. It
 /// is never made mid-move, and a roost within `clearance` of where he stands is not a move. A move
 /// is one eased glide at `speed` points a second on average, which under Reduce Motion is a
-/// placement with no glide. **Whether he may be seen** is made on every frame and every geometry,
-/// with no wait: whenever anything he may not cover overlaps his picture where it is now — a turn
-/// scrolled under him, a turn his path crosses — he is hidden, while the move goes on underneath.
+/// placement with no glide. He is drawn above everything but the keyboard wherever he is, so
+/// nothing is judged about whether he may be seen: he is drawn whenever he stands anywhere.
 struct MascotRoam: Equatable, Sendable {
     struct Settings: Equatable, Sendable {
         var size: CGSize
@@ -305,7 +304,7 @@ struct MascotRoam: Equatable, Sendable {
     /// When the geometry last changed, and when the roam was last moved on.
     private var changed = -Double.infinity
     private var now = 0.0
-    /// The time a frame lasts, which is the quiet a hidden Topo waits for.
+    /// The time a frame lasts, which is the quiet a covered Topo waits for.
     var frame: Double
 
     init(_ settings: Settings, frame: Double = 1.0 / 30) {
@@ -315,8 +314,8 @@ struct MascotRoam: Equatable, Sendable {
 
     /// His picture where it is now; nil while he stands nowhere.
     var picture: CGRect? { position.map { CGRect(origin: $0, size: settings.size) } }
-    /// He is not drawn: covered, or standing nowhere.
-    var hidden: Bool { covered || position == nil }
+    /// He is not drawn: he stands nowhere.
+    var hidden: Bool { position == nil }
     /// He is gliding, which is when he wears the walk.
     var walking: Bool { move != nil }
     /// There is something the clock has to move on: a glide, or a decision waiting on the quiet.

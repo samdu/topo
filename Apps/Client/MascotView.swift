@@ -27,12 +27,11 @@ final class MascotDriver {
         var covered = false
         /// Reduce Motion: he is held still in his idle pose.
         var reduceMotion = false
-        /// Something he may not cover is over him, or he stands nowhere (`MascotRoam.hidden`): he
-        /// is faded out, and nothing of him is drawn.
+        /// He stands nowhere (`MascotRoam.hidden`): nothing of him is drawn.
         var hidden = false
 
-        /// The chat is in front of the person with him on it, whether or not he is hidden: what
-        /// his going from roost to roost needs, since a glide goes on under a hidden Topo.
+        /// The chat is in front of the person with him on it, whether or not he stands anywhere:
+        /// what his going from roost to roost needs, since a roost is decided from nowhere too.
         var present: Bool { active && onScreen && opacity > 0 && !covered }
         var visible: Bool { present && !hidden }
         /// Frames run: he is seen and may move.
@@ -155,16 +154,15 @@ final class MascotCanvas: UIView {
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
     private var interval = 1.0 / 30
-    private var hideDuration = 0.25
     /// What he stands for, before the walk is put on him for a glide.
     private var input = TopoInput()
-    /// What decides whether he is drawn, as SwiftUI tells it: the roam says whether he is hidden.
+    /// What decides whether he is drawn, as SwiftUI tells it: the roam says whether he stands anywhere.
     private var told = MascotDriver.Conditions()
     private(set) var roam: MascotRoam?
     /// How long the canvas has been ticking: the roam's clock, which stops with the link, so a
     /// glide the chat going behind a sheet interrupts carries on from where it was.
     private(set) var clock = 0.0
-    /// Told each time what he stands in, whether he is hidden or how many glides he has begun
+    /// Told each time what he stands in, whether he stands anywhere or how many glides he has begun
     /// changes. A debug build hands it to the chat's report.
     var onReport: ((MascotRoam.Report) -> Void)?
     private var reported: MascotRoam.Report?
@@ -199,10 +197,9 @@ final class MascotCanvas: UIView {
     /// Everything the view is told by SwiftUI, applied at once: the geometry is the roam's newest,
     /// and whether he is covered is judged against it before anything is drawn.
     func apply(input: TopoInput, field: MascotField?, settings: MascotRoam.Settings, interval: Double,
-               hideDuration: Double, conditions: MascotDriver.Conditions) {
+               conditions: MascotDriver.Conditions) {
         self.input = input
         self.interval = interval
-        self.hideDuration = hideDuration
         told = conditions
         var roam = roam ?? MascotRoam(settings, frame: interval)
         roam.use(settings)
@@ -214,7 +211,7 @@ final class MascotCanvas: UIView {
 
     /// His picture where the roam has it now, in the canvas.
     var spriteFrame: CGRect { sprite.frame }
-    /// Whether he is being drawn at all: the layer's opacity is heading for one.
+    /// Whether he is being drawn at all.
     var showing: Bool { sprite.opacity > 0 }
 
     override func didMoveToWindow() {
@@ -223,8 +220,9 @@ final class MascotCanvas: UIView {
     }
 
     /// The roam's answer handed to what draws him: the walk while he glides and his own activity
-    /// otherwise, the driver told whether he is hidden, the layer put where he is and faded to
-    /// match, and the link run exactly while something needs it.
+    /// otherwise, the driver told whether he stands anywhere, the layer put where he is and shown
+    /// or not with it, and the link run exactly while something needs it. Nothing over him hides
+    /// him: he is drawn above everything in the chat, and only the keyboard is above him.
     private func sync() {
         guard let roam else { return }
         var conditions = told
@@ -247,21 +245,9 @@ final class MascotCanvas: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         if let picture = roam.picture { sprite.frame = picture }
+        sprite.opacity = roam.hidden ? 0 : 1
         CATransaction.commit()
-        fade(to: roam.hidden ? 0 : 1)
         report(roam)
-    }
-
-    private func fade(to target: Float) {
-        guard sprite.opacity != target else { return }
-        let from = sprite.presentation()?.opacity ?? sprite.opacity
-        sprite.opacity = target
-        guard hideDuration > 0 else { return }
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = from
-        fade.toValue = target
-        fade.duration = hideDuration * Double(abs(target - from))
-        sprite.add(fade, forKey: "fade")
     }
 
     private func report(_ roam: MascotRoam) {
@@ -280,7 +266,7 @@ final class MascotCanvas: UIView {
     }
 
     /// The link runs while he animates, or while his roam has a glide or a decision waiting on the
-    /// clock, and not a frame longer: a hidden Topo standing still asks for nothing.
+    /// clock, and not a frame longer: a Topo standing nowhere with nothing to decide asks for nothing.
     private func reschedule() {
         let wanted = driver.conditions.animates || (driver.conditions.present && (roam?.needsTime ?? false))
         if wanted {
@@ -331,7 +317,7 @@ final class MascotCanvas: UIView {
 
 extension MascotRoam {
     /// What a debug build reports of him: where he stands, the frame of his picture there, whether
-    /// he is hidden and how many glides he has begun.
+    /// he stands nowhere and how many glides he has begun.
     struct Report: Codable, Equatable, Sendable {
         var roost: String
         var frame: [Double]?
@@ -352,7 +338,6 @@ struct MascotOverChat: UIViewRepresentable {
     var field: MascotField?
     var settings: MascotRoam.Settings
     var interval: Double
-    var hideDuration: Double
     var conditions: MascotDriver.Conditions
     var report: ((MascotRoam.Report) -> Void)?
 
@@ -361,7 +346,7 @@ struct MascotOverChat: UIViewRepresentable {
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
         canvas.onReport = report
         canvas.apply(input: input, field: field, settings: settings, interval: interval,
-                     hideDuration: hideDuration, conditions: conditions)
+                     conditions: conditions)
     }
 
     static func dismantleUIView(_ canvas: MascotCanvas, coordinator: ()) {
@@ -403,7 +388,7 @@ struct MascotLayer: View {
         GeometryReader { proxy in
             MascotOverChat(input: state.input, field: scene.field(in: proxy, keyboardTop: keyboardTop),
                            settings: MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion),
-                           interval: look.mascot.frameInterval, hideDuration: look.mascot.hideDuration,
+                           interval: look.mascot.frameInterval,
                            conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                              reduceMotion: reduceMotion),
                            report: report)
