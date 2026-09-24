@@ -185,6 +185,8 @@ enum LookDocument {
         r.seconds("duration", &value.duration)
         r.length("presenceRise", &value.presenceRise)
         r.seconds("presenceDuration", &value.presenceDuration)
+        r.compactShare("compactShare", &value.compactShare)
+        r.seconds("compactDuration", &value.compactDuration)
         r.object("flank") { flank(&value.flank, $0) }
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
@@ -200,6 +202,8 @@ enum LookDocument {
         r.size("offset", &value.offset, signed: true, heights: 0...200)
         r.length("stroll", &value.stroll)
         r.frameInterval("frameInterval", &value.frameInterval)
+        r.bob("bobAmplitude", &value.bobAmplitude)
+        r.period("bobPeriod", &value.bobPeriod)
     }
 
     private static func flank(_ value: inout Look.Composer.Flank, _ r: Reader) {
@@ -315,6 +319,34 @@ enum LookDocument {
             if let number = amount(key, in: 0...0.25, "a share between 0 and 0.25") {
                 applied += 1
                 value = CGFloat(number)
+            }
+        }
+
+        /// How much of its resting height the pane keeps under the keyboard. Bounded below at a
+        /// half, so the microphone drawn at that share is still one to press; the well has a
+        /// floor of its own besides (`Look.Composer.Well.pressable`).
+        func compactShare(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0.5...1, "a share of the resting height between 0.5 and 1") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
+        /// How far Topo bobs over an empty transcript. Up to 32 points: past that he is not
+        /// floating over the glass but leaving it.
+        func bob(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0...32, "a height in points between 0 and 32") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
+        /// How long one bob takes. Never nothing, since a bob that takes no time is a flicker,
+        /// and no longer than twenty seconds, past which it is not a bob.
+        func period(_ key: String, _ value: inout Double) {
+            if let number = amount(key, in: 0.5...20, "a time in seconds between 0.5 and 20") {
+                applied += 1
+                value = number
             }
         }
 

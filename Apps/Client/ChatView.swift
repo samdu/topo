@@ -27,6 +27,9 @@ struct ChatView: View {
     /// own state because what the row holds outlives the screen — an app killed with words on the
     /// line comes back to the row they were sent from.
     @State private var row = NextTurn()
+    /// The row's field holds focus, which is the keyboard on screen: the pane is present and
+    /// short while it does. Not `row.typing`, which outlives the field while a turn is on its way.
+    @State private var keyboardUp = false
     @State private var showSettings = false
     @State private var showDiagnostics = false
     /// The two edges the pane's presence is read from, in the chat's own space: where the
@@ -355,12 +358,13 @@ struct ChatView: View {
     }
 
     /// How much of a pane the pane is. One while any of the three edges is unmeasured: iOS 17
-    /// measures none of them, and a launch has not measured them yet.
+    /// measures none of them, and a launch has not measured them yet. One while the keyboard is
+    /// up, whatever the geometry.
     private var panePresence: Double {
         guard let contentBottomInTranscript, let transcriptTop, let paneTop else { return 1 }
         return PanePresence.of(contentBottom: transcriptTop + contentBottomInTranscript,
                                paneTop: paneTop, rise: look.composer.presenceRise,
-                               open: micState.open)
+                               open: micState.open, keyboard: keyboardUp)
     }
 
     /// The four facts the glass draws the microphone from, read off `VoiceInput`.
@@ -376,6 +380,7 @@ struct ChatView: View {
     /// the edge the presence is read against.
     @ViewBuilder private var composer: some View {
         let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
+                            keyboard: keyboardUp,
                             micPressed: { down in Task { await micPressed(down) } },
                             micReport: micReport, mascot: mascot.state,
                             covered: showSettings || showDiagnostics || showMemory)
@@ -431,7 +436,8 @@ struct ChatView: View {
     private var draftRow: Draft {
         let bindable = Bindable(row)
         return Draft(text: bindable.text, typing: bindable.typing,
-                     sending: row.sending(in: harness), send: send, edit: editSending)
+                     sending: row.sending(in: harness), send: send, edit: editSending,
+                     focused: { keyboardUp = $0 })
     }
 
     /// The turn the row is holding is in the log — answered, or answered by nothing, which are

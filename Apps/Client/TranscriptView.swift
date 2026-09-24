@@ -187,6 +187,10 @@ struct Draft {
     /// there is nothing to take back — nothing on its way, an attempt in flight that may be
     /// landing as it is asked, or a turn already known to be in the log.
     var edit: (@MainActor () -> Void)?
+    /// Told whether the row's field holds focus, which is whether the keyboard is on screen.
+    /// `typing` is what was asked for and outlives the field while a turn is on its way; this is
+    /// what is, and it is what the glass goes short and present for.
+    var focused: @MainActor (Bool) -> Void = { _ in }
 
     /// The three states of the row, and the whole of what it draws.
     enum State: String, Equatable, Sendable {
@@ -236,9 +240,12 @@ struct DraftRow: View {
         // which is what keeps the control that raised it honest. The field closing to a turn on
         // its way is not that, and says nothing about what the person wants next.
         .onChange(of: writing) { _, focused in
+            draft.focused(focused)
             guard draft.state != .inFlight else { return }
             draft.typing = focused
         }
+        // A row taken off the screen holds no focus, whatever the last change said.
+        .onDisappear { draft.focused(false) }
     }
 
     /// What the words are drawn on: the draft's own enclosure, in the colour of the state it is

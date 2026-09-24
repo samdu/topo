@@ -309,6 +309,18 @@ struct Look: Equatable, Sendable {
         var presenceRise: CGFloat = 48
         var presenceDuration = 0.2
 
+        /// The pane under the keyboard: shorter, so the keyboard and the pane take less of the
+        /// screen between them. The microphone is drawn at this share of its resting size — the
+        /// well, the jewel in it and the mark cut into it, and the room above and below the well
+        /// with them — so where the well is what sets the pane's height the pane is this share of
+        /// its resting height. The flanks keep their size. Read from a half to one, and the well
+        /// is never drawn under `Well.pressable` for it (`ComposerGeometry`).
+        var compactShare: CGFloat = 2.0 / 3
+        /// How long the pane takes to go short as the keyboard rises, and tall again as it goes.
+        /// SwiftUI hands a view nothing of the keyboard's own curve, so this is the keyboard's
+        /// duration written down.
+        var compactDuration = 0.25
+
         var flank = Flank()
         var well = Well()
         var glyph = Glyph()
@@ -350,8 +362,13 @@ struct Look: Equatable, Sendable {
         /// hard line of the lip itself and the light caught under its far edge, inside a cut
         /// edge that runs dark at the top to bright at the foot.
         struct Well: Equatable, Sendable {
+            /// The smallest the well is drawn under the keyboard: the system's minimum target.
+            /// Not a field of the look, because it is the floor a look is not allowed under; a
+            /// well a look makes smaller than this at rest is drawn at its own size and no smaller.
+            static let pressable: CGFloat = 44
+
             var size: CGFloat = 72
-            /// The jewel set into it.
+            /// The jewel set into it, drawn no bigger than the well it is set into.
             var jewelSize: CGFloat = 64
             var floor = Color.black.opacity(0.28)
             var bore = Shadow(color: .black.opacity(0.7), radius: 7, y: 5)
@@ -393,6 +410,12 @@ struct Look: Equatable, Sendable {
         /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
         /// motion was judged at and half the work of the display's rate.
         var frameInterval = 1.0 / 30
+        /// Over an empty transcript, with no pane under him, he floats where he would stand and
+        /// bobs: up by as much as this many points and back, once a `bobPeriod`. The bob eases out
+        /// as the pane arrives, so on the glass whole he sits still on its edge. None under
+        /// Reduce Motion.
+        var bobAmplitude: CGFloat = 3
+        var bobPeriod = 2.4
     }
 
     /// The person's next turn, written at the end of the transcript rather than in the glass.

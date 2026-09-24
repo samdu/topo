@@ -48,14 +48,24 @@ final class MascotGeometryTests: XCTestCase {
         let canvasView: MascotCanvas?
     }
 
-    private func stage(_ mascot: Look.Mascot?, composer: Look.Composer = Look.Composer()) throws -> Stage {
+    /// Where the pane is: at rest over turns (the pane whole), at rest over nothing (no pane,
+    /// and him floating), and under the keyboard (the pane short, and whole).
+    struct Pane: CustomStringConvertible {
+        var keyboard = false
+        var presence = 1.0
+        static let all = [Pane(), Pane(presence: 0), Pane(keyboard: true)]
+        var description: String { keyboard ? "under the keyboard" : "at rest, presence \(presence)" }
+    }
+
+    private func stage(_ mascot: Look.Mascot?, composer: Look.Composer = Look.Composer(),
+                       pane: Pane = Pane()) throws -> Stage {
         var look = Look()
         look.composer = composer
         look.composer.surface = .flat
         if let mascot { look.mascot = mascot }
         let view = VStack(spacing: 0) {
             Spacer()
-            Composer(typing: .constant(false), mic: .init(),
+            Composer(typing: .constant(pane.keyboard), mic: .init(), presence: pane.presence, keyboard: pane.keyboard,
                      mascot: mascot == nil ? nil : MascotState(model: "claude-opus-5", activity: .searching))
         }
         .environment(\.look, look)
@@ -88,9 +98,10 @@ final class MascotGeometryTests: XCTestCase {
         return nil
     }
 
-    /// The well, as the composer lays it out: in the middle of the stage, since the pane is.
-    private func well(_ composer: Look.Composer = Look.Composer()) -> CGRect {
-        let size = composer.well.size
+    /// The well, as the composer lays it out: in the middle of the stage, since the pane is, at
+    /// the size the keyboard leaves it.
+    private func well(_ composer: Look.Composer = Look.Composer(), pane: Pane = Pane()) -> CGRect {
+        let size = ComposerGeometry.of(composer, keyboard: pane.keyboard).well
         return CGRect(x: narrowest.width / 2 - size / 2, y: 0, width: size, height: narrowest.height)
             .intersection(CGRect(origin: .zero, size: narrowest))
     }
@@ -101,32 +112,41 @@ final class MascotGeometryTests: XCTestCase {
     /// — to the same pixels with Topo as without him, and his canvas to the flank's side of it,
     /// and that a touch anywhere on the well reaches no part of him.
     func testTheJewelIsTheSameWithHimAtEveryExtreme() throws {
-        let without = try stage(nil)
+        for pane in Pane.all { try jewelIsTheSameWithHim(pane) }
+    }
+
+    /// The whole of the test above, for one pane: at rest over turns, at rest over nothing with
+    /// him floating, and short under the keyboard with him placed from the short pane.
+    private func jewelIsTheSameWithHim(_ pane: Pane) throws {
+        let without = try stage(nil, pane: pane)
         defer { without.window.isHidden = true }
         XCTAssertNil(without.canvas)
         let bare = try pixels(without.image)
-        let well = well()
+        let well = well(pane: pane)
         let scale = Int(without.image.scale)
         let width = Int(narrowest.width) * scale
+        let share = ComposerGeometry.of(Look.Composer(), keyboard: pane.keyboard).scale
         // The pane's foot and height, read off him at home: his canvas runs from the top of him,
-        // standing on the pane's top edge at one point a pixel, to the pane's foot.
-        let home = try stage(Look.Mascot())
+        // standing on the pane's top edge at the pane's share of a point a pixel with room above
+        // for the bob, to the pane's foot.
+        let home = try stage(Look.Mascot(), pane: pane)
         defer { home.window.isHidden = true }
         let homeCanvas = try XCTUnwrap(home.canvas)
         let paneFoot = homeCanvas.maxY
-        let paneHeight = homeCanvas.height - CGFloat(Topo.shelfY)
+        let paneHeight = homeCanvas.height - CGFloat(Topo.shelfY) * share - Look.Mascot().bobAmplitude
 
         for mascot in Self.extremes {
-            let with = try stage(mascot)
+            let with = try stage(mascot, pane: pane)
             defer { with.window.isHidden = true }
-            let canvas = try XCTUnwrap(with.canvas, "\(mascot): he was not drawn")
-            XCTAssertLessThanOrEqual(canvas.maxX, well.minX + 0.5, "\(mascot): his canvas reaches the well")
+            let canvas = try XCTUnwrap(with.canvas, "\(pane), \(mascot): he was not drawn")
+            XCTAssertLessThanOrEqual(canvas.maxX, well.minX + 0.5, "\(pane), \(mascot): his canvas reaches the well")
 
             // He stays in his slot's band: his canvas ends at the pane's foot and reaches no
-            // higher than he stands tall over the pane's top edge.
-            XCTAssertEqual(canvas.maxY, paneFoot, accuracy: 0.5, "\(mascot): his canvas left the pane's foot")
-            XCTAssertLessThanOrEqual(canvas.height, paneHeight + CGFloat(Topo.shelfY) * mascot.scale + 0.5,
-                                     "\(mascot): his canvas grew past his band")
+            // higher than he stands tall over the pane's top edge, with his bob above him.
+            XCTAssertEqual(canvas.maxY, paneFoot, accuracy: 0.5, "\(pane), \(mascot): his canvas left the pane's foot")
+            XCTAssertLessThanOrEqual(canvas.height, paneHeight + CGFloat(Topo.shelfY) * mascot.scale * share
+                                        + mascot.bobAmplitude + 0.5,
+                                     "\(pane), \(mascot): his canvas grew past his band")
 
             // Every pixel of the well's column is the same, with a shade for the render server's
             // rounding on a curve's edge.
@@ -138,7 +158,7 @@ final class MascotGeometryTests: XCTestCase {
                     for c in 0..<4 where abs(Int(drawn[i + c]) - Int(bare[i + c])) > 2 { differing += 1 }
                 }
             }
-            XCTAssertEqual(differing, 0, "\(mascot): the well's column changed with him on the glass")
+            XCTAssertEqual(differing, 0, "\(pane), \(mascot): the well's column changed with him on the glass")
 
             // And he is to be seen in it, not pushed out of his own canvas.
             var seen = 0
@@ -149,14 +169,14 @@ final class MascotGeometryTests: XCTestCase {
                     if (0..<4).contains(where: { abs(Int(drawn[i + $0]) - Int(bare[i + $0])) > 2 }) { seen += 1 }
                 }
             }
-            XCTAssertGreaterThan(seen, 0, "\(mascot): nothing of him is drawn in his canvas")
+            XCTAssertGreaterThan(seen, 0, "\(pane), \(mascot): nothing of him is drawn in his canvas")
 
             // A touch on the well reaches the hosting view, never him. SwiftUI puts no view of its
             // own under a gesture, so UIKit can say no more than that he is not what is hit: that
             // the press reaches the microphone is `TopoOnTheGlassTests`, which presses it.
             for point in [CGPoint(x: well.midX, y: narrowest.height - 50), CGPoint(x: well.minX + 2, y: narrowest.height - 50)] {
                 let hit = with.window.hitTest(point, with: nil)
-                XCTAssertFalse(hit is MascotCanvas, "\(mascot): a touch on the well reached him")
+                XCTAssertFalse(hit is MascotCanvas, "\(pane), \(mascot): a touch on the well reached him")
                 if let canvasView = with.canvasView { XCTAssertFalse(hit?.isDescendant(of: canvasView) ?? false) }
             }
         }
@@ -238,7 +258,8 @@ final class MascotGeometryTests: XCTestCase {
             let shelf = placement.frame.minY + placement.home.y
             XCTAssertGreaterThanOrEqual(shelf, -composer.verticalInset, "\(height)")
             XCTAssertLessThanOrEqual(shelf, row.height + composer.verticalInset, "\(height)")
-            XCTAssertGreaterThanOrEqual(placement.frame.minY, -composer.verticalInset - CGFloat(Topo.shelfY) - 1e-9, "\(height)")
+            XCTAssertGreaterThanOrEqual(placement.frame.minY,
+                                        -composer.verticalInset - CGFloat(Topo.shelfY) - mascot.bobAmplitude - 1e-9, "\(height)")
         }
     }
 
@@ -260,7 +281,8 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(shelf, -composer.verticalInset, "\(mascot): lifted off the pane")
             XCTAssertLessThanOrEqual(shelf, row.height + composer.verticalInset, "\(mascot): below the pane")
             XCTAssertGreaterThanOrEqual(placement.frame.minY,
-                                        -composer.verticalInset - CGFloat(Topo.shelfY) * placement.scale - 1e-9,
+                                        -composer.verticalInset - CGFloat(Topo.shelfY) * placement.scale
+                                            - mascot.bobAmplitude - 1e-9,
                                         "\(mascot): the canvas grew past his band")
         }
         // A flank with no room at all is no placement.
@@ -268,5 +290,67 @@ final class MascotGeometryTests: XCTestCase {
                                       composer: { var c = composer; c.spacing = 0; c.horizontalInset = 0; return c }(),
                                       mascot: Look.Mascot())
         XCTAssertTrue(none.isEmpty)
+    }
+
+    // MARK: Floating, settling, and the short pane
+
+    /// At no presence, halfway and whole, on the resting pane and the short one, at every extreme
+    /// of his fields: every picture of him through a whole bob is inside the frame he is clipped
+    /// to, the frame ends at the well's leading edge — never over the jewel — and at the pane's
+    /// leading end, and he stands between the pane's top edge and its foot as drawn.
+    func testFloatingOrSettledOnEitherPaneHeStaysInHisFlank() {
+        let composer = Look.Composer()
+        for keyboard in [false, true] {
+            let geometry = ComposerGeometry.of(composer, keyboard: keyboard)
+            // The flank widens by what the well gave up, since the two ends take what is left.
+            let give = (composer.well.size - geometry.well) / 2
+            let flank = CGRect(x: 0, y: geometry.well / 2, width: self.flank.width + give, height: 0)
+            let row = CGSize(width: self.row.width, height: geometry.well)
+            let wellEdge = flank.maxX + composer.spacing
+            for mascot in Self.extremes + [{ var m = Look.Mascot(); m.bobAmplitude = 32; m.bobPeriod = 0.5; return m }()] {
+                let placement = MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: mascot,
+                                                   share: geometry.scale)
+                XCTAssertEqual(placement.scale, mascot.scale * geometry.scale, accuracy: 1e-9,
+                               "\(mascot): his scale does not follow the pane's")
+                XCTAssertEqual(placement.frame.maxX, wellEdge, accuracy: 1e-9, "\(mascot): his frame is not his flank")
+                XCTAssertEqual(placement.frame.minX, -composer.horizontalInset, accuracy: 1e-9)
+                let shelf = placement.frame.minY + placement.home.y
+                XCTAssertGreaterThanOrEqual(shelf, -geometry.verticalInset - 1e-9, "\(mascot)")
+                XCTAssertLessThanOrEqual(shelf, row.height + geometry.verticalInset + 1e-9, "\(mascot)")
+                XCTAssertEqual(placement.frame.maxY, row.height + geometry.verticalInset, accuracy: 1e-9,
+                               "\(mascot): his frame left the short pane's foot")
+                for presence in [0, 0.5, 1] {
+                    let hover = MascotHover(mascot, presence: presence)
+                    for step in 0...16 {
+                        let lift = hover.lift(at: mascot.bobPeriod * Double(step) / 16, reduceMotion: false)
+                        XCTAssertGreaterThanOrEqual(lift, 0)
+                        XCTAssertLessThanOrEqual(lift, mascot.bobAmplitude * CGFloat(1 - presence) + 1e-9,
+                                                 "\(mascot), \(presence): the bob is not eased by the presence")
+                        let sprite = placement.sprite(x: placement.corner, lift: lift)
+                        XCTAssertGreaterThanOrEqual(sprite.minY, -1e-9,
+                                                    "\(mascot), \(presence): his bob is clipped off the top of his frame")
+                    }
+                }
+            }
+        }
+    }
+
+    /// The bob, as arithmetic: nothing at the start of a period, the whole amplitude halfway, a
+    /// share of it at a share of the presence, and nothing at all under Reduce Motion or on the
+    /// glass whole.
+    func testTheBobEasesOutWithThePresenceAndIsNoneUnderReduceMotion() {
+        let hover = { (presence: Double) in MascotHover(amplitude: 8, period: 2, presence: presence) }
+        XCTAssertEqual(hover(0).lift(at: 0, reduceMotion: false), 0)
+        XCTAssertEqual(hover(0).lift(at: 1, reduceMotion: false), 8, accuracy: 1e-9)
+        XCTAssertEqual(hover(0.5).lift(at: 1, reduceMotion: false), 4, accuracy: 1e-9)
+        XCTAssertEqual(hover(0.75).lift(at: 1, reduceMotion: false), 2, accuracy: 1e-9)
+        XCTAssertEqual(hover(1).lift(at: 1, reduceMotion: false), 0)
+        for presence in [0, 0.5, 1] {
+            for time in stride(from: 0.0, through: 4, by: 0.25) {
+                XCTAssertEqual(hover(presence).lift(at: time, reduceMotion: true), 0, "\(presence), \(time)")
+            }
+        }
+        XCTAssertEqual(MascotHover(amplitude: 8, period: 0, presence: 0).lift(at: 1, reduceMotion: false), 0,
+                       "a bob with no period is a division by nothing")
     }
 }

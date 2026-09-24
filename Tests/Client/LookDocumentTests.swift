@@ -145,6 +145,31 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(LookDocument.read(#"{"mascot": {"frameInterval": 2}}"#).look.mascot.frameInterval, 1.0 / 30)
     }
 
+    /// The glass under the keyboard and Topo's bob are read in ranges of their own: a pane kept
+    /// at under half its height, a bob of no period or over twenty seconds, and a bob higher than
+    /// 32 points are refused, each alone, and the ends of each range are taken.
+    func testTheShortPaneAndTheBobAreReadInTheirOwnRanges() {
+        let refused = LookDocument.read(#"{"composer": {"compactShare": 0.49, "compactDuration": 11}, "mascot": {"bobAmplitude": 33, "bobPeriod": 0}}"#)
+        XCTAssertEqual(refused.look, Look())
+        XCTAssertEqual(refused.notes.count, 4, refused.notes.description)
+        XCTAssertEqual(LookDocument.read(#"{"composer": {"compactShare": 1.01}}"#).look.composer.compactShare, 2.0 / 3)
+        XCTAssertEqual(LookDocument.read(#"{"mascot": {"bobPeriod": 21}}"#).look.mascot.bobPeriod, 2.4)
+        XCTAssertEqual(LookDocument.read(#"{"mascot": {"bobAmplitude": -1}}"#).look.mascot.bobAmplitude, 3)
+
+        let low = LookDocument.read(#"{"composer": {"compactShare": 0.5, "compactDuration": 0}, "mascot": {"bobAmplitude": 0, "bobPeriod": 0.5}}"#)
+        XCTAssertEqual(low.notes, [])
+        XCTAssertEqual(low.look.composer.compactShare, 0.5)
+        XCTAssertEqual(low.look.composer.compactDuration, 0)
+        XCTAssertEqual(low.look.mascot.bobAmplitude, 0)
+        XCTAssertEqual(low.look.mascot.bobPeriod, 0.5)
+        let high = LookDocument.read(#"{"composer": {"compactShare": 1, "compactDuration": 10}, "mascot": {"bobAmplitude": 32, "bobPeriod": 20}}"#)
+        XCTAssertEqual(high.notes, [])
+        XCTAssertEqual(high.look.composer.compactShare, 1)
+        XCTAssertEqual(high.look.composer.compactDuration, 10)
+        XCTAssertEqual(high.look.mascot.bobAmplitude, 32)
+        XCTAssertEqual(high.look.mascot.bobPeriod, 20)
+    }
+
     func testABooleanIsNotANumber() {
         let reading = LookDocument.read("""
         { "bubble": { "strokeWidth": true } }

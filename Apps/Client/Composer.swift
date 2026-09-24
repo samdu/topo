@@ -13,7 +13,8 @@ import SwiftUI
 ///
 /// Words are not written here. The person's next turn is written at the end of the transcript,
 /// in the bubble it is about to become (`DraftRow`); this raises the keyboard for it and holds
-/// the microphone.
+/// the microphone. While the keyboard is up the pane is shorter: the microphone is drawn at
+/// `compactShare` of its size and the flanks at theirs (`ComposerGeometry`).
 struct Composer: View {
     /// The keyboard is up, and the row at the end of the transcript has it.
     @Binding var typing: Bool
@@ -24,6 +25,10 @@ struct Composer: View {
     /// and nothing else. The chat works it out from the transcript's scroll geometry
     /// (`PanePresence`); a screen with no geometry to read hands over 1, which is the pane whole.
     var presence: Double = 1
+    /// The keyboard is on screen — the row's field has focus, which the chat reads rather than
+    /// `typing`, since `typing` outlives the field while a turn is on its way. The pane is drawn
+    /// short under it.
+    var keyboard = false
     /// Called with true on the press and false on the release. The session logic is
     /// `VoiceInput`'s; this passes the press on and nothing else.
     var micPressed: (Bool) -> Void = { _ in }
@@ -85,6 +90,7 @@ struct Composer: View {
     }
 
     var body: some View {
+        let geometry = ComposerGeometry.of(look.composer, keyboard: keyboard)
         HStack(spacing: look.composer.spacing) {
             // The two ends take the same width, which is what keeps the microphone in the
             // middle of the glass. A control that has gone keeps its place, so the glass
@@ -93,7 +99,7 @@ struct Composer: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .opacity(flankOpacity)
                 .anchorPreference(key: LeadingFlank.self, value: .bounds) { $0 }
-            micButton
+            micButton(geometry)
             trailing
                 .etched(look.composer.flank, ink: ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -102,11 +108,13 @@ struct Composer: View {
         // Topo lives in the leading flank. He is laid over the row rather than in it, so he
         // takes no room and moves nothing, and he is placed from the flank as it was measured:
         // the microphone is where it would be without him, and he is clipped short of its well.
+        // Under the keyboard he is placed from the short pane and drawn at its share; over an
+        // empty transcript, where there is no pane, he floats.
         .overlayPreferenceValue(LeadingFlank.self) { flank in
             if let mascot, let flank {
                 GeometryReader { row in
-                    MascotOnGlass(state: mascot, flank: row[flank], row: row.size,
-                                  opacity: flankOpacity, covered: covered)
+                    MascotOnGlass(state: mascot, flank: row[flank], row: row.size, share: geometry.scale,
+                                  presence: presence, opacity: flankOpacity, covered: covered)
                         .opacity(flankOpacity)
                 }
                 .allowsHitTesting(false)
@@ -114,7 +122,8 @@ struct Composer: View {
             }
         }
         .padding(.horizontal, look.composer.horizontalInset)
-        .padding(.vertical, look.composer.verticalInset)
+        .padding(.vertical, geometry.verticalInset)
+        .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
         .background(lozenge.opacity(presence))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
         .containerRelativeFrame(.horizontal) { width, _ in width * look.composer.widthFraction }
@@ -122,6 +131,7 @@ struct Composer: View {
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
         .animation(.easeInOut(duration: look.composer.duration), value: typing)
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
+        .animation(.easeInOut(duration: look.composer.compactDuration), value: keyboard)
     }
 
     /// How much of the two ends is drawn: all of it, except under a thumb on the microphone.
@@ -140,10 +150,17 @@ struct Composer: View {
 
     /// The way to the keyboard, and back from it. One control with two states rather than two
     /// controls, since the row it raises the keyboard for is the only thing it has to undo.
+    ///
+    /// Both marks are laid out and one is drawn, so the control is the size of the larger of them
+    /// either way: the keyboard mark is taller than the plain one, and a flank that grew as the
+    /// keyboard rose would hold up a pane that is meant to go short.
     private var trailing: some View {
         Button { typing.toggle() } label: {
-            Image(systemName: typing ? "keyboard.chevron.compact.down" : "keyboard")
-                .font(look.composer.flank.font)
+            ZStack {
+                Image(systemName: "keyboard").opacity(typing ? 0 : 1)
+                Image(systemName: "keyboard.chevron.compact.down").opacity(typing ? 1 : 0)
+            }
+            .font(look.composer.flank.font)
         }
         .accessibilityLabel(typing ? "Hide the keyboard" : "Type instead")
     }
@@ -183,11 +200,15 @@ struct Composer: View {
     ///
     /// The gesture is the chat's: press and release, with the session logic on the far side of
     /// `micPressed`. It sits on the whole well rather than on the mark, so the thumb has the
-    /// bore to land in.
-    private var micButton: some View {
+    /// bore to land in — at whatever size the well is drawn, since the gesture is on the well as
+    /// drawn and not as it rests.
+    ///
+    /// It is drawn at its resting size and scaled to the geometry's share as one piece, so the
+    /// well, the jewel and the cut of the mark go short together and animate as one value.
+    private func micButton(_ geometry: ComposerGeometry) -> some View {
         Well(well: look.composer.well)
             .overlay {
-                StainedGlass(glass: jewel, diameter: look.composer.well.jewelSize)
+                StainedGlass(glass: jewel, diameter: geometry.restingJewel)
                     .saturation(mic.appearance == .dimmed ? look.composer.dimmedSaturation : 1)
                     .opacity(mic.appearance == .dimmed ? look.composer.dimmedOpacity : 1)
             }
@@ -197,10 +218,14 @@ struct Composer: View {
                 // two walls of the cut, from `Look.press`.
                 Image(systemName: mic.appearance == .handsFree ? "waveform" : "mic.fill")
                     .font(.system(size: look.composer.glyph.size, weight: look.composer.glyph.weight))
-                    .pressed(look.press, into: jewel, diameter: look.composer.well.jewelSize,
+                    .pressed(look.press, into: jewel, diameter: geometry.restingJewel,
                              cast: mic.open ? look.composer.glyph.openCast : .clear)
             }
             .frame(width: look.composer.well.size, height: look.composer.well.size)
+            .scaleEffect(geometry.scale)
+            .frame(width: geometry.well, height: geometry.well)
+            .contentShape(Circle())
+            .anchorPreference(key: ComposerFrames.Well.self, value: .bounds) { $0 }
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                 micPressed(down)
             }
@@ -216,11 +241,66 @@ struct Composer: View {
     }
 }
 
+/// Where the pane and the well are, as laid out, for whatever is drawn over the composer to read:
+/// the pane's own bounds, the edge of the glass, and the well's, which is the area a press lands
+/// in. `ComposerGeometryTests` holds the one inside the other at every end of the look's ranges.
+enum ComposerFrames {
+    struct Pane: PreferenceKey {
+        static let defaultValue: Anchor<CGRect>? = nil
+        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+            value = value ?? nextValue()
+        }
+    }
+
+    struct Well: PreferenceKey {
+        static let defaultValue: Anchor<CGRect>? = nil
+        static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+            value = value ?? nextValue()
+        }
+    }
+}
+
 /// Where the leading flank is, for Topo to be placed from.
 private struct LeadingFlank: PreferenceKey {
     static let defaultValue: Anchor<CGRect>? = nil
     static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
         value = value ?? nextValue()
+    }
+}
+
+/// How big the microphone is drawn, and the room above and below it, at rest and under the
+/// keyboard. A pure function of the look, so what the pane does under the keyboard is arithmetic
+/// a test holds at every end of the document's ranges rather than a screen it has to photograph.
+///
+/// Under the keyboard the well, the jewel and the mark are drawn at `compactShare` of their
+/// resting size, and the vertical inset with them, so the pane is that share of its resting height
+/// wherever the well is what sets it. The flanks keep their size: a pane whose flanks are taller
+/// than its short well is as short as they let it be. The well is never drawn under
+/// `Look.Composer.Well.pressable` for the keyboard — one a look makes smaller than that at rest
+/// stays at its own size — so the share the whole microphone is drawn at is the larger of the two.
+struct ComposerGeometry: Equatable, Sendable {
+    /// The share of its resting size the microphone is drawn at: 1 at rest.
+    var scale: CGFloat
+    /// The well as drawn, which is the area the press lands in.
+    var well: CGFloat
+    /// The jewel before it is scaled: its own size, and no bigger than the well it is set into.
+    var restingJewel: CGFloat
+    /// The room above and below the row, as drawn.
+    var verticalInset: CGFloat
+
+    /// The jewel as drawn.
+    var jewel: CGFloat { restingJewel * scale }
+
+    static func of(_ composer: Look.Composer, keyboard: Bool) -> ComposerGeometry {
+        let resting = composer.well.size
+        let jewel = min(composer.well.jewelSize, resting)
+        guard keyboard, resting > 0 else {
+            return ComposerGeometry(scale: 1, well: resting, restingJewel: jewel, verticalInset: composer.verticalInset)
+        }
+        let short = max(resting * min(max(composer.compactShare, 0), 1), min(resting, Look.Composer.Well.pressable))
+        let scale = short / resting
+        return ComposerGeometry(scale: scale, well: short, restingJewel: jewel,
+                                verticalInset: composer.verticalInset * scale)
     }
 }
 
@@ -233,12 +313,15 @@ private struct LeadingFlank: PreferenceKey {
 /// is a share and not a step, so the surface arrives as the content does.
 ///
 /// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
-/// open, and that must not depend on how much has been said.
+/// open, and that must not depend on how much has been said. So is the keyboard: the pane goes
+/// short under it, and a pane that is not there cannot be seen to.
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing
-    /// is the step the share cannot express: a pane, or none, with nothing in between.
-    static func of(contentBottom: CGFloat, paneTop: CGFloat, rise: CGFloat, open: Bool) -> Double {
-        if open { return 1 }
+    /// is the step the share cannot express: a pane, or none, with nothing in between. `keyboard`
+    /// is the row's field holding focus, which is the keyboard on screen.
+    static func of(contentBottom: CGFloat, paneTop: CGFloat, rise: CGFloat, open: Bool,
+                   keyboard: Bool) -> Double {
+        if open || keyboard { return 1 }
         let under = contentBottom - paneTop
         guard rise > 0 else { return under > 0 ? 1 : 0 }
         return Double(min(max(under / rise, 0), 1))
@@ -317,7 +400,8 @@ private extension View {
                 .safeAreaInset(edge: .bottom) {
                     Composer(typing: $typing,
                              mic: .init(canListen: canListen, listening: listening,
-                                        owner: listening ? .chat : nil, handsFree: handsFree))
+                                        owner: listening ? .chat : nil, handsFree: handsFree),
+                             keyboard: typing)
                 }
         }
         Divider()
