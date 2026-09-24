@@ -4,104 +4,6 @@ import SwiftUI
 import TopoMascot
 import UIKit
 
-/// Where Topo is drawn on the glass, worked out from the flank he lives in rather than from the
-/// look alone: the look says how big, where and how far, and this clamps all of it to the room
-/// the flank actually has, so no look and no screen puts him over the microphone.
-///
-/// Everything is in the space of the composer's row — the flanks and the well, inside the pane's
-/// insets — where the leading flank is measured. The pane's leading end is `horizontalInset`
-/// before the flank, the well's leading edge `spacing` after it, and the pane's top and foot the
-/// vertical inset as drawn outside the row.
-///
-/// `share` is the share of its resting size the pane's microphone is drawn at
-/// (`ComposerGeometry.scale`): under the keyboard the pane is short, and he is placed from the
-/// short pane — its top edge and its foot — at his own size, which is `look.mascot.scale` alone
-/// and never follows the pane's height.
-struct MascotPlacement: Equatable, Sendable {
-    /// The one rectangle he is drawn in and clipped to: from the pane's leading end to the well's
-    /// leading edge, and from the top of him, floated as high as his bob goes, to the pane's foot.
-    /// Nothing of him is drawn outside it, and it never reaches the well.
-    var frame: CGRect
-    /// Where his body stands in `frame`: the middle of the flank moved by the look's offset, on
-    /// the row of the engine's shelf, which sits on the pane's top edge.
-    var home: CGPoint
-    /// Points to an art pixel.
-    var scale: CGFloat
-    /// How far the engine's idle stroll goes, in its own art pixels: towards the pane's leading
-    /// end, and never past it.
-    var corner: Double
-
-    /// A flank with no room in it — a pane too narrow for anything but the microphone — draws
-    /// nothing.
-    var isEmpty: Bool { frame.width <= 0 || frame.height <= 0 }
-
-    /// No placement at all: what a flank with no width gets.
-    static let none = MascotPlacement(frame: .zero, home: .zero, scale: 1, corner: 0)
-
-    static func of(flank: CGRect, row: CGSize, composer: Look.Composer, mascot: Look.Mascot,
-                   share: CGFloat = 1) -> MascotPlacement {
-        // No flank is no Topo: the inset and the spacing around a flank with no width are the
-        // pane's edge and the well's margin, not room of his.
-        guard flank.width > 0 else { return .none }
-        let share = min(max(share, 0), 1)
-        let scale = mascot.scale
-        let inset = composer.verticalInset * share
-        let left = flank.minX - composer.horizontalInset
-        let right = max(left, flank.maxX + composer.spacing)
-        let paneTop = -inset
-        let paneFoot = row.height + inset
-        let homeX = min(max((left + right) / 2 + mascot.offset.width, left), right)
-        // The edge he stands on is between the pane's top edge and its foot, whatever the look
-        // says: lifted above it he would float over the transcript, below it he is out of sight.
-        let shelf = paneTop + min(max(mascot.offset.height, 0), paneFoot - paneTop)
-        // Room above him for the bob, so a lift is drawn rather than clipped.
-        let top = min(shelf - CGFloat(Topo.shelfY) * scale - max(mascot.bobAmplitude, 0), paneTop)
-        let stroll = min(max(mascot.stroll, 0), homeX - left)
-        return MascotPlacement(frame: CGRect(x: left, y: top, width: right - left, height: max(0, paneFoot - top)),
-                               home: CGPoint(x: homeX - left, y: shelf - top), scale: scale,
-                               corner: -Double(stroll / scale))
-    }
-
-    /// The engine's whole picture in `frame`'s space, with him walked `x` art pixels from home
-    /// and floated `lift` points up off it.
-    func sprite(x: Double, lift: CGFloat = 0) -> CGRect {
-        CGRect(x: home.x + CGFloat(x - Topo.bodyX) * scale, y: home.y - CGFloat(Topo.shelfY) * scale - lift,
-               width: CGFloat(Topo.width) * scale, height: CGFloat(Topo.height) * scale)
-    }
-}
-
-/// Topo floating over an empty transcript. With no pane under him he is not standing on
-/// anything, so he bobs where he would stand: up by as much as the amplitude and back, once a
-/// period. The bob is scaled by how much of a pane there is not — the presence, which the pane
-/// arrives at as the turns run under it — so as the glass appears he settles onto it rather than
-/// stopping, and on the glass whole he is still.
-struct MascotHover: Equatable, Sendable {
-    var amplitude: CGFloat = 0
-    var period: Double = 1
-    /// The pane's presence, 0 to 1.
-    var presence: Double = 1
-
-    init(amplitude: CGFloat = 0, period: Double = 1, presence: Double = 1) {
-        self.amplitude = amplitude
-        self.period = period
-        self.presence = presence
-    }
-
-    init(_ mascot: Look.Mascot, presence: Double) {
-        self.init(amplitude: mascot.bobAmplitude, period: mascot.bobPeriod, presence: presence)
-    }
-
-    /// How far up he is `time` seconds into the bob, in points: nothing at the start of each
-    /// period, the whole amplitude at its middle, and nothing at all under Reduce Motion, on the
-    /// glass whole, or for a bob with no length or no period.
-    func lift(at time: Double, reduceMotion: Bool) -> CGFloat {
-        guard !reduceMotion, period > 0, amplitude > 0, time.isFinite else { return 0 }
-        let free = 1 - min(max(presence.isFinite ? presence : 1, 0), 1)
-        let phase = (1 - cos(2 * .pi * time / period)) / 2
-        return amplitude * CGFloat(free * phase)
-    }
-}
-
 /// The engine run a frame at a time, and only while he can be seen. It holds the engine, the one
 /// buffer it draws into and the picture made from it; what calls `tick` is the canvas's display
 /// link, which runs exactly while `conditions.animates` does.
@@ -117,7 +19,7 @@ final class MascotDriver {
         var active = false
         /// The canvas is in a window.
         var onScreen = false
-        /// How opaque his flank is drawn: the microphone's hold fades both flanks to
+        /// How opaque he is drawn: the microphone's hold fades him with the glass's flanks, to
         /// `composer.flank.heldOpacity`. Any opacity above zero is him seen, so frames go on;
         /// at zero there is nothing to draw, and they stop.
         var opacity = 1.0
@@ -125,8 +27,14 @@ final class MascotDriver {
         var covered = false
         /// Reduce Motion: he is held still in his idle pose.
         var reduceMotion = false
+        /// Something he may not cover is over him, or he stands nowhere (`MascotRoam.hidden`): he
+        /// is faded out, and nothing of him is drawn.
+        var hidden = false
 
-        var visible: Bool { active && onScreen && opacity > 0 && !covered }
+        /// The chat is in front of the person with him on it, whether or not he is hidden: what
+        /// his going from roost to roost needs, since a glide goes on under a hidden Topo.
+        var present: Bool { active && onScreen && opacity > 0 && !covered }
+        var visible: Bool { present && !hidden }
         /// Frames run: he is seen and may move.
         var animates: Bool { visible && !reduceMotion }
         /// One still frame, drawn once per state: he is seen and may not move.
@@ -134,7 +42,7 @@ final class MascotDriver {
     }
 
     var conditions = Conditions() { didSet { if conditions != oldValue { holdStill() } } }
-    /// What the engine is handed, including how far the stroll goes.
+    /// What the engine is handed.
     var input = TopoInput() { didSet { holdStill() } }
     /// Told every picture drawn, and how far along the shelf he is.
     var onFrame: ((CGImage, Double) -> Void)?
@@ -236,21 +144,30 @@ final class MascotDriver {
     #endif
 }
 
-/// The view he is drawn in: one layer holding the engine's picture, magnified nearest-neighbour,
-/// moved along the shelf as he strolls, and clipped to the canvas, which is his placement's frame.
-/// It takes no touch and is nothing to accessibility, so the microphone beside it is found and
-/// pressed exactly as it would be without him.
+/// The view he is drawn in, laid over the whole of the chat: one layer holding the engine's
+/// picture, cut to the part of it he is ever drawn in (`MascotSprite.box`), magnified
+/// nearest-neighbour and put where his roam says he is. It takes no touch and is nothing to
+/// accessibility, so everything under it is found and pressed exactly as it would be without him.
 @MainActor
 final class MascotCanvas: UIView {
     let driver = MascotDriver()
     private let sprite = CALayer()
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
-    private(set) var placement: MascotPlacement?
     private var interval = 1.0 / 30
-    private(set) var hover = MascotHover()
-    /// How long he has been drawn moving, which is where in the bob he is.
-    private var clock = 0.0
+    private var hideDuration = 0.25
+    /// What he stands for, before the walk is put on him for a glide.
+    private var input = TopoInput()
+    /// What decides whether he is drawn, as SwiftUI tells it: the roam says whether he is hidden.
+    private var told = MascotDriver.Conditions()
+    private(set) var roam: MascotRoam?
+    /// How long the canvas has been ticking: the roam's clock, which stops with the link, so a
+    /// glide the chat going behind a sheet interrupts carries on from where it was.
+    private(set) var clock = 0.0
+    /// Told each time what he stands in, whether he is hidden or how many glides he has begun
+    /// changes. A debug build hands it to the chat's report.
+    var onReport: ((MascotRoam.Report) -> Void)?
+    private var reported: MascotRoam.Report?
 
     /// Whether the display link is running, which is whether frames are being asked for.
     var isTicking: Bool { link != nil }
@@ -265,57 +182,108 @@ final class MascotCanvas: UIView {
         clipsToBounds = true
         sprite.magnificationFilter = .nearest
         sprite.minificationFilter = .nearest
+        sprite.contentsRect = CGRect(x: MascotSprite.box.minX / CGFloat(Topo.width),
+                                     y: MascotSprite.box.minY / CGFloat(Topo.height),
+                                     width: MascotSprite.box.width / CGFloat(Topo.width),
+                                     height: MascotSprite.box.height / CGFloat(Topo.height))
         // The layer is moved every frame; an implicit animation would smear what is pixels.
-        sprite.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "frame": NSNull()]
+        sprite.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "frame": NSNull(),
+                          "opacity": NSNull()]
+        sprite.opacity = 0
         layer.addSublayer(sprite)
-        driver.onFrame = { [weak self] image, x in self?.show(image, x: x) }
+        driver.onFrame = { [weak self] image, _ in self?.show(image) }
     }
 
     required init?(coder: NSCoder) { fatalError("made in code") }
 
-    /// Everything the view is told by SwiftUI, applied at once.
-    func apply(input: TopoInput, placement: MascotPlacement, interval: Double, hover: MascotHover = .init(),
-               conditions: MascotDriver.Conditions) {
-        self.placement = placement
+    /// Everything the view is told by SwiftUI, applied at once: the geometry is the roam's newest,
+    /// and whether he is covered is judged against it before anything is drawn.
+    func apply(input: TopoInput, field: MascotField?, settings: MascotRoam.Settings, interval: Double,
+               hideDuration: Double, conditions: MascotDriver.Conditions) {
+        self.input = input
         self.interval = interval
-        self.hover = hover
-        var conditions = conditions
+        self.hideDuration = hideDuration
+        told = conditions
+        var roam = roam ?? MascotRoam(settings, frame: interval)
+        roam.use(settings)
+        roam.frame = interval
+        if let field { roam.observe(field, at: clock) }
+        self.roam = roam
+        sync()
+    }
+
+    /// His picture where the roam has it now, in the canvas.
+    var spriteFrame: CGRect { sprite.frame }
+    /// Whether he is being drawn at all: the layer's opacity is heading for one.
+    var showing: Bool { sprite.opacity > 0 }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        sync()
+    }
+
+    /// The roam's answer handed to what draws him: the walk while he glides and his own activity
+    /// otherwise, the driver told whether he is hidden, the layer put where he is and faded to
+    /// match, and the link run exactly while something needs it.
+    private func sync() {
+        guard let roam else { return }
+        var conditions = told
         conditions.onScreen = window != nil
-        driver.input = input
+        conditions.hidden = roam.hidden
+        var worn = input
+        // The engine walks along its own shelf; where he is on the screen is the roam's, so the
+        // stroll goes nowhere and a glide is the walk worn in place.
+        worn.corner = 0
+        if roam.walking {
+            worn.activity = "walk"
+            worn.sign = nil
+        }
+        if driver.input.activity != worn.activity || driver.input.model != worn.model
+            || driver.input.tokens != worn.tokens || driver.input.sign != worn.sign || driver.input.corner != 0 {
+            driver.input = worn
+        }
         driver.conditions = conditions
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        sprite.frame = placement.sprite(x: lastX, lift: lift)
+        if let picture = roam.picture { sprite.frame = picture }
         CATransaction.commit()
+        fade(to: roam.hidden ? 0 : 1)
+        report(roam)
     }
 
-    /// How far up the bob has him now: nothing under Reduce Motion, where no frame moves him.
-    var lift: CGFloat { hover.lift(at: clock, reduceMotion: driver.conditions.reduceMotion) }
-
-    /// Where his picture is drawn in the canvas, as the last frame or state left it.
-    var spriteFrame: CGRect { sprite.frame }
-
-    override func didMoveToWindow() {
-        super.didMoveToWindow()
-        driver.conditions.onScreen = window != nil
-        reschedule()
+    private func fade(to target: Float) {
+        guard sprite.opacity != target else { return }
+        let from = sprite.presentation()?.opacity ?? sprite.opacity
+        sprite.opacity = target
+        guard hideDuration > 0 else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = from
+        fade.toValue = target
+        fade.duration = hideDuration * Double(abs(target - from))
+        sprite.add(fade, forKey: "fade")
     }
 
-    private var lastX = 0.0
+    private func report(_ roam: MascotRoam) {
+        guard let onReport else { return }
+        let now = roam.report
+        guard now != reported else { return }
+        reported = now
+        onReport(now)
+    }
 
-    private func show(_ image: CGImage, x: Double) {
-        lastX = x
+    private func show(_ image: CGImage) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         sprite.contents = image
-        if let placement { sprite.frame = placement.sprite(x: x, lift: lift) }
         CATransaction.commit()
     }
 
-    /// The link runs while he animates and not a frame longer.
+    /// The link runs while he animates, or while his roam has a glide or a decision waiting on the
+    /// clock, and not a frame longer: a hidden Topo standing still asks for nothing.
     private func reschedule() {
-        if driver.conditions.animates {
+        let wanted = driver.conditions.animates || (driver.conditions.present && (roam?.needsTime ?? false))
+        if wanted {
             let fps = Float(1 / interval)
             if let link {
                 link.preferredFrameRateRange = CAFrameRateRange(minimum: fps / 2, maximum: fps, preferred: fps)
@@ -339,9 +307,11 @@ final class MascotCanvas: UIView {
         step(dt)
     }
 
-    /// One frame, `dt` seconds on: the bob's clock and the engine moved on together.
+    /// One frame, `dt` seconds on: the roam's clock and the engine moved on together.
     func step(_ dt: Double) {
         clock += dt
+        roam?.advance(to: clock)
+        sync()
         driver.tick(dt)
     }
 
@@ -359,18 +329,39 @@ final class MascotCanvas: UIView {
     }
 }
 
+extension MascotRoam {
+    /// What a debug build reports of him: where he stands, the frame of his picture there, whether
+    /// he is hidden and how many glides he has begun.
+    struct Report: Codable, Equatable, Sendable {
+        var roost: String
+        var frame: [Double]?
+        var hidden: Bool
+        var moves: Int
+    }
+
+    var report: Report {
+        Report(roost: roost.name,
+               frame: roost.frame.map { [$0.minX, $0.minY, $0.width, $0.height].map { Double($0) } },
+               hidden: hidden, moves: moves)
+    }
+}
+
 /// The canvas in SwiftUI.
-struct MascotPerch: UIViewRepresentable {
+struct MascotOverChat: UIViewRepresentable {
     var input: TopoInput
-    var placement: MascotPlacement
+    var field: MascotField?
+    var settings: MascotRoam.Settings
     var interval: Double
-    var hover: MascotHover
+    var hideDuration: Double
     var conditions: MascotDriver.Conditions
+    var report: ((MascotRoam.Report) -> Void)?
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
-        canvas.apply(input: input, placement: placement, interval: interval, hover: hover, conditions: conditions)
+        canvas.onReport = report
+        canvas.apply(input: input, field: field, settings: settings, interval: interval,
+                     hideDuration: hideDuration, conditions: conditions)
     }
 
     static func dismantleUIView(_ canvas: MascotCanvas, coordinator: ()) {
@@ -378,58 +369,64 @@ struct MascotPerch: UIViewRepresentable {
     }
 }
 
-/// Topo in the composer's leading flank: placed from the flank's measured bounds and the row's
-/// size, drawn from the state he is handed, and told what decides whether he is drawn.
-///
-/// The presence and the share are animated through it, so the bob eases out over the same time
-/// the pane's surface arrives in, and his slot moves with the short pane's edges rather than
-/// jumping. His size is the look's and does not move at all.
-struct MascotOnGlass: View, Animatable {
+extension MascotScene.Value {
+    /// The anchors resolved where he is drawn, or nil before the transcript has reported its frame.
+    /// `keyboardTop` is the keyboard's top edge in the global space, while it is up.
+    func field(in proxy: GeometryProxy, keyboardTop: CGFloat?) -> MascotField? {
+        guard let visible else { return nil }
+        var keyboard: CGRect?
+        if let keyboardTop {
+            let top = keyboardTop - proxy.frame(in: .global).minY
+            keyboard = CGRect(x: 0, y: top, width: proxy.size.width, height: max(proxy.size.height - top, 0) + 10_000)
+        }
+        return MascotField(visible: proxy[visible], obstacles: obstacles.map { proxy[$0] },
+                           pane: pane.map { proxy[$0] }, well: well.map { proxy[$0] }, keyboard: keyboard)
+    }
+}
+
+/// Topo over the chat, drawn from the state he is handed, standing where the chat's geometry
+/// leaves him room.
+struct MascotLayer: View {
     let state: MascotState
-    let flank: CGRect
-    let row: CGSize
-    /// The share the pane's microphone is drawn at (`ComposerGeometry.scale`).
-    var share: CGFloat = 1
-    /// The pane's presence: at nothing he floats, and he settles as it rises.
-    var presence: Double = 1
-    /// How opaque his flank is drawn; frames stop only at zero.
-    let opacity: Double
+    let scene: MascotScene.Value
+    /// How opaque he is drawn: the microphone's hold fades him with the glass's flanks.
+    var opacity = 1.0
     /// A sheet is over the chat.
-    let covered: Bool
+    var covered = false
+    var keyboardTop: CGFloat?
+    var report: ((MascotRoam.Report) -> Void)?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// The presence and the share, animated together: the bob eases out as the pane arrives, and
-    /// his slot follows the pane's edges as the keyboard rises rather than jumping.
-    nonisolated var animatableData: AnimatablePair<Double, CGFloat> {
-        get { AnimatablePair(presence, share) }
-        set {
-            presence = newValue.first
-            share = newValue.second
-        }
-    }
-
     var body: some View {
-        let placement = MascotPlacement.of(flank: flank, row: row, composer: look.composer, mascot: look.mascot,
-                                           share: share)
-        if !placement.isEmpty {
-            MascotPerch(input: input(corner: placement.corner), placement: placement,
-                        interval: look.mascot.frameInterval,
-                        hover: MascotHover(look.mascot, presence: presence),
-                        conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
-                                          reduceMotion: reduceMotion))
-                .frame(width: placement.frame.width, height: placement.frame.height)
-                .position(x: placement.frame.midX, y: placement.frame.midY)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+        GeometryReader { proxy in
+            MascotOverChat(input: state.input, field: scene.field(in: proxy, keyboardTop: keyboardTop),
+                           settings: MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion),
+                           interval: look.mascot.frameInterval, hideDuration: look.mascot.hideDuration,
+                           conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
+                                             reduceMotion: reduceMotion),
+                           report: report)
+                .frame(width: proxy.size.width, height: proxy.size.height)
+                .opacity(opacity)
         }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
+}
 
-    private func input(corner: Double) -> TopoInput {
-        var input = state.input
-        input.corner = corner
-        return input
+extension View {
+    /// Topo laid over this view, which is the chat: he stands where the frames its turns, rows and
+    /// glass report (`MascotScene`) leave him room, takes no room of his own and no touch, and is
+    /// nothing to accessibility. Nil is no Topo.
+    func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
+                     report: ((MascotRoam.Report) -> Void)? = nil) -> some View {
+        overlayPreferenceValue(MascotScene.self) { scene in
+            if let state {
+                MascotLayer(state: state, scene: scene, opacity: opacity, covered: covered,
+                            keyboardTop: keyboardTop, report: report)
+            }
+        }
     }
 }
 #endif

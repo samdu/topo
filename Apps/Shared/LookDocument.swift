@@ -196,13 +196,11 @@ enum LookDocument {
 
     private static func mascot(_ value: inout Look.Mascot, _ r: Reader) {
         r.pixelScale("scale", &value.scale)
-        // Down only, and no further than a pane is tall: his shelf is the pane's top edge, and
-        // the band he stands in runs from it to the pane's foot.
-        r.size("offset", &value.offset, signed: true, heights: 0...200)
-        r.length("stroll", &value.stroll)
+        r.clearance("clearance", &value.clearance)
+        r.roamSpeed("roamSpeed", &value.roamSpeed)
+        r.roamSettle("roamSettle", &value.roamSettle)
+        r.hideDuration("hideDuration", &value.hideDuration)
         r.frameInterval("frameInterval", &value.frameInterval)
-        r.bob("bobAmplitude", &value.bobAmplitude)
-        r.period("bobPeriod", &value.bobPeriod)
     }
 
     private static func flank(_ value: inout Look.Composer.Flank, _ r: Reader) {
@@ -331,19 +329,38 @@ enum LookDocument {
             }
         }
 
-        /// How far Topo bobs over an empty transcript. Up to 32 points: past that he is not
-        /// floating over the glass but leaving it.
-        func bob(_ key: String, _ value: inout CGFloat) {
-            if let number = amount(key, in: 0...32, "a height in points between 0 and 32") {
+        /// The room Topo keeps from every word, in points: none to 64. Past that a phone has no
+        /// gap wide enough for him and he is always on the glass.
+        func clearance(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0...64, "a length in points between 0 and 64") {
                 applied += 1
                 value = CGFloat(number)
             }
         }
 
-        /// How long one bob takes. Never nothing, since a bob that takes no time is a flicker,
-        /// and no longer than twenty seconds, past which it is not a bob.
-        func period(_ key: String, _ value: inout Double) {
-            if let number = amount(key, in: 0.5...20, "a time in seconds between 0.5 and 20") {
+        /// How fast Topo strolls, in points a second: at least 10, so a move across the screen
+        /// ends in under a minute rather than never, and at most 400, past which it is a jump.
+        func roamSpeed(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 10...400, "a speed in points a second between 10 and 400") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
+        /// How long the chat holds still before Topo picks a new roost: a tenth of a second to
+        /// five. Under a tenth he answers every frame of a scroll; over five he is left standing
+        /// where he no longer fits.
+        func roamSettle(_ key: String, _ value: inout Double) {
+            if let number = amount(key, in: 0.1...5, "a time in seconds between 0.1 and 5") {
+                applied += 1
+                value = number
+            }
+        }
+
+        /// How long Topo takes to fade out when something comes over him: none to two seconds,
+        /// since a longer fade is him drawn over a word for longer.
+        func hideDuration(_ key: String, _ value: inout Double) {
+            if let number = amount(key, in: 0...2, "a time in seconds between 0 and 2") {
                 applied += 1
                 value = number
             }
@@ -654,31 +671,6 @@ enum LookDocument {
             guard named else { return }
             applied += 1
             value = shadow
-        }
-
-        /// A width and a height. `signed` is an offset rather than a size, and may be negative.
-        /// `heights` narrows the height's range where a field's own reading does.
-        func size(_ key: String, _ value: inout CGSize, signed: Bool = false, heights: ClosedRange<Double>? = nil) {
-            guard let raw = take(key) else { return }
-            guard let object = raw as? [String: Any] else {
-                return note(key, "is not an object naming a width and a height")
-            }
-            let range: ClosedRange<Double> = signed ? -4000...4000 : 0...4000
-            var size = value
-            var named = false
-            into(object, name(key)) { r in
-                if let width = r.amount("width", in: range, "a length in points") {
-                    size.width = CGFloat(width)
-                    named = true
-                }
-                if let height = r.amount("height", in: heights ?? range, "a length in points") {
-                    size.height = CGFloat(height)
-                    named = true
-                }
-            }
-            guard named else { return }
-            applied += 1
-            value = size
         }
 
         /// A place in a unit square: the centre of a gradient, the end of a sheen. Outside the

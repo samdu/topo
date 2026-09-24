@@ -130,11 +130,11 @@ enum LookFixture {
       },
       "mascot": {
         "scale": 2,
-        "offset": { "width": -6, "height": 3 },
-        "stroll": 12,
-        "frameInterval": 0.05,
-        "bobAmplitude": 7,
-        "bobPeriod": 5
+        "clearance": 12,
+        "roamSpeed": 60,
+        "roamSettle": 1.5,
+        "hideDuration": 0.5,
+        "frameInterval": 0.05
       }
     }
     """

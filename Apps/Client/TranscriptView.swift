@@ -27,6 +27,7 @@ struct TranscriptView: View {
                         Text(notice)
                             .font(look.transcript.noticeFont)
                             .foregroundStyle(look.transcript.caption)
+                            .mascotObstacle()
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     ForEach(turns) { turn in
@@ -41,6 +42,8 @@ struct TranscriptView: View {
                 .frame(maxWidth: look.transcript.maximumLineWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            // Where Topo may stand, on a screen that draws him: the frame the turns scroll in.
+            .mascotVisible()
             .onAppear { scroll(proxy, animated: false) }
             .onChange(of: turns.last?.ref) { _, _ in scroll(proxy, animated: true) }
             // The row appearing, and each line it grows by, keep it where the newest turn was.
@@ -96,6 +99,9 @@ struct TurnRow: View {
                 .foregroundStyle(look.transcript.caption)
                 .padding(.horizontal, enclosure.horizontalPadding)
         }
+        // The words and the time as drawn, before the row takes the column's width: Topo stands
+        // clear of them, and beside a short turn is room for him.
+        .mascotObstacle()
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
         // Held, never tapped: a turn brushed in passing must not start talking. What is offered
@@ -234,6 +240,7 @@ struct DraftRow: View {
             bubble
             control
         }
+        .mascotObstacle()
         .frame(maxWidth: .infinity, alignment: .trailing)
         .onAppear { writing = draft.typing }
         .onChange(of: draft.typing) { _, wanted in writing = wanted }

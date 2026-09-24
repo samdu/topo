@@ -41,6 +41,15 @@ enum PreviewTurns {
         (.assistant, "Any time."),
     ])
 
+    /// Long turns only, each wrapping across the whole column: a transcript with no gap in it
+    /// anywhere Topo could stand, so he sits on the glass.
+    static let full: [Turn] = make((0..<10).map { index in
+        (index.isMultiple(of: 2) ? .assistant : .person,
+         "Air scatters short wavelengths more than long ones, so blue light bounces around the whole sky. "
+            + "At sunset the light crosses far more air on its way to you, and by then most of the blue has "
+            + "scattered away, leaving the reds and oranges that travel straighter.")
+    })
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?
@@ -67,6 +76,8 @@ struct ChatCanvas: View {
     var mic: Composer.MicState = .init()
     /// What the row at the end of the transcript is doing.
     var row: Row = .hidden
+    /// Topo over the chat, standing where the fixtures leave him room; nil for none.
+    var mascot: MascotState?
 
     enum Row: String, CaseIterable { case hidden, writing, inFlight }
 
@@ -90,6 +101,7 @@ struct ChatCanvas: View {
                 .safeAreaInset(edge: .bottom) {
                     Composer(typing: .constant(false), mic: mic)
                 }
+                .mascotRoams(mascot)
         }
     }
 

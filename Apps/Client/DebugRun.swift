@@ -1,6 +1,7 @@
 #if DEBUG
 import Foundation
 import TopoAuth
+import TopoCore
 #if os(iOS)
 import UIKit
 #endif
@@ -26,6 +27,7 @@ enum DebugRun {
     static let outboxVariable = "TOPO_DEBUG_OUTBOX"
     static let lookVariable = "TOPO_DEBUG_LOOK"
     static let softwareKeyboardVariable = "TOPO_DEBUG_SOFTWARE_KEYBOARD"
+    static let transcriptVariable = "TOPO_DEBUG_TRANSCRIPT"
 
     #if os(iOS)
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
@@ -48,6 +50,20 @@ enum DebugRun {
     /// the document accepts with no vault behind it. Nil when the variable is absent, which is
     /// every ordinary run.
     static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
+
+    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full>`: the chat draws these fixture turns
+    /// (`PreviewTurns`) in place of the log's, so a UI suite can put Topo over a transcript of a
+    /// known shape — nothing, turns with gaps beside them, and turns that leave no gap at all —
+    /// whatever the account's log holds. Only what is drawn changes: the harness, the log and the
+    /// microphone are the ordinary ones. Nil when the variable is absent or names none of them.
+    static func transcript(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Turn]? {
+        switch environment[transcriptVariable] {
+        case "empty": []
+        case "long": PreviewTurns.long
+        case "full": PreviewTurns.full
+        default: nil
+        }
+    }
 
     /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
     /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be
@@ -347,6 +363,8 @@ extension DebugRun {
         /// The voice's state, so a lane waits for Pocket to be resident rather than sending a
         /// question the speaker would have nothing to read it with.
         var voice: String
+        /// Where Topo stands over the chat, and whether he is hidden; nil before he has been placed.
+        var mascot: MascotRoam.Report?
     }
 
     struct TurnReport: Codable, Equatable {
@@ -364,8 +382,8 @@ extension DebugRun {
     static let chatReportIdentifier = "topo-debug-chat"
 
     static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report,
-                           voice: Voice.State) -> String {
-        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)")
+                           voice: Voice.State, mascot: MascotRoam.Report? = nil) -> String {
+        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot)
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

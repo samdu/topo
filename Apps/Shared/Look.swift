@@ -36,7 +36,7 @@ struct Look: Equatable, Sendable {
     var composer: Composer
     /// The person's next turn, written at the end of the transcript.
     var draft: Draft
-    /// Topo himself, on the composer's glass.
+    /// Topo himself, over the chat.
     var mascot: Mascot
 
     init(_ screen: Screen = .current) {
@@ -388,32 +388,37 @@ struct Look: Equatable, Sendable {
         }
     }
 
-    /// Topo on the composer's glass: where he perches in the flank left of the microphone, how
-    /// big, how far he strolls when idle and how often he is drawn. His pixels and colours are
-    /// the engine's (`Packages/TopoMascot`); what is here is where they go.
+    /// Topo over the chat: how big he is drawn, how much room he keeps from any word, how he
+    /// goes from one gap to the next and how often he is drawn. His pixels and colours are the
+    /// engine's (`Packages/TopoMascot`); where he stands is `MascotRoost`'s, from the chat's
+    /// geometry and these.
     ///
-    /// Each field is read in the range the document names, and then clamped again to the flank
-    /// he is drawn in (`MascotPlacement`): whatever the look says, he is drawn between the pane's
-    /// leading end and the well, and never over the microphone.
+    /// Each field is read in the range the document names (`LookDocument`), and `MascotRoost`
+    /// takes what it is handed as it comes, so no value puts him over a word or the microphone.
     struct Mascot: Equatable, Sendable {
         /// Points to one of the engine's art pixels, scaled nearest-neighbour so pixels stay
-        /// pixels. One is the size the engine's poses were drawn at.
-        var scale: CGFloat = 1
-        /// Where his body stands, from home: the middle of the flank, his shelf row on the pane's
-        /// top edge. Positive is right and down; the height is down only, 0 to 200, and drawn no
-        /// lower than the pane's foot, so he stands between its top edge and its foot.
-        var offset = CGSize.zero
-        /// How far towards the pane's leading end he strolls when idle, in points.
-        var stroll: CGFloat = 36
+        /// pixels: two thirds, which is two device pixels an art pixel on a 3x screen, and the
+        /// size at which the whole of his picture (`MascotSprite.box`) fits on the pane's leading
+        /// flank, where he sits when the chat has no gap for him.
+        var scale: CGFloat = 2.0 / 3
+        /// The room he keeps from every word, the row being written and the lines under the
+        /// transcript, in points, on every side of his picture. A gap he stands in holds his
+        /// picture with this all round it, and a new roost within this of where he stands is not
+        /// a move.
+        var clearance: CGFloat = 8
+        /// How fast he goes from one roost to the next, in points a second on average, eased at
+        /// both ends: a stroll, so as not to call attention to himself.
+        var roamSpeed: CGFloat = 40
+        /// How long the chat's geometry has to hold still before he picks a new roost, in
+        /// seconds: the transcript reports its geometry on every frame of a scroll, and he goes
+        /// once it settles, not on every frame of it.
+        var roamSettle = 0.6
+        /// How long he takes to fade out when something comes over him, and back in when it has
+        /// gone, in seconds.
+        var hideDuration = 0.25
         /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
         /// motion was judged at and half the work of the display's rate.
         var frameInterval = 1.0 / 30
-        /// Over an empty transcript, with no pane under him, he floats where he would stand and
-        /// bobs: up by as much as this many points and back, once a `bobPeriod`. The bob eases out
-        /// as the pane arrives, so on the glass whole he sits still on its edge. None under
-        /// Reduce Motion.
-        var bobAmplitude: CGFloat = 3
-        var bobPeriod = 2.4
     }
 
     /// The person's next turn, written at the end of the transcript rather than in the glass.

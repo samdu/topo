@@ -37,10 +37,6 @@ struct Composer: View {
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
-    /// Topo, in the leading flank: what he stands for, or nil for no Topo at all.
-    var mascot: MascotState?
-    /// A sheet is over the chat, so he is not seen and is not drawn.
-    var covered = false
     @Environment(\.look) private var look
 
     /// What the microphone is doing, and which of the four the glass draws for it. The chat
@@ -100,32 +96,17 @@ struct Composer: View {
             leading
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .opacity(flankOpacity)
-                .anchorPreference(key: LeadingFlank.self, value: .bounds) { $0 }
             micButton(geometry)
             trailing
                 .etched(look.composer.flank, ink: ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .opacity(flankOpacity)
         }
-        // Topo lives in the leading flank. He is laid over the row rather than in it, so he
-        // takes no room and moves nothing, and he is placed from the flank as it was measured:
-        // the microphone is where it would be without him, and he is clipped short of its well.
-        // Under the keyboard he is placed from the short pane at his own size; over an empty
-        // transcript, where there is no pane, he floats, and settles in the presence's time.
-        .overlayPreferenceValue(LeadingFlank.self) { flank in
-            if let mascot, let flank {
-                GeometryReader { row in
-                    MascotOnGlass(state: mascot, flank: row[flank], row: row.size, share: geometry.scale,
-                                  presence: presence, opacity: flankOpacity, covered: covered)
-                        .opacity(flankOpacity)
-                }
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-            }
-        }
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, geometry.verticalInset)
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
+        // Topo sits on the pane's leading flank when the transcript has no gap for him.
+        .mascotPane()
         .background(lozenge(geometry).opacity(max(presence, Self.leastSurface)).allowsHitTesting(presence > 0))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
         .containerRelativeFrame(.horizontal) { width, _ in width * look.composer.widthFraction }
@@ -151,7 +132,8 @@ struct Composer: View {
 
     /// No control: what else can come in besides words has no path into the log, and a control
     /// that does nothing is worse in the person's reach than no control. It keeps the space so
-    /// the microphone stays in the middle, and Topo is drawn over it.
+    /// the microphone stays in the middle, and Topo sits over it when the transcript has no gap
+    /// for him.
     private var leading: some View {
         Color.clear.frame(width: 0, height: 0)
     }
@@ -237,6 +219,8 @@ struct Composer: View {
             .frame(width: geometry.well, height: geometry.well)
             .contentShape(Circle())
             .anchorPreference(key: ComposerFrames.Well.self, value: .bounds) { $0 }
+            // Topo is never drawn over it.
+            .mascotWell()
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                 micPressed(down)
             }
@@ -272,14 +256,6 @@ enum ComposerFrames {
         static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
             value = value ?? nextValue()
         }
-    }
-}
-
-/// Where the leading flank is, for Topo to be placed from.
-private struct LeadingFlank: PreferenceKey {
-    static let defaultValue: Anchor<CGRect>? = nil
-    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
-        value = value ?? nextValue()
     }
 }
 

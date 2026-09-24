@@ -124,48 +124,55 @@ final class LookDocumentTests: XCTestCase {
 
     /// JSON gives every number as an `NSNumber`, and a `Bool` is one. A true where a length goes
     /// would otherwise be a padding of one point.
-    /// Topo's scale and frame interval are read in ranges of their own: a scale under a quarter
-    /// or over four, and a frame that lasts no time or over a second, are refused, each alone.
+    /// Topo's fields are read in ranges of their own: a scale under a quarter or over four, a
+    /// frame that lasts no time or over a second, a clearance over 64 points or under none, a
+    /// speed under 10 points a second (he would never arrive) or over 400, a settle under a tenth
+    /// of a second or over five, and a fade over two seconds, are refused, each alone; the ends of
+    /// each range are taken. The fields that placed him on the flank are no longer his.
     func testTopoIsReadInItsOwnRanges() {
-        let reading = LookDocument.read(#"{"mascot": {"scale": 0.1, "frameInterval": 0, "stroll": -1, "offset": {"width": 9000}}}"#)
+        let reading = LookDocument.read(#"{"mascot": {"scale": 0.1, "frameInterval": 0, "clearance": -1, "roamSpeed": 9, "roamSettle": 0.05, "hideDuration": 2.5}}"#)
         XCTAssertEqual(reading.look.mascot, Look.Mascot())
-        XCTAssertEqual(reading.notes.count, 4, "\(reading.notes)")
-        let fine = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "stroll": 4000, "offset": {"width": -4000, "height": 200}}}"#)
-        XCTAssertEqual(fine.notes, [])
-        XCTAssertEqual(fine.look.mascot.scale, 4)
-        XCTAssertEqual(fine.look.mascot.frameInterval, 1)
-        XCTAssertEqual(fine.look.mascot.offset, CGSize(width: -4000, height: 200))
-        // His height is down only, and no further than a pane is tall: the width stands alone.
-        for height in [-1, 201, 4000] {
-            let lifted = LookDocument.read(#"{"mascot": {"offset": {"width": 5, "height": \#(height)}}}"#)
-            XCTAssertEqual(lifted.look.mascot.offset, CGSize(width: 5, height: 0), "\(height)")
-            XCTAssertEqual(lifted.notes.count, 1, "\(height): \(lifted.notes)")
+        XCTAssertEqual(reading.notes.count, 6, "\(reading.notes)")
+        let high = LookDocument.read(#"{"mascot": {"scale": 4, "frameInterval": 1, "clearance": 64, "roamSpeed": 400, "roamSettle": 5, "hideDuration": 2}}"#)
+        XCTAssertEqual(high.notes, [])
+        XCTAssertEqual(high.look.mascot.scale, 4)
+        XCTAssertEqual(high.look.mascot.frameInterval, 1)
+        XCTAssertEqual(high.look.mascot.clearance, 64)
+        XCTAssertEqual(high.look.mascot.roamSpeed, 400)
+        XCTAssertEqual(high.look.mascot.roamSettle, 5)
+        XCTAssertEqual(high.look.mascot.hideDuration, 2)
+        let low = LookDocument.read(#"{"mascot": {"scale": 0.25, "frameInterval": 0.008333333333333333, "clearance": 0, "roamSpeed": 10, "roamSettle": 0.1, "hideDuration": 0}}"#)
+        XCTAssertEqual(low.notes, [])
+        XCTAssertEqual(low.look.mascot.scale, 0.25)
+        XCTAssertEqual(low.look.mascot.clearance, 0)
+        XCTAssertEqual(low.look.mascot.roamSpeed, 10)
+        XCTAssertEqual(low.look.mascot.roamSettle, 0.1)
+        XCTAssertEqual(low.look.mascot.hideDuration, 0)
+        for key in ["clearance", "roamSpeed", "roamSettle", "hideDuration", "scale"] {
+            let past = LookDocument.read(#"{"mascot": {"\#(key)": 4000}}"#)
+            XCTAssertEqual(past.look.mascot, Look.Mascot(), key)
+            XCTAssertEqual(past.notes.count, 1, "\(key): \(past.notes)")
         }
-        XCTAssertEqual(LookDocument.read(#"{"mascot": {"scale": 5}}"#).look.mascot.scale, 1)
-        XCTAssertEqual(LookDocument.read(#"{"mascot": {"frameInterval": 2}}"#).look.mascot.frameInterval, 1.0 / 30)
+        for gone in ["offset", "stroll", "bobAmplitude", "bobPeriod"] {
+            let old = LookDocument.read(#"{"mascot": {"\#(gone)": 1}}"#)
+            XCTAssertEqual(old.look.mascot, Look.Mascot(), gone)
+            XCTAssertEqual(old.notes, ["mascot.\(gone) is not a field of the look"])
+        }
     }
 
-    /// The glass under the keyboard and Topo's bob are read in ranges of their own: a pane kept
-    /// at under half its height, a bob of no period or over twenty seconds, and a bob higher than
-    /// 32 points are refused, each alone, and the ends of each range are taken.
-    func testTheShortPaneAndTheBobAreReadInTheirOwnRanges() {
-        let refused = LookDocument.read(#"{"composer": {"compactShare": 0.49}, "mascot": {"bobAmplitude": 33, "bobPeriod": 0}}"#)
+    /// The glass under the keyboard is read in a range of its own: a pane kept at under half its
+    /// height is refused, and the ends of the range are taken.
+    func testTheShortPaneIsReadInItsOwnRange() {
+        let refused = LookDocument.read(#"{"composer": {"compactShare": 0.49}}"#)
         XCTAssertEqual(refused.look, Look())
-        XCTAssertEqual(refused.notes.count, 3, refused.notes.description)
+        XCTAssertEqual(refused.notes.count, 1, refused.notes.description)
         XCTAssertEqual(LookDocument.read(#"{"composer": {"compactShare": 1.01}}"#).look.composer.compactShare, 2.0 / 3)
-        XCTAssertEqual(LookDocument.read(#"{"mascot": {"bobPeriod": 21}}"#).look.mascot.bobPeriod, 2.4)
-        XCTAssertEqual(LookDocument.read(#"{"mascot": {"bobAmplitude": -1}}"#).look.mascot.bobAmplitude, 3)
-
-        let low = LookDocument.read(#"{"composer": {"compactShare": 0.5}, "mascot": {"bobAmplitude": 0, "bobPeriod": 0.5}}"#)
+        let low = LookDocument.read(#"{"composer": {"compactShare": 0.5}}"#)
         XCTAssertEqual(low.notes, [])
         XCTAssertEqual(low.look.composer.compactShare, 0.5)
-        XCTAssertEqual(low.look.mascot.bobAmplitude, 0)
-        XCTAssertEqual(low.look.mascot.bobPeriod, 0.5)
-        let high = LookDocument.read(#"{"composer": {"compactShare": 1}, "mascot": {"bobAmplitude": 32, "bobPeriod": 20}}"#)
+        let high = LookDocument.read(#"{"composer": {"compactShare": 1}}"#)
         XCTAssertEqual(high.notes, [])
         XCTAssertEqual(high.look.composer.compactShare, 1)
-        XCTAssertEqual(high.look.mascot.bobAmplitude, 32)
-        XCTAssertEqual(high.look.mascot.bobPeriod, 20)
     }
 
     func testABooleanIsNotANumber() {
