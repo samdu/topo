@@ -112,6 +112,16 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertEqual(stay.origin, CGPoint(x: 100, y: 20))
     }
 
+    /// Of two places as near where he stands, the one on the right wins: a turn down the middle
+    /// with room either side of it, and him over it.
+    func testATieGoesToTheRight() throws {
+        let field = Self.field([CGRect(x: 151, y: 0, width: 100, height: 628)])
+        let from = CGPoint(x: 201 - Self.size.width / 2, y: 100)
+        let frame = try XCTUnwrap(MascotRoost.of(field, size: Self.size, clearance: 8, from: from).frame)
+        XCTAssertEqual(frame.minX, 251 + 8, accuracy: 0.001, "he went left: \(frame)")
+        XCTAssertEqual(frame.minY, 100, accuracy: 0.001)
+    }
+
     /// With no `from` he starts nearest the middle of the pane's trailing flank, which is where he
     /// would otherwise sit.
     func testWithNowhereToStartFromHeStartsNearTheFlank() throws {
@@ -245,7 +255,9 @@ final class MascotGeometryTests: XCTestCase {
         let canvas: MascotCanvas?
     }
 
-    private func stage(_ turns: [Turn], mascot: Look.Mascot?, size: CGSize? = nil) throws -> Stage {
+    /// `atEnd` scrolls the transcript to its end, where the chat rests; a hosted window does not
+    /// run the chat's own scroll to the newest turn.
+    private func stage(_ turns: [Turn], mascot: Look.Mascot?, size: CGSize? = nil, atEnd: Bool = false) throws -> Stage {
         let screen = size ?? screen
         var look = Look()
         look.composer.surface = .flat
@@ -263,6 +275,12 @@ final class MascotGeometryTests: XCTestCase {
         window.layoutIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         window.layoutIfNeeded()
+        if atEnd, let scroll = find(UIScrollView.self, in: window) {
+            let end = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
+            scroll.setContentOffset(CGPoint(x: 0, y: max(end, -scroll.adjustedContentInset.top)), animated: false)
+            RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+            window.layoutIfNeeded()
+        }
         let canvas = find(MascotCanvas.self, in: window)
         // The roam settled and a frame of him drawn, on the canvas's own clock.
         if let canvas { for _ in 0..<60 { canvas.step(1.0 / 30) } }
@@ -397,6 +415,59 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertTrue(beside.minY < shortBubble.maxY && beside.maxY > shortBubble.minY,
                       "not beside the bubble: \(beside) \(shortBubble)")
         XCTAssertTrue(short.canvas?.showing ?? false)
+    }
+
+    /// Topo's reply reports its lines and not its frame, which is as wide as its widest line, so
+    /// the room at the end of a short line is room, and of two places as near each other he takes
+    /// the one on the right. `PreviewTurns.continuity` scrolled to its end, as the phone Sam's
+    /// screenshot came from rests: the last line, "…has to mean here.", ends 100 points
+    /// short of the transcript's edge, and the room beside it and its time, down to the
+    /// transcript's foot, is 100 by 52 points, smaller both ways than his 103-by-75 picture with
+    /// its clearance, so he is on the trailing flank; at a scale whose picture that room holds, he stands in it. In
+    /// `PreviewTurns.ragged` the reply ends in two short paragraphs, and the room at their end, on
+    /// the right, is where he stands at the default look.
+    func testTheRaggedRightOfAReplyIsRoom() throws {
+        let phone = CGSize(width: 393, height: 852)
+        let clearance = Look.Mascot().clearance
+        let size = MascotSprite.size(scale: Look.Mascot().scale)
+
+        let screenshot = try stage(PreviewTurns.continuity, mascot: Look.Mascot(), size: phone, atEnd: true)
+        defer { screenshot.window.isHidden = true }
+        let field = try XCTUnwrap(screenshot.canvas?.roam?.field)
+        let lines = field.covering.filter { $0.minX == 16 && $0.height > 18 && $0.height < 24 }
+        XCTAssertGreaterThan(lines.count, 10, "Topo's replies did not report their lines: \(field.covering)")
+        let last = try XCTUnwrap(lines.max { $0.minY < $1.minY })
+        let above = try XCTUnwrap(lines.filter { $0.maxY <= last.minY }.max { $0.minY < $1.minY })
+        XCTAssertLessThan(last.maxX, above.maxX - 50, "the last line is not short: \(last), \(above)")
+        let room = CGRect(x: last.maxX, y: above.maxY, width: field.visible.maxX - last.maxX, height: field.open.maxY - above.maxY)
+        XCTAssertLessThan(room.width, size.width + 2 * clearance, "\(room)")
+        XCTAssertLessThan(room.height, size.height + 2 * clearance, "\(room)")
+        let roost = try XCTUnwrap(screenshot.canvas?.roam?.roost)
+        XCTAssertEqual(roost.name, "flank")
+        XCTAssertGreaterThanOrEqual(try XCTUnwrap(roost.frame).minX, try XCTUnwrap(field.well).maxX - 0.001, "not on the right")
+
+        var small = Look.Mascot()
+        small.scale = 0.3
+        let fits = try stage(PreviewTurns.continuity, mascot: small, size: phone, atEnd: true)
+        defer { fits.window.isHidden = true }
+        let tail = try XCTUnwrap(fits.canvas?.roam?.roost.frame, "at a scale of 0.3 he stands nowhere")
+        XCTAssertEqual(fits.canvas?.roam?.roost.name, "gap")
+        XCTAssertGreaterThanOrEqual(tail.minX, last.maxX + small.clearance - 0.001, "not after the last line: \(tail)")
+        XCTAssertTrue(tail.minY < last.maxY && tail.maxY > last.minY, "not beside the last line: \(tail) \(last)")
+
+        let ragged = try stage(PreviewTurns.ragged, mascot: Look.Mascot(), size: phone, atEnd: true)
+        defer { ragged.window.isHidden = true }
+        let raggedField = try XCTUnwrap(ragged.canvas?.roam?.field)
+        let short = raggedField.covering.filter { $0.minX == 16 && $0.height > 18 && $0.height < 24 && $0.maxX < 150 }
+        XCTAssertEqual(short.count, 2, "the two short paragraphs: \(raggedField.covering)")
+        let spot = try XCTUnwrap(ragged.canvas?.roam?.roost.frame, "he stands nowhere")
+        XCTAssertEqual(ragged.canvas?.roam?.roost.name, "gap")
+        XCTAssertTrue(ragged.canvas?.showing ?? false)
+        for line in short {
+            XCTAssertTrue(spot.minY < line.maxY && spot.maxY > line.minY, "not beside \(line): \(spot)")
+            XCTAssertGreaterThanOrEqual(spot.minX, line.maxX + clearance - 0.001, "over \(line): \(spot)")
+        }
+        XCTAssertGreaterThan(spot.midX, raggedField.visible.midX, "not on the right: \(spot)")
     }
 
     func testHeIsDrawnAtAll() throws {

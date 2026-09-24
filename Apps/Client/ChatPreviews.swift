@@ -65,6 +65,12 @@ enum PreviewTurns {
         (turn.role, index == 1 ? "Nothing,\njust testing :p" : turn.text)
     })
 
+    /// The same, with Topo's last reply ending in short lines: the room at the end of them, on
+    /// the right, is the one place on the screen his picture fits.
+    static let ragged: [Turn] = make(continuity.enumerated().map { index, turn in
+        (turn.role, index == 2 ? turn.text + "\n\nSay the word.\n\nOr don't :)" : turn.text)
+    })
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?

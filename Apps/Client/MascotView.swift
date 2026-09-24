@@ -383,7 +383,7 @@ extension MascotScene.Value {
             let top = keyboardTop - proxy.frame(in: .global).minY
             keyboard = CGRect(x: 0, y: top, width: proxy.size.width, height: max(proxy.size.height - top, 0) + 10_000)
         }
-        return MascotField(visible: proxy[visible], obstacles: obstacles.map { proxy[$0] },
+        return MascotField(visible: proxy[visible], obstacles: obstacles.flatMap { proxy[$0] },
                            pane: pane.map { proxy[$0] }, well: well.map { proxy[$0] }, keyboard: keyboard)
     }
 }

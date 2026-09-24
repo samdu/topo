@@ -134,6 +134,10 @@ struct Look: Equatable, Sendable {
         /// What sits under the tint.
         var surface: Surface
 
+        /// Nothing is drawn around the words: no surface, no tint and no outline. The words are
+        /// then all there is of the turn, so the room at the end of a short line is room.
+        var drawsNothing: Bool { surface == .flat && fillOpacity == 0 && strokeWidth == 0 }
+
         /// The person's side. `primary` is the person's colour in the palette, the same one
         /// Topo's own voice wears; `secondary` is reserved for a turn a process put into the
         /// transcript.

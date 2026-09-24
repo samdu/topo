@@ -85,12 +85,18 @@ struct TurnRow: View {
     /// drawn on it, Topo's side included, which is why there is no number here.
     private var enclosure: Look.Enclosure { mine ? look.bubble : look.plain }
 
+    /// Nothing is drawn around the words, so what Topo stands clear of is the words themselves.
+    private var bare: Bool { enclosure.drawsNothing }
+
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
             Text(turn.text)
                 .font(look.transcript.bodyFont)
                 .foregroundStyle(look.transcript.text)
                 .fixedSize(horizontal: false, vertical: true)
+                // Words with nothing drawn around them are their lines, so the room at the end of
+                // a short line is room for Topo.
+                .mascotLines(bare)
                 .padding(.horizontal, enclosure.horizontalPadding)
                 .padding(.vertical, enclosure.verticalPadding)
                 .background { TurnShape.fill(enclosure) }
@@ -98,10 +104,11 @@ struct TurnRow: View {
                 .font(look.transcript.labelFont)
                 .foregroundStyle(look.transcript.caption)
                 .padding(.horizontal, enclosure.horizontalPadding)
+                .mascotObstacle(bare)
         }
-        // The words and the time as drawn, before the row takes the column's width: Topo stands
-        // clear of them, and beside a short turn is room for him.
-        .mascotObstacle()
+        // An enclosed turn is its enclosure and the time as drawn, before the row takes the
+        // column's width: Topo stands clear of them, and beside a short bubble is room for him.
+        .mascotObstacle(!bare)
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
         // Held, never tapped: a turn brushed in passing must not start talking. What is offered

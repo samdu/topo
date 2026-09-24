@@ -12,7 +12,8 @@ struct MascotScene: PreferenceKey {
         var visible: Anchor<CGRect>?
         var pane: Anchor<CGRect>?
         var well: Anchor<CGRect>?
-        var obstacles: [Anchor<CGRect>] = []
+        /// Each view's frames: one for most, a line each for words with nothing drawn round them.
+        var obstacles: [Anchor<[CGRect]>] = []
     }
 
     static let defaultValue = Value()
@@ -29,8 +30,17 @@ struct MascotScene: PreferenceKey {
 extension View {
     /// Something Topo may not be drawn over: a turn, the row being written, a line under the
     /// transcript. Every platform's transcript reports its turns; only the phone reads them.
-    func mascotObstacle() -> some View {
-        transformAnchorPreference(key: MascotScene.self, value: .bounds) { $0.obstacles.append($1) }
+    func mascotObstacle(_ reported: Bool = true) -> some View {
+        transformAnchorPreference(key: MascotScene.self, value: Anchor<[CGRect]>.Source([.bounds])) {
+            if reported { $0.obstacles.append($1) }
+        }
+    }
+
+    /// Words Topo may not be drawn over, reported a line at a time where the lines can be read, so
+    /// the room after a short line — the last of a long reply, the end of a paragraph — is room.
+    /// Where they cannot, the words' frame, which is as wide as the widest line.
+    func mascotLines(_ reported: Bool = true) -> some View {
+        modifier(MascotLines(reported: reported))
     }
 
     /// The frame Topo may stand in: the transcript's.
@@ -46,6 +56,48 @@ extension View {
     /// The composer's well, which he is never drawn over.
     func mascotWell() -> some View {
         transformAnchorPreference(key: MascotScene.self, value: .bounds) { $0.well = $1 }
+    }
+}
+
+/// Reports a text's lines as it lays them out. `Text.Layout` is read by a `TextRenderer`, which
+/// is handed it at drawing time and nowhere else (iOS 18); the lines it read are kept here and
+/// reported as rects in the text's own space, and until they have been read, or on iOS 17, the
+/// text's whole frame is.
+private struct MascotLines: ViewModifier {
+    let reported: Bool
+    @State private var lines: [CGRect] = []
+
+    func body(content: Content) -> some View {
+        Group {
+            if #available(iOS 18, watchOS 11, tvOS 18, macOS 15, *) {
+                content.textRenderer(LineReader { read in if read != lines { lines = read } })
+            } else {
+                content
+            }
+        }
+        .transformAnchorPreference(key: MascotScene.self,
+                                   value: Anchor<[CGRect]>.Source(lines.isEmpty ? [.bounds] : lines.map { .rect($0) })) {
+            if reported { $0.obstacles.append($1) }
+        }
+    }
+}
+
+/// Draws a text as it would be drawn anyway, and hands its lines' typographic bounds to `read`
+/// on the main actor. A line with no width (an empty one between paragraphs) is nothing to
+/// stand clear of and is left out.
+@available(iOS 18, watchOS 11, tvOS 18, macOS 15, *)
+private struct LineReader: TextRenderer {
+    let read: @MainActor ([CGRect]) -> Void
+
+    func draw(layout: Text.Layout, in context: inout GraphicsContext) {
+        var rects: [CGRect] = []
+        for line in layout {
+            context.draw(line)
+            let rect = line.typographicBounds.rect
+            if rect.width > 0, rect.height > 0 { rects.append(rect) }
+        }
+        let read = read
+        DispatchQueue.main.async { read(rects) }
     }
 }
 
@@ -217,7 +269,7 @@ enum MascotRoost: Equatable, Sendable {
                 guard !forbidden.contains(where: { strictlyInside(point, $0) }) else { continue }
                 let distance = hypot(x - aim.x, y - aim.y)
                 if let best, !(distance < best.distance - epsilon
-                               || (abs(distance - best.distance) <= epsilon && (y, x) < (best.point.y, best.point.x))) {
+                               || (abs(distance - best.distance) <= epsilon && (-x, y) < (-best.point.x, best.point.y))) {
                     continue
                 }
                 best = (point, distance)
