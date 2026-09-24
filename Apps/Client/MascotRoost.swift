@@ -218,6 +218,17 @@ enum MascotRoost: Equatable, Sendable {
         return best.map { CGPoint(x: $0.point.x + margin, y: $0.point.y + margin) }
     }
 
+    /// Whether `frame` is a roost as it stands: a gap — inside `field.open` with `clearance` all round
+    /// it and nothing he may not cover within that — or on the flank whole. The small-move
+    /// threshold keeps him only where this holds.
+    static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat) -> Bool {
+        if let flank = field.flank, flank.insetBy(dx: -epsilon, dy: -epsilon).contains(frame) { return true }
+        let margin = clearance.isFinite ? max(clearance, 0) : 0
+        let grown = frame.insetBy(dx: -margin, dy: -margin)
+        guard field.open.insetBy(dx: -epsilon, dy: -epsilon).contains(grown) else { return false }
+        return !field.covering.contains { overlap($0, grown) }
+    }
+
     /// A thousandth of a point: what two edges that meet are allowed to share without counting as
     /// an overlap, since the edges are sums of floating-point sizes.
     static let epsilon: CGFloat = 0.001
@@ -245,8 +256,8 @@ private extension Comparable {
 /// seconds of it with nothing changing, since the transcript reports its geometry on every frame
 /// of a scroll — or a single frame of it while something is over him, so a covered Topo gets out
 /// of the way as soon as the scroll or the landing turn stops rather than a settle later. It
-/// is never made mid-move, and a roost within `clearance` of where he stands is not a move. A move
-/// is one eased glide at `speed` points a second on average — `hurry` times that on every frame
+/// is never made mid-move, and a roost within `clearance` of where he stands is not a move while
+/// where he stands is a roost itself (`MascotRoost.holds`). A move is one eased glide at `speed` points a second on average — `hurry` times that on every frame
 /// anything is over him, and back to the stroll the frame he is clear — which under Reduce Motion
 /// is a placement with no glide. He is drawn above everything but the keyboard wherever he is, so
 /// nothing is judged about whether he may be seen: he is drawn whenever he stands anywhere.
@@ -411,9 +422,10 @@ struct MascotRoam: Equatable, Sendable {
             position = to
             return
         }
-        // Within his own room of where he stands is where he stands.
+        // Within his own room of where he stands is where he stands — where that is a roost as it
+        // stands; one that is not moves however short the move.
         if !forced, hypot(to.x - from.x, to.y - from.y) <= settings.clearance,
-           !field.covers(CGRect(origin: from, size: settings.size)) {
+           MascotRoost.holds(field, frame: CGRect(origin: from, size: settings.size), clearance: settings.clearance) {
             return
         }
         roost = next

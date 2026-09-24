@@ -289,18 +289,24 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.roost.name, "gap")
     }
 
-    /// A new roost within his clearance of where he stands is not a move; and a geometry change
-    /// mid-glide does not restart it.
-    func testASmallChangeIsNotAMoveAndAGlideIsNeverRestarted() throws {
+    /// Where he stands lacking the clearance is not a roost, and he moves however short the move
+    /// to one is; and a geometry change mid-glide does not restart a glide.
+    func testAShortMoveOutOfAPlaceLackingTheClearanceIsAMoveAndAGlideIsNeverRestarted() throws {
         let (placed, start) = settled(Self.field([]))
         var roam = placed
         let picture = try XCTUnwrap(roam.picture)
-        // A turn comes within 5 points of his clearance: the nearest place clear of it is 5 away.
-        roam.observe(Self.field([CGRect(x: 0, y: picture.maxY + 3, width: 402, height: 20)]), at: start)
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: picture, clearance: 8))
+        // A turn comes within 5 points of his clearance: the nearest place clear of it is 5 away,
+        // and where he stands no longer holds.
+        let turn = CGRect(x: 0, y: picture.maxY + 3, width: 402, height: 20)
+        roam.observe(Self.field([turn]), at: start)
+        XCTAssertFalse(MascotRoost.holds(roam.field!, frame: picture, clearance: 8))
         var time = start
         while roam.needsTime, time < start + 5 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.moves, 0, "a roost within his clearance was a move")
-        XCTAssertEqual(roam.picture, picture)
+        XCTAssertEqual(roam.moves, 1, "a roost lacking his clearance was kept for being near")
+        let moved = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(moved.maxY, turn.minY - 8, accuracy: 0.001, "\(moved) does not keep 8 points from \(turn)")
+        XCTAssertEqual(hypot(moved.minX - picture.minX, moved.minY - picture.minY), 5, accuracy: 0.001)
 
         // A long glide, and geometry arriving all through it.
         roam.observe(Self.field([CGRect(x: 0, y: 200, width: 402, height: 340)]), at: time)
@@ -315,7 +321,7 @@ final class MascotRoamTests: XCTestCase {
                 XCTAssertGreaterThan(move.elapsed, glide.elapsed, "the glide was restarted")
             }
         }
-        XCTAssertEqual(roam.moves, 1)
+        XCTAssertEqual(roam.moves, 2)
     }
 
     /// Nothing is left waiting on the clock once the geometry has settled and he has arrived: the
