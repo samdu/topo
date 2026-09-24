@@ -279,10 +279,12 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     /// Over an empty chat, a chat with room beside its turns and one with none, at the default
-    /// look and the ends of the ranges for his size and clearance: his picture as the canvas draws
-    /// it overlaps no turn, the well or the flank beyond it, measured from the frames the views
-    /// report as drawn; and every pixel of the pane from the well to its trailing end is the same
-    /// with him as without.
+    /// look and the ends of the ranges for his size and clearance: he is drawn exactly where a
+    /// roost holds him — at every look here but a scale of 4, whose 616-point picture no phone
+    /// holds, and a scale of 1 over a chat with no gap, whose flank is narrower than he is — and a look at which he is not drawn fails unless no roost holds him; his picture as
+    /// the canvas draws it overlaps no turn, the well or the flank beyond it, measured from the
+    /// frames the views report as drawn; and every pixel of the pane from the well to its trailing
+    /// end is the same with him as without.
     func testTheChatAsDrawnHasHimClearOfEveryWordAndTheMicrophone() throws {
         for (name, turns, roost) in [("empty", [Turn](), "gap"), ("full", PreviewTurns.full, "flank"),
                                      ("fitting", PreviewTurns.fitting, nil)] as [(String, [Turn], String?)] {
@@ -310,6 +312,15 @@ final class MascotGeometryTests: XCTestCase {
                     XCTAssertEqual(roam.roost.name, roost, label)
                     XCTAssertFalse(roam.hidden, label)
                 }
+                let expected = MascotRoost.of(field, size: MascotSprite.size(scale: mascot.scale),
+                                              clearance: mascot.clearance, from: nil)
+                XCTAssertEqual(roam.roost, expected, label)
+                XCTAssertEqual(canvas.showing, expected != .none,
+                               "\(label): drawn \(canvas.showing), where a roost \(expected.name == "none" ? "holds nothing" : "holds him")")
+                // Every look here holds him but the largest, and a scale of 1 over a chat with no
+                // gap, whose flank is narrower than his 154 points.
+                let held = mascot.scale < 4 && !(name == "full" && mascot.scale >= 1)
+                XCTAssertEqual(canvas.showing, held, "\(label): \(expected.name)")
                 if canvas.showing {
                     let drawn = canvas.spriteFrame
                     XCTAssertEqual(drawn.size, MascotSprite.size(scale: mascot.scale), label)
