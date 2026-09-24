@@ -211,12 +211,32 @@ round_is() {
     else
       pass "$name: no round section before round 3"
     fi
-  elif grep -qx -- "----- REVIEW ROUND $want -----" "$work/$name.out" \
-    && grep -q "only for a bug a real user of Topo would hit" "$work/$name.out" \
-    && [ "$(tail -n 1 "$work/$name.out")" = "this prompt. The PM files the non-blocking findings as issues." ]; then
-    pass "$name: ends with the round $want convergence rule"
-  else
+  elif ! grep -qx -- "----- REVIEW ROUND $want -----" "$work/$name.out" \
+    || [ "$(tail -n 1 "$work/$name.out")" != "this prompt. The PM files the non-blocking findings as issues." ]; then
     fail "$name: does not end with the round $want convergence rule"
+  else
+    # Each clause of the rule, matched across its line breaks: a clause dropped from it is a class of
+    # finding the reviewer goes back to blocking on.
+    local rule clause missing=""
+    rule="$(sed -n "/^----- REVIEW ROUND $want -----\$/,\$p" "$work/$name.out" | tr '\n' ' ' | tr -s ' ')"
+    for clause in \
+      "This is review round $want of this PR." \
+      "true only for a bug a real user of Topo would hit" \
+      "A lost or corrupted record, a split primary or a leaked secret blocks when ordinary use reaches it." \
+      "Everything else is reported, says in its text that it is not blocking, and does not set" \
+      "a claim in the description or a comment worded stronger than the code" \
+      "a test or Proof entry that could be stronger" \
+      "a defect in CI, the scripts or the test harness" \
+      "a sequence reachable only through a debug path or one no user can produce" \
+      "This holds for an earlier finding still open as much as for a new one" \
+      "it overrides any other bar in this prompt"; do
+      grep -qF -- "$clause" <<<"$rule" || missing="$missing [$clause]"
+    done
+    if [ -n "$missing" ]; then
+      fail "$name: the round $want rule is missing:$missing"
+    else
+      pass "$name: ends with the round $want convergence rule, every clause of it"
+    fi
   fi
 }
 
