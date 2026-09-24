@@ -70,7 +70,7 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// drawn, not as it rests. The keyboard is raised by the flank that raises it, and the press
     /// is delivered through the system, counted in the button's debug report.
     func testAPressAtTheShortWellsEdgeReachesTheMicrophoneUnderTheKeyboard() throws {
-        let app = launch(look: "{}")
+        let app = launch(look: "{}", softwareKeyboard: true)
         let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
         let resting = mic.frame
@@ -115,8 +115,12 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// The button's three labels, `VoiceInput`'s state in words.
     static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send"]
 
-    private func launch(look: String) -> XCUIApplication {
+    /// `softwareKeyboard` asks for the keyboard a phone has (`TOPO_DEBUG_SOFTWARE_KEYBOARD`): a
+    /// simulator starts with the Mac's keyboard connected, under which nothing rises and the
+    /// glass, which goes short on the keyboard's own safe area, stays as it is.
+    private func launch(look: String, softwareKeyboard: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
+        if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"

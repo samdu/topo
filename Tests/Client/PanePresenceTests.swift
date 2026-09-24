@@ -103,4 +103,17 @@ final class PanePresenceTests: XCTestCase {
         XCTAssertEqual(PanePresence.of(contentBottom: paneTop + 1, paneTop: paneTop,
                                        rise: 0, open: false, keyboard: false), 1)
     }
+
+    /// The pane goes short on the keyboard's own safe area: the bottom inset past the screen's
+    /// own is the keyboard on screen, the screen's own inset is not, and a launch that has not
+    /// measured the screen's own inset yet, or a value that is not a number, is no keyboard.
+    func testTheKeyboardIsTheBottomInsetPastTheScreensOwn() {
+        XCTAssertFalse(KeyboardInset.isUp(bottom: 34, resting: 34), "the home indicator is not a keyboard")
+        XCTAssertFalse(KeyboardInset.isUp(bottom: 0, resting: 0), "a phone with a home button")
+        XCTAssertTrue(KeyboardInset.isUp(bottom: 336, resting: 34))
+        XCTAssertTrue(KeyboardInset.isUp(bottom: 55, resting: 34), "a hardware keyboard's bar")
+        XCTAssertFalse(KeyboardInset.isUp(bottom: 336, resting: nil), "nothing measured yet")
+        XCTAssertFalse(KeyboardInset.isUp(bottom: .nan, resting: 34))
+        XCTAssertFalse(KeyboardInset.isUp(bottom: 336, resting: .infinity))
+    }
 }

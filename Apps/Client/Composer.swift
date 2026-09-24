@@ -25,9 +25,11 @@ struct Composer: View {
     /// and nothing else. The chat works it out from the transcript's scroll geometry
     /// (`PanePresence`); a screen with no geometry to read hands over 1, which is the pane whole.
     var presence: Double = 1
-    /// The keyboard is on screen — the row's field has focus, which the chat reads rather than
-    /// `typing`, since `typing` outlives the field while a turn is on its way. The pane is drawn
-    /// short under it.
+    /// The keyboard is on screen, as the keyboard's own safe area says (`KeyboardInset`), not
+    /// `typing`, which is what was asked for and outlives the field while a turn is on its way.
+    /// The pane is drawn short under it. It changes in the transaction the keyboard's rise and
+    /// fall is animated in, and nothing here animates it on a curve of its own, so the pane goes
+    /// short and tall again on the keyboard's curve and in step with it.
     var keyboard = false
     /// Called with true on the press and false on the release. The session logic is
     /// `VoiceInput`'s; this passes the press on and nothing else.
@@ -108,8 +110,8 @@ struct Composer: View {
         // Topo lives in the leading flank. He is laid over the row rather than in it, so he
         // takes no room and moves nothing, and he is placed from the flank as it was measured:
         // the microphone is where it would be without him, and he is clipped short of its well.
-        // Under the keyboard he is placed from the short pane and drawn at its share; over an
-        // empty transcript, where there is no pane, he floats.
+        // Under the keyboard he is placed from the short pane at his own size; over an empty
+        // transcript, where there is no pane, he floats, and settles in the presence's time.
         .overlayPreferenceValue(LeadingFlank.self) { flank in
             if let mascot, let flank {
                 GeometryReader { row in
@@ -124,15 +126,21 @@ struct Composer: View {
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, geometry.verticalInset)
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
-        .background(lozenge(geometry).opacity(presence))
+        .background(lozenge(geometry).opacity(max(presence, Self.leastSurface)).allowsHitTesting(presence > 0))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
         .containerRelativeFrame(.horizontal) { width, _ in width * look.composer.widthFraction }
         .padding(.bottom, look.composer.bottomPadding)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
         .animation(.easeInOut(duration: look.composer.duration), value: typing)
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
-        .animation(.easeInOut(duration: look.composer.compactDuration), value: keyboard)
     }
+
+    /// The least the surface is drawn at, which is not nothing: at nothing SwiftUI takes it out of
+    /// what is drawn, and a surface put back mid-way through the keyboard's rise is put where the
+    /// pane is going rather than where it is, so it would fade in ahead of the pane instead of
+    /// riding up with it. Under half a step of an 8-bit alpha, so nothing of it is seen, and it
+    /// takes no touch while the presence is nothing, as a surface that is not drawn takes none.
+    static let leastSurface = 0.001
 
     /// How much of the two ends is drawn: all of it, except under a thumb on the microphone.
     private var flankOpacity: Double { mic.holding ? look.composer.flank.heldOpacity : 1 }
@@ -321,6 +329,18 @@ struct ComposerGeometry: Equatable, Sendable {
     }
 }
 
+/// Whether the keyboard is on screen, from the bottom of the screen's safe area: the keyboard's
+/// region is part of it while the keyboard is up, so the inset is more than the screen's own
+/// (`resting`, the same inset with the keyboard's region ignored). A pure function, so the answer
+/// is arithmetic a test can hold; the chat reads both insets off the whole screen. No resting
+/// inset yet is no keyboard: a launch has not measured it.
+enum KeyboardInset {
+    static func isUp(bottom: CGFloat, resting: CGFloat?) -> Bool {
+        guard let resting, bottom.isFinite, resting.isFinite else { return false }
+        return bottom > resting + 0.5
+    }
+}
+
 /// How much of a pane the pane is, from where the transcript's content ends and where the pane's
 /// own top edge is. Both are measured in one space by the chat screen, so the offer card and the
 /// keyboard's rise move the pane's top rather than being assumed away.
@@ -335,7 +355,7 @@ struct ComposerGeometry: Equatable, Sendable {
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing
     /// is the step the share cannot express: a pane, or none, with nothing in between. `keyboard`
-    /// is the row's field holding focus, which is the keyboard on screen.
+    /// is the row's field holding focus, which is the keyboard asked for.
     static func of(contentBottom: CGFloat, paneTop: CGFloat, rise: CGFloat, open: Bool,
                    keyboard: Bool) -> Double {
         if open || keyboard { return 1 }

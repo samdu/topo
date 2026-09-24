@@ -186,7 +186,6 @@ enum LookDocument {
         r.length("presenceRise", &value.presenceRise)
         r.seconds("presenceDuration", &value.presenceDuration)
         r.compactShare("compactShare", &value.compactShare)
-        r.seconds("compactDuration", &value.compactDuration)
         r.object("flank") { flank(&value.flank, $0) }
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }

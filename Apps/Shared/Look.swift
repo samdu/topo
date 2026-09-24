@@ -315,11 +315,9 @@ struct Look: Equatable, Sendable {
         /// with them — so where the well is what sets the pane's height the pane is this share of
         /// its resting height. The flanks keep their size. Read from a half to one, and the well
         /// is never drawn under `Well.pressable` for it (`ComposerGeometry`).
+        /// The change has no time of its own: it is laid out in the keyboard's own transaction,
+        /// so it takes the keyboard's curve and duration.
         var compactShare: CGFloat = 2.0 / 3
-        /// How long the pane takes to go short as the keyboard rises, and tall again as it goes.
-        /// SwiftUI hands a view nothing of the keyboard's own curve, so this is the keyboard's
-        /// duration written down.
-        var compactDuration = 0.25
 
         var flank = Flank()
         var well = Well()

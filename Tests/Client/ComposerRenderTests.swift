@@ -14,7 +14,7 @@ import XCTest
 /// Every field of `Look.Composer` is varied here except four, and each of the four was shown to
 /// render byte for byte the same picture before it was left out rather than assumed to:
 ///
-/// - `duration`, `presenceDuration` and `compactDuration` are times, so a still frame is the
+/// - `duration` and `presenceDuration` are times, so a still frame is the
 ///   same either way. Nothing tests them.
 /// - `presenceRise` is not drawn by the composer at all: it is how the chat works out the
 ///   presence it hands over, and it is `PanePresenceTests` that holds it.
