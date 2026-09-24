@@ -12,6 +12,9 @@ import XCTest
 /// microphone from empty glass (`MascotGeometryTests` holds only that he is not what is hit);
 /// a press through the system is what says the gesture got it.
 ///
+/// The same holds under the keyboard, where the glass is short and the well with it: a press at
+/// the short well's edge is delivered and counted too.
+///
 /// The look arrives as `TOPO_DEBUG_LOOK`. The ear is held loading, so no press opens anything.
 /// A press is counted before it asks for the microphone. The class sorts after
 /// `MicrophonePressTests`, so in the suite that class meets the one prompt a cleared lane raises
@@ -62,11 +65,62 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
     }
 
+    /// Under the keyboard the glass is short and the microphone two thirds of its size, and a
+    /// press at the short well's edge still reaches `VoiceInput`: the gesture is on the well as
+    /// drawn, not as it rests. The keyboard is raised by the flank that raises it, and the press
+    /// is delivered through the system, counted in the button's debug report.
+    func testAPressAtTheShortWellsEdgeReachesTheMicrophoneUnderTheKeyboard() throws {
+        let app = launch(look: "{}", softwareKeyboard: true)
+        let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        let resting = mic.frame
+
+        let flank = app.buttons["Type instead"]
+        XCTAssertTrue(flank.waitForExistence(timeout: 10), "the keyboard flank")
+        flank.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the flank raised no keyboard")
+        let deadline = Date().addingTimeInterval(10)
+        var short = mic.frame
+        while abs(short.width - resting.width * 2 / 3) > 1, Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            short = mic.frame
+        }
+        XCTAssertEqual(short.width, resting.width * 2 / 3, accuracy: 1,
+                       "under the keyboard the microphone is not two thirds of its size: \(resting) → \(short)")
+        XCTAssertEqual(short.height, resting.height * 2 / 3, accuracy: 1)
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "glass-under-the-keyboard"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        let before = try report(mic)
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: short.minX + 2, dy: short.midY))
+            .press(forDuration: 0.2)
+        let pressDeadline = Date().addingTimeInterval(15)
+        var after = try report(mic)
+        while after.presses != before.presses + 1, Date() < pressDeadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            after = try report(mic)
+        }
+        XCTAssertEqual(after.presses, before.presses + 1,
+                       "a press at the short well's edge did not reach the microphone: \(after.raw)")
+        XCTAssertEqual(mic.frame.width, short.width, accuracy: 1, "the press was not on the short well")
+        let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
+        if alert.waitForExistence(timeout: 2) {
+            alert.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch.tap()
+        }
+        app.terminate()
+    }
+
     /// The button's three labels, `VoiceInput`'s state in words.
     static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send"]
 
-    private func launch(look: String) -> XCUIApplication {
+    /// `softwareKeyboard` asks for the keyboard a phone has (`TOPO_DEBUG_SOFTWARE_KEYBOARD`): a
+    /// simulator starts with the Mac's keyboard connected, under which nothing rises and the
+    /// glass, which goes short on the keyboard's own safe area, stays as it is.
+    private func launch(look: String, softwareKeyboard: Bool = false) -> XCUIApplication {
         let app = XCUIApplication()
+        if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"

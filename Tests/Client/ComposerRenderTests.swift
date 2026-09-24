@@ -14,8 +14,8 @@ import XCTest
 /// Every field of `Look.Composer` is varied here except four, and each of the four was shown to
 /// render byte for byte the same picture before it was left out rather than assumed to:
 ///
-/// - `duration` and `presenceDuration` are times, so a still frame is the same either way.
-///   Nothing tests them.
+/// - `duration` and `presenceDuration` are times, so a still frame is the
+///   same either way. Nothing tests them.
 /// - `presenceRise` is not drawn by the composer at all: it is how the chat works out the
 ///   presence it hands over, and it is `PanePresenceTests` that holds it.
 /// - `dimmedSaturation` is drawn by `.saturation`, which `ImageRenderer` does not apply. The
@@ -51,8 +51,8 @@ final class ComposerRenderTests: XCTestCase {
     /// The composer at rest, or in whatever state it is handed, as a digest: what a failure here
     /// has to say is that two pictures are the same, and the bytes are not worth printing.
     private func raster(_ mic: Composer.MicState = .init(), typing: Bool = false,
-                        presence: Double = 1, look: Look) throws -> String {
-        let view = Composer(typing: .constant(typing), mic: mic, presence: presence)
+                        presence: Double = 1, keyboard: Bool = false, look: Look) throws -> String {
+        let view = Composer(typing: .constant(typing), mic: mic, presence: presence, keyboard: keyboard)
             .environment(\.look, look)
             .frame(width: size.width, height: size.height)
             .background(Color.white)
@@ -159,6 +159,24 @@ final class ComposerRenderTests: XCTestCase {
         XCTAssertNotEqual(try raster(look: look), try raster(look: tight),
                           "the look's spacing does not reach the row")
 
+    }
+
+    /// Under the keyboard the pane is short and the microphone with it, at the look's share: the
+    /// share reaches the short pane's pixels and not the resting pane's.
+    func testTheShortPaneIsDrawnAtTheLooksShare() throws {
+        let look = flatLook()
+        XCTAssertNotEqual(try raster(look: look), try raster(keyboard: true, look: look),
+                          "the keyboard does not change the pane")
+        var other = flatLook()
+        other.composer.compactShare = 0.9
+        XCTAssertNotEqual(try raster(keyboard: true, look: look), try raster(keyboard: true, look: other),
+                          "the look's share does not reach the short pane")
+        XCTAssertEqual(try raster(look: look), try raster(look: other),
+                       "the share reaches the pane at rest")
+        var whole = flatLook()
+        whole.composer.compactShare = 1
+        XCTAssertEqual(try raster(look: whole), try raster(keyboard: true, look: whole),
+                       "a share of one is not the resting pane")
     }
 
     /// What the open glass spills onto the transcript behind it. It is the same shadow at

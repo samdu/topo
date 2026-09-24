@@ -27,6 +27,14 @@ struct ChatView: View {
     /// own state because what the row holds outlives the screen — an app killed with words on the
     /// line comes back to the row they were sent from.
     @State private var row = NextTurn()
+    /// The row's field holds focus: the pane is present while it does. Not `row.typing`, which
+    /// outlives the field while a turn is on its way. It is the presence's and not the pane's
+    /// height, because it changes in a transaction of its own ahead of the keyboard, so the
+    /// surface fades in on the presence's time where it stands and then rides up with the pane.
+    @State private var focused = false
+    /// The bottom of the screen's safe area with no keyboard in it, which is what the keyboard's
+    /// is measured against (`KeyboardInset`). Nil until it has been measured.
+    @State private var restingBottomInset: CGFloat?
     @State private var showSettings = false
     @State private var showDiagnostics = false
     /// The two edges the pane's presence is read from, in the chat's own space: where the
@@ -57,7 +65,27 @@ struct ChatView: View {
         return .seconds(5)
     }
 
+    /// The chat, told whether the keyboard is on screen by the keyboard's own safe area. The
+    /// reader is the whole screen, so what it reads is the bottom inset the keyboard sets, and it
+    /// reads it inside the transaction the keyboard's rise and fall is animated in: the pane going
+    /// short and tall again is laid out in that same transaction, so it moves on the keyboard's
+    /// own curve and reaches its end with it, and the transcript is laid out once for both.
     var body: some View {
+        GeometryReader { screen in
+            chat(keyboard: KeyboardInset.isUp(bottom: screen.safeAreaInsets.bottom, resting: restingBottomInset))
+        }
+        // The same inset with the keyboard's region ignored, which is the screen's own.
+        .background {
+            GeometryReader { screen in
+                Color.clear.onChange(of: screen.safeAreaInsets.bottom, initial: true) { _, bottom in
+                    restingBottomInset = bottom
+                }
+            }
+            .ignoresSafeArea(.keyboard)
+        }
+    }
+
+    private func chat(keyboard: Bool) -> some View {
         NavigationStack {
             VStack(spacing: 0) {
                 transcript
@@ -109,7 +137,7 @@ struct ChatView: View {
                             memoryOfferAnswered = true
                         })
                     }
-                    composer
+                    composer(keyboard: keyboard)
                 }
             }
             // The one space the transcript's content bottom and the pane's top edge are both
@@ -137,6 +165,11 @@ struct ChatView: View {
             .sheet(isPresented: $showMemory) { MemoryView() }
         }
         .task {
+            #if DEBUG && os(iOS)
+            // Before the keyboard is first asked for: a suite that presses the short well asks
+            // for the keyboard a phone has, not the Mac's.
+            DebugRun.softwareKeyboard()
+            #endif
             // The mirror runs on every pass of the loop below, which is what makes the folder
             // current with no push and no turn. It is installed before the first turn of all,
             // not after it: the first-run answer is a turn like any other, and a screen that
@@ -355,12 +388,13 @@ struct ChatView: View {
     }
 
     /// How much of a pane the pane is. One while any of the three edges is unmeasured: iOS 17
-    /// measures none of them, and a launch has not measured them yet.
+    /// measures none of them, and a launch has not measured them yet. One while the row's field
+    /// holds focus, which is the keyboard asked for, whatever the geometry.
     private var panePresence: Double {
         guard let contentBottomInTranscript, let transcriptTop, let paneTop else { return 1 }
         return PanePresence.of(contentBottom: transcriptTop + contentBottomInTranscript,
                                paneTop: paneTop, rise: look.composer.presenceRise,
-                               open: micState.open)
+                               open: micState.open, keyboard: focused)
     }
 
     /// The four facts the glass draws the microphone from, read off `VoiceInput`.
@@ -374,8 +408,9 @@ struct ChatView: View {
     /// which is the whole of this screen's part in a session. Its own top edge is read off its
     /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
     /// the edge the presence is read against.
-    @ViewBuilder private var composer: some View {
+    @ViewBuilder private func composer(keyboard: Bool) -> some View {
         let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
+                            keyboard: keyboard,
                             micPressed: { down in Task { await micPressed(down) } },
                             micReport: micReport, mascot: mascot.state,
                             covered: showSettings || showDiagnostics || showMemory)
@@ -431,7 +466,8 @@ struct ChatView: View {
     private var draftRow: Draft {
         let bindable = Bindable(row)
         return Draft(text: bindable.text, typing: bindable.typing,
-                     sending: row.sending(in: harness), send: send, edit: editSending)
+                     sending: row.sending(in: harness), send: send, edit: editSending,
+                     focused: { focused = $0 }, holdsKeyboard: focused)
     }
 
     /// The turn the row is holding is in the log — answered, or answered by nothing, which are

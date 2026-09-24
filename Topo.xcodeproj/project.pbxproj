@@ -263,6 +263,7 @@
 		EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3D543E552C5A46713503953 /* DebugRunTests.swift */; };
 		F0BA3D90910C9AD803840F86 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 3F87D19718887EBA98EA56FA /* TopoCore */; };
 		F0E3735FB1184C474A985C4B /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
+		F122D5CBDFF0ED4BF5FD49A7 /* ComposerGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE26BC3B71DBCF5F73F6B15 /* ComposerGeometryTests.swift */; };
 		F179B6F2808ECFFAA6763959 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
 		F4974068046E34EB0AB10E96 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7F8C14868F6151C38208F7 /* ThemeTests.swift */; };
@@ -311,6 +312,7 @@
 		0A7905C0DCB97E97379C3533 /* TVRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVRootView.swift; sourceTree = "<group>"; };
 		0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResident.swift; sourceTree = "<group>"; };
 		0E7E379AAFA416610DDB0D94 /* DebugRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRun.swift; sourceTree = "<group>"; };
+		0EE26BC3B71DBCF5F73F6B15 /* ComposerGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerGeometryTests.swift; sourceTree = "<group>"; };
 		10C7E3FD777A713DA6298113 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
 		113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelector.swift; sourceTree = "<group>"; };
 		11800CD3827F773B71C8B1B7 /* QRImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRImage.swift; sourceTree = "<group>"; };
@@ -725,6 +727,7 @@
 			children = (
 				F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */,
 				680EA7BD55CA0D2F27D81FE8 /* BadgeRenderTests.swift */,
+				0EE26BC3B71DBCF5F73F6B15 /* ComposerGeometryTests.swift */,
 				327323DA10D8649D7ED7A137 /* ComposerRenderTests.swift */,
 				2E3F7EEC977B79E8BB72BBDC /* ComposerStateTests.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
@@ -1413,6 +1416,7 @@
 			files = (
 				B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */,
 				1C280B2522CCAE406145B8E1 /* BadgeRenderTests.swift in Sources */,
+				F122D5CBDFF0ED4BF5FD49A7 /* ComposerGeometryTests.swift in Sources */,
 				B671F1F9F691342A9216792C /* ComposerRenderTests.swift in Sources */,
 				A0CB70E9F5876CDC83B84D04 /* ComposerStateTests.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,

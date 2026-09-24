@@ -10,12 +10,17 @@ import UIKit
 ///
 /// Everything is in the space of the composer's row — the flanks and the well, inside the pane's
 /// insets — where the leading flank is measured. The pane's leading end is `horizontalInset`
-/// before the flank, the well's leading edge `spacing` after it, and the pane's top and foot
-/// `verticalInset` outside the row.
+/// before the flank, the well's leading edge `spacing` after it, and the pane's top and foot the
+/// vertical inset as drawn outside the row.
+///
+/// `share` is the share of its resting size the pane's microphone is drawn at
+/// (`ComposerGeometry.scale`): under the keyboard the pane is short, and he is placed from the
+/// short pane — its top edge and its foot — at his own size, which is `look.mascot.scale` alone
+/// and never follows the pane's height.
 struct MascotPlacement: Equatable, Sendable {
     /// The one rectangle he is drawn in and clipped to: from the pane's leading end to the well's
-    /// leading edge, and from the top of him to the pane's foot. Nothing of him is drawn outside
-    /// it, and it never reaches the well.
+    /// leading edge, and from the top of him, floated as high as his bob goes, to the pane's foot.
+    /// Nothing of him is drawn outside it, and it never reaches the well.
     var frame: CGRect
     /// Where his body stands in `frame`: the middle of the flank moved by the look's offset, on
     /// the row of the engine's shelf, which sits on the pane's top edge.
@@ -33,30 +38,67 @@ struct MascotPlacement: Equatable, Sendable {
     /// No placement at all: what a flank with no width gets.
     static let none = MascotPlacement(frame: .zero, home: .zero, scale: 1, corner: 0)
 
-    static func of(flank: CGRect, row: CGSize, composer: Look.Composer, mascot: Look.Mascot) -> MascotPlacement {
+    static func of(flank: CGRect, row: CGSize, composer: Look.Composer, mascot: Look.Mascot,
+                   share: CGFloat = 1) -> MascotPlacement {
         // No flank is no Topo: the inset and the spacing around a flank with no width are the
         // pane's edge and the well's margin, not room of his.
         guard flank.width > 0 else { return .none }
+        let share = min(max(share, 0), 1)
         let scale = mascot.scale
+        let inset = composer.verticalInset * share
         let left = flank.minX - composer.horizontalInset
         let right = max(left, flank.maxX + composer.spacing)
-        let paneTop = -composer.verticalInset
-        let paneFoot = row.height + composer.verticalInset
+        let paneTop = -inset
+        let paneFoot = row.height + inset
         let homeX = min(max((left + right) / 2 + mascot.offset.width, left), right)
         // The edge he stands on is between the pane's top edge and its foot, whatever the look
         // says: lifted above it he would float over the transcript, below it he is out of sight.
         let shelf = paneTop + min(max(mascot.offset.height, 0), paneFoot - paneTop)
-        let top = min(shelf - CGFloat(Topo.shelfY) * scale, paneTop)
+        // Room above him for the bob, so a lift is drawn rather than clipped.
+        let top = min(shelf - CGFloat(Topo.shelfY) * scale - max(mascot.bobAmplitude, 0), paneTop)
         let stroll = min(max(mascot.stroll, 0), homeX - left)
         return MascotPlacement(frame: CGRect(x: left, y: top, width: right - left, height: max(0, paneFoot - top)),
                                home: CGPoint(x: homeX - left, y: shelf - top), scale: scale,
                                corner: -Double(stroll / scale))
     }
 
-    /// The engine's whole picture in `frame`'s space, with him walked `x` art pixels from home.
-    func sprite(x: Double) -> CGRect {
-        CGRect(x: home.x + CGFloat(x - Topo.bodyX) * scale, y: home.y - CGFloat(Topo.shelfY) * scale,
+    /// The engine's whole picture in `frame`'s space, with him walked `x` art pixels from home
+    /// and floated `lift` points up off it.
+    func sprite(x: Double, lift: CGFloat = 0) -> CGRect {
+        CGRect(x: home.x + CGFloat(x - Topo.bodyX) * scale, y: home.y - CGFloat(Topo.shelfY) * scale - lift,
                width: CGFloat(Topo.width) * scale, height: CGFloat(Topo.height) * scale)
+    }
+}
+
+/// Topo floating over an empty transcript. With no pane under him he is not standing on
+/// anything, so he bobs where he would stand: up by as much as the amplitude and back, once a
+/// period. The bob is scaled by how much of a pane there is not — the presence, which the pane
+/// arrives at as the turns run under it — so as the glass appears he settles onto it rather than
+/// stopping, and on the glass whole he is still.
+struct MascotHover: Equatable, Sendable {
+    var amplitude: CGFloat = 0
+    var period: Double = 1
+    /// The pane's presence, 0 to 1.
+    var presence: Double = 1
+
+    init(amplitude: CGFloat = 0, period: Double = 1, presence: Double = 1) {
+        self.amplitude = amplitude
+        self.period = period
+        self.presence = presence
+    }
+
+    init(_ mascot: Look.Mascot, presence: Double) {
+        self.init(amplitude: mascot.bobAmplitude, period: mascot.bobPeriod, presence: presence)
+    }
+
+    /// How far up he is `time` seconds into the bob, in points: nothing at the start of each
+    /// period, the whole amplitude at its middle, and nothing at all under Reduce Motion, on the
+    /// glass whole, or for a bob with no length or no period.
+    func lift(at time: Double, reduceMotion: Bool) -> CGFloat {
+        guard !reduceMotion, period > 0, amplitude > 0, time.isFinite else { return 0 }
+        let free = 1 - min(max(presence.isFinite ? presence : 1, 0), 1)
+        let phase = (1 - cos(2 * .pi * time / period)) / 2
+        return amplitude * CGFloat(free * phase)
     }
 }
 
@@ -206,6 +248,9 @@ final class MascotCanvas: UIView {
     private var last: CFTimeInterval = 0
     private(set) var placement: MascotPlacement?
     private var interval = 1.0 / 30
+    private(set) var hover = MascotHover()
+    /// How long he has been drawn moving, which is where in the bob he is.
+    private var clock = 0.0
 
     /// Whether the display link is running, which is whether frames are being asked for.
     var isTicking: Bool { link != nil }
@@ -229,9 +274,11 @@ final class MascotCanvas: UIView {
     required init?(coder: NSCoder) { fatalError("made in code") }
 
     /// Everything the view is told by SwiftUI, applied at once.
-    func apply(input: TopoInput, placement: MascotPlacement, interval: Double, conditions: MascotDriver.Conditions) {
+    func apply(input: TopoInput, placement: MascotPlacement, interval: Double, hover: MascotHover = .init(),
+               conditions: MascotDriver.Conditions) {
         self.placement = placement
         self.interval = interval
+        self.hover = hover
         var conditions = conditions
         conditions.onScreen = window != nil
         driver.input = input
@@ -239,9 +286,15 @@ final class MascotCanvas: UIView {
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        sprite.frame = placement.sprite(x: lastX)
+        sprite.frame = placement.sprite(x: lastX, lift: lift)
         CATransaction.commit()
     }
+
+    /// How far up the bob has him now: nothing under Reduce Motion, where no frame moves him.
+    var lift: CGFloat { hover.lift(at: clock, reduceMotion: driver.conditions.reduceMotion) }
+
+    /// Where his picture is drawn in the canvas, as the last frame or state left it.
+    var spriteFrame: CGRect { sprite.frame }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
@@ -256,7 +309,7 @@ final class MascotCanvas: UIView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         sprite.contents = image
-        if let placement { sprite.frame = placement.sprite(x: x) }
+        if let placement { sprite.frame = placement.sprite(x: x, lift: lift) }
         CATransaction.commit()
     }
 
@@ -283,6 +336,12 @@ final class MascotCanvas: UIView {
         // The first frame after a pause moves him one frame on, not by the whole pause.
         let dt = last == 0 ? interval : min(link.targetTimestamp - last, 0.1)
         last = link.targetTimestamp
+        step(dt)
+    }
+
+    /// One frame, `dt` seconds on: the bob's clock and the engine moved on together.
+    func step(_ dt: Double) {
+        clock += dt
         driver.tick(dt)
     }
 
@@ -305,12 +364,13 @@ struct MascotPerch: UIViewRepresentable {
     var input: TopoInput
     var placement: MascotPlacement
     var interval: Double
+    var hover: MascotHover
     var conditions: MascotDriver.Conditions
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
-        canvas.apply(input: input, placement: placement, interval: interval, conditions: conditions)
+        canvas.apply(input: input, placement: placement, interval: interval, hover: hover, conditions: conditions)
     }
 
     static func dismantleUIView(_ canvas: MascotCanvas, coordinator: ()) {
@@ -320,10 +380,18 @@ struct MascotPerch: UIViewRepresentable {
 
 /// Topo in the composer's leading flank: placed from the flank's measured bounds and the row's
 /// size, drawn from the state he is handed, and told what decides whether he is drawn.
-struct MascotOnGlass: View {
+///
+/// The presence and the share are animated through it, so the bob eases out over the same time
+/// the pane's surface arrives in, and his slot moves with the short pane's edges rather than
+/// jumping. His size is the look's and does not move at all.
+struct MascotOnGlass: View, Animatable {
     let state: MascotState
     let flank: CGRect
     let row: CGSize
+    /// The share the pane's microphone is drawn at (`ComposerGeometry.scale`).
+    var share: CGFloat = 1
+    /// The pane's presence: at nothing he floats, and he settles as it rises.
+    var presence: Double = 1
     /// How opaque his flank is drawn; frames stop only at zero.
     let opacity: Double
     /// A sheet is over the chat.
@@ -332,11 +400,23 @@ struct MascotOnGlass: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The presence and the share, animated together: the bob eases out as the pane arrives, and
+    /// his slot follows the pane's edges as the keyboard rises rather than jumping.
+    nonisolated var animatableData: AnimatablePair<Double, CGFloat> {
+        get { AnimatablePair(presence, share) }
+        set {
+            presence = newValue.first
+            share = newValue.second
+        }
+    }
+
     var body: some View {
-        let placement = MascotPlacement.of(flank: flank, row: row, composer: look.composer, mascot: look.mascot)
+        let placement = MascotPlacement.of(flank: flank, row: row, composer: look.composer, mascot: look.mascot,
+                                           share: share)
         if !placement.isEmpty {
             MascotPerch(input: input(corner: placement.corner), placement: placement,
                         interval: look.mascot.frameInterval,
+                        hover: MascotHover(look.mascot, presence: presence),
                         conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                           reduceMotion: reduceMotion))
                 .frame(width: placement.frame.width, height: placement.frame.height)

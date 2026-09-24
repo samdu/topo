@@ -1,6 +1,9 @@
 #if DEBUG
 import Foundation
 import TopoAuth
+#if os(iOS)
+import UIKit
+#endif
 
 /// What a debug build takes from its launch environment, so a simulator can be signed in and made
 /// to say something without anybody touching the screen. None of it exists in a release build: the
@@ -22,6 +25,23 @@ enum DebugRun {
     static let loopVariable = "TOPO_DEBUG_LOOP_SECONDS"
     static let outboxVariable = "TOPO_DEBUG_OUTBOX"
     static let lookVariable = "TOPO_DEBUG_LOOK"
+    static let softwareKeyboardVariable = "TOPO_DEBUG_SOFTWARE_KEYBOARD"
+
+    #if os(iOS)
+    /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
+    /// Mac's keyboard connected, which is how a simulator starts. With the Mac's keyboard nothing
+    /// rises and the screen's safe area never changes, and the glass goes short on the keyboard's
+    /// own safe area (`KeyboardInset`), so a suite pressing the short well needs the keyboard a
+    /// phone has. It clears the input modes' hardware layout, the simulator's own switch, through
+    /// UIKit's private `setHardwareLayout:`, which is why it is here and nowhere else.
+    static func softwareKeyboard(_ environment: [String: String] = ProcessInfo.processInfo.environment) {
+        guard environment[softwareKeyboardVariable] == "1" else { return }
+        let clear = NSSelectorFromString("setHardwareLayout:")
+        for mode in UITextInputMode.activeInputModes where mode.responds(to: clear) {
+            mode.perform(clear, with: nil)
+        }
+    }
+    #endif
 
     /// `TOPO_DEBUG_LOOK=<look.json>`: a look worn in place of the vault's, read by the same
     /// `LookDocument` field by field, so a UI suite can put the screen at the ends of the ranges

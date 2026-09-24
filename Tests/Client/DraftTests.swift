@@ -12,8 +12,9 @@ import XCTest
 @MainActor
 final class DraftStateTests: XCTestCase {
     private func draft(_ text: String = "", typing: Bool = false, sending: Bool = false,
-                       edit: (@MainActor () -> Void)? = nil) -> Draft {
-        Draft(text: .constant(text), typing: .constant(typing), sending: sending, edit: edit)
+                       edit: (@MainActor () -> Void)? = nil, holdsKeyboard: Bool = false) -> Draft {
+        Draft(text: .constant(text), typing: .constant(typing), sending: sending, edit: edit,
+              holdsKeyboard: holdsKeyboard)
     }
 
     /// Nothing written and no keyboard: the transcript ends at the last turn, as it did before
@@ -24,6 +25,14 @@ final class DraftStateTests: XCTestCase {
 
     func testTheKeyboardAloneShowsTheRow() {
         XCTAssertEqual(draft(typing: true).state, .writing)
+    }
+
+    /// The keyboard asked down while the field still holds it leaves the row where it is: taken
+    /// out of the window then, the field would drop the keyboard with no animation. The row goes
+    /// once the field has let the keyboard go.
+    func testTheRowStaysUntilItsFieldHasLetTheKeyboardGo() {
+        XCTAssertEqual(draft(typing: false, holdsKeyboard: true).state, .writing)
+        XCTAssertEqual(draft(typing: false, holdsKeyboard: false).state, .hidden)
     }
 
     /// A caption from the microphone arrives with no keyboard, and the row is what shows it.

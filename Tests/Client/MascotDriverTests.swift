@@ -155,6 +155,41 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertFalse(canvas.isTicking, "a canvas taken out of the window kept asking for frames")
     }
 
+    /// Over an empty transcript he floats: half a period into the bob he is the look's amplitude
+    /// up off where he would stand, and on the glass whole, or under Reduce Motion, he is not up
+    /// at all.
+    func testHeBobsOverNoPaneAndNotOnTheGlassOrUnderReduceMotion() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 100, height: 200))
+        let placement = MascotPlacement(frame: canvas.frame, home: CGPoint(x: 50, y: 150), scale: 1, corner: 0)
+        let input = MascotState(model: "claude-sonnet-5").input
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        var mascot = Look.Mascot()
+        mascot.bobAmplitude = 10
+        mascot.bobPeriod = 2
+        let resting = placement.sprite(x: 0).minY
+
+        canvas.apply(input: input, placement: placement, interval: 1.0 / 30,
+                     hover: MascotHover(mascot, presence: 0), conditions: seen)
+        canvas.step(1)
+        XCTAssertEqual(canvas.lift, 10, accuracy: 1e-9, "half a period over no pane is the whole bob")
+        XCTAssertEqual(canvas.spriteFrame.minY, resting - 10, accuracy: 1e-6, "the lift is not where he is drawn")
+
+        canvas.apply(input: input, placement: placement, interval: 1.0 / 30,
+                     hover: MascotHover(mascot, presence: 1), conditions: seen)
+        XCTAssertEqual(canvas.lift, 0, "on the glass whole he still bobs")
+        XCTAssertEqual(canvas.spriteFrame.minY, resting, accuracy: 1e-6)
+
+        var still = seen
+        still.reduceMotion = true
+        canvas.apply(input: input, placement: placement, interval: 1.0 / 30,
+                     hover: MascotHover(mascot, presence: 0), conditions: still)
+        XCTAssertEqual(canvas.lift, 0, "he bobs under Reduce Motion")
+        XCTAssertEqual(canvas.spriteFrame.minY, resting, accuracy: 1e-6)
+        XCTAssertFalse(canvas.isTicking, "Reduce Motion asked for frames to bob him with")
+    }
+
     /// He takes no touch and is nothing to accessibility.
     func testTheCanvasTakesNoTouchAndIsHidden() {
         let canvas = MascotCanvas(frame: .zero)
