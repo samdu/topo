@@ -12,6 +12,9 @@ struct Fetched: Sendable, Equatable {
     let sha256: String
     /// The release the entry is pinned to, where it names one (Claude Code's version).
     let version: String?
+
+    /// The file as a layer of the fakefs, with its pin.
+    var layer: RootfsLayer { RootfsLayer(file: file, pin: RootfsPin(size: size, sha256: sha256)) }
 }
 
 /// Where one of the guest's downloads comes from: fetched and verified by the downloader.
@@ -21,13 +24,13 @@ protocol DownloadSource: AnyObject {
     var isFetched: Bool { get }
     /// The downloader's own line while a fetch is on its way.
     var status: String { get }
-    /// Starts a fetch, or carries on the one under way, and settles `done` once: with the file
-    /// and its pin, or with why the fetch failed.
-    func fetch(_ done: @escaping @MainActor (Result<Fetched, Error>) -> Void)
+    /// Starts a fetch, or carries on the one under way, and settles `done` once: with every file of
+    /// the entry and its pin, in the manifest's order, or with why the fetch failed.
+    func fetch(_ done: @escaping @MainActor (Result<[Fetched], Error>) -> Void)
 }
 
-/// One single-file entry of the model manifest, fetched by `ModelDownloads`: the rootfs tarball,
-/// or Claude Code.
+/// One entry of the model manifest, fetched by `ModelDownloads`: the rootfs tarball, bash and the
+/// packages it depends on, or Claude Code.
 @MainActor
 final class DownloadedEntry: DownloadSource {
     private let id: String
@@ -45,24 +48,27 @@ final class DownloadedEntry: DownloadSource {
         return downloads.describe([id])
     }
 
-    func fetch(_ done: @escaping @MainActor (Result<Fetched, Error>) -> Void) {
+    func fetch(_ done: @escaping @MainActor (Result<[Fetched], Error>) -> Void) {
         downloads.start([id])
         downloads.whenSettled([id]) { [downloads, id] result in
             done(result.mapError { $0 as Error }.flatMap {
-                guard let model = downloads.manifest?.model(id), let file = model.files.first else {
+                guard let model = downloads.manifest?.model(id), !model.files.isEmpty else {
                     return .failure(ModelStoreError.unknownModel(id))
                 }
-                return .success(Fetched(file: downloads.store.location(of: file, in: model), size: file.size,
-                                        sha256: file.sha256, version: model.version))
+                return .success(model.files.map {
+                    Fetched(file: downloads.store.location(of: $0, in: model), size: $0.size,
+                            sha256: $0.sha256, version: model.version)
+                })
             })
         }
     }
 }
 
-/// The guest on this phone, as two downloads. Its root: Alpine's minirootfs, fetched by
-/// `ModelDownloads` as one more pinned entry of the manifest and verified there, then made into a
-/// fakefs by the fork's own importer (`RootfsInstaller`) under Application Support; once the
-/// fakefs is whole nothing is fetched or imported again. And Claude Code: Anthropic's binary,
+/// The guest on this phone, as three downloads. Its root: Alpine's minirootfs and bash with the
+/// packages it depends on, fetched by `ModelDownloads` as two more pinned entries of the manifest
+/// and verified there, then made into one fakefs by the fork's own importer (`RootfsInstaller`)
+/// under Application Support; once the fakefs is whole nothing is fetched or imported again. And
+/// Claude Code: Anthropic's binary,
 /// another pinned entry, which stays in its manifest home and is handed out as the installer that
 /// verifies and mounts it into a booted guest (`ClaudeCodeInstaller`), so nothing here copies it.
 /// Both are asked for on every foreground, like the ear's and the voice's models. A fetch that
@@ -76,8 +82,8 @@ final class Userland {
     static let shared = Userland()
 
     enum Phase: Equatable {
-        /// The tarball is not yet on disk and verified; the downloader's own status says where it
-        /// stands.
+        /// The tarball or the packages are not yet on disk and verified; the downloader's own
+        /// status says where each stands.
         case fetching
         case importing
         case ready(RootfsInstaller.Outcome)
@@ -94,16 +100,20 @@ final class Userland {
 
     private(set) var phase: Phase = .fetching
     private(set) var claude: ClaudePhase = .fetching
-    /// Whether this launch had to fetch the tarball: a fakefs imported from a file an earlier
-    /// launch downloaded is not one this launch fetched.
+    /// Whether this launch had to fetch the tarball or the packages: a fakefs imported from files
+    /// an earlier launch downloaded is not one this launch fetched.
     private(set) var fetchedThisLaunch = false
     /// Whether this launch had to fetch Claude Code, rather than finding it on the phone.
     private(set) var claudeFetchedThisLaunch = false
     let installer: RootfsInstaller
     private let source: any DownloadSource
+    private let shellSource: any DownloadSource
     private let claudeSource: any DownloadSource
     /// Whether a fetch is on its way, so a foreground during one asks for nothing more.
     private var fetching = false
+    /// What the rootfs's fetch and the packages' fetch settled with, until both have.
+    private var fetchedRootfs: Result<[Fetched], Error>?
+    private var fetchedShell: Result<[Fetched], Error>?
     private var claudeFetching = false
     private var readiness: [CheckedContinuation<URL, Error>] = []
     private var claudeReadiness: [CheckedContinuation<ClaudeCodeInstaller, Error>] = []
@@ -111,21 +121,24 @@ final class Userland {
     private var booting: Task<ClaudeCodeInstaller.Installed, Error>?
 
     init(installer: RootfsInstaller = .standard(), source: (any DownloadSource)? = nil,
-         claudeSource: (any DownloadSource)? = nil) {
+         shellSource: (any DownloadSource)? = nil, claudeSource: (any DownloadSource)? = nil) {
         self.installer = installer
         self.source = source ?? DownloadedEntry(ModelManifest.rootfs)
+        self.shellSource = shellSource ?? DownloadedEntry(ModelManifest.shell)
         self.claudeSource = claudeSource ?? DownloadedEntry(ModelManifest.claudeCode)
     }
 
-    /// Asks for both downloads: the rootfs, imported once it is here, and Claude Code. Idempotent,
+    /// Asks for every download: the rootfs and the packages, imported once both are here, and
+    /// Claude Code. Idempotent,
     /// and called on every foreground so that a download or an import that failed is tried again.
     func prepare() {
         prepareRootfs()
         prepareClaude()
     }
 
-    /// A fakefs already whole asks for nothing — not even the tarball, which a later launch does
-    /// not need.
+    /// A fakefs already whole asks for nothing — not even the tarball or the packages, which a
+    /// later launch does not need. Otherwise both are fetched at once, and imported together once
+    /// both have settled; either failing fails the import.
     private func prepareRootfs() {
         switch phase {
         case .importing, .ready: return
@@ -137,15 +150,38 @@ final class Userland {
         }
         guard !fetching else { return }
         fetching = true
-        if !source.isFetched { fetchedThisLaunch = true }
+        if !source.isFetched || !shellSource.isFetched { fetchedThisLaunch = true }
         phase = .fetching
+        fetchedRootfs = nil
+        fetchedShell = nil
         source.fetch { [weak self] result in
-            guard let self else { return }
-            self.fetching = false
-            switch result {
-            case .success(let fetched): self.install(fetched.file, RootfsPin(size: fetched.size, sha256: fetched.sha256))
-            case .failure(let error): self.finish(.failure(error))
+            self?.fetchedRootfs = result
+            self?.fetchedBoth()
+        }
+        shellSource.fetch { [weak self] result in
+            self?.fetchedShell = result
+            self?.fetchedBoth()
+        }
+    }
+
+    /// Once both fetches have settled: the import, or the first failure.
+    private func fetchedBoth() {
+        guard let rootfs = fetchedRootfs, let shell = fetchedShell else { return }
+        fetchedRootfs = nil
+        fetchedShell = nil
+        fetching = false
+        do {
+            let files = try rootfs.get()
+            guard files.count == 1, let tarball = files.first else {
+                throw ModelDownloadFailure(id: ModelManifest.rootfs, why: "the entry is not one file")
             }
+            let packages = try shell.get()
+            guard !packages.isEmpty else {
+                throw ModelDownloadFailure(id: ModelManifest.shell, why: "the entry names no package")
+            }
+            install(tarball.layer, packages.map(\.layer))
+        } catch {
+            finish(.failure(error))
         }
     }
 
@@ -162,7 +198,12 @@ final class Userland {
             self.claudeFetching = false
             let waiting = self.claudeReadiness
             self.claudeReadiness = []
-            switch result {
+            switch result.flatMap({ files -> Result<Fetched, Error> in
+                guard files.count == 1, let file = files.first else {
+                    return .failure(ModelDownloadFailure(id: ModelManifest.claudeCode, why: "the entry is not one file"))
+                }
+                return .success(file)
+            }) {
             case .success(let fetched) where (fetched.version ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
                 // A pin without its version — absent, empty or blank — is not one `claude --version`
                 // can be held to.
@@ -193,7 +234,7 @@ final class Userland {
         }
     }
 
-    /// The guest booted with Claude Code mounted, once per process: waits for both downloads,
+    /// The guest booted with Claude Code mounted, once per process: waits for every download,
     /// boots the kernel on the fakefs, and verifies and mounts Claude Code off the main thread
     /// (the digest reads the whole binary). Every caller after the first gets the first's
     /// answer, failure included, since the kernel boots at most once.
@@ -213,13 +254,13 @@ final class Userland {
         return try await task.value
     }
 
-    private func install(_ tarball: URL, _ pin: RootfsPin) {
+    private func install(_ rootfs: RootfsLayer, _ packages: [RootfsLayer]) {
         phase = .importing
         let installer = installer
-        // The digest reads four megabytes and the import writes a few thousand files: blocking
+        // The digests read five megabytes and the import writes a few thousand files: blocking
         // work, so a queue of its own rather than the cooperative pool.
         DispatchQueue.global(qos: .utility).async {
-            let result = Result { try installer.install(from: tarball, pin: pin) }
+            let result = Result { try installer.install(rootfs: rootfs, packages: packages) }
             Task { @MainActor in self.finish(result) }
         }
     }
@@ -249,23 +290,24 @@ final class Userland {
         }
     }
 
-    /// Whether both downloads are on the phone: the fakefs whole and Claude Code fetched at its
-    /// pin. Until they are, the phone does not answer.
+    /// Whether every download is on the phone: the fakefs whole, bash in it, and Claude Code
+    /// fetched at its pin. Until they are, the phone does not answer.
     var isReady: Bool {
         guard case .ready = phase, case .fetched = claude else { return false }
         return true
     }
 
-    /// The diagnostics screen's `userland` row, one clause per download, so it says which of the
-    /// two a guest is waiting on: the rootfs waiting, downloading, verifying, importing or ready,
-    /// and Claude Code waiting, downloading, verifying or downloaded at its version.
+    /// The diagnostics screen's `userland` row, a clause per download, so it says which of the
+    /// three a guest is waiting on: the rootfs and bash each waiting, downloading or verifying,
+    /// then the two importing together and ready, and Claude Code waiting, downloading, verifying
+    /// or downloaded at its version.
     var summary: String {
         let rootfs: String
         switch phase {
-        case .fetching: rootfs = source.status
-        case .importing: rootfs = "importing"
-        case .ready: rootfs = "ready"
-        case .failed(let why): rootfs = "failed: \(why)"
+        case .fetching: rootfs = "rootfs \(source.status); bash \(shellSource.status)"
+        case .importing: rootfs = "rootfs and bash importing"
+        case .ready: rootfs = "rootfs and bash ready"
+        case .failed(let why): rootfs = "rootfs and bash failed: \(why)"
         }
         let claudeCode: String
         switch claude {
@@ -273,7 +315,7 @@ final class Userland {
         case .fetched(let pin): claudeCode = "\(pin.version) downloaded"
         case .failed(let why): claudeCode = "failed: \(why)"
         }
-        return "rootfs \(rootfs); claude code \(claudeCode)"
+        return "\(rootfs); claude code \(claudeCode)"
     }
 }
 

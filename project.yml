@@ -190,8 +190,9 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.tests
   # The guest's suite: the rootfs pipeline, the kernel booted on Alpine's minirootfs
-  # (TEST_RUNNER_TOPO_USERLAND_ROOTFS) and Claude Code mounted into it
-  # (TEST_RUNNER_TOPO_USERLAND_CLAUDE), both from scripts/fetch-pinned.sh. Not hosted, so it runs in a
+  # (TEST_RUNNER_TOPO_USERLAND_ROOTFS) with bash and its packages laid in
+  # (TEST_RUNNER_TOPO_USERLAND_SHELL) and Claude Code mounted into it
+  # (TEST_RUNNER_TOPO_USERLAND_CLAUDE), all from scripts/fetch-pinned.sh. Not hosted, so it runs in a
   # process of its own: the kernel is process-global, and this bundle boots it once.
   TopoUserlandTests:
     type: bundle.unit-test

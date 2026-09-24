@@ -68,6 +68,9 @@ struct ModelManifest: Codable, Sendable {
     /// The guest's rootfs: Alpine's aarch64 minirootfs, one tarball, which the userland imports
     /// into a fakefs once it is here and verified (`Apps/Topo/Userland.swift`).
     static let rootfs = "alpine-minirootfs"
+    /// bash for the guest, which Claude Code's Bash tool runs in: Alpine's own package and the
+    /// three it depends on, laid into the fakefs beside the rootfs (`Apps/Topo/Userland.swift`).
+    static let shell = "alpine-bash"
     /// Claude Code: Anthropic's `linux-arm64-musl` build, one binary, which the guest runs from
     /// its home here through a mount (`TopoUserland.ClaudeCodeInstaller`), never a copy.
     static let claudeCode = "claude-code"

@@ -28,7 +28,24 @@ final class StreamJSONTests: XCTestCase {
         // What the app does not read is named, not dropped silently.
         XCTAssertTrue(events.contains(.other("system/thinking_tokens")))
         XCTAssertTrue(events.contains(.other("rate_limit_event")))
-        XCTAssertTrue(events.contains(.other("user")), "a tool's result coming back")
+        // The Bash call's result, recorded before the guest had a shell: an error, with Claude
+        // Code's words for it.
+        XCTAssertTrue(events.contains(.toolResult(isError: true, text: "No suitable shell found. Claude CLI requires a Posix shell "
+                                                  + "environment. Please ensure you have a valid shell installed and the SHELL "
+                                                  + "environment variable set.")))
+    }
+
+    /// A tool's result, as a string or as text blocks, an error or not; a `user` message with no
+    /// tool result in it is named and not read.
+    func testAToolResultCarriesItsTextAndWhetherItFailed() {
+        func line(_ content: String, _ extra: String = "") -> String {
+            #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"# + content + extra + "}]}}"
+        }
+        XCTAssertEqual(StreamJSON.events(in: line(#""topo-42\n""#)), [.toolResult(isError: false, text: "topo-42\n")])
+        XCTAssertEqual(StreamJSON.events(in: line(#""nope""#, #","is_error":true"#)), [.toolResult(isError: true, text: "nope")])
+        XCTAssertEqual(StreamJSON.events(in: line(#"[{"type":"text","text":"a"},{"type":"image"},{"type":"text","text":"b"}]"#)),
+                       [.toolResult(isError: false, text: "a\nb")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"user","message":{"role":"user","content":"hello"}}"#), [.other("user")])
     }
 
     /// A turn that searched, wrote a note, wrote code, read, edited and ran a command, recorded in
