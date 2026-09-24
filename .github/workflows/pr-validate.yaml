@@ -1266,9 +1266,13 @@ jobs:
           fi
 
           # Everything below records the outcome for the status-pane step, then
-          # exits with it; `state` is pass|block, `summary` is one line.
+          # exits with it; `state` is pass|block, `summary` is the verdict's
+          # summary, which a re-review writes as several lines (its list of
+          # earlier findings), so it goes to the output file as a delimited
+          # block and never as `summary=` on one line, which the runner
+          # refuses for a value with a newline in it and fails the step.
           finish() {
-            { echo "state=$1"; echo "summary=$2"; } >> "$GITHUB_OUTPUT"
+            { echo "state=$1"; echo "summary<<TOPO_SUMMARY_EOF"; echo "$2"; echo "TOPO_SUMMARY_EOF"; } >> "$GITHUB_OUTPUT"
             exit "$3"
           }
 
