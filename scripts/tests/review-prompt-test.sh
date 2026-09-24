@@ -398,6 +398,15 @@ round_is flaky 3
 # Round 2: one verdict before it, so no round section.
 { echo "["; comment 'github-actions[bot]' "$body"; echo "]"; } > "$work/second.json"
 run second "$work/second.json"
+if [ "$(cat "$work/second.status")" != 0 ]; then
+  fail "second: exited $(cat "$work/second.status"): $(cat "$work/second.err")"
+elif [ ! -s "$work/second.out" ]; then
+  fail "second: the prompt is empty"
+elif ! grep -qx -- "----- PREVIOUS REVIEW AND THE CHANGE SINCE -----" "$work/second.out"; then
+  fail "second: no previous-review section"
+else
+  pass "second: exited 0 with a re-review prompt"
+fi
 round_is second ""
 
 # Two pages, the newest verdict last on the second, an older one and a human's between.
