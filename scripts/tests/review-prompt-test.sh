@@ -20,7 +20,9 @@
 #   - otherwise the newest verdict is quoted verbatim inside its fence, and the change since is
 #     exactly the two fix commits, each with its patch: never the base's advances, the merge that
 #     brought one into the branch, the merge ref, or the reviewed commit;
-#   - text in the verdict cannot close its fence, and both bounds truncate with a marker.
+#   - text in the verdict cannot close its fence, and both bounds truncate with a marker;
+#   - the round is one more than the codex verdicts on the PR, and from round 3 on, and only then,
+#     the prompt ends with the convergence rule, on a first review as on a re-review.
 #
 #   scripts/tests/review-prompt-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/review-prompt-test.sh
@@ -190,14 +192,40 @@ run() {
   echo "$?" > "$work/$name.status"
 }
 
-# first_review <case> <reason pattern> — the case produced the first-review prompt, exactly, and
-# said why on stderr.
+# before_round <case> — the case's prompt up to the round section, which is the whole prompt when it
+# has none.
+before_round() {
+  python3 -c 'import sys; sys.stdout.write(open(sys.argv[1]).read().split("\n----- REVIEW ROUND ")[0])' "$work/$1.out"
+}
+
+# round_is <case> <round or empty> — the prompt ends with the convergence rule for that round, or,
+# given no round, carries none.
+round_is() {
+  local name="$1" want="$2"
+  if [ -z "$want" ]; then
+    if grep -q -- "^----- REVIEW ROUND" "$work/$name.out"; then
+      fail "$name: carries a round section before round 3"
+    else
+      pass "$name: no round section before round 3"
+    fi
+  elif grep -qx -- "----- REVIEW ROUND $want -----" "$work/$name.out" \
+    && grep -q "only for a bug a real user of Topo would hit" "$work/$name.out" \
+    && [ "$(tail -n 1 "$work/$name.out")" = "this prompt. The PM files the non-blocking findings as issues." ]; then
+    pass "$name: ends with the round $want convergence rule"
+  else
+    fail "$name: does not end with the round $want convergence rule"
+  fi
+}
+
+# first_review <case> <reason pattern> [round] — the case produced the first-review prompt, exactly,
+# said why on stderr, and carries the round section for [round] or none.
 first_review() {
-  local name="$1" reason="$2"
+  local name="$1" reason="$2" round="${3:-}"
+  round_is "$name" "$round"
   if [ "$(cat "$work/$name.status")" != 0 ]; then
     fail "$name: exited $(cat "$work/$name.status"): $(cat "$work/$name.err")"
-  elif ! cmp -s "$expected_first" "$work/$name.out"; then
-    fail "$name: the prompt is not the first-review prompt"; diff "$expected_first" "$work/$name.out" | head -n 20
+  elif ! cmp -s "$expected_first" <(before_round "$name"); then
+    fail "$name: the prompt is not the first-review prompt"; diff "$expected_first" <(before_round "$name") | head -n 20
   elif ! grep -Eq "$reason" "$work/$name.err"; then
     fail "$name: stderr does not say why ($reason): $(cat "$work/$name.err")"
   else
@@ -308,7 +336,7 @@ first_review others "no previous Codex review"
 no_sha_body="$(sed 2d <<<"$body")"
 { echo "["; comment 'github-actions[bot]' "$body"; echo ","; comment 'github-actions[bot]' "$no_sha_body"; echo "]"; } > "$work/nosha.json"
 run nosha "$work/nosha.json"
-first_review nosha "names no commit"
+first_review nosha "names no commit" 3
 
 # A legacy verdict whose text carries the marker, but not on line two: not a record of a review.
 stray_body="$no_sha_body
@@ -330,6 +358,11 @@ run ghfails "$work/none.json" FAKE_GH_FAIL=1
 first_review ghfails "::warning::could not read this PR's comments.*HTTP 502"
 
 # --- a re-review ------------------------------------------------------------------------------
+
+# Round 2: one verdict before it, so no round section.
+{ echo "["; comment 'github-actions[bot]' "$body"; echo "]"; } > "$work/second.json"
+run second "$work/second.json"
+round_is second ""
 
 # Two pages, the newest verdict last on the second, an older one and a human's between.
 {
@@ -376,6 +409,7 @@ else
   else
     fail "rereview: the instruction to verify earlier findings and read again is missing"
   fi
+  round_is rereview 3
   if grep -q "re-review: previous review of $reviewed" "$work/rereview.err"; then
     pass "rereview: says on stderr which review it builds on"
   else

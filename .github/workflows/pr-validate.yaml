@@ -1,9 +1,10 @@
-# The merge gate. The suite runs first, as parallel jobs gated by `test`;
-# Codex reviews every non-draft PR whose suite is green, and its verdict is
-# what gates. `review_gate` and `test` are the required status checks on main,
-# and automerge.yaml merges on this workflow's latest pull_request run
-# concluding green — so a red suite job holds the merge by both routes and
-# costs no reviewer round.
+# The merge gate. The suite runs as parallel jobs gated by `test`; Codex
+# reviews every non-draft PR whose fast jobs (`select`, `topo_unit`, `others`)
+# are green, alongside the UI tests in `topo_ui`, and its verdict is what
+# gates. `review_gate` and `test` are the required status checks on main, and
+# automerge.yaml merges on this workflow's latest pull_request run concluding
+# green — so a red suite job holds the merge by both routes, and a red fast
+# job costs no reviewer round.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
 # `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
@@ -725,21 +726,24 @@ jobs:
   # Skipped while the PR is a draft: an agent opens the PR as a draft, iterates
   # against the free local reviewer, and marks it ready — that transition is
   # what first spends a Codex round.
+  #
+  # It waits on the fast jobs only, never on `topo_ui` or `test`: the UI tests
+  # take most of a run's wall clock, and the verdict arrives while they are
+  # still going. The merge still needs both, since reviewer_ran and
+  # review_gate read every suite job and `test`.
   codex:
-    needs: [select, topo_unit, topo_ui, others, test]
+    needs: [select, topo_unit, others]
     # Same-repo branches only: a fork PR carries untrusted content and must
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
     #
     # Every `needs.<job>.result` is spelled out because a job with its own
     # `if:` drops the implicit `success()` over its `needs` — without them, a
-    # red suite job would still spend a reviewer round.
+    # red fast job would still spend a reviewer round.
     if: >-
       needs.select.result == 'success' &&
       needs.topo_unit.result == 'success' &&
-      needs.topo_ui.result == 'success' &&
       needs.others.result == 'success' &&
-      needs.test.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -857,7 +861,8 @@ jobs:
             neither is reported as low-confidence — say so in its text — and
             never blocks.
 
-            The test suite has already passed, this runner has no Swift
+            The unit, package and script suites have already passed and the
+            UI tests are running beside you; this runner has no Swift
             toolchain and your sandbox is read-only; do not try to build or run
             anything — review the tests by reading them. You can read any file
             in the checkout; do that rather than guessing. Skip style and
@@ -1205,16 +1210,17 @@ jobs:
             echo "::error::No verdict: this PR is a draft, so the reviewer was deliberately skipped. Mark it ready for review — nothing here is a review decision."
             exit 1
           fi
-          # Named before the reviewer's own result, because a red suite is why
-          # the reviewer did not run and "the reviewer job did not complete"
-          # would send a reader to the wrong log. Every suite job that did not
-          # pass is named.
+          # Named before the reviewer's own result, because a red fast job is
+          # why the reviewer did not run and "the reviewer job did not
+          # complete" would send a reader to the wrong log, and a red
+          # `topo_ui` holds the merge whatever the verdict. Every suite job
+          # that did not pass is named.
           red=""
           for pair in $SUITE_RESULTS; do
             [ "${pair#*=}" = success ] || red="$red ${pair%%=*} (${pair#*=})"
           done
           if [ -n "$red" ]; then
-            echo "::error::No verdict: the suite did not pass —$red — so the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
+            echo "::error::Not mergeable: the suite did not pass —$red — whatever any verdict says, and a red fast job means the reviewer was deliberately not spent on it. Fix the suite — nothing here is a review decision."
             exit 1
           fi
           if [ "$CODEX_RESULT" != "success" ]; then
