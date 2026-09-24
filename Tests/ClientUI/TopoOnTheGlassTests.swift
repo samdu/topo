@@ -146,11 +146,17 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
         let keyboard = app.keyboards.element
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the flank raised no keyboard")
-        let up = try waitForTopo(in: app, "on the short glass above the keyboard") {
-            $0.roost == "flank" && !$0.hidden && !$0.walking && $0.frame == $0.to
-                && ($0.frame.map { $0[1] + $0[3] } ?? .infinity) <= Double(keyboard.frame.minY)
+        // The glass under the keyboard is shorter than he is, and he stands on its foot: his
+        // picture's bottom edge is the pane's, both as he read them, in one space.
+        let up = try waitForTopo(in: app, "on the short glass's foot") {
+            guard $0.roost == "flank", !$0.hidden, !$0.walking, $0.frame == $0.to,
+                  let frame = $0.frame, let pane = $0.pane else { return false }
+            return pane[3] < frame[3] && abs((frame[1] + frame[3]) - (pane[1] + pane[3])) < 0.5
         }
         let frame = try XCTUnwrap(up.frame)
+        let pane = try XCTUnwrap(up.pane)
+        XCTAssertEqual(frame[1] + frame[3], pane[1] + pane[3], accuracy: 0.5, "not on the short glass's foot: \(up)")
+        XCTAssertLessThan(frame[1], pane[1], "the glass is not shorter than he is: \(up)")
         XCTAssertGreaterThanOrEqual(frame[0], Double(mic.frame.maxX) - 0.5, "not right of the microphone: \(up)")
         attach(app, "topo-keyboard-up-full-chat")
         app.terminate()
@@ -203,8 +209,9 @@ final class TopoOnTheGlassTests: XCTestCase {
         var walking = false
         var covered = false
         var moves = 0
+        var pane: [Double]?
         var description: String {
-            "\(roost) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) covered \(covered) moves \(moves)"
+            "\(roost) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) covered \(covered) moves \(moves) pane \(pane ?? [])"
         }
     }
 
@@ -222,7 +229,11 @@ final class TopoOnTheGlassTests: XCTestCase {
                              _ wanted: (Topo) -> Bool) throws -> Topo {
         let deadline = Date().addingTimeInterval(timeout)
         var seen = topo(in: app)
+        // The simulator's account alert can arrive at any point of a run and puts the scene out
+        // of the foreground, which stops him; it is put away whenever it is up.
+        let accountAlert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
         while seen.map(wanted) != true, Date() < deadline {
+            if accountAlert.exists { accountAlert.buttons["Not Now"].tap() }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
             seen = topo(in: app)
         }
