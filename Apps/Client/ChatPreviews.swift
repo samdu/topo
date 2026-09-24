@@ -42,7 +42,7 @@ enum PreviewTurns {
     ])
 
     /// Long turns only, each wrapping across the whole column: a transcript with no gap in it
-    /// anywhere Topo could stand, so he sits on the glass.
+    /// anywhere Topo could stand, so he is not drawn.
     static let full: [Turn] = make((0..<10).map { index in
         (index.isMultiple(of: 2) ? .assistant : .person,
          "Air scatters short wavelengths more than long ones, so blue light bounces around the whole sky. "

@@ -401,9 +401,7 @@ struct Look: Equatable, Sendable {
     /// takes what it is handed as it comes, so no value puts him over a word or the microphone.
     struct Mascot: Equatable, Sendable {
         /// Points to one of the engine's art pixels, scaled nearest-neighbour so pixels stay
-        /// pixels: two thirds, which is two device pixels an art pixel on a 3x screen, and the
-        /// size at which the whole of his picture (`MascotSprite.box`) fits on the pane's leading
-        /// flank, where he sits when the chat has no gap for him.
+        /// pixels: two thirds, which is two device pixels an art pixel on a 3x screen.
         var scale: CGFloat = 2.0 / 3
         /// The room he keeps from every word, the row being written and the lines under the
         /// transcript, in points, on every side of his picture. A gap he stands in holds his

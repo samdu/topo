@@ -105,7 +105,7 @@ struct Composer: View {
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, geometry.verticalInset)
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
-        // Topo sits on the pane's trailing flank when the transcript has no gap for him.
+        // The whole pane is off limits to Topo, at every presence.
         .mascotPane()
         .background(lozenge(geometry).opacity(max(presence, Self.leastSurface)).allowsHitTesting(presence > 0))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
@@ -130,9 +130,8 @@ struct Composer: View {
     /// itself has taken that colour.
     private var ink: Color { mic.open ? look.composer.flank.openInk : look.composer.flank.ink }
 
-    /// No control: this flank is Topo's, where he sits when the transcript has no gap for him and
-    /// waits before the transcript's first read. It keeps the space so the microphone stays in
-    /// the middle.
+    /// No control: what else can come in besides words has no path into the log yet. It keeps the
+    /// space so the microphone stays in the middle.
     private var trailing: some View {
         Color.clear.frame(width: 0, height: 0)
     }

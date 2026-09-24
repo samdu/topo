@@ -2,8 +2,8 @@ import SwiftUI
 
 /// Where the things are that Topo stands clear of, reported by the views that draw them: the
 /// transcript's frame, which is where he may stand, every turn, the row being written and the
-/// lines under the transcript, which he may not cover, and the composer's pane and well, whose
-/// trailing flank is where he sits when there is no gap for him.
+/// lines under the transcript, which he may not cover, and the composer's pane and well, which he
+/// is never drawn over.
 ///
 /// Each is an anchor, resolved where he is drawn (`mascotRoams`), so the frames are the ones
 /// drawn and not ones worked out: a turn scrolled half out of sight is where it is drawn.
@@ -48,7 +48,7 @@ extension View {
         transformAnchorPreference(key: MascotScene.self, value: .bounds) { $0.visible = $1 }
     }
 
-    /// The composer's pane, whose trailing flank he sits on when no gap holds him.
+    /// The composer's pane, which he is never drawn over.
     func mascotPane() -> some View {
         transformAnchorPreference(key: MascotScene.self, value: .bounds) { $0.pane = $1 }
     }
@@ -152,29 +152,16 @@ struct MascotField: Equatable, Sendable {
         return CGRect(x: -wide, y: visible.minY, width: 2 * wide, height: max(bottom - visible.minY, 0))
     }
 
-    /// What he may not be drawn over: what of each obstacle can be seen (`seen`); the pane's
-    /// controls — the well and everything from it to the pane's leading end — whole, since a move
-    /// onto the flank may pass them; and the keyboard, whose keys are words too.
+    /// What he may not be drawn over: what of each obstacle can be seen (`seen`); the composer's
+    /// pane and its well, whole, at every presence and whether the keyboard is up or down, since
+    /// the glass is the controls' and never his; and the keyboard, whose keys are words too.
     var covering: [CGRect] {
         let seen = seen
         var all = obstacles.map { $0.intersection(seen) }.filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
-        if let controls { all.append(controls) }
+        if let pane { all.append(pane) }
+        if let well { all.append(well) }
         if let keyboard { all.append(keyboard) }
         return all
-    }
-
-    /// The pane's trailing flank: from the well's trailing edge to the pane's trailing end, the
-    /// pane's height. Nothing is drawn there but him.
-    var flank: CGRect? {
-        guard let pane, let well, pane.maxX > well.maxX else { return nil }
-        return CGRect(x: well.maxX, y: pane.minY, width: pane.maxX - well.maxX, height: pane.height)
-    }
-
-    /// The well and the flank before it, from the pane's leading end: the keyboard control and
-    /// the microphone.
-    var controls: CGRect? {
-        guard let pane, let well else { return nil }
-        return CGRect(x: pane.minX, y: pane.minY, width: max(0, well.maxX - pane.minX), height: pane.height)
     }
 
     /// Whether anything he may not cover overlaps `frame`.
@@ -183,18 +170,16 @@ struct MascotField: Equatable, Sendable {
     }
 }
 
-/// Where Topo stands: a gap in the transcript, the pane's trailing flank, or nowhere.
+/// Where Topo stands: a gap in the transcript, or nowhere.
 enum MascotRoost: Equatable, Sendable {
     /// A gap in the transcript, and the frame of his picture in it.
     case gap(CGRect)
-    /// The pane's trailing flank, where no gap held him.
-    case flank(CGRect)
-    /// Neither holds him, and he is not drawn.
+    /// No gap holds him, and he is not drawn.
     case none
 
     var frame: CGRect? {
         switch self {
-        case .gap(let frame), .flank(let frame): frame
+        case .gap(let frame): frame
         case .none: nil
         }
     }
@@ -202,7 +187,6 @@ enum MascotRoost: Equatable, Sendable {
     var name: String {
         switch self {
         case .gap: "gap"
-        case .flank: "flank"
         case .none: "none"
         }
     }
@@ -212,31 +196,18 @@ enum MascotRoost: Equatable, Sendable {
     ///
     /// A gap is a place in `field.open` where his picture with `clearance` all round it overlaps
     /// nothing he may not cover. Of the gaps that hold him the nearest to `from` wins — so a new
-    /// turn moves him the least — and with no `from` the nearest to the middle of the pane's
-    /// trailing flank, where he would sit otherwise. With no gap he sits on that flank
-    /// (`flank(_:size:)`), and a flank narrower than his picture draws nothing, never a Topo over
-    /// the microphone.
+    /// turn moves him the least — and with no `from` the nearest to the transcript's bottom
+    /// trailing corner, the right margin just above the glass. With no gap he stands nowhere and
+    /// is not drawn: never on the glass, never over the microphone.
     static func of(_ field: MascotField, size: CGSize, clearance: CGFloat, from: CGPoint?) -> MascotRoost {
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
         let margin = clearance.isFinite ? max(clearance, 0) : 0
-        let home = flank(field, size: size).frame?.origin
-            ?? field.flank.map { CGPoint(x: $0.midX - size.width / 2, y: $0.midY - size.height / 2) }
-            ?? CGPoint(x: field.open.minX, y: field.open.maxY - size.height)
+        let open = field.open
+        let home = CGPoint(x: open.maxX - size.width - margin, y: open.maxY - size.height - margin)
         if let spot = nearestGap(field, size: size, margin: margin, to: from ?? home) {
             return .gap(CGRect(origin: spot, size: size))
         }
-        return flank(field, size: size)
-    }
-
-    /// The middle of the pane's trailing flank; on a pane shorter than his picture — the glass
-    /// under the keyboard — the middle of its width, standing on its foot and rising above its top
-    /// edge, so a chat with no gap and the keyboard up still has him on the glass rather than
-    /// nowhere; and nowhere when the flank is narrower than his picture.
-    static func flank(_ field: MascotField, size: CGSize) -> MascotRoost {
-        guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
-        guard let flank = field.flank, size.width <= flank.width else { return .none }
-        let y = size.height <= flank.height ? flank.midY - size.height / 2 : flank.maxY - size.height
-        return .flank(CGRect(x: flank.midX - size.width / 2, y: y, width: size.width, height: size.height))
+        return .none
     }
 
     /// The origin of his picture in the nearest gap to `target`, or nil for none.
@@ -280,13 +251,9 @@ enum MascotRoost: Equatable, Sendable {
     }
 
     /// Whether `frame` is a roost as it stands: a gap — inside `field.open` with `clearance` all round
-    /// it and nothing he may not cover within that — or on the flank whole, or where the flank
-    /// stands him on a pane shorter than he is (`flank(_:size:)`). The small-move
-    /// threshold keeps him only where this holds.
+    /// it and nothing he may not cover within that. The small-move threshold keeps him only
+    /// where this holds.
     static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat) -> Bool {
-        if let flank = field.flank, flank.insetBy(dx: -epsilon, dy: -epsilon).contains(frame) { return true }
-        if let standing = flank(field, size: frame.size).frame,
-           abs(standing.minX - frame.minX) <= epsilon, abs(standing.minY - frame.minY) <= epsilon { return true }
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let grown = frame.insetBy(dx: -margin, dy: -margin)
         guard field.open.insetBy(dx: -epsilon, dy: -epsilon).contains(grown) else { return false }
@@ -392,8 +359,8 @@ struct MascotRoam: Equatable, Sendable {
     private var advanced = 0.0
     /// The time a frame lasts, which is the quiet a covered Topo waits for.
     var frame: Double
-    /// The transcript has not been read yet: the page is about to fill, so he goes to the flank
-    /// and nowhere else until it has.
+    /// The transcript has not been read yet: the page is about to fill, so he stands nowhere and
+    /// is not drawn until it has.
     private(set) var waiting = false
 
     init(_ settings: Settings, frame: Double = 1.0 / 30) {
@@ -423,9 +390,9 @@ struct MascotRoam: Equatable, Sendable {
         covered = picture.map(field.covers) ?? false
     }
 
-    /// Whether the transcript is still to be read. While it is, every decision is the flank (or
-    /// nowhere, when the flank cannot hold him); once it has been, the geometry counts as changed
-    /// then, so his first decision where to stand is a settle after the read.
+    /// Whether the transcript is still to be read. While it is, every decision is nowhere; once it
+    /// has been, the geometry counts as changed then, so his first decision where to stand is a
+    /// settle after the read.
     mutating func wait(_ waiting: Bool, at time: Double) {
         guard waiting != self.waiting else { return }
         now = max(now, time)
@@ -450,6 +417,10 @@ struct MascotRoam: Equatable, Sendable {
         if reroost, position != nil {
             move = nil
             decide(glide: false)
+        } else if reroost {
+            // Not drawn: the new size may fit where the old did not, decided once it settles.
+            changed = now
+            unsettled = true
         }
         covered = picture.flatMap { picture in field.map { $0.covers(picture) } } ?? false
     }
@@ -483,7 +454,7 @@ struct MascotRoam: Equatable, Sendable {
         unsettled = false
         guard let field else { return }
         let next = waiting
-            ? MascotRoost.flank(field, size: settings.size)
+            ? MascotRoost.none
             : MascotRoost.of(field, size: settings.size, clearance: settings.clearance, from: position)
         guard let to = next.frame?.origin else {
             roost = .none

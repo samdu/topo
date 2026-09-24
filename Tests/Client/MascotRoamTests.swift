@@ -73,7 +73,7 @@ final class MascotRoamTests: XCTestCase {
     /// A glide whose straight path crosses a turn is covered while he is over it and clear past
     /// it, he is drawn all the way, and it ends where it was going.
     func testAGlideAcrossATurnIsCoveredOnlyWhileHeIsOverIt() throws {
-        // He stands low on the left, over the glass; then a turn lands over him and another lies
+        // He stands low on the right, just above the glass; then a turn lands over him and another lies
         // between him and the only gap, at the top, so his way up crosses both.
         let (placed, start) = settled(Self.field([]))
         var roam = placed
@@ -260,69 +260,72 @@ final class MascotRoamTests: XCTestCase {
     }
 
     /// A geometry change that lands within the settle of the last one defers the decision; the
-    /// decision comes a settle after the last change and not before. He sits on the glass while a
-    /// chat with no gap streams, flickering between full and one with room at its top, and goes
-    /// to the room only once it holds still.
+    /// decision comes a settle after the last change and not before. He is not drawn while a
+    /// chat with no gap streams, flickering between full and one with room at its top, and is
+    /// placed in the room only once it holds still.
     func testTheRoostWaitsForTheGeometryToSettle() throws {
         let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
         let roomy = Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)])
         let (placed, start) = settled(full)
         var roam = placed
-        XCTAssertEqual(roam.roost.name, "flank")
+        XCTAssertEqual(roam.roost.name, "none")
+        XCTAssertTrue(roam.hidden)
         var time = start
         for step in 0..<11 {
             time = start + Double(step) * 0.3
             roam.observe(step.isMultiple(of: 2) ? roomy : full, at: time)
             roam.advance(to: time)
-            XCTAssertFalse(roam.hidden)
-            XCTAssertEqual(roam.moves, 0, "decided within the settle of a change")
+            XCTAssertTrue(roam.hidden, "decided within the settle of a change")
         }
         let last = time
         while time < last + 0.6 - Self.frame {
             time += Self.frame / 2
             roam.advance(to: time)
-            XCTAssertEqual(roam.moves, 0, "decided before the settle at \(time - last)")
+            XCTAssertTrue(roam.hidden, "decided before the settle at \(time - last)")
         }
-        while roam.moves == 0, time < last + 2 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.moves, 1)
+        while roam.hidden, time < last + 2 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertFalse(roam.hidden)
+        XCTAssertEqual(roam.moves, 0, "a glide from nowhere")
         XCTAssertGreaterThanOrEqual(time - last, 0.6 - 1e-9)
         XCTAssertEqual(roam.roost.name, "gap")
     }
 
-    /// Until the transcript has been read he is on the flank, however empty the page: the page is
+    /// Until the transcript has been read he is not drawn, however empty the page: the page is
     /// about to fill, and he is not placed into it. Once it has been read, his first decision is
-    /// a settle later, from the flank, and it is a glide into the room the read left.
-    func testUntilTheTranscriptIsReadHeIsOnTheFlank() throws {
+    /// a settle later, and it places him, with no glide, in the room the read left.
+    func testUntilTheTranscriptIsReadHeIsNotDrawn() throws {
         var roam = MascotRoam(Self.settings, frame: Self.frame)
         roam.wait(true, at: 0)
         let empty = Self.field([])
         roam.observe(empty, at: 0)
         var time = 0.0
         while roam.needsTime, time < 5 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "flank", "placed into the empty page before the read")
+        XCTAssertEqual(roam.roost.name, "none", "placed into the empty page before the read")
+        XCTAssertTrue(roam.hidden)
         // The read fills the page, leaving room at its top.
         let filled = Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)])
         roam.observe(filled, at: time)
         let changed = time
         while roam.needsTime, time < changed + 5 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "flank", "a geometry change before the read placed him off the flank")
-        XCTAssertEqual(roam.moves, 0)
+        XCTAssertEqual(roam.roost.name, "none", "a geometry change before the read placed him")
+        XCTAssertTrue(roam.hidden)
         roam.wait(false, at: time)
         let read = time
         XCTAssertTrue(roam.needsTime)
-        while roam.moves == 0, time < read + 5 { time += Self.frame; roam.advance(to: time) }
+        while roam.hidden, time < read + 5 { time += Self.frame; roam.advance(to: time) }
         XCTAssertGreaterThanOrEqual(time - read, Self.settings.settle - 1e-9, "decided before a settle after the read")
-        XCTAssertEqual(roam.moves, 1, "no glide from the flank into the room the read left")
-        while roam.needsTime, time < read + 60 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.moves, 0, "a glide from nowhere")
         XCTAssertEqual(roam.roost.name, "gap")
+        let frame = try XCTUnwrap(roam.picture)
+        XCTAssertLessThanOrEqual(frame.maxY, 200 - Self.settings.clearance + 0.001, "not in the room the read left")
     }
 
-    /// A read that fails is not the read: while the transcript has not been read he stays on the
-    /// flank through the empty page and every change to it — the error line under the transcript
+    /// A read that fails is not the read: while the transcript has not been read he is not drawn
+    /// through the empty page and every change to it — the error line under the transcript
     /// appearing, a retry failing again — however many settles go by, and the read that gets
     /// through is what starts his first decision, into the room it leaves and not the empty
     /// page's.
-    func testAFailedReadKeepsHimOnTheFlankUntilOneGetsThrough() throws {
+    func testAFailedReadKeepsHimUndrawnUntilOneGetsThrough() throws {
         var roam = MascotRoam(Self.settings, frame: Self.frame)
         roam.wait(true, at: 0)
         roam.observe(Self.field([]), at: 0)
@@ -335,35 +338,36 @@ final class MascotRoamTests: XCTestCase {
             roam.observe(change == 60 ? Self.field([]) : errorLine, at: time)
         }
         while time < 120 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "flank", "placed into the empty page while no read had got through")
-        XCTAssertEqual(roam.moves, 0)
+        XCTAssertEqual(roam.roost.name, "none", "placed into the empty page while no read had got through")
+        XCTAssertTrue(roam.hidden)
         // The read gets through and fills the page, leaving room at its top only.
         let filled = Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)])
         roam.observe(filled, at: time)
         roam.wait(false, at: time)
         let read = time
-        while roam.moves == 0, time < read + 5 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.moves, 1)
+        while roam.hidden, time < read + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.moves, 0, "a glide from nowhere")
         while roam.needsTime, time < read + 60 { time += Self.frame; roam.advance(to: time) }
         let frame = try XCTUnwrap(roam.roost.frame)
         XCTAssertEqual(roam.roost.name, "gap")
         XCTAssertLessThanOrEqual(frame.maxY, 200 - Self.settings.clearance + 0.001, "not in the room the read left")
     }
 
-    /// On the flank with no gap, every geometry change asks for a new roost: the keyboard rising,
-    /// which lifts the glass and the transcript's end, opens room above the glass and he glides
-    /// off the flank into it; with the keyboard down again and the chat full he is back on the
-    /// flank. A scroll that opens room does the same.
-    func testOnTheFlankAGeometryChangeThatOpensAGapTakesHimOffIt() throws {
+    /// Not drawn for want of a gap, every geometry change asks for a new roost: the keyboard
+    /// rising, which lifts the glass and the transcript's end, opens room above the glass and he
+    /// is placed in it; with the keyboard down again and the chat full he is not drawn. A scroll
+    /// that opens room does the same.
+    func testWithNowhereToStandAGeometryChangeThatOpensAGapPlacesHim() throws {
         let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
         let (placed, start) = settled(full)
         var roam = placed
-        XCTAssertEqual(roam.roost.name, "flank")
+        XCTAssertEqual(roam.roost.name, "none")
+        XCTAssertTrue(roam.hidden)
         XCTAssertFalse(roam.needsTime)
 
         // The keyboard rises: the glass sits on it, full height, and the transcript's end rises
         // with it, leaving room between the last turn and the glass.
-        var up = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 628),
+        let up = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 628),
                              obstacles: [CGRect(x: 0, y: -300, width: 402, height: 480)],
                              pane: CGRect(x: 41, y: 300, width: 320, height: 80),
                              well: CGRect(x: 165, y: 304, width: 72, height: 72),
@@ -372,23 +376,22 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertTrue(roam.needsTime, "a keyboard rising asked for no new roost")
         var time = start
         while roam.needsTime, time < start + 30 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "gap", "the keyboard opened room and he stayed on the flank")
+        XCTAssertEqual(roam.roost.name, "gap", "the keyboard opened room and he was not placed in it")
         let gap = try XCTUnwrap(roam.picture)
         XCTAssertTrue(MascotRoost.holds(up, frame: gap, clearance: 8))
-        XCTAssertGreaterThanOrEqual(roam.moves, 1)
+        XCTAssertFalse(MascotRoost.overlap(gap, up.pane!), "\(gap) over the glass")
 
-        // Down again, into a full chat: nothing holds him but the flank.
+        // Down again, into a full chat: nothing holds him, and he is not drawn.
         roam.observe(full, at: time)
         while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "flank")
+        XCTAssertEqual(roam.roost.name, "none")
+        XCTAssertTrue(roam.hidden)
 
-        // A scroll opening room at the top of the chat takes him there.
-        up.keyboard = nil
+        // A scroll opening room at the top of the chat places him there.
         roam.observe(Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)]), at: time)
-        let before = roam.moves
         while roam.needsTime, time < start + 90 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "gap", "a scroll opened room and he stayed on the flank")
-        XCTAssertGreaterThan(roam.moves, before, "he did not glide off the flank")
+        XCTAssertEqual(roam.roost.name, "gap", "a scroll opened room and he was not placed in it")
+        XCTAssertFalse(roam.hidden)
     }
 
     /// Where he stands lacking the clearance is not a roost, and he moves however short the move
@@ -484,23 +487,23 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertFalse(roam.needsTime, "the decision was left for the clock")
     }
 
-    /// A look changing his scale during a glide from the flank is decided on that frame: at the
-    /// scale's maximum no roost holds him, so nothing is drawn, and at no frame is his picture
-    /// over the well or the controls before it.
-    func testAScaleChangeMidGlideFromTheFlankNeverDrawsHimOverTheWell() throws {
-        let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
-        let (placed, start) = settled(full)
+    /// A look changing his scale during a glide is decided on that frame: at the scale's maximum
+    /// no roost holds him, so nothing is drawn, and at no frame is his picture over the glass.
+    func testAScaleChangeMidGlideNeverDrawsHimOverTheGlass() throws {
+        // Room at the top only, then room at the bottom only: he glides down across the turn.
+        let (placed, start) = settled(Self.field([CGRect(x: 0, y: 300, width: 402, height: 328)]))
         var roam = placed
-        XCTAssertEqual(roam.roost.name, "flank")
-        roam.observe(Self.field([CGRect(x: 0, y: 0, width: 200, height: 628)]), at: start)
+        XCTAssertEqual(roam.roost.name, "gap")
+        roam.observe(Self.field([CGRect(x: 0, y: 0, width: 402, height: 300)]), at: start)
         var time = start
         while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
-        for _ in 0..<5 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertNotNil(roam.move, "no glide from the flank")
-        func assertClearOfTheControls(_ label: String) {
+        time += Self.frame
+        roam.advance(to: time)
+        XCTAssertNotNil(roam.move, "no glide")
+        func assertClearOfTheGlass(_ label: String) {
             guard let picture = roam.picture, let field = roam.field else { return }
             XCTAssertFalse(MascotRoost.overlap(picture, field.well!), "\(label): \(picture) over the well")
-            XCTAssertFalse(MascotRoost.overlap(picture, field.controls!), "\(label): \(picture) over the controls")
+            XCTAssertFalse(MascotRoost.overlap(picture, field.pane!), "\(label): \(picture) over the pane")
         }
         var largest = Self.settings
         largest.size = MascotSprite.size(scale: 4)
@@ -511,14 +514,15 @@ final class MascotRoamTests: XCTestCase {
         for _ in 0..<120 {
             time += Self.frame
             roam.advance(to: time)
-            assertClearOfTheControls("t \(time)")
+            assertClearOfTheGlass("t \(time)")
         }
         // Back to a scale that fits, he is placed where it holds.
         var middle = Self.settings
         middle.size = MascotSprite.size(scale: 1)
         roam.use(middle)
         roam.advance(to: time + 1)
-        assertClearOfTheControls("scale 1")
+        XCTAssertNotNil(roam.picture, "back at scale 1 he was not placed")
+        assertClearOfTheGlass("scale 1")
     }
 
     /// Reduce Motion coming on during a glide ends it at its destination at once.
@@ -561,12 +565,10 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertFalse(roam.hidden)
     }
 
-    /// A chat that has nothing that holds him — no gap, no flank that fits — has no Topo, and
+    /// A chat that has nothing that holds him — no gap — has no Topo, and
     /// one that holds him again places him, once it settles, with no glide from nowhere.
     func testNowhereToStandIsNoTopoAndBackIsAPlacement() {
-        var field = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
-        field.well = CGRect(x: 270, y: 544, width: 72, height: 72)
-        let (placed, start) = settled(field)
+        let (placed, start) = settled(Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)]))
         var roam = placed
         XCTAssertNil(roam.position)
         XCTAssertTrue(roam.hidden)

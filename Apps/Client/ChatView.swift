@@ -152,7 +152,7 @@ struct ChatView: View {
             // measured in, so the two numbers the presence is worked out from are comparable.
             .coordinateSpace(.named(Self.space))
             // Topo, over all of it: he stands where the turns, the lines under them and the glass
-            // leave him room, and on the glass's trailing flank where they leave none.
+            // leave him room, and is not drawn where they leave none. The glass is never his.
             .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          ready: transcriptRead, report: mascotReported)

@@ -27,9 +27,8 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertNotNil(driver.image)
     }
 
-    /// Faded part of the way by the microphone's hold, with the glass's flanks, is still him seen, so frames go
-    /// on; faded to nothing, they stop.
-    func testAPartlyFadedFlankKeepsHisFramesAndANoneStopsThem() {
+    /// Faded part of the way is still him seen, so frames go on; faded to nothing, they stop.
+    func testAPartlyFadedTopoKeepsHisFramesAndANoneStopsThem() {
         for (opacity, drawn) in [(0.5, true), (0.01, true), (0, false)] as [(Double, Bool)] {
             var conditions = seen
             conditions.opacity = opacity
@@ -223,23 +222,25 @@ final class MascotDriverTests: XCTestCase {
         defer { window.isHidden = true }
         window.addSubview(canvas)
         let input = MascotState(model: "claude-sonnet-5").input
+        // No hurry, so a glide under a turn is at the stroll too.
+        var settings = Self.settings
+        settings.hurry = 1
         func apply(_ field: MascotField) {
-            canvas.apply(input: input, field: field, settings: Self.settings, interval: 1, conditions: seen)
+            canvas.apply(input: input, field: field, settings: settings, interval: 1, conditions: seen)
         }
-        // A full chat: he settles on the flank.
-        var full = Self.open
-        full.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 600)]
-        apply(full)
+        // Room at the bottom right only: he settles there.
+        var low = Self.open
+        low.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 400), CGRect(x: 0, y: 400, width: 200, height: 200)]
+        apply(low)
         // Real-shaped timestamps: host time in seconds, one callback a second, with the jitter a
         // display link's target timestamps carry.
         var stamp: CFTimeInterval = 81_234.567
         canvas.fire(at: stamp)
         XCTAssertEqual(canvas.clock, 1, accuracy: 1e-9)
-        XCTAssertEqual(canvas.roam?.roost.name, "flank", "a 0.6 s settle was not over a second in")
-        // Room opens on the right, straight above the flank: he strolls up to it, clear of
-        // everything the whole way.
+        XCTAssertEqual(canvas.roam?.roost.name, "gap", "a 0.6 s settle was not over a second in")
+        // Room opens straight above him and a turn lands where he stands: he strolls up to it.
         var roomy = Self.open
-        roomy.obstacles = [CGRect(x: 0, y: 0, width: 200, height: 600)]
+        roomy.obstacles = [CGRect(x: 0, y: 0, width: 200, height: 600), CGRect(x: 200, y: 500, width: 200, height: 100)]
         apply(roomy)
         for jitter in [1.0002, 0.9997] {
             stamp += jitter
@@ -247,7 +248,6 @@ final class MascotDriverTests: XCTestCase {
         }
         XCTAssertEqual(canvas.clock, 1 + 1.0002 + 0.9997, accuracy: 1e-6, "the clock is not real time")
         let glide = try XCTUnwrap(canvas.roam?.move, "no glide once the settle was over")
-        XCTAssertEqual(canvas.roam?.covered, false)
         // Each second of callbacks is a second of the stroll: the glide's pace is the look's,
         // whatever the frame interval.
         var steps = 0
@@ -268,10 +268,9 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(MascotCanvas.stepCap(interval: 1.0 / 30), 0.1)
     }
 
-    /// On the flank with no gap the link stops, since nothing waits on the clock; a geometry
-    /// change — the keyboard rising, a scroll — starts it again, and the room it opens takes him
-    /// off the flank.
-    func testAGeometryChangeOnTheFlankStartsTheClockAgain() throws {
+    /// Not drawn for want of a gap, the link stops, since nothing waits on the clock; a geometry
+    /// change — the keyboard rising, a scroll — starts it again, and the room it opens places him.
+    func testAGeometryChangeWithNowhereToStandStartsTheClockAgain() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
         defer { window.isHidden = true }
@@ -284,12 +283,12 @@ final class MascotDriverTests: XCTestCase {
         full.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 600)]
         apply(full)
         for _ in 0..<30 { canvas.step(1.0 / 30) }
-        XCTAssertEqual(canvas.roam?.roost.name, "flank")
+        XCTAssertEqual(canvas.roam?.roost.name, "none")
         XCTAssertEqual(canvas.roam?.needsTime, false)
         var scrolled = Self.open
         scrolled.obstacles = [CGRect(x: 0, y: 150, width: 400, height: 450)]
         apply(scrolled)
-        XCTAssertTrue(canvas.isTicking, "a geometry change on the flank asked for no frame")
+        XCTAssertTrue(canvas.isTicking, "a geometry change with nowhere to stand asked for no frame")
         for _ in 0..<600 where canvas.roam?.needsTime == true { canvas.step(1.0 / 30) }
         XCTAssertEqual(canvas.roam?.roost.name, "gap")
     }

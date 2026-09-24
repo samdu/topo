@@ -10,8 +10,8 @@ import XCTest
 /// function of the chat's geometry, held here over fixtures — an empty chat, long turns on both
 /// sides, one gap only, no gap, the keyboard up, and the choice that moves him least — and at the
 /// ends of the look's ranges for his size and his clearance; and the chat as drawn, with him over
-/// it, is held to the same: his picture where the canvas draws it overlaps no turn, the well or
-/// the flank before it, and the pane's controls are the same pixels with him as without.
+/// it, is held to the same: his picture where the canvas draws it overlaps no turn and none of
+/// the composer's pane, and the pane is the same pixels with him as without.
 ///
 /// That a press on the well reaches the microphone with him beside it is `TopoOnTheGlassTests`',
 /// which presses it; neither stands in for the other.
@@ -20,15 +20,14 @@ final class MascotGeometryTests: XCTestCase {
     // MARK: Fixtures
 
     /// A phone's transcript, 402 points wide, over a pane 320 wide and 80 tall with its 72-point
-    /// well in the middle: the trailing flank is 124 by 80, which holds his picture at two thirds.
+    /// well in the middle.
     static let visible = CGRect(x: 0, y: 0, width: 402, height: 628)
     static let pane = CGRect(x: 41, y: 540, width: 320, height: 80)
     static let well = CGRect(x: 165, y: 544, width: 72, height: 72)
 
     static func field(_ obstacles: [CGRect], keyboard: Bool = false) -> MascotField {
         if keyboard {
-            // The keyboard is up from 400: the pane rides on it, short, and its flank is too short
-            // for him.
+            // The keyboard is up from 400: the pane rides on it, short.
             return MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 400), obstacles: obstacles,
                                pane: CGRect(x: 41, y: 344, width: 320, height: 53),
                                well: CGRect(x: 177, y: 345, width: 48, height: 48),
@@ -63,18 +62,18 @@ final class MascotGeometryTests: XCTestCase {
         Fixture(name: "an empty chat", field: field([]), roost: "gap"),
         // Long turns on both sides, reaching under the pane as a scrolled transcript does.
         Fixture(name: "long turns on both sides", field: field(rows(height: 80, personMinX: 60, topoMaxX: 380, until: 700)),
-                roost: "flank"),
+                roost: "none"),
         // Every row full width but one short person's turn on the right with room to its left.
         Fixture(name: "one gap only",
                 field: field([CGRect(x: 16, y: 0, width: 370, height: 200),
                               CGRect(x: 250, y: 212, width: 136, height: 120),
                               CGRect(x: 16, y: 344, width: 370, height: 284)]),
                 roost: "gap"),
-        Fixture(name: "no gap", field: field([CGRect(x: 0, y: 0, width: 402, height: 628)]), roost: "flank"),
-        Fixture(name: "the keyboard up, turns above it", field: field(rows(height: 40, personMinX: 300, topoMaxX: 150, until: 400),
+        Fixture(name: "no gap", field: field([CGRect(x: 0, y: 0, width: 402, height: 628)]), roost: "none"),
+        Fixture(name: "the keyboard up, turns above it", field: field(rows(height: 40, personMinX: 330, topoMaxX: 150, until: 400),
                                                                       keyboard: true), roost: "gap"),
         Fixture(name: "the keyboard up, no gap", field: field([CGRect(x: 0, y: 0, width: 402, height: 400)], keyboard: true),
-                roost: "flank"),
+                roost: "none"),
     ]
 
     static let size = MascotSprite.size(scale: Look.Mascot().scale)
@@ -115,63 +114,59 @@ final class MascotGeometryTests: XCTestCase {
     /// Of two places as near where he stands, the one on the right wins: a turn down the middle
     /// with room either side of it, and him over it.
     func testATieGoesToTheRight() throws {
-        let field = Self.field([CGRect(x: 151, y: 0, width: 100, height: 628)])
+        let field = Self.field([CGRect(x: 170, y: 0, width: 62, height: 628)])
         let from = CGPoint(x: 201 - Self.size.width / 2, y: 100)
         let frame = try XCTUnwrap(MascotRoost.of(field, size: Self.size, clearance: 8, from: from).frame)
-        XCTAssertEqual(frame.minX, 251 + 8, accuracy: 0.001, "he went left: \(frame)")
+        XCTAssertEqual(frame.minX, 232 + 8, accuracy: 0.001, "he went left: \(frame)")
         XCTAssertEqual(frame.minY, 100, accuracy: 0.001)
     }
 
-    /// With no `from` he starts nearest the middle of the pane's trailing flank, which is where he
-    /// would otherwise sit.
-    func testWithNowhereToStartFromHeStartsNearTheFlank() throws {
+    /// With no `from` he starts nearest the transcript's bottom trailing corner: the right margin,
+    /// just above the glass and clear of it.
+    func testWithNowhereToStartFromHeStartsInTheBottomTrailingCorner() throws {
         let frame = try XCTUnwrap(MascotRoost.of(Self.fixtures[0].field, size: Self.size, clearance: 8, from: nil).frame)
         XCTAssertEqual(frame.maxY, Self.pane.minY - 8, accuracy: 0.001, "he does not stand just over the glass")
-        XCTAssertEqual(frame.midX, Self.well.maxX + (Self.pane.maxX - Self.well.maxX) / 2, accuracy: 0.001)
+        XCTAssertEqual(frame.maxX, Self.visible.maxX - 8, accuracy: 0.001, "he does not stand in the right margin")
+        XCTAssertFalse(MascotRoost.overlap(frame, Self.pane))
     }
 
-    /// The flank holds his whole picture or he is not drawn: at a scale the flank cannot hold, a
-    /// chat with no gap has no Topo, never one over the microphone.
-    func testAFlankThatCannotHoldHimDrawsNothing() {
-        let noGap = Self.fixtures[3].field
-        XCTAssertEqual(MascotRoost.of(noGap, size: MascotSprite.size(scale: 1), clearance: 8, from: nil), .none)
-        XCTAssertEqual(MascotRoost.of(noGap, size: MascotSprite.size(scale: 4), clearance: 0, from: nil), .none)
-        XCTAssertEqual(MascotRoost.of(noGap, size: MascotSprite.size(scale: 0.25), clearance: 64, from: nil).name, "flank")
-        var narrow = noGap
-        narrow.well = CGRect(x: 270, y: 544, width: 72, height: 72)
-        XCTAssertEqual(MascotRoost.of(narrow, size: Self.size, clearance: 8, from: nil), .none)
+    /// With no gap he is not drawn, at the default size and larger, whatever the clearance: the
+    /// glass is never where he waits.
+    func testWithNoGapHeIsNotDrawn() {
+        for fixture in Self.fixtures where fixture.roost == "none" {
+            for scale in [Look.Mascot().scale, 4] as [CGFloat] {
+                for clearance in [0, 8, 64] as [CGFloat] {
+                    XCTAssertEqual(MascotRoost.of(fixture.field, size: MascotSprite.size(scale: scale),
+                                                  clearance: clearance, from: nil), .none,
+                                   "\(fixture.name), scale \(scale), clearance \(clearance)")
+                }
+            }
+        }
     }
 
-    /// Under the keyboard the glass is shorter than he is: with no gap he stands on the flank's
-    /// foot, rising above the pane's top edge, rather than nowhere, and a flank narrower than he is
-    /// is still nowhere. Standing there is a roost as it stands, so the small-move threshold keeps
-    /// him there.
-    func testUnderTheKeyboardHeStandsOnTheShortGlass() throws {
-        let field = Self.fixtures[5].field
-        let flank = try XCTUnwrap(field.flank)
-        XCTAssertLessThan(flank.height, Self.size.height, "the fixture's glass is not shorter than he is")
-        let roost = MascotRoost.of(field, size: Self.size, clearance: 8, from: nil)
-        XCTAssertEqual(roost.name, "flank")
-        let frame = try XCTUnwrap(roost.frame)
-        XCTAssertEqual(frame.maxY, flank.maxY, accuracy: 0.001)
-        XCTAssertEqual(frame.midX, flank.midX, accuracy: 0.001)
-        XCTAssertLessThan(frame.minY, flank.minY, "he does not rise above the short glass")
-        XCTAssertFalse(MascotRoost.overlap(frame, try XCTUnwrap(field.controls)))
-        XCTAssertTrue(MascotRoost.holds(field, frame: frame, clearance: 8))
-        XCTAssertFalse(MascotRoost.holds(field, frame: frame.offsetBy(dx: 0, dy: -1), clearance: 8))
-        var narrow = field
-        narrow.well = CGRect(x: flank.maxX - Self.size.width + 1 - 48, y: 345, width: 48, height: 48)
-        XCTAssertEqual(MascotRoost.of(narrow, size: Self.size, clearance: 8, from: nil), .none)
+    /// Under the keyboard the glass rides on it, short, and it is off limits as it is at the foot
+    /// of the screen: with room above it he stands above its top edge, and with none he is not
+    /// drawn. A frame reaching one point into the glass is not a roost.
+    func testUnderTheKeyboardTheShortGlassIsOffLimits() throws {
+        let roomy = Self.fixtures[4].field
+        let pane = try XCTUnwrap(roomy.pane)
+        let frame = try XCTUnwrap(MascotRoost.of(roomy, size: Self.size, clearance: 8, from: nil).frame)
+        XCTAssertLessThanOrEqual(frame.maxY, pane.minY - 8 + 0.001, "\(frame) is not above the short glass")
+        XCTAssertTrue(MascotRoost.holds(roomy, frame: frame, clearance: 8))
+        let into = CGRect(x: frame.minX, y: pane.minY - frame.height + 1, width: frame.width, height: frame.height)
+        XCTAssertFalse(MascotRoost.holds(roomy, frame: into, clearance: 0), "a frame over the glass holds")
+        XCTAssertTrue(roomy.covers(into), "the glass does not cover him")
+        XCTAssertEqual(MascotRoost.of(Self.fixtures[5].field, size: Self.size, clearance: 8, from: nil), .none)
     }
 
     // MARK: The bounds, from geometry, at every end
 
     /// At every fixture, at the ends of the look's ranges for his size (0.25 and 4, and the
     /// default) and his clearance (0 and 64, and the default), from nowhere and from four corners:
-    /// his whole picture — every point of it, top to bottom — overlaps no turn, no row, the well
-    /// or the flank beyond it; standing in a gap it keeps the clearance from every turn and stays
-    /// in the transcript above the glass; on the flank it is inside the flank.
-    func testHisPictureExcludesEveryObstacleTheWellAndTheControlsAtEveryEnd() {
+    /// his whole picture — every point of it, top to bottom — overlaps no turn, no row and none of
+    /// the composer's pane; standing in a gap it keeps the clearance from every turn and stays in
+    /// the transcript above the glass.
+    func testHisPictureExcludesEveryObstacleAndThePaneAtEveryEnd() {
         for fixture in Self.fixtures {
             for scale in [0.25, Look.Mascot().scale, 4] as [CGFloat] {
                 for clearance in [0, 8, 64] as [CGFloat] {
@@ -190,39 +185,19 @@ final class MascotGeometryTests: XCTestCase {
                              _ label: String, file: StaticString = #filePath, line: UInt = #line) {
         guard let frame = roost.frame else { return }
         XCTAssertEqual(frame.size, size, label, file: file, line: line)
-        // On a pane shorter than he is, the flank stands him on its foot and he rises above its top
-        // edge, over whatever is there; what is judged against the words is the part on the glass.
-        let judged = roost.name == "flank" ? frame.intersection(field.flank!) : frame
-        let well = field.well ?? .null
-        let controls = field.controls ?? .null
-        XCTAssertFalse(MascotRoost.overlap(frame, well), "\(label): over the well", file: file, line: line)
-        XCTAssertFalse(MascotRoost.overlap(frame, controls), "\(label): over the controls", file: file, line: line)
+        XCTAssertEqual(roost.name, "gap", label, file: file, line: line)
+        XCTAssertFalse(MascotRoost.overlap(frame, field.pane ?? .null), "\(label): over the pane", file: file, line: line)
+        XCTAssertFalse(MascotRoost.overlap(frame, field.well ?? .null), "\(label): over the well", file: file, line: line)
         for obstacle in field.obstacles where MascotRoost.overlap(obstacle, field.seen) {
-            XCTAssertFalse(MascotRoost.overlap(judged, obstacle.intersection(field.seen)), "\(label): over \(obstacle)",
+            XCTAssertFalse(MascotRoost.overlap(frame, obstacle.intersection(field.seen)), "\(label): over \(obstacle)",
                            file: file, line: line)
         }
-        switch roost {
-        case .gap:
-            let room = frame.insetBy(dx: -clearance, dy: -clearance)
-            XCTAssertTrue(field.open.insetBy(dx: -0.001, dy: -0.001).contains(room), "\(label): out of the transcript",
-                          file: file, line: line)
-            for obstacle in field.covering {
-                XCTAssertFalse(MascotRoost.overlap(room, obstacle), "\(label): within the clearance of \(obstacle)",
-                               file: file, line: line)
-            }
-        case .flank:
-            let flank = field.flank!
-            if size.height <= flank.height {
-                XCTAssertTrue(flank.insetBy(dx: -0.001, dy: -0.001).contains(frame), "\(label): out of the flank",
-                              file: file, line: line)
-            } else {
-                XCTAssertTrue(frame.minX >= flank.minX - 0.001 && frame.maxX <= flank.maxX + 0.001,
-                              "\(label): wider than the flank", file: file, line: line)
-                XCTAssertEqual(frame.maxY, flank.maxY, accuracy: 0.001, "\(label): not on the glass's foot",
-                               file: file, line: line)
-            }
-        case .none:
-            break
+        let room = frame.insetBy(dx: -clearance, dy: -clearance)
+        XCTAssertTrue(field.open.insetBy(dx: -0.001, dy: -0.001).contains(room), "\(label): out of the transcript",
+                      file: file, line: line)
+        for obstacle in field.covering {
+            XCTAssertFalse(MascotRoost.overlap(room, obstacle), "\(label): within the clearance of \(obstacle)",
+                           file: file, line: line)
         }
     }
 
@@ -236,7 +211,8 @@ final class MascotGeometryTests: XCTestCase {
                                             CGRect(x: 16, y: -60, width: 370, height: 50)],
                                 pane: Self.pane, well: Self.well)
         XCTAssertTrue(field.covers(CGRect(x: 20, y: 480, width: 60, height: 40)), "the line under the transcript")
-        XCTAssertFalse(field.covers(CGRect(x: 290, y: 560, width: 60, height: 40)), "a turn under the glass")
+        XCTAssertFalse(field.covers(CGRect(x: 362, y: 560, width: 24, height: 40)), "a turn under the glass, beside the pane")
+        XCTAssertTrue(field.covers(CGRect(x: 290, y: 560, width: 60, height: 40)), "the pane itself")
         XCTAssertFalse(field.covers(CGRect(x: 20, y: -50, width: 60, height: 40)), "a turn under the bar")
     }
 
@@ -333,12 +309,12 @@ final class MascotGeometryTests: XCTestCase {
     /// Over an empty chat, a chat with room beside its turns and one with none, at the default
     /// look and the ends of the ranges for his size and clearance: he is drawn exactly where a
     /// roost holds him — at every look here but a scale of 4, whose 616-point picture no phone
-    /// holds, and a scale of 1 over a chat with no gap, whose flank is narrower than he is — and a look at which he is not drawn fails unless no roost holds him; his picture as
-    /// the canvas draws it overlaps no turn, the well or the flank beyond it, measured from the
-    /// frames the views report as drawn; and every pixel of the pane from the well to its trailing
-    /// end is the same with him as without.
+    /// holds, and a chat with no gap at his default size and larger — and a look at which he is
+    /// not drawn fails unless no roost holds him; his picture as the canvas draws it overlaps no
+    /// turn and none of the pane, measured from the frames the views report as drawn; and every
+    /// pixel of the pane is the same with him as without.
     func testTheChatAsDrawnHasHimClearOfEveryWordAndTheMicrophone() throws {
-        for (name, turns, roost) in [("empty", [Turn](), "gap"), ("full", PreviewTurns.full, "flank"),
+        for (name, turns, roost) in [("empty", [Turn](), "gap"), ("full", PreviewTurns.full, "none"),
                                      ("fitting", PreviewTurns.fitting, nil)] as [(String, [Turn], String?)] {
             let without = try stage(turns, mascot: nil)
             defer { without.window.isHidden = true }
@@ -362,36 +338,37 @@ final class MascotGeometryTests: XCTestCase {
                 if name != "empty" { XCTAssertFalse(field.obstacles.isEmpty, "\(label): no turn reported its frame") }
                 if let roost, mascot == Look.Mascot() {
                     XCTAssertEqual(roam.roost.name, roost, label)
-                    XCTAssertFalse(roam.hidden, label)
+                    XCTAssertEqual(roam.hidden, roost == "none", label)
                 }
                 let expected = MascotRoost.of(field, size: MascotSprite.size(scale: mascot.scale),
                                               clearance: mascot.clearance, from: nil)
                 XCTAssertEqual(roam.roost, expected, label)
                 XCTAssertEqual(canvas.showing, expected != .none,
                                "\(label): drawn \(canvas.showing), where a roost \(expected.name == "none" ? "holds nothing" : "holds him")")
-                // Every look here holds him but the largest, and a scale of 1 over a chat with no
-                // gap, whose flank is narrower than his 154 points.
-                let held = mascot.scale < 4 && !(name == "full" && mascot.scale >= 1)
+                // Every look here holds him but the largest, and, over a chat with no gap, his
+                // default size and larger, and the widest clearance.
+                let held = mascot.scale < 4
+                    && !(name == "full" && (mascot.scale >= Look.Mascot().scale || mascot.clearance >= 64))
                 XCTAssertEqual(canvas.showing, held, "\(label): \(expected.name)")
                 if canvas.showing {
                     let drawn = canvas.spriteFrame
                     XCTAssertEqual(drawn.size, MascotSprite.size(scale: mascot.scale), label)
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.well!), "\(label): drawn over the well")
-                    XCTAssertFalse(MascotRoost.overlap(drawn, field.controls!), "\(label): drawn over the controls")
+                    XCTAssertFalse(MascotRoost.overlap(drawn, field.pane!), "\(label): drawn over the pane")
                     for obstacle in field.covering {
                         XCTAssertFalse(MascotRoost.overlap(drawn, obstacle), "\(label): drawn over \(obstacle)")
                     }
                 }
-                try assertControlsUnchanged(without, with, field: field, canvas: canvas, label)
+                try assertPaneUnchanged(without, with, field: field, canvas: canvas, label)
             }
         }
     }
 
-    /// The pane from its leading end to the well's trailing edge, pixel for pixel, with a shade
-    /// for the render server's rounding on a curve's edge.
-    private func assertControlsUnchanged(_ without: Stage, _ with: Stage, field: MascotField, canvas: MascotCanvas,
-                                         _ label: String) throws {
-        let controls = canvas.convert(try XCTUnwrap(field.controls), to: with.window)
+    /// The whole pane, pixel for pixel, with a shade for the render server's rounding on a curve's
+    /// edge.
+    private func assertPaneUnchanged(_ without: Stage, _ with: Stage, field: MascotField, canvas: MascotCanvas,
+                                     _ label: String) throws {
+        let controls = canvas.convert(try XCTUnwrap(field.pane), to: with.window)
             .intersection(CGRect(origin: .zero, size: screen))
         let bare = try LookStage.bytes(without.image)
         let drawn = try LookStage.bytes(with.image)
@@ -404,7 +381,7 @@ final class MascotGeometryTests: XCTestCase {
                 for c in 0..<4 where abs(Int(drawn[i + c]) - Int(bare[i + c])) > 2 { differing += 1 }
             }
         }
-        XCTAssertEqual(differing, 0, "\(label): the pane's controls changed with him over the chat")
+        XCTAssertEqual(differing, 0, "\(label): the pane changed with him over the chat")
     }
 
     /// With him drawn somewhere, the stage is different somewhere: the test above is not holding
@@ -414,7 +391,7 @@ final class MascotGeometryTests: XCTestCase {
     /// (`device-a70490e-trapped-on-flank.png`), the turn "Nothing, just testing the continuity
     /// feature :p" wraps to a bubble 294 points wide at x 83 — as drawn there — and the room left
     /// of it, 83 points, is narrower than his picture at the default look (103 points, 119 with
-    /// its clearance), so no roost holds him there and he is on the flank; at a scale whose
+    /// its clearance), so no roost holds him there and he is not drawn; at a scale whose
     /// picture fits that room he stands in it. A narrower turn of two lines in the same place
     /// leaves room his default picture fits — a one-line bubble's row, about 85 points with the
     /// spacing either side, is shorter than his 91 — and he takes it.
@@ -428,7 +405,7 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertEqual(bubble.maxX, 377, accuracy: 2)
         let size = MascotSprite.size(scale: Look.Mascot().scale)
         XCTAssertLessThan(bubble.minX, size.width + 2 * Look.Mascot().clearance, "the room left of it holds him")
-        XCTAssertEqual(screenshot.canvas?.roam?.roost.name, "flank")
+        XCTAssertEqual(screenshot.canvas?.roam?.roost.name, "none")
 
         var small = Look.Mascot()
         small.scale = 0.4
@@ -456,7 +433,7 @@ final class MascotGeometryTests: XCTestCase {
     /// screenshot came from rests: the last line, "…has to mean here.", ends 100 points
     /// short of the transcript's edge, and the room beside it and its time, down to the
     /// transcript's foot, is 100 by 52 points, smaller both ways than his 103-by-75 picture with
-    /// its clearance, so he is on the trailing flank; at a scale whose picture that room holds, he stands in it. In
+    /// its clearance, so he is not drawn; at a scale whose picture that room holds, he stands in it. In
     /// `PreviewTurns.ragged` the reply ends in two short paragraphs, and the room at their end, on
     /// the right, is where he stands at the default look.
     func testTheRaggedRightOfAReplyIsRoom() throws {
@@ -476,8 +453,7 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertLessThan(room.width, size.width + 2 * clearance, "\(room)")
         XCTAssertLessThan(room.height, size.height + 2 * clearance, "\(room)")
         let roost = try XCTUnwrap(screenshot.canvas?.roam?.roost)
-        XCTAssertEqual(roost.name, "flank")
-        XCTAssertGreaterThanOrEqual(try XCTUnwrap(roost.frame).minX, try XCTUnwrap(field.well).maxX - 0.001, "not on the right")
+        XCTAssertEqual(roost.name, "none")
 
         var small = Look.Mascot()
         small.scale = 0.3
@@ -504,7 +480,7 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     func testHeIsDrawnAtAll() throws {
-        for turns in [[], PreviewTurns.full] {
+        for turns in [[], PreviewTurns.fitting] {
             let without = try stage(turns, mascot: nil)
             defer { without.window.isHidden = true }
             let with = try stage(turns, mascot: Look.Mascot())

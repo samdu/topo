@@ -196,7 +196,7 @@ final class MascotCanvas: UIView {
 
     /// Everything the view is told by SwiftUI, applied at once: the geometry is the roam's newest,
     /// and whether he is covered is judged against it before anything is drawn.
-    /// `ready` is whether the transcript has been read once: until then he is on the flank.
+    /// `ready` is whether the transcript has been read once: until then he is not drawn.
     func apply(input: TopoInput, field: MascotField?, settings: MascotRoam.Settings, interval: Double,
                ready: Bool = true, conditions: MascotDriver.Conditions) {
         self.input = input
@@ -401,8 +401,8 @@ struct MascotLayer: View {
     /// A sheet is over the chat.
     var covered = false
     var keyboardTop: CGFloat?
-    /// The transcript has been read once. Until it has, the page is about to fill, and he is on
-    /// the flank rather than placed into it.
+    /// The transcript has been read once. Until it has, the page is about to fill, and he is not
+    /// drawn rather than placed into it.
     var ready = true
     var report: ((MascotRoam.Report) -> Void)?
     @Environment(\.look) private var look
@@ -429,7 +429,7 @@ extension View {
     /// Topo laid over this view, which is the chat: he stands where the frames its turns, rows and
     /// glass report (`MascotScene`) leave him room, takes no room of his own and no touch, and is
     /// nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — he is
-    /// on the flank, and his first decision where to stand comes after it.
+    /// not drawn, and his first decision where to stand comes after it.
     func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
                      ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil) -> some View {
         overlayPreferenceValue(MascotScene.self) { scene in

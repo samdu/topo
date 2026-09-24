@@ -1,9 +1,9 @@
 import XCTest
 
-/// Topo over the chat takes nothing from the microphone: with him sitting on the glass's trailing
-/// flank, where a transcript with no gap in it leaves him, and with him standing in a gap away
-/// from it, a press on the well — in its middle, and at the edge nearest the flank — reaches
-/// `VoiceInput`, counted in the button's debug report.
+/// Topo over the chat takes nothing from the microphone: wherever a transcript puts him — in a
+/// gap beside its turns, or nowhere when it leaves none — a press on the well, in its middle and
+/// at its trailing edge, reaches `VoiceInput`, counted in the button's debug report. The glass is
+/// never his, keyboard up or down.
 ///
 /// This is the one place a touch is delivered, and it is the press proof only. SwiftUI puts no
 /// view of its own under a gesture, so a UIKit hit test cannot tell the microphone from empty glass;
@@ -25,18 +25,19 @@ final class TopoOnTheGlassTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// A transcript whose turns leave no gap puts him on the flank; an empty one leaves him in a
-    /// gap over it. Each is photographed as he stands, then pressed.
-    func testAPressOnTheWellReachesTheMicrophoneWithHimOnTheFlankAndAway() throws {
-        for (transcript, roost) in [("full", "flank"), ("empty", "gap")] {
+    /// A full transcript and an empty one, each with him where it puts him, photographed as he
+    /// stands, then pressed.
+    func testAPressOnTheWellReachesTheMicrophoneWhereverHeStands() throws {
+        for (transcript, roost) in Self.roosts {
             let app = launch(look: "{}", transcript: transcript)
             let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
             XCTAssertTrue(mic.waitForExistence(timeout: 60), "\(transcript): the chat screen, with its microphone")
-            _ = try waitForTopo(in: app, "\(transcript): standing in the \(roost)") {
-                $0.roost == roost && !$0.hidden && !$0.walking && $0.frame == $0.to
+            let standing = try waitForTopo(in: app, "\(transcript): standing in the \(roost)") {
+                $0.roost == roost && $0.hidden == (roost == "none") && !$0.walking && $0.frame == $0.to
             }
+            assertOffTheGlass(standing, transcript)
             attach(app, "topo-\(transcript)-\(roost)")
-            for point in ["the well's middle", "the well's edge nearest the flank"] {
+            for point in ["the well's middle", "the well's trailing edge"] {
                 let before = try report(mic)
                 let frame = mic.frame
                 let x = point == "the well's middle" ? frame.midX : frame.maxX - 2
@@ -127,16 +128,17 @@ final class TopoOnTheGlassTests: XCTestCase {
         app.terminate()
     }
 
-    /// A chat with no gap above the keyboard — `continuity`, the layout of Sam's screenshot — has
-    /// him on the short glass's trailing flank once the keyboard is up, drawn and standing still,
-    /// right of the microphone: the glass is shorter than he is, so he stands on its foot.
-    func testWithTheKeyboardUpOverAFullChatHeStandsOnTheShortGlass() throws {
+    /// Over `continuity`, the layout of Sam's screenshot, with the keyboard up the short glass is
+    /// as off limits as the tall one: every report from the keyboard rising to his standing still
+    /// has his picture clear of the pane — above its top edge, or not drawn.
+    func testWithTheKeyboardUpOverAFullChatHeIsNeverOnTheGlass() throws {
         let app = launch(look: "{}", transcript: "continuity", softwareKeyboard: true)
         let mic = app.images.matching(NSPredicate(format: "label IN %@", Self.labels)).firstMatch
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
-        _ = try waitForTopo(in: app, "on the flank of a chat with no gap") {
-            $0.roost == "flank" && !$0.hidden && !$0.walking && $0.frame == $0.to
+        let resting = try waitForTopo(in: app, "settled over the full chat") {
+            $0.roost != "" && !$0.walking && $0.frame == $0.to && $0.pane != nil
         }
+        assertOffTheGlass(resting, "before the keyboard")
         let flank = app.buttons["Type instead"]
         XCTAssertTrue(flank.waitForExistence(timeout: 10), "the keyboard flank")
         for _ in 0..<3 where !app.keyboards.element.exists {
@@ -146,20 +148,37 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
         let keyboard = app.keyboards.element
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "the flank raised no keyboard")
-        // The glass under the keyboard is shorter than he is, and he stands on its foot: his
-        // picture's bottom edge is the pane's, both as he read them, in one space.
-        let up = try waitForTopo(in: app, "on the short glass's foot") {
-            guard $0.roost == "flank", !$0.hidden, !$0.walking, $0.frame == $0.to,
-                  let frame = $0.frame, let pane = $0.pane else { return false }
-            return pane[3] < frame[3] && abs((frame[1] + frame[3]) - (pane[1] + pane[3])) < 0.5
+        // Every report for five seconds as the keyboard rises and he settles, then the one he
+        // settles on under the short glass: none has him over the pane.
+        let restingPane = try XCTUnwrap(resting.pane)
+        let watch = Date().addingTimeInterval(5)
+        while Date() < watch {
+            if let seen = topo(in: app) { assertOffTheGlass(seen, "as the keyboard rose") }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
         }
-        let frame = try XCTUnwrap(up.frame)
-        let pane = try XCTUnwrap(up.pane)
-        XCTAssertEqual(frame[1] + frame[3], pane[1] + pane[3], accuracy: 0.5, "not on the short glass's foot: \(up)")
-        XCTAssertLessThan(frame[1], pane[1], "the glass is not shorter than he is: \(up)")
-        XCTAssertGreaterThanOrEqual(frame[0], Double(mic.frame.maxX) - 0.5, "not right of the microphone: \(up)")
+        let up = try waitForTopo(in: app, "settled over the short glass") {
+            guard let pane = $0.pane else { return false }
+            return !$0.walking && $0.frame == $0.to && pane[3] < restingPane[3] - 1
+        }
+        assertOffTheGlass(up, "with the keyboard up")
         attach(app, "topo-keyboard-up-full-chat")
         app.terminate()
+    }
+
+    /// Where each transcript puts him at the default look.
+    static let roosts = [("full", "none"), ("empty", "gap")]
+
+    /// His picture, as he read it, is clear of the pane, as he read it: above its top edge, or not
+    /// drawn at all.
+    private func assertOffTheGlass(_ seen: Topo, _ label: String, file: StaticString = #filePath, line: UInt = #line) {
+        guard let frame = seen.frame else {
+            XCTAssertTrue(seen.hidden, "\(label): a frame of nothing, drawn: \(seen)", file: file, line: line)
+            return
+        }
+        guard let pane = seen.pane else { return XCTFail("\(label): no pane in the report: \(seen)", file: file, line: line) }
+        XCTAssertFalse(seen.hidden, "\(label): \(seen)", file: file, line: line)
+        XCTAssertLessThanOrEqual(frame[1] + frame[3], pane[1] + 0.5, "\(label): over the glass: \(seen)",
+                                 file: file, line: line)
     }
 
     /// The button's three labels, `VoiceInput`'s state in words.
