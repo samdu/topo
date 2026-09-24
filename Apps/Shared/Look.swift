@@ -79,8 +79,9 @@ struct Look: Equatable, Sendable {
         /// How wide the column is allowed to become on a screen wider than it.
         var maximumLineWidth: CGFloat
         /// Room kept clear after Topo's own turns, in points, on their trailing side: the margin
-        /// he stands in beside his replies. On the phone it is 150, which with the column's
-        /// padding holds his picture at a scale of 1 and its clearance from the words, and the
+        /// he stands in beside his replies. On the phone it is 100: his box at a scale of 1, 92
+        /// points, and one clearance, rounded up to ten, which with the column's padding holds his
+        /// picture flush with the screen's edge and its clearance from the words, and the
         /// ends of lines that stop short of the column's edge add to it; none on the watch and the
         /// television, where he is not drawn. The person's bubbles keep the column's width.
         var replyTrailingInset: CGFloat
@@ -120,7 +121,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 2
                 horizontalPadding = 16
                 maximumLineWidth = 672
-                replyTrailingInset = 150
+                replyTrailingInset = 100
                 bodyFont = .system(.body)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)

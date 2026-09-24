@@ -216,11 +216,11 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(reading.notes, [])
     }
 
-    /// The margin after Topo's turns: 150 points on the phone and none on the watch or the
+    /// The margin after Topo's turns: 100 points on the phone and none on the watch or the
     /// television, read from 0 to 200, so a reply keeps a column of words on the narrowest
     /// phone; past either end the field alone falls back.
     func testTheReplyTrailingInsetIsReadInItsRange() {
-        XCTAssertEqual(Look.Transcript(.phone).replyTrailingInset, 150)
+        XCTAssertEqual(Look.Transcript(.phone).replyTrailingInset, 100)
         XCTAssertEqual(Look.Transcript(.watch).replyTrailingInset, 0)
         XCTAssertEqual(Look.Transcript(.tv).replyTrailingInset, 0)
         for inset in [0, 200] as [CGFloat] {

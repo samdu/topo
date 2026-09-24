@@ -64,10 +64,10 @@ final class MascotGeometryTests: XCTestCase {
     static let fixtures: [Fixture] = [
         Fixture(name: "an empty chat", field: field([]), roost: "gap"),
         // Long turns on both sides, reaching under the pane as a scrolled transcript does: the
-        // person's across the column, Topo's to the column's edge less his margin (150 points), so
+        // person's across the column, Topo's to the column's edge less his margin (100 points), so
         // the margin beside a reply is room.
         Fixture(name: "long turns on both sides",
-                field: field(rows(height: 80, topoHeight: 160, personMinX: 60, topoMaxX: 236, until: 700)),
+                field: field(rows(height: 80, topoHeight: 160, personMinX: 60, topoMaxX: 286, until: 700)),
                 roost: "gap"),
         // Every row full width but one short person's turn on the right with room to its left.
         Fixture(name: "one gap only",
@@ -482,8 +482,8 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     /// Topo's reply reports its lines and not its frame, which is as wide as its widest line, and
-    /// keeps a margin after them (`replyTrailingInset`, 150 points on the phone): with the
-    /// column's padding, 166 points on the 393-point phone, it holds his picture at a scale of 1
+    /// keeps a margin after them (`replyTrailingInset`, 100 points on the phone): with the
+    /// column's padding, 116 points on the 393-point phone, it holds his picture at a scale of 1
     /// and its clearance from the words, flush with the screen's edge, and the ends of short lines
     /// add to it. `PreviewTurns.continuity` scrolled to its end, as the phone Sam's screenshot
     /// came from rests, and `PreviewTurns.ragged`, whose last reply ends in two short paragraphs,
