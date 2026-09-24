@@ -317,6 +317,39 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.roost.name, "gap")
     }
 
+    /// A read that fails is not the read: while the transcript has not been read he stays on the
+    /// flank through the empty page and every change to it — the error line under the transcript
+    /// appearing, a retry failing again — however many settles go by, and the read that gets
+    /// through is what starts his first decision, into the room it leaves and not the empty
+    /// page's.
+    func testAFailedReadKeepsHimOnTheFlankUntilOneGetsThrough() throws {
+        var roam = MascotRoam(Self.settings, frame: Self.frame)
+        roam.wait(true, at: 0)
+        roam.observe(Self.field([]), at: 0)
+        var time = 0.0
+        // The first read fails: the error line appears under the transcript, and a retry fails
+        // again a minute later.
+        let errorLine = Self.field([CGRect(x: 16, y: 600, width: 370, height: 20)])
+        for change in [1.0, 60.0, 61.0] {
+            while time < change { time += Self.frame; roam.advance(to: time) }
+            roam.observe(change == 60 ? Self.field([]) : errorLine, at: time)
+        }
+        while time < 120 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "flank", "placed into the empty page while no read had got through")
+        XCTAssertEqual(roam.moves, 0)
+        // The read gets through and fills the page, leaving room at its top only.
+        let filled = Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)])
+        roam.observe(filled, at: time)
+        roam.wait(false, at: time)
+        let read = time
+        while roam.moves == 0, time < read + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.moves, 1)
+        while roam.needsTime, time < read + 60 { time += Self.frame; roam.advance(to: time) }
+        let frame = try XCTUnwrap(roam.roost.frame)
+        XCTAssertEqual(roam.roost.name, "gap")
+        XCTAssertLessThanOrEqual(frame.maxY, 200 - Self.settings.clearance + 0.001, "not in the room the read left")
+    }
+
     /// On the flank with no gap, every geometry change asks for a new roost: the keyboard rising,
     /// which lifts the glass and the transcript's end, opens room above the glass and he glides
     /// off the flank into it; with the keyboard down again and the chat full he is back on the
