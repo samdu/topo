@@ -22,16 +22,22 @@ struct TranscriptView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: look.transcript.spacing) {
-                    if let notice {
-                        Text(notice)
-                            .font(look.transcript.noticeFont)
-                            .foregroundStyle(look.transcript.caption)
-                            .mascotObstacle()
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    ForEach(turns) { turn in
-                        TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
+                // The row being written is outside the lazy stack, so it is always made: with
+                // the keyboard up over a transcript taller than the screen, a row inside a lazy
+                // stack scrolled to it loads, grows the stack, is scrolled out, unloads and
+                // shrinks it again inside one layout pass, which never ends and freezes the app.
+                VStack(alignment: .leading, spacing: look.transcript.spacing) {
+                    LazyVStack(alignment: .leading, spacing: look.transcript.spacing) {
+                        if let notice {
+                            Text(notice)
+                                .font(look.transcript.noticeFont)
+                                .foregroundStyle(look.transcript.caption)
+                                .mascotObstacle()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        ForEach(turns) { turn in
+                            TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
+                        }
                     }
                     if let draft, draft.state != .hidden {
                         DraftRow(draft: draft).id(Self.draftID)
