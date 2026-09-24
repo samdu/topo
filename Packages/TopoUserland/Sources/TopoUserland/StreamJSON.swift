@@ -144,9 +144,13 @@ public enum StreamJSON {
         line.count <= 200 ? line : String(line.prefix(200)) + "…"
     }
 
-    /// The input line that asks Claude Code for a turn: a `user` message carrying `text`.
-    public static func userTurn(_ text: String) -> String {
-        let object: [String: Any] = ["type": "user", "message": ["role": "user", "content": text]]
+    /// The input line that asks Claude Code for a turn: a `user` message carrying `text`. `id`,
+    /// when given, is the message's `uuid`, which Claude Code keeps as the uuid of the entry it
+    /// writes for the input in its session transcript — how the app finds, after the fact,
+    /// whether that input was received and answered (`GuestTranscript`).
+    public static func userTurn(_ text: String, id: String? = nil) -> String {
+        var object: [String: Any] = ["type": "user", "message": ["role": "user", "content": text]]
+        if let id { object["uuid"] = id }
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         return String(decoding: data, as: UTF8.self)
     }

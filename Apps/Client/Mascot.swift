@@ -139,7 +139,8 @@ enum MascotMapping {
 }
 
 /// Topo's state as the app holds it: one value the glass reads, moved by the chat's harness and
-/// by the guest's turns.
+/// by the guest's turns — the chat's own, which the harness relays (`follow`), and a debug
+/// launch's.
 @MainActor
 @Observable
 final class Mascot {
@@ -167,5 +168,19 @@ final class Mascot {
     /// A guest turn's updates stopped, with or without an end: whatever it was doing, it is not
     /// doing it now.
     func guestTurnGone() { state = MascotMapping.ended(state) }
+
+    /// Topo follows the chat's guest: every turn the harness's brain sends it moves him.
+    func follow(_ harness: Harness) {
+        harness.onGuest = { [self] activity in follow(activity) }
+    }
+
+    /// What the chat's guest is doing, as the harness's brain tells it.
+    func follow(_ activity: GuestActivity) {
+        switch activity {
+        case .began: guestTurnBegan()
+        case .update(let update): guest(update)
+        case .gone: guestTurnGone()
+        }
+    }
 }
 #endif

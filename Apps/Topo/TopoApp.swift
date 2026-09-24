@@ -14,7 +14,7 @@ struct TopoApp: App {
     @State private var voice: VoiceInput
     @State private var speaker: Speaker
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
-    @State private var mascot = Mascot()
+    @State private var mascot: Mascot
     private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
@@ -33,7 +33,12 @@ struct TopoApp: App {
         // so a refresh is in flight once for the process: a refresh token is single-use.
         let tokens = StoredTokenProvider(store: KeychainTokenStore())
         self.tokens = tokens
-        _harness = State(initialValue: Harness.standard(tokens: tokens))
+        let harness = Harness.standard(tokens: tokens)
+        let mascot = Mascot()
+        // The guest answering the chat moves Topo as it works: each turn's events set his pose.
+        mascot.follow(harness)
+        _harness = State(initialValue: harness)
+        _mascot = State(initialValue: mascot)
         _memory = State(initialValue: Memory.standard())
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
@@ -60,7 +65,7 @@ struct TopoApp: App {
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.
     private func debugTurn() async {
         #if DEBUG
-        await DebugRun.send(with: harness)
+        await DebugRun.send(with: harness, mascot: mascot)
         #endif
     }
 
@@ -111,7 +116,7 @@ struct TopoApp: App {
                         speaker.prepare()
                         // The guest's rootfs and Claude Code, fetched (and the rootfs imported)
                         // on the same cue, so the userland is on the phone before anything
-                        // needs it. Nothing boots it.
+                        // needs it. The chat's harness boots it once both are here.
                         Userland.shared.prepare()
                         // The memory catches up with what the other devices wrote while this
                         // phone was away, and anything edited in Files here goes out, before

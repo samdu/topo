@@ -200,7 +200,7 @@ final class NextTurnTests: XCTestCase {
                          transport: ScriptedTransport,
                          ensureZone: @escaping @Sendable () async throws -> Void = {}) -> Harness {
         Harness(database: database, tokens: FixedToken(), device: phone, ensureZone: ensureZone,
-                defaults: defaults, transport: transport, leaseSleep: parked,
+                defaults: defaults, brain: messagesBrain(over: transport), leaseSleep: parked,
                 pause: { _ in throw CancellationError() })
     }
 

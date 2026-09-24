@@ -14,18 +14,14 @@ public struct ClaudeLauncher: ResidentLauncher {
     public let guest: Guest
     public let command: String
     public let home: String
-    /// The model every turn is asked of; nil leaves it to Claude Code. A debug build passes the
-    /// pinned Haiku.
-    public let model: String?
     public let environment: @Sendable () async throws -> [String: String]
 
     public init(guest: Guest = .shared, command: String = ClaudeCodeInstaller.command,
-                home: String = ClaudeLauncher.home, model: String?,
+                home: String = ClaudeLauncher.home,
                 environment: @escaping @Sendable () async throws -> [String: String]) {
         self.guest = guest
         self.command = command
         self.home = home
-        self.model = model
         self.environment = environment
     }
 
@@ -42,8 +38,9 @@ public struct ClaudeLauncher: ResidentLauncher {
     }
 
     /// The whole command line: the shell moves into the home and `exec`s Claude Code, so the pid
-    /// the app holds is Claude Code's own.
-    public func commandLine(resume: String?) -> [String] {
+    /// the app holds is Claude Code's own. `model` is the model every turn is asked of (the
+    /// session's, which a debug build pins to Haiku); nil leaves it to Claude Code.
+    public func commandLine(resume: String?, model: String?) -> [String] {
         ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", command] + Self.arguments(model: model, resume: resume)
     }
 
@@ -62,7 +59,8 @@ public struct ClaudeLauncher: ResidentLauncher {
         return environment
     }
 
-    public func launch(resume session: String?) async throws -> any ResidentProcess {
-        try await guest.spawn("/bin/sh", commandLine(resume: session), environment: try await launchEnvironment())
+    public func launch(resume session: String?, model: String?) async throws -> any ResidentProcess {
+        try await guest.spawn("/bin/sh", commandLine(resume: session, model: model),
+                              environment: try await launchEnvironment())
     }
 }

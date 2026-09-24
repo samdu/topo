@@ -25,46 +25,80 @@ final class ApplicationBackgroundTime: BackgroundTime {
 /// `Documents/home` mounted as its home, the API proxy on loopback, and the one `GuestSession`,
 /// carried through the app's lifecycle by a `GuestLifecycle` — started on the foreground, ended on
 /// the way out once the grace is spent. The session id the next process resumes is kept in
-/// `Documents/.guest-session`, beside the home. Nothing starts it in a user build: the chat still
-/// answers through the Messages API, and only a debug launch (`DebugRun.guestTurn`) brings the
-/// resident process up.
+/// `Documents/.guest-session`, beside the home, and the bridge's ledger in
+/// `Documents/.guest-bridge.json` beside that. The chat's harness brings it up
+/// (`ResidentConversation`), once the userland is on the phone; so does a debug launch
+/// (`DebugRun.guestTurn`).
 @MainActor
 final class GuestResident {
     static let shared = GuestResident()
 
-    private var starting: Task<GuestSession, Error>?
+    private let starting = StartOnce<GuestSession>()
+    /// What of the start is done, so a start tried again after a failure does not do it twice.
+    private var homeMounted = false
+    private var proxyPort: UInt16?
     private var lifecycle: GuestLifecycle?
     private var proxy: APIProxy?
     private var observers: [NSObjectProtocol] = []
 
     /// The app's `Documents/home`, mounted at `ClaudeLauncher.home`.
-    static var homeDirectory: URL {
+    nonisolated static var homeDirectory: URL {
         URL.documentsDirectory.appendingPathComponent("home", isDirectory: true)
     }
 
-    static var sessionFile: SessionFile {
+    nonisolated static var sessionFile: SessionFile {
         SessionFile(url: URL.documentsDirectory.appendingPathComponent(".guest-session"))
     }
 
+    /// The bridge's ledger: what the guest has seen of the log, and the input outstanding.
+    nonisolated static var ledgerFile: URL {
+        URL.documentsDirectory.appendingPathComponent(".guest-bridge.json")
+    }
+
+    /// The session once `start` has made it, nil before.
+    private(set) var session: GuestSession?
+
+    /// The model a process is started with: the setting, as the debug pin makes it.
+    static var model: String {
+        let setting = UserDefaults.standard.string(forKey: Harness.modelKey).flatMap(ClaudeModel.init(rawValue:))
+        return ClaudeModel.effective(setting ?? .default).rawValue
+    }
+
     /// Brings the guest and the session up, once per process, and starts following the app's
-    /// lifecycle from the foreground it is in now. `tokens` is the app's one provider over the
+    /// lifecycle from the foreground it is in now. A start that fails is not kept: the next call
+    /// tries again from the step that failed (the kernel's own boot is once per process, and its
+    /// answer is `Userland.bootGuest`'s to keep). `tokens` is the app's one provider over the
     /// ordinary tokens; `log` hears the session's and the proxy's lines, and each way out's outcome.
     func start(tokens: StoredTokenProvider, userland: Userland = .shared,
                log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
-        if let starting { return try await starting.value }
-        let task = Task { @MainActor in
+        try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
-            let home = Self.homeDirectory
-            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-            try Guest.shared.mount(home, at: ClaudeLauncher.home)
-            let proxy = try APIProxy(log: { log("proxy: \($0)") })
-            let port = try await proxy.start()
-            self.proxy = proxy
+            if !self.homeMounted {
+                let home = Self.homeDirectory
+                try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+                try Guest.shared.mount(home, at: ClaudeLauncher.home)
+                self.homeMounted = true
+            }
+            let port: UInt16
+            if let running = self.proxyPort {
+                port = running
+            } else {
+                let proxy = try APIProxy(log: { log("proxy: \($0)") })
+                do {
+                    port = try await proxy.start()
+                } catch {
+                    await proxy.stop()
+                    throw error
+                }
+                self.proxy = proxy
+                self.proxyPort = port
+            }
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            let launcher = ClaudeLauncher(model: ClaudeModel.pinned?.rawValue) {
+            let launcher = ClaudeLauncher {
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile, log: log)
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model, log: log)
+            self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in log("background: \(outcome)") })
             self.lifecycle = lifecycle
@@ -72,8 +106,6 @@ final class GuestResident {
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
         }
-        starting = task
-        return try await task.value
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {
@@ -86,6 +118,119 @@ final class GuestResident {
                 MainActor.assumeIsolated { lifecycle.willEnterForeground() }
             },
         ]
+    }
+}
+
+/// One start at a time, whose success is kept and whose failure is not: every caller while a start
+/// runs gets its answer, and a call after one that failed starts again.
+@MainActor
+final class StartOnce<Value: Sendable> {
+    private var task: Task<Value, Error>?
+
+    func value(_ start: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        if let task { return try await task.value }
+        let task = Task { @MainActor in try await start() }
+        self.task = task
+        do {
+            return try await task.value
+        } catch {
+            if self.task == task { self.task = nil }
+            throw error
+        }
+    }
+}
+
+/// The resident Claude Code as the bridge's conversation: the guest brought up through
+/// `GuestResident` once the userland is on the phone, and the one `GuestSession` from then on.
+/// Until the rootfs and Claude Code are both fetched nothing is started and a turn is refused with
+/// the userland's own status line, which is what the chat shows.
+struct ResidentConversation: GuestConversation {
+    let tokens: StoredTokenProvider
+
+    var home: URL { GuestResident.homeDirectory }
+
+    /// The session, started if it was not: refused, as not ready, while the userland is still on
+    /// its way or the guest could not start.
+    @MainActor
+    private func session() async throws -> GuestSession {
+        let userland = Userland.shared
+        guard userland.isReady else {
+            userland.prepare()
+            throw GuestBridgeError.notReady(userland.summary)
+        }
+        do {
+            return try await GuestResident.shared.start(tokens: tokens, log: GuestResident.log)
+        } catch {
+            throw GuestBridgeError.notReady("the guest did not start: \(error)")
+        }
+    }
+
+    func ready() async throws {
+        let session = try await session()
+        do {
+            try await session.ready()
+        } catch GuestSession.Refusal.notResident {
+            throw GuestBridgeError.notReady("Claude Code is not resident while the app is in the background")
+        } catch {
+            throw GuestBridgeError.notReady("Claude Code did not start: \(error)")
+        }
+    }
+
+    func warm() async {
+        guard let session = try? await session() else { return }
+        try? await session.ready()
+    }
+
+    func use(model: String?) async {
+        // A session not started yet starts with the setting (`GuestResident.model`).
+        await GuestResident.shared.session?.use(model: model)
+    }
+
+    func sessionID() async -> String? {
+        if let session = await GuestResident.shared.session { return await session.sessionID }
+        return GuestResident.sessionFile.load()
+    }
+
+    func residentPID() async -> Int32? {
+        await GuestResident.shared.session?.residentPID
+    }
+
+    func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
+        let session = try await session()
+        return try await session.send(text, id: id)
+    }
+
+    func settle() async -> Bool {
+        // No guest has run in this process, and the last process's guest ended with it: what it
+        // wrote is final.
+        await GuestResident.shared.session?.settle() ?? true
+    }
+
+    func forget() async {
+        if let session = await GuestResident.shared.session {
+            await session.forgetSession()
+        } else {
+            GuestResident.sessionFile.clear()
+        }
+    }
+
+    func status() async -> String {
+        let summary = await Userland.shared.summary
+        guard let session = await GuestResident.shared.session else { return "\(summary); not started" }
+        let phase = await session.currentPhase
+        let pid = await session.residentPID.map { ", pid \($0)" } ?? ""
+        let model = await session.currentModel ?? "Claude Code's own model"
+        return "\(summary); \(phase)\(pid), \(model)"
+    }
+}
+
+extension GuestResident {
+    /// Where the session's and the proxy's lines go: printed in a debug build, where a simulator
+    /// run reads them, and nowhere in a release one.
+    nonisolated static let log: @Sendable (String) -> Void = { line in
+        #if DEBUG
+        DebugRun.say("guest: \(line)")
+        #endif
     }
 }
 

@@ -48,6 +48,13 @@ final class GuestSessionTests: XCTestCase {
         }
     }
 
+    private final class Settled: @unchecked Sendable {
+        private let lock = NSLock()
+        private var marked = false
+        var done: Bool { lock.withLock { marked } }
+        func mark() { lock.withLock { marked = true } }
+    }
+
     private func collect(_ stream: AsyncStream<GuestSession.TurnUpdate>) -> (Collected, Task<Void, Never>) {
         let collected = Collected()
         let task = Task { for await update in stream { collected.add(update) } }
@@ -144,6 +151,48 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(result.text, "API Error: 529 overloaded")
         XCTAssertFalse(process.terminated, "an error Claude Code reported itself restarted a healthy process")
         _ = try await session.send("again")
+    }
+
+    /// `settle` waits out a turn nobody listens to any more — its caller stopped listening, and
+    /// the guest still has it — and answers once that turn has ended.
+    func testSettleWaitsForATurnInFlightWhoseCallerStoppedListening() async throws {
+        let (session, process) = try await resident()
+        _ = try await session.send("hi")
+        await eventually("written") { process.turns.count == 1 }
+        let settled = Settled()
+        let settling = Task {
+            let final = await session.settle()
+            settled.mark()
+            return final
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertFalse(settled.done, "settle answered while the guest still had a turn")
+        answer(process, "done")
+        let final = await settling.value
+        XCTAssertTrue(final)
+    }
+
+    /// An end the bound ran out on is not final: `settle` says so until an end is confirmed.
+    func testSettleSaysWhetherTheLastEndWasConfirmed() async throws {
+        let (session, process) = try await resident()
+        let before = await session.settle()
+        XCTAssertTrue(before, "nothing ended yet is final")
+        process.answerNextEnd(with: .init(status: nil, signalled: 1, running: 1, pipesClosed: false,
+                                          stragglers: ["claude: running"]))
+        let (_, done) = collect(try await session.send("hi"))
+        await eventually("written") { process.turns.count == 1 }
+        process.close()
+        await done.value
+        let unconfirmed = await session.settle()
+        XCTAssertFalse(unconfirmed, "an end that was not confirmed was reported final")
+
+        await eventually("a replacement") { launcher.processes.count == 2 }
+        try await session.ready()
+        await session.use(model: "claude-opus-5")
+        try await session.ready()
+        XCTAssertEqual(launcher.processes.count, 3)
+        let confirmed = await session.settle()
+        XCTAssertTrue(confirmed, "a confirmed end after it did not make it final")
     }
 
     func testTheProcessEndingMidTurnFailsItWithItsStderrAndNothingOfItReachesTheNext() async throws {
@@ -368,5 +417,127 @@ final class GuestSessionTests: XCTestCase {
         await done.value
         XCTAssertEqual(turn.ends.count, 1)
         XCTAssertEqual(store.load(), "S2")
+    }
+
+    // MARK: - The model and the conversation
+
+    /// A change of model during a turn is made once the turn has ended: the process answering it is
+    /// not ended under it, and the next process is started with the new model.
+    func testAModelChangeDuringATurnRestartsTheProcessOnlyAfterTheTurnEnds() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let (turn, done) = collect(try await session.send("a long one", id: "input-1"))
+        await eventually("written") { first.turns.count == 1 }
+        XCTAssertEqual(first.ids, ["input-1"], "the input's id went out with it")
+
+        await session.use(model: "claude-opus-5")
+        // Give the actor every chance to act on the change while the turn is in flight.
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertFalse(first.terminated, "the model change ended the process mid-turn")
+        XCTAssertEqual(launcher.processes.count, 1)
+
+        answer(first, "done")
+        await done.value
+        XCTAssertEqual(turn.ends.count, 1)
+        await eventually("the process replaced after the turn") { launcher.processes.count == 2 }
+        XCTAssertTrue(first.terminated)
+        XCTAssertEqual(launcher.models, ["claude-sonnet-5", "claude-opus-5"])
+        XCTAssertEqual(launcher.resumed, [nil, "S1"], "the replacement resumes the conversation")
+        try await session.ready()
+        _ = try await session.send("next")
+        await eventually("the replacement took the next turn") { launcher.last?.turns == ["next"] }
+    }
+
+    /// The next turn sent the moment the first ends, without waiting for the replacement the
+    /// model change asked for, goes to the replacement on the new model and never to the old one.
+    func testATurnSentAsTheTurnBeforeItEndsGoesToTheNewModel() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        let first = try XCTUnwrap(launcher.last)
+        let (turn, _) = collect(try await session.send("a long one"))
+        await eventually("written") { first.turns.count == 1 }
+        await session.use(model: "claude-opus-5")
+
+        // The replacement's launch is held, so the turn is sent before it can be up.
+        launcher.holdNextLaunch()
+        answer(first, "done")
+        await eventually("the first turn ended") { turn.ends.count == 1 }
+        let next = Task { _ = try await session.send("next") }
+        await eventually("the replacement launching") { launcher.launchHeld }
+        XCTAssertEqual(first.turns, ["a long one"], "the next turn rode the old process")
+        launcher.release()
+        try await next.value
+        XCTAssertEqual(launcher.processes.count, 2)
+        let second = try XCTUnwrap(launcher.last)
+        await eventually("the replacement took the next turn") { second.turns == ["next"] }
+        XCTAssertEqual(launcher.models, ["claude-sonnet-5", "claude-opus-5"])
+    }
+
+    /// An idle process is replaced at once, and the same model again changes nothing.
+    func testAModelChangeWhileIdleRestartsAtOnceAndTheSameModelDoesNot() async throws {
+        let session = GuestSession(launcher: launcher, store: store, model: "claude-sonnet-5", turnBound: bound,
+                                   sleep: clock.sleep)
+        await session.foreground()
+        try await session.ready()
+        await session.use(model: "claude-sonnet-5")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertEqual(launcher.processes.count, 1, "the same model restarted the process")
+        await session.use(model: "claude-fable-5-1")
+        await eventually("replaced") { launcher.processes.count == 2 }
+        XCTAssertEqual(launcher.models, ["claude-sonnet-5", "claude-fable-5-1"])
+        let model = await session.currentModel
+        XCTAssertEqual(model, "claude-fable-5-1")
+    }
+
+    /// Forgetting the conversation clears the kept id, and the replacement starts fresh.
+    func testForgettingTheConversationStartsAFreshSession() async throws {
+        store.save("OLD")
+        let session = session()
+        await session.foreground()
+        try await session.ready()
+        await session.forgetSession()
+        XCTAssertNil(store.load())
+        await eventually("replaced") { launcher.processes.count == 2 }
+        XCTAssertEqual(launcher.resumed, ["OLD", nil])
+    }
+
+    /// Forgotten during a turn (sign-out): the turn is abandoned and the process ended at once,
+    /// never waiting for the turn, since what it holds is the login that went. The old process
+    /// names its session — in its `system/init` and its result — while it is being ended, and
+    /// neither is kept: with its end held, so the replacement has not started (the app exiting
+    /// there), the kept id is still none, and the next process starts fresh. The replacement's own
+    /// session is kept.
+    func testAForgottenConversationsProcessIsEndedMidTurnAndNeverWritesItsSessionBack() async throws {
+        store.save("OLD")
+        let (session, old) = try await resident()
+        XCTAssertEqual(launcher.resumed, ["OLD"])
+        let (turn, _) = collect(try await session.send("a long one"))
+        await eventually("written") { old.turns.count == 1 }
+
+        old.holdNextTermination()
+        await session.forgetSession()
+        XCTAssertNil(store.load())
+        await eventually("the turn ended by the sign-out") { !turn.ends.isEmpty }
+        XCTAssertEqual(turn.ends, [.abandoned], "the turn outlived the sign-out")
+        await eventually("the old process ended at once") { old.terminationHeld }
+        answer(old, "done", session: "OLD")
+        for _ in 0..<20 { await Task.yield() }
+        XCTAssertNil(store.load(), "a forgotten conversation's process wrote its session back")
+
+        old.release()
+        await eventually("replaced") { launcher.processes.count == 2 }
+        XCTAssertEqual(launcher.resumed, ["OLD", nil], "the replacement resumed the forgotten session")
+        try await session.ready()
+        let fresh = try XCTUnwrap(launcher.last)
+        let (_, freshDone) = collect(try await session.send("hello"))
+        await eventually("written") { fresh.turns.count == 1 }
+        answer(fresh, "hi", session: "NEW")
+        await freshDone.value
+        XCTAssertEqual(store.load(), "NEW", "the replacement's own session was not kept")
     }
 }

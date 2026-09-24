@@ -19,8 +19,8 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
     @AppStorage("readAloud") private var readAloud = true
-    /// The model the settings sheet chose, which is the head Topo wears while the chat's own
-    /// harness is what answers.
+    /// The model the settings sheet chose, which is the head Topo wears between the guest's turns
+    /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
     /// The row at the end of the transcript: what is written, whether the keyboard has it, and
     /// the turn those words are on their way under. It is a `NextTurn` rather than this screen's
@@ -81,17 +81,16 @@ struct ChatView: View {
                 }
                 if harness.hasWaiting {
                     // The line stopped on a failure; what was said is kept and goes again from here.
-                    Button {
-                        Task { await harness.retry() }
-                    } label: {
-                        Label(harness.waiting.count == 1 ? "Send \"\(harness.waiting[0])\" again"
-                                                         : "Send \(harness.waiting.count) waiting",
-                              systemImage: "arrow.clockwise")
-                            .lineLimit(1)
+                    lineButton(harness.waiting.count == 1 ? "Send \"\(harness.waiting[0])\" again"
+                                                          : "Send \(harness.waiting.count) waiting") {
+                        await harness.retry()
                     }
-                    .buttonStyle(.bordered)
-                    .font(.footnote)
-                    .padding(.bottom, 8)
+                } else if let unfinished = harness.unfinished, !harness.busy {
+                    // The guest was cut off answering this turn. It may have run tools, so it is
+                    // never asked again by itself: only this, which the person chooses.
+                    lineButton("Unfinished: ask \"\(unfinished.text)\" again") {
+                        await harness.askAgain()
+                    }
                 }
             }
             // The composer is a bar under the transcript, and the inset is the whole of its
@@ -247,6 +246,20 @@ struct ChatView: View {
         .onDisappear { voice.cancel(.chat) }
     }
 
+    /// A control under the transcript that sends something again: the line stopped on a failure,
+    /// or a turn the guest was cut off answering.
+    private func lineButton(_ title: String, _ action: @escaping @MainActor () async -> Void) -> some View {
+        Button {
+            Task { await action() }
+        } label: {
+            Label(title, systemImage: "arrow.clockwise")
+                .lineLimit(1)
+        }
+        .buttonStyle(.bordered)
+        .font(.footnote)
+        .padding(.bottom, 8)
+    }
+
     /// The mark at the trailing edge, and what the spoken-turn test reads off it.
     private var badgeItem: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -267,7 +280,7 @@ struct ChatView: View {
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
-        SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { harness.forget() },
+        SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
                 forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
     }
 

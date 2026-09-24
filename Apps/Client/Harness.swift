@@ -6,7 +6,8 @@ import TopoCore
 import TopoTurn
 
 /// The phone harness as the UI sees it: the transcript, the model setting, and one turn at a time.
-/// The log is the shared CloudKit log, on the person's own Apple ID.
+/// The log is the shared CloudKit log, on the person's own Apple ID. What answers is the brain the
+/// harness is made with: in the app, Claude Code in the guest (`standard`, over `GuestBridge`).
 @MainActor
 @Observable
 final class Harness {
@@ -18,6 +19,15 @@ final class Harness {
     private(set) var error: String?
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// The person's turn the guest was cut off answering, which is not asked again unless the
+    /// person asks (`askAgain`). Nil when there is none.
+    private(set) var unfinished: Turn?
+    /// Told what the guest is doing while it answers: Topo on the glass follows it.
+    var onGuest: (@MainActor (GuestActivity) -> Void)? {
+        get { relay.handler }
+        set { relay.handler = newValue }
+    }
+    private let relay: GuestRelay
     /// The tokens of context the last reply this phone asked for was written over, as the API
     /// counted them — input and both cache counts (`Reply.context`); nil until one has been answered here, and again after
     /// a sign-out, since the context was the last login's. A reply another primary wrote, or one found already in the log,
@@ -72,8 +82,8 @@ final class Harness {
     private let tokens: TokenProvider
     /// Where the unsettled turns and the model setting are kept.
     private let defaults: UserDefaults
-    /// How the Messages API's bytes leave the process.
-    private let transport: any Transport
+    /// What answers: the runner asks it, and the harness asks it what is unresolved.
+    let brain: any Brain
     /// How the lease this harness makes waits between heartbeats.
     private let leaseSleep: @Sendable (TimeInterval) async throws -> Void
     /// How the answering loop waits between passes.
@@ -100,8 +110,11 @@ final class Harness {
     /// device's primary and the reply is on its way. Cleared by the next send.
     private(set) var info: String?
     private var inFlight: Task<Bool, Never>?
-    /// The last answer from the Messages API: status, when, how long it took.
-    private var lastAPI: (status: Int, at: Date, seconds: TimeInterval)?
+    /// The answering passes running now, which a sign-out cancels as it cancels the turn in flight.
+    private var passes: Set<Task<Void, Never>> = []
+    /// Counts sign-outs and demotions. A pass or a loop begun under an earlier count belongs to a
+    /// login that has gone: it shows nothing and writes nothing, and the loop ends.
+    private var login = 0
 
     /// What the person said that is not settled yet, oldest first, each under the nonce it was
     /// first attempted with and written to disk before any attempt. So a relaunch after a lost
@@ -144,10 +157,12 @@ final class Harness {
         pending.map { ($0.text, $0.nonce) }
     }
 
+    /// `brain` is what answers, chosen here and nowhere else: never per turn, and never on a
+    /// failure. `relay` is where the brain tells what the guest is doing, when it is the guest.
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          defaults: UserDefaults = .standard,
-         transport: any Transport = URLSessionTransport(),
+         brain: any Brain, relay: GuestRelay = GuestRelay(),
          leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
          pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
         self.database = RecordingDatabase(database)
@@ -155,7 +170,8 @@ final class Harness {
         self.device = device
         self.ensureZone = ensureZone
         self.defaults = defaults
-        self.transport = transport
+        self.brain = brain
+        self.relay = relay
         self.leaseSleep = leaseSleep
         self.pause = pause
         log = TurnLog(database: self.database)
@@ -174,23 +190,47 @@ final class Harness {
         }
     }
 
-    /// The app's harness: the shared CloudKit log and the keychain's tokens, through the one
-    /// provider the app makes for them.
-    static func standard(tokens: StoredTokenProvider) -> Harness {
-        Harness(database: TopoCloudKit.database(), tokens: tokens)
+    /// The app's harness: the shared CloudKit log, the keychain's tokens through the one provider
+    /// the app makes for them, and Claude Code in the guest as the brain — the only one the app
+    /// composes. Until the userland is on the phone and the resident process is up, a turn is not
+    /// answered: the person's words stand in the log, the chat says why, and the answering loop
+    /// answers them once the guest is ready.
+    /// `database` is the suites' seam; the app passes nothing.
+    static func standard(tokens: StoredTokenProvider,
+                         database: @autoclosure () -> any RecordDatabase = TopoCloudKit.database()) -> Harness {
+        let (bridge, relay) = guestBrain(ResidentConversation(tokens: tokens), ledger: GuestResident.ledgerFile)
+        return Harness(database: database(), tokens: tokens, brain: bridge, relay: relay)
     }
 
+    /// The guest as the brain, and the relay its activity reaches `onGuest` through.
+    static func guestBrain(_ conversation: any GuestConversation, ledger: URL) -> (GuestBridge, GuestRelay) {
+        let relay = GuestRelay()
+        let bridge = GuestBridge(conversation: conversation, ledger: ledger,
+                                 observe: { activity in await relay.tell(activity) })
+        return (bridge, relay)
+    }
+
+    /// The guest, when it is what answers.
+    var guest: GuestBridge? { brain as? GuestBridge }
+
+    /// The model setting. A change reaches the brain at once, which for the guest replaces the
+    /// resident process at its next idle moment, never in the middle of a turn.
     var model: ClaudeModel {
         get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
-        set { defaults.set(newValue.rawValue, forKey: Self.modelKey) }
+        set {
+            defaults.set(newValue.rawValue, forKey: Self.modelKey)
+            let brain = brain
+            Task { await brain.use(model: newValue) }
+        }
     }
 
-    /// Sign-out: the turn in flight is cancelled and its result dropped, the runner and screen
-    /// are cleared, and the next sign-in starts at the first question. The log itself stays where
-    /// it is, in the person's own iCloud; nothing of it is on this device to remove.
-    func forget() {
-        inFlight?.cancel()
-        inFlight = nil
+    /// Sign-out: the turn in flight and the answering pass in flight are cancelled and write
+    /// nothing more, the answering loop ends, the runner and screen are cleared, and the next
+    /// sign-in starts at the first question. Returns once the brain has forgotten the login's
+    /// conversation, so what the guest kept of it is gone before the login is. The log itself
+    /// stays where it is, in the person's own iCloud; nothing of it is on this device to remove.
+    func forget() async {
+        stopAnswering()
         runner = nil
         lease = nil
         writer = nil
@@ -201,20 +241,36 @@ final class Harness {
         status = nil
         busy = false
         context = nil
+        unfinished = nil
         pending = []
         spokenNonces = []
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
+        // What the guest kept of the last login's conversation goes with it.
+        await brain.forget()
     }
 
-    /// The far end of a takeover: this device is a viewer now. The turn in flight is cancelled;
-    /// what is waiting to be sent goes into the log as a limb's turns, in order, so nothing said
-    /// is lost to the handover, and whichever device is primary answers it there. A turn that
-    /// will not go stays on disk for the next launch. Then the harness is dropped as `forget`
-    /// drops it, but the transcript stays on screen.
-    func demote() async {
+    /// Ends everything under way for this login: the turn in flight, every answering pass and
+    /// the loop's pause, each cancelled, and the count moved so none of them shows or writes
+    /// anything once it wakes. The runner checks its task before each reply it appends.
+    private func stopAnswering() {
+        login += 1
         inFlight?.cancel()
         inFlight = nil
+        passes.forEach { $0.cancel() }
+        passes = []
+        sleeping?.cancel()
+    }
+
+    /// The far end of a takeover: this device is a viewer now. The turn and the answering pass in
+    /// flight are cancelled and the loop ends, as at a sign-out; what is waiting to be sent goes
+    /// into the log as a limb's turns, in order, so nothing said is lost to the handover, and
+    /// whichever device is primary answers it there. A turn that will not go stays on disk for the
+    /// next launch. Then the harness is dropped as `forget` drops it, but the transcript stays on
+    /// screen, and the brain forgets the conversation: a viewer holds no login, so it keeps none of
+    /// the guest's session either.
+    func demote() async {
+        stopAnswering()
         busy = false
         status = nil
         do {
@@ -233,6 +289,7 @@ final class Harness {
         lease = nil
         writer = nil
         info = nil
+        await brain.forget()
     }
 
     /// Reads the log into the screen, and answers whether it read it: a log that is not there
@@ -383,6 +440,7 @@ final class Harness {
             show(result.assistant)
             if result.reply.context > 0 { context = result.reply.context }
             status = nil
+            await refreshUnfinished()
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.
             await onPass?()
@@ -396,6 +454,7 @@ final class Harness {
             error = Self.describe(underlying)
             onTurnFailed?(attempt.nonce)
             await refresh()
+            await refreshUnfinished()
             status = nil
             return true
         } catch TurnRunnerError.notPrimary(let outcome) {
@@ -405,13 +464,15 @@ final class Harness {
             do {
                 status = "Saving what you said…"
                 let transcript = try await log.read()
-                guard let writer else { return false }
+                // A sign-out during the read: the outbox went with it, and so do these words.
+                guard inFlight == generation, !Task.isCancelled, let writer else { return false }
                 let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
                 show(person)
                 info = Self.describe(outcome) + " What you said is in the log; the reply will appear here."
                 status = nil
                 return true
             } catch {
+                guard inFlight == generation else { return false }
                 self.error = Self.describe(error)
                 onTurnFailed?(attempt.nonce)
             }
@@ -464,6 +525,8 @@ final class Harness {
             "Claude declined that one."
         case MessagesAPIError.http(let status, let message):
             message ?? "Claude answered \(status)."
+        case let error as GuestBridgeError:
+            error.description
         case TokenProviderError.signedOut:
             "Signed out. Sign in again to continue."
         default:
@@ -480,6 +543,7 @@ final class Harness {
     /// `wake()` cuts the pause short: the next pass runs now rather than at the end of the
     /// interval. It never runs a pass of its own, so passes never overlap.
     func answering(every interval: Duration) async {
+        let login = self.login
         answeringLoop = true
         defer {
             answeringLoop = false
@@ -487,7 +551,8 @@ final class Harness {
             wakers = []
             left.forEach { $0.resume() }
         }
-        while !Task.isCancelled {
+        // A sign-out ends the loop: whatever answers next is the next login's.
+        while !Task.isCancelled, self.login == login {
             // A wake asked for before this pass began is served by it; one asked for during it
             // may have missed what this pass read, so it gets the next.
             woken = false
@@ -495,6 +560,9 @@ final class Harness {
             wakers = []
             await onPass?()
             await refresh()
+            // The guest is warmed as the chat runs, so it is up by the time the words are; this
+            // waits for nothing.
+            if let guest { Task { await guest.warm() } }
             await answerPending()
             served.forEach { $0.resume() }
             if woken { continue }
@@ -517,21 +585,36 @@ final class Harness {
     }
 
     /// One pass: if the log's newest turns are the person's with no reply, answer them as primary.
+    /// The pass is a task of its own, so a sign-out can cancel it as it cancels a send; cancelling
+    /// the caller cancels it too.
     func answerPending() async {
         guard !busy else { return }
+        let login = self.login
+        let pass = Task { await self.pass(under: login) }
+        passes.insert(pass)
+        await withTaskCancellationHandler { await pass.value } onCancel: { pass.cancel() }
+        passes.remove(pass)
+    }
+
+    private func pass(under login: Int) async {
         do {
             if runner == nil {
                 try await ensureZone()
+                guard self.login == login else { return }
                 runner = try await makeRunner()
             }
-            guard let runner else { return }
-            if let reply = try await runner.answerPending(model: model) {
+            guard let runner, self.login == login else { return }
+            let answered = try await runner.answerPending(model: model)
+            // A sign-out during the pass: what it found is for a screen that has gone.
+            guard self.login == login else { return }
+            if let reply = answered {
                 show(reply)
                 error = nil
                 await refresh()
                 // The reply is in the log, so anything the turn left in the memory goes out now.
                 await onPass?()
             }
+            await refreshUnfinished()
         } catch TurnRunnerError.notPrimary {
             // Another device holds the lease and this one has yielded to it; that device answers.
         } catch TurnRunnerError.displaced {
@@ -539,8 +622,26 @@ final class Harness {
         } catch is CancellationError {
             return
         } catch {
+            guard self.login == login else { return }
             self.error = Self.describe(error)
+            await refreshUnfinished()
         }
+    }
+
+    /// Reads which of the log's turns the brain holds as cut off, for the control that asks again.
+    private func refreshUnfinished() async {
+        let refs = await brain.unresolved()
+        unfinished = refs.isEmpty ? nil : turns.last { refs.contains($0.ref) }
+    }
+
+    /// The person chose to ask again the turn the guest was cut off answering: it is sent once
+    /// more, now, by the answering pass. This is the only way such a turn is sent a second time.
+    func askAgain() async {
+        guard unfinished != nil, let guest else { return }
+        await guest.askAgain()
+        unfinished = nil
+        error = nil
+        if answeringLoop { await wake() } else { await answerPending() }
     }
 
     /// Takes a lease another part of the app claimed for this device (the deliberate takeover),
@@ -556,11 +657,7 @@ final class Harness {
         let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(),
                                                sleep: leaseSleep)
         self.lease = lease
-        var api = MessagesAPI(transport: transport, tokens: tokens)
-        api.onResponse = { [weak self] status, seconds in
-            Task { @MainActor in self?.lastAPI = (status, Date(), seconds) }
-        }
-        return TurnRunner(log: log, writer: writer, lease: lease, api: api)
+        return TurnRunner(log: log, writer: writer, lease: lease, brain: brain)
     }
 
     /// What the diagnostics screen shows: everything a failed or silent turn could be blamed on.
@@ -595,7 +692,8 @@ final class Harness {
         }
         rows.append(("Last CloudKit error", database.lastError.map { "\(Self.clock($0.at)) \($0.message)" } ?? "none"))
         rows.append(("Last CloudKit success", database.lastSuccess.map(Self.clock) ?? "none"))
-        rows.append(("Last API answer", lastAPI.map { "\($0.status) at \(Self.clock($0.at)), \(Int($0.seconds))s" } ?? "none"))
+        rows.append(("Brain", await brain.describe()))
+        rows.append(("Unfinished turn", unfinished.map { "\($0.ref): \($0.text)" } ?? "none"))
         rows.append(("Claude token", await Self.describeToken(tokens)))
         rows.append(("Model", model.displayName))
         rows.append(("Turns on screen", "\(turns.count)"))
@@ -623,6 +721,15 @@ final class Harness {
         case .contended: "Another device is claiming primary."
         }
     }
+}
+
+/// Where the guest's activity goes on its way to the screen: the bridge is made before the harness,
+/// so it tells this, and the harness hands it on to whoever set `onGuest`.
+@MainActor
+final class GuestRelay {
+    var handler: (@MainActor (GuestActivity) -> Void)?
+    nonisolated init() {}
+    func tell(_ activity: GuestActivity) { handler?(activity) }
 }
 
 /// The database with a memory: the last error any call raised and the last time one worked,

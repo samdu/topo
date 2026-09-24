@@ -144,7 +144,10 @@ final class DebugRunTests: XCTestCase {
         let later = turn("phone", 3, .assistant, "to the limb", parents: [limb.ref])
         XCTAssertEqual(DebugRun.answer(to: "this-run", in: [mine, reply, limb, later]), .answered(mine, reply: reply))
         XCTAssertEqual(DebugRun.line(for: .answered(mine, reply: reply), nonce: "this-run", run: "R"),
-                       "reply to phone/1 in run R: to mine")
+                       "reply to phone/1 in run R from session none, process none: to mine")
+        XCTAssertEqual(DebugRun.line(for: .answered(mine, reply: reply), nonce: "this-run", run: "R",
+                                     by: (session: "S1", pid: 42)),
+                       "reply to phone/1 in run R from session S1, process 42: to mine")
     }
 
     func testAReplyJoiningSeveralHeadsAnswersEachOfThem() {

@@ -131,8 +131,8 @@ final class StreamJSONTests: XCTestCase {
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
                         "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001"])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
-        let launcher = ClaudeLauncher(model: nil) { [:] }
-        XCTAssertEqual(Array(launcher.commandLine(resume: nil).prefix(4)),
+        let launcher = ClaudeLauncher { [:] }
+        XCTAssertEqual(Array(launcher.commandLine(resume: nil, model: nil).prefix(4)),
                        ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", "/usr/local/bin/claude"])
     }
 
@@ -143,8 +143,8 @@ final class StreamJSONTests: XCTestCase {
     /// the app's other guest programs are given (`Guest.environment`, which `Guest.run` defaults to
     /// and the debug userland command builds on) carries neither.
     func testOnlyTheResidentsLauncherSetsTheBypass() async throws {
-        let launcher = ClaudeLauncher(model: nil) { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:4242"] }
-        XCTAssertTrue(launcher.commandLine(resume: "S1").contains("--dangerously-skip-permissions"))
+        let launcher = ClaudeLauncher { ["ANTHROPIC_BASE_URL": "http://127.0.0.1:4242"] }
+        XCTAssertTrue(launcher.commandLine(resume: "S1", model: nil).contains("--dangerously-skip-permissions"))
         let environment = try await launcher.launchEnvironment()
         XCTAssertEqual(environment["IS_SANDBOX"], "1")
         XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)
@@ -155,7 +155,7 @@ final class StreamJSONTests: XCTestCase {
     /// The launcher's own keys are applied after what the callback supplies, so nothing supplied
     /// turns the sandbox off or moves the home.
     func testTheCallbackCannotOverrideTheLaunchersOwnKeys() async throws {
-        let launcher = ClaudeLauncher(model: nil) { ["IS_SANDBOX": "0", "HOME": "/root", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
+        let launcher = ClaudeLauncher { ["IS_SANDBOX": "0", "HOME": "/root", "CLAUDE_CODE_OAUTH_TOKEN": "t"] }
         let environment = try await launcher.launchEnvironment()
         XCTAssertEqual(environment["IS_SANDBOX"], "1")
         XCTAssertEqual(environment["HOME"], ClaudeLauncher.home)

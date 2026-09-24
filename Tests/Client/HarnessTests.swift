@@ -36,39 +36,56 @@ final class HarnessTests: XCTestCase {
 /// The phone harness as an orchestrator: the persistent line of unsettled turns, the relaunch that
 /// finds it, the answering loop, and the handover between primary and viewer. Each test drives a
 /// real `Harness` over the in-memory log, with the Messages API behind a scripted transport, and
-/// holds what landed in the log, what the harness shows, and what went to the model.
+/// holds what landed in the log, what the harness shows, and what went to the model. The same
+/// scenarios run again with the guest as the brain (`HarnessGuestIntegrationTests`).
 @MainActor
-final class HarnessIntegrationTests: XCTestCase {
-    private let phone = DeviceID("phone")
+class HarnessIntegrationTests: XCTestCase {
+    fileprivate let phone = DeviceID("phone")
 
-    private func makeDefaults() -> UserDefaults {
+    /// The brain a harness in these scenarios answers with, over the scenario's scripted answers.
+    /// `defaults` and `device` say which device, and which launch of it, the harness is.
+    fileprivate func brain(_ transport: ScriptedTransport, device: DeviceID, defaults: UserDefaults) -> any Brain {
+        messagesBrain(over: transport)
+    }
+
+    /// The line the chat shows when the model failed with `message`: the API's own words.
+    fileprivate func failureShown(_ message: String) -> String { message }
+
+    /// What a brain that has seen none of the log is asked, for `words` said after `unseen`: the
+    /// Messages API is sent the history, one message per turn.
+    fileprivate func asked(unseen: [(TurnRole, String)], saying words: String) -> [String] {
+        unseen.map(\.1) + [words]
+    }
+
+    fileprivate func makeDefaults() -> UserDefaults {
         let name = "topo.tests.harness.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         return UserDefaults(suiteName: name)!
     }
 
-    private func harness(_ database: any RecordDatabase, device: DeviceID? = nil, defaults: UserDefaults,
-                         transport: ScriptedTransport,
-                         ensureZone: @escaping @Sendable () async throws -> Void = {},
-                         pause: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }) -> Harness {
+    fileprivate func harness(_ database: any RecordDatabase, device: DeviceID? = nil, defaults: UserDefaults,
+                             transport: ScriptedTransport,
+                             ensureZone: @escaping @Sendable () async throws -> Void = {},
+                             pause: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }) -> Harness {
         Harness(database: database, tokens: FixedToken(), device: device ?? phone, ensureZone: ensureZone,
-                defaults: defaults, transport: transport, leaseSleep: parked, pause: pause)
+                defaults: defaults, brain: brain(transport, device: device ?? phone, defaults: defaults),
+                leaseSleep: parked, pause: pause)
     }
 
-    private func log(_ database: any RecordDatabase) async throws -> [Turn] {
+    fileprivate func log(_ database: any RecordDatabase) async throws -> [Turn] {
         try await TurnLog(database: database).read().ordered
     }
 
     /// A person's turn written the way a watch or a pad writes one: a limb continuing the log.
     @discardableResult
-    private func limb(_ database: any RecordDatabase, _ text: String, device: String = "watch") async throws -> Turn {
+    fileprivate func limb(_ database: any RecordDatabase, _ text: String, device: String = "watch") async throws -> Turn {
         let log = TurnLog(database: database)
         let writer = try await log.writer(for: DeviceID(device))
         return try await writer.append(.person, text, continuing: try await log.read())
     }
 
     /// Another device's lease, claimed over whoever holds it: a hub waking, or a device with no socket.
-    private func claim(_ database: any RecordDatabase, as device: String) async throws -> PrimaryLease {
+    fileprivate func claim(_ database: any RecordDatabase, as device: String) async throws -> PrimaryLease {
         let lease = PrimaryLease(database: database, device: DeviceID(device), endpoint: nil, probe: NoSocketProbe(),
                                  sleep: parked)
         guard case .primary = try await lease.acquire() else {
@@ -135,7 +152,7 @@ final class HarnessIntegrationTests: XCTestCase {
         mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
         XCTAssertEqual(mascot.state.tokens, 259_010)
 
-        harness.forget()
+        await harness.forget()
         XCTAssertNil(harness.context, "the last login's context outlived the sign-out")
         // The next sign-in's chat appears and hands Topo what the harness has.
         mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
@@ -156,7 +173,7 @@ final class HarnessIntegrationTests: XCTestCase {
 
         let read1 = try await log(db).map(\.text)
         XCTAssertEqual(read1, ["bins?"], "the words are in the log without a reply")
-        XCTAssertEqual(harness.error, "Overloaded")
+        XCTAssertEqual(harness.error, failureShown("Overloaded"))
         XCTAssertTrue(harness.waiting.isEmpty, "a turn in the log is settled: sending it again would be a second turn")
         XCTAssertFalse(harness.hasWaiting)
         XCTAssertNil(defaults.data(forKey: "topo.harness.outbox"))
@@ -494,7 +511,7 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(row.clearIfLanded(in: harness), "the row kept the words of a turn that landed")
         XCTAssertEqual(row.text, "", "the words stayed in the row although the turn is in the log")
         XCTAssertNil(row.sent)
-        XCTAssertEqual(harness.error, "Overloaded")
+        XCTAssertEqual(harness.error, failureShown("Overloaded"))
 
         await harness.answerPending()
         let turns = try await log(db)
@@ -542,7 +559,7 @@ final class HarnessIntegrationTests: XCTestCase {
         guard answered.count == 4 else { return XCTFail("expected 4 turns in the log, found \(answered.map(\.text))") }
         XCTAssertEqual(answered[3].parents, [answered[2].ref])
         XCTAssertEqual(answered[3].ref.device, DeviceID("hub"))
-        XCTAssertEqual(hubTransport.sent, [["one", "one back", "two"]])
+        XCTAssertEqual(hubTransport.sent, [asked(unseen: [(.person, "one"), (.assistant, "one back")], saying: "two")])
         XCTAssertEqual(phoneTransport.sent.count, 1)
     }
 
@@ -1305,5 +1322,47 @@ private func lapsing(_ db: InMemoryRecordDatabase) -> @Sendable (TimeInterval) a
             record.fields["expiresAt"] = .date(Date(timeIntervalSinceNow: -1))
             _ = try await db.save(record)
         }
+    }
+}
+
+/// Every scenario of `HarnessIntegrationTests` again, with the guest as the brain: a `GuestBridge`
+/// over a `ScriptedGuest` answering from the same scripted transport, its ledger and its home kept
+/// per device and across that device's relaunches. What the log holds, what the harness shows, and
+/// what was asked hold as they do with the Messages API; where the guest is told something other
+/// than the Messages API's history (it keeps its own conversation) or says a failure in its own
+/// words, the test is overridden below with the guest's expectation and says why.
+@MainActor
+final class HarnessGuestIntegrationTests: HarnessIntegrationTests {
+    private var homes: [String: URL] = [:]
+
+    fileprivate override func brain(_ transport: ScriptedTransport, device: DeviceID, defaults: UserDefaults) -> any Brain {
+        let key = "\(ObjectIdentifier(defaults).hashValue)/\(device.rawValue)"
+        let directory: URL
+        if let known = homes[key] {
+            directory = known
+        } else {
+            directory = FileManager.default.temporaryDirectory.appendingPathComponent("guest-\(UUID().uuidString)")
+            homes[key] = directory
+            addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        }
+        let guest = ScriptedGuest(home: directory.appendingPathComponent("home"), transport: transport)
+        return GuestBridge(conversation: guest, ledger: directory.appendingPathComponent("ledger.json"))
+    }
+
+    /// A failure before the guest received the turn, in the bridge's words: the scripted guest's
+    /// process ends with the API's message as its stderr.
+    fileprivate override func failureShown(_ message: String) -> String {
+        GuestBridgeError.failed("the process ended mid-turn: \(message)").description
+    }
+
+    /// The guest keeps its own conversation, so a session that has seen none of the log is sent
+    /// one input: the log so far, then the words.
+    fileprivate override func asked(unseen: [(TurnRole, String)], saying words: String) -> [String] {
+        let turns = unseen.enumerated().map { index, turn in
+            Turn(ref: TurnRef(device: DeviceID("any"), sequence: Int64(index + 1)), parents: [], role: turn.0,
+                 text: turn.1, at: Date())
+        }
+        let person = Turn(ref: TurnRef(device: DeviceID("any"), sequence: 99), parents: [], role: .person, text: words, at: Date())
+        return [GuestBridge.render(unseen: turns, answering: [person], fresh: true)]
     }
 }

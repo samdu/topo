@@ -104,7 +104,7 @@ final class MemoryTests: XCTestCase {
         let transport = ScriptedTransport()
         let beats = Beats()
         let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
-                              defaults: makeDefaults(), transport: transport,
+                              defaults: makeDefaults(), brain: messagesBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
         harness.onPass = { [memory] in await memory.sync() }
@@ -130,7 +130,7 @@ final class MemoryTests: XCTestCase {
         transport.duringRequest = { await order.add("model") }
         let beats = Beats()
         let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
-                              defaults: makeDefaults(), transport: transport,
+                              defaults: makeDefaults(), brain: messagesBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
         harness.onPass = { [memory] in
@@ -165,7 +165,7 @@ final class MemoryTests: XCTestCase {
         transport.duringRequest = { await order.add("model") }
         let beats = Beats()
         let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
-                              defaults: makeDefaults(), transport: transport,
+                              defaults: makeDefaults(), brain: messagesBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
         harness.onPass = { [memory] in

@@ -40,7 +40,7 @@ struct SettingsView: View {
                     Button("About Topo") { showAbout = true }
                 }
                 Section {
-                    Button("Sign out", role: .destructive) { signOut.act() }
+                    Button("Sign out", role: .destructive) { Task { await signOut.act() } }
                 }
             }
             .navigationTitle("Settings")
@@ -63,17 +63,19 @@ struct SignOut {
     /// The reply in the ear goes with the login: one still being read would otherwise carry on,
     /// holding the process open.
     var stopSpeaking: @MainActor () -> Void = {}
-    /// The transcript, the outbox and the spoken marks.
-    var forgetHarness: @MainActor () -> Void = {}
+    /// The transcript, the outbox and the spoken marks, the turn and the pass in flight, and what
+    /// the guest kept of the conversation. Awaited, so the guest's session and the bridge's ledger
+    /// are gone before the login is.
+    var forgetHarness: @MainActor () async -> Void = {}
     /// The memory is the person's and stays in their iCloud; the copy of it on this phone goes
     /// with the login.
     var forgetMemory: @MainActor () -> Void = {}
     /// The tokens, last, so nothing above it runs without an account to run against.
     var forgetLogin: @MainActor () -> Void = {}
 
-    @MainActor func act() {
+    @MainActor func act() async {
         stopSpeaking()
-        forgetHarness()
+        await forgetHarness()
         forgetMemory()
         forgetLogin()
     }

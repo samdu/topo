@@ -42,18 +42,29 @@ case "$2" in
       exits-42) echo "launch failed"; exit 42 ;;
       stale-reply-exits-42) say "reply: stale unrelated reply"; exit 42 ;;
       dies-before-done) say "sending: hello"; exit 42 ;;
-      reply-no-done) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run: hi"; exec sleep 600 ;;
+      reply-no-done) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"; exec sleep 600 ;;
       silent) exec sleep 600 ;;
       error-then-done) say "sending: hello"; say "error: Claude answered 500."; say "reply: hi"
-                       say "reply to phone/2 in run $run: hi"; say "done"; exec sleep 600 ;;
-      other-run) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run someone-else: hi"
+                       say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
+      other-run) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run someone-else from session S1, process 7: hi"
                  say "done"; exec sleep 600 ;;
       no-reply) say "sending: hello"; say "reply: an older answer"; say "no reply to phone/2 in run $run"
                 say "done"; exec sleep 600 ;;
-      done-then-exits-1) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run: hi"
+      done-then-exits-1) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
                          say "done"; exit 1 ;;
-      answered) say "sending: hello"; say "reply: hi"; say "reply to phone/2 in run $run: hi"; say "done"
-                exec sleep 600 ;;
+      answered) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: thinking"
+                say "mascot: turn gone for phone/2, idle"; say "reply: hi"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+                say "done"; exec sleep 600 ;;
+      answered-by-nobody) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
+                          say "reply to phone/2 in run $run from session none, process none: hi"; say "done"; exec sleep 600 ;;
+      answered-other-mascot) say "sending: hello"; say "mascot: turn began for phone/1, process 7, idle"
+                             say "mascot: turn gone for phone/1, idle"; say "mascot: turn began for phone/12, process 7, idle"
+                             say "mascot: turn gone for phone/12, idle"
+                             say "reply to phone/2 in run $run from session S1, process 7: hi"; say "done"; exec sleep 600 ;;
+      answered-no-mascot) say "sending: hello"; say "reply to phone/2 in run $run from session S1, process 7: hi"
+                          say "done"; exec sleep 600 ;;
+      answered-old-format) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
+                           say "reply to phone/2 in run $run: hi"; say "done"; exec sleep 600 ;;
       launched) exit 0 ;;
       userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"
                         say "userland: claude code 2.1.278 fetched"; say "userland: booted"
@@ -155,6 +166,10 @@ case_ send-reply-to-another-run            fail other-run            5  --send h
 case_ send-no-reply-to-this-turn           fail no-reply             5  --send hello
 case_ send-done-then-launcher-exits-1      fail done-then-exits-1    5  --send hello
 case_ send-answered                        pass answered             5  --send hello
+case_ send-answered-by-no-resident         fail answered-by-nobody   5  --send hello
+case_ send-answered-mascot-silent          fail answered-no-mascot   5  --send hello
+case_ send-answered-mascot-other-turn      fail answered-other-mascot 5 --send hello
+case_ send-answered-no-provenance          fail answered-old-format  5  --send hello
 case_ no-send-launched                     pass launched             5
 case_ userland-ran                         pass userland-fetched     5  --userland "echo hi" --expect hi
 case_ userland-fetched-as-expected         pass userland-fetched     5  --userland "echo hi" --expect-rootfs fetched
