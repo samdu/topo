@@ -155,7 +155,7 @@ struct ChatView: View {
             // leave him room, and on the glass's leading flank where they leave none.
             .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
-                         report: mascotReported)
+                         ready: transcriptRead, report: mascotReported)
             // The mark says the name, so the title says it twice.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -444,6 +444,15 @@ struct ChatView: View {
     private struct HarnessFacts: Equatable {
         var model: String
         var context: Int?
+    }
+
+    /// Whether what the transcript draws is the log's: once it has been read, or at once for a
+    /// debug build's fixture.
+    private var transcriptRead: Bool {
+        #if DEBUG
+        if DebugRun.transcript() != nil { return true }
+        #endif
+        return harness.hasRead
     }
 
     /// The turns the transcript draws: the log's, or in a debug build launched with

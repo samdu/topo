@@ -171,6 +171,13 @@ enum MascotRoost: Equatable, Sendable {
         if let spot = nearestGap(field, size: size, margin: margin, to: from ?? home) {
             return .gap(CGRect(origin: spot, size: size))
         }
+        return flank(field, size: size)
+    }
+
+    /// The middle of the pane's leading flank, or nowhere when the flank cannot hold his whole
+    /// picture.
+    static func flank(_ field: MascotField, size: CGSize) -> MascotRoost {
+        guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
         if let flank = field.flank, size.width <= flank.width, size.height <= flank.height {
             return .flank(CGRect(x: flank.midX - size.width / 2, y: flank.midY - size.height / 2,
                                  width: size.width, height: size.height))
@@ -328,6 +335,9 @@ struct MascotRoam: Equatable, Sendable {
     private var advanced = 0.0
     /// The time a frame lasts, which is the quiet a covered Topo waits for.
     var frame: Double
+    /// The transcript has not been read yet: the page is about to fill, so he goes to the flank
+    /// and nowhere else until it has.
+    private(set) var waiting = false
 
     init(_ settings: Settings, frame: Double = 1.0 / 30) {
         self.settings = settings
@@ -354,6 +364,17 @@ struct MascotRoam: Equatable, Sendable {
         changed = now
         unsettled = true
         covered = picture.map(field.covers) ?? false
+    }
+
+    /// Whether the transcript is still to be read. While it is, every decision is the flank (or
+    /// nowhere, when the flank cannot hold him); once it has been, the geometry counts as changed
+    /// then, so his first decision where to stand is a settle after the read.
+    mutating func wait(_ waiting: Bool, at time: Double) {
+        guard waiting != self.waiting else { return }
+        now = max(now, time)
+        self.waiting = waiting
+        changed = now
+        unsettled = true
     }
 
     /// The settings, which a look or Reduce Motion can change. Reduce Motion coming on ends a glide
@@ -404,7 +425,9 @@ struct MascotRoam: Equatable, Sendable {
     private mutating func decide(glide: Bool) {
         unsettled = false
         guard let field else { return }
-        let next = MascotRoost.of(field, size: settings.size, clearance: settings.clearance, from: position)
+        let next = waiting
+            ? MascotRoost.flank(field, size: settings.size)
+            : MascotRoost.of(field, size: settings.size, clearance: settings.clearance, from: position)
         guard let to = next.frame?.origin else {
             roost = .none
             position = nil

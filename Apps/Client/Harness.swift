@@ -14,6 +14,9 @@ final class Harness {
     static let modelKey = "model"
 
     private(set) var turns: [Turn] = []
+    /// The log has been read once, or the read has failed once: what the transcript draws is the
+    /// log's rather than the empty page before the first read.
+    private(set) var hasRead = false
     private(set) var notice: String?
     private(set) var busy = false
     private(set) var error: String?
@@ -236,6 +239,7 @@ final class Harness {
         writer = nil
         info = nil
         turns = []
+        hasRead = false
         notice = nil
         error = nil
         status = nil
@@ -297,6 +301,7 @@ final class Harness {
     /// Only `withdraw` asks; everything else refreshes for the screen's sake.
     @discardableResult
     func refresh() async -> Bool {
+        defer { hasRead = true }
         do {
             let transcript = try await log.read()
             turns = transcript.ordered

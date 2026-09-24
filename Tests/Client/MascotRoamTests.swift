@@ -289,6 +289,34 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.roost.name, "gap")
     }
 
+    /// Until the transcript has been read he is on the flank, however empty the page: the page is
+    /// about to fill, and he is not placed into it. Once it has been read, his first decision is
+    /// a settle later, from the flank, and it is a glide into the room the read left.
+    func testUntilTheTranscriptIsReadHeIsOnTheFlank() throws {
+        var roam = MascotRoam(Self.settings, frame: Self.frame)
+        roam.wait(true, at: 0)
+        let empty = Self.field([])
+        roam.observe(empty, at: 0)
+        var time = 0.0
+        while roam.needsTime, time < 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "flank", "placed into the empty page before the read")
+        // The read fills the page, leaving room at its top.
+        let filled = Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)])
+        roam.observe(filled, at: time)
+        let changed = time
+        while roam.needsTime, time < changed + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "flank", "a geometry change before the read placed him off the flank")
+        XCTAssertEqual(roam.moves, 0)
+        roam.wait(false, at: time)
+        let read = time
+        XCTAssertTrue(roam.needsTime)
+        while roam.moves == 0, time < read + 5 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertGreaterThanOrEqual(time - read, Self.settings.settle - 1e-9, "decided before a settle after the read")
+        XCTAssertEqual(roam.moves, 1, "no glide from the flank into the room the read left")
+        while roam.needsTime, time < read + 60 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "gap")
+    }
+
     /// On the flank with no gap, every geometry change asks for a new roost: the keyboard rising,
     /// which lifts the glass and the transcript's end, opens room above the glass and he glides
     /// off the flank into it; with the keyboard down again and the chat full he is back on the

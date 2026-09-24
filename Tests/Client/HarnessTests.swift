@@ -95,6 +95,24 @@ class HarnessIntegrationTests: XCTestCase {
         return lease
     }
 
+    // MARK: The first read
+
+    /// The transcript is the log's once it has been read: `hasRead` is false until the first
+    /// refresh ends, true after it whether the log held anything, and false again after a
+    /// sign-out, which empties what the transcript draws.
+    func testTheFirstReadIsMarkedAndASignOutClearsIt() async throws {
+        let db = InMemoryRecordDatabase()
+        try await limb(db, "Anything from Helen?")
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        XCTAssertFalse(harness.hasRead)
+        XCTAssertTrue(harness.turns.isEmpty)
+        await harness.refresh()
+        XCTAssertTrue(harness.hasRead)
+        XCTAssertEqual(harness.turns.map(\.text), ["Anything from Helen?"])
+        await harness.forget()
+        XCTAssertFalse(harness.hasRead)
+    }
+
     // MARK: A turn as primary
 
     func testSendingAsPrimaryWritesThePersonsTurnAndTheReplyAsItsChild() async throws {
