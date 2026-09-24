@@ -15,7 +15,8 @@ import UIKit
 ///
 /// `share` is the share of its resting size the pane's microphone is drawn at
 /// (`ComposerGeometry.scale`): under the keyboard the pane is short, and he is placed from the
-/// short pane and drawn at that share of his size, so he keeps his proportion to the glass.
+/// short pane — its top edge and its foot — at his own size, which is `look.mascot.scale` alone
+/// and never follows the pane's height.
 struct MascotPlacement: Equatable, Sendable {
     /// The one rectangle he is drawn in and clipped to: from the pane's leading end to the well's
     /// leading edge, and from the top of him, floated as high as his bob goes, to the pane's foot.
@@ -43,7 +44,7 @@ struct MascotPlacement: Equatable, Sendable {
         // pane's edge and the well's margin, not room of his.
         guard flank.width > 0 else { return .none }
         let share = min(max(share, 0), 1)
-        let scale = mascot.scale * share
+        let scale = mascot.scale
         let inset = composer.verticalInset * share
         let left = flank.minX - composer.horizontalInset
         let right = max(left, flank.maxX + composer.spacing)
@@ -381,7 +382,8 @@ struct MascotPerch: UIViewRepresentable {
 /// size, drawn from the state he is handed, and told what decides whether he is drawn.
 ///
 /// The presence and the share are animated through it, so the bob eases out over the same time
-/// the pane's surface arrives in, and his scale goes short with the well rather than jumping.
+/// the pane's surface arrives in, and his slot moves with the short pane's edges rather than
+/// jumping. His size is the look's and does not move at all.
 struct MascotOnGlass: View, Animatable {
     let state: MascotState
     let flank: CGRect
@@ -399,7 +401,7 @@ struct MascotOnGlass: View, Animatable {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The presence and the share, animated together: the bob eases out as the pane arrives, and
-    /// his scale follows the well over `compactDuration` rather than jumping as the keyboard rises.
+    /// his slot follows the pane's edges as the keyboard rises rather than jumping.
     nonisolated var animatableData: AnimatablePair<Double, CGFloat> {
         get { AnimatablePair(presence, share) }
         set {

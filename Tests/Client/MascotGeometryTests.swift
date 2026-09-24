@@ -125,15 +125,14 @@ final class MascotGeometryTests: XCTestCase {
         let well = well(pane: pane)
         let scale = Int(without.image.scale)
         let width = Int(narrowest.width) * scale
-        let share = ComposerGeometry.of(Look.Composer(), keyboard: pane.keyboard).scale
         // The pane's foot and height, read off him at home: his canvas runs from the top of him,
-        // standing on the pane's top edge at the pane's share of a point a pixel with room above
-        // for the bob, to the pane's foot.
+        // standing on the pane's top edge at one point a pixel whatever the pane's height, with
+        // room above for the bob, to the pane's foot.
         let home = try stage(Look.Mascot(), pane: pane)
         defer { home.window.isHidden = true }
         let homeCanvas = try XCTUnwrap(home.canvas)
         let paneFoot = homeCanvas.maxY
-        let paneHeight = homeCanvas.height - CGFloat(Topo.shelfY) * share - Look.Mascot().bobAmplitude
+        let paneHeight = homeCanvas.height - CGFloat(Topo.shelfY) - Look.Mascot().bobAmplitude
 
         for mascot in Self.extremes {
             let with = try stage(mascot, pane: pane)
@@ -144,7 +143,7 @@ final class MascotGeometryTests: XCTestCase {
             // He stays in his slot's band: his canvas ends at the pane's foot and reaches no
             // higher than he stands tall over the pane's top edge, with his bob above him.
             XCTAssertEqual(canvas.maxY, paneFoot, accuracy: 0.5, "\(pane), \(mascot): his canvas left the pane's foot")
-            XCTAssertLessThanOrEqual(canvas.height, paneHeight + CGFloat(Topo.shelfY) * mascot.scale * share
+            XCTAssertLessThanOrEqual(canvas.height, paneHeight + CGFloat(Topo.shelfY) * mascot.scale
                                         + mascot.bobAmplitude + 0.5,
                                      "\(pane), \(mascot): his canvas grew past his band")
 
@@ -309,8 +308,8 @@ final class MascotGeometryTests: XCTestCase {
             for mascot in Self.extremes + [{ var m = Look.Mascot(); m.bobAmplitude = 32; m.bobPeriod = 0.5; return m }()] {
                 let placement = MascotPlacement.of(flank: flank, row: row, composer: composer, mascot: mascot,
                                                    share: geometry.scale)
-                XCTAssertEqual(placement.scale, mascot.scale * geometry.scale, accuracy: 1e-9,
-                               "\(mascot): his scale does not follow the pane's")
+                XCTAssertEqual(placement.scale, mascot.scale, accuracy: 1e-9,
+                               "\(mascot): his scale is not the look's alone")
                 XCTAssertEqual(placement.frame.maxX, wellEdge, accuracy: 1e-9, "\(mascot): his frame is not his flank")
                 XCTAssertEqual(placement.frame.minX, -composer.horizontalInset, accuracy: 1e-9)
                 let shelf = placement.frame.minY + placement.home.y
@@ -334,19 +333,37 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
-    /// The share is animated with the presence, so halfway through the keyboard's rise he is
-    /// drawn at a scale between his resting one and his short one, not at either end.
-    func testAnIntermediateShareIsAnIntermediateScale() {
+    /// He keeps his size under the keyboard: at the resting pane's height, the short pane's and
+    /// every share between them that the keyboard's rise animates through, at every extreme of
+    /// his fields, his picture is the same size. His slot moves with the pane's edges; he does not
+    /// shrink with them.
+    func testHeKeepsHisSizeAtBothPaneHeights() {
+        let composer = Look.Composer()
+        let resting = ComposerGeometry.of(composer, keyboard: false)
+        let short = ComposerGeometry.of(composer, keyboard: true)
+        XCTAssertLessThan(short.scale, 1, "the pane does not go short under the keyboard")
+        for mascot in Self.extremes + [Look.Mascot()] {
+            func sprite(_ share: CGFloat, well: CGFloat) -> CGRect {
+                let flank = CGRect(x: 0, y: well / 2, width: self.flank.width, height: 0)
+                return MascotPlacement.of(flank: flank, row: CGSize(width: row.width, height: well), composer: composer,
+                                          mascot: mascot, share: share).sprite(x: 0)
+            }
+            let tall = sprite(resting.scale, well: resting.well)
+            XCTAssertEqual(tall.width, CGFloat(Topo.width) * mascot.scale, accuracy: 1e-9, "\(mascot)")
+            XCTAssertEqual(tall.height, CGFloat(Topo.height) * mascot.scale, accuracy: 1e-9, "\(mascot)")
+            for step in 0...4 {
+                let share = short.scale + (1 - short.scale) * CGFloat(step) / 4
+                let drawn = sprite(share, well: resting.well * share)
+                XCTAssertEqual(drawn.size.width, tall.size.width, accuracy: 1e-9, "\(mascot), share \(share): he changed size")
+                XCTAssertEqual(drawn.size.height, tall.size.height, accuracy: 1e-9, "\(mascot), share \(share): he changed size")
+            }
+        }
+        // An animated share reaches him as the share, and still moves nothing of his size.
         var glass = MascotOnGlass(state: MascotState(model: "claude-opus-5"), flank: flank, row: row,
                                   share: 1, presence: 1, opacity: 1, covered: false)
-        let short = ComposerGeometry.of(Look.Composer(), keyboard: true).scale
-        glass.animatableData = AnimatablePair(0.5, (1 + short) / 2)
+        glass.animatableData = AnimatablePair(0.5, (1 + short.scale) / 2)
         XCTAssertEqual(glass.presence, 0.5)
-        XCTAssertEqual(glass.share, (1 + short) / 2, accuracy: 1e-9)
-        let scale = MascotPlacement.of(flank: flank, row: row, composer: Look.Composer(), mascot: Look.Mascot(),
-                                       share: glass.share).scale
-        XCTAssertLessThan(scale, Look.Mascot().scale)
-        XCTAssertGreaterThan(scale, Look.Mascot().scale * short)
+        XCTAssertEqual(glass.share, (1 + short.scale) / 2, accuracy: 1e-9)
     }
 
     /// On iOS 17 there is no scroll geometry and the presence is 1, so he never floats there: the
