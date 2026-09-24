@@ -1,6 +1,6 @@
 import XCTest
 
-/// Topo over the chat takes nothing from the microphone: with him sitting on the glass's leading
+/// Topo over the chat takes nothing from the microphone: with him sitting on the glass's trailing
 /// flank, where a transcript with no gap in it leaves him, and with him standing in a gap away
 /// from it, a press on the well — in its middle, and at the edge nearest the flank — reaches
 /// `VoiceInput`, counted in the button's debug report.
@@ -39,7 +39,7 @@ final class TopoOnTheGlassTests: XCTestCase {
             for point in ["the well's middle", "the well's edge nearest the flank"] {
                 let before = try report(mic)
                 let frame = mic.frame
-                let x = point == "the well's middle" ? frame.midX : frame.minX + 2
+                let x = point == "the well's middle" ? frame.midX : frame.maxX - 2
                 app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: x, dy: frame.midY))
                     .press(forDuration: 0.2)
                 let deadline = Date().addingTimeInterval(15)
@@ -109,7 +109,7 @@ final class TopoOnTheGlassTests: XCTestCase {
         attach(app, "topo-keyboard-up")
 
         let before = try report(mic)
-        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: short.minX + 2, dy: short.midY))
+        app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: short.maxX - 2, dy: short.midY))
             .press(forDuration: 0.2)
         let pressDeadline = Date().addingTimeInterval(15)
         var after = try report(mic)

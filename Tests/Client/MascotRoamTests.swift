@@ -453,13 +453,13 @@ final class MascotRoamTests: XCTestCase {
 
     /// A look changing his scale during a glide from the flank is decided on that frame: at the
     /// scale's maximum no roost holds him, so nothing is drawn, and at no frame is his picture
-    /// over the well or the controls beyond it.
+    /// over the well or the controls before it.
     func testAScaleChangeMidGlideFromTheFlankNeverDrawsHimOverTheWell() throws {
         let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
         let (placed, start) = settled(full)
         var roam = placed
         XCTAssertEqual(roam.roost.name, "flank")
-        roam.observe(Self.field([CGRect(x: 200, y: 0, width: 202, height: 628)]), at: start)
+        roam.observe(Self.field([CGRect(x: 0, y: 0, width: 200, height: 628)]), at: start)
         var time = start
         while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
         for _ in 0..<5 { time += Self.frame; roam.advance(to: time) }
@@ -532,7 +532,7 @@ final class MascotRoamTests: XCTestCase {
     /// one that holds him again places him, once it settles, with no glide from nowhere.
     func testNowhereToStandIsNoTopoAndBackIsAPlacement() {
         var field = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
-        field.well = CGRect(x: 60, y: 544, width: 72, height: 72)
+        field.well = CGRect(x: 270, y: 544, width: 72, height: 72)
         let (placed, start) = settled(field)
         var roam = placed
         XCTAssertNil(roam.position)

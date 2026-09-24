@@ -94,18 +94,18 @@ struct Composer: View {
             // middle of the glass. A control that has gone keeps its place, so the glass
             // never changes size.
             leading
+                .etched(look.composer.flank, ink: ink)
                 .frame(maxWidth: .infinity, alignment: .trailing)
                 .opacity(flankOpacity)
             micButton(geometry)
             trailing
-                .etched(look.composer.flank, ink: ink)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .opacity(flankOpacity)
         }
         .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, geometry.verticalInset)
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
-        // Topo sits on the pane's leading flank when the transcript has no gap for him.
+        // Topo sits on the pane's trailing flank when the transcript has no gap for him.
         .mascotPane()
         .background(lozenge(geometry).opacity(max(presence, Self.leastSurface)).allowsHitTesting(presence > 0))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
@@ -130,11 +130,10 @@ struct Composer: View {
     /// itself has taken that colour.
     private var ink: Color { mic.open ? look.composer.flank.openInk : look.composer.flank.ink }
 
-    /// No control: what else can come in besides words has no path into the log, and a control
-    /// that does nothing is worse in the person's reach than no control. It keeps the space so
-    /// the microphone stays in the middle, and Topo sits over it when the transcript has no gap
-    /// for him.
-    private var leading: some View {
+    /// No control: this flank is Topo's, where he sits when the transcript has no gap for him and
+    /// waits before the transcript's first read. It keeps the space so the microphone stays in
+    /// the middle.
+    private var trailing: some View {
         Color.clear.frame(width: 0, height: 0)
     }
 
@@ -144,7 +143,7 @@ struct Composer: View {
     /// Both marks are laid out and one is drawn, so the control is the size of the larger of them
     /// either way: the keyboard mark is taller than the plain one, and a flank that grew as the
     /// keyboard rose would hold up a pane that is meant to go short.
-    private var trailing: some View {
+    private var leading: some View {
         Button { typing.toggle() } label: {
             ZStack {
                 Image(systemName: "keyboard").opacity(typing ? 0 : 1)

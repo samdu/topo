@@ -11,7 +11,7 @@ import XCTest
 /// sides, one gap only, no gap, the keyboard up, and the choice that moves him least — and at the
 /// ends of the look's ranges for his size and his clearance; and the chat as drawn, with him over
 /// it, is held to the same: his picture where the canvas draws it overlaps no turn, the well or
-/// the flank beyond it, and the pane's controls are the same pixels with him as without.
+/// the flank before it, and the pane's controls are the same pixels with him as without.
 ///
 /// That a press on the well reaches the microphone with him beside it is `TopoOnTheGlassTests`',
 /// which presses it; neither stands in for the other.
@@ -20,7 +20,7 @@ final class MascotGeometryTests: XCTestCase {
     // MARK: Fixtures
 
     /// A phone's transcript, 402 points wide, over a pane 320 wide and 80 tall with its 72-point
-    /// well in the middle: the leading flank is 124 by 80, which holds his picture at two thirds.
+    /// well in the middle: the trailing flank is 124 by 80, which holds his picture at two thirds.
     static let visible = CGRect(x: 0, y: 0, width: 402, height: 628)
     static let pane = CGRect(x: 41, y: 540, width: 320, height: 80)
     static let well = CGRect(x: 165, y: 544, width: 72, height: 72)
@@ -112,12 +112,12 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertEqual(stay.origin, CGPoint(x: 100, y: 20))
     }
 
-    /// With no `from` he starts nearest the middle of the pane's leading flank, which is where he
+    /// With no `from` he starts nearest the middle of the pane's trailing flank, which is where he
     /// would otherwise sit.
     func testWithNowhereToStartFromHeStartsNearTheFlank() throws {
         let frame = try XCTUnwrap(MascotRoost.of(Self.fixtures[0].field, size: Self.size, clearance: 8, from: nil).frame)
         XCTAssertEqual(frame.maxY, Self.pane.minY - 8, accuracy: 0.001, "he does not stand just over the glass")
-        XCTAssertEqual(frame.midX, Self.pane.minX + (Self.well.minX - Self.pane.minX) / 2, accuracy: 0.001)
+        XCTAssertEqual(frame.midX, Self.well.maxX + (Self.pane.maxX - Self.well.maxX) / 2, accuracy: 0.001)
     }
 
     /// The flank holds his whole picture or he is not drawn: at a scale the flank cannot hold, a
@@ -128,7 +128,7 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertEqual(MascotRoost.of(noGap, size: MascotSprite.size(scale: 4), clearance: 0, from: nil), .none)
         XCTAssertEqual(MascotRoost.of(noGap, size: MascotSprite.size(scale: 0.25), clearance: 64, from: nil).name, "flank")
         var narrow = noGap
-        narrow.well = CGRect(x: 60, y: 544, width: 72, height: 72)
+        narrow.well = CGRect(x: 270, y: 544, width: 72, height: 72)
         XCTAssertEqual(MascotRoost.of(narrow, size: Self.size, clearance: 8, from: nil), .none)
     }
 
@@ -193,7 +193,7 @@ final class MascotGeometryTests: XCTestCase {
                                             CGRect(x: 16, y: -60, width: 370, height: 50)],
                                 pane: Self.pane, well: Self.well)
         XCTAssertTrue(field.covers(CGRect(x: 20, y: 480, width: 60, height: 40)), "the line under the transcript")
-        XCTAssertFalse(field.covers(CGRect(x: 50, y: 560, width: 60, height: 40)), "a turn under the glass")
+        XCTAssertFalse(field.covers(CGRect(x: 290, y: 560, width: 60, height: 40)), "a turn under the glass")
         XCTAssertFalse(field.covers(CGRect(x: 20, y: -50, width: 60, height: 40)), "a turn under the bar")
     }
 
@@ -336,7 +336,7 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
-    /// The pane from the well's leading edge to its trailing end, pixel for pixel, with a shade
+    /// The pane from its leading end to the well's trailing edge, pixel for pixel, with a shade
     /// for the render server's rounding on a curve's edge.
     private func assertControlsUnchanged(_ without: Stage, _ with: Stage, field: MascotField, canvas: MascotCanvas,
                                          _ label: String) throws {

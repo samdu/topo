@@ -236,10 +236,10 @@ final class MascotDriverTests: XCTestCase {
         canvas.fire(at: stamp)
         XCTAssertEqual(canvas.clock, 1, accuracy: 1e-9)
         XCTAssertEqual(canvas.roam?.roost.name, "flank", "a 0.6 s settle was not over a second in")
-        // Room opens on the left, straight above the flank: he strolls up to it, clear of
+        // Room opens on the right, straight above the flank: he strolls up to it, clear of
         // everything the whole way.
         var roomy = Self.open
-        roomy.obstacles = [CGRect(x: 200, y: 0, width: 200, height: 600)]
+        roomy.obstacles = [CGRect(x: 0, y: 0, width: 200, height: 600)]
         apply(roomy)
         for jitter in [1.0002, 0.9997] {
             stamp += jitter
