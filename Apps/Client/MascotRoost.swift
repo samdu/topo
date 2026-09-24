@@ -350,11 +350,16 @@ struct MascotRoam: Equatable, Sendable {
     /// The settings, which a look or Reduce Motion can change. A new size or clearance is a new
     /// answer to where he may stand, so it is decided again with no threshold, since where he
     /// stands may be exactly what the new value refuses: at once with no glide when he is standing
-    /// still, and on arrival when he is gliding.
+    /// still, and on arrival when he is gliding. Reduce Motion coming on ends a glide at its
+    /// destination at once.
     mutating func use(_ settings: Settings) {
         guard settings != self.settings else { return }
         let reroost = settings.size != self.settings.size || settings.clearance != self.settings.clearance
         self.settings = settings
+        if settings.reduceMotion, let move {
+            position = move.to
+            self.move = nil
+        }
         if reroost {
             changed = now
             unsettled = true

@@ -371,6 +371,27 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertLessThanOrEqual(arrived.maxY, turn.minY - 64 + 0.001, "the new clearance was not kept")
     }
 
+    /// Reduce Motion coming on during a glide ends it at its destination at once.
+    func testReduceMotionComingOnMidGlideEndsItAtItsDestination() throws {
+        let (placed, start) = settled(Self.field([]))
+        var roam = placed
+        let picture = try XCTUnwrap(roam.picture)
+        roam.observe(Self.field([CGRect(x: 0, y: picture.minY - 4, width: 402, height: 628 - picture.minY + 4)]), at: start)
+        var time = start
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        let glide = try XCTUnwrap(roam.move)
+        for _ in 0..<5 { time += Self.frame; roam.advance(to: time) }
+        var still = Self.settings
+        still.reduceMotion = true
+        roam.use(still)
+        XCTAssertNil(roam.move)
+        XCTAssertFalse(roam.walking)
+        XCTAssertEqual(roam.position, glide.to)
+        time += 1
+        roam.advance(to: time)
+        XCTAssertEqual(roam.position, glide.to, "he went on moving under Reduce Motion")
+    }
+
     /// Under Reduce Motion he is placed with no glide.
     func testReduceMotionPlacesHimWithNoGlide() throws {
         var settings = Self.settings
