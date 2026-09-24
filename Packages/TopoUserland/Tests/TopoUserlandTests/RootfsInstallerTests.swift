@@ -1,4 +1,5 @@
 import CryptoKit
+import SQLite3
 import XCTest
 @testable import TopoUserland
 
@@ -213,7 +214,10 @@ final class RootfsInstallerTests: XCTestCase {
     /// The fork's own importer on Alpine's minirootfs and the pinned packages, combined into one
     /// archive and imported: a fakefs with the tree under `data/` and its metadata in `meta.db`,
     /// busybox and bash among it and the libraries bash links, and none of a package's control
-    /// entries; the combined archive gone once it has been read.
+    /// entries; the combined archive gone once it has been read. What the rootfs's own headers say
+    /// survives the combining, read back from `meta.db` as the kernel reads it: `/etc/shadow`'s
+    /// group (42, shadow) and mode, and `/bin/sh` a symlink to `/bin/busybox` — neither of them a
+    /// path any package touches.
     func testTheForkImporterMakesAFakefsFromThePinnedRootfsAndPackages() throws {
         let layers = try Fixture.layers()
         let installer = RootfsInstaller(directory: directory.appendingPathComponent("Userland", isDirectory: true))
@@ -233,6 +237,42 @@ final class RootfsInstallerTests: XCTestCase {
         let signatures = try fm.contentsOfDirectory(atPath: data.path).filter { $0.hasPrefix(".SIGN") }
         XCTAssertEqual(signatures, [])
         XCTAssertFalse(fm.fileExists(atPath: installer.combined.path), "the combined archive was left behind")
+
+        let shadow = try XCTUnwrap(try Self.stat("/etc/shadow", in: installer.fakefs), "/etc/shadow is not in meta.db")
+        XCTAssertEqual(shadow.uid, 0)
+        XCTAssertEqual(shadow.gid, 42, "the rootfs's owner did not survive the combined import")
+        XCTAssertEqual(shadow.mode, UInt32(S_IFREG) | 0o640)
+        let sh = try XCTUnwrap(try Self.stat("/bin/sh", in: installer.fakefs), "/bin/sh is not in meta.db")
+        XCTAssertEqual(sh.mode & UInt32(S_IFMT), UInt32(S_IFLNK), "/bin/sh is not a symlink")
+        // A fakefs keeps a symlink's target as the contents of the file under `data/`.
+        XCTAssertEqual(try String(contentsOf: data.appendingPathComponent("bin/sh"), encoding: .utf8), "/bin/busybox")
+    }
+
+    /// A path's `struct ish_stat` (mode, uid, gid, rdev, four little-endian 32-bit words) from a
+    /// fakefs's `meta.db`, nil when the path is not there.
+    private static func stat(_ path: String, in fakefs: URL) throws -> (mode: UInt32, uid: UInt32, gid: UInt32)? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(fakefs.appendingPathComponent("meta.db").path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK else {
+            defer { sqlite3_close(db) }
+            throw NSError(domain: "meta.db", code: 1, userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+        }
+        defer { sqlite3_close(db) }
+        var statement: OpaquePointer?
+        let sql = "select stat from stats where inode = (select inode from paths where path = ?)"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw NSError(domain: "meta.db", code: 2, userInfo: [NSLocalizedDescriptionKey: String(cString: sqlite3_errmsg(db))])
+        }
+        defer { sqlite3_finalize(statement) }
+        let key = Array(path.utf8)
+        let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        sqlite3_bind_blob(statement, 1, key, Int32(key.count), transient)
+        guard sqlite3_step(statement) == SQLITE_ROW, let blob = sqlite3_column_blob(statement, 0),
+              sqlite3_column_bytes(statement, 0) >= 12 else { return nil }
+        let words = Data(bytes: blob, count: 12)
+        func word(_ index: Int) -> UInt32 {
+            words[index * 4 ..< index * 4 + 4].enumerated().reduce(0) { $0 | UInt32($1.element) << (8 * UInt32($1.offset)) }
+        }
+        return (word(0), word(1), word(2))
     }
 }
 
