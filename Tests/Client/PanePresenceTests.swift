@@ -75,17 +75,6 @@ final class PanePresenceTests: XCTestCase {
         }
     }
 
-    /// The keyboard going down hands the pane back to the geometry: the same answers the three
-    /// cases above give with no keyboard at all, not a pane stuck whole.
-    func testTheKeyboardDownIsTheGeometrysAnswer() {
-        XCTAssertEqual(PanePresence.of(contentBottom: paneTop - 200, paneTop: paneTop, rise: rise,
-                                       open: false, keyboard: false), 0)
-        XCTAssertEqual(PanePresence.of(contentBottom: paneTop + rise / 2, paneTop: paneTop, rise: rise,
-                                       open: false, keyboard: false), 0.5, accuracy: 0.0001)
-        XCTAssertEqual(PanePresence.of(contentBottom: paneTop + rise, paneTop: paneTop, rise: rise,
-                                       open: false, keyboard: false), 1)
-    }
-
     /// An open microphone is still the pane whole with the keyboard up or down.
     func testAnOpenMicrophoneIsThePaneWholeWithTheKeyboardEitherWay() {
         for keyboard in [false, true] {

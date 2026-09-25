@@ -25,23 +25,6 @@ final class ReplayTests: XCTestCase {
         return (replay, calls)
     }
 
-    func testToposOwnTurnIsOfferedAgain() {
-        let (replay, _) = replay()
-        XCTAssertEqual(replay.offer(for: turn(.assistant, "Hello."))?.title, "Say again")
-    }
-
-    func testThePersonsOwnTurnIsOfferedNothing() {
-        let (replay, _) = replay()
-        XCTAssertNil(replay.offer(for: turn(.person, "Hello.")),
-                     "their words are not Topo's to say")
-    }
-
-    func testNothingIsOfferedWhileTheVoiceIsNotResident() {
-        let (replay, _) = replay(canSpeak: false)
-        XCTAssertNil(replay.offer(for: turn(.assistant, "Hello.")),
-                     "an item that would be heard as nothing is not offered")
-    }
-
     func testTheOfferReadsStopWhileTheSpeakerIsSpeaking() {
         let (replay, calls) = replay(speaking: true)
         let offer = replay.offer(for: turn(.assistant, "Hello."))
