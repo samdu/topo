@@ -88,9 +88,18 @@ final class Tuning {
     /// pane's foot; nil is the vault's pin.
     private(set) var pin: CGPoint?
 
-    init(defaults: UserDefaults = .standard) {
+    /// Whether the sliders' values are worn: in a debug build, which has the sliders. A release
+    /// build has only the placement and the pin to show, so it reads only those, and slider values
+    /// a debug install left in the defaults are neither worn nor kept.
+    #if DEBUG
+    static let knobsWorn = true
+    #else
+    static let knobsWorn = false
+    #endif
+
+    init(defaults: UserDefaults = .standard, knobs: Bool = Tuning.knobsWorn) {
         self.defaults = defaults
-        (values, placement, pin) = Self.read(defaults.string(forKey: Self.key))
+        (values, placement, pin) = Self.read(defaults.string(forKey: Self.key), knobs: knobs)
     }
 
     /// Nothing is set: the look is the vault's.
@@ -147,13 +156,13 @@ final class Tuning {
 
     /// What a kept override says, read back as loosely as it was written: anything that is not one
     /// of these is left out here, and anything out of its range is refused where it is worn.
-    private static func read(_ document: String?)
+    private static func read(_ document: String?, knobs: Bool)
         -> (values: [Knob: Double], placement: Look.Mascot.Placement?, pin: CGPoint?) {
         guard let data = document?.data(using: .utf8),
               let parts = (try? JSONSerialization.jsonObject(with: data)) as? [String: [String: Any]]
         else { return ([:], nil, nil) }
         var values: [Knob: Double] = [:]
-        for knob in Knob.allCases {
+        for knob in Knob.allCases where knobs {
             if let value = parts[knob.part]?[knob.rawValue] as? Double { values[knob] = value }
         }
         let mascot = parts["mascot"] ?? [:]

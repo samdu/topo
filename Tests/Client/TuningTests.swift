@@ -147,6 +147,22 @@ final class TuningTests: XCTestCase {
         XCTAssertEqual(worn.mascot.pin, vault.mascot.pin)
     }
 
+    /// A release build has no sliders, so it wears none of their values: slider values a debug
+    /// install left in the defaults are read as nothing, the placement and the pin beside them are
+    /// worn, and the next write keeps only what the release build shows.
+    func testAReleaseBuildWearsOnlyThePlacementAndThePin() throws {
+        let store = defaults()
+        store.set(#"{"mascot": {"clearance": 40, "scale": 2, "placement": "pinned", "pin": {"x": 0.2, "y": 0.4}}, "transcript": {"replyTrailingInset": 90}}"#,
+                  forKey: Tuning.key)
+        let release = Tuning(defaults: store, knobs: false)
+        XCTAssertEqual(release.values, [:])
+        let worn = release.worn(over: vault)
+        XCTAssertEqual(Set(try LookCensus.different(worn, vault)), ["mascot.placement", "mascot.pin.x", "mascot.pin.y"])
+        release.place(.glass)
+        XCTAssertEqual(Tuning(defaults: store, knobs: true).values, [:], "the release build kept slider values it does not show")
+        XCTAssertEqual(Tuning(defaults: store, knobs: true).placement, .glass)
+    }
+
     /// The join: what the chat draws with is the vault's look with the tuning worn over it.
     func testTheSubtreeDrawsWithTheTuningOverTheVaultsLook() throws {
         let directory = FileManager.default.temporaryDirectory
