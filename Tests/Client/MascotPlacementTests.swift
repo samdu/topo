@@ -358,6 +358,32 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertFalse(roam.covered)
     }
 
+    /// A drop with the keyboard up pins him where he was let go, read in the frame with the
+    /// keyboard down, and lifts him clear of the keyboard; the keyboard going sends him to the pin,
+    /// which is where the finger let him go, and the pin is unchanged.
+    func testADropWithTheKeyboardUpPinsInTheRestingFrame() throws {
+        var time = 0.0
+        var roam = settled(Self.settings(.roam), [Self.field()], time: &time)
+        let up = Self.field(keyboard: true)
+        roam.observe(up, at: time)
+        run(&roam, time: &time)
+        XCTAssertTrue(roam.grab())
+        // Down over where the keyboard is: the resting frame lets him go there.
+        roam.drag(to: CGPoint(x: 150, y: 500))
+        let pin = try XCTUnwrap(roam.drop())
+        let within = Self.field().pinFrame
+        XCTAssertEqual(pin.y, (500 + Self.size.height / 2) / within.height, accuracy: 1e-9, "not read in the resting frame")
+        run(&roam, time: &time)
+        let lifted = try XCTUnwrap(roam.picture)
+        let keyboard = try XCTUnwrap(up.keyboard)
+        XCTAssertLessThanOrEqual(lifted.maxY, keyboard.minY, "left over the keyboard")
+        XCTAssertEqual(roam.settings.pin, pin)
+        roam.observe(Self.field(), at: time)
+        run(&roam, time: &time)
+        XCTAssertEqual(roam.picture?.origin.y ?? 0, 500, accuracy: 0.001, "not back where the finger let him go")
+        XCTAssertEqual(roam.settings.pin, pin)
+    }
+
     /// A press cancelled rather than let go pins nothing: the policy and the pin are as they
     /// were, and he goes back to his place with a glide.
     func testACancelledDragPinsNothing() throws {
@@ -429,6 +455,16 @@ final class MascotPlacementTests: XCTestCase {
         let now = canvas.spriteFrame
         XCTAssertTrue(canvas.cancelledDrag(from: CGPoint(x: now.minX + 4, y: now.minY + 4), to: CGPoint(x: 300, y: 50)))
         XCTAssertEqual(pinned, [pin], "a cancelled press handed a pin on")
+        // With a sheet over the chat, nothing is picked up.
+        var covered = seen
+        covered.covered = true
+        canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: field,
+                     settings: Self.settings(.pinned, pin: pin), interval: Self.frame, conditions: covered)
+        settle(canvas)
+        let under = canvas.spriteFrame
+        XCTAssertFalse(canvas.grabbable(at: CGPoint(x: under.midX, y: under.midY)), "picked up under a sheet")
+        XCTAssertNil(canvas.drag(from: CGPoint(x: under.midX, y: under.midY), to: CGPoint(x: 10, y: 10)))
+        XCTAssertEqual(pinned, [pin])
         canvas.removeFromSuperview()
         XCTAssertFalse(window.gestureRecognizers?.contains(canvas.grab) ?? false, "the recognizer outlived the canvas")
     }
