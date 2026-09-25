@@ -4,8 +4,9 @@ import XCTest
 @testable import Topo
 
 /// A person's turn scrolling through Topo, replayed from the geometry the simulator recorded
-/// (`TOPO_DEBUG_MASCOT_TRACE`, over the `full` fixture with the transcript dragged slowly, in
-/// `Traces/`) and scripted: he is displaced once per crossing and never caught by the turn — one
+/// (`TOPO_DEBUG_MASCOT_TRACE`, over the `full` fixture with the person's inset at 0, so a
+/// person's turn spans the column and there is no room beside it, and the transcript dragged
+/// slowly, in `Traces/`) and scripted: he is displaced once per crossing and never caught by the turn — one
 /// glide, through it to its far side from where it is going, and no frame of him over it after
 /// that glide; and a turn that lands on him still, with room above and below it, sends him below.
 final class MascotCrossingTests: XCTestCase {
@@ -71,29 +72,26 @@ final class MascotCrossingTests: XCTestCase {
         return (roam, try XCTUnwrap(field, file: file, line: line))
     }
 
-    /// The transcript dragged slowly up, a person's bubble rising into him from below (the
-    /// crossing that, recorded before the fix, caught him and carried him up the screen in hops a
-    /// few points long, forty glides in a second and a half): one glide, under it, and he ends
-    /// clear below it.
-    func testARisingPersonsTurnIsOneHopUnderItAndNeverCatchesHim() throws {
-        let trace = try trace("crossing-up")
-        let (roam, field) = try assertCrossings("crossing-up", until: 32.5, glides: 1)
-        let picture = try XCTUnwrap(roam.picture)
-        XCTAssertGreaterThan(picture.minY, trace.standing.y, "he did not go under it")
-        let above = try XCTUnwrap(Self.bubbles(in: field).filter { $0.maxY <= picture.minY }.max { $0.maxY < $1.maxY },
-                                  "no person's turn above him")
-        XCTAssertGreaterThanOrEqual(picture.minY, above.maxY + Self.settings.clearance - MascotRoost.epsilon)
-    }
-
-    /// The same drag carried on until the next person's bubble rises into him with the glass
-    /// still over its foot, so there is no room under it: one more glide, above it, riding the
-    /// words until they stop, and never caught.
-    func testTheNextRisingTurnWithNoRoomUnderItIsOneGlideAboveIt() throws {
-        let (roam, field) = try assertCrossings("crossing-up", glides: 2)
+    /// The transcript dragged slowly up, a person's bubble rising into him from below with the
+    /// glass over its foot, so there is no room under it: one glide, above it, riding the words
+    /// up until the drag stops, and never caught (the crossing that, recorded before the fix,
+    /// carried him up the screen in hops a few points long, forty glides in a second and a half).
+    func testARisingPersonsTurnWithNoRoomUnderItIsOneGlideAboveIt() throws {
+        let (roam, field) = try assertCrossings("crossing-up", until: 35, glides: 1)
         let picture = try XCTUnwrap(roam.picture)
         let below = try XCTUnwrap(Self.bubbles(in: field).filter { $0.minY >= picture.maxY }.min { $0.minY < $1.minY },
                                   "no person's turn below him")
         XCTAssertLessThanOrEqual(picture.maxY + Self.settings.clearance, below.minY + MascotRoost.epsilon)
+    }
+
+    /// The same turn dragged on up: he rides it to the top of where he may stand, and from there
+    /// goes under it, once, and ends clear below it.
+    func testDraggedOnUpHeGoesUnderItOnceAtTheTop() throws {
+        let (roam, field) = try assertCrossings("crossing-up", glides: 3)
+        let picture = try XCTUnwrap(roam.picture)
+        let above = try XCTUnwrap(Self.bubbles(in: field).filter { $0.maxY <= picture.minY }.max { $0.maxY < $1.maxY },
+                                  "no person's turn above him")
+        XCTAssertGreaterThanOrEqual(picture.minY, above.maxY + Self.settings.clearance - MascotRoost.epsilon)
     }
 
     /// The transcript dragged down, a person's bubble descending onto him from above, and let go,
@@ -159,7 +157,7 @@ final class MascotCrossingTests: XCTestCase {
     /// A turn landing on him where it stands still, with room above it and below it: below wins,
     /// though above is the shorter way.
     func testATurnLandingOnHimWithRoomEitherSideSendsHimBelowIt() throws {
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         let bubble = CGRect(x: 19, y: 300, width: 367, height: 60)
         _ = scroll(&roam, from: 0, through: [Self.field([bubble])])
         let picture = try XCTUnwrap(roam.picture)
@@ -172,7 +170,7 @@ final class MascotCrossingTests: XCTestCase {
     /// through: he goes above it, once, and rides the words up until they stop rather than being
     /// caught again every frame.
     func testATurnRisingOutOfTheGlassIsOneGlideAboveItRidingTheWords() throws {
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 440))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 440))
         let pages = stride(from: 560.0, through: 300.0, by: -4.0).map { Self.page(CGFloat($0)) }
         _ = scroll(&roam, from: 0, through: pages)
         let picture = try XCTUnwrap(roam.picture)
@@ -184,7 +182,7 @@ final class MascotCrossingTests: XCTestCase {
     /// A person's bubble descending onto him: one glide, over it, the side it came from, since
     /// below it is where it is going.
     func testADescendingTurnIsOneGlideOverIt() throws {
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         let pages = stride(from: 60.0, through: 380.0, by: 4.0).map { Self.page(CGFloat($0)) }
         _ = scroll(&roam, from: 0, through: pages)
         let picture = try XCTUnwrap(roam.picture)
@@ -194,7 +192,7 @@ final class MascotCrossingTests: XCTestCase {
 
     /// A person's bubble rising past him with room below it: one glide, under it.
     func testARisingTurnWithRoomBelowIsOneGlideUnderIt() throws {
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 150))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 150))
         let pages = stride(from: 300.0, through: 0.0, by: -4.0).map { Self.page(CGFloat($0)) }
         _ = scroll(&roam, from: 0, through: pages)
         let picture = try XCTUnwrap(roam.picture)
@@ -210,7 +208,7 @@ final class MascotCrossingTests: XCTestCase {
     /// The transcript scrolled down and stopped, and a turn landing on him before the scroll has
     /// settled: a still turn, which is under wins, whatever the scroll before it did.
     func testATurnLandingJustAfterADownwardScrollSendsHimBelowIt() throws {
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         var pages = stride(from: 0.0, through: 40.0, by: 4.0).map { Self.field(Self.lines(CGFloat($0))) }
         let bubble = CGRect(x: 19, y: 230, width: 367, height: 60)
         pages.append(Self.field(Self.lines(40) + [bubble]))
@@ -227,7 +225,7 @@ final class MascotCrossingTests: XCTestCase {
     /// with the bubble.
     func testAStillTwinDoesNotHoldTheDestinationBack() throws {
         let twin = CGRect(x: 19, y: 20, width: 367, height: 60)
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         roam.observe(Self.field([twin, CGRect(x: 19, y: 300, width: 367, height: 60)]), at: 0)
         roam.advance(to: 1.0 / 30)
         let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
@@ -243,7 +241,7 @@ final class MascotCrossingTests: XCTestCase {
     /// A drag a tenth of a point a geometry, for a hundred geometries: where he is going moves
     /// the ten points the words did, rather than nothing a frame.
     func testATenthOfAPointAGeometryAddsUp() throws {
-        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
         roam.observe(Self.field(Self.lines(0) + [CGRect(x: 19, y: 300, width: 367, height: 60)]), at: 0)
         roam.advance(to: 1.0 / 30)
         let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
