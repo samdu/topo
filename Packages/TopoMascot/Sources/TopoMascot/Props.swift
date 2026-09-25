@@ -263,7 +263,9 @@ private func jsTrim(_ s: String) -> String { s.trimmingCharacters(in: .whitespac
 /// The sign: a board on a stick, as big as its words, written in pixels rather than design units.
 /// It faces us square and stands upright whatever the arm does. `stick` is how far the board stands
 /// above the grip, and `room` how far the picture runs to the right of it.
-func makeSign(_ text: String, stick: Double, room: Double, lettering: ((String) -> Lettering?)?) -> PropSpec {
+/// `mirror` is for a picture that will be mirrored whole once drawn: the lettering is inked mirrored about
+/// the board's centre, so the mirror puts it back and it reads left to right.
+func makeSign(_ text: String, stick: Double, room: Double, lettering: ((String) -> Lettering?)?, mirror: Bool = false) -> PropSpec {
     let upper = jsTrim(text.uppercased()), words = upper.isEmpty ? "..." : upper
     // lines by UTF-16 unit, as the JavaScript counts them
     var lines: [[UInt16]] = []
@@ -277,7 +279,8 @@ func makeSign(_ text: String, stick: Double, room: Double, lettering: ((String) 
     let hw = ((set.map { Double($0.width) } ?? cols * 8 - 1) / 2).rounded(.up) + 7
     let hh = (set.map { Double($0.height) } ?? Double(lines.count) * 13 - 3) / 2 + 7
     let cx = jmin(0, (room - hw).rounded(.down)), cy = -stick - hh, top = cy - hh + 7
-    let ink: (Double, Double) -> Double = { x, y in
+    let ink: (Double, Double) -> Double = { x0, y in
+        let x = mirror ? 2 * cx - x0 : x0
         if let set {
             let u = Int((x - cx + Double(set.width) / 2).rounded(.down)), v = Int((y - top).rounded(.down))
             return u >= 0 && u < set.width && v >= 0 && v < set.height ? Double(set.alpha[v * set.width + u]) / 255 : 0
