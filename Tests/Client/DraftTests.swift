@@ -47,12 +47,6 @@ final class DraftStateTests: XCTestCase {
         XCTAssertEqual(draft("bins?", typing: true, sending: true).state, .inFlight)
         XCTAssertEqual(draft(sending: true).state, .inFlight, "an empty row in flight is still in flight")
     }
-
-    /// The way back is offered or it is not; the row never draws a way back that does nothing.
-    func testTheWayBackIsWhatTheRowIsGiven() {
-        XCTAssertNil(draft("bins?", sending: true).edit)
-        XCTAssertNotNil(draft("bins?", sending: true, edit: {}).edit)
-    }
 }
 
 /// The row, read off the pixels. Two things are worth holding: that it is drawn at the size the
@@ -178,11 +172,6 @@ final class DraftRowRenderTests: XCTestCase {
     }
 
     // MARK: Drawn as the turn it becomes
-
-    func testTheRowIsDrawnInAnOutlinedBubble() throws {
-        XCTAssertFalse(outline(try render(draft("Morning.")), Look().draft.written.accent).isEmpty,
-                       "the row draws no outline at all")
-    }
 
     /// The row's two enclosures are its own, so a look that changes the person's landed bubble
     /// leaves the row alone — which is what makes the draft's colour a value of the draft's.

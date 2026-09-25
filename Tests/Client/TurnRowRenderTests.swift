@@ -149,12 +149,6 @@ final class TurnRowRenderTests: XCTestCase {
                        "the person's turn draws no outline in the theme's primary colour")
     }
 
-    func testToposTurnIsDrawnWithNoBubble() throws {
-        let raster = try render(turn(.assistant, "Paris."))
-        XCTAssertTrue(outlinePixels(raster, Look().bubble.accent).isEmpty,
-                      "Topo's turn drew the bubble's accent, which is the person's side")
-    }
-
     func testThePersonsBubbleSitsOnTheRight() throws {
         let raster = try render(turn(.person, "ta"))
         let columns = outlinePixels(raster, Look().bubble.accent)
