@@ -104,6 +104,7 @@ enum LookDocument {
         r.length("horizontalPadding", &value.horizontalPadding)
         r.width("maximumLineWidth", &value.maximumLineWidth)
         r.inset("replyTrailingInset", &value.replyTrailingInset)
+        r.inset("personLeadingInset", &value.personLeadingInset)
         r.font("bodyFont", &value.bodyFont)
         r.font("labelFont", &value.labelFont)
         r.font("noticeFont", &value.noticeFont)

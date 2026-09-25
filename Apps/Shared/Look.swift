@@ -83,8 +83,12 @@ struct Look: Equatable, Sendable {
         /// points, and one clearance, rounded up to ten, which with the column's padding holds his
         /// picture, the 9 points his reach keeps from the screen's edge and his clearance from the
         /// words, and the ends of lines that stop short of the column's edge add to it; none on the
-        /// watch and the television, where he is not drawn. The person's bubbles keep the column's width.
+        /// watch and the television, where he is not drawn.
         var replyTrailingInset: CGFloat
+        /// Room kept clear before the person's own turns, in points, on their leading side, so both
+        /// sides of the conversation are indented alike: the same as `replyTrailingInset` on every
+        /// screen by default, and read in the same range. A bubble wraps within what is left.
+        var personLeadingInset: CGFloat
         /// A turn's words.
         var bodyFont: Font
         /// A time.
@@ -104,6 +108,7 @@ struct Look: Equatable, Sendable {
                 horizontalPadding = 2
                 maximumLineWidth = .infinity
                 replyTrailingInset = 0
+                personLeadingInset = 0
                 bodyFont = .system(.footnote)
                 labelFont = .system(.caption2).weight(.semibold)
                 noticeFont = .system(.caption2)
@@ -113,6 +118,7 @@ struct Look: Equatable, Sendable {
                 horizontalPadding = 48
                 maximumLineWidth = 1100
                 replyTrailingInset = 0
+                personLeadingInset = 0
                 bodyFont = .system(.title3)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)
@@ -122,6 +128,7 @@ struct Look: Equatable, Sendable {
                 horizontalPadding = 16
                 maximumLineWidth = 672
                 replyTrailingInset = 100
+                personLeadingInset = 100
                 bodyFont = .system(.body)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)

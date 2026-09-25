@@ -551,10 +551,11 @@ final class MascotGeometryTests: XCTestCase {
     /// A person's turn reports its bubble and not the row's width, so the room a short bubble
     /// leaves on its left is room. On the 393-point phone Sam's screenshot came from
     /// (`device-a70490e-trapped-on-flank.png`), the turn "Nothing, just testing the continuity
-    /// feature :p" wraps to a bubble 294 points wide at x 83 — as drawn there — and the room left
-    /// of it holds his picture 60 points wide with its clearance and not one 78 points wide. A
-    /// narrower turn of two lines in the same place (`continuityShort`) leaves room a picture 74
-    /// points wide fits.
+    /// feature :p" keeps the person's inset (`personLeadingInset`, 100 points, with the column's
+    /// 16) and wraps within it, so its bubble starts at least 116 points in and ends at the
+    /// column's edge, and the room left of it holds his picture at his own size with its
+    /// clearance. A narrower turn of two lines in the same place (`continuityShort`) leaves room a
+    /// picture 74 points wide fits.
     func testTheRoomBesideAShortBubbleIsAGap() throws {
         let phone = CGSize(width: 393, height: 852)
         let clearance = Look.Mascot().clearance
@@ -568,11 +569,13 @@ final class MascotGeometryTests: XCTestCase {
         defer { screenshot.window.isHidden = true }
         let field = try XCTUnwrap(screenshot.canvas?.roam?.field)
         let bubble = try XCTUnwrap(field.obstacles.first { $0.minX > 40 }, "no turn reported less than the row: \(field.obstacles)")
-        XCTAssertEqual(bubble.minX, 83, accuracy: 2, "the bubble is not where the phone drew it: \(bubble)")
+        let inset = Look().transcript.horizontalPadding + Look().transcript.personLeadingInset
+        XCTAssertGreaterThanOrEqual(bubble.minX, inset - 0.5, "the bubble does not keep the person's inset: \(bubble)")
         XCTAssertEqual(bubble.maxX, 377, accuracy: 2)
         XCTAssertTrue(MascotRoost.holds(field, frame: beside(bubble, width: 60), clearance: clearance),
                       "the room left of the bubble is not room: \(field.covering)")
-        XCTAssertFalse(MascotRoost.holds(field, frame: beside(bubble, width: 78), clearance: clearance))
+        XCTAssertTrue(MascotRoost.holds(field, frame: beside(bubble, width: MascotSprite.box.width), clearance: clearance),
+                      "the room left of the bubble does not hold him at his own size: \(field.covering)")
 
         let short = try stage(PreviewTurns.continuityShort, mascot: Look.Mascot(), size: phone)
         defer { short.window.isHidden = true }

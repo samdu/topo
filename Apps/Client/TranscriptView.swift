@@ -116,8 +116,9 @@ struct TurnRow: View {
         // column's width: Topo stands clear of them, and beside a short bubble is room for him.
         .mascotObstacle(!bare)
         // Topo's turns keep a margin on their trailing side, which is where he stands beside
-        // them; the person's keep the column's width.
+        // them, and the person's the same on their leading side, so both are indented alike.
         .padding(.trailing, mine ? .zero : look.transcript.replyTrailingInset)
+        .padding(.leading, mine ? look.transcript.personLeadingInset : .zero)
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
         // Held, never tapped: a turn brushed in passing must not start talking. What is offered
@@ -257,6 +258,8 @@ struct DraftRow: View {
             control
         }
         .mascotObstacle()
+        // Indented as the person's turn it is about to become, so it wraps where that will.
+        .padding(.leading, look.transcript.personLeadingInset)
         .frame(maxWidth: .infinity, alignment: .trailing)
         .onAppear { writing = draft.typing }
         .onChange(of: draft.typing) { _, wanted in writing = wanted }
