@@ -55,10 +55,3 @@ What is built, what comes next and in what order, what is parked, and the thread
 ### Flakes on CI
 
 #91, #122, #124, #126, #127, #141, #146, #159: each is a timing bound on a cold runner, noted rather than fixed. `topo_unit` has grown to about 27 minutes on the full lane and is now the long pole.
-
-### The review pipeline
-
-- Codex (the CI reviewer) is out on its ChatGPT usage limit until 27 September; stand-in reviews are the `adversarial-reviewer` agent, and their verdicts are in each plan's ledger under `~/Desktop/topo-plans/progress-*.md`.
-- `advisorModel: fable` is set in buddybox's `~/.claude/settings.json` for engineer sessions; no engineer session has yet had the Advisor tool, so the experiment has produced no data.
-- Automerge skips while any job in the PR-validate run is red, the reviewer job included, so a Codex outage means every merge is by hand.
-- The topo-status poller trips GitHub's secondary rate limit; `gh` calls fail with a 403 for a few minutes at a time.
