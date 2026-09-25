@@ -1,0 +1,2 @@
+# Recorded runs of Topo's roam, replayed by MascotCrossingTests: data, not code to review.
+Tests/Client/Traces/*.json -diff linguist-generated=true

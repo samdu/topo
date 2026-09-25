@@ -321,7 +321,7 @@ struct ChatView: View {
                 .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
                                                         error: harness.error, speaker: speaker.report,
                                                         voice: speaker.voice.state, mascot: mascotReport,
-                                                        facing: mascot.facing))
+                                                        facing: mascot.facing, clearance: look.mascot.clearance))
                 #endif
         }
     }

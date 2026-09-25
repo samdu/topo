@@ -104,6 +104,7 @@ enum LookDocument {
         r.length("horizontalPadding", &value.horizontalPadding)
         r.width("maximumLineWidth", &value.maximumLineWidth)
         r.inset("replyTrailingInset", &value.replyTrailingInset)
+        r.inset("personLeadingInset", &value.personLeadingInset)
         r.font("bodyFont", &value.bodyFont)
         r.font("labelFont", &value.labelFont)
         r.font("noticeFont", &value.noticeFont)
@@ -722,10 +723,18 @@ extension View {
     /// worn.
     func wearing(_ memory: Memory) -> some View {
         #if DEBUG
-        environment(\.look, DebugRun.look ?? memory.look)
+        wearing(memory, tuning: .shared)
         #else
         environment(\.look, memory.look)
         #endif
     }
+
+    #if DEBUG
+    /// A debug build's: the launch's look in place of the vault's where one was given, and the
+    /// settings sheet's tuning worn over either (`Tuning`).
+    func wearing(_ memory: Memory, tuning: Tuning) -> some View {
+        environment(\.look, tuning.worn(over: DebugRun.look ?? memory.look))
+    }
+    #endif
 }
 #endif

@@ -372,6 +372,9 @@ extension DebugRun {
         /// The side of the screen his roost says he stands on, as `Mascot` hands it to the engine
         /// (which takes it once he is at rest at home): `left` until a roost has decided otherwise.
         var facing: String
+        /// Topo's clearance in the look the chat is drawn with, which a debug build's Tuning is
+        /// worn over (`Tuning`).
+        var clearance: Double?
     }
 
     struct TurnReport: Codable, Equatable {
@@ -390,9 +393,9 @@ extension DebugRun {
 
     static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report,
                            voice: Voice.State, mascot: MascotRoam.Report? = nil,
-                           facing: MascotFacing = .left) -> String {
+                           facing: MascotFacing = .left, clearance: CGFloat? = nil) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
-                                facing: facing.rawValue)
+                                facing: facing.rawValue, clearance: clearance.map(Double.init))
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

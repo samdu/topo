@@ -116,8 +116,9 @@ struct TurnRow: View {
         // column's width: Topo stands clear of them, and beside a short bubble is room for him.
         .mascotObstacle(!bare)
         // Topo's turns keep a margin on their trailing side, which is where he stands beside
-        // them; the person's keep the column's width.
+        // them, and the person's the same on their leading side, so both are indented alike.
         .padding(.trailing, mine ? .zero : look.transcript.replyTrailingInset)
+        .padding(.leading, mine ? look.transcript.personLeadingInset : .zero)
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
         // Held, never tapped: a turn brushed in passing must not start talking. What is offered
@@ -252,11 +253,15 @@ struct DraftRow: View {
     @FocusState private var writing: Bool
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: look.draft.spacing) {
-            bubble
-            control
+        // Indented as the person's turn it is about to become, so it wraps where that will, as
+        // far as leaves the bubble its minimum width and the control its slot.
+        DraftInset(inset: look.transcript.personLeadingInset, keep: Self.kept(look.draft)) {
+            HStack(alignment: .bottom, spacing: look.draft.spacing) {
+                bubble
+                control
+            }
+            .mascotObstacle()
         }
-        .mascotObstacle()
         .frame(maxWidth: .infinity, alignment: .trailing)
         .onAppear { writing = draft.typing }
         .onChange(of: draft.typing) { _, wanted in writing = wanted }
@@ -274,6 +279,20 @@ struct DraftRow: View {
         }
         // A row taken off the screen holds no focus, whatever the last change said.
         .onDisappear { draft.focused(false) }
+    }
+
+    /// What the row keeps of its width whatever the person's inset: the bubble at its minimum,
+    /// the room beside it and the control's slot.
+    static func kept(_ draft: Look.Draft) -> CGFloat {
+        draft.minimumWidth + draft.spacing + draft.slot
+    }
+
+    /// The person's inset as the row takes it in `width`: all of it where it leaves `kept`, and
+    /// only as much as does where it would not, so the inset yields and the control stays in
+    /// the column.
+    static func inset(_ inset: CGFloat, keeping kept: CGFloat, in width: CGFloat) -> CGFloat {
+        guard inset.isFinite, width.isFinite else { return 0 }
+        return min(max(inset, 0), max(width - kept, 0))
     }
 
     /// What the words are drawn on: the draft's own enclosure, in the colour of the state it is
@@ -342,6 +361,32 @@ struct DraftRow: View {
     /// doing nothing.
     private var nothingToSend: Bool {
         draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+/// The draft row's leading inset, taken out of the width it is offered as far as leaves `keep`
+/// of it: one pass of layout, so the row is laid out at its inset from the frame it appears in.
+struct DraftInset: Layout {
+    var inset: CGFloat
+    var keep: CGFloat
+
+    private func taken(_ proposal: ProposedViewSize) -> CGFloat {
+        proposal.width.map { DraftRow.inset(inset, keeping: keep, in: $0) } ?? max(inset, 0)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let row = subviews.first else { return .zero }
+        let inset = taken(proposal)
+        let size = row.sizeThatFits(ProposedViewSize(width: proposal.width.map { max($0 - inset, 0) },
+                                                     height: proposal.height))
+        return CGSize(width: size.width + inset, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let row = subviews.first else { return }
+        let inset = taken(proposal)
+        row.place(at: CGPoint(x: bounds.minX + inset, y: bounds.minY), anchor: .topLeading,
+                  proposal: ProposedViewSize(width: max(bounds.width - inset, 0), height: bounds.height))
     }
 }
 

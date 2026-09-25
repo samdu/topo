@@ -236,6 +236,26 @@ final class LookDocumentTests: XCTestCase {
         }
     }
 
+    /// The room before the person's turns mirrors the margin after Topo's: the same default on
+    /// every screen, read in the same range, and past either end the field alone falls back.
+    func testThePersonsLeadingInsetMirrorsTheReplysAndIsReadInItsRange() {
+        for screen in [Look.Screen.phone, .watch, .tv] {
+            XCTAssertEqual(Look.Transcript(screen).personLeadingInset, Look.Transcript(screen).replyTrailingInset, "\(screen)")
+        }
+        XCTAssertEqual(Look.Transcript(.phone).personLeadingInset, 110)
+        for inset in [0, 200] as [CGFloat] {
+            let reading = LookDocument.read(#"{"transcript": {"personLeadingInset": \#(inset), "spacing": 9}}"#)
+            XCTAssertEqual(reading.look.transcript.personLeadingInset, inset)
+            XCTAssertEqual(reading.notes, [])
+        }
+        for inset in ["-1", "201", "\"wide\""] {
+            let reading = LookDocument.read(#"{"transcript": {"personLeadingInset": \#(inset), "spacing": 9}}"#)
+            XCTAssertEqual(reading.look.transcript.personLeadingInset, Look().transcript.personLeadingInset, inset)
+            XCTAssertEqual(reading.look.transcript.spacing, 9, "\(inset) took another field down")
+            XCTAssertEqual(reading.notes.count, 1, "\(inset): \(reading.notes)")
+        }
+    }
+
     func testANullIsNotAValue() {
         let reading = LookDocument.read("""
         { "bubble": { "accent": null } }

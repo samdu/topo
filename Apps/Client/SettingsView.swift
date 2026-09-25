@@ -42,6 +42,11 @@ struct SettingsView: View {
                 Section {
                     Button("Sign out", role: .destructive) { Task { await signOut.act() } }
                 }
+                #if DEBUG
+                // Last, below everything a release build has, so the sheet's own rows are where
+                // they are in one.
+                TuningSection()
+                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

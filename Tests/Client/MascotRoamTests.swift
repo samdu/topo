@@ -402,7 +402,8 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(moved.maxY, turn.minY - 8, accuracy: 0.001, "\(moved) does not keep 8 points from \(turn)")
         XCTAssertEqual(hypot(moved.minX - picture.minX, moved.minY - picture.minY), 5, accuracy: 0.001)
 
-        // A long glide, and geometry arriving all through it.
+        // A long glide, and geometry arriving all through it: the words scrolling a point a frame,
+        // which carries where he is going with them and restarts nothing.
         roam.observe(Self.field([CGRect(x: 0, y: 200, width: 402, height: 340)]), at: time)
         while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
         let glide = try XCTUnwrap(roam.move)
@@ -411,7 +412,10 @@ final class MascotRoamTests: XCTestCase {
             roam.observe(Self.field([CGRect(x: 0, y: 200 + CGFloat(step), width: 402, height: 340)]), at: time)
             roam.advance(to: time)
             if let move = roam.move {
-                XCTAssertEqual([move.from, move.to], [glide.from, glide.to], "the glide was restarted")
+                XCTAssertEqual(move.from, glide.from, "the glide was restarted")
+                XCTAssertEqual(move.to.x, glide.to.x, "the glide was restarted")
+                XCTAssertEqual(move.to.y, glide.to.y + CGFloat(step), accuracy: 0.001,
+                               "where he is going did not move with the words")
                 XCTAssertGreaterThan(move.elapsed, glide.elapsed, "the glide was restarted")
             }
         }

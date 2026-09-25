@@ -220,7 +220,12 @@ final class MascotCanvas: UIView {
         roam.use(settings)
         roam.frame = interval
         roam.wait(!ready, at: clock)
-        if let field { roam.observe(field, at: clock) }
+        if let field {
+            #if DEBUG
+            if field != roam.field { MascotTrace.shared?.observed(field, at: clock) }
+            #endif
+            roam.observe(field, at: clock)
+        }
         self.roam = roam
         sync()
     }
@@ -342,6 +347,9 @@ final class MascotCanvas: UIView {
     func step(_ dt: Double) {
         clock += dt
         roam?.advance(to: clock)
+        #if DEBUG
+        if let roam { MascotTrace.shared?.advanced(roam, at: clock) }
+        #endif
         sync()
         driver.tick(dt)
     }
@@ -397,6 +405,55 @@ extension MascotRoam {
                       pane: field?.pane.map(numbers))
     }
 }
+
+#if DEBUG
+/// `TOPO_DEBUG_MASCOT_TRACE=<file name>`: every geometry the canvas hands his roam and every tick
+/// of its clock, with where that left him, written a JSON object a line to that name in the app's
+/// temporary directory. A geometry is written as the roam is handed it (`observe`), and a tick as
+/// the clock moved it on (`advance`), in the order they happened, so a run on the simulator can be
+/// replayed through `MascotRoam` in a test exactly as it ran. Nothing is written when the
+/// variable is absent, which is every ordinary run.
+@MainActor
+final class MascotTrace {
+    static let variable = "TOPO_DEBUG_MASCOT_TRACE"
+    static let shared: MascotTrace? = ProcessInfo.processInfo.environment[variable].flatMap { MascotTrace(name: $0) }
+
+    private let handle: FileHandle
+    private let encoder = JSONEncoder()
+
+    init?(name: String) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        FileManager.default.createFile(atPath: url.path, contents: nil)
+        guard let handle = try? FileHandle(forWritingTo: url) else { return nil }
+        self.handle = handle
+        encoder.outputFormatting = .sortedKeys
+        DebugRun.say("mascot trace: \(url.path)")
+    }
+
+    struct Line: Codable {
+        var t: Double
+        var field: MascotField?
+        var frame: CGRect?
+        var to: CGRect?
+        var covered: Bool?
+        var walking: Bool?
+        var moves: Int?
+    }
+
+    func observed(_ field: MascotField, at time: Double) { write(Line(t: time, field: field)) }
+
+    func advanced(_ roam: MascotRoam, at time: Double) {
+        write(Line(t: time, frame: roam.picture, to: roam.roost.frame, covered: roam.covered, walking: roam.walking,
+                   moves: roam.moves))
+    }
+
+    private func write(_ line: Line) {
+        guard var data = try? encoder.encode(line) else { return }
+        data.append(0x0A)
+        handle.write(data)
+    }
+}
+#endif
 
 /// The canvas in SwiftUI.
 struct MascotOverChat: UIViewRepresentable {
