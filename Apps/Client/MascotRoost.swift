@@ -878,8 +878,11 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         if settings.placement != .roam {
+            // Nothing to decide — placed already, the transcript still to be read, or no geometry
+            // yet — asks nothing of the clock: the read (`wait`) and the next geometry (`observe`)
+            // ask again.
             guard unsettled, position == nil, !waiting, field != nil else {
-                if position != nil { unsettled = false }
+                unsettled = false
                 return
             }
             if now - changed >= settings.settle { perch(.atOnce) }

@@ -143,6 +143,28 @@ final class MascotPlacementTests: XCTestCase {
         }
     }
 
+    /// While the transcript is still to be read, a placed Topo asks nothing of the clock, so the
+    /// display link stops as a roaming one's does: the read, when it comes, asks again.
+    func testAPlacedTopoWaitingOnTheReadAsksNothingOfTheClock() throws {
+        for placement in [Look.Mascot.Placement.pinned, .glass] {
+            var time = 0.0
+            var roam = MascotRoam(Self.settings(placement), frame: Self.frame)
+            roam.wait(true, at: time)
+            roam.observe(Self.field(), at: time)
+            for _ in 0..<3 {
+                time += Self.frame
+                roam.advance(to: time)
+            }
+            XCTAssertFalse(roam.needsTime, "\(placement): the clock kept running with the transcript unread")
+            XCTAssertTrue(roam.hidden)
+            roam.wait(false, at: time)
+            XCTAssertTrue(roam.needsTime, "\(placement): the read asked nothing of the clock")
+            run(&roam, time: &time)
+            XCTAssertFalse(roam.hidden, "\(placement): not placed after the read")
+            XCTAssertFalse(roam.needsTime)
+        }
+    }
+
     // MARK: Pinned
 
     /// Pinned, his box's centre is the pin — a fraction across and down the transcript's frame
