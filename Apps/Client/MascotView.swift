@@ -237,12 +237,22 @@ final class MascotDriver {
     private func measure(_ seconds: Double) {
         spent.append(seconds * 1000)
         guard spent.count >= Self.reportEvery else { return }
-        let sorted = spent.sorted(), n = sorted.count
-        DebugRun.say(String(format: "mascot: %d frames, %@, facing %@, mean %.2f ms, p95 %.2f ms, max %.2f ms",
-                            n, input.activity ?? "idle", engine.facing, sorted.reduce(0, +) / Double(n),
-                            sorted[n * 95 / 100], sorted[n - 1]))
+        DebugRun.say(Self.frameLine(spent, activity: input.activity ?? "idle", facing: engine.facing))
         spent.removeAll(keepingCapacity: true)
     }
+
+    /// The line a debug build prints for `spent`, a run of frame times in milliseconds: how many,
+    /// the pose, the facing in force (which lags the facing asked for until he is home), and the
+    /// mean, the 95th percentile and the worst.
+    static func frameLine(_ spent: [Double], activity: String, facing: String) -> String {
+        let sorted = spent.sorted(), n = sorted.count
+        guard n > 0 else { return "mascot: 0 frames, \(activity), facing \(facing)" }
+        return String(format: "mascot: %d frames, %@, facing %@, mean %.2f ms, p95 %.2f ms, max %.2f ms",
+                      n, activity, facing, sorted.reduce(0, +) / Double(n), sorted[n * 95 / 100], sorted[n - 1])
+    }
+
+    /// The facing in force, as the engine draws it now.
+    var facingInForce: String { engine.facing }
     #endif
 }
 

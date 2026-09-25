@@ -143,6 +143,22 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(bytes(try XCTUnwrap(driver.image)), left)
     }
 
+    /// The debug frame line says the facing in force, which is the engine's: asked for at home and
+    /// at rest, it is taken within the frames a debug run reports over.
+    func testTheDebugFrameLineSaysTheFacingInForce() {
+        let driver = MascotDriver()
+        var state = MascotState(model: "claude-sonnet-5")
+        state.facing = .right
+        driver.input = state.input
+        driver.conditions = seen
+        XCTAssertEqual(driver.facingInForce, "left")
+        for _ in 0..<60 { driver.tick(1.0 / 30) }
+        XCTAssertEqual(driver.facingInForce, "right", "a facing asked for at rest at home was not taken")
+        let line = MascotDriver.frameLine([1, 2, 3], activity: "idle", facing: driver.facingInForce)
+        XCTAssertTrue(line.hasPrefix("mascot: 3 frames, idle, facing right, mean 2.00 ms"), line)
+        XCTAssertEqual(MascotDriver.frameLine([], activity: "idle", facing: "left"), "mascot: 0 frames, idle, facing left")
+    }
+
     /// The still is the idle pose whatever the state's pose is: the same picture for building as
     /// for idle.
     func testTheStillIsTheIdlePose() throws {
