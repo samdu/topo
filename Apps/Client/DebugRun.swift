@@ -51,7 +51,7 @@ enum DebugRun {
     /// every ordinary run.
     static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
 
-    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged>`: the chat draws these fixture turns
+    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left>`: the chat draws these fixture turns
     /// (`PreviewTurns`) in place of the log's, so a UI suite can put Topo over a transcript of a
     /// known shape — nothing, turns with gaps beside them, and turns that leave no gap at all —
     /// whatever the account's log holds. Only what is drawn changes: the harness, the log and the
@@ -64,6 +64,7 @@ enum DebugRun {
         case "continuity": PreviewTurns.continuity
         case "continuity-short": PreviewTurns.continuityShort
         case "ragged": PreviewTurns.ragged
+        case "left": PreviewTurns.left
         default: nil
         }
     }
@@ -368,6 +369,9 @@ extension DebugRun {
         var voice: String
         /// Where Topo stands over the chat, and whether he is hidden; nil before he has been placed.
         var mascot: MascotRoam.Report?
+        /// The side of the screen his roost says he stands on, as `Mascot` hands it to the engine
+        /// (which takes it once he is at rest at home): `left` until a roost has decided otherwise.
+        var facing: String
     }
 
     struct TurnReport: Codable, Equatable {
@@ -385,8 +389,10 @@ extension DebugRun {
     static let chatReportIdentifier = "topo-debug-chat"
 
     static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report,
-                           voice: Voice.State, mascot: MascotRoam.Report? = nil) -> String {
-        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot)
+                           voice: Voice.State, mascot: MascotRoam.Report? = nil,
+                           facing: MascotFacing = .left) -> String {
+        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
+                                facing: facing.rawValue)
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

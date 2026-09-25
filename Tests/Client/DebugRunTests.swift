@@ -181,6 +181,17 @@ final class DebugRunTests: XCTestCase {
         // A nonce is never empty on a turn this run sent; an empty one names no turn at all.
         XCTAssertEqual(DebugRun.answer(to: "", in: [turn("phone", 3, .person, "old", nonce: "")]), .notInLog)
     }
+
+    /// The chat's debug report carries the facing `Mascot` hands the engine, as the word the
+    /// engine reads, under `facing` in its JSON.
+    func testTheChatReportSaysTheFacing() throws {
+        for facing in MascotFacing.allCases {
+            let raw = DebugRun.chatReport(spoken: nil, turns: [], error: nil, speaker: Speaker.Report(),
+                                          voice: .ready, facing: facing)
+            let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(raw.utf8)) as? [String: Any], raw)
+            XCTAssertEqual(json["facing"] as? String, facing.rawValue, raw)
+        }
+    }
 }
 
 /// The token endpoint for `testTheOrdinaryRefreshLineSaysWhatTheRefreshGranted`: one scripted

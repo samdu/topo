@@ -181,6 +181,36 @@ final class TopoOnTheGlassTests: XCTestCase {
         app.terminate()
     }
 
+    /// He faces the half of the screen he stands on, as the chat's debug report says the roost
+    /// decided it (`DebugRun.ChatReport.facing`, `Mascot.facing`): read off the chat itself, so the
+    /// roost's decision reaching `Mascot` through the overlay is what is held. `continuity`, a full
+    /// chat, puts him in the margin beside the last reply on the right, facing right; so does an
+    /// empty chat, whose first roost is the transcript's bottom trailing corner; `left`, the
+    /// person's turns only with room beside one narrow bubble, puts him on the left half, facing
+    /// as drawn. Each is held against where his frame is: right of the screen's middle or left of it.
+    func testHeFacesTheHalfOfTheScreenHeStandsOn() throws {
+        for (transcript, facing) in [("continuity", "right"), ("empty", "right"), ("left", "left")] {
+            let app = launch(look: "{}", transcript: transcript)
+            let standing = try waitForTopo(in: app, "\(transcript): standing in a gap") {
+                $0.roost == "gap" && !$0.hidden && !$0.walking && $0.frame == $0.to
+            }
+            let frame = try XCTUnwrap(standing.frame)
+            let centre = frame[0] + frame[2] / 2, middle = Double(app.frame.width) / 2
+            XCTAssertEqual(centre > middle, facing == "right",
+                           "\(transcript): he stands at \(centre) against the middle \(middle): \(standing)")
+            // The facing is handed to `Mascot` off the view update the roost is decided in.
+            let deadline = Date().addingTimeInterval(5)
+            var seen = self.facing(in: app)
+            while seen != facing, Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+                seen = self.facing(in: app)
+            }
+            XCTAssertEqual(seen, facing, "\(transcript): \(standing)")
+            attach(app, "topo-\(transcript)-facing-\(facing)")
+            app.terminate()
+        }
+    }
+
     /// Where each transcript puts him at the default look.
     static let roosts = [("full", "gap"), ("empty", "gap")]
 
@@ -260,12 +290,21 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
     }
 
-    private struct ChatReport: Decodable { var mascot: Topo? }
+    private struct ChatReport: Decodable {
+        var mascot: Topo?
+        var facing: String?
+    }
     private struct TopoNotThere: Error { var message: String }
 
     private func topo(in app: XCUIApplication) -> Topo? {
         let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
         return (try? JSONDecoder().decode(ChatReport.self, from: Data(raw.utf8)))?.mascot
+    }
+
+    /// Which way the chat's debug report says he faces.
+    private func facing(in app: XCUIApplication) -> String? {
+        let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
+        return (try? JSONDecoder().decode(ChatReport.self, from: Data(raw.utf8)))?.facing
     }
 
     /// Waits for him to be as `wanted` says, and fails the test, naming what he was instead, when

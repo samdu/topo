@@ -64,10 +64,10 @@ final class MascotGeometryTests: XCTestCase {
     static let fixtures: [Fixture] = [
         Fixture(name: "an empty chat", field: field([]), roost: "gap"),
         // Long turns on both sides, reaching under the pane as a scrolled transcript does: the
-        // person's across the column, Topo's to the column's edge less his margin (100 points), so
+        // person's across the column, Topo's to the column's edge less his margin (110 points), so
         // the margin beside a reply is room.
         Fixture(name: "long turns on both sides",
-                field: field(rows(height: 80, topoHeight: 160, personMinX: 60, topoMaxX: 286, until: 700)),
+                field: field(rows(height: 80, topoHeight: 160, personMinX: 60, topoMaxX: 276, until: 700)),
                 roost: "gap"),
         // Every row full width but one short person's turn on the right with room to its left.
         Fixture(name: "one gap only",
@@ -275,21 +275,26 @@ final class MascotGeometryTests: XCTestCase {
     func testHeRestsInsideTheBox() {
         let box = MascotSprite.box
         var reached = Reach()
-        for (m, model) in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated() {
-            // One token count in each band: default, warning, reset, untrusted.
-            for (b, tokens) in [1_000.0, 210_000, 260_000, 320_000].enumerated() {
-                var random = Mulberry32(seed: UInt32(m * 4 + b + 1))
-                let engine = Topo(random: { random.next() })
-                var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
-                var home = 0.0
-                for frame in 0..<(120 * 30) {
-                    engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: "idle", corner: 0))
-                    let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
-                    home = resting ? home + 1.0 / 30 : 0
-                    // The head and the load settle from the engine's start in under two seconds.
-                    guard frame >= 60, home > 1 else { continue }
-                    engine.draw(&rgba)
-                    reached.add(rgba)
+        for facing in MascotFacing.allCases {
+            for (m, model) in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated() {
+                // One token count in each band: default, warning, reset, untrusted.
+                for (b, tokens) in [1_000.0, 210_000, 260_000, 320_000].enumerated() {
+                    var random = Mulberry32(seed: UInt32(m * 4 + b + 1))
+                    let engine = Topo(random: { random.next() })
+                    var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+                    var home = 0.0
+                    for frame in 0..<(120 * 30) {
+                        engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: "idle", corner: 0,
+                                                          facing: facing.rawValue))
+                        let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
+                        home = resting ? home + 1.0 / 30 : 0
+                        // The head and the load settle from the engine's start in under two seconds,
+                        // and he has turned by then.
+                        guard frame >= 60, home > 1 else { continue }
+                        XCTAssertEqual(engine.facing, facing.rawValue)
+                        engine.draw(&rgba)
+                        reached.add(rgba)
+                    }
                 }
             }
         }
@@ -298,6 +303,10 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertTrue(box.contains(rest), "at rest he reaches \(rest), outside the box \(box)")
         // Two pixels round him and no more, so the box is his rest and not a guess.
         XCTAssertEqual(box, rest.insetBy(dx: -2, dy: -2), "the box is not his rest with two pixels round it")
+        // Symmetric about his body's axis, which is the mirror's: the box's centre is where his body
+        // stands in either facing.
+        XCTAssertEqual(box.midX, CGFloat(Topo.bodyX))
+        XCTAssertEqual(MascotSprite.reach.midX, CGFloat(Topo.bodyX))
     }
 
     /// Everything the app can ask the engine for is drawn inside `MascotSprite.reach`: the idle
@@ -312,6 +321,7 @@ final class MascotGeometryTests: XCTestCase {
         let reach = MascotSprite.reach, box = MascotSprite.box
         let activities = ["idle", "walk", "thinking", "searching", "building", "writing", "calendar"]
         var poses: [String: Reach] = [:]
+        for facing in MascotFacing.allCases {
         for (m, model) in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated() {
             for (b, tokens) in [1_000.0, 210_000, 260_000, 320_000].enumerated() {
                 var random = Mulberry32(seed: UInt32(m * 4 + b + 1))
@@ -336,7 +346,8 @@ final class MascotGeometryTests: XCTestCase {
                             until = time + (activity == "idle" ? 20 + schedule.next() * 40 : schedule.next() * 5)
                         }
                     }
-                    engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: activity, corner: 0))
+                    engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: activity, corner: 0,
+                                                      facing: facing.rawValue))
                     engine.draw(&rgba)
                     let pose = engine.poseName
                     entered.insert(pose)
@@ -351,6 +362,7 @@ final class MascotGeometryTests: XCTestCase {
                 XCTAssertTrue(entered.contains("yoga") || entered.contains("corner"),
                               "\(model) \(tokens): the schedule never took him on an excursion")
             }
+        }
         }
         XCTAssertNotNil(poses["yoga"], "no run took him to yoga")
         XCTAssertNotNil(poses["corner"], "no run took him to the corner")
@@ -551,8 +563,8 @@ final class MascotGeometryTests: XCTestCase {
     /// A person's turn reports its bubble and not the row's width, so the room a short bubble
     /// leaves on its left is room. On the 393-point phone Sam's screenshot came from
     /// (`device-a70490e-trapped-on-flank.png`), the turn "Nothing, just testing the continuity
-    /// feature :p" keeps the person's inset (`personLeadingInset`, 100 points, with the column's
-    /// 16) and wraps within it, so its bubble starts at least 116 points in and ends at the
+    /// feature :p" keeps the person's inset (`personLeadingInset`, 110 points, with the column's
+    /// 16) and wraps within it, so its bubble starts at least 126 points in and ends at the
     /// column's edge, and the room left of it holds his picture at his own size with its
     /// clearance. A narrower turn of two lines in the same place (`continuityShort`) leaves room a
     /// picture 74 points wide fits.
@@ -586,7 +598,7 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     /// Topo's reply reports its lines and not its frame, which is as wide as its widest line, and
-    /// keeps a margin after them (`replyTrailingInset`, 100 points on the phone): with the
+    /// keeps a margin after them (`replyTrailingInset`, 110 points on the phone): with the
     /// column's padding, 116 points on the 393-point phone, it holds his picture at a scale of 1
     /// and its clearance from the words, with his reach inside the screen's edge, and the ends of short lines
     /// add to it. `PreviewTurns.continuity` scrolled to its end, as the phone Sam's screenshot
@@ -640,5 +652,106 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertTrue(try LookStage.differ(try LookStage.bytes(without.image), try LookStage.bytes(with.image)),
                           "Topo drew nothing on the stage")
         }
+    }
+
+    // MARK: Facing
+
+    /// The facing is which half of the transcript his centre is in: right of the midline faces
+    /// right, which the engine draws mirrored with the sign held out to the left; left of it, and
+    /// on it, is the picture as drawn. A measure that is not a number decides the picture as drawn.
+    func testTheFacingIsTheHalfOfTheTranscriptHisCentreIsIn() {
+        XCTAssertEqual(MascotFacing.of(centreX: 161, midlineX: 160), .right, "the right half")
+        XCTAssertEqual(MascotFacing.of(centreX: 160.01, midlineX: 160), .right, "just right of the line")
+        XCTAssertEqual(MascotFacing.of(centreX: 159, midlineX: 160), .left, "the left half")
+        XCTAssertEqual(MascotFacing.of(centreX: 160, midlineX: 160), .left, "on the line")
+        XCTAssertEqual(MascotFacing.of(centreX: .nan, midlineX: 160), .left)
+        XCTAssertEqual(MascotFacing.of(centreX: 200, midlineX: .infinity), .left)
+        XCTAssertEqual(MascotFacing.of(centreX: .infinity, midlineX: 160), .left)
+    }
+
+    /// A roam over `field` left to settle, at the default look.
+    private func settled(_ field: MascotField, from start: MascotField? = nil) -> MascotRoam {
+        var roam = MascotRoam(MascotRoam.Settings(Look.Mascot(), reduceMotion: false))
+        var time = 0.0
+        for next in [start, field].compactMap({ $0 }) {
+            roam.observe(next, at: time)
+            let until = time + 30
+            while roam.needsTime, time < until {
+                time += 1.0 / 30
+                roam.advance(to: time)
+            }
+        }
+        return roam
+    }
+
+    /// A column of turns the whole height of the transcript, leaving room for him only between
+    /// `left` and `right`.
+    private func only(between left: CGFloat, and right: CGFloat) -> MascotField {
+        Self.field([CGRect(x: 0, y: 0, width: left, height: 628),
+                    CGRect(x: right, y: 0, width: 402 - right, height: 628)])
+    }
+
+    /// Through the roost path: the roam decides the facing with the roost, from the roost's centre
+    /// against the transcript's midline. An empty chat puts him in the bottom trailing corner,
+    /// right of the line, facing right; a gap only on the left half faces him left; a gap whose
+    /// centre is exactly on the line is the picture as drawn; and a new roost across the line turns
+    /// him at the decision, before the glide there has ended, and back again.
+    func testTheRoostDecidesTheFacingEitherSideOfTheMidlineAndOnIt() throws {
+        let size = MascotSprite.size(scale: Look.Mascot().scale)
+        let clearance = Look.Mascot().clearance
+        let midline = Self.visible.midX
+
+        let empty = settled(Self.field([]))
+        let right = try XCTUnwrap(empty.roost.frame)
+        XCTAssertGreaterThan(right.midX, midline)
+        XCTAssertEqual(empty.facing, .right, "an empty chat")
+
+        let leftField = only(between: 8, and: midline - 4)
+        let onLeft = settled(leftField)
+        let left = try XCTUnwrap(onLeft.roost.frame, "no gap on the left half")
+        XCTAssertLessThan(left.midX, midline)
+        XCTAssertEqual(onLeft.facing, .left, "a gap on the left half")
+
+        // A gap exactly his width and his clearance either side, centred on the midline.
+        let edge = midline - size.width / 2 - clearance
+        let onLine = settled(only(between: edge, and: 2 * midline - edge))
+        let centred = try XCTUnwrap(onLine.roost.frame, "the centred gap does not hold him")
+        XCTAssertEqual(centred.midX, midline, accuracy: 0.001)
+        XCTAssertEqual(onLine.facing, .left, "on the line")
+
+        // From the right to the left half: the facing is the new roost's from the decision on,
+        // while he is still gliding there.
+        var across = MascotRoam(MascotRoam.Settings(Look.Mascot(), reduceMotion: false))
+        across.observe(Self.field([]), at: 0)
+        var time = 0.0
+        while across.needsTime, time < 30 { time += 1.0 / 30; across.advance(to: time) }
+        XCTAssertEqual(across.facing, .right)
+        across.observe(leftField, at: time)
+        var turnedMidGlide = false
+        while across.needsTime, time < 60 {
+            time += 1.0 / 30
+            across.advance(to: time)
+            if across.walking, across.facing == .left { turnedMidGlide = true }
+        }
+        XCTAssertTrue(turnedMidGlide, "the facing waited for the glide to end")
+        XCTAssertEqual(across.facing, .left)
+        XCTAssertEqual(across.moves, 1)
+    }
+
+    /// Facing right his picture's reach is mirrored, so what reaches past his box on his left
+    /// reaches as far on his right: the reach is the same on both sides of the box, and a roost in
+    /// the bottom trailing corner keeps the whole of it inside the transcript's frame and off the
+    /// glass in either facing.
+    func testTheReachHoldsHisPictureInsideTheScreenInEitherFacing() throws {
+        let reach = MascotSprite.reach(scale: Look.Mascot().scale)
+        XCTAssertEqual(reach.left, reach.right, accuracy: 0.001)
+        let roam = settled(Self.field([]))
+        XCTAssertEqual(roam.facing, .right)
+        let frame = try XCTUnwrap(roam.roost.frame)
+        let drawn = reach.around(frame)
+        XCTAssertLessThanOrEqual(drawn.maxX, Self.visible.maxX + 0.001, "his reach runs past the screen's edge")
+        XCTAssertGreaterThanOrEqual(drawn.minX, Self.visible.minX - 0.001)
+        XCTAssertFalse(MascotRoost.overlap(drawn, Self.pane), "his reach is on the glass")
+        XCTAssertFalse(MascotRoost.overlap(drawn, Self.well))
     }
 }

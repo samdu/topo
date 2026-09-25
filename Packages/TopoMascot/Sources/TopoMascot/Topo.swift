@@ -1,7 +1,7 @@
 // Topo mascot engine, ported from topo-engine.js. Agent state in, pixels out.
 //
 //   let topo = Topo()
-//   topo.update(dt, TopoInput(model: "claude-fable-5-1", tokens: 120_000, activity: "searching"))
+//   topo.update(dt, TopoInput(model: "claude-fable-5-1", tokens: 120_000, activity: "searching", facing: "left"))
 //   topo.draw(into: rgba)            // W × H × 4 bytes; move the sprite by topo.x
 //
 // Everything is drawn into an indexed buffer at one entry per art pixel and only becomes colour at the
@@ -14,18 +14,20 @@ import Foundation
 /// What the host tells him, a frame at a time; anything left nil keeps its last value.
 public struct TopoInput: Codable, Sendable {
     public var model: String?, tokens: Double?, level: Double?, load: String?
-    public var activity: String?, sign: String?, corner: Double?
+    public var activity: String?, sign: String?, corner: Double?, facing: String?
     public var style: String?, shading: String?, relief: Double?
     public init(model: String? = nil, tokens: Double? = nil, level: Double? = nil, load: String? = nil, activity: String? = nil,
-                sign: String? = nil, corner: Double? = nil, style: String? = nil, shading: String? = nil, relief: Double? = nil) {
+                sign: String? = nil, corner: Double? = nil, facing: String? = nil, style: String? = nil, shading: String? = nil, relief: Double? = nil) {
         self.model = model; self.tokens = tokens; self.level = level; self.load = load; self.activity = activity
-        self.sign = sign; self.corner = corner; self.style = style; self.shading = shading; self.relief = relief
+        self.sign = sign; self.corner = corner; self.facing = facing; self.style = style; self.shading = shading; self.relief = relief
     }
 }
 
 public struct TopoState: Sendable {
     public var level = 2.0, load = Load.default, activity = "idle", style = "lineless", shading = "soft"
     public var corner = -40.0, sign = "updating memory", relief: Double? = nil
+    /// The side of the screen he stands on, "left" or "right"; anything else is "left".
+    public var facing = "left"
 }
 
 public final class Topo {
@@ -34,6 +36,8 @@ public final class Topo {
     /// The idle cycle's waits, in seconds from his arrival, and how many yoga excursions he takes for every corner one.
     public static let firstRest = FIRST_REST, rest = REST, cornerStay = CORNER_STAY, yogaStay = YOGA_STAY
     public static let yogaPerCorner = YOGA_PER_CORNER
+    /// The facings he knows, the first the one he is drawn in; and how near the shelf pose his arms must be before he turns.
+    public static let facings = FACINGS, turnSettle = TURN_SETTLE
 
     // A part is rasterised into planes before it is composited: `mask` is its silhouette, `nX`/`nY` the
     // surface normal's lean in the picture plane, and `open` the share of it that takes an outline.
@@ -58,6 +62,8 @@ public final class Topo {
     private var rest = 1.0                                                    // how far the drift at rest has taken over from the wave of work
     private var x_ = 0.0, goal = 0.0                                          // where he is along the shelf, in art pixels from home, and where he is going
     private var outing_: String? = nil, dueAt: Double? = FIRST_REST           // the excursion he is on, and when the wait where he is ends; nil until he arrives
+    private var faced = "left"                                                // the facing in force, which follows state.facing only at home (see "facing")
+    private var mirrored: Bool { faced == "right" }
     public private(set) var state = TopoState()
 
     private let lettering: ((String) -> Lettering?)?
@@ -86,6 +92,8 @@ public final class Topo {
     public var poseName: String { poseKey }
     /// The excursion he is on, "corner" or "yoga", or nil at home.
     public var outing: String? { outing_ }
+    /// The facing in force, which lags `state.facing` until he is home.
+    public var facing: String { faced }
 
     public func update(_ dt: Double, _ next: TopoInput = TopoInput()) {
         if let v = next.level { state.level = v }
@@ -93,6 +101,7 @@ public final class Topo {
         if let v = next.activity { state.activity = v }
         if let v = next.sign { state.sign = v }
         if let v = next.corner { state.corner = v }
+        if let v = next.facing { state.facing = v == "right" ? "right" : "left" }
         if let v = next.style { state.style = v }
         if let v = next.shading { state.shading = v }
         if let v = next.relief { state.relief = v }
@@ -106,6 +115,12 @@ public final class Topo {
 
         // The idle cycle (see "at rest"). Any work calls him home first, since the props stand where home is,
         // and abandons the excursion: back at rest he starts a fresh wait on the shelf rather than resuming it.
+        // A turn that is due is taken first, before the idle cycle may start an excursion, so every excursion
+        // begins under the facing in force: asked for on the update a wait runs out, he turns, then goes.
+        func settledHome(_ shelf: [Float]) -> Bool {
+            poseKey == "shelf" && x_ == 0 && (0..<arms.count).allSatisfy { abs(Double(shelf[$0]) - Double(arms[$0])) <= TURN_SETTLE }
+        }
+        if state.facing != faced && settledHome(targets) { faced = state.facing }
         let idle = state.activity == "idle"
         func span(_ r: (Double, Double)) -> Double { r.0 + random() * (r.1 - r.0) }
         if !idle { outing_ = nil; goal = 0; dueAt = nil }
@@ -113,7 +128,7 @@ public final class Topo {
             if outing_ == nil {
                 outing_ = random() < YOGA_PER_CORNER / (1 + YOGA_PER_CORNER) ? "yoga" : "corner"
                 if outing_ == "yoga" { dueAt = t + span(YOGA_STAY) }         // on his mat where he sits: he has arrived
-                else { goal = state.corner; dueAt = nil }
+                else { goal = mirrored ? -state.corner : state.corner; dueAt = nil }   // the corner is on his outer side
             } else {
                 if outing_ == "yoga" { dueAt = t + span(REST) }
                 else { goal = 0; dueAt = nil }
@@ -138,6 +153,7 @@ public final class Topo {
                 arms[k] = Float(a + (Double(targets[k]) - a) * rate)
             }
         }
+        if state.facing != faced && settledHome(targets) { faced = state.facing }     // or once he is home and settled this update
         // The head rides the body on a spring, which is what ties two animations into one creature.
         let breathe = sin(t * 1.7) * 0.9 + (pose.head?.1 ?? 0) + (poseKey == "walk" ? abs(sin(t * 5)) : 0)
         headV += ((breathe - headY) * 40 - headV * 7) * dt
@@ -255,10 +271,10 @@ public final class Topo {
     private var room = 1e3, stick = 14.0          // how far the sign's board must stand above the grip to clear his head
 
     private func signSpec() -> PropSpec {
-        let key = "\(stick)|\(room)|\(lettering != nil ? "set" : "cut")|\(state.sign)"
+        let key = "\(stick)|\(room)|\(lettering != nil ? "set" : "cut")|\(mirrored ? "mirror|" : "")\(state.sign)"
         if let s = signs[key] { return s }
         if signs.count > 60 { signs.removeAll() }
-        let s = makeSign(state.sign, stick: stick, room: room, lettering: lettering)
+        let s = makeSign(state.sign, stick: stick, room: room, lettering: lettering, mirror: mirrored)
         signs[key] = s
         return s
     }
@@ -354,7 +370,8 @@ public final class Topo {
         if held == "sign" {
             let p = levelParams(level)
             stick = jmax(8, jround(ay - (BY - lift - jmax(22, (p.up + p.ry) * 0.55))))
-            room = Double(W - 3) - jround(ax)
+            // and its room runs to the edge of the picture on that side: in the mirror, the column that lands on the left edge
+            room = (mirrored ? 2 * BX - 3 : Double(W - 3)) - jround(ax)
         }
         let spec = held.map { $0 == "sign" ? signSpec() : props[$0]! }
         let hx = spec?.snap == true ? jround(ax) : ax, hy = spec?.snap == true ? jround(ay) : ay   // on whole pixels, so its kept surface serves
@@ -515,15 +532,20 @@ public final class Topo {
         rgba.withUnsafeMutableBufferPointer { draw(into: $0.baseAddress!) }
     }
 
+    // Facing right, column x of the picture is column 2·BX − 1 − x of what was drawn, the reflection about the
+    // body's axis; the columns past the reflection of the left edge are clear. The dither follows the drawing.
     private func toRGBA(_ rgba: UnsafeMutablePointer<UInt8>) {
+        let m = mirrored, axis = Int(2 * BX) - 1
         palettes[loadFrom]!.withUnsafeBufferPointer { from in
             palettes[loadTo]!.withUnsafeBufferPointer { to in
                 for y in 0..<H {
                     for x in 0..<W {
-                        let p = y * W + x, i = Int(idx[p])
-                        if i == 0 { rgba[p * 4 + 3] = 0; continue }
-                        let c = loadMix > BAYER[(y & 3) * 4 + (x & 3)] ? to : from
-                        rgba[p * 4] = c[i * 3]; rgba[p * 4 + 1] = c[i * 3 + 1]; rgba[p * 4 + 2] = c[i * 3 + 2]; rgba[p * 4 + 3] = 255
+                        let at = y * W + x, sx = m ? axis - x : x
+                        if sx < 0 { rgba[at * 4 + 3] = 0; continue }
+                        let p = y * W + sx, i = Int(idx[p])
+                        if i == 0 { rgba[at * 4 + 3] = 0; continue }
+                        let c = loadMix > BAYER[(y & 3) * 4 + (sx & 3)] ? to : from
+                        rgba[at * 4] = c[i * 3]; rgba[at * 4 + 1] = c[i * 3 + 1]; rgba[at * 4 + 2] = c[i * 3 + 2]; rgba[at * 4 + 3] = 255
                     }
                 }
             }

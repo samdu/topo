@@ -20,6 +20,10 @@ struct MascotState: Equatable, Sendable {
     var activity: Activity = .idle
     /// Words on a sign he holds up. Nothing sets it yet; while it is nil he holds none.
     var sign: String?
+    /// The side of the screen he stands on, which is the way the whole picture faces: on the right
+    /// the engine mirrors him, so the sign comes out to the left, into the room. The engine takes a
+    /// change only at rest at home; the events never touch it (`MascotMapping` copies it through).
+    var facing: MascotFacing = .left
 
     /// The poses the engine has for work, and the one for none. A pose that is not idle is shown
     /// only while a turn is in flight: the working animation is the honest sign that work is.
@@ -30,7 +34,26 @@ struct MascotState: Equatable, Sendable {
 
     /// What the engine is handed for this state, a frame at a time.
     var input: TopoInput {
-        TopoInput(model: model, tokens: Double(tokens), activity: sign == nil ? activity.rawValue : "sign", sign: sign)
+        TopoInput(model: model, tokens: Double(tokens), activity: sign == nil ? activity.rawValue : "sign", sign: sign,
+                  facing: facing.rawValue)
+    }
+}
+
+/// Which way Topo faces, named as the engine names it: the side of the screen he stands on.
+/// `left` is the picture as it is drawn, the sign held out to his right; `right` is its mirror.
+enum MascotFacing: String, CaseIterable, Sendable {
+    case left, right
+
+    /// The facing for where he stands: `centreX`, his body's axis at home, against `midlineX`,
+    /// the transcript's vertical midline, both in one space. Right of the line is the right half
+    /// of the screen, so he faces into it from there; on the line, or with either measure not a
+    /// number, he keeps the picture as it is drawn.
+    ///
+    /// It is decided with each roost (`MascotRoam`), not per frame: a glide across the line
+    /// changes it once, at the decision that sent him across.
+    static func of(centreX: CGFloat, midlineX: CGFloat) -> MascotFacing {
+        guard centreX.isFinite, midlineX.isFinite else { return .left }
+        return centreX > midlineX ? .right : .left
     }
 }
 
@@ -143,6 +166,12 @@ final class Mascot {
     /// The chat's harness: the model it asks, and the context of the last reply it got.
     func harness(model: String, tokens: Int?) {
         state = MascotMapping.harness(state, model: model, tokens: tokens)
+    }
+
+    /// The side of the screen he stands on, as his roost decided it (`MascotRoam.facing`).
+    var facing: MascotFacing {
+        get { state.facing }
+        set { if state.facing != newValue { state.facing = newValue } }
     }
 
     /// A guest turn was sent.

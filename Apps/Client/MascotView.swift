@@ -58,18 +58,21 @@ final class MascotDriver {
     private var stillFor: Still?
 
     /// What of the input the still is drawn differently for, as the engine reads it: the head the
-    /// model picks (`levelForModel`, by family, so two ids of one model are one head) and the band
-    /// the tokens fall in (`loadForTokens`). Tokens moving within a band, a pose, a sign or the
-    /// stroll's corner change nothing of the idle still, and `MascotState` sets nothing else it is
-    /// drawn with: style, shading and relief are left at the engine's own.
+    /// model picks (`levelForModel`, by family, so two ids of one model are one head), the band
+    /// the tokens fall in (`loadForTokens`) and the facing, which mirrors the whole picture (any
+    /// word but `right` is `left`, as the engine reads it). Tokens moving within a band, a pose, a
+    /// sign or the stroll's corner change nothing of the idle still, and `MascotState` sets
+    /// nothing else it is drawn with: style, shading and relief are left at the engine's own.
     struct Still: Equatable {
         var level: Double
         var load: Load
+        var facing: String
 
         init(_ input: TopoInput) {
             let rest = Self.rest
             level = input.model.flatMap { $0.isEmpty ? nil : levelForModel($0) } ?? input.level ?? rest.level
             load = input.tokens.map(loadForTokens) ?? input.load.flatMap(Load.init(rawValue:)) ?? rest.load
+            facing = input.facing.map { $0 == "right" ? "right" : "left" } ?? rest.facing
         }
 
         /// A fresh engine's, which is what the still starts from and keeps where the input is silent.
@@ -92,7 +95,7 @@ final class MascotDriver {
     }
 
     /// Under Reduce Motion he is the idle pose, settled, at home: a fresh engine walked to where
-    /// the pose has landed and drawn once, with the model and the load of the state.
+    /// the pose has landed and drawn once, with the model, the load and the facing of the state.
     ///
     /// 2.9 s at a thirtieth is past the pose's settle (the sheet settles in 2.2) and before the
     /// engine's first glance (3 s) and its second blink (at least 2.5 s after the first at 2 s):
@@ -134,12 +137,22 @@ final class MascotDriver {
     private func measure(_ seconds: Double) {
         spent.append(seconds * 1000)
         guard spent.count >= Self.reportEvery else { return }
-        let sorted = spent.sorted(), n = sorted.count
-        DebugRun.say(String(format: "mascot: %d frames, %@, mean %.2f ms, p95 %.2f ms, max %.2f ms",
-                            n, input.activity ?? "idle", sorted.reduce(0, +) / Double(n),
-                            sorted[n * 95 / 100], sorted[n - 1]))
+        DebugRun.say(Self.frameLine(spent, activity: input.activity ?? "idle", facing: engine.facing))
         spent.removeAll(keepingCapacity: true)
     }
+
+    /// The line a debug build prints for `spent`, a run of frame times in milliseconds: how many,
+    /// the pose, the facing in force (which lags the facing asked for until he is home), and the
+    /// mean, the 95th percentile and the worst.
+    static func frameLine(_ spent: [Double], activity: String, facing: String) -> String {
+        let sorted = spent.sorted(), n = sorted.count
+        guard n > 0 else { return "mascot: 0 frames, \(activity), facing \(facing)" }
+        return String(format: "mascot: %d frames, %@, facing %@, mean %.2f ms, p95 %.2f ms, max %.2f ms",
+                      n, activity, facing, sorted.reduce(0, +) / Double(n), sorted[n * 95 / 100], sorted[n - 1])
+    }
+
+    /// The facing in force, as the engine draws it now.
+    var facingInForce: String { engine.facing }
     #endif
 }
 
@@ -167,6 +180,10 @@ final class MascotCanvas: UIView {
     /// changes. A debug build hands it to the chat's report.
     var onReport: ((MascotRoam.Report) -> Void)?
     private var reported: MascotRoam.Report?
+    /// Told the facing each roost decides (`MascotRoam.facing`) when it is not the one last told,
+    /// which is how it reaches `Mascot.facing` and so the engine: at the decision, not per frame.
+    var onFace: ((MascotFacing) -> Void)?
+    private var faced: MascotFacing?
 
     /// Whether the display link is running, which is whether frames are being asked for.
     var isTicking: Bool { link != nil }
@@ -243,7 +260,8 @@ final class MascotCanvas: UIView {
             worn.sign = nil
         }
         if driver.input.activity != worn.activity || driver.input.model != worn.model
-            || driver.input.tokens != worn.tokens || driver.input.sign != worn.sign || driver.input.corner != 0 {
+            || driver.input.tokens != worn.tokens || driver.input.sign != worn.sign || driver.input.corner != 0
+            || driver.input.facing != worn.facing {
             driver.input = worn
         }
         driver.conditions = conditions
@@ -253,6 +271,10 @@ final class MascotCanvas: UIView {
         if let picture = roam.picture { sprite.frame = MascotSprite.drawn(around: picture) }
         sprite.opacity = roam.hidden ? 0 : 1
         CATransaction.commit()
+        if !roam.hidden, roam.facing != faced {
+            faced = roam.facing
+            onFace?(roam.facing)
+        }
         report(roam)
     }
 
@@ -442,11 +464,13 @@ struct MascotOverChat: UIViewRepresentable {
     var ready = true
     var conditions: MascotDriver.Conditions
     var report: ((MascotRoam.Report) -> Void)?
+    var face: ((MascotFacing) -> Void)?
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
         canvas.onReport = report
+        canvas.onFace = face
         canvas.apply(input: input, field: field, settings: settings, interval: interval, ready: ready,
                      conditions: conditions)
     }
@@ -485,6 +509,8 @@ struct MascotLayer: View {
     /// drawn rather than placed into it.
     var ready = true
     var report: ((MascotRoam.Report) -> Void)?
+    /// Told the facing each roost decides.
+    var face: ((MascotFacing) -> Void)?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -496,7 +522,7 @@ struct MascotLayer: View {
                            interval: look.mascot.frameInterval, ready: ready,
                            conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                              reduceMotion: reduceMotion),
-                           report: report)
+                           report: report, face: face)
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .opacity(opacity)
         }
@@ -509,13 +535,15 @@ extension View {
     /// Topo laid over this view, which is the chat: he stands where the frames its turns, rows and
     /// glass report (`MascotScene`) leave him room, takes no room of his own and no touch, and is
     /// nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — he is
-    /// not drawn, and his first decision where to stand comes after it.
+    /// not drawn, and his first decision where to stand comes after it. `face` is told the facing
+    /// each roost decides, for `Mascot.facing`.
     func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
-                     ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil) -> some View {
+                     ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil,
+                     face: ((MascotFacing) -> Void)? = nil) -> some View {
         overlayPreferenceValue(MascotScene.self) { scene in
             if let state {
                 MascotLayer(state: state, scene: scene, opacity: opacity, covered: covered,
-                            keyboardTop: keyboardTop, ready: ready, report: report)
+                            keyboardTop: keyboardTop, ready: ready, report: report, face: face)
             }
         }
     }
