@@ -35,6 +35,9 @@ struct SettingsView: View {
                     // control that moves it, so the row names that rather than the section again.
                     Button("Where it lives") { showMemory = true }
                 }
+                #if DEBUG
+                TuningSection()
+                #endif
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
                     Button("About Topo") { showAbout = true }

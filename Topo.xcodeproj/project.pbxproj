@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0033D5043460871D4D290C82 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
+		0082A334CEDB494269F8E8D9 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
@@ -43,6 +44,7 @@
 		1E6472BE7B0F51AC2B8B0D30 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		1E726715C9BE92C093BC2932 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
 		20F2A0B4C6E8592CD1F27954 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
+		239832F9F2883746AE291109 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		23BF8C9AB0A659820195042C /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		243871CD8C2AB6177AE98A7C /* VaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0910114D0F4D264253EC5 /* VaultMigration.swift */; };
 		246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */; };
@@ -209,6 +211,7 @@
 		AF4F131F2EC3C983BC0BFBB0 /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		AF9538434E62AF312A23A63D /* MascotRoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6904A480352F2D00E38BFD6F /* MascotRoost.swift */; };
 		B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */; };
+		B15EA92763AE1DC3A0B80DA0 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
 		B19EE86A1617D62050D9A220 /* VaultHomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E624F2EA4D0E819F8FE0215 /* VaultHomeTests.swift */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
@@ -257,6 +260,7 @@
 		DDAF0AAE6CDED176CD2FCEA2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 57BE8636EBBD805D555F974A /* Assets.xcassets */; };
 		DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */; };
 		E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
+		E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C72071D6B88AB32EF3BBFD /* TuningTests.swift */; };
 		E4F6A39CB234B2F7FF938D1C /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		E596F876098F2B54AB0DD7C6 /* GuestSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */; };
 		E72AC5641EFE61743159DCD5 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 5A4E38620A9CC6B4ED612A12 /* TopoAuth */; };
@@ -336,6 +340,7 @@
 		2161479EF81FD157D026791F /* TopoProxy */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoProxy; path = Packages/TopoProxy; sourceTree = SOURCE_ROOT; };
 		246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnMenuTests.swift; sourceTree = "<group>"; };
 		255D132EA660241074B17048 /* VocabularyView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyView.swift; sourceTree = "<group>"; };
+		2692590D1320E8D8078ECB31 /* Tuning.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Tuning.swift; sourceTree = "<group>"; };
 		26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OctopusMark.swift; sourceTree = "<group>"; };
 		2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrimaryReader.swift; sourceTree = "<group>"; };
 		2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookDocument.swift; sourceTree = "<group>"; };
@@ -347,6 +352,7 @@
 		327323DA10D8649D7ED7A137 /* ComposerRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerRenderTests.swift; sourceTree = "<group>"; };
 		333D38923B458890391C4F4C /* MascotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotView.swift; sourceTree = "<group>"; };
 		34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
+		37C72071D6B88AB32EF3BBFD /* TuningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TuningTests.swift; sourceTree = "<group>"; };
 		3B4AAF2BA51E20FAEF2AB1FA /* LookDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookDocumentTests.swift; sourceTree = "<group>"; };
 		3BE447F6D164A10E8BC7A28E /* LookLiveTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookLiveTests.swift; sourceTree = "<group>"; };
 		3C73B06423A3D15D5A7B7093 /* WebAuth.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebAuth.swift; sourceTree = "<group>"; };
@@ -692,6 +698,7 @@
 				2093D9815FF009868258903B /* TopoBadge.swift */,
 				00266AD0F77CC8178D3BABA9 /* TranscriptStore.swift */,
 				D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */,
+				2692590D1320E8D8078ECB31 /* Tuning.swift */,
 				9E270E681606D89AAEA041E6 /* VaultDownloads.swift */,
 				82E8447D928AACA5D0B36ABD /* VaultHome.swift */,
 				CCC0910114D0F4D264253EC5 /* VaultMigration.swift */,
@@ -784,6 +791,7 @@
 				629737688F7BECCE20D49992 /* StoneRenderTests.swift */,
 				8B7F8C14868F6151C38208F7 /* ThemeTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
+				37C72071D6B88AB32EF3BBFD /* TuningTests.swift */,
 				246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */,
 				E657338C47DD5C2996280F04 /* TurnPushTests.swift */,
 				D340E2EBD4E7079577777054 /* TurnRowRenderTests.swift */,
@@ -1319,6 +1327,7 @@
 				CAC4FF7C1FD4AFE398708CA8 /* TopoWatchApp.swift in Sources */,
 				0C53C4EE08987A6A0555C32E /* TranscriptStore.swift in Sources */,
 				AD4F9E8277006852F3904EED /* TranscriptView.swift in Sources */,
+				B15EA92763AE1DC3A0B80DA0 /* Tuning.swift in Sources */,
 				33FADCED655202CC03DA3DE0 /* VaultDownloads.swift in Sources */,
 				D35DC59EA573D68164A6E5B8 /* VaultHome.swift in Sources */,
 				9C4656ACA5CED95740060C72 /* VaultMigration.swift in Sources */,
@@ -1427,6 +1436,7 @@
 				CFF0361D936128D236BEE661 /* TopoTVApp.swift in Sources */,
 				6322C31CF98F5ECFA3AE56D3 /* TranscriptStore.swift in Sources */,
 				20F2A0B4C6E8592CD1F27954 /* TranscriptView.swift in Sources */,
+				239832F9F2883746AE291109 /* Tuning.swift in Sources */,
 				D6EF93EF3E2A2F6A9B7D96F6 /* VaultDownloads.swift in Sources */,
 				84CE3B4140640A9E25A88D50 /* VaultHome.swift in Sources */,
 				243871CD8C2AB6177AE98A7C /* VaultMigration.swift in Sources */,
@@ -1480,6 +1490,7 @@
 				2FBBC319A56891113C7BB372 /* StoneRenderTests.swift in Sources */,
 				F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
+				E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */,
 				A80AAFDB7F75D142FA415516 /* TurnMenuTests.swift in Sources */,
 				ADECDDCBA226E9262EE67313 /* TurnPushTests.swift in Sources */,
 				3F313B39A4E9D56573A14C46 /* TurnRowRenderTests.swift in Sources */,
@@ -1536,6 +1547,7 @@
 				3C6EE019F5CEBDDD755176BB /* TopoCloudKit.swift in Sources */,
 				B0BE6308E15DF83F2D98AF82 /* TranscriptStore.swift in Sources */,
 				C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */,
+				0082A334CEDB494269F8E8D9 /* Tuning.swift in Sources */,
 				FEE8ACFFA1125F4E7EE68BFA /* TurnPush.swift in Sources */,
 				5085BBEFC04DEA12CCDB38DB /* Userland.swift in Sources */,
 				6FB46136563FED2942CB8295 /* VaultDownloads.swift in Sources */,
