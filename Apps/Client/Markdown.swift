@@ -5,8 +5,10 @@ import Foundation
 /// with the full syntax), which already marks every run with the block it belongs to; what is
 /// here is the cut into blocks, since SwiftUI's `Text` draws inline styles and nothing of a block.
 ///
-/// A reply with no markup in it is one paragraph of itself: a single newline stays a line break,
-/// as a reply's newlines always have, rather than folding into a space as CommonMark folds it.
+/// A single newline stays a line break, as a reply's newlines always have, rather than folding into
+/// a space as CommonMark folds it. Beyond that CommonMark's own readings stand: a line's leading
+/// spaces are dropped, a tab-indented line is code, a backslash escapes what follows it, and a
+/// link reference definition is not drawn.
 enum Markdown {
     struct Block: Equatable {
         var kind: Kind
@@ -58,8 +60,9 @@ enum Markdown {
         return cache
     }()
 
-    /// The blocks of `source`. A parse that fails is the source as one plain paragraph, so no
-    /// reply ever draws as nothing.
+    /// The blocks of `source`. A parse that fails, or that finds nothing to draw in a source that
+    /// is not blank (a lone `#`, a bare fence), is the source as one plain paragraph, so no reply
+    /// with words in it draws as nothing.
     static func blocks(_ source: String,
                        parse: (String) throws -> AttributedString = Markdown.parse) -> [Block] {
         guard let parsed = try? parse(source) else {
@@ -123,6 +126,9 @@ enum Markdown {
             }
         }
         finishRow()
+        if blocks.isEmpty, !source.allSatisfy(\.isWhitespace) {
+            return [Block(kind: .paragraph, depth: 0, text: AttributedString(source))]
+        }
         return blocks
     }
 

@@ -352,10 +352,6 @@ enum LookDocument {
             }
         }
 
-        /// The room Topo keeps from every word, in points: none to 64. Past that a phone has no
-        /// gap wide enough for him and he is always on the glass.
-        /// Room kept clear beside a column of words: at most 200 points, so a reply on a
-        /// 320-point phone keeps a column of words 88 points wide or more.
         /// Room inside a reply, between its blocks or before a list's words, and the width of a
         /// quote's bar or a rule: none to 64 points, since a list indents by it once for every
         /// list it is inside and the words have to stay in the column.
@@ -366,6 +362,10 @@ enum LookDocument {
             }
         }
 
+        /// The room Topo keeps from every word, in points: none to 64. Past that a phone has no
+        /// gap wide enough for him and he is always on the glass.
+        /// Room kept clear beside a column of words: at most 200 points, so a reply on a
+        /// 320-point phone keeps a column of words 88 points wide or more.
         func inset(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...200, "a length in points between 0 and 200") {
                 applied += 1

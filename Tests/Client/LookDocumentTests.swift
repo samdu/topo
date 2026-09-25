@@ -206,8 +206,6 @@ final class LookDocumentTests: XCTestCase {
         }
     }
 
-    /// The glass under the keyboard is read in a range of its own: a pane kept at under half its
-    /// height is refused, and the ends of the range are taken.
     /// The markdown fields reach the look, and one refused — an overflow that is not one of the
     /// two, a length below nothing, a code block's radius of the wrong kind — takes nothing else
     /// down with it.
@@ -229,6 +227,8 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(bad.look.markdown.blockSpacing, Look().markdown.blockSpacing, "past 64 points is refused")
     }
 
+    /// The glass under the keyboard is read in a range of its own: a pane kept at under half its
+    /// height is refused, and the ends of the range are taken.
     func testTheShortPaneIsReadInItsOwnRange() {
         let refused = LookDocument.read(#"{"composer": {"compactShare": 0.49}}"#)
         XCTAssertEqual(refused.look, Look())

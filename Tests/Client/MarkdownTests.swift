@@ -176,5 +176,14 @@ final class MarkdownTests: XCTestCase {
 
     func testAnEmptyReplyIsNoBlocks() {
         XCTAssertEqual(Markdown.blocks(""), [])
+        XCTAssertEqual(Markdown.blocks("  \n"), [])
+    }
+
+    /// A reply with words in it that the parse finds nothing to draw in is drawn as it was
+    /// written rather than as an empty turn.
+    func testASourceThatParsesToNothingIsItsPlainText() {
+        for source in ["#", "-", "```", "[x]: http://y"] {
+            XCTAssertEqual(summary(source), ["paragraph 0 \(source)"], source)
+        }
     }
 }

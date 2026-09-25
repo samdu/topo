@@ -142,8 +142,7 @@ struct Look: Equatable, Sendable {
 
     /// Topo's words as blocks (`MarkdownText`): the room between them, how a list is indented,
     /// the type of a heading and of code, and what a code block is drawn on. A paragraph is
-    /// drawn in the transcript's own `bodyFont` and `text`, so a reply with no markup in it is
-    /// drawn exactly as the transcript draws words.
+    /// drawn in the transcript's own `bodyFont` and `text`, as the transcript draws words.
     struct Markdown: Equatable, Sendable {
         /// Between one block of a reply and the next: two paragraphs, a list and a fence.
         var blockSpacing: CGFloat

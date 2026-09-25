@@ -3,7 +3,7 @@ import SwiftUI
 /// Topo's words drawn as their blocks (`Markdown.blocks`): paragraphs and headings as text, list
 /// items behind their markers, quotes behind a bar, rules, and fenced code in an enclosure of its
 /// own. Every value is the look's (`Look.Markdown`), and a paragraph is drawn in the transcript's
-/// own type and ink, so a reply with no markup is drawn as the transcript draws words.
+/// own type and ink, as the transcript draws words.
 ///
 /// `bare` is whether the turn draws nothing round its words. Then what Topo stands clear of is
 /// the words themselves: each text reports its own lines (`mascotLines`), and what draws a shape
@@ -25,7 +25,7 @@ struct MarkdownText: View {
 
     /// How far a block is led in: a list item by the lists round it less its own, so its marker
     /// sits where its list starts, and anything else inside an item by all of them, so it sits
-    /// under the item's words.
+    /// one indent in from the item's marker.
     private func lead(_ block: Markdown.Block) -> CGFloat {
         if case .item = block.kind { return CGFloat(max(block.depth - 1, 0)) * look.markdown.listIndent }
         return CGFloat(block.depth) * look.markdown.listIndent
