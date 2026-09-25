@@ -179,6 +179,7 @@
 		9107FEAD3FE82BD92D841883 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
 		92D72F78C88069649826EF12 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		96EB4D095C0F58026CD0017E /* TuningSliderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD430A125344B175B015CE22 /* TuningSliderTests.swift */; };
 		97D07427DA98C956921275FD /* ModelHousekeeping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */; };
 		98351458B1674AC1309DA106 /* PanePresenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C3603530275DA0379CCB96F /* PanePresenceTests.swift */; };
 		98F16241DBF61F9F1250FA71 /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333D38923B458890391C4F4C /* MascotView.swift */; };
@@ -449,6 +450,7 @@
 		D946D8851F96D23296B16179 /* RoleSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelectorTests.swift; sourceTree = "<group>"; };
 		D9BDDB4560950858CA3F4314 /* purple-elephants.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "purple-elephants.wav"; sourceTree = "<group>"; };
 		DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */ = {isa = PBXFileReference; path = "topo-mark.svg"; sourceTree = "<group>"; };
+		DD430A125344B175B015CE22 /* TuningSliderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TuningSliderTests.swift; sourceTree = "<group>"; };
 		DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Look.swift; sourceTree = "<group>"; };
 		DEF0C378213C9A0018F5BC0B /* TopoLink */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoLink; path = Packages/TopoLink; sourceTree = SOURCE_ROOT; };
 		E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTranscriptTests.swift; sourceTree = "<group>"; };
@@ -846,6 +848,7 @@
 				7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */,
 				91354032F5443E868316550B /* MicrophonePressTests.swift */,
 				BD2BEF1581B6D3DF49DF650C /* TopoOnTheGlassTests.swift */,
+				DD430A125344B175B015CE22 /* TuningSliderTests.swift */,
 			);
 			path = ClientUI;
 			sourceTree = "<group>";
@@ -1282,6 +1285,7 @@
 				40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */,
 				A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */,
 				508EB5B8E3D4A3679611A869 /* TopoOnTheGlassTests.swift in Sources */,
+				96EB4D095C0F58026CD0017E /* TuningSliderTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
