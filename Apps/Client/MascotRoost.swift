@@ -259,14 +259,20 @@ struct MascotField: Equatable, Sendable, Codable {
     }
 
     /// How far the words have moved down the screen since `previous`, in points: the transcript's
-    /// scroll between two geometries, up negative. A scroll moves the words and nothing else, so a
-    /// geometry whose transcript frame, pane, well or keyboard moved — the keyboard rising, the
-    /// glass going short — is not one, and is no move. Each obstacle is paired with every one of
-    /// the same place across and the same size in `previous`, and the move most of the pairs
-    /// agree on is the answer, the smallest of equals: the lines of a reply are alike and a line
-    /// apart, and only the true move pairs every one of them; the lines under the transcript, which
-    /// do not scroll, and a turn loaded or unloaded by the lazy stack are outvoted. Nothing paired
-    /// is no move.
+    /// scroll between two geometries, up negative, as far as the layout moved them and unrounded,
+    /// so a drag of a tenth of a point a geometry adds up to what it moved. A scroll moves the
+    /// words and nothing else, so a geometry whose transcript frame, pane, well or keyboard moved
+    /// — the keyboard rising, the glass going short — is not one, and is no move.
+    ///
+    /// Each obstacle is paired with every one of the same place across and the same size in
+    /// `previous`. One standing where one of its size stood has not moved and has no say in how
+    /// far the rest did; each of the others votes for every move it could have made, and the move
+    /// most of them agree on is the answer, the smallest of equals: the lines of a reply are alike
+    /// and a line apart, and only the true move pairs every one of them. A move is outvoted by
+    /// more obstacles that stood still than agree on it — a still page with a line added to a
+    /// reply, which pairs with the reply's other lines, is no move — and a tie goes to the move,
+    /// so one bubble scrolling past a still obstacle of its size is a scroll. Nothing paired is
+    /// no move.
     func drift(since previous: MascotField) -> CGFloat {
         guard visible == previous.visible, pane == previous.pane, well == previous.well,
               keyboard == previous.keyboard else { return 0 }
@@ -275,17 +281,30 @@ struct MascotField: Equatable, Sendable, Codable {
         }
         var before: [[Int]: [CGFloat]] = [:]
         for rect in previous.obstacles where rect.width > 0 && rect.height > 0 { before[key(rect), default: []].append(rect.minY) }
-        // Moves counted in quarters of a point, the finest a screen's layout is laid out in.
-        var votes: [Int: Int] = [:]
+        // Moves grouped in quarters of a point, the finest a screen's layout is laid out in; the
+        // answer is the moves of the winning group as they were, averaged.
+        var votes: [Int: (count: Int, sum: CGFloat)] = [:]
+        var still = 0
         for rect in obstacles where rect.width > 0 && rect.height > 0 {
-            for y in before[key(rect)] ?? [] where abs(rect.minY - y) < Self.driftLimit {
-                votes[Int(((rect.minY - y) * 4).rounded()), default: 0] += 1
+            let paired = before[key(rect)] ?? []
+            if paired.contains(where: { abs(rect.minY - $0) <= Self.stillness }) {
+                still += 1
+                continue
+            }
+            for y in paired where abs(rect.minY - y) < Self.driftLimit {
+                let move = rect.minY - y
+                let vote = votes[Int((move * 4).rounded()), default: (0, 0)]
+                votes[Int((move * 4).rounded())] = (vote.count + 1, vote.sum + move)
             }
         }
-        guard let best = votes.max(by: { a, b in a.value < b.value || (a.value == b.value && abs(a.key) > abs(b.key)) })
-        else { return 0 }
-        return CGFloat(best.key) / 4
+        guard let best = votes.max(by: { a, b in
+            a.value.count < b.value.count || (a.value.count == b.value.count && abs(a.key) > abs(b.key))
+        }), best.value.count >= still else { return 0 }
+        return best.value.sum / CGFloat(best.value.count)
     }
+
+    /// An obstacle within this of where one of its size stood has not moved.
+    static let stillness: CGFloat = 0.001
 
     /// The most the words are taken to move between two geometries: more is not a scroll but a
     /// different page, and is no move.
@@ -514,8 +533,8 @@ struct MascotRoam: Equatable, Sendable {
     }
     /// How many glides have begun, for the tests.
     private(set) var moves = 0
-    /// Which way the words were last moving, in points down the screen at the last geometry that
-    /// moved them (up negative); none once the geometry has settled.
+    /// Which way the words are moving, in points down the screen at the last geometry (up
+    /// negative): none when that geometry moved nothing, and none once the geometry has settled.
     private(set) var heading: CGFloat = 0
     /// He was displaced to the side of a word it is moving toward — there was no room behind it —
     /// so he goes with the words until they stop, rather than being caught again and again.
@@ -574,10 +593,10 @@ struct MascotRoam: Equatable, Sendable {
         self.field = field
         changed = now
         unsettled = true
-        if drift != 0 {
-            heading = drift
-            follow(drift)
-        }
+        // Which way the words are going is what this geometry moved them: none is a still page,
+        // whatever the last scroll did.
+        heading = drift
+        if drift != 0 { follow(drift) }
         covered = isCovered
         // Riding the words to the edge of where he may stand is the end of the ride: he decides
         // again from there rather than being carried past it.
