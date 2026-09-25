@@ -632,11 +632,10 @@ struct MascotRoam: Equatable, Sendable {
                 self.move = nil
                 decide(glide: true)
                 // A new roost within his clearance of where he was going is the same glide
-                // carried on, since the words he goes between moved and not his mind.
+                // carried on, since the words he goes between moved and not his mind: not counted
+                // as another, and timed from where he is to where it now ends, so he does not jump
+                // the difference in one frame.
                 if let next = self.move, hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= settings.clearance {
-                    var carried = move
-                    carried.to = next.to
-                    self.move = carried
                     moves -= 1
                 }
                 // The geometry may still be moving: the settled decision follows as ever.

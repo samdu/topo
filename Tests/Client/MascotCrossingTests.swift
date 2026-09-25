@@ -317,6 +317,31 @@ final class MascotCrossingTests: XCTestCase {
         XCTAssertEqual(b.drift(since: a), 0)
     }
 
+    /// A glide carried on to a roost within his clearance of where it was going is timed from
+    /// where he is, so no frame of it moves him further than a frame of the glide's pace.
+    func testACarriedGlideIsTimedFromWhereHeIs() throws {
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 250))
+        let bubble = CGRect(x: 19, y: 300, width: 367, height: 60)
+        roam.observe(Self.field([bubble]), at: 0)
+        var time = 1.0 / 30
+        roam.advance(to: time)
+        let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
+        // Most of the way along, the turn grows a few points taller, into where the glide ends.
+        while let move = roam.move, move.elapsed < move.duration * 0.8 { time += 1.0 / 30; roam.advance(to: time) }
+        let before = try XCTUnwrap(roam.picture)
+        roam.observe(Self.field([CGRect(x: bubble.minX, y: bubble.minY, width: bubble.width, height: bubble.height + 5)]),
+                     at: time)
+        let carried = try XCTUnwrap(roam.move, "the glide was not carried on")
+        XCTAssertNotEqual(carried.to, glide.to, "nothing moved where it ends")
+        XCTAssertEqual(roam.moves, 1, "carrying the glide on counted another")
+        XCTAssertEqual(carried.from, before.origin, "the carried glide is not timed from where he is")
+        time += 1.0 / 30
+        roam.advance(to: time)
+        let after = try XCTUnwrap(roam.picture)
+        XCTAssertLessThanOrEqual(hypot(after.minX - before.minX, after.minY - before.minY),
+                                 Self.settings.speed / 30 + MascotRoost.epsilon, "the carried glide jumped")
+    }
+
     /// The words' move between two geometries is what their obstacles moved, and a line that
     /// does not scroll is outvoted.
     func testTheDriftIsTheWordsMove() {
