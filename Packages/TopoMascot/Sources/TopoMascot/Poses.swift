@@ -30,6 +30,18 @@ let REST_EASE = 1.5                        // how fast the wave of work gives wa
 // Poses the idle cycle reaches and work does not: a host asking for one is asking for nothing he has.
 let CYCLE_ONLY = ["yoga"]
 
+// ── facing ──────────────────────────────────────────────────────────────────────
+// `facing` is the side of the screen he stands on. On the left, as he is drawn, he holds the sign out
+// to his right, into the room; on the right the whole picture is mirrored about his body's axis (x = BX,
+// never the buffer's centre, which would move him), so the sign comes out to the left: poses, props,
+// the gaze, the light and the corner's direction, everything but the sign's lettering, which reads left
+// to right either way. It is one transform, where the index buffer becomes colour, rather than a second
+// set of poses, so the left-hand drawing is the same bytes it always was and nothing can drift between two.
+// He turns only on the shelf at home, idle or at rest there, once every arm has come within TURN_SETTLE of
+// the shelf pose: a facing asked for mid-excursion or mid-work is taken when he is back and settled.
+let FACINGS = ["left", "right"]
+let TURN_SETTLE = 0.5                      // how near the shelf pose every arm parameter must be before he turns
+
 // ── palette ─────────────────────────────────────────────────────────────────────
 // A ten-tone ramp per load state, darkest first, then the fixed colours, then every material's ramp
 // at a multiple of ten, so (index - 1) % 10 is the tone in any ramp.

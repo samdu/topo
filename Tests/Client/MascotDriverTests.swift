@@ -104,6 +104,60 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertNotEqual(bytes(first), bytes(try XCTUnwrap(driver.image)))
     }
 
+    /// A facing is a picture of its own: under Reduce Motion a change of facing alone draws a new
+    /// still, and it is the mirror, his body reflected about his axis; the same facing again draws
+    /// nothing.
+    func testReduceMotionDrawsANewStillForAFacingAlone() throws {
+        var still = seen; still.reduceMotion = true
+        let driver = driver(still)
+        XCTAssertEqual(driver.frames, 1)
+        let left = bytes(try XCTUnwrap(driver.image))
+
+        var state = MascotState(model: "claude-sonnet-5", tokens: 1_000, activity: .building)
+        state.facing = .right
+        driver.input = state.input
+        XCTAssertEqual(driver.frames, 2, "a facing alone drew no still")
+        let right = bytes(try XCTUnwrap(driver.image))
+        driver.input = state.input
+        XCTAssertEqual(driver.frames, 2, "the same facing again drew another still")
+
+        // Column x of the mirror is column 2·bodyX − 1 − x of the picture as drawn, wherever both are
+        // inside the buffer.
+        let axis = Int(2 * Topo.bodyX) - 1
+        var compared = 0
+        for y in 0..<Topo.height {
+            for x in 0..<Topo.width where axis - x >= 0 && axis - x < Topo.width {
+                let a = (y * Topo.width + x) * 4, b = (y * Topo.width + axis - x) * 4
+                XCTAssertEqual(right[a..<a + 4], left[b..<b + 4], "(\(x), \(y)) is not the mirror")
+                compared += 1
+                if right[a..<a + 4] != left[b..<b + 4] { return }
+            }
+        }
+        XCTAssertGreaterThan(compared, 0)
+        XCTAssertNotEqual(left, right, "the mirror is the picture as drawn")
+
+        state.facing = .left
+        driver.input = state.input
+        XCTAssertEqual(driver.frames, 3, "turning back drew no still")
+        XCTAssertEqual(bytes(try XCTUnwrap(driver.image)), left)
+    }
+
+    /// The debug frame line says the facing in force, which is the engine's: asked for at home and
+    /// at rest, it is taken within the frames a debug run reports over.
+    func testTheDebugFrameLineSaysTheFacingInForce() {
+        let driver = MascotDriver()
+        var state = MascotState(model: "claude-sonnet-5")
+        state.facing = .right
+        driver.input = state.input
+        driver.conditions = seen
+        XCTAssertEqual(driver.facingInForce, "left")
+        for _ in 0..<60 { driver.tick(1.0 / 30) }
+        XCTAssertEqual(driver.facingInForce, "right", "a facing asked for at rest at home was not taken")
+        let line = MascotDriver.frameLine([1, 2, 3], activity: "idle", facing: driver.facingInForce)
+        XCTAssertTrue(line.hasPrefix("mascot: 3 frames, idle, facing right, mean 2.00 ms"), line)
+        XCTAssertEqual(MascotDriver.frameLine([], activity: "idle", facing: "left"), "mascot: 0 frames, idle, facing left")
+    }
+
     /// The still is the idle pose whatever the state's pose is: the same picture for building as
     /// for idle.
     func testTheStillIsTheIdlePose() throws {

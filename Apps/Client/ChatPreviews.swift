@@ -71,6 +71,17 @@ enum PreviewTurns {
         (turn.role, index == 2 ? turn.text + "\n\nSay the word.\n\nOr don't :)" : turn.text)
     })
 
+    /// The person's turns only: first a list whose bubble is narrow and tall, then turns each
+    /// wrapping across the whole column. No reply keeps a margin, so the only room Topo has is on
+    /// the left of the list's bubble, the left half of the screen, where he faces as drawn. The
+    /// list is first so that it is on the screen however far the transcript is scrolled.
+    static let left: [Turn] = make([(.person, "For the weekend, in order:\nthe dentist, Friday at 11\nDaphne's food on the way\ncall Helen about the wall\nthe garden, with Krista\nand then nothing at all")]
+        + (0..<5).map { _ in
+            (.person, "Air scatters short wavelengths more than long ones, so blue light bounces around the whole sky. "
+                + "At sunset the light crosses far more air on its way to you, and by then most of the blue has "
+                + "scattered away, leaving the reds and oranges that travel straighter.")
+        })
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?

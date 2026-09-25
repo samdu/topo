@@ -1,5 +1,5 @@
 {
- "engine": "topo-mascot-engine/topo-engine.js at 3ba6246",
+ "engine": "topo-mascot-engine/topo-engine.js at f139be1",
  "width": 184,
  "height": 160,
  "scenarios": [
@@ -631,6 +631,833 @@
    "digests": {
     "45": "177e0ff1bd49d6cd929e326cb3e41e857fb52a52d2f7f849389ebdeb07ab9020",
     "89": "37d8c2cdf9d98c4e7d92e7cd9e0a565308976f9140dfdb09117977f8e447becd"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-00-idle-l1-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 1,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 1,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "44a2994486085706fb98ec06802f53f2cc04eb9082257689ed1f6d85e86c7506",
+    "65": "610a2f49886a6edb334e61a6960a47419cb73de251961915a1f3f614b0196841"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-01-idle-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "03a07191406d1d9768e618e0d91d728aadf79b4ba736fef5eda03b2271baec75",
+    "65": "d6b8aef8ab01b35ada1d3fa564c745e002a1bae97e26fec00fc43ab23cccf25c"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-02-idle-l3-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 3,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 3,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "0e32452d1a160d26a9ba44b3240d5cde96fa2b610a4168b246651196d680adcb",
+    "65": "5b844b9de3c3f97a5e733abb808abc6aa348b2d2655bce9a34eea4a63758d0fa"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-03-idle-l4-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 4,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 4,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "8681e78bee3855433cce226fd0d515397ecb2347f6c2d412671105bdf1010bb7",
+    "65": "6e6df5d06233e14cf0a275f03f5968a6a8a3b4bbbae1ccb529130116107c9df3"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-04-idle-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "03a07191406d1d9768e618e0d91d728aadf79b4ba736fef5eda03b2271baec75",
+    "65": "d6b8aef8ab01b35ada1d3fa564c745e002a1bae97e26fec00fc43ab23cccf25c"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-05-idle-l2-warning",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "warning",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "warning",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "1b54f588521b3e35374bbd8bbe41a9e1f323c47ebac7f38dd8faa4c10ab6975c",
+    "65": "a4c342dbdfae06b3fd072bf206ac6f2181880ff9a6b3b8eb62639c3712210bdc"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-06-idle-l2-reset",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "reset",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "reset",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "c55ce61940ac315d481cd3c605f87ac04eef7d1567a4f91a55102b686fc986f3",
+    "65": "fa0b8d71193078136b57af8b87e6d62cbf7552ef7a239cfbb3c3125af88d486f"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-07-idle-l2-untrusted",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "untrusted",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "untrusted",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "ee64d2eddbcbe59f64f6e20856efbd503d6860a2b17a6979322c568a555bd214",
+    "65": "3088ba0605eb16baa3f2cedcb22e44e5db53dd7bff7c1f6578a59a91dcb4c1a0"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-08-front-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "front"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "35a88f721eecaab7b48a416e19a2ad6bcd79630abd508364449b805316476fd5",
+    "65": "c4432546d717fdce757f34408bdc2027f471821131b5ab3c1244655508e9dcf7"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-09-walk-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "walk"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "fbb4bf3f244fe77eca18df10a06906993935a5dcc0f24ffe6b0ad83f68251201",
+    "65": "efd42f7de45f8fff3cbfc973201a2d4d7098e900089a32ddfc75dc43a7238f6c"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-10-corner-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "corner"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "929af39276848562811559d8a9243d1993e783278e0e02225165e168e3ba6c02",
+    "65": "577f9241dbfb06d08e33efa251870b52c669cbb7941cb3ddef68af2fcdd3bd25"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-11-yoga-l2-default",
+   "seconds": 22.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle"
+     }
+    ]
+   ],
+   "frames": 666,
+   "digests": {
+    "640": "f020452590fc92434cf9f8f414f5b342d142f8d8b0b3bdd9ab10e34a671ffe68",
+    "665": "7133c13bac9363ed33df33fd195f3f8ac61508a652f1850104bb0a6d7cbfd41b"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-12-sign-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "sign"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "4d351f3e83b76a9067c44d60456534c37e4e030a9c0a7cf28999577870bb5028",
+    "65": "e72696e5bd2f3c107985df7d49da5094d23219a0a3b7fddb669bbfea7b833113"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-13-building-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "building"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "d34486ca9540f504f0519c7de259f605e2a21676be04bf00eeb28076257efe51",
+    "65": "df85f04b7d390535347b942e238a35a5a6599864ee2dfc269cdec0c22778f987"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-14-writing-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "writing"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "ec50a92a24b60d40032b37160675b7f78fae4148914581fe4094c86834ea6d67",
+    "65": "1dd7942d9d575cbf7a006442a94b80cb0abc5ba11acd77f3c8312aef0a7c66c0"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-15-calendar-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "calendar"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "009fa424b6bf8d349bbc97967b94c53a5e1e2a254dfbd4b15b9c941b4839ce0c",
+    "65": "a62ad0e9dec7a2f06c739794a498eff042994288a88e175d0f185c93221ac696"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-16-searching-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "searching"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "7cb27e8f7d0259a4273f0a77f15931c6d8849f467003e1bd2a971d9ad314faaa",
+    "65": "3975e4099e2c91b36dd8686e76cd1afc20cf194ff915437ca3d909244c42ce7c"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sheet-17-thinking-l2-default",
+   "seconds": 2.2,
+   "script": [
+    [
+     0,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "level": 2,
+      "load": "default",
+      "activity": "thinking"
+     }
+    ]
+   ],
+   "frames": 66,
+   "digests": {
+    "40": "aa52aefb9d621fd54e2ed624ef921930edf512934c8299291b07329de4c2906d",
+    "65": "013e2cb77d9e098fb0bcff189ff19ba6cad2e6515f6f2e775ca657cb4caa8a6f"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 50,
+   "name": "faces-rest",
+   "seconds": 100,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33,
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 3000,
+   "digests": {
+    "630": "55c1b4c3ac192fde3c42035271747ad8e89014570a3148c28614b9fc4ecd9853",
+    "780": "66e5209fc05d3d57740b06eaf6aa564cee9ac2e4dcea9981ab0786f17cefc58e",
+    "2340": "9381dbe3f2f9a7b15736dd75cfdaa9ca789ffc1ba5be33a7b04313aa086b0da7"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-sign-words",
+   "seconds": 9,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     0.01,
+     {
+      "activity": "sign",
+      "sign": "updating memory",
+      "model": "sonnet"
+     }
+    ],
+    [
+     1.51,
+     {
+      "activity": "sign",
+      "sign": "hi",
+      "model": "sonnet"
+     }
+    ],
+    [
+     3.01,
+     {
+      "activity": "sign",
+      "sign": "reading twelve files at once",
+      "model": "sonnet"
+     }
+    ],
+    [
+     4.51,
+     {
+      "activity": "sign",
+      "sign": "",
+      "model": "fable"
+     }
+    ],
+    [
+     6.01,
+     {
+      "activity": "sign",
+      "sign": "Straße? 100%",
+      "model": "fable"
+     }
+    ],
+    [
+     7.51,
+     {
+      "activity": "sign",
+      "sign": "mmmmmmmmmmm wwwwwwwwwww nnnnnnnnnnn",
+      "model": "fable"
+     }
+    ]
+   ],
+   "frames": 270,
+   "digests": {
+    "40": "4d351f3e83b76a9067c44d60456534c37e4e030a9c0a7cf28999577870bb5028",
+    "85": "f0aa465c6dfef38c9db2a7403cc90643fff4fabf9105025c913ec3eb0d7539b4",
+    "130": "d4855cb88be1d5724410aa0b7fbd9c6c57086a2e842c4a87940c5af605e894b0",
+    "265": "f25f37b90af94d1faed6ac6f43e98ac24ead34fd5b26298f24750f85a0e6ba3e"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 50,
+   "name": "faces-turn-stroll",
+   "seconds": 45,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33
+     }
+    ],
+    [
+     21.5,
+     {
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 1350,
+   "digests": {
+    "660": "cd8021ebffcaf961aa3babbfe13ecd785eb2c778a9d7c8b795c8c70f6676fa23",
+    "800": "487affc2acb091198d4e155a56e3a2a6a9ab0a7d45303b7c14fe2c318fa66e07",
+    "1120": "7da23226730827d9ea5e98b03cc72ff84936c571cdfa728afdbc48be99d2bec3",
+    "1200": "77d21f15ee7a589c8e9db287e2f7cfc58d3fb3daa97ef3d24ad7202ad4db11d2"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-turn-yoga",
+   "seconds": 40,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33
+     }
+    ],
+    [
+     24,
+     {
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 1200,
+   "digests": {
+    "750": "f7cb3d8303fe563abe375de308072270f4d750ca802da0eb0bd5d64779bfd620",
+    "960": "38def42f8ef0d549c29a59069b11722d93e0864bf724c6f917ad44805c263008",
+    "1050": "71e73ee244df1626d3b28fb7623c60731c1963c6ea79dda9e722c7ea0578b7dd"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-turn-sign",
+   "seconds": 10,
+   "script": [
+    [
+     0,
+     {
+      "activity": "sign",
+      "sign": "updating memory"
+     }
+    ],
+    [
+     2,
+     {
+      "facing": "right"
+     }
+    ],
+    [
+     5,
+     {
+      "activity": "idle"
+     }
+    ],
+    [
+     7,
+     {
+      "activity": "sign"
+     }
+    ]
+   ],
+   "frames": 300,
+   "digests": {
+    "90": "661b84cb303415d9e107b15b55982d5e9b3c6499a429612610d476e055065752",
+    "160": "3e5ec161b55895de05a96fd795aba197a37ea92873b81ba15dc668fcc32407cf",
+    "200": "d801bdd1a18f81a1d2b23a48ea32e9c71b92183f8b0ef51e238c0700704e0cb1",
+    "280": "c9f0051951e82918b1440611f10bb59486f7276e1dfb0623cbb16044f1dc5344"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 50,
+   "name": "faces-turn-deadline",
+   "seconds": 26,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33
+     }
+    ],
+    [
+     19.95,
+     {
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 780,
+   "digests": {
+    "599": "d1f663d78101d2c5475a3310430720b6eb573e664039b3299191fc5899db337d",
+    "650": "8bed83644c6080b7e4477b34d4abf832e52ae2343880ce364e4795a85bb9d3fb",
+    "710": "23c4a6abcb77c0b7747e1cba6b86f58201538c81b259d9859aaaaa3234e1ea8b"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 50,
+   "name": "faces-turn-deadline-later",
+   "seconds": 130,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33
+     }
+    ],
+    [
+     124.55,
+     {
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 3900,
+   "digests": {
+    "3737": "2ced8cf51707d0e19c921696fd3880f0f29850829f8f0c9e8566c295db328025",
+    "3800": "fa634805365631d076f4242c2a3e8a57d0b4a3fbc8567f0a2dc5d761755b0df2"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 1,
+   "name": "faces-turn-work",
+   "seconds": 12,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "facing": "right"
+     }
+    ],
+    [
+     1,
+     {
+      "activity": "building"
+     }
+    ],
+    [
+     3,
+     {
+      "facing": "left"
+     }
+    ],
+    [
+     6,
+     {
+      "activity": "idle"
+     }
+    ],
+    [
+     9,
+     {
+      "activity": "searching"
+     }
+    ]
+   ],
+   "frames": 360,
+   "digests": {
+    "60": "105b0d1f04d014a2034af45c16a6f264e4c4a6f2b306e8cf405ae08c91fe45d0",
+    "150": "ac086e44e6932635c1506c1544891f8355fc0c673484c2dd34f1ed77bd9f9bc8",
+    "200": "9121b403d0bca4a0e616b48dfceea4a797908f7701e6c31bd08dabaeca67fae5",
+    "260": "65a160e36340adb9aaf181d431a210bffe276d29ae25156f70c785289b470ee5",
+    "340": "cc140be134932fe7bb99d6976b9a864f72db91c0ee1bf94d105d8aaedce28b80"
    }
   }
  ]
