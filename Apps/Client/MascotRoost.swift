@@ -167,7 +167,7 @@ enum MascotSprite {
 }
 
 /// The chat's geometry as Topo reads it, in the space he is drawn in.
-struct MascotField: Equatable, Sendable {
+struct MascotField: Equatable, Sendable, Codable {
     /// The transcript's frame: where he may stand.
     var visible: CGRect
     /// What he may not be drawn over: every turn, the row being written, the lines under the
