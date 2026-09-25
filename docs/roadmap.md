@@ -56,13 +56,6 @@ What is built, what comes next and in what order, what is parked, and the thread
 
 #91, #122, #124, #126, #127, #141, #146, #159: each is a timing bound on a cold runner, noted rather than fixed. `topo_unit` has grown to about 27 minutes on the full lane and is now the long pole.
 
-### The device-check queue
-
-- The primary test device is Sam's iPhone 15 Pro (`83FAFEC2-7326-5E79-A186-AB8E1B0A32E3`), paired with buddybox over the local network with Developer Mode on: a debug build with the Tuning sliders and the Haiku pin installs straight to it with `xcrun devicectl device install app`, and it also takes the ad-hoc OTA builds.
-- Every merge to main republishes the install page (`~/github/experiments/ota/publish-topo.sh <ref>`, a Release build with no debug sliders and no Haiku pin) so Sam's other devices, none of them paired for direct installs, can pick up the current build.
-- #165's vault-look line, above, if Sam wants it checked.
-- The TestFlight steps in `docs/testflight.md` all need Sam's Apple account and none has been started.
-
 ### The review pipeline
 
 - Codex (the CI reviewer) is out on its ChatGPT usage limit until 27 September; stand-in reviews are the `adversarial-reviewer` agent, and their verdicts are in each plan's ledger under `~/Desktop/topo-plans/progress-*.md`.

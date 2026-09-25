@@ -44,7 +44,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 | The PR check, the debug launch environment | `docs/testing.md` |
 | Running signed in on a simulator | `docs/simulator.md` |
 | Pairing, LAN surfaces, the house board | `docs/pairing.md`, `docs/surfaces.md`, `docs/board.md` |
-| TestFlight and installing on a phone | `docs/testflight.md`, `docs/install.md` |
+| Installing on Sam's phone, republishing the install page on merge, TestFlight | `docs/install.md`, `docs/testflight.md` |
 | Icons and the stone | `Design/README.md` |
 | Womble | `Womble/README.md` |
 
