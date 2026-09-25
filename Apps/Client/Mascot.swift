@@ -49,8 +49,8 @@ enum MascotFacing: String, CaseIterable, Sendable {
     /// of the screen, so he faces into it from there; on the line, or with either measure not a
     /// number, he keeps the picture as it is drawn.
     ///
-    /// It is decided where he is placed, not per frame: a place that crosses the line changes it
-    /// once, at the placement that crossed.
+    /// It is decided with each roost (`MascotRoam`), not per frame: a glide across the line
+    /// changes it once, at the decision that sent him across.
     static func of(centreX: CGFloat, midlineX: CGFloat) -> MascotFacing {
         guard centreX.isFinite, midlineX.isFinite else { return .left }
         return centreX > midlineX ? .right : .left
@@ -168,7 +168,7 @@ final class Mascot {
         state = MascotMapping.harness(state, model: model, tokens: tokens)
     }
 
-    /// The side of the screen he stands on, as his placement decided it (`MascotFacing.of`).
+    /// The side of the screen he stands on, as his roost decided it (`MascotRoam.facing`).
     var facing: MascotFacing {
         get { state.facing }
         set { if state.facing != newValue { state.facing = newValue } }

@@ -107,7 +107,10 @@ private struct LineReader: TextRenderer {
 #if os(iOS)
 /// The part of the engine's 184×160 picture he takes up at rest, in art pixels: the union of what he
 /// draws sitting on the shelf at home — breathing, blinking, looking about, his arms drifting — on
-/// every head and load band, with two pixels round it
+/// every head and load band and in both facings, with two pixels round it. Facing right the engine
+/// mirrors the picture about his body's axis (x = `Topo.bodyX`), so the union of the two is
+/// symmetric about that axis: the box, and the reach below, are the same in either facing and his
+/// body stands at the same point of the screen whichever way he faces
 /// (`MascotGeometryTests.testHeRestsInsideTheBox` runs the idle state and holds that nothing is drawn
 /// outside it). The box is what a gap has to hold, what the roost and the hurry judge and what
 /// "covered" means. The canvas draws the whole picture round it, so an excursion, a working pose or
@@ -116,15 +119,17 @@ private struct LineReader: TextRenderer {
 /// screen's edge, the composer's pane and well and the keyboard: `reach` keeps the whole of it
 /// inside the transcript's frame and off all three.
 enum MascotSprite {
-    static let box = CGRect(x: 35, y: 67, width: 92, height: 89)
+    static let box = CGRect(x: 33, y: 67, width: 94, height: 89)
 
     /// The part of the picture he can be drawn in at all, in art pixels: the union of every pose
     /// the app can ask the engine for — the idle cycle with its corner and yoga, the walk, and
     /// thinking, searching, building, writing and calendar, on every head and load band, and the
-    /// ways between them — with two pixels round it (`MascotGeometryTests.testEveryPoseTheAppAsksForIsDrawnInsideTheReach`).
+    /// ways between them — in both facings, with two pixels round it
+    /// (`MascotGeometryTests.testEveryPoseTheAppAsksForIsDrawnInsideTheReach`). Facing right what a
+    /// pose reaches on his right is reached on his left, so each side is the longer of the two.
     /// The sign is not in it, because nothing in the app sets one (`MascotState.sign`); a sign
-    /// reaches 40 pixels further right.
-    static let reach = CGRect(x: 15, y: 47, width: 121, height: 113)
+    /// reaches about 40 pixels further out on the side he faces.
+    static let reach = CGRect(x: 15, y: 47, width: 130, height: 113)
 
     /// How far `reach` goes past the box on each side, in points at `scale`.
     struct Reach: Equatable, Sendable {
@@ -448,6 +453,10 @@ struct MascotRoam: Equatable, Sendable {
     private(set) var field: MascotField?
     /// Where he is going, or standing.
     private(set) var roost: MascotRoost = .none
+    /// Which way he faces, decided with each roost that is a gap (`MascotFacing.of`, his box's
+    /// centre against the transcript's vertical midline) and kept while he stands nowhere. His box
+    /// is symmetric about his body's axis, so its centre is where his body stands.
+    private(set) var facing: MascotFacing = .left
     /// His picture's origin now; nil while he stands nowhere.
     private(set) var position: CGPoint?
     private(set) var move: Move?
@@ -607,6 +616,7 @@ struct MascotRoam: Equatable, Sendable {
         }
         guard let from = position else {
             roost = next
+            face(field)
             position = to
             return
         }
@@ -617,9 +627,11 @@ struct MascotRoam: Equatable, Sendable {
                              reach: settings.reach) {
             // Where he stands is his roost, which a glide cut short leaves somewhere else.
             roost = .gap(CGRect(origin: from, size: settings.size))
+            face(field)
             return
         }
         roost = next
+        face(field)
         let distance = hypot(to.x - from.x, to.y - from.y)
         if !glide || settings.reduceMotion || distance == 0 {
             position = to
@@ -628,6 +640,12 @@ struct MascotRoam: Equatable, Sendable {
         let speed = max(settings.speed, 1)
         move = Move(from: from, to: to, duration: Double(distance / speed))
         moves += 1
+    }
+
+    /// The facing for the roost just decided: which half of the transcript its centre is in.
+    private mutating func face(_ field: MascotField) {
+        guard let frame = roost.frame else { return }
+        facing = MascotFacing.of(centreX: frame.midX, midlineX: field.visible.midX)
     }
 }
 #endif

@@ -180,6 +180,10 @@ final class MascotCanvas: UIView {
     /// changes. A debug build hands it to the chat's report.
     var onReport: ((MascotRoam.Report) -> Void)?
     private var reported: MascotRoam.Report?
+    /// Told the facing each roost decides (`MascotRoam.facing`) when it is not the one last told,
+    /// which is how it reaches `Mascot.facing` and so the engine: at the decision, not per frame.
+    var onFace: ((MascotFacing) -> Void)?
+    private var faced: MascotFacing?
 
     /// Whether the display link is running, which is whether frames are being asked for.
     var isTicking: Bool { link != nil }
@@ -262,6 +266,10 @@ final class MascotCanvas: UIView {
         if let picture = roam.picture { sprite.frame = MascotSprite.drawn(around: picture) }
         sprite.opacity = roam.hidden ? 0 : 1
         CATransaction.commit()
+        if !roam.hidden, roam.facing != faced {
+            faced = roam.facing
+            onFace?(roam.facing)
+        }
         report(roam)
     }
 
@@ -399,11 +407,13 @@ struct MascotOverChat: UIViewRepresentable {
     var ready = true
     var conditions: MascotDriver.Conditions
     var report: ((MascotRoam.Report) -> Void)?
+    var face: ((MascotFacing) -> Void)?
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
         canvas.onReport = report
+        canvas.onFace = face
         canvas.apply(input: input, field: field, settings: settings, interval: interval, ready: ready,
                      conditions: conditions)
     }
@@ -442,6 +452,8 @@ struct MascotLayer: View {
     /// drawn rather than placed into it.
     var ready = true
     var report: ((MascotRoam.Report) -> Void)?
+    /// Told the facing each roost decides.
+    var face: ((MascotFacing) -> Void)?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -453,7 +465,7 @@ struct MascotLayer: View {
                            interval: look.mascot.frameInterval, ready: ready,
                            conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                              reduceMotion: reduceMotion),
-                           report: report)
+                           report: report, face: face)
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .opacity(opacity)
         }
@@ -466,13 +478,15 @@ extension View {
     /// Topo laid over this view, which is the chat: he stands where the frames its turns, rows and
     /// glass report (`MascotScene`) leave him room, takes no room of his own and no touch, and is
     /// nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — he is
-    /// not drawn, and his first decision where to stand comes after it.
+    /// not drawn, and his first decision where to stand comes after it. `face` is told the facing
+    /// each roost decides, for `Mascot.facing`.
     func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
-                     ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil) -> some View {
+                     ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil,
+                     face: ((MascotFacing) -> Void)? = nil) -> some View {
         overlayPreferenceValue(MascotScene.self) { scene in
             if let state {
                 MascotLayer(state: state, scene: scene, opacity: opacity, covered: covered,
-                            keyboardTop: keyboardTop, ready: ready, report: report)
+                            keyboardTop: keyboardTop, ready: ready, report: report, face: face)
             }
         }
     }

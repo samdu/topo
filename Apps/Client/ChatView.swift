@@ -155,7 +155,9 @@ struct ChatView: View {
             // leave him room, and is not drawn where they leave none. The glass is never his.
             .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
-                         ready: transcriptRead, report: mascotReported)
+                         ready: transcriptRead, report: mascotReported,
+                         // The facing each roost decides, off the view update it arrives in.
+                         face: { facing in Task { @MainActor in mascot.facing = facing } })
             // The mark says the name, so the title says it twice.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
