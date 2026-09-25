@@ -54,14 +54,16 @@ final class MascotCrossingTests: XCTestCase {
                 continue
             }
             roam.advance(to: event.t)
-            guard let field, let picture = roam.picture else { continue }
+            guard field != nil else { continue }
+            // He stood somewhere when the recording opened, and a crossing is never a reason to
+            // stand nowhere.
+            let picture = try XCTUnwrap(roam.picture, "t \(event.t): he stands nowhere", file: file, line: line)
             standingCovered = roam.covered && !roam.walking ? standingCovered + 1 : 0
             XCTAssertLessThanOrEqual(standingCovered, 1, "t \(event.t): caught under text at \(picture)", file: file, line: line)
             if gliding, !roam.walking {
                 XCTAssertFalse(roam.covered, "t \(event.t): a glide ended under text at \(picture)", file: file, line: line)
             }
             gliding = roam.walking
-            _ = field
         }
         XCTAssertEqual(roam.moves, glides, "\(name): one glide a crossing", file: file, line: line)
         XCTAssertFalse(roam.covered, "\(name): he ended under text", file: file, line: line)
@@ -98,7 +100,13 @@ final class MascotCrossingTests: XCTestCase {
     /// so it springs back up past him: each way is one glide through the bubble to the side it
     /// came from — over it on the way down, under it on the way back — and never caught.
     func testADescendingPersonsTurnAndItsSpringBackAreAHopEach() throws {
-        _ = try assertCrossings("crossing-down", glides: 2)
+        let (roam, field) = try assertCrossings("crossing-down", glides: 2)
+        // The spring-back rose past him last, so he ends under it.
+        let picture = try XCTUnwrap(roam.picture)
+        let above = try XCTUnwrap(Self.bubbles(in: field).filter { $0.maxY <= picture.minY }.max { $0.maxY < $1.maxY },
+                                  "no person's turn above him")
+        XCTAssertGreaterThanOrEqual(picture.minY, above.maxY + Self.settings.clearance - MascotRoost.epsilon)
+        XCTAssertFalse(Self.bubbles(in: field).contains { $0.intersects(picture) }, "he ended over a person's turn")
     }
 
     // MARK: Scripted
@@ -194,6 +202,66 @@ final class MascotCrossingTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(picture.minY, 120 + Self.settings.clearance - MascotRoost.epsilon, "he is not below the turn")
     }
 
+    /// Reply lines on the left, six of them a line apart from `y`, clear of where he stands.
+    static func lines(_ y: CGFloat) -> [CGRect] {
+        (0..<6).map { CGRect(x: 16, y: y + CGFloat($0) * 22, width: 250, height: 20) }
+    }
+
+    /// The transcript scrolled down and stopped, and a turn landing on him before the scroll has
+    /// settled: a still turn, which is under wins, whatever the scroll before it did.
+    func testATurnLandingJustAfterADownwardScrollSendsHimBelowIt() throws {
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        var pages = stride(from: 0.0, through: 40.0, by: 4.0).map { Self.field(Self.lines(CGFloat($0))) }
+        let bubble = CGRect(x: 19, y: 230, width: 367, height: 60)
+        pages.append(Self.field(Self.lines(40) + [bubble]))
+        let end = scroll(&roam, from: 0, through: pages)
+        XCTAssertLessThan(end, Double(pages.count) / 30 + Self.settings.settle + 2)
+        let picture = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(roam.moves, 1)
+        XCTAssertGreaterThanOrEqual(picture.minY, bubble.maxY + Self.settings.clearance - MascotRoost.epsilon,
+                                    "the scroll before the turn landed sent him over it")
+    }
+
+    /// A glide under a bubble that lands on him, then the bubble scrolling a point at a time past
+    /// a still obstacle of its own size: the still one has no say, and where he is going moves
+    /// with the bubble.
+    func testAStillTwinDoesNotHoldTheDestinationBack() throws {
+        let twin = CGRect(x: 19, y: 20, width: 367, height: 60)
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        roam.observe(Self.field([twin, CGRect(x: 19, y: 300, width: 367, height: 60)]), at: 0)
+        roam.advance(to: 1.0 / 30)
+        let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
+        for step in 1...5 {
+            let bubble = CGRect(x: 19, y: 300 + CGFloat(step), width: 367, height: 60)
+            roam.observe(Self.field([twin, bubble]), at: 1.0 / 30)
+            XCTAssertEqual(try XCTUnwrap(roam.move).to.y, glide.to.y + CGFloat(step), accuracy: 0.001,
+                           "step \(step): the destination did not move with the bubble")
+        }
+        XCTAssertEqual(roam.moves, 1, "the glide was restarted")
+    }
+
+    /// A drag a tenth of a point a geometry, for a hundred geometries: where he is going moves
+    /// the ten points the words did, rather than nothing a frame.
+    func testATenthOfAPointAGeometryAddsUp() throws {
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 301, y: 250))
+        roam.observe(Self.field(Self.lines(0) + [CGRect(x: 19, y: 300, width: 367, height: 60)]), at: 0)
+        roam.advance(to: 1.0 / 30)
+        let glide = try XCTUnwrap(roam.move, "the landing turn started no glide")
+        for step in 1...100 {
+            let d = CGFloat(step) / 10
+            roam.observe(Self.field(Self.lines(d) + [CGRect(x: 19, y: 300 + d, width: 367, height: 60)]), at: 1.0 / 30)
+        }
+        XCTAssertEqual(try XCTUnwrap(roam.move).to.y, glide.to.y + 10, accuracy: 0.01)
+        XCTAssertEqual(roam.moves, 1, "the glide was restarted")
+    }
+
+    /// A still page with a line added to a reply, the same size as its other lines, is no move.
+    func testALineAddedToAStillPageIsNoMove() {
+        let a = Self.field(Self.lines(100))
+        let b = Self.field(Self.lines(100) + [CGRect(x: 16, y: 100 + 6 * 22, width: 250, height: 20)])
+        XCTAssertEqual(b.drift(since: a), 0)
+    }
+
     /// The words' move between two geometries is what their obstacles moved, and a line that
     /// does not scroll is outvoted.
     func testTheDriftIsTheWordsMove() {
@@ -203,5 +271,10 @@ final class MascotCrossingTests: XCTestCase {
         XCTAssertEqual(b.drift(since: a), -12)
         XCTAssertEqual(a.drift(since: a), 0)
         XCTAssertEqual(Self.field([]).drift(since: a), 0)
+        // One bubble scrolling past a still obstacle of its size is its scroll, not a tie.
+        let twin = CGRect(x: 19, y: 20, width: 367, height: 120)
+        XCTAssertEqual(Self.field([twin, CGRect(x: 19, y: 300, width: 367, height: 120)])
+            .drift(since: Self.field([twin, CGRect(x: 19, y: 298, width: 367, height: 120)])), 2)
+        XCTAssertEqual(Self.field(Self.lines(0.1)).drift(since: Self.field(Self.lines(0))), 0.1, accuracy: 0.0001)
     }
 }
