@@ -432,6 +432,31 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertEqual(roaming.roost.name, "gap")
     }
 
+    /// A still press on him — picked up and let go where it took him — pins nothing: a pin kept at
+    /// the frame's corner, where the edge holds him short of it, is not rewritten to the fraction
+    /// he was held at, and a roaming Topo is still roaming.
+    func testAStillPressPinsNothing() throws {
+        var time = 0.0
+        let corner = CGPoint(x: 1, y: 1)
+        var roam = settled(Self.settings(.pinned, pin: corner), [Self.field()], time: &time)
+        let home = try XCTUnwrap(roam.picture)
+        XCTAssertTrue(roam.grab())
+        roam.drag(to: home.origin)
+        XCTAssertNil(roam.drop(), "a still press handed a pin on")
+        XCTAssertEqual(roam.settings.pin, corner)
+        XCTAssertEqual(roam.settings.placement, .pinned)
+        XCTAssertFalse(roam.dragging)
+        run(&roam, time: &time)
+        XCTAssertEqual(roam.picture, home)
+
+        var roaming = settled(Self.settings(.roam), [Self.field()], time: &time)
+        let there = try XCTUnwrap(roaming.picture)
+        XCTAssertTrue(roaming.grab())
+        roaming.drag(to: there.origin)
+        XCTAssertNil(roaming.drop())
+        XCTAssertEqual(roaming.settings.placement, .roam)
+    }
+
     /// Nothing is picked up where he is not drawn.
     func testNothingIsPickedUpWhereHeIsNotDrawn() {
         var roam = MascotRoam(Self.settings(.roam), frame: Self.frame)

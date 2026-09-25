@@ -658,6 +658,8 @@ struct MascotRoam: Equatable, Sendable {
     private(set) var dragging = false
     /// How many drags have begun, for the tests: a press that was not one leaves it alone.
     private(set) var drags = 0
+    /// Where the finger picked him up, which a drop that moved him nowhere leaves him.
+    private var pickedUp: CGPoint?
     /// The frame a pin is a fraction of with the keyboard down (`MascotField.pinFrame`): the last
     /// of a geometry with no keyboard in it.
     private(set) var resting: CGRect?
@@ -1082,6 +1084,7 @@ struct MascotRoam: Equatable, Sendable {
         guard position != nil, !dragging else { return false }
         dragging = true
         drags += 1
+        pickedUp = position
         move = nil
         riding = false
         unsettled = false
@@ -1102,11 +1105,17 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// The finger has let go: he is pinned where he is, as a fraction of the transcript's frame
-    /// carried to the pane's foot with the keyboard down, which is answered for the look to keep. From here the roam is the
-    /// pinned policy at that pin, so nothing moves him before the look catches up; with the
-    /// keyboard up, it lifts him clear of it.
+    /// carried to the pane's foot with the keyboard down, which is answered for the look to keep.
+    /// From here the roam is the pinned policy at that pin, so nothing moves him before the look
+    /// catches up; with the keyboard up, it lifts him clear of it. A press that let go where it
+    /// picked him up moved him nowhere and pins nothing: it ends as a cancelled one does, and a
+    /// pin kept at the frame's very edge is not rewritten to where the edge held him.
     mutating func drop() -> CGPoint? {
         guard dragging else { return nil }
+        if let from = pickedUp, let at = position, hypot(at.x - from.x, at.y - from.y) <= MascotRoost.epsilon {
+            cancelDrag()
+            return nil
+        }
         dragging = false
         guard let picture, let field else { return nil }
         let pin = MascotPerch.pin(of: picture, in: resting ?? field.pinFrame)
