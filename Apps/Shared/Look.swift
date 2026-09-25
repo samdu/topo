@@ -16,6 +16,9 @@ import SwiftUI
 /// look, in a preview or in a render.
 struct Look: Equatable, Sendable {
     var transcript: Transcript
+    /// What Topo's words are drawn as when they are more than a paragraph: headings, lists,
+    /// quotes, rules and code.
+    var markdown: Markdown
     /// The person's own turn, which is enclosed.
     var bubble: Enclosure
     /// Topo's turn, which is not: the same fields set to nothing, so the words sit in the column
@@ -41,6 +44,7 @@ struct Look: Equatable, Sendable {
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
+        markdown = Markdown(screen)
         bubble = .bubble(screen)
         plain = .plain
         jewel = Jewel()
@@ -132,6 +136,103 @@ struct Look: Equatable, Sendable {
                 bodyFont = .system(.body)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)
+            }
+        }
+    }
+
+    /// Topo's words as blocks (`MarkdownText`): the room between them, how a list is indented,
+    /// the type of a heading and of code, and what a code block is drawn on. A paragraph is
+    /// drawn in the transcript's own `bodyFont` and `text`, so a reply with no markup in it is
+    /// drawn exactly as the transcript draws words.
+    struct Markdown: Equatable, Sendable {
+        /// Between one block of a reply and the next: two paragraphs, a list and a fence.
+        var blockSpacing: CGFloat
+        /// How far each list a block sits inside leads it in.
+        var listIndent: CGFloat
+        /// Between a list item's marker and its words.
+        var markerSpacing: CGFloat
+        /// A heading of level 1, 2, and 3 or deeper.
+        var heading1Font: Font
+        var heading2Font: Font
+        var heading3Font: Font
+        /// Code, inline and fenced. Drawn monospaced whatever this names, since code is
+        /// monospaced by definition and a document's font names no design.
+        var codeFont: Font
+        /// Code's ink, inline and fenced.
+        var codeInk: Color = Theme.text
+        /// What a fenced block is drawn on: an enclosure of its own inside the reply.
+        var codeBlock: Enclosure
+        /// A code line longer than the column: scrolled sideways inside its enclosure, or
+        /// wrapped. A watch's crown and a television's remote move the transcript and nothing
+        /// inside it, so there it wraps.
+        var codeOverflow: CodeOverflow
+        /// The bar down the leading side of a quote, and its width.
+        var quoteBar: Color = Theme.textMuted
+        var quoteBarWidth: CGFloat
+        /// A quote's words.
+        var quoteText: Color = Theme.textMuted
+        /// A list item's marker, and a rule.
+        var marker: Color = Theme.textMuted
+        /// A rule's thickness.
+        var ruleWidth: CGFloat
+
+        enum CodeOverflow: String, Equatable, Sendable, CaseIterable {
+            case scroll, wrap
+        }
+
+        /// The font of a heading at `level`, the deepest three alike.
+        func headingFont(_ level: Int) -> Font {
+            switch level {
+            case ...1: heading1Font
+            case 2: heading2Font
+            default: heading3Font
+            }
+        }
+
+        init(_ screen: Screen = .current) {
+            switch screen {
+            case .watch:
+                blockSpacing = 4
+                listIndent = 10
+                markerSpacing = 4
+                heading1Font = .system(.headline)
+                heading2Font = .system(.footnote).weight(.bold)
+                heading3Font = .system(.footnote).weight(.semibold)
+                codeFont = .system(.caption2)
+                codeOverflow = .wrap
+                quoteBarWidth = 2
+                ruleWidth = 1
+                codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
+                                      cornerRadius: 6, horizontalPadding: 6, verticalPadding: 4,
+                                      surface: .flat)
+            case .tv:
+                blockSpacing = 14
+                listIndent = 32
+                markerSpacing = 10
+                heading1Font = .system(.title2).weight(.bold)
+                heading2Font = .system(.title3).weight(.bold)
+                heading3Font = .system(.title3).weight(.semibold)
+                codeFont = .system(.body)
+                codeOverflow = .wrap
+                quoteBarWidth = 4
+                ruleWidth = 2
+                codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
+                                      cornerRadius: 12, horizontalPadding: 20, verticalPadding: 14,
+                                      surface: .flat)
+            case .phone:
+                blockSpacing = 8
+                listIndent = 18
+                markerSpacing = 6
+                heading1Font = .system(.title3).weight(.bold)
+                heading2Font = .system(.headline)
+                heading3Font = .system(.subheadline).weight(.semibold)
+                codeFont = .system(.callout)
+                codeOverflow = .scroll
+                quoteBarWidth = 3
+                ruleWidth = 1
+                codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
+                                      cornerRadius: 8, horizontalPadding: 10, verticalPadding: 8,
+                                      surface: .flat)
             }
         }
     }
