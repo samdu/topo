@@ -112,9 +112,30 @@ private struct LineReader: TextRenderer {
 /// outside it). The box is what a gap has to hold, what the roost and the hurry judge and what
 /// "covered" means. The canvas draws the whole picture round it, so an excursion, a working pose or
 /// the sign reaches past the box and over whatever is there, and that reach is nothing the roam
-/// answers: they are brief, and he comes back to the box.
+/// answers: they are brief, and he comes back to the box. What it answers of that reach is the
+/// screen's edge: `reach` keeps the whole of it inside the transcript's frame.
 enum MascotSprite {
     static let box = CGRect(x: 35, y: 67, width: 92, height: 89)
+
+    /// The part of the picture he can be drawn in at all, in art pixels: the union of every pose
+    /// the app can ask the engine for — the idle cycle with its corner and yoga, the walk, and
+    /// thinking, searching, building, writing and calendar, on every head and load band, and the
+    /// ways between them — with two pixels round it (`MascotGeometryTests.testEveryPoseTheAppAsksForIsDrawnInsideTheReach`).
+    /// The sign is not in it, because nothing in the app sets one (`MascotState.sign`); a sign
+    /// reaches 40 pixels further right.
+    static let reach = CGRect(x: 15, y: 47, width: 121, height: 113)
+
+    /// How far `reach` goes past the box on each side, in points at `scale`.
+    struct Reach: Equatable, Sendable {
+        var left: CGFloat = 0, top: CGFloat = 0, right: CGFloat = 0, bottom: CGFloat = 0
+
+        static let none = Reach()
+    }
+
+    static func reach(scale: CGFloat) -> Reach {
+        Reach(left: (box.minX - reach.minX) * scale, top: (box.minY - reach.minY) * scale,
+              right: (reach.maxX - box.maxX) * scale, bottom: (reach.maxY - box.maxY) * scale)
+    }
 
     /// His picture on the screen, in points, at `scale` points an art pixel.
     static func size(scale: CGFloat) -> CGSize {
@@ -151,6 +172,16 @@ struct MascotField: Equatable, Sendable {
         if let keyboard { bottom = min(bottom, keyboard.minY) }
         guard bottom > visible.minY else { return CGRect(x: visible.minX, y: visible.minY, width: visible.width, height: 0) }
         return CGRect(x: visible.minX, y: visible.minY, width: visible.width, height: bottom - visible.minY)
+    }
+
+    /// Where his box can be, for a picture reaching `reach` past it: `open`, drawn in from the
+    /// transcript's edges by the reach, so nothing he can be drawn in is cut by the screen's edge.
+    /// Only the edges: what he keeps from the words is the box's clearance, and nothing more.
+    func room(_ reach: MascotSprite.Reach) -> CGRect {
+        let open = open
+        let minX = visible.minX + max(reach.left, 0), maxX = visible.maxX - max(reach.right, 0)
+        let minY = visible.minY + max(reach.top, 0), maxY = min(open.maxY, visible.maxY - max(reach.bottom, 0))
+        return CGRect(x: minX, y: minY, width: max(maxX - minX, 0), height: max(maxY - minY, 0))
     }
 
     /// Where an obstacle can be seen: from the transcript's top edge — above it is the navigation
@@ -228,19 +259,20 @@ enum MascotRoost: Equatable, Sendable {
     /// Where he stands, from the chat's geometry, the size of his picture, the room he keeps and
     /// where he stands now (`from`, his picture's origin; nil before he has stood anywhere).
     ///
-    /// A gap is a place in `field.open` for his picture where it, with `clearance` all round it,
+    /// A gap is a place in `field.room(reach)` for his picture where it, with `clearance` all round it,
     /// overlaps nothing he may not cover. The clearance is kept from what he may not cover and
     /// not from the transcript's own edges, so the margin beside a reply holds him flush with the
     /// screen's edge. Of the gaps that hold him the nearest to `from` wins — so a new turn moves
     /// him the least — and with no `from` the nearest to the transcript's bottom trailing corner,
     /// the right margin just above the glass. With no gap he stands nowhere and is not drawn:
     /// never on the glass, never over the microphone.
-    static func of(_ field: MascotField, size: CGSize, clearance: CGFloat, from: CGPoint?) -> MascotRoost {
+    static func of(_ field: MascotField, size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none,
+                   from: CGPoint?) -> MascotRoost {
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
         let margin = clearance.isFinite ? max(clearance, 0) : 0
-        let open = field.open
+        let open = field.room(reach)
         let home = CGPoint(x: open.maxX - size.width, y: open.maxY - size.height)
-        if let spot = nearestGap(field, size: size, margin: margin, to: from ?? home) {
+        if let spot = nearestGap(field, open: open, size: size, margin: margin, to: from ?? home) {
             return .gap(CGRect(origin: spot, size: size))
         }
         return .none
@@ -249,13 +281,13 @@ enum MascotRoost: Equatable, Sendable {
     /// The origin of his picture in the nearest gap to `target`, or nil for none.
     ///
     /// The gap is found for his picture grown by the margin, whose origin is allowed anywhere that
-    /// leaves the picture itself inside `open` and the grown picture outside every obstacle grown
+    /// leaves the picture itself inside `open`, the room, and the grown picture outside every obstacle grown
     /// by its size. The nearest
     /// allowed point to the target is the target itself or lies on the edge of one of those
     /// regions, at the target's own x or y or at a corner of two of them, so the lines through
     /// the target and every edge, crossed, hold it.
-    private static func nearestGap(_ field: MascotField, size: CGSize, margin: CGFloat, to target: CGPoint) -> CGPoint? {
-        let open = field.open
+    private static func nearestGap(_ field: MascotField, open: CGRect, size: CGSize, margin: CGFloat,
+                                   to target: CGPoint) -> CGPoint? {
         let grown = CGSize(width: size.width + 2 * margin, height: size.height + 2 * margin)
         guard size.width <= open.width, size.height <= open.height else { return nil }
         let allowedX = (open.minX - margin)...(open.maxX - size.width - margin)
@@ -287,13 +319,13 @@ enum MascotRoost: Equatable, Sendable {
         return best.map { CGPoint(x: $0.point.x + margin, y: $0.point.y + margin) }
     }
 
-    /// Whether `frame` is a roost as it stands: a gap — inside `field.open`, with nothing he may
-    /// not cover within `clearance` of it. The small-move threshold keeps him only where this
+    /// Whether `frame` is a roost as it stands: a gap — inside `field.room(reach)`, with nothing he
+    /// may not cover within `clearance` of it. The small-move threshold keeps him only where this
     /// holds.
-    static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat) -> Bool {
+    static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat, reach: MascotSprite.Reach = .none) -> Bool {
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let grown = frame.insetBy(dx: -margin, dy: -margin)
-        guard field.open.insetBy(dx: -epsilon, dy: -epsilon).contains(frame) else { return false }
+        guard field.room(reach).insetBy(dx: -epsilon, dy: -epsilon).contains(frame) else { return false }
         return !field.covering.contains { overlap($0, grown) }
     }
 
@@ -333,15 +365,19 @@ struct MascotRoam: Equatable, Sendable {
     struct Settings: Equatable, Sendable {
         var size: CGSize
         var clearance: CGFloat
+        /// How far the picture he can be drawn in reaches past his box, which the transcript's
+        /// edges hold.
+        var reach: MascotSprite.Reach
         var speed: CGFloat
         var hurry: CGFloat
         var settle: Double
         var reduceMotion = false
 
-        init(size: CGSize, clearance: CGFloat, speed: CGFloat, hurry: CGFloat = 10, settle: Double,
-             reduceMotion: Bool = false) {
+        init(size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none, speed: CGFloat,
+             hurry: CGFloat = 10, settle: Double, reduceMotion: Bool = false) {
             self.size = size
             self.clearance = clearance
+            self.reach = reach
             self.speed = speed
             self.hurry = hurry
             self.settle = settle
@@ -350,7 +386,7 @@ struct MascotRoam: Equatable, Sendable {
 
         init(_ mascot: Look.Mascot, reduceMotion: Bool) {
             self.init(size: MascotSprite.size(scale: mascot.scale), clearance: mascot.clearance,
-                      speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
+                      reach: MascotSprite.reach(scale: mascot.scale), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
                       reduceMotion: reduceMotion)
         }
     }
@@ -445,7 +481,7 @@ struct MascotRoam: Equatable, Sendable {
         }
         if let move, let from = position {
             let destination = CGRect(origin: move.to, size: settings.size)
-            if !MascotRoost.holds(field, frame: destination, clearance: settings.clearance)
+            if !MascotRoost.holds(field, frame: destination, clearance: settings.clearance, reach: settings.reach)
                 || field.crossesOffLimits(from: from, to: move.to, size: settings.size) {
                 self.move = nil
                 decide(glide: true)
@@ -475,6 +511,7 @@ struct MascotRoam: Equatable, Sendable {
     mutating func use(_ settings: Settings) {
         guard settings != self.settings else { return }
         let reroost = settings.size != self.settings.size || settings.clearance != self.settings.clearance
+            || settings.reach != self.settings.reach
         self.settings = settings
         if settings.reduceMotion, let move {
             position = move.to
@@ -521,7 +558,8 @@ struct MascotRoam: Equatable, Sendable {
         guard let field else { return }
         let next = waiting
             ? MascotRoost.none
-            : MascotRoost.of(field, size: settings.size, clearance: settings.clearance, from: position)
+            : MascotRoost.of(field, size: settings.size, clearance: settings.clearance, reach: settings.reach,
+                             from: position)
         guard let to = next.frame?.origin else {
             roost = .none
             position = nil
@@ -536,7 +574,8 @@ struct MascotRoam: Equatable, Sendable {
         // Within his own room of where he stands is where he stands — where that is a roost as it
         // stands; one that is not moves however short the move.
         if hypot(to.x - from.x, to.y - from.y) <= settings.clearance,
-           MascotRoost.holds(field, frame: CGRect(origin: from, size: settings.size), clearance: settings.clearance) {
+           MascotRoost.holds(field, frame: CGRect(origin: from, size: settings.size), clearance: settings.clearance,
+                             reach: settings.reach) {
             // Where he stands is his roost, which a glide cut short leaves somewhere else.
             roost = .gap(CGRect(origin: from, size: settings.size))
             return

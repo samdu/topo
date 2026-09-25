@@ -81,9 +81,9 @@ struct Look: Equatable, Sendable {
         /// Room kept clear after Topo's own turns, in points, on their trailing side: the margin
         /// he stands in beside his replies. On the phone it is 100: his box at a scale of 1, 92
         /// points, and one clearance, rounded up to ten, which with the column's padding holds his
-        /// picture flush with the screen's edge and its clearance from the words, and the
-        /// ends of lines that stop short of the column's edge add to it; none on the watch and the
-        /// television, where he is not drawn. The person's bubbles keep the column's width.
+        /// picture, the 9 points his reach keeps from the screen's edge and his clearance from the
+        /// words, and the ends of lines that stop short of the column's edge add to it; none on the
+        /// watch and the television, where he is not drawn. The person's bubbles keep the column's width.
         var replyTrailingInset: CGFloat
         /// A turn's words.
         var bodyFont: Font
@@ -415,8 +415,8 @@ struct Look: Equatable, Sendable {
         var scale: CGFloat = 1
         /// The room he keeps from every word, the row being written, the lines under the
         /// transcript, the composer's pane and the keyboard, in points, on every side of his
-        /// picture; not from the transcript's own edges, so the margin beside a reply holds him
-        /// flush with the screen's edge. A new roost within this of where he stands is not a move.
+        /// picture; not from the transcript's own edges, where what he keeps is his reach
+        /// (`MascotSprite.reach`), so the margin beside a reply holds him. A new roost within this of where he stands is not a move.
         var clearance: CGFloat = 8
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
