@@ -29,14 +29,15 @@ What is built, what comes next and in what order, what is parked, and the thread
 
 ## Parked, and why
 
-- **The hub as a running mind.** `TopoHub` holds the lease and shows the pairing code but runs no turns; the phone is the primary until the guest path is complete, because the phone is the device Helen has.
+- **The hub as a running mind.** `TopoHub` holds the lease and shows the pairing code but runs no turns; the phone is the primary until the guest path is complete, since it has to stand-alone if it's a user's only device.
 - **Sockets and the tunnel** (`Packages/TopoLink` beyond the LAN probe). CloudKit is truth and works with no socket; speed comes after the mind does.
 - **The house board** (`docs/board.md`). Designed, with `TopoBoard` in place; no screen draws it until one person's mind is worth sharing a wall with.
-- **A settings button replaced by a long press on Topo.** Sam's word: never mind the settings button; the badge stays.
-- **A hidden terminal onto the guest's Claude Code, #133.** Useful for debugging; not a feature.
-- **Resuming a spoken reply after an interruption.** Deliberately not built; a reply cut by a call carries on, a reply interrupted by anything else is said again by hand.
 
 ## Open threads
+- **A "topo" menu** with menu-items populated by the agent themselves. Quick access to frequent settings, long-press the octopus (conflicts with dragging topo, TBD)
+- need to implement a (+) button on the glass for inserting attachments
+- need a model + effort selector on the glass — opens to a panel with a model size slider, topo remains visible with this panel open so his head size can react in real time to model changes
+- first-run progress screen with progress bars for environment setup, speech setup, and transcription setup — need to decide how to show this progress when launching a newly-updated app that already has a log, since it will jump straight to the transcript while things download in the background
 
 ### Pull requests
 
@@ -44,9 +45,6 @@ What is built, what comes next and in what order, what is parked, and the thread
 
 ### Deferred proof gaps
 
-- **#160** (Topo roams) and **#154** (glass under the keyboard): test gaps the sweeps deferred rather than fixed.
-- **#149**: five corner cases in the transcript bridge from #143's last Codex read, merged over by override.
-- **#147**, **#132**, **#153**: tests that bind what they should not or leave a path untested.
 - **#161**: the chat draws empty until the first CloudKit read returns; a first-run progress plan has not been written.
 - **#128**: the first-run screen shows after sign-in when the log already has turns.
 - **#148**: the lease's heartbeat runs on after sign-out.
