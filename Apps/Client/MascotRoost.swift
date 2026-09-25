@@ -132,7 +132,7 @@ enum MascotSprite {
     static let reach = CGRect(x: 15, y: 47, width: 130, height: 113)
 
     /// How far `reach` goes past the box on each side, in points at `scale`.
-    struct Reach: Equatable, Sendable {
+    struct Reach: Equatable, Sendable, Codable {
         var left: CGFloat = 0, top: CGFloat = 0, right: CGFloat = 0, bottom: CGFloat = 0
 
         static let none = Reach()
@@ -225,6 +225,13 @@ struct MascotField: Equatable, Sendable, Codable {
         if let keyboard { bottom = min(bottom, keyboard.minY) }
         let wide = CGFloat.greatestFiniteMagnitude / 4
         return CGRect(x: -wide, y: visible.minY, width: 2 * wide, height: max(bottom - visible.minY, 0))
+    }
+
+    /// The words he may not cover, as far as each can be seen (`seen`): every turn, the row being
+    /// written, the lines under the transcript and the offer card, less what is out of sight.
+    var words: [CGRect] {
+        let seen = seen
+        return obstacles.map { $0.intersection(seen) }.filter { !$0.isNull && $0.width > 0 && $0.height > 0 }
     }
 
     /// What he may not be drawn over: what of each obstacle can be seen (`seen`); the composer's
@@ -349,13 +356,15 @@ struct MascotField: Equatable, Sendable, Codable {
 
 /// Where Topo stands: a gap in the transcript, the glass, a pin, or nowhere.
 enum MascotRoost: Equatable, Sendable {
-    /// A gap in the transcript, and the frame of his picture in it.
+    /// A place in the transcript, and the frame of his picture in it: a gap clear of the words, or
+    /// where none is, the least covered place (`Decision.choice.clears` says which).
     case gap(CGRect)
     /// The composer's empty flank, placed `glass`.
     case glass(CGRect)
     /// Where a person pinned him, placed `pinned`, or where a drag has him now.
     case pinned(CGRect)
-    /// No gap holds him, and he is not drawn.
+    /// No place holds him at all — the transcript unread, his reach wider than the room — and he
+    /// is not drawn.
     case none
 
     var frame: CGRect? {
@@ -375,66 +384,142 @@ enum MascotRoost: Equatable, Sendable {
     }
 
     /// Where he stands, from the chat's geometry, the size of his picture, the room he keeps and
-    /// where he stands now (`from`, his picture's origin; nil before he has stood anywhere).
-    ///
-    /// A gap is a place in `field.room(reach)` for his picture where it, with `clearance` all round it,
-    /// overlaps nothing he may not cover. The clearance is kept from what he may not cover and
-    /// not from the transcript's own edges, so the margin beside a reply holds him flush with the
-    /// screen's edge. Of the gaps that hold him the nearest to `from` wins — so a new turn moves
-    /// him the least — and with no `from` the nearest to the transcript's bottom trailing corner,
-    /// the right margin just above the glass. With no gap he stands nowhere and is not drawn:
-    /// never on the glass, never over the microphone.
+    /// where he stands now (`from`, his picture's origin; nil before he has stood anywhere): the
+    /// roost `decide` chooses.
     static func of(_ field: MascotField, size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none,
                    from: CGPoint?) -> MascotRoost {
-        guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite else { return .none }
+        decide(field, size: size, clearance: clearance, reach: reach, from: from).roost
+    }
+
+    /// One place his box was weighed at: its frame, the area of it over words he may not cover
+    /// (`cost`, none for a place that clears), and whether it clears — keeps `clearance` from
+    /// every word and is a gap.
+    struct Candidate: Codable, Equatable, Sendable {
+        var frame: CGRect
+        var cost: CGFloat
+        var clears: Bool
+    }
+
+    /// Where he was put and why: the geometry whole, what he was weighed with, where he was aimed
+    /// at, every place weighed and the one chosen. The roam keeps the last one it made, and what a
+    /// debug build shows of him — the chat's report, the overlay of his field, the trace — reads
+    /// this value rather than working anything out again.
+    struct Decision: Codable, Equatable, Sendable {
+        var field: MascotField
+        var size: CGSize
+        var clearance: CGFloat
+        var reach: MascotSprite.Reach
+        /// Where his box may be at all (`MascotField.room`).
+        var room: CGRect
+        /// What the nearest place is measured from: where he stands, or where a word displacing
+        /// him sends him, or the room's bottom trailing corner before he has stood anywhere.
+        var aim: CGPoint
+        var candidates: [Candidate] = []
+        /// How many of `candidates` clear the words.
+        var clearing = 0
+        /// The index of the one chosen in `candidates`; nil when none was, and he stands nowhere.
+        var chosen: Int?
+
+        /// The candidate chosen.
+        var choice: Candidate? { chosen.map { candidates[$0] } }
+
+        /// The roost it comes to: the chosen place, or nowhere.
+        var roost: MascotRoost { choice.map { .gap($0.frame) } ?? .none }
+    }
+
+    /// Where he stands and why, from the same things `of` is handed.
+    ///
+    /// Every place for his box is weighed on one lattice (below) inside `field.room(reach)`, and
+    /// one where the box, grown by what it keeps from the pane, the well or the keyboard — the
+    /// clearance or his reach, whichever is longer on each side — overlaps any of them is not a
+    /// place at all. Of the rest, one that also keeps `clearance` from every word clears. The
+    /// clearance is kept from what he may not cover and not from the transcript's own edges, so
+    /// the margin beside a reply holds him flush with the screen's edge.
+    ///
+    /// Of the places that clear, the nearest to the aim wins — so a new turn moves him the least —
+    /// and of two as near the one further right, then the one higher up. With none that clears he
+    /// stands where the least of his box is over words (`cost`), with the same rule between
+    /// places that cost the same: over words rather than nowhere, since hiding him is worse than
+    /// covering a line. The aim is `from`, or with none the room's bottom trailing corner, the
+    /// right margin just above the glass.
+    ///
+    /// He stands nowhere only where there is no place at all: a size that is not one, or a room
+    /// his box cannot fit at all (his reach wider or taller than the transcript leaves him), and
+    /// never on the glass or over the microphone.
+    static func decide(_ field: MascotField, size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none,
+                       from: CGPoint?) -> Decision {
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let open = field.room(reach)
         let home = CGPoint(x: open.maxX - size.width, y: open.maxY - size.height)
-        if let spot = nearestGap(field.kept(clearance: margin, reach: reach), open: open, size: size, to: from ?? home) {
-            return .gap(CGRect(origin: spot, size: size))
-        }
-        return .none
-    }
-
-    /// The origin of his picture in the nearest gap to `target`, or nil for none.
-    ///
-    /// His box's origin is allowed anywhere that leaves the box inside `open`, the room, and the
-    /// box, grown by what it keeps from each thing (`kept`), outside that thing; each thing so
-    /// becomes a region of origins it forbids. The nearest
-    /// allowed point to the target is the target itself or lies on the edge of one of those
-    /// regions, at the target's own x or y or at a corner of two of them, so the lines through
-    /// the target and every edge, crossed, hold it.
-    private static func nearestGap(_ kept: [(rect: CGRect, keep: MascotSprite.Reach)], open: CGRect, size: CGSize,
-                                   to target: CGPoint) -> CGPoint? {
-        guard size.width <= open.width, size.height <= open.height else { return nil }
+        let aim = from ?? home
+        var decision = Decision(field: field, size: size, clearance: margin, reach: reach, room: open, aim: aim)
+        guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite,
+              size.width <= open.width, size.height <= open.height else { return decision }
         let allowedX = open.minX...(open.maxX - size.width)
         let allowedY = open.minY...(open.maxY - size.height)
-        let forbidden = kept.map { thing in
+        // Each thing he keeps from becomes the region of origins it forbids: the thing grown by
+        // his box up and left and by what he keeps from it on every side.
+        func forbids(_ thing: (rect: CGRect, keep: MascotSprite.Reach)) -> CGRect {
             CGRect(x: thing.rect.minX - size.width - thing.keep.right, y: thing.rect.minY - size.height - thing.keep.bottom,
                    width: thing.rect.width + size.width + thing.keep.left + thing.keep.right,
                    height: thing.rect.height + size.height + thing.keep.top + thing.keep.bottom)
         }
-        let aim = target
-        var xs = [aim.x.clamped(to: allowedX), allowedX.lowerBound, allowedX.upperBound]
-        var ys = [aim.y.clamped(to: allowedY), allowedY.lowerBound, allowedY.upperBound]
-        for region in forbidden {
-            xs += [region.minX, region.maxX].filter(allowedX.contains)
-            ys += [region.minY, region.maxY].filter(allowedY.contains)
+        // What the words forbid is where a place stops clearing; what the pane, the well and the
+        // keyboard forbid is no place at all.
+        let words = field.words
+        let keep = MascotSprite.Reach.all(margin)
+        let wordRegions = words.map { forbids((rect: $0, keep: keep)) }
+        let offLimits = field.offLimits.map { forbids((rect: $0, keep: keep.union(reach))) }
+        let everything = wordRegions + offLimits
+        // The lattice: the aim's own x and y, the room's edges and every forbidden region's
+        // edges, which is where the nearest place that clears is, since it is the aim itself or
+        // on the edge of a region, at the aim's x or y or at a corner of two; and the edges at
+        // which his box starts and stops overlapping each word, which with those are where the
+        // area over words, bilinear between them, is least.
+        var xs: Set<CGFloat> = [aim.x.clamped(to: allowedX), allowedX.lowerBound, allowedX.upperBound]
+        var ys: Set<CGFloat> = [aim.y.clamped(to: allowedY), allowedY.lowerBound, allowedY.upperBound]
+        for region in everything {
+            for x in [region.minX, region.maxX] where allowedX.contains(x) { xs.insert(x) }
+            for y in [region.minY, region.maxY] where allowedY.contains(y) { ys.insert(y) }
         }
-        var best: (point: CGPoint, distance: CGFloat)?
-        for y in ys {
-            for x in xs {
-                let point = CGPoint(x: x, y: y)
-                guard !forbidden.contains(where: { strictlyInside(point, $0) }) else { continue }
-                let distance = hypot(x - aim.x, y - aim.y)
-                if let best, !(distance < best.distance - epsilon
-                               || (abs(distance - best.distance) <= epsilon && (-x, y) < (-best.point.x, best.point.y))) {
-                    continue
-                }
-                best = (point, distance)
+        for word in words {
+            for x in [word.minX - size.width, word.minX, word.maxX - size.width, word.maxX] where allowedX.contains(x) {
+                xs.insert(x)
+            }
+            for y in [word.minY - size.height, word.minY, word.maxY - size.height, word.maxY] where allowedY.contains(y) {
+                ys.insert(y)
             }
         }
-        return best?.point
+        var best: (index: Int, cost: CGFloat, distance: CGFloat)?
+        for y in ys.sorted() {
+            for x in xs.sorted() {
+                let point = CGPoint(x: x, y: y)
+                guard !offLimits.contains(where: { strictlyInside(point, $0) }) else { continue }
+                let clears = !wordRegions.contains(where: { strictlyInside(point, $0) })
+                let frame = CGRect(origin: point, size: size)
+                let cost = clears ? 0 : words.reduce(CGFloat(0)) { sum, word in
+                    let over = word.intersection(frame)
+                    return over.isNull ? sum : sum + over.width * over.height
+                }
+                decision.candidates.append(Candidate(frame: frame, cost: cost, clears: clears))
+                if clears { decision.clearing += 1 }
+                let distance = hypot(x - aim.x, y - aim.y)
+                // A place that clears beats one that does not; then the least cost; then the
+                // nearest; then the one further right, then higher up.
+                let rank = clears ? -CGFloat.infinity : cost
+                if let best {
+                    let bestFrame = decision.candidates[best.index].frame
+                    let better = rank < best.cost - epsilon
+                        || (abs(rank - best.cost) <= epsilon || rank == best.cost)
+                        && (distance < best.distance - epsilon
+                            || (abs(distance - best.distance) <= epsilon && (-x, y) < (-bestFrame.minX, bestFrame.minY)))
+                    guard better else { continue }
+                }
+                best = (decision.candidates.count - 1, rank, distance)
+            }
+        }
+        decision.chosen = best?.index
+        return decision
     }
 
     /// Whether `frame` is a roost as it stands: a gap — inside `field.room(reach)`, with no word
@@ -444,6 +529,16 @@ enum MascotRoost: Equatable, Sendable {
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         guard field.room(reach).insetBy(dx: -epsilon, dy: -epsilon).contains(frame) else { return false }
         return !field.kept(clearance: margin, reach: reach).contains { overlap($0.rect, $0.keep.around(frame)) }
+    }
+
+    /// Whether `frame` is a place he may stand at all, words aside: inside `field.room(reach)`,
+    /// with neither the pane, the well nor the keyboard within his clearance or his reach. Where
+    /// no place clears the words, this is what keeps a glide to the least covered one going.
+    static func admits(_ field: MascotField, frame: CGRect, clearance: CGFloat, reach: MascotSprite.Reach = .none) -> Bool {
+        let margin = clearance.isFinite ? max(clearance, 0) : 0
+        guard field.room(reach).insetBy(dx: -epsilon, dy: -epsilon).contains(frame) else { return false }
+        let keep = MascotSprite.Reach.all(margin).union(reach)
+        return !field.offLimits.contains { overlap($0, keep.around(frame)) }
     }
 
     /// A thousandth of a point: what two edges that meet are allowed to share without counting as
@@ -640,6 +735,11 @@ struct MascotRoam: Equatable, Sendable {
     private(set) var field: MascotField?
     /// Where he is going, or standing.
     private(set) var roost: MascotRoost = .none
+    /// The last decision where to stand (`MascotRoost.decide`), which a debug build shows; nil
+    /// before one, and while the transcript is still to be read.
+    private(set) var decision: MascotRoost.Decision?
+    /// How many decisions he has made, for the trace.
+    private(set) var decisions = 0
     /// Which way he faces, decided with each roost that is a gap (`MascotFacing.of`, his box's
     /// centre against the transcript's vertical midline) and kept while he stands nowhere. His box
     /// is symmetric about his body's axis, so its centre is where his body stands.
@@ -717,8 +817,8 @@ struct MascotRoam: Equatable, Sendable {
     /// him below the pane's top edge or the keyboard's — the glass rising with the keyboard onto
     /// or past where he stands, which SwiftUI lays out in one step while the render server
     /// animates it across him — places him at once, with no glide, since a glide out from under
-    /// the glass or the keyboard would draw him over the glass on its way; with nowhere to go he is
-    /// not drawn.
+    /// the glass or the keyboard would draw him over the glass on its way; with no place at all he
+    /// is not drawn.
     mutating func observe(_ field: MascotField, at time: Double) {
         now = max(now, time)
         guard field != self.field else { return }
@@ -771,7 +871,13 @@ struct MascotRoam: Equatable, Sendable {
         }
         if let move, let from = position {
             let destination = CGRect(origin: move.to, size: settings.size)
-            if !MascotRoost.holds(field, frame: destination, clearance: settings.clearance, reach: settings.reach)
+            // Where no place cleared the words, where he was going was the least covered one and
+            // never a gap: it stands while it is a place at all, and the settle after the glide
+            // decides again.
+            let stands = MascotRoost.holds(field, frame: destination, clearance: settings.clearance, reach: settings.reach)
+                || (decision?.choice?.clears == false
+                    && MascotRoost.admits(field, frame: destination, clearance: settings.clearance, reach: settings.reach))
+            if !stands
                 || field.crossesOffLimits(from: from, to: move.to, size: settings.size, reach: settings.reach) {
                 self.move = nil
                 decide(glide: true)
@@ -945,10 +1051,18 @@ struct MascotRoam: Equatable, Sendable {
                 ? CGPoint(x: picture.minX, y: word.minY - margin - settings.size.height)
                 : CGPoint(x: picture.minX, y: word.maxY + margin)
         }
-        let next = waiting
-            ? MascotRoost.none
-            : MascotRoost.of(field, size: settings.size, clearance: settings.clearance, reach: settings.reach,
-                             from: aim)
+        if waiting {
+            decision = nil
+        } else {
+            let made = MascotRoost.decide(field, size: settings.size, clearance: settings.clearance,
+                                          reach: settings.reach, from: aim)
+            decision = made
+            decisions += 1
+            #if DEBUG
+            MascotTrace.shared?.decided(made, at: now)
+            #endif
+        }
+        let next = decision?.roost ?? .none
         guard let to = next.frame?.origin else {
             roost = .none
             position = nil

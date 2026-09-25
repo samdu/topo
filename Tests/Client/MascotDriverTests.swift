@@ -231,13 +231,14 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertFalse(nowhere.animates)
         XCTAssertTrue(nowhere.present, "a Topo standing nowhere lost the clock that places him")
 
-        // A chat with no room anywhere, not even a pane: he stands nowhere.
+        // A transcript too short for his box, with no pane: there is no place at all, and he
+        // stands nowhere.
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
         defer { window.isHidden = true }
         window.addSubview(canvas)
-        let none = MascotField(visible: CGRect(x: 0, y: 0, width: 400, height: 600),
-                               obstacles: [CGRect(x: 0, y: 0, width: 400, height: 600)])
+        let none = MascotField(visible: CGRect(x: 0, y: 0, width: 400, height: 40),
+                               obstacles: [CGRect(x: 0, y: 0, width: 400, height: 40)])
         canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: none, settings: Self.settings,
                      interval: 1.0 / 30, conditions: seen)
         XCTAssertEqual(canvas.roam?.hidden, true)
@@ -323,8 +324,9 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(MascotCanvas.stepCap(interval: 1.0 / 30), 0.1)
     }
 
-    /// Not drawn for want of a gap, the link stops, since nothing waits on the clock; a geometry
-    /// change — the keyboard rising, a scroll — starts it again, and the room it opens places him.
+    /// Not drawn for want of a place — a transcript too short for his box, which is where he
+    /// stands nowhere — the link stops, since nothing waits on the clock; a geometry change that
+    /// gives the transcript its height starts it again, and the room it opens places him.
     func testAGeometryChangeWithNowhereToStandStartsTheClockAgain() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
@@ -335,7 +337,8 @@ final class MascotDriverTests: XCTestCase {
             canvas.apply(input: input, field: field, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
         }
         var full = Self.open
-        full.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 600)]
+        full.visible = CGRect(x: 0, y: 560, width: 400, height: 40)
+        full.obstacles = [CGRect(x: 0, y: 560, width: 400, height: 40)]
         apply(full)
         for _ in 0..<30 { canvas.step(1.0 / 30) }
         XCTAssertEqual(canvas.roam?.roost.name, "none")

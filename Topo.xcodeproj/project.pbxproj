@@ -15,6 +15,7 @@
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		062DCBE16220AA2952E85920 /* MascotDebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */; };
 		07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */; };
 		07DD7564A112D8FE2FF4224F /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
 		08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
@@ -45,6 +46,7 @@
 		1E6472BE7B0F51AC2B8B0D30 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		1E726715C9BE92C093BC2932 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
 		20F2A0B4C6E8592CD1F27954 /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
+		2308E041E51118EDBF4A785C /* MascotDebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */; };
 		239832F9F2883746AE291109 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		23BF8C9AB0A659820195042C /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		243871CD8C2AB6177AE98A7C /* VaultMigration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCC0910114D0F4D264253EC5 /* VaultMigration.swift */; };
@@ -272,6 +274,7 @@
 		E855FBF41819F3010E5322B5 /* GuestBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402EB6E7D75092F33B78F15B /* GuestBridge.swift */; };
 		E942602EA806665C4E0B77D5 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		E9C3F1CE0924C7104534402E /* LookScreenshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = F59AA6D01DD8D8703F00072C /* LookScreenshots.swift */; };
+		EA4ACBF53A5AFDEBEDE83AF4 /* MascotDebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */; };
 		EAE76D18E221DDE86E6B8E9F /* NextTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = 168BFCB3EC9C31AD43D68959 /* NextTurn.swift */; };
 		EB5D170F823BF4964F6331DB /* ModelDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */; };
 		EC6D775DF6222966553B11BA /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A383104A833CDB1DFF33D305 /* Composer.swift */; };
@@ -374,6 +377,7 @@
 		522A26D8E0BA7917872C2EAC /* fling.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fling.json; sourceTree = "<group>"; };
 		57BE8636EBBD805D555F974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5990B1776EC4BC101510B22E /* TopoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoAuth; path = Packages/TopoAuth; sourceTree = SOURCE_ROOT; };
+		5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotDebugOverlay.swift; sourceTree = "<group>"; };
 		5BC384737CD70F66D0AB8921 /* TopoCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoCore; path = Packages/TopoCore; sourceTree = SOURCE_ROOT; };
 		5C5D5EA3AC974059B62B6B47 /* NextTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextTurnTests.swift; sourceTree = "<group>"; };
 		5D8D9234166E53AA4FC71B31 /* TopoUserlandBrakeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUserlandBrakeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -693,6 +697,7 @@
 				402EB6E7D75092F33B78F15B /* GuestBridge.swift */,
 				9A03F8DA19F37B857BA8F079 /* Harness.swift */,
 				F3F572EF397E4BF9E7FF6685 /* Mascot.swift */,
+				5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */,
 				6904A480352F2D00E38BFD6F /* MascotRoost.swift */,
 				333D38923B458890391C4F4C /* MascotView.swift */,
 				41AECABE45D12B711410A2ED /* Memory.swift */,
@@ -1326,6 +1331,7 @@
 				2A8B0CBB3C5F5C7737F9B998 /* Look.swift in Sources */,
 				5266073D3EDF719493DE1B17 /* LookDocument.swift in Sources */,
 				7FC511CC16D5D339A6795596 /* Mascot.swift in Sources */,
+				2308E041E51118EDBF4A785C /* MascotDebugOverlay.swift in Sources */,
 				AF9538434E62AF312A23A63D /* MascotRoost.swift in Sources */,
 				98F16241DBF61F9F1250FA71 /* MascotView.swift in Sources */,
 				0CB9C6F0BF69A4125ADF0F51 /* Memory.swift in Sources */,
@@ -1434,6 +1440,7 @@
 				A8807AF0D00F928C12D256FA /* Look.swift in Sources */,
 				F179B6F2808ECFFAA6763959 /* LookDocument.swift in Sources */,
 				473D96F72E5B9C40C4975D6A /* Mascot.swift in Sources */,
+				062DCBE16220AA2952E85920 /* MascotDebugOverlay.swift in Sources */,
 				095AA2E26A94E478E1E1679E /* MascotRoost.swift in Sources */,
 				46E8500C0C4AD6DBF1BCCCEA /* MascotView.swift in Sources */,
 				A2097BCC74498B3C1244E579 /* Memory.swift in Sources */,
@@ -1545,6 +1552,7 @@
 				3823B3829FF33312ACBCE0B1 /* Look.swift in Sources */,
 				9107FEAD3FE82BD92D841883 /* LookDocument.swift in Sources */,
 				64E90F467AC3967809F8EC29 /* Mascot.swift in Sources */,
+				EA4ACBF53A5AFDEBEDE83AF4 /* MascotDebugOverlay.swift in Sources */,
 				394011352BE04F68F30E3B98 /* MascotRoost.swift in Sources */,
 				19FE7B41489AD4F9301A5FB3 /* MascotView.swift in Sources */,
 				5FAB5887BA7AFAB2F6B79F92 /* Memory.swift in Sources */,

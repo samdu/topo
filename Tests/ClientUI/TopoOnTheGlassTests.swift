@@ -242,6 +242,40 @@ final class TopoOnTheGlassTests: XCTestCase {
         over.terminate()
     }
 
+    /// Over a chat with no place clear of its words he is still drawn — over the words, where the
+    /// least of him covers them — and the well keeps its press beside him. `full` with both insets
+    /// at 0, so the turns span the column, and his clearance at the top of its range, which takes
+    /// the room at the top of the chat as well (`noClearPlace`, kept as a drag's pin would be and
+    /// cleared after): the chat's report says he is drawn, his frame inside the screen and off the
+    /// glass, the decision cleared no place and chose where he stands.
+    func testWithNoPlaceClearOfTheWordsHeIsDrawnOverThemAndTheWellKeepsItsPress() throws {
+        addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
+        let app = ChatReading.launch(transcript: "full", tuning: Self.noClearPlace)
+        let mic = ChatReading.microphone(app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen")
+        let (_, topo) = try ChatReading.wait(app, "standing over the words") { _, topo in
+            topo.roost == "gap" && topo.standing && topo.decision?.clears == false
+        }
+        XCTAssertFalse(topo.hidden, "\(topo)")
+        let decision = try XCTUnwrap(topo.decision)
+        XCTAssertEqual(decision.clearing, 0, "a place clear of the words was weighed and passed over: \(topo)")
+        XCTAssertGreaterThan(decision.candidates, 0)
+        XCTAssertTrue(ChatReading.near(decision.chosen, topo.frame), "he does not stand where the decision chose: \(topo)")
+        let box = try XCTUnwrap(topo.box)
+        let offset = try XCTUnwrap(ChatReading.offset(topo, mic: mic), "no well in the report")
+        let onScreen = box.offsetBy(dx: offset.dx, dy: offset.dy)
+        XCTAssertTrue(app.frame.contains(onScreen), "\(onScreen) is not inside the screen \(app.frame): \(topo)")
+        let pane = try XCTUnwrap(topo.paneRect)
+        XCTAssertLessThanOrEqual(box.maxY, pane.minY + 0.5, "over the glass: \(topo)")
+        attach(app, "topo-over-the-words")
+        try pressThrough(app, "over the words beside the well")
+        app.terminate()
+    }
+
+    /// `full` with no place clear of its words: the turns across the column and the clearance at
+    /// its most.
+    static let noClearPlace = #"{"mascot": {"clearance": 64}, "transcript": {"replyTrailingInset": 0, "personLeadingInset": 0}}"#
+
     /// A tap on the well's middle and a hold there past the time that picks him up, each counted as
     /// a press and a release by the microphone, with no drag begun.
     private func pressThrough(_ app: XCUIApplication, _ label: String) throws {

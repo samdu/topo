@@ -190,6 +190,9 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// changes. A debug build hands it to the chat's report.
     var onReport: ((MascotRoam.Report) -> Void)?
     private var reported: MascotRoam.Report?
+    /// The overlay of his field is drawn: turning it on reports again, so it has something to
+    /// draw with him standing still.
+    var fieldShown = false { didSet { if fieldShown != oldValue { reported = nil } } }
     /// Told the facing each roost decides (`MascotRoam.facing`) when it is not the one last told,
     /// which is how it reaches `Mascot.facing` and so the engine: at the decision, not per frame.
     var onFace: ((MascotFacing) -> Void)?
@@ -633,6 +636,37 @@ extension MascotRoam {
         /// The glass's frames as drawn while something moved (`MascotCanvas.trail`), debug only.
         var trail: [Drawn] = []
 
+        /// The roam's last decision where to stand (`MascotRoam.decision`), debug only: whole in
+        /// the app, for the overlay of his field, and as a summary in the JSON.
+        var decision: Weighed?
+
+        /// A decision as the report carries it. `whole` is the decision itself, which the overlay
+        /// draws and which is not written out, since it holds every place weighed; the rest is
+        /// what a suite reads: the frame chosen, whether it clears the words, what of it is over
+        /// them, the aim, and how many places were weighed and how many cleared.
+        struct Weighed: Codable, Equatable, Sendable {
+            var whole: MascotRoost.Decision?
+            var chosen: [Double]?
+            var clears: Bool?
+            var cost: Double?
+            var aim: [Double]
+            var candidates: Int
+            var clearing: Int
+
+            enum CodingKeys: String, CodingKey { case chosen, clears, cost, aim, candidates, clearing }
+
+            init(_ decision: MascotRoost.Decision) {
+                whole = decision
+                let choice = decision.choice
+                chosen = choice.map { [$0.frame.minX, $0.frame.minY, $0.frame.width, $0.frame.height].map { Double($0) } }
+                clears = choice?.clears
+                cost = choice.map { Double($0.cost) }
+                aim = [Double(decision.aim.x), Double(decision.aim.y)]
+                candidates = decision.candidates.count
+                clearing = decision.clearing
+            }
+        }
+
         struct Drawn: Codable, Equatable, Sendable {
             var t: Double
             var top: Double
@@ -654,24 +688,37 @@ extension MascotRoam {
                       hidden: hidden, walking: walking, covered: covered, moves: moves,
                       pane: field?.pane.map(numbers), placement: settings.placement.rawValue, dragging: dragging,
                       drags: drags, pin: [Double(settings.pin.x), Double(settings.pin.y)],
-                      well: field?.well.map(numbers), visible: field.map { numbers($0.visible) })
+                      well: field?.well.map(numbers), visible: field.map { numbers($0.visible) },
+                      decision: debugDecision)
+    }
+
+    /// The decision as a debug build reports it; nothing in a release build.
+    private var debugDecision: Report.Weighed? {
+        #if DEBUG
+        decision.map(Report.Weighed.init)
+        #else
+        nil
+        #endif
     }
 }
 
 #if DEBUG
-/// `TOPO_DEBUG_MASCOT_TRACE=<file name>`: every geometry the canvas hands his roam and every tick
-/// of its clock, with where that left him, written a JSON object a line to that name in the app's
-/// temporary directory. A geometry is written as the roam is handed it (`observe`), and a tick as
-/// the clock moved it on (`advance`), in the order they happened, so a run on the simulator can be
-/// replayed through `MascotRoam` in a test exactly as it ran. Nothing is written when the
-/// variable is absent, which is every ordinary run.
-@MainActor
-final class MascotTrace {
+/// `TOPO_DEBUG_MASCOT_TRACE=<file name>`: every geometry the canvas hands his roam, every tick
+/// of its clock, with where that left him, and every decision where to stand, written a JSON
+/// object a line to that name in the app's temporary directory. A geometry is written as the roam
+/// is handed it (`observe`), a tick as the clock moved it on (`advance`), and a decision as the
+/// roam makes it (`MascotRoost.decide`, from `MascotRoam`, once each: the whole of it, geometry,
+/// every place weighed and the one chosen), in the order they happened, so a run on the
+/// simulator can be replayed through `MascotRoam` in a test exactly as it ran and each decision
+/// read as it was made. Nothing is written when the variable is absent, which is every ordinary
+/// run. Writes are serialised by a lock, since a decision is made wherever the roam is.
+final class MascotTrace: @unchecked Sendable {
     static let variable = "TOPO_DEBUG_MASCOT_TRACE"
     static let shared: MascotTrace? = ProcessInfo.processInfo.environment[variable].flatMap { MascotTrace(name: $0) }
 
     private let handle: FileHandle
     private let encoder = JSONEncoder()
+    private let lock = NSLock()
 
     init?(name: String) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
@@ -690,6 +737,7 @@ final class MascotTrace {
         var covered: Bool?
         var walking: Bool?
         var moves: Int?
+        var decision: MascotRoost.Decision?
     }
 
     func observed(_ field: MascotField, at time: Double) { write(Line(t: time, field: field)) }
@@ -699,7 +747,11 @@ final class MascotTrace {
                    moves: roam.moves))
     }
 
+    func decided(_ decision: MascotRoost.Decision, at time: Double) { write(Line(t: time, decision: decision)) }
+
     private func write(_ line: Line) {
+        lock.lock()
+        defer { lock.unlock() }
         guard var data = try? encoder.encode(line) else { return }
         data.append(0x0A)
         handle.write(data)
@@ -776,12 +828,14 @@ struct MascotOverChat: UIViewRepresentable {
     var face: ((MascotFacing) -> Void)?
     var pin: ((CGPoint) -> Void)?
     var glass: MascotGlassPort?
+    var fieldShown = false
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
         canvas.glass = glass
         canvas.onReport = report
+        canvas.fieldShown = fieldShown
         canvas.onFace = face
         canvas.onPin = pin
         canvas.apply(input: input, field: field, settings: settings, interval: interval, ready: ready,
@@ -831,6 +885,34 @@ struct MascotLayer: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var port = MascotGlassPort()
+    #if DEBUG
+    /// The settings sheet's `Show his field`, and the last report, which the overlay draws.
+    @AppStorage(MascotFieldOverlay.key) private var showField = false
+    @State private var shown: MascotRoam.Report?
+    #endif
+
+    private var fieldShown: Bool {
+        #if DEBUG
+        showField
+        #else
+        false
+        #endif
+    }
+
+    /// What the canvas reports to: the chat's own, and in a debug build showing his field, the
+    /// overlay too, off the view update the report arrives in.
+    private var reported: ((MascotRoam.Report) -> Void)? {
+        #if DEBUG
+        guard showField else { return report }
+        let report = report
+        return { now in
+            report?(now)
+            Task { @MainActor in shown = now }
+        }
+        #else
+        return report
+        #endif
+    }
 
     var body: some View {
         GeometryReader { proxy in
@@ -841,8 +923,14 @@ struct MascotLayer: View {
                                interval: look.mascot.frameInterval, ready: ready,
                                conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                                  reduceMotion: reduceMotion),
-                               report: report, face: face, pin: pin, glass: port)
+                               report: reported, face: face, pin: pin, glass: port, fieldShown: fieldShown)
                     .frame(width: proxy.size.width, height: proxy.size.height)
+                #if DEBUG
+                if showField {
+                    MascotFieldOverlay(report: shown, reach: settings.reach)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                }
+                #endif
                 // On the glass, the stage is framed from the pane as laid out now, so SwiftUI
                 // draws it wherever it draws the pane, in the same transaction.
                 if look.mascot.placement == .glass, let field,

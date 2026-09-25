@@ -181,6 +181,10 @@ final class Tuning {
 struct TuningSection: View {
     @Environment(\.look) private var look
     var tuning = Tuning.shared
+    #if DEBUG
+    /// The overlay of his field (`MascotFieldOverlay`): this device's, and not the look's.
+    @AppStorage(MascotFieldOverlay.key) private var showField = false
+    #endif
 
     var body: some View {
         Section {
@@ -202,6 +206,8 @@ struct TuningSection: View {
                         .accessibilityIdentifier("tuning-\(knob.rawValue)")
                 }
             }
+            Toggle("Show his field", isOn: $showField)
+                .accessibilityIdentifier("tuning-show-field")
             #endif
             Button("Reset", role: .destructive) { tuning.reset() }
                 .disabled(tuning.isEmpty)
