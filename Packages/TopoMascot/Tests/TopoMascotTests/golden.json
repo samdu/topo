@@ -1,5 +1,5 @@
 {
- "engine": "topo-mascot-engine/topo-engine.js at 485fe73",
+ "engine": "topo-mascot-engine/topo-engine.js at f139be1",
  "width": 184,
  "height": 160,
  "scenarios": [
@@ -1358,6 +1358,59 @@
     "160": "3e5ec161b55895de05a96fd795aba197a37ea92873b81ba15dc668fcc32407cf",
     "200": "d801bdd1a18f81a1d2b23a48ea32e9c71b92183f8b0ef51e238c0700704e0cb1",
     "280": "c9f0051951e82918b1440611f10bb59486f7276e1dfb0623cbb16044f1dc5344"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 50,
+   "name": "faces-turn-deadline",
+   "seconds": 26,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33
+     }
+    ],
+    [
+     19.95,
+     {
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 780,
+   "digests": {
+    "599": "d1f663d78101d2c5475a3310430720b6eb573e664039b3299191fc5899db337d",
+    "650": "8bed83644c6080b7e4477b34d4abf832e52ae2343880ce364e4795a85bb9d3fb",
+    "710": "23c4a6abcb77c0b7747e1cba6b86f58201538c81b259d9859aaaaa3234e1ea8b"
+   }
+  },
+  {
+   "fps": 30,
+   "seed": 50,
+   "name": "faces-turn-deadline-later",
+   "seconds": 130,
+   "script": [
+    [
+     0,
+     {
+      "activity": "idle",
+      "corner": -33
+     }
+    ],
+    [
+     124.55,
+     {
+      "facing": "right"
+     }
+    ]
+   ],
+   "frames": 3900,
+   "digests": {
+    "3737": "2ced8cf51707d0e19c921696fd3880f0f29850829f8f0c9e8566c295db328025",
+    "3800": "fa634805365631d076f4242c2a3e8a57d0b4a3fbc8567f0a2dc5d761755b0df2"
    }
   },
   {

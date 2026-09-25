@@ -6,7 +6,7 @@ import TopoMascot
 /// The engine against the pinned JavaScript it was ported from, frame for frame.
 ///
 /// `golden.json` is what the reference rendered, made in samdu/experiments by
-/// `topo-mascot-swift/oracle/golden.mjs` from `topo-mascot-engine/topo-engine.js` at 485fe73: the
+/// `topo-mascot-swift/oracle/golden.mjs` from `topo-mascot-engine/topo-engine.js` at f139be1: the
 /// eighteen cells of the engine's own sheet — the four heads idle, the four loads idle, and every
 /// pose but the shelf he rests on (front, walk, corner, sign, building, writing, calendar,
 /// searching, thinking) — each at frames 10, 40 and 65 of the 2.2 s it settles for, which catches
@@ -18,12 +18,13 @@ import TopoMascot
 /// the way, the work worn, the shelf after), and yoga asked for and not taken. Then all of it again
 /// facing right, the mirror: every sheet cell at two frames, the idle cycle with its stroll going
 /// the other way, signs of every width, and a facing asked for mid-stroll, mid-yoga, mid-sign and
-/// mid-work, before it is taken, at home before he has settled, and after. Each is the SHA-256 of
+/// mid-work, before it is taken, at home before he has settled, and after, and on exactly the
+/// update a shelf wait runs out, the first and a later one. Each is the SHA-256 of
 /// the whole buffer after that frame's draw, the buffer carried from one frame to the next as the
 /// host carries it.
 ///
 /// A frame of the port that differs from the reference by one pixel fails here. The sign's words
-/// beyond its default are not in the set; the experiment's own oracle covers them on 20,685 frames.
+/// beyond its default are not in the set; the experiment's own oracle covers them on 25,365 frames.
 @Suite struct GoldenFramesTests {
     struct Golden: Decodable {
         let width: Int, height: Int
@@ -52,8 +53,8 @@ import TopoMascot
 
     @Test func theSetIsTheOneTheReferenceRendered() {
         #expect(Self.golden.width == Topo.width && Self.golden.height == Topo.height)
-        #expect(Self.golden.scenarios.count == 49)
-        #expect(Self.golden.scenarios.reduce(0) { $0 + $1.digests.count } == 140)
+        #expect(Self.golden.scenarios.count == 51)
+        #expect(Self.golden.scenarios.reduce(0) { $0 + $1.digests.count } == 145)
     }
 
     @Test(arguments: golden.scenarios.map(\.name))

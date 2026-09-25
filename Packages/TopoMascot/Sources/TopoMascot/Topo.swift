@@ -115,6 +115,12 @@ public final class Topo {
 
         // The idle cycle (see "at rest"). Any work calls him home first, since the props stand where home is,
         // and abandons the excursion: back at rest he starts a fresh wait on the shelf rather than resuming it.
+        // A turn that is due is taken first, before the idle cycle may start an excursion, so every excursion
+        // begins under the facing in force: asked for on the update a wait runs out, he turns, then goes.
+        func settledHome(_ shelf: [Float]) -> Bool {
+            poseKey == "shelf" && x_ == 0 && (0..<arms.count).allSatisfy { abs(Double(shelf[$0]) - Double(arms[$0])) <= TURN_SETTLE }
+        }
+        if state.facing != faced && settledHome(targets) { faced = state.facing }
         let idle = state.activity == "idle"
         func span(_ r: (Double, Double)) -> Double { r.0 + random() * (r.1 - r.0) }
         if !idle { outing_ = nil; goal = 0; dueAt = nil }
@@ -147,8 +153,7 @@ public final class Topo {
                 arms[k] = Float(a + (Double(targets[k]) - a) * rate)
             }
         }
-        if state.facing != faced && poseKey == "shelf" && x_ == 0
-            && (0..<arms.count).allSatisfy({ abs(Double(targets[$0]) - Double(arms[$0])) <= TURN_SETTLE }) { faced = state.facing }
+        if state.facing != faced && settledHome(targets) { faced = state.facing }     // or once he is home and settled this update
         // The head rides the body on a spring, which is what ties two animations into one creature.
         let breathe = sin(t * 1.7) * 0.9 + (pose.head?.1 ?? 0) + (poseKey == "walk" ? abs(sin(t * 5)) : 0)
         headV += ((breathe - headY) * 40 - headV * 7) * dt

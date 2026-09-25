@@ -133,4 +133,32 @@ import TopoMascot
         #expect(flip - back <= 60, "\(part): home at frame \(back), turned only at \(flip)")
         #expect(asked.topo.facing == "right")
     }
+
+    /// A twin never asked finds the update on which a corner excursion starts: the first deadline
+    /// (`firstRest`), or one between excursions. Asked to face right on exactly that update, he turns before
+    /// he goes, so the stroll goes to his outer side, right, from its first step, and the picture is the
+    /// twin's reflected.
+    @Test(arguments: [("the first deadline", 1), ("a deadline between excursions", 2)])
+    func aFacingAskedOnTheDeadlineIsTakenBeforeTheExcursion(_ name: String, _ nth: Int) throws {
+        let search = Run(seed: 50)
+        var starts: [Int] = [], was: String? = nil
+        for f in 0..<(200 * 30) where starts.count < nth {
+            search.topo.update(Self.dt, TopoInput(activity: "idle", corner: -33))
+            if was == nil && search.topo.outing == "corner" { starts.append(f) }
+            was = search.topo.outing
+        }
+        let at = try #require(starts.count == nth ? starts[nth - 1] : nil, "\(name): no corner excursion found")
+        let twin = Run(seed: 50), asked = Run(seed: 50)
+        var left = 0, right = 0
+        for f in 0...(at + 150) {
+            let a = twin.step(TopoInput(activity: "idle", corner: -33))
+            let b = asked.step(TopoInput(activity: "idle", corner: -33, facing: f >= at ? "right" : nil))
+            if f < at { continue }
+            if f == at { #expect(asked.topo.facing == "right" && asked.topo.outing == "corner", "\(name): on the deadline's update he is \(asked.topo.facing), outing \(asked.topo.outing ?? "none")") }
+            if asked.topo.x < 0 { left += 1 }
+            if asked.topo.x > 0 { right += 1 }
+            if !Self.reflected(a, b) { Issue.record("\(name): frame \(f), not the twin reflected"); return }
+        }
+        #expect(left == 0 && right > 0, "\(name): the stroll went left \(left) frames and right \(right)")
+    }
 }
