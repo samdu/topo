@@ -9,7 +9,8 @@ import XCTest
 /// stops him being drawn.
 final class MascotRoamTests: XCTestCase {
     static let size = MascotSprite.size(scale: 2.0 / 3)
-    static let settings = MascotRoam.Settings(size: size, clearance: 8, speed: 40, settle: 0.6)
+    static let reach = MascotSprite.reach(scale: 2.0 / 3)
+    static let settings = MascotRoam.Settings(size: size, clearance: 8, reach: reach, speed: 40, settle: 0.6)
     static let frame = 1.0 / 30
 
     static func field(_ obstacles: [CGRect]) -> MascotField {
@@ -35,7 +36,7 @@ final class MascotRoamTests: XCTestCase {
     private func assertCoveredExactlyWhenOverlapped(_ roam: MascotRoam, _ label: String,
                                                     file: StaticString = #filePath, line: UInt = #line) {
         guard let picture = roam.picture, let field = roam.field else { return }
-        XCTAssertEqual(roam.covered, field.covers(picture), "\(label): \(picture)", file: file, line: line)
+        XCTAssertEqual(roam.covered, field.covers(picture, reach: Self.reach), "\(label): \(picture)", file: file, line: line)
         XCTAssertFalse(roam.hidden, "\(label): a Topo standing somewhere was not drawn", file: file, line: line)
     }
 
@@ -366,7 +367,7 @@ final class MascotRoamTests: XCTestCase {
         while roam.needsTime, time < start + 30 { time += Self.frame; roam.advance(to: time) }
         XCTAssertEqual(roam.roost.name, "gap", "the keyboard opened room and he was not placed in it")
         let gap = try XCTUnwrap(roam.picture)
-        XCTAssertTrue(MascotRoost.holds(up, frame: gap, clearance: 8))
+        XCTAssertTrue(MascotRoost.holds(up, frame: gap, clearance: 8, reach: Self.reach))
         XCTAssertFalse(MascotRoost.overlap(gap, up.pane!), "\(gap) over the glass")
 
         // Down again, into a full chat: nothing holds him, and he is not drawn.
@@ -388,12 +389,12 @@ final class MascotRoamTests: XCTestCase {
         let (placed, start) = settled(Self.field([]))
         var roam = placed
         let picture = try XCTUnwrap(roam.picture)
-        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: picture, clearance: 8))
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: picture, clearance: 8, reach: Self.reach))
         // A turn comes within 5 points of his clearance: the nearest place clear of it is 5 away,
         // and where he stands no longer holds.
         let turn = CGRect(x: 0, y: picture.maxY + 3, width: 402, height: 20)
         roam.observe(Self.field([turn]), at: start)
-        XCTAssertFalse(MascotRoost.holds(roam.field!, frame: picture, clearance: 8))
+        XCTAssertFalse(MascotRoost.holds(roam.field!, frame: picture, clearance: 8, reach: Self.reach))
         var time = start
         while roam.needsTime, time < start + 5 { time += Self.frame; roam.advance(to: time) }
         XCTAssertEqual(roam.moves, 1, "a roost lacking his clearance was kept for being near")
@@ -471,7 +472,7 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertNil(roam.move, "a glide under the old clearance went on")
         let placedNow = try XCTUnwrap(roam.picture)
         XCTAssertLessThanOrEqual(placedNow.maxY, turn.minY - 64 + 0.001, "the new clearance was not kept")
-        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: placedNow, clearance: 64))
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: placedNow, clearance: 64, reach: Self.reach))
         XCTAssertFalse(roam.needsTime, "the decision was left for the clock")
     }
 
@@ -490,11 +491,13 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertNotNil(roam.move, "no glide")
         func assertClearOfTheGlass(_ label: String) {
             guard let picture = roam.picture, let field = roam.field else { return }
-            XCTAssertFalse(MascotRoost.overlap(picture, field.well!), "\(label): \(picture) over the well")
-            XCTAssertFalse(MascotRoost.overlap(picture, field.pane!), "\(label): \(picture) over the pane")
+            let reached = roam.settings.reach.around(picture)
+            XCTAssertFalse(MascotRoost.overlap(reached, field.well!), "\(label): \(reached) over the well")
+            XCTAssertFalse(MascotRoost.overlap(reached, field.pane!), "\(label): \(reached) over the pane")
         }
         var largest = Self.settings
         largest.size = MascotSprite.size(scale: 4)
+        largest.reach = MascotSprite.reach(scale: 4)
         roam.use(largest)
         XCTAssertNil(roam.move, "the glide under the old size went on")
         XCTAssertNil(roam.picture, "at a scale of 4 no roost holds him, and he was drawn")
@@ -507,6 +510,7 @@ final class MascotRoamTests: XCTestCase {
         // Back to a scale that fits, he is placed where it holds.
         var middle = Self.settings
         middle.size = MascotSprite.size(scale: 1)
+        middle.reach = MascotSprite.reach(scale: 1)
         roam.use(middle)
         roam.advance(to: time + 1)
         XCTAssertNotNil(roam.picture, "back at scale 1 he was not placed")
@@ -537,18 +541,18 @@ final class MascotRoamTests: XCTestCase {
                              pane: CGRect(x: 41, y: 300, width: 320, height: 53),
                              well: CGRect(x: 177, y: 301, width: 48, height: 48),
                              keyboard: CGRect(x: 0, y: 360, width: 402, height: 500))
-        XCTAssertFalse(MascotRoost.holds(up, frame: CGRect(origin: glide.to, size: Self.size), clearance: 8),
+        XCTAssertFalse(MascotRoost.holds(up, frame: CGRect(origin: glide.to, size: Self.size), clearance: 8, reach: Self.reach),
                        "the fixture's keyboard leaves where he was going a roost")
         let moves = roam.moves
         roam.observe(up, at: time)
         let turned = try XCTUnwrap(roam.roost.frame, "nowhere to turn to")
         XCTAssertNotEqual(turned.origin, glide.to, "the glide went on to where the pane is")
-        XCTAssertTrue(MascotRoost.holds(up, frame: turned, clearance: 8))
+        XCTAssertTrue(MascotRoost.holds(up, frame: turned, clearance: 8, reach: Self.reach))
         XCTAssertTrue(roam.move == nil || roam.moves > moves, "no new decision on the geometry it arrived in")
         func assertOffLimitsClear(_ label: String) {
-            guard let picture = roam.picture else { return }
+            guard let picture = roam.picture.map(Self.reach.around) else { return }
             for limit in up.offLimits {
-                XCTAssertFalse(MascotRoost.overlap(picture, limit), "\(label): \(picture) over \(limit)")
+                XCTAssertFalse(MascotRoost.overlap(picture, limit), "\(label): his reach \(picture) over \(limit)")
             }
         }
         assertOffLimitsClear("as the keyboard arrived")
@@ -558,7 +562,7 @@ final class MascotRoamTests: XCTestCase {
             assertOffLimitsClear("t \(time)")
         }
         let arrived = try XCTUnwrap(roam.picture)
-        XCTAssertTrue(MascotRoost.holds(up, frame: arrived, clearance: 8), "\(arrived) is not a roost")
+        XCTAssertTrue(MascotRoost.holds(up, frame: arrived, clearance: 8, reach: Self.reach), "\(arrived) is not a roost")
     }
 
     /// The glass rising with the keyboard onto where he stands, in the steps of its animation,
@@ -577,20 +581,59 @@ final class MascotRoamTests: XCTestCase {
             up.pane = CGRect(x: 41, y: top - 60, width: 320, height: 53)
             up.well = CGRect(x: 177, y: top - 59, width: 48, height: 48)
             roam.observe(up, at: time)
-            if let picture = roam.picture {
-                XCTAssertFalse(MascotRoost.overlap(picture, up.pane!), "step \(step): \(picture) over the pane")
-                XCTAssertFalse(MascotRoost.overlap(picture, up.well!), "step \(step): \(picture) over the well")
+            if let picture = roam.picture.map(Self.reach.around) {
+                XCTAssertFalse(MascotRoost.overlap(picture, up.pane!), "step \(step): his reach \(picture) over the pane")
+                XCTAssertFalse(MascotRoost.overlap(picture, up.well!), "step \(step): his reach \(picture) over the well")
             }
             time += Self.frame
             roam.advance(to: time)
-            if let picture = roam.picture {
-                XCTAssertFalse(MascotRoost.overlap(picture, up.pane!), "step \(step) tick: \(picture) over the pane")
+            if let picture = roam.picture.map(Self.reach.around) {
+                XCTAssertFalse(MascotRoost.overlap(picture, up.pane!), "step \(step) tick: his reach \(picture) over the pane")
             }
         }
         while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
         let above = try XCTUnwrap(roam.picture, "nowhere above the short glass")
         XCTAssertNotEqual(above, standing)
-        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: above, clearance: 8))
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: above, clearance: 8, reach: Self.reach))
+    }
+
+    /// At no clearance his reach, not only his box, is what the glass is judged against: resting
+    /// on the empty chat he stands with his reach on the pane's top edge; the pane rising by less
+    /// than his reach below the box — onto his reach and not his box — covers him on the geometry
+    /// it arrives in and places him clear of it at once; and a glide whose way passes the glass
+    /// by less than his reach turns.
+    func testAtNoClearanceTheGlassIsJudgedByHisReach() throws {
+        var bare = Self.settings
+        bare.clearance = 0
+        let (placed, start) = settled(Self.field([]), bare)
+        var roam = placed
+        let standing = try XCTUnwrap(roam.picture)
+        let pane = try XCTUnwrap(Self.field([]).pane)
+        XCTAssertEqual(Self.reach.around(standing).maxY, pane.minY, accuracy: 0.001, "\(standing): his reach is not on the glass's edge")
+        XCTAssertGreaterThan(Self.reach.bottom, 0)
+        // The pane rises by half his reach below the box: it is under his reach and not his box.
+        var risen = Self.field([])
+        let rise = Self.reach.bottom / 2
+        risen.pane = pane.offsetBy(dx: 0, dy: -rise)
+        risen.well = risen.well?.offsetBy(dx: 0, dy: -rise)
+        XCTAssertFalse(MascotRoost.overlap(standing, risen.pane!), "the fixture put the pane on his box")
+        XCTAssertTrue(risen.covers(standing, reach: Self.reach), "the glass under his reach does not cover him")
+        XCTAssertFalse(MascotRoost.holds(risen, frame: standing, clearance: 0, reach: Self.reach))
+        roam.observe(risen, at: start)
+        let moved = try XCTUnwrap(roam.picture, "nowhere clear of the risen glass")
+        XCTAssertNil(roam.move, "a glide out from over the glass")
+        XCTAssertFalse(MascotRoost.overlap(Self.reach.around(moved), risen.pane!), "\(moved): his reach is over the glass")
+        XCTAssertFalse(roam.covered)
+        // A glide past the glass by less than his reach turns.
+        let field = Self.field([])
+        let from = CGPoint(x: 0, y: pane.minY - Self.size.height - Self.reach.bottom)
+        let along = CGPoint(x: 300, y: from.y)
+        XCTAssertFalse(field.crossesOffLimits(from: from, to: along, size: Self.size, reach: Self.reach))
+        let lower = CGPoint(x: 300, y: from.y + rise)
+        XCTAssertFalse(field.crossesOffLimits(from: from, to: lower, size: Self.size),
+                       "the fixture's glide crosses the glass with his box")
+        XCTAssertTrue(field.crossesOffLimits(from: from, to: lower, size: Self.size, reach: Self.reach),
+                      "a glide with his reach over the glass does not cross it")
     }
 
     /// The keyboard rising mid-glide with where he is going still a roost, and the way to it

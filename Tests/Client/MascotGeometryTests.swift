@@ -196,7 +196,8 @@ final class MascotGeometryTests: XCTestCase {
     /// his whole picture — every point of it, top to bottom — overlaps no turn, no row and none of
     /// the composer's pane; standing in a gap it keeps the clearance from every turn and stays in
     /// the transcript above the glass; and the whole of what he can be drawn in, his reach, is
-    /// inside the transcript's frame, so the screen's edge cuts none of it.
+    /// inside the transcript's frame, so the screen's edge cuts none of it, and clear of the
+    /// pane, the well and the keyboard, at no clearance as at every other.
     func testHisPictureExcludesEveryObstacleAndThePaneAtEveryEnd() {
         for fixture in Self.fixtures {
             for scale in [0.25, Look.Mascot().scale, 4] as [CGFloat] {
@@ -208,8 +209,12 @@ final class MascotGeometryTests: XCTestCase {
                         let label = "\(fixture.name), scale \(scale), clearance \(clearance), from \(String(describing: from))"
                         assertClear(roost, in: fixture.field, size: size, clearance: clearance, label)
                         if let frame = roost.frame {
-                            XCTAssertTrue(fixture.field.visible.insetBy(dx: -0.001, dy: -0.001).contains(Self.reached(frame)),
-                                          "\(label): his reach \(Self.reached(frame)) is cut by \(fixture.field.visible)")
+                            let reached = Self.reached(frame)
+                            XCTAssertTrue(fixture.field.visible.insetBy(dx: -0.001, dy: -0.001).contains(reached),
+                                          "\(label): his reach \(reached) is cut by \(fixture.field.visible)")
+                            for limit in fixture.field.offLimits {
+                                XCTAssertFalse(MascotRoost.overlap(reached, limit), "\(label): his reach \(reached) over \(limit)")
+                            }
                         }
                     }
                 }
@@ -491,6 +496,10 @@ final class MascotGeometryTests: XCTestCase {
                     XCTAssertEqual(whole.minY + MascotSprite.box.minY * mascot.scale, drawn.minY, accuracy: 0.001, label)
                     XCTAssertTrue(field.visible.insetBy(dx: -0.001, dy: -0.001).contains(Self.reached(drawn)),
                                   "\(label): his reach \(Self.reached(drawn)) is cut by \(field.visible)")
+                    for limit in field.offLimits {
+                        XCTAssertFalse(MascotRoost.overlap(Self.reached(drawn), limit),
+                                       "\(label): his reach \(Self.reached(drawn)) over \(limit)")
+                    }
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.well!), "\(label): drawn over the well")
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.pane!), "\(label): drawn over the pane")
                     for obstacle in field.covering {

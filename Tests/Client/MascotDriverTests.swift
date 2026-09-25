@@ -121,7 +121,8 @@ final class MascotDriverTests: XCTestCase {
     static let open = MascotField(visible: CGRect(x: 0, y: 0, width: 400, height: 600),
                                   pane: CGRect(x: 40, y: 600, width: 320, height: 80),
                                   well: CGRect(x: 164, y: 604, width: 72, height: 72))
-    static let settings = MascotRoam.Settings(size: MascotSprite.size(scale: 2.0 / 3), clearance: 8, speed: 40,
+    static let settings = MascotRoam.Settings(size: MascotSprite.size(scale: 2.0 / 3), clearance: 8,
+                                              reach: MascotSprite.reach(scale: 2.0 / 3), speed: 40,
                                               settle: 0.6)
 
     /// The canvas's display link runs while he animates, at the look's rate, and is gone the
