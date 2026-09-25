@@ -326,13 +326,15 @@ enum KeyboardInset {
 /// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
 /// open, and that must not depend on how much has been said. So is the keyboard: the pane goes
 /// short under it, and a pane that is not there cannot be seen to.
+/// So is a pane Topo sits on (`holdsTopo`, the look's `glass` placement): a Topo on invisible glass
+/// is a Topo floating.
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing
     /// is the step the share cannot express: a pane, or none, with nothing in between. `keyboard`
     /// is the row's field holding focus, which is the keyboard asked for.
     static func of(contentBottom: CGFloat, paneTop: CGFloat, rise: CGFloat, open: Bool,
-                   keyboard: Bool) -> Double {
-        if open || keyboard { return 1 }
+                   keyboard: Bool, holdsTopo: Bool = false) -> Double {
+        if open || keyboard || holdsTopo { return 1 }
         let under = contentBottom - paneTop
         guard rise > 0 else { return under > 0 ? 1 : 0 }
         return Double(min(max(under / rise, 0), 1))

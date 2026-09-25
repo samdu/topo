@@ -211,6 +211,61 @@ final class TopoOnTheGlassTests: XCTestCase {
         }
     }
 
+    /// The well keeps its press under a placed Topo: with him on the glass beside it, and pinned
+    /// over it, a tap and a hold long enough to have been a drag each reach `VoiceInput` — the press
+    /// and its release both counted — and no drag began. The pin over the well is worked out from
+    /// where the chat reports the well, a fraction of the transcript's frame carried to the pane's
+    /// foot, and kept as a drag would keep it (`TOPO_DEBUG_TUNING`), which the test clears after.
+    func testThroughAPlacedTopoThePressIsTheMicrophones() throws {
+        addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
+        let beside = ChatReading.launch(transcript: "empty", tuning: #"{"mascot": {"placement": "glass"}}"#)
+        XCTAssertTrue(ChatReading.microphone(beside).waitForExistence(timeout: 60), "the chat screen")
+        let (_, glass) = try ChatReading.wait(beside, "on the glass beside the well") { _, topo in
+            topo.roost == "glass" && topo.standing
+        }
+        attach(beside, "topo-glass-beside-the-well")
+        try pressThrough(beside, "beside the well on the glass")
+        beside.terminate()
+
+        let well = try XCTUnwrap(glass.wellRect), frame = try XCTUnwrap(glass.pinFrame)
+        let x = (well.midX - frame.minX) / frame.width, y = (well.midY - frame.minY) / frame.height
+        let over = ChatReading.launch(transcript: "full",
+                                      tuning: #"{"mascot": {"placement": "pinned", "pin": {"x": \#(x), "y": \#(y)}}}"#)
+        XCTAssertTrue(ChatReading.microphone(over).waitForExistence(timeout: 60), "the chat screen")
+        let (_, pinned) = try ChatReading.wait(over, "pinned over the well") { _, topo in
+            topo.roost == "pinned" && topo.standing
+        }
+        let box = try XCTUnwrap(pinned.box), drawnWell = try XCTUnwrap(pinned.wellRect)
+        XCTAssertTrue(box.contains(CGPoint(x: drawnWell.midX, y: drawnWell.midY)), "not over the well's middle: \(pinned)")
+        attach(over, "topo-pinned-over-the-well")
+        try pressThrough(over, "pinned over the well")
+        over.terminate()
+    }
+
+    /// A tap on the well's middle and a hold there past the time that picks him up, each counted as
+    /// a press and a release by the microphone, with no drag begun.
+    private func pressThrough(_ app: XCUIApplication, _ label: String) throws {
+        let mic = ChatReading.microphone(app)
+        for (press, duration) in [("a tap", 0.1), ("a hold", 1.5)] {
+            let before = try XCTUnwrap(ChatReading.mic(mic), "\(label): no report on the microphone")
+            let frame = mic.frame
+            app.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: frame.midX, dy: frame.midY))
+                .press(forDuration: duration)
+            let deadline = Date().addingTimeInterval(15)
+            var after = ChatReading.mic(mic)
+            while (after?.presses != before.presses + 1 || after?.releases != before.releases + 1), Date() < deadline {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+                after = ChatReading.mic(mic)
+            }
+            XCTAssertEqual(after?.presses, before.presses + 1, "\(label): \(press) on the well was not the microphone's press")
+            XCTAssertEqual(after?.releases, before.releases + 1, "\(label): \(press) on the well was not the microphone's release")
+            let topo = try XCTUnwrap(ChatReading.chat(app)?.mascot)
+            XCTAssertEqual(topo.drags, 0, "\(label): \(press) on the well began a drag: \(topo)")
+            XCTAssertFalse(topo.dragging, "\(label): \(press) on the well picked him up")
+            ChatReading.answerPrompt()
+        }
+    }
+
     /// Where each transcript puts him at the default look.
     static let roosts = [("full", "gap"), ("empty", "gap")]
 
@@ -244,6 +299,8 @@ final class TopoOnTheGlassTests: XCTestCase {
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = ""
         app.launchEnvironment["TOPO_DEBUG_LOOK"] = look
         app.launchEnvironment["TOPO_DEBUG_TRANSCRIPT"] = transcript
+        // No placement or pin kept from an earlier run: he roams.
+        app.launchEnvironment["TOPO_DEBUG_TUNING"] = ""
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
         dismissAccountAlert()

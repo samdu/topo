@@ -203,6 +203,8 @@ enum LookDocument {
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
+        r.placement("placement", &value.placement)
+        r.pin("pin", &value.pin)
     }
 
     private static func flank(_ value: inout Look.Composer.Flank, _ r: Reader) {
@@ -525,6 +527,32 @@ enum LookDocument {
 
         func surface(_ key: String, _ value: inout Look.Surface) { named(key, &value) }
 
+        /// Where Topo sits: `"roam"`, `"glass"` or `"pinned"`.
+        func placement(_ key: String, _ value: inout Look.Mascot.Placement) { named(key, &value) }
+
+        /// Where a pinned Topo's centre is put: an object naming an `x` and a `y`, each a fraction
+        /// from 0 to 1 of the transcript's frame carried down to the pane's foot. It is one place and not two numbers, so it is
+        /// taken whole or refused whole: a pin with one half out of range, or missing, is not a
+        /// place the person put him, and the compiled pin stands.
+        func pin(_ key: String, _ value: inout CGPoint) {
+            guard let raw = take(key) else { return }
+            guard let object = raw as? [String: Any] else {
+                return note(key, "is not an object naming an x and a y")
+            }
+            var x: Double?, y: Double?
+            let before = notes.count
+            into(object, name(key)) { r in
+                x = r.amount("x", in: 0...1, "a fraction across the chat between 0 and 1")
+                y = r.amount("y", in: 0...1, "a fraction down the chat, from the transcript's top to the glass's foot, between 0 and 1")
+            }
+            guard let x, let y else {
+                if notes.count == before { note(key, "needs both an x and a y") }
+                return
+            }
+            applied += 1
+            value = CGPoint(x: x, y: y)
+        }
+
         /// The name of a picture in the app's asset catalogue. What names are in there is not
         /// something this can be asked — the catalogue is the app's and this type is every
         /// platform's — so a name that is not one of them is a jewel with no stone in it, which
@@ -722,19 +750,18 @@ extension View {
     /// from it, and a join nothing can hold is a document that decodes perfectly and is never
     /// worn.
     func wearing(_ memory: Memory) -> some View {
-        #if DEBUG
         wearing(memory, tuning: .shared)
-        #else
-        environment(\.look, memory.look)
-        #endif
     }
 
-    #if DEBUG
-    /// A debug build's: the launch's look in place of the vault's where one was given, and the
-    /// settings sheet's tuning worn over either (`Tuning`).
+    /// The vault's look — in a debug build the launch's look in its place where one was given —
+    /// with this device's override worn over it (`Tuning`): the pin a drag left and the placement
+    /// chosen in the settings sheet, and a debug build's sliders.
     func wearing(_ memory: Memory, tuning: Tuning) -> some View {
+        #if DEBUG
         environment(\.look, tuning.worn(over: DebugRun.look ?? memory.look))
+        #else
+        environment(\.look, tuning.worn(over: memory.look))
+        #endif
     }
-    #endif
 }
 #endif

@@ -184,6 +184,15 @@ struct MascotField: Equatable, Sendable, Codable {
     /// The keyboard, while it is up.
     var keyboard: CGRect?
 
+    /// What a pin is a fraction of: the transcript's frame, carried down to the pane's foot where
+    /// the pane is below it, since the lines under the transcript and the glass are part of the
+    /// chat a person can put him over — the well included, which keeps its press whatever is drawn
+    /// over it.
+    var pinFrame: CGRect {
+        guard let pane, pane.maxY > visible.maxY else { return visible }
+        return CGRect(x: visible.minX, y: visible.minY, width: visible.width, height: pane.maxY - visible.minY)
+    }
+
     /// Where a gap can be: the transcript's frame down to the pane's top edge and the keyboard's.
     /// Text runs under the pane, but the pane is glass over it and not text, so what is under the
     /// pane is not what he covers; beside the pane is left out with it, which only costs him room.
@@ -338,16 +347,20 @@ struct MascotField: Equatable, Sendable, Codable {
     }
 }
 
-/// Where Topo stands: a gap in the transcript, or nowhere.
+/// Where Topo stands: a gap in the transcript, the glass, a pin, or nowhere.
 enum MascotRoost: Equatable, Sendable {
     /// A gap in the transcript, and the frame of his picture in it.
     case gap(CGRect)
+    /// The composer's empty flank, placed `glass`.
+    case glass(CGRect)
+    /// Where a person pinned him, placed `pinned`, or where a drag has him now.
+    case pinned(CGRect)
     /// No gap holds him, and he is not drawn.
     case none
 
     var frame: CGRect? {
         switch self {
-        case .gap(let frame): frame
+        case .gap(let frame), .glass(let frame), .pinned(let frame): frame
         case .none: nil
         }
     }
@@ -355,6 +368,8 @@ enum MascotRoost: Equatable, Sendable {
     var name: String {
         switch self {
         case .gap: "gap"
+        case .glass: "glass"
+        case .pinned: "pinned"
         case .none: "none"
         }
     }
@@ -447,6 +462,90 @@ enum MascotRoost: Equatable, Sendable {
     }
 }
 
+/// Where Topo stands when the look places him rather than letting him roam: on the glass, or at a
+/// pin. Pure functions of the chat's geometry, so each policy's answer is arithmetic a test holds.
+enum MascotPerch {
+    /// His box on the composer's glass, in its empty flank — the trailing one, since the leading
+    /// flank holds the keyboard's control — with the engine's shelf on the pane's top edge and his
+    /// body in the middle of the flank: from the well's trailing edge to the pane's trailing end.
+    /// Nil where there is no pane or no well to stand beside.
+    static func glass(_ field: MascotField, size: CGSize) -> CGRect? {
+        guard let slot = glassSlot(field), let pane = field.pane, size.width > 0, size.height > 0 else { return nil }
+        let scale = size.width / MascotSprite.box.width
+        let top = pane.minY - (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * scale
+        return CGRect(x: slot.midX - size.width / 2, y: top, width: size.width, height: size.height)
+    }
+
+    /// The part of the chat he is drawn in while he stands on the glass: across, the empty flank
+    /// from the well's trailing edge to the pane's trailing end, so no pose of his is drawn over
+    /// the microphone or off the end of the pane; down, everything to the pane's foot.
+    static func glassSlot(_ field: MascotField) -> CGRect? {
+        guard let pane = field.pane, let well = field.well else { return nil }
+        let left = min(well.maxX, pane.maxX)
+        // Above the pane is as far up as the screen goes; a number any screen is inside, and small
+        // enough that the pane's foot survives being added to it.
+        let top = min(field.visible.minY, pane.minY) - 10_000
+        return CGRect(x: left, y: top, width: pane.maxX - left, height: pane.maxY - top)
+    }
+
+    /// The view he is drawn in while he stands on the glass (`MascotGlassStage`): the whole
+    /// picture drawn round his box on the pane, which SwiftUI places from the pane's own frame
+    /// inside a clip of `glassSlot`, so where the pane is drawn — on the keyboard's curve as it
+    /// rises and falls — he is drawn with it, and his picture fills the stage at every height.
+    static func glassStage(_ field: MascotField, size: CGSize) -> CGRect? {
+        glass(field, size: size).map(MascotSprite.drawn(around:))
+    }
+
+    /// His box at `pin`, a fraction of `frame` across and down, as the look carries it: the box's
+    /// centre put there, then moved in only as far as it takes to keep his reach inside `frame` —
+    /// the transcript's carried to the pane's foot with the keyboard down (`MascotField.pinFrame`) —
+    /// so the screen's edge holds him wherever the pin
+    /// is. The pin is read in `0...1` here too, whatever it is handed. With the keyboard up he is
+    /// lifted clear of it, keeping from its top edge his clearance or his reach, whichever is
+    /// longer, and no further up than the transcript's top edge lets him: the pin is where he goes
+    /// back to when it goes. The glass and the words are not obstacles, since a person put him
+    /// there. Nil for a frame with no room at all.
+    static func pinned(_ pin: CGPoint, in frame: CGRect, keyboard: CGRect?, size: CGSize,
+                       reach: MascotSprite.Reach, clearance: CGFloat) -> CGRect? {
+        guard frame.width > 0, frame.height > 0, frame.width.isFinite, frame.height.isFinite,
+              size.width > 0, size.height > 0 else { return nil }
+        let px = pin.x.isFinite ? pin.x.clamped(to: 0...1) : 0.5
+        let py = pin.y.isFinite ? pin.y.clamped(to: 0...1) : 0.5
+        let at = inside(CGRect(x: frame.minX + px * frame.width - size.width / 2,
+                               y: frame.minY + py * frame.height - size.height / 2,
+                               width: size.width, height: size.height), frame, reach: reach)
+        let x = at.minX
+        var y = at.minY
+        if let keyboard {
+            let keep = max(clearance.isFinite ? max(clearance, 0) : 0, reach.bottom)
+            let lowest = keyboard.minY - keep - size.height
+            if y > lowest { y = max(lowest, frame.minY + reach.top) }
+        }
+        return CGRect(x: x, y: y, width: size.width, height: size.height)
+    }
+
+    /// Where `frame`'s centre is, as a pin: a fraction of `within` across and down, each in `0...1`.
+    static func pin(of frame: CGRect, in within: CGRect) -> CGPoint {
+        guard within.width > 0, within.height > 0 else { return CGPoint(x: 0.5, y: 0.5) }
+        return CGPoint(x: ((frame.midX - within.minX) / within.width).clamped(to: 0...1),
+                       y: ((frame.midY - within.minY) / within.height).clamped(to: 0...1))
+    }
+
+    /// `box` moved in only as far as it takes to keep its reach inside `frame`: the screen's edge
+    /// holding him, at a pin and in a finger alike.
+    static func inside(_ box: CGRect, _ frame: CGRect, reach: MascotSprite.Reach) -> CGRect {
+        CGRect(x: inside(box.minX, from: frame.minX + reach.left, to: frame.maxX - reach.right - box.width),
+               y: inside(box.minY, from: frame.minY + reach.top, to: frame.maxY - reach.bottom - box.height),
+               width: box.width, height: box.height)
+    }
+
+    /// `value` inside `from...to`, or halfway between them where the range is empty.
+    private static func inside(_ value: CGFloat, from: CGFloat, to: CGFloat) -> CGFloat {
+        guard from <= to else { return (from + to) / 2 }
+        return value.clamped(to: from...to)
+    }
+}
+
 private extension Comparable {
     func clamped(to range: ClosedRange<Self>) -> Self { min(max(self, range.lowerBound), range.upperBound) }
 }
@@ -481,9 +580,14 @@ struct MascotRoam: Equatable, Sendable {
         var hurry: CGFloat
         var settle: Double
         var reduceMotion = false
+        /// Where he sits, as a policy (`Look.Mascot.Placement`), and the pin he is put at while it
+        /// is `pinned`.
+        var placement = Look.Mascot.Placement.roam
+        var pin = Look.Mascot().pin
 
         init(size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none, speed: CGFloat,
-             hurry: CGFloat = 10, settle: Double, reduceMotion: Bool = false) {
+             hurry: CGFloat = 10, settle: Double, reduceMotion: Bool = false,
+             placement: Look.Mascot.Placement = .roam, pin: CGPoint = Look.Mascot().pin) {
             self.size = size
             self.clearance = clearance
             self.reach = reach
@@ -491,12 +595,20 @@ struct MascotRoam: Equatable, Sendable {
             self.hurry = hurry
             self.settle = settle
             self.reduceMotion = reduceMotion
+            self.placement = placement
+            self.pin = pin
         }
 
         init(_ mascot: Look.Mascot, reduceMotion: Bool) {
             self.init(size: MascotSprite.size(scale: mascot.scale), clearance: mascot.clearance,
                       reach: MascotSprite.reach(scale: mascot.scale), speed: mascot.roamSpeed, hurry: mascot.hurry, settle: mascot.roamSettle,
-                      reduceMotion: reduceMotion)
+                      reduceMotion: reduceMotion, placement: mascot.placement, pin: mascot.pin)
+        }
+
+        /// The same policy and the same place: a change of either is a glide to where the new one
+        /// puts him.
+        func samePlace(as other: Settings) -> Bool {
+            placement == other.placement && (placement != .pinned || pin == other.pin)
         }
     }
 
@@ -508,6 +620,9 @@ struct MascotRoam: Equatable, Sendable {
         var to: CGPoint
         var duration: Double
         var elapsed = 0.0
+        /// How many times the stroll it goes at the least: 1, or the hurry for a pinned Topo the
+        /// keyboard has come up over.
+        var pace: CGFloat = 1
 
         /// Where he is `elapsed` stroll-seconds along it.
         func at(_ elapsed: Double) -> CGPoint {
@@ -537,9 +652,18 @@ struct MascotRoam: Equatable, Sendable {
     private(set) var covered = false
 
     private var isCovered: Bool {
-        guard let picture, let field else { return false }
+        guard settings.placement == .roam, !dragging, let picture, let field else { return false }
         return field.covers(picture, reach: settings.reach)
     }
+    /// A finger has him: he goes where it takes him, and nothing is decided until it lets go.
+    private(set) var dragging = false
+    /// How many drags have begun, for the tests: a press that was not one leaves it alone.
+    private(set) var drags = 0
+    /// Where the finger picked him up, which a drop that moved him nowhere leaves him.
+    private var pickedUp: CGPoint?
+    /// The frame a pin is a fraction of with the keyboard down (`MascotField.pinFrame`): the last
+    /// of a geometry with no keyboard in it.
+    private(set) var resting: CGRect?
     /// How many glides have begun, for the tests.
     private(set) var moves = 0
     /// Which way the words are moving, in points down the screen at the last geometry (up
@@ -598,6 +722,26 @@ struct MascotRoam: Equatable, Sendable {
     mutating func observe(_ field: MascotField, at time: Double) {
         now = max(now, time)
         guard field != self.field else { return }
+        if field.keyboard == nil { resting = field.pinFrame }
+        // A finger has him, or the look places him: the roam decides nothing.
+        if dragging {
+            self.field = field
+            covered = false
+            return
+        }
+        if settings.placement != .roam {
+            let keyboardMoved = (self.field?.keyboard == nil) != (field.keyboard == nil)
+            self.field = field
+            changed = now
+            // Not yet placed: the chat is still laying itself out, and he is placed once it has
+            // held still for a settle after the read, as a roaming Topo is.
+            guard position != nil else {
+                unsettled = true
+                return
+            }
+            perch(keyboardMoved ? .keyboard : .geometry)
+            return
+        }
         let drift = self.field.map { field.drift(since: $0) } ?? 0
         self.field = field
         changed = now
@@ -654,6 +798,12 @@ struct MascotRoam: Equatable, Sendable {
         self.waiting = waiting
         changed = now
         unsettled = true
+        // A placed Topo is nowhere while the transcript is to be read, as a roaming one is.
+        if waiting, settings.placement != .roam, !dragging {
+            roost = .none
+            position = nil
+            move = nil
+        }
     }
 
     /// The settings, which a look or Reduce Motion can change. Reduce Motion coming on ends a glide
@@ -665,15 +815,38 @@ struct MascotRoam: Equatable, Sendable {
         guard settings != self.settings else { return }
         let reroost = settings.size != self.settings.size || settings.clearance != self.settings.clearance
             || settings.reach != self.settings.reach
+        let switched = !settings.samePlace(as: self.settings)
         self.settings = settings
         if settings.reduceMotion, let move {
             position = move.to
             self.move = nil
         }
+        // Held by a finger, he is where it has him; what it lets go of is decided then.
+        if dragging { return }
+        // A new policy, or a new pin, is a glide from where he stands to where it puts him, at the
+        // stroll, as a roost change is; from a pin to roaming, a roost is decided from where he
+        // stands. A new size or clearance under a placed policy places him at once, as it does
+        // when he roams. Not yet placed, he is placed at the settle.
+        if settings.placement != .roam, switched || reroost {
+            guard position != nil else {
+                changed = now
+                unsettled = true
+                return
+            }
+            perch(reroost ? .atOnce : .switched)
+            return
+        }
+        if switched, position != nil {
+            move = nil
+            decide(glide: !reroost)
+            unsettled = true
+            covered = isCovered
+            return
+        }
         if reroost, position != nil {
             move = nil
             decide(glide: false)
-        } else if reroost {
+        } else if reroost || switched {
             // Not drawn: the new size may fit where the old did not, decided once it settles.
             changed = now
             unsettled = true
@@ -688,8 +861,9 @@ struct MascotRoam: Equatable, Sendable {
         advanced = max(advanced, time)
         now = max(now, time)
         if var move {
-            // The pace this frame is judged where he was over it: in a hurry while covered.
-            move.elapsed += dt * Double(covered ? max(settings.hurry, 1) : 1)
+            // The pace this frame is judged where he was over it: in a hurry while covered, and
+            // never under the glide's own.
+            move.elapsed += dt * Double(max(covered ? max(settings.hurry, 1) : 1, move.pace))
             position = move.point
             if move.done {
                 position = move.to
@@ -699,6 +873,24 @@ struct MascotRoam: Equatable, Sendable {
             }
         }
         covered = isCovered
+        // A held Topo has nothing to decide on the clock, and a placed one only his first place:
+        // once the transcript has been read and the geometry has held still for a settle, where
+        // he is put at once, with no glide, since there is nowhere to glide from.
+        if dragging {
+            unsettled = false
+            return
+        }
+        if settings.placement != .roam {
+            // Nothing to decide — placed already, the transcript still to be read, or no geometry
+            // yet — asks nothing of the clock: the read (`wait`) and the next geometry (`observe`)
+            // ask again.
+            guard unsettled, position == nil, !waiting, field != nil else {
+                unsettled = false
+                return
+            }
+            if now - changed >= settings.settle { perch(.atOnce) }
+            return
+        }
         guard unsettled, move == nil else { return }
         let quiet = now - changed
         // A frame's quiet is a tick with no geometry since the one before, which the display
@@ -794,6 +986,160 @@ struct MascotRoam: Equatable, Sendable {
         let speed = max(settings.speed, 1)
         move = Move(from: from, to: to, duration: Double(distance / speed))
         moves += 1
+    }
+
+    /// Why a placed Topo is being put somewhere: his first place, or a new size or clearance, is a
+    /// placement (`atOnce`); a new policy or pin is a glide at the stroll (`switched`); the
+    /// keyboard coming or going under a pin is a glide, at the hurry up and the stroll back
+    /// (`keyboard`); any other geometry moves him with it at once, or turns a glide under way
+    /// toward where he now goes (`geometry`).
+    enum Arrival: Equatable, Sendable { case atOnce, switched, keyboard, geometry }
+
+    /// Where the look places him, when it does: the glass or the pin, from the geometry as it is,
+    /// arriving as `arrival` says. On the glass he rides the pane, placed at once wherever it goes
+    /// but for a new policy, which is the one glide. At a pin, the keyboard coming up over him
+    /// sends him clear of it at the hurry, and its going sends him back to the pin at the stroll;
+    /// the pin itself is the look's and nothing here writes it. A glide under way is turned toward
+    /// where he now goes at its own pace, and at the hurry once the keyboard is up. He faces the
+    /// half of the transcript his box's centre is in, as he does roaming. With no pane to stand on,
+    /// or no transcript to be pinned in, he stands nowhere and is not drawn.
+    private mutating func perch(_ arrival: Arrival) {
+        unsettled = false
+        riding = false
+        heading = 0
+        covered = false
+        guard let field, let target = perchFrame(field) else {
+            roost = .none
+            position = nil
+            move = nil
+            return
+        }
+        roost = settings.placement == .glass ? .glass(target) : .pinned(target)
+        face(field)
+        let to = target.origin
+        guard let from = position, arrival != .atOnce else {
+            position = to
+            move = nil
+            return
+        }
+        let hurried = settings.placement == .pinned && field.keyboard != nil ? max(settings.hurry, 1) : 1
+        if arrival == .switched {
+            glide(from: from, to: to, pace: 1)
+        } else if let move {
+            guard hypot(move.to.x - to.x, move.to.y - to.y) > MascotRoost.epsilon else { return }
+            // The same glide, turned: not counted as another.
+            glide(from: from, to: to, pace: max(move.pace, hurried))
+            moves -= 1
+        } else if hypot(to.x - from.x, to.y - from.y) <= MascotRoost.epsilon {
+            // Where he is, to a rounding: a pin read back from the place a drag left him. His roost
+            // is where he stands, so the two are the same frame.
+            roost = settings.placement == .glass ? .glass(CGRect(origin: from, size: settings.size))
+                : .pinned(CGRect(origin: from, size: settings.size))
+        } else if arrival == .keyboard, settings.placement == .pinned {
+            glide(from: from, to: to, pace: hurried)
+        } else {
+            position = to
+        }
+    }
+
+    /// Where the look puts his box now, for a placed policy.
+    private func perchFrame(_ field: MascotField) -> CGRect? {
+        switch settings.placement {
+        case .roam:
+            return nil
+        case .glass:
+            return MascotPerch.glass(field, size: settings.size)
+        case .pinned:
+            return MascotPerch.pinned(settings.pin, in: resting ?? field.pinFrame, keyboard: field.keyboard,
+                                      size: settings.size, reach: settings.reach, clearance: settings.clearance)
+        }
+    }
+
+    /// One glide from `from` to `to` at `pace` times the stroll at the least; under Reduce Motion,
+    /// or for no distance at all, a placement.
+    private mutating func glide(from: CGPoint, to: CGPoint, pace: CGFloat) {
+        let distance = hypot(to.x - from.x, to.y - from.y)
+        guard !settings.reduceMotion, distance > MascotRoost.epsilon else {
+            position = to
+            move = nil
+            return
+        }
+        move = Move(from: from, to: to, duration: Double(distance / max(settings.speed, 1)), pace: pace)
+        moves += 1
+    }
+
+    // MARK: A drag
+
+    /// Whether a press at `point` is on him: on his box, drawn, and not on the well, which is the
+    /// microphone's whatever is drawn over it.
+    func grabbable(at point: CGPoint) -> Bool {
+        guard let picture, picture.contains(point) else { return false }
+        if let well = field?.well, well.contains(point) { return false }
+        return true
+    }
+
+    /// A finger has him: whatever he was doing stops where he is, and he goes where it takes him.
+    /// Nothing happens where he is not drawn.
+    @discardableResult
+    mutating func grab() -> Bool {
+        guard position != nil, !dragging else { return false }
+        dragging = true
+        drags += 1
+        pickedUp = position
+        move = nil
+        riding = false
+        unsettled = false
+        covered = false
+        return true
+    }
+
+    /// The finger has moved his box's origin to `origin`: he is drawn there, at his size, as far as
+    /// the transcript's frame carried to the pane's foot with the keyboard down lets his reach go —
+    /// the place he would be pinned at if it let go now.
+    mutating func drag(to origin: CGPoint) {
+        guard dragging, let field, origin.x.isFinite, origin.y.isFinite else { return }
+        let frame = MascotPerch.inside(CGRect(origin: origin, size: settings.size), resting ?? field.pinFrame,
+                                       reach: settings.reach)
+        position = frame.origin
+        roost = .pinned(frame)
+        face(field)
+    }
+
+    /// The finger has let go: he is pinned where he is, as a fraction of the transcript's frame
+    /// carried to the pane's foot with the keyboard down, which is answered for the look to keep.
+    /// From here the roam is the pinned policy at that pin, so nothing moves him before the look
+    /// catches up; with the keyboard up, it lifts him clear of it. A press that let go where it
+    /// picked him up moved him nowhere and pins nothing: it ends as a cancelled one does, and a
+    /// pin kept at the frame's very edge is not rewritten to where the edge held him.
+    mutating func drop() -> CGPoint? {
+        guard dragging else { return nil }
+        if let from = pickedUp, let at = position, hypot(at.x - from.x, at.y - from.y) <= MascotRoost.epsilon {
+            cancelDrag()
+            return nil
+        }
+        dragging = false
+        guard let picture, let field else { return nil }
+        let pin = MascotPerch.pin(of: picture, in: resting ?? field.pinFrame)
+        settings.placement = .pinned
+        settings.pin = pin
+        // Where he was let go is the pin, to a rounding, unless the keyboard is up over it.
+        perch(.keyboard)
+        return pin
+    }
+
+    /// The press was cancelled — a call, an alert, the system taking the touch — rather than let
+    /// go: nothing is pinned, and he goes back to where his policy puts him, with a glide at the
+    /// stroll, or, roaming, to a roost decided from where the finger left him.
+    mutating func cancelDrag() {
+        guard dragging else { return }
+        dragging = false
+        if settings.placement != .roam {
+            perch(.switched)
+        } else {
+            move = nil
+            decide(glide: true)
+            covered = isCovered
+        }
     }
 
     /// The facing for the roost just decided: which half of the transcript its centre is in.

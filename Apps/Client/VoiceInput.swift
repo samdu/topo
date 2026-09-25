@@ -45,6 +45,9 @@ final class VoiceInput {
     /// gesture was handled, the second that it opened the microphone.
     private(set) var presses = 0
     private(set) var sessions = 0
+    /// Every release the gesture handed over, whatever it ended: with `presses`, what says a press
+    /// was the microphone's from the thumb coming down to its going up.
+    private(set) var releases = 0
     /// Why the last press started no microphone, in words; nil while it is running, and from
     /// the next press until that one is refused. The UI test reads it too, to tell a host with
     /// no input from a refusal that is a fault.
@@ -150,6 +153,7 @@ final class VoiceInput {
     /// leaves the microphone open and returns nil. A release while the permission prompts are
     /// still up cancels the press, so no microphone is left open with nobody holding it.
     func pressUp(as gate: Gate) async -> String? {
+        releases += 1
         if starting, owner == gate {
             generation += 1
             starting = false
@@ -467,13 +471,14 @@ extension VoiceInput {
     struct Report: Codable, Equatable {
         var presses: Int
         var sessions: Int
+        var releases = 0
         var refusal: String?
         var ear: String
         var capture: Capture
     }
 
     var debugReport: String {
-        let report = Report(presses: presses, sessions: sessions, refusal: refusal,
+        let report = Report(presses: presses, sessions: sessions, releases: releases, refusal: refusal,
                             ear: "\(ear.state)", capture: capture)
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys

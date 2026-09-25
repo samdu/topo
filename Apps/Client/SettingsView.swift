@@ -42,11 +42,9 @@ struct SettingsView: View {
                 Section {
                     Button("Sign out", role: .destructive) { Task { await signOut.act() } }
                 }
-                #if DEBUG
-                // Last, below everything a release build has, so the sheet's own rows are where
-                // they are in one.
+                // Last: where Topo sits and the Reset for this device's hand on the look, with a
+                // debug build's sliders under them.
                 TuningSection()
-                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

@@ -160,6 +160,52 @@ final class LookDocumentTests: XCTestCase {
         }
     }
 
+    /// Where Topo sits is one of three names, and anything else is refused with the names listed,
+    /// leaving every other field of his as the document said.
+    func testThePlacementIsOneOfThreeNames() {
+        for placement in Look.Mascot.Placement.allCases {
+            let reading = LookDocument.read(#"{"mascot": {"placement": "\#(placement.rawValue)"}}"#)
+            XCTAssertEqual(reading.notes, [], placement.rawValue)
+            XCTAssertEqual(reading.look.mascot.placement, placement)
+        }
+        XCTAssertEqual(Look.Mascot().placement, .roam, "the compiled placement is roaming")
+        for wrong in [#""floating""#, #""Glass""#, "1", "true", #"["glass"]"#] {
+            let reading = LookDocument.read(#"{"mascot": {"placement": \#(wrong), "clearance": 20}}"#)
+            XCTAssertEqual(reading.look.mascot.placement, .roam, wrong)
+            XCTAssertEqual(reading.look.mascot.clearance, 20, "\(wrong) took clearance down with it")
+            XCTAssertEqual(reading.notes, [#"mascot.placement is not one of "roam", "glass", "pinned""#], wrong)
+        }
+    }
+
+    /// A pin is a place in the transcript's frame, a fraction across and down: both ends of both
+    /// halves are taken; one out of `0...1`, a half missing, or something that is not a pair of
+    /// numbers is refused whole, with the reason, and the compiled pin stands while every other
+    /// field of his is taken — a document costs what it got wrong and no more.
+    func testAPinOutOfRangeIsRefusedWholeAndNothingElseGoesWithIt() {
+        for (x, y) in [(0.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.37, 0.62)] {
+            let reading = LookDocument.read(#"{"mascot": {"pin": {"x": \#(x), "y": \#(y)}}}"#)
+            XCTAssertEqual(reading.notes, [], "\(x), \(y)")
+            XCTAssertEqual(reading.look.mascot.pin, CGPoint(x: x, y: y))
+            XCTAssertEqual(reading.state, .read(fields: 1), "a pin is one field")
+        }
+        let compiled = Look.Mascot().pin
+        XCTAssertTrue((0...1).contains(compiled.x) && (0...1).contains(compiled.y), "the compiled pin \(compiled)")
+        let refused: [(String, String)] = [
+            (#"{"x": 1.5, "y": 0.5}"#, "mascot.pin.x is 1.5, and a fraction across the chat between 0 and 1 is read from 0.0 to 1.0"),
+            (#"{"x": 0.5, "y": -0.1}"#, "mascot.pin.y is -0.1, and a fraction down the chat, from the transcript's top to the glass's foot, between 0 and 1 is read from 0.0 to 1.0"),
+            (#"{"x": 0.5}"#, "mascot.pin needs both an x and a y"),
+            (#"{"x": "left", "y": 0.5}"#, "mascot.pin.x is not a fraction across the chat between 0 and 1"),
+            (#"[0.5, 0.5]"#, "mascot.pin is not an object naming an x and a y"),
+        ]
+        for (pin, note) in refused {
+            let reading = LookDocument.read(#"{"mascot": {"pin": \#(pin), "placement": "pinned", "scale": 2}}"#)
+            XCTAssertEqual(reading.look.mascot.pin, compiled, pin)
+            XCTAssertEqual(reading.look.mascot.placement, .pinned, "\(pin) took the placement down with it")
+            XCTAssertEqual(reading.look.mascot.scale, 2, "\(pin) took the scale down with it")
+            XCTAssertEqual(reading.notes, [note], pin)
+        }
+    }
+
     /// The glass under the keyboard is read in a range of its own: a pane kept at under half its
     /// height is refused, and the ends of the range are taken.
     func testTheShortPaneIsReadInItsOwnRange() {
@@ -494,7 +540,7 @@ enum LookCensus {
         case is CGFloat, is Double, is Int, is Bool, is String,
              is Font, is Font.Weight, is Font.TextStyle,
              is Angle, is UnitPoint, is CGSize,
-             is Look.Surface, is BlendMode:
+             is Look.Surface, is BlendMode, is Look.Mascot.Placement:
             guard let a = a as? any Equatable else { return false }
             return alike(a, b)
         default:
