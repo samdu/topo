@@ -35,9 +35,6 @@ struct SettingsView: View {
                     // control that moves it, so the row names that rather than the section again.
                     Button("Where it lives") { showMemory = true }
                 }
-                #if DEBUG
-                TuningSection()
-                #endif
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
                     Button("About Topo") { showAbout = true }
@@ -45,6 +42,11 @@ struct SettingsView: View {
                 Section {
                     Button("Sign out", role: .destructive) { Task { await signOut.act() } }
                 }
+                #if DEBUG
+                // Last, below everything a release build has, so the sheet's own rows are where
+                // they are in one.
+                TuningSection()
+                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
