@@ -56,6 +56,8 @@ The process — who plans, who builds, who reviews, and in what order — is `do
 - Never force push. One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
 - Prefer what exists: stdlib, then a platform framework, then an already-linked dependency, before new code or a new dependency. Nothing GPL from others ships in a bundle unless its holders waive the App Store conflict, as iSH's do; the fork is the one such piece. Every borrowed piece is attributed in `THIRD-PARTY`.
 - Docs describe what **is**, never what was or what is planned. When you change behaviour, change the doc to match; do not narrate the change.
+- **Ask the advisor at three moments.** Engineer sessions carry a Fable advisor beside the Opus model that does the work. Consult it once a plan is drafted and before anyone else reads it, and fix what it catches first; the second time a CI job fails the same way or a reviewer raises the same finding again, before pushing a third attempt; and at a task boundary, before reporting, to ask what was missed, with the answer in the report. The advisor advises and you still write the code; a consult is not an escalation, so nothing waits on anyone after it.
+- Between task boundaries, keep going: a step that needs nobody's input is taken, with status in the same message as the next action. Stop only at the boundaries `docs/process.md` names.
 - An engineer reports to the Topo PM at every task boundary (PR opened, blocked, finished) with `SendMessage`: what, where (branch, commit, PR), what it waits on. It never merges, never reads or answers a review, and never polls with background shells — the PM does all three.
 
 ## Where the risk lives
