@@ -43,9 +43,6 @@ struct ChatView: View {
     /// scroll geometry to read at all — and the pane is drawn whole while any of them is.
     @State private var contentBottomInTranscript: CGFloat?
     @State private var transcriptTop: CGFloat?
-    /// The transcript's vertical midline in the global space, which Topo's facing is decided
-    /// against: on its right half he faces into the room from the right.
-    @State private var transcriptMidline: CGFloat?
     @State private var paneTop: CGFloat?
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
@@ -56,6 +53,8 @@ struct ChatView: View {
     #if DEBUG
     /// The last spoken turn's nonce, for the badge's debug report.
     @State private var spokenNonce: String?
+    /// Where Topo stands, for the badge's debug report.
+    @State private var mascotReport: MascotRoam.Report?
     #endif
 
     /// How long the answering loop waits between passes. Five seconds, except in a debug build
@@ -75,7 +74,9 @@ struct ChatView: View {
     /// own curve and reaches its end with it, and the transcript is laid out once for both.
     var body: some View {
         GeometryReader { screen in
-            chat(keyboard: KeyboardInset.isUp(bottom: screen.safeAreaInsets.bottom, resting: restingBottomInset))
+            let keyboard = KeyboardInset.isUp(bottom: screen.safeAreaInsets.bottom, resting: restingBottomInset)
+            // The keyboard's top edge is the bottom of this reader's frame while it is up.
+            chat(keyboard: keyboard, keyboardTop: keyboard ? screen.frame(in: .global).maxY : nil)
         }
         // The same inset with the keyboard's region ignored, which is the screen's own.
         .background {
@@ -88,13 +89,10 @@ struct ChatView: View {
         }
     }
 
-    private func chat(keyboard: Bool) -> some View {
+    private func chat(keyboard: Bool, keyboardTop: CGFloat?) -> some View {
         NavigationStack {
             VStack(spacing: 0) {
                 transcript
-                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: {
-                        transcriptMidline = $0
-                    }
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
@@ -105,13 +103,16 @@ struct ChatView: View {
                         }
                     }
                     .font(.footnote)
+                    .mascotObstacle()
                     .padding(.bottom, 8)
                 }
                 if let error = harness.error {
-                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
+                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).mascotObstacle()
+                        .padding(.bottom, 8)
                 }
                 if let info = harness.info {
-                    Text(info).font(.footnote).foregroundStyle(.secondary).padding(.horizontal).padding(.bottom, 8)
+                    Text(info).font(.footnote).foregroundStyle(.secondary).padding(.horizontal).mascotObstacle()
+                        .padding(.bottom, 8)
                 }
                 if harness.hasWaiting {
                     // The line stopped on a failure; what was said is kept and goes again from here.
@@ -142,6 +143,7 @@ struct ChatView: View {
                         }, notNow: {
                             memoryOfferAnswered = true
                         })
+                        .mascotObstacle()
                     }
                     composer(keyboard: keyboard)
                 }
@@ -149,6 +151,11 @@ struct ChatView: View {
             // The one space the transcript's content bottom and the pane's top edge are both
             // measured in, so the two numbers the presence is worked out from are comparable.
             .coordinateSpace(.named(Self.space))
+            // Topo, over all of it: he stands where the turns, the lines under them and the glass
+            // leave him room, and is not drawn where they leave none. The glass is never his.
+            .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+                         covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
+                         ready: transcriptRead, report: mascotReported)
             // The mark says the name, so the title says it twice.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -296,6 +303,7 @@ struct ChatView: View {
         }
         .buttonStyle(.bordered)
         .font(.footnote)
+        .mascotObstacle()
         .padding(.bottom, 8)
     }
 
@@ -310,7 +318,7 @@ struct ChatView: View {
                 .accessibilityIdentifier(DebugRun.chatReportIdentifier)
                 .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
                                                         error: harness.error, speaker: speaker.report,
-                                                        voice: speaker.voice.state,
+                                                        voice: speaker.voice.state, mascot: mascotReport,
                                                         facing: mascot.facing))
                 #endif
         }
@@ -366,7 +374,7 @@ struct ChatView: View {
     /// there is neither: nothing is measured and the pane is drawn whole, which is the pane as
     /// it was before it had a presence. This is the one availability branch on this screen.
     @ViewBuilder private var transcript: some View {
-        let view = TranscriptView(turns: harness.turns, notice: harness.notice,
+        let view = TranscriptView(turns: shownTurns, notice: harness.notice,
                                   // Holding one of Topo's turns says it again, which is how a
                                   // typed turn's reply — never read aloud as it lands — is heard.
                                   replay: Replay(speaking: speaker.speaking,
@@ -419,9 +427,7 @@ struct ChatView: View {
         let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
                             keyboard: keyboard,
                             micPressed: { down in Task { await micPressed(down) } },
-                            micReport: micReport, mascot: mascot.state,
-                            covered: showSettings || showDiagnostics || showMemory,
-                            midline: transcriptMidline, face: { mascot.facing = $0 })
+                            micReport: micReport)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {
@@ -439,6 +445,34 @@ struct ChatView: View {
     private struct HarnessFacts: Equatable {
         var model: String
         var context: Int?
+    }
+
+    /// Whether what the transcript draws is the log's: once it has been read, or at once for a
+    /// debug build's fixture.
+    private var transcriptRead: Bool {
+        #if DEBUG
+        if DebugRun.transcript() != nil { return true }
+        #endif
+        return harness.hasRead
+    }
+
+    /// The turns the transcript draws: the log's, or in a debug build launched with
+    /// `TOPO_DEBUG_TRANSCRIPT` the fixture it names.
+    private var shownTurns: [Turn] {
+        #if DEBUG
+        if let fixture = DebugRun.transcript() { return fixture }
+        #endif
+        return harness.turns
+    }
+
+    /// Where Topo stands, into the badge's debug report, off the view update it arrives in. Nil in
+    /// a release build, which reports nothing.
+    private var mascotReported: ((MascotRoam.Report) -> Void)? {
+        #if DEBUG
+        return { report in Task { @MainActor in mascotReport = report } }
+        #else
+        return nil
+        #endif
     }
 
     /// What the UI suites decode off the microphone after a press. A debug build only, so

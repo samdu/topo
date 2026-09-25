@@ -41,6 +41,36 @@ enum PreviewTurns {
         (.assistant, "Any time."),
     ])
 
+    /// Long turns only, each wrapping across the whole column: the person's bubbles span it, and
+    /// the only room Topo has is the margin beside the replies.
+    static let full: [Turn] = make((0..<10).map { index in
+        (index.isMultiple(of: 2) ? .assistant : .person,
+         "Air scatters short wavelengths more than long ones, so blue light bounces around the whole sky. "
+            + "At sunset the light crosses far more air on its way to you, and by then most of the blue has "
+            + "scattered away, leaving the reds and oranges that travel straighter.")
+    })
+
+    /// The end of a long conversation as it stood on a phone (`device-a70490e-trapped-on-flank`):
+    /// long replies either side of the person's one short turn, whose bubble wraps on a 393-point
+    /// phone and leaves room on its left.
+    static let continuity: [Turn] = make([
+        (.assistant, "None of this is an accusation — could just be you enjoying the bit, could be a genuine architecture you're building. Either way, I'm happy to help with the real thing once it exists and I can verify it (new tools showing up, actual API access, etc.). I just won't narrate capabilities I can't check.\n\nWhat would you actually like to do right now, with what's really in front of me?"),
+        (.person, "Nothing, just testing the continuity feature :p"),
+        (.assistant, "Ha, fair enough — good stress test. For the record: continuity of conversation held up fine throughout; I just wasn't going to sign off on unverified claims about where I'm running. Say the word whenever you want something built. And if you do want to test it properly some time, the useful version is a turn from the phone and one from the Mac on the same thread, a few minutes apart, and then asking me what the first one said: that exercises the log, the lease and the guest's own memory of the conversation in one go, which is the whole of what continuity has to mean here."),
+    ])
+
+    /// The same, with the person's turn narrow and two lines tall, so the room beside its bubble
+    /// holds his picture with its clearance (a one-line bubble's row leaves too little height).
+    static let continuityShort: [Turn] = make(continuity.enumerated().map { index, turn in
+        (turn.role, index == 1 ? "Nothing,\njust testing :p" : turn.text)
+    })
+
+    /// The same, with Topo's last reply ending in short lines: the room at the end of them joins
+    /// the margin beside the reply.
+    static let ragged: [Turn] = make(continuity.enumerated().map { index, turn in
+        (turn.role, index == 2 ? turn.text + "\n\nSay the word.\n\nOr don't :)" : turn.text)
+    })
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?
@@ -67,6 +97,8 @@ struct ChatCanvas: View {
     var mic: Composer.MicState = .init()
     /// What the row at the end of the transcript is doing.
     var row: Row = .hidden
+    /// Topo over the chat, standing where the fixtures leave him room; nil for none.
+    var mascot: MascotState?
 
     enum Row: String, CaseIterable { case hidden, writing, inFlight }
 
@@ -90,6 +122,7 @@ struct ChatCanvas: View {
                 .safeAreaInset(edge: .bottom) {
                     Composer(typing: .constant(false), mic: mic)
                 }
+                .mascotRoams(mascot)
         }
     }
 

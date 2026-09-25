@@ -22,15 +22,22 @@ struct TranscriptView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: look.transcript.spacing) {
-                    if let notice {
-                        Text(notice)
-                            .font(look.transcript.noticeFont)
-                            .foregroundStyle(look.transcript.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    ForEach(turns) { turn in
-                        TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
+                // The row being written is outside the lazy stack, so it is always made: with
+                // the keyboard up over a transcript taller than the screen, a row inside a lazy
+                // stack scrolled to it loads, grows the stack, is scrolled out, unloads and
+                // shrinks it again inside one layout pass, which never ends and freezes the app.
+                VStack(alignment: .leading, spacing: look.transcript.spacing) {
+                    LazyVStack(alignment: .leading, spacing: look.transcript.spacing) {
+                        if let notice {
+                            Text(notice)
+                                .font(look.transcript.noticeFont)
+                                .foregroundStyle(look.transcript.caption)
+                                .mascotObstacle()
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        ForEach(turns) { turn in
+                            TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
+                        }
                     }
                     if let draft, draft.state != .hidden {
                         DraftRow(draft: draft).id(Self.draftID)
@@ -41,6 +48,8 @@ struct TranscriptView: View {
                 .frame(maxWidth: look.transcript.maximumLineWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
             }
+            // Where Topo may stand, on a screen that draws him: the frame the turns scroll in.
+            .mascotVisible()
             .onAppear { scroll(proxy, animated: false) }
             .onChange(of: turns.last?.ref) { _, _ in scroll(proxy, animated: true) }
             // The row appearing, and each line it grows by, keep it where the newest turn was.
@@ -82,12 +91,18 @@ struct TurnRow: View {
     /// drawn on it, Topo's side included, which is why there is no number here.
     private var enclosure: Look.Enclosure { mine ? look.bubble : look.plain }
 
+    /// Nothing is drawn around the words, so what Topo stands clear of is the words themselves.
+    private var bare: Bool { enclosure.drawsNothing }
+
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
             Text(turn.text)
                 .font(look.transcript.bodyFont)
                 .foregroundStyle(look.transcript.text)
                 .fixedSize(horizontal: false, vertical: true)
+                // Words with nothing drawn around them are their lines, so the room at the end of
+                // a short line is room for Topo.
+                .mascotLines(bare)
                 .padding(.horizontal, enclosure.horizontalPadding)
                 .padding(.vertical, enclosure.verticalPadding)
                 .background { TurnShape.fill(enclosure) }
@@ -95,7 +110,14 @@ struct TurnRow: View {
                 .font(look.transcript.labelFont)
                 .foregroundStyle(look.transcript.caption)
                 .padding(.horizontal, enclosure.horizontalPadding)
+                .mascotObstacle(bare)
         }
+        // An enclosed turn is its enclosure and the time as drawn, before the row takes the
+        // column's width: Topo stands clear of them, and beside a short bubble is room for him.
+        .mascotObstacle(!bare)
+        // Topo's turns keep a margin on their trailing side, which is where he stands beside
+        // them; the person's keep the column's width.
+        .padding(.trailing, mine ? .zero : look.transcript.replyTrailingInset)
         .frame(maxWidth: .infinity, alignment: mine ? .trailing : .leading)
         #if os(iOS)
         // Held, never tapped: a turn brushed in passing must not start talking. What is offered
@@ -234,6 +256,7 @@ struct DraftRow: View {
             bubble
             control
         }
+        .mascotObstacle()
         .frame(maxWidth: .infinity, alignment: .trailing)
         .onAppear { writing = draft.typing }
         .onChange(of: draft.typing) { _, wanted in writing = wanted }

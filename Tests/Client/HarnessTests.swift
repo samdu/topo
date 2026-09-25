@@ -95,6 +95,47 @@ class HarnessIntegrationTests: XCTestCase {
         return lease
     }
 
+    // MARK: The first read
+
+    /// The transcript is the log's once it has been read: `hasRead` is false until the first
+    /// refresh ends, true after it whether the log held anything, and false again after a
+    /// sign-out, which empties what the transcript draws.
+    func testTheFirstReadIsMarkedAndASignOutClearsIt() async throws {
+        let db = InMemoryRecordDatabase()
+        try await limb(db, "Anything from Helen?")
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        XCTAssertFalse(harness.hasRead)
+        XCTAssertTrue(harness.turns.isEmpty)
+        await harness.refresh()
+        XCTAssertTrue(harness.hasRead)
+        XCTAssertEqual(harness.turns.map(\.text), ["Anything from Helen?"])
+        await harness.forget()
+        XCTAssertFalse(harness.hasRead)
+    }
+
+    /// A read that threw is not a read: with no connection on a launch over a log that holds
+    /// turns, `hasRead` stays false and the transcript empty, so Topo is not placed into a page
+    /// about to fill; the first read that gets through marks it and brings the turns.
+    func testAFailedFirstReadIsNotARead() async throws {
+        let db = InMemoryRecordDatabase()
+        try await limb(db, "Anything from Helen?")
+        let flaky = ReadFailingDatabase(db)
+        await flaky.setFailing(true)
+        let harness = harness(flaky, defaults: makeDefaults(), transport: ScriptedTransport())
+        let first = await harness.refresh()
+        XCTAssertFalse(first)
+        XCTAssertFalse(harness.hasRead, "a read that threw was taken for the log")
+        XCTAssertTrue(harness.turns.isEmpty)
+        XCTAssertNotNil(harness.error)
+        await harness.refresh()
+        XCTAssertFalse(harness.hasRead, "a second failure marked it")
+        await flaky.setFailing(false)
+        let read = await harness.refresh()
+        XCTAssertTrue(read)
+        XCTAssertTrue(harness.hasRead)
+        XCTAssertEqual(harness.turns.map(\.text), ["Anything from Helen?"])
+    }
+
     // MARK: A turn as primary
 
     func testSendingAsPrimaryWritesThePersonsTurnAndTheReplyAsItsChild() async throws {
@@ -1147,6 +1188,37 @@ private func makeSpeaker(_ seams: Seams, _ audio: AudioSession, _ center: Notifi
 }
 
 // MARK: - Doubles
+
+/// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
+private actor ReadFailingDatabase: RecordDatabase {
+    let wrapped: InMemoryRecordDatabase
+    private var failing = false
+
+    init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
+
+    func setFailing(_ on: Bool) { failing = on }
+
+    private func check() throws {
+        if failing { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+    }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
+
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        try check()
+        return try await wrapped.fetch(ids)
+    }
+
+    func query(_ query: RecordQuery) async throws -> [Record] {
+        try check()
+        return try await wrapped.query(query)
+    }
+
+    func records(ofType type: String) async throws -> [Record] {
+        try check()
+        return try await wrapped.records(ofType: type)
+    }
+}
 
 /// What the reply handler was given, in order.
 @MainActor
