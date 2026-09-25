@@ -59,13 +59,13 @@ final class MascotPlacementTests: XCTestCase {
 
     /// On the glass he stands in the empty flank — the trailing one, the keyboard's control being
     /// the leading one's — his body in the middle of it and the engine's shelf on the pane's top
-    /// edge, over an empty chat, a full one, and on the short pane with the keyboard up, where he
-    /// is put at once as the pane moves: he rides it, with no glide and no settle. Words are not
-    /// his to keep clear of there, so nothing is over him; he faces right, his centre being right
-    /// of the transcript's middle.
+    /// edge, over an empty chat, a full one, and on the short pane with the keyboard up. Once
+    /// placed, he is put at once as the pane moves: he rides it, with no glide and no settle.
+    /// Words are not his to keep clear of there, so nothing is over him; he faces right, his
+    /// centre being right of the transcript's middle.
     func testOnTheGlassHeSitsInTheEmptyFlankAndRidesThePane() throws {
         var time = 0.0
-        var roam = MascotRoam(Self.settings(.glass), frame: Self.frame)
+        var roam = settled(Self.settings(.glass), [Self.field()], time: &time)
         for (label, field) in [("empty", Self.field()), ("full", Self.field(full: true)),
                                ("keyboard up", Self.field(keyboard: true)), ("full, keyboard up", Self.field(full: true, keyboard: true)),
                                ("keyboard down", Self.field())] {
@@ -101,6 +101,46 @@ final class MascotPlacementTests: XCTestCase {
         roam.observe(MascotField(visible: Self.visible), at: 0)
         XCTAssertTrue(roam.hidden)
         XCTAssertEqual(roam.roost, .none)
+    }
+
+    /// A placed Topo is put where the look places him once the transcript has been read and the
+    /// chat has held still for a settle, at once, and never walks there: the geometries of a chat
+    /// still laying itself out — a transcript 47 points wide, the glass not yet up — place him
+    /// nowhere, and the pin is read in the frame the chat settled on, not the first it reported.
+    func testAPlacedTopoIsPlacedAtOnceWhenTheChatIsLaidOut() throws {
+        let early = MascotField(visible: CGRect(x: 0, y: 0, width: 47, height: 60),
+                                pane: CGRect(x: 4, y: 20, width: 40, height: 30), well: CGRect(x: 14, y: 22, width: 20, height: 20))
+        for placement in [Look.Mascot.Placement.pinned, .glass] {
+            var time = 0.0
+            var roam = MascotRoam(Self.settings(placement, pin: CGPoint(x: 0.3, y: 0.5)), frame: Self.frame)
+            roam.wait(true, at: time)
+            roam.observe(early, at: time)
+            run(&roam, time: &time, for: 2)
+            XCTAssertTrue(roam.hidden, "\(placement): drawn before the transcript was read")
+            roam.wait(false, at: time)
+            roam.observe(early, at: time)
+            time += Self.frame
+            roam.advance(to: time)
+            XCTAssertTrue(roam.hidden, "\(placement): drawn before the chat held still")
+            let field = Self.field()
+            roam.observe(field, at: time)
+            XCTAssertTrue(roam.hidden, "\(placement): drawn in a geometry that had not held still")
+            var first: CGRect?
+            while roam.hidden, time < 10 {
+                time += Self.frame
+                roam.advance(to: time)
+            }
+            first = roam.picture
+            run(&roam, time: &time, for: 2)
+            let box = try XCTUnwrap(first, "\(placement): never placed")
+            XCTAssertEqual(roam.picture, box, "\(placement): he moved after he was first drawn")
+            XCTAssertEqual(roam.moves, 0, "\(placement): a glide began")
+            let expected = placement == .glass
+                ? MascotPerch.glass(field, size: Self.size)
+                : MascotPerch.pinned(CGPoint(x: 0.3, y: 0.5), in: field.pinFrame, keyboard: nil, size: Self.size,
+                                     reach: Self.reach, clearance: 8)
+            XCTAssertEqual(box, expected, "\(placement): first drawn somewhere other than where he is placed")
+        }
     }
 
     // MARK: Pinned
@@ -173,6 +213,27 @@ final class MascotPlacementTests: XCTestCase {
         run(&roam, time: &time)
         XCTAssertEqual(roam.picture, home, "not back at the pin")
         XCTAssertEqual(roam.settings.pin, pin)
+    }
+
+    /// Once he stands at a pin, a geometry that moves the frame under him and is not the keyboard
+    /// — the offer card coming, the screen turning — moves him with it at once, and a new size or
+    /// clearance places him at once too: only a drag, the policy or the pin, and the keyboard glide.
+    func testAtAPinOnlyTheKeyboardOrANewPlaceGlides() throws {
+        var time = 0.0
+        let pin = CGPoint(x: 0.4, y: 0.6)
+        var roam = settled(Self.settings(.pinned, pin: pin), [Self.field()], time: &time)
+        var taller = Self.field()
+        taller.visible = CGRect(x: 0, y: 60, width: 402, height: 526)
+        roam.observe(taller, at: time)
+        XCTAssertNil(roam.move, "a geometry that is not the keyboard began a glide")
+        XCTAssertEqual(roam.picture, MascotPerch.pinned(pin, in: taller.pinFrame, keyboard: nil, size: Self.size,
+                                                        reach: Self.reach, clearance: 8))
+        var larger = Self.settings(.pinned, pin: pin)
+        larger.size = MascotSprite.size(scale: 2)
+        larger.reach = MascotSprite.reach(scale: 2)
+        roam.use(larger)
+        XCTAssertNil(roam.move, "a new size began a glide")
+        XCTAssertEqual(roam.moves, 0)
     }
 
     // MARK: Between policies
@@ -329,7 +390,7 @@ final class MascotPlacementTests: XCTestCase {
         let overWell = CGPoint(x: Self.well.midX / within.width, y: Self.well.midY / within.height)
         canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: field,
                      settings: Self.settings(.pinned, pin: overWell), interval: Self.frame, conditions: seen)
-        canvas.step(Self.frame)
+        settle(canvas)
         XCTAssertTrue(canvas.showing)
         XCTAssertNil(canvas.drag(from: CGPoint(x: Self.well.midX, y: Self.well.midY), to: CGPoint(x: 100, y: 100)))
         XCTAssertEqual(pinned, [])
@@ -342,13 +403,18 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertFalse(window.gestureRecognizers?.contains(canvas.grab) ?? false, "the recognizer outlived the canvas")
     }
 
+    /// The clock run past the settle, a frame at a time.
+    private func settle(_ canvas: MascotCanvas) {
+        for _ in 0..<60 { canvas.step(Self.frame) }
+    }
+
     /// On the glass the picture is drawn inside the empty flank only: nothing of it over the well.
     func testOnTheGlassNothingOfHimIsDrawnOverTheWell() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         let field = Self.field()
         canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: field,
                      settings: Self.settings(.glass), interval: Self.frame, conditions: seen)
-        canvas.step(Self.frame)
+        settle(canvas)
         let shown = canvas.shownFrame
         XCTAssertFalse(shown.isEmpty)
         XCTAssertGreaterThanOrEqual(shown.minX, Self.well.maxX - 0.001, "drawn over the well: \(shown)")

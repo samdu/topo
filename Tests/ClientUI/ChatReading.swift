@@ -33,6 +33,17 @@ enum ChatReading {
         var pin: [Double]?
         var well: [Double]?
         var visible: [Double]?
+        /// The last reports, oldest first.
+        var recent: [Glimpse] = []
+
+        struct Glimpse: Decodable {
+            var sequence: Int
+            var frame: [Double]?
+            var hidden: Bool
+        }
+
+        var description: String { String(format: "%.3f top %.1f keyboard %.1f%@", t, top, keyboard, moving ? " moving" : "") }
+        }
 
         var description: String {
             "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? [])"

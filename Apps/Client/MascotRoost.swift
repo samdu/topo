@@ -719,9 +719,16 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         if settings.placement != .roam {
+            let keyboardMoved = (self.field?.keyboard == nil) != (field.keyboard == nil)
             self.field = field
             changed = now
-            perch(switching: false)
+            // Not yet placed: the chat is still laying itself out, and he is placed once it has
+            // held still for a settle after the read, as a roaming Topo is.
+            guard position != nil else {
+                unsettled = true
+                return
+            }
+            perch(keyboardMoved ? .keyboard : .geometry)
             return
         }
         let drift = self.field.map { field.drift(since: $0) } ?? 0
@@ -780,6 +787,12 @@ struct MascotRoam: Equatable, Sendable {
         self.waiting = waiting
         changed = now
         unsettled = true
+        // A placed Topo is nowhere while the transcript is to be read, as a roaming one is.
+        if waiting, settings.placement != .roam, !dragging {
+            roost = .none
+            position = nil
+            move = nil
+        }
     }
 
     /// The settings, which a look or Reduce Motion can change. Reduce Motion coming on ends a glide
@@ -802,9 +815,14 @@ struct MascotRoam: Equatable, Sendable {
         // A new policy, or a new pin, is a glide from where he stands to where it puts him, at the
         // stroll, as a roost change is; from a pin to roaming, a roost is decided from where he
         // stands. A new size or clearance under a placed policy places him at once, as it does
-        // when he roams.
+        // when he roams. Not yet placed, he is placed at the settle.
         if settings.placement != .roam, switched || reroost {
-            perch(switching: switched && !reroost)
+            guard position != nil else {
+                changed = now
+                unsettled = true
+                return
+            }
+            perch(reroost ? .atOnce : .switched)
             return
         }
         if switched, position != nil {
@@ -844,9 +862,19 @@ struct MascotRoam: Equatable, Sendable {
             }
         }
         covered = isCovered
-        // A placed or a held Topo has nothing to decide on the clock.
-        if settings.placement != .roam || dragging {
+        // A held Topo has nothing to decide on the clock, and a placed one only his first place:
+        // once the transcript has been read and the geometry has held still for a settle, where
+        // he is put at once, with no glide, since there is nowhere to glide from.
+        if dragging {
             unsettled = false
+            return
+        }
+        if settings.placement != .roam {
+            guard unsettled, position == nil, !waiting, field != nil else {
+                if position != nil { unsettled = false }
+                return
+            }
+            if now - changed >= settings.settle { perch(.atOnce) }
             return
         }
         guard unsettled, move == nil else { return }
@@ -946,16 +974,22 @@ struct MascotRoam: Equatable, Sendable {
         moves += 1
     }
 
-    /// Where the look places him, when it does: the glass or the pin, from the geometry as it is.
-    /// `switching` is a new policy or a new pin, which is a glide at the stroll from where he
-    /// stands; otherwise the geometry moved under a placed Topo. On the glass he rides the pane,
-    /// placed at once wherever it goes. At a pin, the keyboard coming up over him sends him clear
-    /// of it at the hurry, and its going sends him back to the pin at the stroll; the pin itself
-    /// is the look's and nothing here writes it. A glide under way is turned toward where he now
-    /// goes at its own pace, and at the hurry once the keyboard is up. He faces the half of the
-    /// transcript his box's centre is in, as he does roaming. With no pane to stand on, or no
-    /// transcript to be pinned in, he stands nowhere and is not drawn.
-    private mutating func perch(switching: Bool) {
+    /// Why a placed Topo is being put somewhere: his first place, or a new size or clearance, is a
+    /// placement (`atOnce`); a new policy or pin is a glide at the stroll (`switched`); the
+    /// keyboard coming or going under a pin is a glide, at the hurry up and the stroll back
+    /// (`keyboard`); any other geometry moves him with it at once, or turns a glide under way
+    /// toward where he now goes (`geometry`).
+    enum Arrival: Equatable, Sendable { case atOnce, switched, keyboard, geometry }
+
+    /// Where the look places him, when it does: the glass or the pin, from the geometry as it is,
+    /// arriving as `arrival` says. On the glass he rides the pane, placed at once wherever it goes
+    /// but for a new policy, which is the one glide. At a pin, the keyboard coming up over him
+    /// sends him clear of it at the hurry, and its going sends him back to the pin at the stroll;
+    /// the pin itself is the look's and nothing here writes it. A glide under way is turned toward
+    /// where he now goes at its own pace, and at the hurry once the keyboard is up. He faces the
+    /// half of the transcript his box's centre is in, as he does roaming. With no pane to stand on,
+    /// or no transcript to be pinned in, he stands nowhere and is not drawn.
+    private mutating func perch(_ arrival: Arrival) {
         unsettled = false
         riding = false
         heading = 0
@@ -969,12 +1003,13 @@ struct MascotRoam: Equatable, Sendable {
         roost = settings.placement == .glass ? .glass(target) : .pinned(target)
         face(field)
         let to = target.origin
-        guard let from = position else {
+        guard let from = position, arrival != .atOnce else {
             position = to
+            move = nil
             return
         }
         let hurried = settings.placement == .pinned && field.keyboard != nil ? max(settings.hurry, 1) : 1
-        if switching {
+        if arrival == .switched {
             glide(from: from, to: to, pace: 1)
         } else if let move {
             guard hypot(move.to.x - to.x, move.to.y - to.y) > MascotRoost.epsilon else { return }
@@ -986,10 +1021,10 @@ struct MascotRoam: Equatable, Sendable {
             // is where he stands, so the two are the same frame.
             roost = settings.placement == .glass ? .glass(CGRect(origin: from, size: settings.size))
                 : .pinned(CGRect(origin: from, size: settings.size))
-        } else if settings.placement == .glass {
-            position = to
-        } else {
+        } else if arrival == .keyboard, settings.placement == .pinned {
             glide(from: from, to: to, pace: hurried)
+        } else {
+            position = to
         }
     }
 
@@ -1066,7 +1101,8 @@ struct MascotRoam: Equatable, Sendable {
         let pin = MascotPerch.pin(of: picture, in: resting ?? field.pinFrame)
         settings.placement = .pinned
         settings.pin = pin
-        perch(switching: false)
+        // Where he was let go is the pin, to a rounding, unless the keyboard is up over it.
+        perch(.keyboard)
         return pin
     }
 

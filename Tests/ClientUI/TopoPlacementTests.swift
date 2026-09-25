@@ -31,6 +31,7 @@ final class TopoPlacementTests: XCTestCase {
             }
             XCTAssertEqual(chat.placement, "glass")
             try assertOnTheGlass(topo, transcript)
+            try assertFirstDrawnWhereHeStands(topo, transcript)
             ChatReading.attach(app, "glass-\(transcript)", to: self)
             let resting = try XCTUnwrap(topo.paneRect).height
             ChatReading.raiseKeyboard(app)
@@ -55,7 +56,7 @@ final class TopoPlacementTests: XCTestCase {
     /// and with it gone he is back at the pin. The pin this device keeps is the same throughout.
     func testPinnedHeStandsAtThePinAndTheKeyboardOnlyLiftsHimWhileItIsUp() throws {
         let pin = [0.3, 0.8]
-        for transcript in ["empty", "full"] {
+        for transcript in ["empty", "full", "continuity"] {
             let app = ChatReading.launch(transcript: transcript,
                                          tuning: #"{"mascot": {"placement": "pinned", "pin": {"x": 0.3, "y": 0.8}}}"#,
                                          softwareKeyboard: true)
@@ -65,6 +66,7 @@ final class TopoPlacementTests: XCTestCase {
             }
             XCTAssertEqual(chat.overridePin, pin)
             try assertAtThePin(topo, pin, transcript)
+            try assertFirstDrawnWhereHeStands(topo, transcript)
             XCTAssertEqual(chat.facing, "left", "\(transcript): his centre is left of the middle")
             ChatReading.attach(app, "pinned-\(transcript)", to: self)
 
@@ -200,5 +202,20 @@ final class TopoPlacementTests: XCTestCase {
         let frame = try XCTUnwrap(topo.pinFrame, file: file, line: line)
         XCTAssertEqual(box.midX, frame.minX + pin[0] * frame.width, accuracy: 1, "\(label): \(topo)", file: file, line: line)
         XCTAssertEqual(box.midY, frame.minY + pin[1] * frame.height, accuracy: 1, "\(label): \(topo)", file: file, line: line)
+    }
+
+    /// The first frame he was drawn at since the launch is the one he stands in, and no glide ever
+    /// began: a placed Topo is put where the look places him once the chat is laid out, at once,
+    /// and never walks there. The report's history reaches back to its first report, so nothing
+    /// drawn before it is missed.
+    private func assertFirstDrawnWhereHeStands(_ topo: ChatReading.Topo, _ label: String,
+                                               file: StaticString = #filePath, line: UInt = #line) throws {
+        XCTAssertEqual(topo.recent.first?.sequence, 1, "\(label): the report's history does not reach its first report", file: file, line: line)
+        let first = try XCTUnwrap(topo.recent.first { !$0.hidden && $0.frame != nil }, "\(label): never drawn", file: file, line: line)
+        XCTAssertTrue(ChatReading.near(first.frame, topo.frame),
+                      "\(label): first drawn at \(first.frame ?? []), and stands at \(topo.frame ?? [])", file: file, line: line)
+        XCTAssertEqual(topo.moves, 0, "\(label): a glide began before he stood where he was placed", file: file, line: line)
+        XCTAssertFalse(topo.recent.contains { !$0.hidden && !ChatReading.near($0.frame, topo.frame) },
+                       "\(label): drawn somewhere else first: \(topo.recent.map { $0.frame ?? [] })", file: file, line: line)
     }
 }
