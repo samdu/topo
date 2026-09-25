@@ -58,7 +58,8 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     private func stage(_ mascot: Look.Mascot?, composer: Look.Composer = Look.Composer(),
-                       pane: Pane = Pane()) throws -> Stage {
+                       pane: Pane = Pane(), midline: CGFloat? = nil,
+                       face: @escaping (MascotFacing) -> Void = { _ in }) throws -> Stage {
         var look = Look()
         look.composer = composer
         look.composer.surface = .flat
@@ -66,7 +67,8 @@ final class MascotGeometryTests: XCTestCase {
         let view = VStack(spacing: 0) {
             Spacer()
             Composer(typing: .constant(pane.keyboard), mic: .init(), presence: pane.presence, keyboard: pane.keyboard,
-                     mascot: mascot == nil ? nil : MascotState(model: "claude-opus-5", activity: .searching))
+                     mascot: mascot == nil ? nil : MascotState(model: "claude-opus-5", activity: .searching),
+                     midline: midline, face: face)
         }
         .environment(\.look, look)
         // A view hosted outside the app's scene reads as backgrounded, and he draws nothing there.
@@ -391,5 +393,62 @@ final class MascotGeometryTests: XCTestCase {
         }
         XCTAssertEqual(MascotHover(amplitude: 8, period: 0, presence: 0).lift(at: 1, reduceMotion: false), 0,
                        "a bob with no period is a division by nothing")
+    }
+
+    // MARK: Facing
+
+    /// The facing is which half of the transcript his centre is in: right of the midline faces
+    /// right, which the engine draws mirrored with the sign held out to the left; left of it, and
+    /// on it, is the picture as drawn. A measure that is not a number decides the picture as drawn.
+    func testTheFacingIsTheHalfOfTheTranscriptHisCentreIsIn() {
+        XCTAssertEqual(MascotFacing.of(centreX: 161, midlineX: 160), .right, "the right half")
+        XCTAssertEqual(MascotFacing.of(centreX: 160.01, midlineX: 160), .right, "just right of the line")
+        XCTAssertEqual(MascotFacing.of(centreX: 159, midlineX: 160), .left, "the left half")
+        XCTAssertEqual(MascotFacing.of(centreX: 160, midlineX: 160), .left, "on the line")
+        XCTAssertEqual(MascotFacing.of(centreX: .nan, midlineX: 160), .left)
+        XCTAssertEqual(MascotFacing.of(centreX: 200, midlineX: .infinity), .left)
+        XCTAssertEqual(MascotFacing.of(centreX: .infinity, midlineX: 160), .left)
+    }
+
+    /// A placement faces from his body's axis at home, not from the middle of his frame or of the
+    /// picture: the midline on his axis is the picture as drawn, a point to its left faces him
+    /// right, and a point to its right faces him left — at home in the middle of his flank, and
+    /// moved off it by the look's offset, where his axis is not his frame's middle.
+    func testAPlacementFacesFromHisAxisAtHome() {
+        var moved = Look.Mascot(); moved.offset.width = -12
+        for mascot in [Look.Mascot(), moved] {
+            let placement = MascotPlacement.of(flank: flank, row: row, composer: Look.Composer(), mascot: mascot)
+            let axis = placement.frame.minX + placement.home.x
+            if mascot == moved {
+                XCTAssertNotEqual(axis, placement.frame.midX, "the test cannot tell his axis from his frame's middle")
+            }
+            XCTAssertEqual(placement.facing(midline: axis), .left, "\(mascot): on the line")
+            XCTAssertEqual(placement.facing(midline: axis - 0.5), .right, "\(mascot): he is right of the line")
+            XCTAssertEqual(placement.facing(midline: axis + 0.5), .left, "\(mascot): he is left of the line")
+        }
+    }
+
+    /// On the glass, the composer hands up the facing his placement decides against the midline it
+    /// is given in the global space. On main he stands on the leading flank, left of the middle of
+    /// the screen, so the screen's own midline faces him as drawn; a midline left of him — the
+    /// line the roost of a later layout is decided against — faces him right. No midline decides
+    /// nothing.
+    func testTheComposerHandsUpTheFacingOfWhereHeStands() throws {
+        var told: [MascotFacing] = []
+        let middle = try stage(Look.Mascot(), midline: narrowest.width / 2) { told.append($0) }
+        defer { middle.window.isHidden = true }
+        let canvas = try XCTUnwrap(middle.canvas)
+        XCTAssertLessThan(canvas.maxX, narrowest.width / 2, "he is not on the left half")
+        XCTAssertEqual(told.last, .left)
+
+        told = []
+        let left = try stage(Look.Mascot(), midline: canvas.minX) { told.append($0) }
+        defer { left.window.isHidden = true }
+        XCTAssertEqual(told.last, .right)
+
+        told = []
+        let none = try stage(Look.Mascot()) { told.append($0) }
+        defer { none.window.isHidden = true }
+        XCTAssertTrue(told.isEmpty, "no midline decided \(told)")
     }
 }

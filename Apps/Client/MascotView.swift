@@ -62,6 +62,13 @@ struct MascotPlacement: Equatable, Sendable {
                                corner: -Double(stroll / scale))
     }
 
+    /// Which way he faces standing here, against the transcript's midline in the same space as
+    /// `frame`: his body's axis at home, not the picture's middle, since the picture is not centred
+    /// on him.
+    func facing(midline: CGFloat) -> MascotFacing {
+        .of(centreX: frame.minX + home.x, midlineX: midline)
+    }
+
     /// The engine's whole picture in `frame`'s space, with him walked `x` art pixels from home
     /// and floated `lift` points up off it.
     func sprite(x: Double, lift: CGFloat = 0) -> CGRect {
@@ -151,18 +158,21 @@ final class MascotDriver {
     private var stillFor: Still?
 
     /// What of the input the still is drawn differently for, as the engine reads it: the head the
-    /// model picks (`levelForModel`, by family, so two ids of one model are one head) and the band
-    /// the tokens fall in (`loadForTokens`). Tokens moving within a band, a pose, a sign or the
-    /// stroll's corner change nothing of the idle still, and `MascotState` sets nothing else it is
-    /// drawn with: style, shading and relief are left at the engine's own.
+    /// model picks (`levelForModel`, by family, so two ids of one model are one head), the band
+    /// the tokens fall in (`loadForTokens`) and the facing, which mirrors the whole picture (any
+    /// word but `right` is `left`, as the engine reads it). Tokens moving within a band, a pose, a
+    /// sign or the stroll's corner change nothing of the idle still, and `MascotState` sets
+    /// nothing else it is drawn with: style, shading and relief are left at the engine's own.
     struct Still: Equatable {
         var level: Double
         var load: Load
+        var facing: String
 
         init(_ input: TopoInput) {
             let rest = Self.rest
             level = input.model.flatMap { $0.isEmpty ? nil : levelForModel($0) } ?? input.level ?? rest.level
             load = input.tokens.map(loadForTokens) ?? input.load.flatMap(Load.init(rawValue:)) ?? rest.load
+            facing = input.facing.map { $0 == "right" ? "right" : "left" } ?? rest.facing
         }
 
         /// A fresh engine's, which is what the still starts from and keeps where the input is silent.
@@ -185,7 +195,7 @@ final class MascotDriver {
     }
 
     /// Under Reduce Motion he is the idle pose, settled, at home: a fresh engine walked to where
-    /// the pose has landed and drawn once, with the model and the load of the state.
+    /// the pose has landed and drawn once, with the model, the load and the facing of the state.
     ///
     /// 2.9 s at a thirtieth is past the pose's settle (the sheet settles in 2.2) and before the
     /// engine's first glance (3 s) and its second blink (at least 2.5 s after the first at 2 s):
@@ -228,8 +238,8 @@ final class MascotDriver {
         spent.append(seconds * 1000)
         guard spent.count >= Self.reportEvery else { return }
         let sorted = spent.sorted(), n = sorted.count
-        DebugRun.say(String(format: "mascot: %d frames, %@, mean %.2f ms, p95 %.2f ms, max %.2f ms",
-                            n, input.activity ?? "idle", sorted.reduce(0, +) / Double(n),
+        DebugRun.say(String(format: "mascot: %d frames, %@, facing %@, mean %.2f ms, p95 %.2f ms, max %.2f ms",
+                            n, input.activity ?? "idle", engine.facing, sorted.reduce(0, +) / Double(n),
                             sorted[n * 95 / 100], sorted[n - 1]))
         spent.removeAll(keepingCapacity: true)
     }
@@ -396,6 +406,11 @@ struct MascotOnGlass: View, Animatable {
     let opacity: Double
     /// A sheet is over the chat.
     let covered: Bool
+    /// The transcript's vertical midline in the row's space, which his facing is decided against;
+    /// nil where it has not been measured, which decides nothing.
+    var midline: CGFloat? = nil
+    /// Told the facing his placement decides, when it decides one and whenever that changes.
+    var face: (MascotFacing) -> Void = { _ in }
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -423,6 +438,12 @@ struct MascotOnGlass: View, Animatable {
                 .position(x: placement.frame.midX, y: placement.frame.midY)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)
+                // Decided where he is placed and handed up, so the facing is `Mascot`'s and reaches
+                // the engine in the state it draws from; a placement that stays on one side of the
+                // line decides nothing new.
+                .onChange(of: midline.map(placement.facing(midline:)), initial: true) { _, facing in
+                    if let facing { face(facing) }
+                }
         }
     }
 

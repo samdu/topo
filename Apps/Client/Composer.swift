@@ -41,6 +41,11 @@ struct Composer: View {
     var mascot: MascotState?
     /// A sheet is over the chat, so he is not seen and is not drawn.
     var covered = false
+    /// The transcript's vertical midline in the global space, which Topo's facing is decided
+    /// against; nil for none measured, which leaves his facing as it is.
+    var midline: CGFloat?
+    /// Told the facing his placement decides (`MascotPlacement.facing`).
+    var face: (MascotFacing) -> Void = { _ in }
     @Environment(\.look) private var look
 
     /// What the microphone is doing, and which of the four the glass draws for it. The chat
@@ -116,7 +121,8 @@ struct Composer: View {
             if let mascot, let flank {
                 GeometryReader { row in
                     MascotOnGlass(state: mascot, flank: row[flank], row: row.size, share: geometry.scale,
-                                  presence: presence, opacity: flankOpacity, covered: covered)
+                                  presence: presence, opacity: flankOpacity, covered: covered,
+                                  midline: midline.map { $0 - row.frame(in: .global).minX }, face: face)
                         .opacity(flankOpacity)
                 }
                 .allowsHitTesting(false)

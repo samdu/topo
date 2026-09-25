@@ -43,6 +43,9 @@ struct ChatView: View {
     /// scroll geometry to read at all — and the pane is drawn whole while any of them is.
     @State private var contentBottomInTranscript: CGFloat?
     @State private var transcriptTop: CGFloat?
+    /// The transcript's vertical midline in the global space, which Topo's facing is decided
+    /// against: on its right half he faces into the room from the right.
+    @State private var transcriptMidline: CGFloat?
     @State private var paneTop: CGFloat?
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
     /// Memory section, and what the offer card above the composer opens.
@@ -89,6 +92,9 @@ struct ChatView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 transcript
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .global).midX } action: {
+                        transcriptMidline = $0
+                    }
                 if harness.busy {
                     // A turn in flight always says where it is; a spinner alone reads as nothing.
                     HStack(spacing: 8) {
@@ -304,7 +310,8 @@ struct ChatView: View {
                 .accessibilityIdentifier(DebugRun.chatReportIdentifier)
                 .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
                                                         error: harness.error, speaker: speaker.report,
-                                                        voice: speaker.voice.state))
+                                                        voice: speaker.voice.state,
+                                                        facing: mascot.facing))
                 #endif
         }
     }
@@ -413,7 +420,8 @@ struct ChatView: View {
                             keyboard: keyboard,
                             micPressed: { down in Task { await micPressed(down) } },
                             micReport: micReport, mascot: mascot.state,
-                            covered: showSettings || showDiagnostics || showMemory)
+                            covered: showSettings || showDiagnostics || showMemory,
+                            midline: transcriptMidline, face: { mascot.facing = $0 })
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {

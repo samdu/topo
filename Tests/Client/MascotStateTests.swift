@@ -197,4 +197,27 @@ final class MascotStateTests: XCTestCase {
         mascot.harness(model: "claude-opus-5", tokens: nil)
         XCTAssertEqual(mascot.state.tokens, 0, "a harness with no context left him wearing the last one")
     }
+
+    // MARK: Facing
+
+    /// The facing is `Mascot`'s, handed to the engine in every input, and nothing a turn or the
+    /// harness does moves it: a turn's events and its end, the harness's model and context, all
+    /// leave him facing the way his placement said.
+    func testTheFacingReachesTheEngineAndNoTurnMovesIt() {
+        let mascot = Mascot(model: "claude-sonnet-5")
+        XCTAssertEqual(mascot.facing, .left, "the picture as drawn is where he starts")
+        XCTAssertEqual(mascot.state.input.facing, "left")
+        mascot.facing = .right
+        XCTAssertEqual(mascot.state.input.facing, "right")
+        mascot.guestTurnBegan()
+        mascot.guest(.event(.started(session: "s", model: "claude-opus-5")))
+        mascot.guest(.event(.toolUse(name: "Bash")))
+        XCTAssertEqual(mascot.state.input.facing, "right", "a turn's events turned him")
+        mascot.guest(.ended(.abandoned))
+        mascot.guestTurnGone()
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 12)
+        XCTAssertEqual(mascot.facing, .right, "a turn's end or the harness turned him")
+        mascot.facing = .left
+        XCTAssertEqual(mascot.state.input.facing, "left")
+    }
 }

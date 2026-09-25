@@ -347,6 +347,9 @@ extension DebugRun {
         /// The voice's state, so a lane waits for Pocket to be resident rather than sending a
         /// question the speaker would have nothing to read it with.
         var voice: String
+        /// The side of the screen Topo's placement says he stands on, as `Mascot` hands it to the
+        /// engine (which takes it once he is at rest at home).
+        var facing: String
     }
 
     struct TurnReport: Codable, Equatable {
@@ -364,8 +367,9 @@ extension DebugRun {
     static let chatReportIdentifier = "topo-debug-chat"
 
     static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report,
-                           voice: Voice.State) -> String {
-        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)")
+                           voice: Voice.State, facing: MascotFacing) -> String {
+        var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)",
+                                facing: facing.rawValue)
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)
