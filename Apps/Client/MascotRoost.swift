@@ -498,7 +498,8 @@ enum MascotPerch {
 
     /// His box at `pin`, a fraction of `frame` across and down, as the look carries it: the box's
     /// centre put there, then moved in only as far as it takes to keep his reach inside `frame` —
-    /// the transcript's with the keyboard down — so the screen's edge holds him wherever the pin
+    /// the transcript's carried to the pane's foot with the keyboard down (`MascotField.pinFrame`) —
+    /// so the screen's edge holds him wherever the pin
     /// is. The pin is read in `0...1` here too, whatever it is handed. With the keyboard up he is
     /// lifted clear of it, keeping from its top edge his clearance or his reach, whichever is
     /// longer, and no further up than the transcript's top edge lets him: the pin is where he goes
@@ -1093,8 +1094,8 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// The finger has moved his box's origin to `origin`: he is drawn there, at his size, as far as
-    /// the transcript's frame with the keyboard down lets his reach go — the place he would be
-    /// pinned at if it let go now.
+    /// the transcript's frame carried to the pane's foot with the keyboard down lets his reach go —
+    /// the place he would be pinned at if it let go now.
     mutating func drag(to origin: CGPoint) {
         guard dragging, let field, origin.x.isFinite, origin.y.isFinite else { return }
         let frame = MascotPerch.inside(CGRect(origin: origin, size: settings.size), resting ?? field.pinFrame,

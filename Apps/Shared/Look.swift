@@ -454,8 +454,9 @@ struct Look: Equatable, Sendable {
             /// On the composer's pane, in its empty flank, which is then drawn whole at every
             /// presence: a Topo on invisible glass is a Topo floating.
             case glass
-            /// At `pin`, where a person put him; words and glass are not obstacles, and only the
-            /// keyboard moves him, and then only while it is up.
+            /// At `pin`, where a person put him; words and glass are not obstacles. The keyboard
+            /// lifts him clear of itself only while it is up, and otherwise he moves only with the
+            /// frame the pin is read in, a new pin, or a drag.
             case pinned
         }
     }

@@ -875,8 +875,8 @@ extension View {
     /// Topo laid over this view, which is the chat: where the look places him (`Look.Mascot.placement`)
     /// — roaming where the frames its turns, rows and glass report (`MascotScene`) leave him room,
     /// on the glass, or at a pin — taking no room of his own and no touch but a long press on him,
-    /// and nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — a
-    /// roaming Topo is not drawn, and his first decision where to stand comes after it. `face` is
+    /// and nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — he
+    /// is not drawn, whatever the placement, and his first place comes after it. `face` is
     /// told the facing each roost decides, for `Mascot.facing`, and `pin` the pin a drag let go of
     /// him at.
     func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
