@@ -358,6 +358,32 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertFalse(roam.covered)
     }
 
+    /// A press cancelled rather than let go pins nothing: the policy and the pin are as they
+    /// were, and he goes back to his place with a glide.
+    func testACancelledDragPinsNothing() throws {
+        var time = 0.0
+        let pin = CGPoint(x: 0.3, y: 0.4)
+        var roam = settled(Self.settings(.pinned, pin: pin), [Self.field()], time: &time)
+        let home = try XCTUnwrap(roam.picture)
+        XCTAssertTrue(roam.grab())
+        roam.drag(to: CGPoint(x: 250, y: 100))
+        roam.cancelDrag()
+        XCTAssertFalse(roam.dragging)
+        XCTAssertEqual(roam.settings.placement, .pinned)
+        XCTAssertEqual(roam.settings.pin, pin)
+        XCTAssertNotNil(roam.move, "he jumped back rather than gliding")
+        run(&roam, time: &time)
+        XCTAssertEqual(roam.picture, home)
+
+        var roaming = settled(Self.settings(.roam), [Self.field()], time: &time)
+        XCTAssertTrue(roaming.grab())
+        roaming.drag(to: CGPoint(x: 60, y: 200))
+        roaming.cancelDrag()
+        XCTAssertEqual(roaming.settings.placement, .roam, "a cancelled drag pinned him")
+        run(&roaming, time: &time)
+        XCTAssertEqual(roaming.roost.name, "gap")
+    }
+
     /// Nothing is picked up where he is not drawn.
     func testNothingIsPickedUpWhereHeIsNotDrawn() {
         var roam = MascotRoam(Self.settings(.roam), frame: Self.frame)
@@ -399,6 +425,10 @@ final class MascotPlacementTests: XCTestCase {
         let pin = try XCTUnwrap(canvas.drag(from: CGPoint(x: box.minX + 4, y: box.minY + 4), to: CGPoint(x: 104, y: 204)))
         XCTAssertEqual(pinned, [pin])
         XCTAssertEqual(canvas.spriteFrame.origin, CGPoint(x: 100, y: 200))
+        // A press cancelled rather than let go hands nothing on.
+        let now = canvas.spriteFrame
+        XCTAssertTrue(canvas.cancelledDrag(from: CGPoint(x: now.minX + 4, y: now.minY + 4), to: CGPoint(x: 300, y: 50)))
+        XCTAssertEqual(pinned, [pin], "a cancelled press handed a pin on")
         canvas.removeFromSuperview()
         XCTAssertFalse(window.gestureRecognizers?.contains(canvas.grab) ?? false, "the recognizer outlived the canvas")
     }

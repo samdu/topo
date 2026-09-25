@@ -1114,6 +1114,21 @@ struct MascotRoam: Equatable, Sendable {
         return pin
     }
 
+    /// The press was cancelled — a call, an alert, the system taking the touch — rather than let
+    /// go: nothing is pinned, and he goes back to where his policy puts him, with a glide at the
+    /// stroll, or, roaming, to a roost decided from where the finger left him.
+    mutating func cancelDrag() {
+        guard dragging else { return }
+        dragging = false
+        if settings.placement != .roam {
+            perch(.switched)
+        } else {
+            move = nil
+            decide(glide: true)
+            covered = isCovered
+        }
+    }
+
     /// The facing for the roost just decided: which half of the transcript its centre is in.
     private mutating func face(_ field: MascotField) {
         guard let frame = roost.frame else { return }

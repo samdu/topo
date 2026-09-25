@@ -325,7 +325,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
             pickUp(at: point)
         case .changed:
             move(to: point)
-        case .ended, .cancelled, .failed:
+        case .ended:
             guard roam?.dragging == true else { return }
             move(to: point)
             var roam = roam
@@ -333,6 +333,8 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
             self.roam = roam
             sync()
             if let pin { onPin?(pin) }
+        case .cancelled, .failed:
+            cancel()
         default:
             break
         }
@@ -368,6 +370,24 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         sync()
         if let pin { onPin?(pin) }
         return pin
+    }
+
+    /// A press scripted as a test would make one, picked up at `from`, carried to `to` and then
+    /// cancelled rather than let go. Answers whether it picked him up.
+    @discardableResult
+    func cancelledDrag(from: CGPoint, to: CGPoint) -> Bool {
+        guard grabbable(at: from), pickUp(at: from) else { return false }
+        move(to: to)
+        cancel()
+        return true
+    }
+
+    /// The press taken away rather than let go: nothing is pinned, and he goes back.
+    private func cancel() {
+        guard var roam, roam.dragging else { return }
+        roam.cancelDrag()
+        self.roam = roam
+        sync()
     }
 
     /// The roam's answer handed to what draws him: the walk while he glides and his own activity
