@@ -36,7 +36,7 @@ struct Look: Equatable, Sendable {
     var composer: Composer
     /// The person's next turn, written at the end of the transcript.
     var draft: Draft
-    /// Topo himself, on the composer's glass.
+    /// Topo himself, over the chat.
     var mascot: Mascot
 
     init(_ screen: Screen = .current) {
@@ -78,6 +78,13 @@ struct Look: Equatable, Sendable {
         var horizontalPadding: CGFloat
         /// How wide the column is allowed to become on a screen wider than it.
         var maximumLineWidth: CGFloat
+        /// Room kept clear after Topo's own turns, in points, on their trailing side: the margin
+        /// he stands in beside his replies. On the phone it is 100: his box at a scale of 1, 92
+        /// points, and one clearance, rounded up to ten, which with the column's padding holds his
+        /// picture, the 9 points his reach keeps from the screen's edge and his clearance from the
+        /// words, and the ends of lines that stop short of the column's edge add to it; none on the
+        /// watch and the television, where he is not drawn. The person's bubbles keep the column's width.
+        var replyTrailingInset: CGFloat
         /// A turn's words.
         var bodyFont: Font
         /// A time.
@@ -96,6 +103,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 2
                 horizontalPadding = 2
                 maximumLineWidth = .infinity
+                replyTrailingInset = 0
                 bodyFont = .system(.footnote)
                 labelFont = .system(.caption2).weight(.semibold)
                 noticeFont = .system(.caption2)
@@ -104,6 +112,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 4
                 horizontalPadding = 48
                 maximumLineWidth = 1100
+                replyTrailingInset = 0
                 bodyFont = .system(.title3)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)
@@ -112,6 +121,7 @@ struct Look: Equatable, Sendable {
                 captionSpacing = 2
                 horizontalPadding = 16
                 maximumLineWidth = 672
+                replyTrailingInset = 100
                 bodyFont = .system(.body)
                 labelFont = .system(.caption).weight(.semibold)
                 noticeFont = .system(.caption)
@@ -133,6 +143,10 @@ struct Look: Equatable, Sendable {
         var verticalPadding: CGFloat
         /// What sits under the tint.
         var surface: Surface
+
+        /// Nothing is drawn around the words: no surface, no tint and no outline. The words are
+        /// then all there is of the turn, so the room at the end of a short line is room.
+        var drawsNothing: Bool { surface == .flat && fillOpacity == 0 && strokeWidth == 0 }
 
         /// The person's side. `primary` is the person's colour in the palette, the same one
         /// Topo's own voice wears; `secondary` is reserved for a turn a process put into the
@@ -388,32 +402,35 @@ struct Look: Equatable, Sendable {
         }
     }
 
-    /// Topo on the composer's glass: where he perches in the flank left of the microphone, how
-    /// big, how far he strolls when idle and how often he is drawn. His pixels and colours are
-    /// the engine's (`Packages/TopoMascot`); what is here is where they go.
+    /// Topo over the chat: how big he is drawn, how much room he keeps from any word, how he
+    /// goes from one gap to the next and how often he is drawn. His pixels and colours are the
+    /// engine's (`Packages/TopoMascot`); where he stands is `MascotRoost`'s, from the chat's
+    /// geometry and these.
     ///
-    /// Each field is read in the range the document names, and then clamped again to the flank
-    /// he is drawn in (`MascotPlacement`): whatever the look says, he is drawn between the pane's
-    /// leading end and the well, and never over the microphone.
+    /// Each field is read in the range the document names (`LookDocument`), and `MascotRoost`
+    /// takes what it is handed as it comes, so no value puts him over a word or the microphone.
     struct Mascot: Equatable, Sendable {
         /// Points to one of the engine's art pixels, scaled nearest-neighbour so pixels stay
-        /// pixels. One is the size the engine's poses were drawn at.
+        /// pixels: one, his original size, three device pixels an art pixel on a 3x screen.
         var scale: CGFloat = 1
-        /// Where his body stands, from home: the middle of the flank, his shelf row on the pane's
-        /// top edge. Positive is right and down; the height is down only, 0 to 200, and drawn no
-        /// lower than the pane's foot, so he stands between its top edge and its foot.
-        var offset = CGSize.zero
-        /// How far towards the pane's leading end he strolls when idle, in points.
-        var stroll: CGFloat = 36
+        /// The room he keeps from every word, the row being written, the lines under the
+        /// transcript, the composer's pane and the keyboard, in points, on every side of his
+        /// picture; not from the transcript's own edges, where what he keeps is his reach
+        /// (`MascotSprite.reach`), so the margin beside a reply holds him. A new roost within this of where he stands is not a move.
+        var clearance: CGFloat = 8
+        /// How fast he goes from one roost to the next, in points a second on average, eased at
+        /// both ends: a stroll, so as not to call attention to himself.
+        var roamSpeed: CGFloat = 40
+        /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
+        /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
+        var hurry: CGFloat = 10
+        /// How long the chat's geometry has to hold still before he picks a new roost, in
+        /// seconds: the transcript reports its geometry on every frame of a scroll, and he goes
+        /// once it settles, not on every frame of it.
+        var roamSettle = 0.6
         /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
         /// motion was judged at and half the work of the display's rate.
         var frameInterval = 1.0 / 30
-        /// Over an empty transcript, with no pane under him, he floats where he would stand and
-        /// bobs: up by as much as this many points and back, once a `bobPeriod`. The bob eases out
-        /// as the pane arrives, so on the glass whole he sits still on its edge. None under
-        /// Reduce Motion.
-        var bobAmplitude: CGFloat = 3
-        var bobPeriod = 2.4
     }
 
     /// The person's next turn, written at the end of the transcript rather than in the glass.

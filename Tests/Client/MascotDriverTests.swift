@@ -27,9 +27,8 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertNotNil(driver.image)
     }
 
-    /// His flank faded part of the way by the microphone's hold is still him seen, so frames go
-    /// on; faded to nothing, they stop.
-    func testAPartlyFadedFlankKeepsHisFramesAndANoneStopsThem() {
+    /// Faded part of the way is still him seen, so frames go on; faded to nothing, they stop.
+    func testAPartlyFadedTopoKeepsHisFramesAndANoneStopsThem() {
         for (opacity, drawn) in [(0.5, true), (0.01, true), (0, false)] as [(Double, Bool)] {
             var conditions = seen
             conditions.opacity = opacity
@@ -39,7 +38,7 @@ final class MascotDriverTests: XCTestCase {
         }
     }
 
-    /// Inactive or backgrounded, out of the window, his flank faded to nothing by the microphone's hold,
+    /// Inactive or backgrounded, out of the window, faded to nothing by the microphone's hold,
     /// or a sheet over him: each alone stops every frame.
     func testNoFramesWhileUnseen() {
         var inactive = seen; inactive.active = false
@@ -118,14 +117,23 @@ final class MascotDriverTests: XCTestCase {
 
     // MARK: The clock
 
+    /// A chat with room in it: an empty transcript over a pane.
+    static let open = MascotField(visible: CGRect(x: 0, y: 0, width: 400, height: 600),
+                                  pane: CGRect(x: 40, y: 600, width: 320, height: 80),
+                                  well: CGRect(x: 164, y: 604, width: 72, height: 72))
+    static let settings = MascotRoam.Settings(size: MascotSprite.size(scale: 2.0 / 3), clearance: 8,
+                                              reach: MascotSprite.reach(scale: 2.0 / 3), speed: 40,
+                                              settle: 0.6)
+
     /// The canvas's display link runs while he animates, at the look's rate, and is gone the
-    /// moment any condition says he is unseen or held still.
+    /// moment any condition says he is unseen or held still, once nothing of his roam waits on
+    /// the clock.
     func testTheLinkRunsExactlyWhileHeAnimates() throws {
-        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 100, height: 100))
-        let placement = MascotPlacement(frame: canvas.frame, home: CGPoint(x: 50, y: 90), scale: 1, corner: -20)
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let input = MascotState(model: "claude-sonnet-5").input
         func apply(_ conditions: MascotDriver.Conditions, interval: Double = 1.0 / 30) {
-            canvas.apply(input: input, placement: placement, interval: interval, conditions: conditions)
+            canvas.apply(input: input, field: Self.open, settings: Self.settings, interval: interval,
+                         conditions: conditions)
         }
 
         apply(seen)
@@ -139,6 +147,9 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertEqual(canvas.frameRate, 30)
         apply(seen, interval: 0.1)
         XCTAssertEqual(canvas.frameRate, 10, "the look's frame interval does not reach the clock")
+        // The first geometry is a decision still owed its settle; let it settle.
+        for _ in 0..<30 { canvas.step(0.1) }
+        XCTAssertEqual(canvas.roam?.needsTime, false)
 
         var inactive = seen; inactive.active = false
         var faded = seen; faded.opacity = 0
@@ -155,39 +166,166 @@ final class MascotDriverTests: XCTestCase {
         XCTAssertFalse(canvas.isTicking, "a canvas taken out of the window kept asking for frames")
     }
 
-    /// Over an empty transcript he floats: half a period into the bob he is the look's amplitude
-    /// up off where he would stand, and on the glass whole, or under Reduce Motion, he is not up
-    /// at all.
-    func testHeBobsOverNoPaneAndNotOnTheGlassOrUnderReduceMotion() throws {
-        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 100, height: 200))
-        let placement = MascotPlacement(frame: canvas.frame, home: CGPoint(x: 50, y: 150), scale: 1, corner: 0)
-        let input = MascotState(model: "claude-sonnet-5").input
+    /// Standing nowhere is not animating: no frame is drawn for a Topo with nowhere to stand, and
+    /// once his roam has nothing waiting on the clock the link stops, so he costs nothing.
+    func testATopoStandingNowhereDrawsNoFrameAndStopsTheLink() throws {
+        var nowhere = seen
+        nowhere.hidden = true
+        let driver = driver(nowhere)
+        for _ in 0..<10 { driver.tick(1.0 / 30) }
+        XCTAssertEqual(driver.frames, 0)
+        XCTAssertFalse(nowhere.animates)
+        XCTAssertTrue(nowhere.present, "a Topo standing nowhere lost the clock that places him")
+
+        // A chat with no room anywhere, not even a pane: he stands nowhere.
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
         let window = try XCTUnwrap(stageWindow())
         defer { window.isHidden = true }
         window.addSubview(canvas)
-        var mascot = Look.Mascot()
-        mascot.bobAmplitude = 10
-        mascot.bobPeriod = 2
-        let resting = placement.sprite(x: 0).minY
+        let none = MascotField(visible: CGRect(x: 0, y: 0, width: 400, height: 600),
+                               obstacles: [CGRect(x: 0, y: 0, width: 400, height: 600)])
+        canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: none, settings: Self.settings,
+                     interval: 1.0 / 30, conditions: seen)
+        XCTAssertEqual(canvas.roam?.hidden, true)
+        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        XCTAssertEqual(canvas.driver.frames, 0, "a Topo standing nowhere was drawn")
+        XCTAssertFalse(canvas.isTicking, "a Topo standing nowhere kept the link running")
+        XCTAssertFalse(canvas.showing)
+    }
 
-        canvas.apply(input: input, placement: placement, interval: 1.0 / 30,
-                     hover: MascotHover(mascot, presence: 0), conditions: seen)
-        canvas.step(1)
-        XCTAssertEqual(canvas.lift, 10, accuracy: 1e-9, "half a period over no pane is the whole bob")
-        XCTAssertEqual(canvas.spriteFrame.minY, resting - 10, accuracy: 1e-6, "the lift is not where he is drawn")
+    /// Something over him does not stop him being drawn: he is above everything in the chat.
+    func testACoveredTopoIsStillDrawn() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let input = MascotState(model: "claude-sonnet-5").input
+        canvas.apply(input: input, field: Self.open, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
+        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        let picture = try XCTUnwrap(canvas.roam?.picture)
+        var over = Self.open
+        over.obstacles = [picture.insetBy(dx: 4, dy: 4)]
+        canvas.apply(input: input, field: over, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
+        XCTAssertEqual(canvas.roam?.covered, true)
+        let before = canvas.driver.frames
+        canvas.step(1.0 / 30)
+        XCTAssertTrue(canvas.showing, "a covered Topo was not drawn")
+        XCTAssertGreaterThan(canvas.driver.frames, before, "a covered Topo drew no frame")
+    }
 
-        canvas.apply(input: input, placement: placement, interval: 1.0 / 30,
-                     hover: MascotHover(mascot, presence: 1), conditions: seen)
-        XCTAssertEqual(canvas.lift, 0, "on the glass whole he still bobs")
-        XCTAssertEqual(canvas.spriteFrame.minY, resting, accuracy: 1e-6)
+    /// At a frame interval of a second the link calls back once a second, and the roam's clock is
+    /// real time: the settle is 0.6 s of it and the glide goes at the look's speed, not at the
+    /// tenth of it a per-callback cap under the interval would make it. A stall longer than a frame
+    /// moves the clock two frames on.
+    func testTheClockIsRealTimeAtAFrameIntervalOfASecond() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let input = MascotState(model: "claude-sonnet-5").input
+        // No hurry, so a glide under a turn is at the stroll too.
+        var settings = Self.settings
+        settings.hurry = 1
+        func apply(_ field: MascotField) {
+            canvas.apply(input: input, field: field, settings: settings, interval: 1, conditions: seen)
+        }
+        // Room at the bottom right only: he settles there.
+        var low = Self.open
+        low.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 400), CGRect(x: 0, y: 400, width: 200, height: 200)]
+        apply(low)
+        // Real-shaped timestamps: host time in seconds, one callback a second, with the jitter a
+        // display link's target timestamps carry.
+        var stamp: CFTimeInterval = 81_234.567
+        canvas.fire(at: stamp)
+        XCTAssertEqual(canvas.clock, 1, accuracy: 1e-9)
+        XCTAssertEqual(canvas.roam?.roost.name, "gap", "a 0.6 s settle was not over a second in")
+        // Room opens straight above him and a turn lands where he stands: he strolls up to it.
+        var roomy = Self.open
+        roomy.obstacles = [CGRect(x: 0, y: 0, width: 200, height: 600), CGRect(x: 200, y: 500, width: 200, height: 100)]
+        apply(roomy)
+        for jitter in [1.0002, 0.9997] {
+            stamp += jitter
+            canvas.fire(at: stamp)
+        }
+        XCTAssertEqual(canvas.clock, 1 + 1.0002 + 0.9997, accuracy: 1e-6, "the clock is not real time")
+        let glide = try XCTUnwrap(canvas.roam?.move, "no glide once the settle was over")
+        // Each second of callbacks is a second of the stroll: the glide's pace is the look's,
+        // whatever the frame interval.
+        var steps = 0
+        while let move = canvas.roam?.move, steps < 30 {
+            stamp += 1
+            canvas.fire(at: stamp)
+            if let after = canvas.roam?.move { XCTAssertEqual(after.elapsed - move.elapsed, 1, accuracy: 1e-6) }
+            steps += 1
+        }
+        XCTAssertNil(canvas.roam?.move, "the glide did not end")
+        XCTAssertEqual(Double(steps), glide.duration - glide.elapsed, accuracy: 1.001,
+                       "a glide of \(glide.duration) s at the look's speed took \(steps) callbacks of a second")
+        // A stall of a minute moves the clock by the cap, two frames.
+        let clock = canvas.clock
+        stamp += 60
+        canvas.fire(at: stamp)
+        XCTAssertEqual(canvas.clock - clock, 2, accuracy: 1e-9)
+        XCTAssertEqual(MascotCanvas.stepCap(interval: 1.0 / 30), 0.1)
+    }
 
-        var still = seen
-        still.reduceMotion = true
-        canvas.apply(input: input, placement: placement, interval: 1.0 / 30,
-                     hover: MascotHover(mascot, presence: 0), conditions: still)
-        XCTAssertEqual(canvas.lift, 0, "he bobs under Reduce Motion")
-        XCTAssertEqual(canvas.spriteFrame.minY, resting, accuracy: 1e-6)
-        XCTAssertFalse(canvas.isTicking, "Reduce Motion asked for frames to bob him with")
+    /// Not drawn for want of a gap, the link stops, since nothing waits on the clock; a geometry
+    /// change — the keyboard rising, a scroll — starts it again, and the room it opens places him.
+    func testAGeometryChangeWithNowhereToStandStartsTheClockAgain() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let input = MascotState(model: "claude-sonnet-5").input
+        func apply(_ field: MascotField) {
+            canvas.apply(input: input, field: field, settings: Self.settings, interval: 1.0 / 30, conditions: seen)
+        }
+        var full = Self.open
+        full.obstacles = [CGRect(x: 0, y: 0, width: 400, height: 600)]
+        apply(full)
+        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        XCTAssertEqual(canvas.roam?.roost.name, "none")
+        XCTAssertEqual(canvas.roam?.needsTime, false)
+        var scrolled = Self.open
+        scrolled.obstacles = [CGRect(x: 0, y: 150, width: 400, height: 450)]
+        apply(scrolled)
+        XCTAssertTrue(canvas.isTicking, "a geometry change with nowhere to stand asked for no frame")
+        for _ in 0..<600 where canvas.roam?.needsTime == true { canvas.step(1.0 / 30) }
+        XCTAssertEqual(canvas.roam?.roost.name, "gap")
+    }
+
+    /// The walk is worn only while his frame moves; on arrival he wears the activity he stands
+    /// for, so a thinking guest goes on thinking rather than being put back to idle.
+    func testTheWalkIsWornOnlyWhileHeGlidesAndHisActivitySurvivesIt() throws {
+        let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 400, height: 700))
+        let window = try XCTUnwrap(stageWindow())
+        defer { window.isHidden = true }
+        window.addSubview(canvas)
+        let thinking = MascotState(model: "claude-sonnet-5", activity: .thinking).input
+        func apply(_ field: MascotField) {
+            canvas.apply(input: thinking, field: field, settings: Self.settings, interval: 1.0 / 30,
+                         conditions: seen)
+        }
+        apply(Self.open)
+        for _ in 0..<30 { canvas.step(1.0 / 30) }
+        XCTAssertEqual(canvas.driver.input.activity, "thinking")
+        let before = try XCTUnwrap(canvas.roam?.position)
+        // A turn lands where he stands: he goes, walking.
+        var landed = Self.open
+        landed.obstacles = [CGRect(x: 0, y: before.y - 20, width: 400, height: 600 - before.y + 20)]
+        apply(landed)
+        var walked = false
+        for _ in 0..<(30 * 30) {
+            canvas.step(1.0 / 30)
+            if canvas.roam?.walking == true {
+                walked = true
+                XCTAssertEqual(canvas.driver.input.activity, "walk")
+            }
+            if walked, canvas.roam?.walking == false { break }
+        }
+        XCTAssertTrue(walked, "he never glided")
+        XCTAssertEqual(canvas.driver.input.activity, "thinking", "the glide put him back to something else")
+        XCTAssertEqual(canvas.driver.input.corner, 0, "the engine's own stroll is not his to take")
     }
 
     /// He takes no touch and is nothing to accessibility.
@@ -202,7 +340,7 @@ final class MascotDriverTests: XCTestCase {
     private func stageWindow() -> UIWindow? {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return nil }
         let window = UIWindow(windowScene: scene)
-        window.frame = CGRect(x: 0, y: 0, width: 200, height: 200)
+        window.frame = CGRect(x: 0, y: 0, width: 400, height: 700)
         window.isHidden = false
         return window
     }

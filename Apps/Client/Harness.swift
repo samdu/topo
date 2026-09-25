@@ -14,6 +14,10 @@ final class Harness {
     static let modelKey = "model"
 
     private(set) var turns: [Turn] = []
+    /// A read of the log has returned, with turns or with none: what the transcript draws is the
+    /// log's rather than the empty page before the first read. A read that threw is not one, so a
+    /// launch with no connection keeps this false until a read gets through.
+    private(set) var hasRead = false
     private(set) var notice: String?
     private(set) var busy = false
     private(set) var error: String?
@@ -236,6 +240,7 @@ final class Harness {
         writer = nil
         info = nil
         turns = []
+        hasRead = false
         notice = nil
         error = nil
         status = nil
@@ -302,9 +307,14 @@ final class Harness {
             turns = transcript.ordered
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
+            hasRead = true
             return true
         } catch {
-            guard !TopoCloudKit.meansNoLogYet(error) else { turns = []; return true }
+            guard !TopoCloudKit.meansNoLogYet(error) else {
+                turns = []
+                hasRead = true
+                return true
+            }
             self.error = "Couldn't read the transcript: \(TranscriptStore.message(for: error))"
             return false
         }
