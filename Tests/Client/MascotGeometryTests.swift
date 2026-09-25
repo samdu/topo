@@ -604,10 +604,19 @@ final class MascotGeometryTests: XCTestCase {
         let scale = Int(with.image.scale)
         let width = Int(screen.width) * scale
         var differing = 0
-        for y in Int(controls.minY) * scale..<Int(controls.maxY) * scale {
-            for x in Int(controls.minX) * scale..<Int(controls.maxX) * scale {
-                let i = (y * width + x) * 4
-                for c in 0..<4 where abs(Int(drawn[i + c]) - Int(bare[i + c])) > 2 { differing += 1 }
+        // `while` over pointers: this bundle is `-Onone`, where ranges cost seconds a picture.
+        bare.withUnsafeBufferPointer { bare in
+            drawn.withUnsafeBufferPointer { drawn in
+                var y = Int(controls.minY) * scale
+                while y < Int(controls.maxY) * scale {
+                    var i = (y * width + Int(controls.minX) * scale) * 4
+                    let end = (y * width + Int(controls.maxX) * scale) * 4
+                    while i < end {
+                        if abs(Int(drawn[i]) - Int(bare[i])) > 2 { differing += 1 }
+                        i += 1
+                    }
+                    y += 1
+                }
             }
         }
         XCTAssertEqual(differing, 0, "\(label): the pane changed with him over the chat")
