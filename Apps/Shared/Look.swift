@@ -438,6 +438,26 @@ struct Look: Equatable, Sendable {
         /// How long a frame of him is on the screen, in seconds: a thirtieth, which is what his
         /// motion was judged at and half the work of the display's rate.
         var frameInterval = 1.0 / 30
+        /// Where he sits, as a policy: roaming the gaps the words leave, on the composer's glass,
+        /// or pinned at `pin`. A drag on him writes `pinned` and the pin to this device's override
+        /// (`Tuning`).
+        var placement = Placement.roam
+        /// Where his box's centre is put while he is `pinned`: a fraction of the transcript's width
+        /// and of its height with the keyboard down, 0 to 1 each, so a pin survives rotation and
+        /// another screen.
+        var pin = CGPoint(x: 0.85, y: 0.8)
+
+        /// The three places he can be.
+        enum Placement: String, Equatable, Sendable, CaseIterable {
+            /// In whatever gap the words leave him, never on the glass (`MascotRoost`).
+            case roam
+            /// On the composer's pane, in its empty flank, which is then drawn whole at every
+            /// presence: a Topo on invisible glass is a Topo floating.
+            case glass
+            /// At `pin`, where a person put him; words and glass are not obstacles, and only the
+            /// keyboard moves him, and then only while it is up.
+            case pinned
+        }
     }
 
     /// The person's next turn, written at the end of the transcript rather than in the glass.

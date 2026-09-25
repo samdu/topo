@@ -28,6 +28,7 @@ enum DebugRun {
     static let lookVariable = "TOPO_DEBUG_LOOK"
     static let softwareKeyboardVariable = "TOPO_DEBUG_SOFTWARE_KEYBOARD"
     static let transcriptVariable = "TOPO_DEBUG_TRANSCRIPT"
+    static let tuningVariable = "TOPO_DEBUG_TUNING"
 
     #if os(iOS)
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
@@ -50,6 +51,19 @@ enum DebugRun {
     /// the document accepts with no vault behind it. Nil when the variable is absent, which is
     /// every ordinary run.
     static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
+
+    #if os(iOS)
+    /// `TOPO_DEBUG_TUNING=<look.json>`: this device's override (`Tuning`) set to that document at
+    /// launch, before anything reads it, and kept, as a drag or the settings sheet keeps it; empty
+    /// removes it. So a UI suite starts from a known override and a relaunch without the variable
+    /// is a relaunch that finds what the last one kept. Absent, which is every ordinary run, the
+    /// override is left as it is.
+    static func tuning(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                       defaults: UserDefaults = .standard) {
+        guard let document = environment[tuningVariable] else { return }
+        if document.isEmpty { defaults.removeObject(forKey: Tuning.key) } else { defaults.set(document, forKey: Tuning.key) }
+    }
+    #endif
 
     /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left>`: the chat draws these fixture turns
     /// (`PreviewTurns`) in place of the log's, so a UI suite can put Topo over a transcript of a
@@ -375,6 +389,18 @@ extension DebugRun {
         /// Topo's clearance in the look the chat is drawn with, which a debug build's Tuning is
         /// worn over (`Tuning`).
         var clearance: Double?
+        /// Where the look the chat is drawn with places him, and its pin.
+        var placement: String?
+        var pin: [Double]?
+        /// What this device's override (`Tuning`) holds of the placement and the pin, which only a
+        /// drag or the settings sheet writes: nil where it holds none.
+        var overridePlacement: String?
+        var overridePin: [Double]?
+        /// How much of a pane the composer's pane is drawn as (`PanePresence`).
+        var presence: Double?
+        /// Where the transcript's content ends, measured down from its own top edge, which a
+        /// scroll moves (iOS 18; nil before it is measured).
+        var contentBottom: Double?
     }
 
     struct TurnReport: Codable, Equatable {
@@ -393,9 +419,19 @@ extension DebugRun {
 
     static func chatReport(spoken: String?, turns: [Turn], error: String?, speaker: Speaker.Report,
                            voice: Voice.State, mascot: MascotRoam.Report? = nil,
-                           facing: MascotFacing = .left, clearance: CGFloat? = nil) -> String {
+                           facing: MascotFacing = .left, clearance: CGFloat? = nil,
+                           placed: Look.Mascot? = nil, overridePlacement: Look.Mascot.Placement? = nil,
+                           overridePin: CGPoint? = nil, presence: Double? = nil,
+                           contentBottom: CGFloat? = nil) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
                                 facing: facing.rawValue, clearance: clearance.map(Double.init))
+        func point(_ point: CGPoint) -> [Double] { [Double(point.x), Double(point.y)] }
+        report.placement = placed?.placement.rawValue
+        report.pin = placed.map { point($0.pin) }
+        report.overridePlacement = overridePlacement?.rawValue
+        report.overridePin = overridePin.map(point)
+        report.presence = presence
+        report.contentBottom = contentBottom.map(Double.init)
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

@@ -54,6 +54,17 @@ final class PanePresenceTests: XCTestCase {
 
     /// The pane goes short under the keyboard, and a pane that is not there cannot be seen to:
     /// with the keyboard up it is the pane whole wherever the content ends, over an empty
+    /// Topo sitting on the glass is the pane whole over an empty transcript and at every other
+    /// geometry: a Topo on invisible glass is a Topo floating.
+    func testTopoOnTheGlassIsThePaneWholeWhateverIsBehindIt() {
+        for bottom in [paneTop - 200, paneTop, paneTop + rise / 2, paneTop + rise * 3] {
+            XCTAssertEqual(PanePresence.of(contentBottom: bottom, paneTop: paneTop, rise: rise, open: false,
+                                           keyboard: false, holdsTopo: true), 1, "\(bottom)")
+        }
+        XCTAssertEqual(PanePresence.of(contentBottom: paneTop - 200, paneTop: paneTop, rise: rise, open: false,
+                                       keyboard: false, holdsTopo: false), 0, "without him, the geometry's answer")
+    }
+
     /// transcript as much as a full one.
     func testTheKeyboardIsThePaneWholeWhateverTheGeometry() {
         for bottom in [paneTop - 400, paneTop, paneTop + rise / 4, paneTop + rise / 2, paneTop + rise * 20] {

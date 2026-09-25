@@ -15,8 +15,9 @@ final class TuningSliderTests: XCTestCase {
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
         app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
-        // No tuning left over from an earlier run: the defaults' key is read as an empty document.
-        app.launchArguments += ["-firstRunAnswered", "YES", "-topo.debug.tuning", "{}"]
+        // No tuning left over from an earlier run: the override is removed at launch.
+        app.launchEnvironment["TOPO_DEBUG_TUNING"] = ""
+        app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
@@ -39,6 +40,72 @@ final class TuningSliderTests: XCTestCase {
         XCTAssertFalse(reset.isEnabled, "Reset is still offered with nothing to reset")
         app.navigationBars["Settings"].buttons["Done"].tap()
         XCTAssertTrue(wait(for: shipped, in: app), "Reset did not give the chat its look back: \(String(describing: clearance(in: app)))")
+    }
+
+    /// The Tuning section shows where Topo sits and the pin a drag left, and offers Reset: with a
+    /// pin kept, the section says so, Reset gives the chat its roaming back; the placement chosen
+    /// there, `glass`, is what the chat wears.
+    func testTheSectionShowsThePlacementAndThePinAndResetRemovesThem() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
+        app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
+        app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
+        app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
+        app.launchEnvironment["TOPO_DEBUG_TRANSCRIPT"] = "empty"
+        app.launchEnvironment["TOPO_DEBUG_TUNING"] = #"{"mascot": {"placement": "pinned", "pin": {"x": 0.25, "y": 0.5}}}"#
+        app.launchArguments += ["-firstRunAnswered", "YES"]
+        addTeardownBlock {
+            let clean = XCUIApplication()
+            clean.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
+            clean.launchEnvironment["TOPO_DEBUG_TUNING"] = ""
+            clean.launch()
+            clean.terminate()
+        }
+        app.launch()
+        let badge = app.buttons["topo-debug-chat"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
+        XCTAssertTrue(wait(in: app) { $0.placement == "pinned" }, "the chat does not wear the kept pin")
+
+        _ = try openTuning(app, badge: badge)
+        let pin = app.descendants(matching: .any)["tuning-pin"]
+        XCTAssertTrue(pin.waitForExistence(timeout: 5), "the section does not show the pin")
+        XCTAssertTrue(pin.label.contains("25% across") || (pin.value as? String ?? "").contains("25% across"),
+                      "the pin shown is not the kept one: \(pin.label) \(String(describing: pin.value))")
+        let reset = app.buttons["Reset"]
+        XCTAssertTrue(reset.isEnabled, "Reset is not offered with a pin kept")
+        reset.tap()
+        XCTAssertFalse(reset.isEnabled, "Reset is still offered with nothing to reset")
+        XCTAssertFalse(pin.exists, "the pin is still shown after Reset")
+        app.navigationBars["Settings"].buttons["Done"].tap()
+        XCTAssertTrue(wait(in: app) { $0.placement == "roam" && $0.overridePlacement == nil },
+                      "Reset did not give him his roaming back")
+
+        _ = try openTuning(app, badge: badge)
+        let picker = app.buttons["tuning-placement"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 5), "the section has no placement")
+        picker.tap()
+        let glass = app.buttons["On the glass"]
+        XCTAssertTrue(glass.waitForExistence(timeout: 5), "the placement offers no glass")
+        glass.tap()
+        app.navigationBars["Settings"].buttons["Done"].tap()
+        XCTAssertTrue(wait(in: app) { $0.placement == "glass" && $0.overridePlacement == "glass" && $0.presence == 1 },
+                      "the chat does not wear the glass chosen, on a pane drawn whole")
+    }
+
+    private struct Placed: Decodable {
+        var placement: String?
+        var overridePlacement: String?
+        var presence: Double?
+    }
+
+    private func wait(in app: XCUIApplication, _ wanted: (Placed) -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(15)
+        while Date() < deadline {
+            let raw = app.buttons["topo-debug-chat"].value as? String ?? ""
+            if let placed = try? JSONDecoder().decode(Placed.self, from: Data(raw.utf8)), wanted(placed) { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        }
+        return false
     }
 
     /// Opens the settings and scrolls to the Tuning section, which is the last in the sheet.

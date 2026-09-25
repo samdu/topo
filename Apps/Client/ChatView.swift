@@ -151,13 +151,15 @@ struct ChatView: View {
             // The one space the transcript's content bottom and the pane's top edge are both
             // measured in, so the two numbers the presence is worked out from are comparable.
             .coordinateSpace(.named(Self.space))
-            // Topo, over all of it: he stands where the turns, the lines under them and the glass
-            // leave him room, and is not drawn where they leave none. The glass is never his.
+            // Topo, over all of it, where the look places him: roaming where the turns, the lines
+            // under them and the glass leave him room, on the glass, or at a pin.
             .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
-                         face: { facing in Task { @MainActor in mascot.facing = facing } })
+                         face: { facing in Task { @MainActor in mascot.facing = facing } },
+                         // A drag let go of him: this device keeps the pin, over the vault's look.
+                         pin: { pin in Tuning.shared.pin(at: pin) })
             // The mark says the name, so the title says it twice.
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
@@ -321,7 +323,12 @@ struct ChatView: View {
                 .accessibilityValue(DebugRun.chatReport(spoken: spokenNonce, turns: harness.turns,
                                                         error: harness.error, speaker: speaker.report,
                                                         voice: speaker.voice.state, mascot: mascotReport,
-                                                        facing: mascot.facing, clearance: look.mascot.clearance))
+                                                        facing: mascot.facing, clearance: look.mascot.clearance,
+                                                        placed: look.mascot,
+                                                        overridePlacement: Tuning.shared.placement,
+                                                        overridePin: Tuning.shared.pin,
+                                                        presence: panePresence,
+                                                        contentBottom: contentBottomInTranscript))
                 #endif
         }
     }
@@ -406,12 +413,14 @@ struct ChatView: View {
 
     /// How much of a pane the pane is. One while any of the three edges is unmeasured: iOS 17
     /// measures none of them, and a launch has not measured them yet. One while the row's field
-    /// holds focus, which is the keyboard asked for, whatever the geometry.
+    /// holds focus, which is the keyboard asked for, whatever the geometry, and while Topo sits
+    /// on the glass.
     private var panePresence: Double {
         guard let contentBottomInTranscript, let transcriptTop, let paneTop else { return 1 }
         return PanePresence.of(contentBottom: transcriptTop + contentBottomInTranscript,
                                paneTop: paneTop, rise: look.composer.presenceRise,
-                               open: micState.open, keyboard: focused)
+                               open: micState.open, keyboard: focused,
+                               holdsTopo: look.mascot.placement == .glass)
     }
 
     /// The four facts the glass draws the microphone from, read off `VoiceInput`.

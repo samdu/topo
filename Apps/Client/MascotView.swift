@@ -159,11 +159,21 @@ final class MascotDriver {
 /// The view he is drawn in, laid over the whole of the chat: one layer holding the engine's
 /// whole picture, magnified nearest-neighbour and put so that the part he takes up at rest
 /// (`MascotSprite.box`) is where his roam says he is; what a pose draws past that box is drawn
-/// over whatever is there. It takes no touch and is nothing to
-/// accessibility, so everything under it is found and pressed exactly as it would be without him.
+/// over whatever is there, except on the glass, where he is drawn inside the empty flank. The view
+/// itself takes no touch and is nothing to accessibility, so everything under it is found and
+/// pressed exactly as it would be without him.
+///
+/// What he takes is a long press on his box, less the well's frame, and the drag that follows it
+/// (`grab`, a `UILongPressGestureRecognizer` on the window, since the canvas is laid over the chat
+/// and not in it): the finger moves him, and letting go pins him there (`onPin`). A long press, so
+/// a scroll that starts on him moves off before it fires and scrolls; a tap on him fires nothing
+/// and is whatever is under him's. The well is never his: a touch on it is not handed to the
+/// recognizer at all, so the microphone's own gesture has it whatever is drawn over it.
 @MainActor
-final class MascotCanvas: UIView {
+final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     let driver = MascotDriver()
+    /// What the picture is drawn inside: the whole canvas, or on the glass the empty flank.
+    private let stage = CALayer()
     private let sprite = CALayer()
     private var link: CADisplayLink?
     private var last: CFTimeInterval = 0
@@ -184,6 +194,27 @@ final class MascotCanvas: UIView {
     /// which is how it reaches `Mascot.facing` and so the engine: at the decision, not per frame.
     var onFace: ((MascotFacing) -> Void)?
     private var faced: MascotFacing?
+    /// Told the pin a drag let go of him at, as fractions of the transcript's frame with the
+    /// keyboard down, for this device's override to keep (`Tuning.pin(at:)`).
+    var onPin: ((CGPoint) -> Void)?
+    /// The press that picks him up. It lives on the window, where it sees the touches that start
+    /// on his box, which land on whatever is under him.
+    private(set) lazy var grab: UILongPressGestureRecognizer = {
+        let grab = UILongPressGestureRecognizer(target: self, action: #selector(grabbed(_:)))
+        grab.minimumPressDuration = Self.holdToGrab
+        grab.allowableMovement = Self.grabSlop
+        grab.cancelsTouchesInView = true
+        grab.delegate = self
+        return grab
+    }()
+    /// Where the finger took his box from, as the offset of the box's origin from it.
+    private var held: CGSize = .zero
+
+    /// How long a press on him has to be still before it picks him up: long enough that a tap and
+    /// the start of a scroll are over first.
+    static let holdToGrab: TimeInterval = 0.5
+    /// How far a finger may move before it is a scroll and not a press.
+    static let grabSlop: CGFloat = 10
 
     /// Whether the display link is running, which is whether frames are being asked for.
     var isTicking: Bool { link != nil }
@@ -202,7 +233,10 @@ final class MascotCanvas: UIView {
         sprite.actions = ["position": NSNull(), "bounds": NSNull(), "contents": NSNull(), "frame": NSNull(),
                           "opacity": NSNull()]
         sprite.opacity = 0
-        layer.addSublayer(sprite)
+        stage.masksToBounds = true
+        stage.actions = ["position": NSNull(), "bounds": NSNull(), "frame": NSNull()]
+        stage.addSublayer(sprite)
+        layer.addSublayer(stage)
         driver.onFrame = { [weak self] image, _ in self?.show(image) }
     }
 
@@ -232,14 +266,94 @@ final class MascotCanvas: UIView {
 
     /// His box where the roam has it now, in the canvas: what the roost holds.
     var spriteFrame: CGRect { roam?.picture ?? .zero }
-    /// The whole of the engine's picture as the layer draws it, round that box.
-    var drawnFrame: CGRect { sprite.frame }
+    /// The whole of the engine's picture as the layer draws it, round that box, in the canvas.
+    var drawnFrame: CGRect { sprite.frame.offsetBy(dx: stage.frame.minX, dy: stage.frame.minY) }
     /// Whether he is being drawn at all.
     var showing: Bool { sprite.opacity > 0 }
+
+    override func willMove(toWindow newWindow: UIWindow?) {
+        super.willMove(toWindow: newWindow)
+        grab.view?.removeGestureRecognizer(grab)
+        newWindow?.addGestureRecognizer(grab)
+    }
 
     override func didMoveToWindow() {
         super.didMoveToWindow()
         sync()
+    }
+
+    // MARK: Picking him up
+
+    /// A touch is handed to the press only where he can be picked up: drawn, in front, with no
+    /// sheet over the chat, on his box and off the well.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+        grabbable(at: touch.location(in: self))
+    }
+
+    /// Whether a press at `point`, in the canvas, would pick him up.
+    func grabbable(at point: CGPoint) -> Bool {
+        guard driver.conditions.visible, let roam else { return false }
+        return roam.grabbable(at: point)
+    }
+
+    /// A press on him waits to be told it is not his before anything else under him acts on it —
+    /// a turn's own hold, a button — except a scroll, which begins on its own movement and ends
+    /// his press by moving.
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+        !(other is UIPanGestureRecognizer)
+    }
+
+    @objc private func grabbed(_ press: UILongPressGestureRecognizer) {
+        let point = press.location(in: self)
+        switch press.state {
+        case .began:
+            pickUp(at: point)
+        case .changed:
+            move(to: point)
+        case .ended, .cancelled, .failed:
+            guard roam?.dragging == true else { return }
+            move(to: point)
+            var roam = roam
+            let pin = roam?.drop()
+            self.roam = roam
+            sync()
+            if let pin { onPin?(pin) }
+        default:
+            break
+        }
+    }
+
+    /// Picked up by a finger at `point`, which keeps the place on him it took him by.
+    @discardableResult
+    private func pickUp(at point: CGPoint) -> Bool {
+        guard var roam, let picture = roam.picture else { return false }
+        guard roam.grab() else { return false }
+        held = CGSize(width: picture.minX - point.x, height: picture.minY - point.y)
+        self.roam = roam
+        sync()
+        return true
+    }
+
+    /// The finger at `point`: his box where it has him.
+    func move(to point: CGPoint) {
+        guard var roam, roam.dragging else { return }
+        roam.drag(to: CGPoint(x: point.x + held.width, y: point.y + held.height))
+        self.roam = roam
+        sync()
+    }
+
+    /// A drag scripted as a test would make one: picked up at `from`, carried to `to`, let go.
+    /// Answers the pin, or nil where `from` does not pick him up.
+    func drag(from: CGPoint, to: CGPoint) -> CGPoint? {
+        guard grabbable(at: from), pickUp(at: from) else { return nil }
+        move(to: to)
+        guard var dropped = self.roam else { return nil }
+        let pin = dropped.drop()
+        self.roam = dropped
+        sync()
+        if let pin { onPin?(pin) }
+        return pin
     }
 
     /// The roam's answer handed to what draws him: the walk while he glides and his own activity
@@ -268,7 +382,10 @@ final class MascotCanvas: UIView {
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        if let picture = roam.picture { sprite.frame = MascotSprite.drawn(around: picture) }
+        stage.frame = clip(roam) ?? bounds
+        if let picture = roam.picture {
+            sprite.frame = MascotSprite.drawn(around: picture).offsetBy(dx: -stage.frame.minX, dy: -stage.frame.minY)
+        }
         sprite.opacity = roam.hidden ? 0 : 1
         CATransaction.commit()
         if !roam.hidden, roam.facing != faced {
@@ -276,6 +393,20 @@ final class MascotCanvas: UIView {
             onFace?(roam.facing)
         }
         report(roam)
+    }
+
+    /// What he is drawn inside: on the glass, standing there and not in a finger, the empty flank,
+    /// so no pose is drawn over the microphone; the whole canvas otherwise.
+    private func clip(_ roam: MascotRoam) -> CGRect? {
+        guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
+              let slot = MascotPerch.glassSlot(field)?.intersection(bounds), !slot.isNull else { return nil }
+        return slot
+    }
+
+    /// Where the picture is drawn, in the canvas, as the layer has it: the whole picture, clipped
+    /// to the flank on the glass.
+    var shownFrame: CGRect {
+        stage.frame.intersection(sprite.frame.offsetBy(dx: stage.frame.minX, dy: stage.frame.minY))
     }
 
     private func report(_ roam: MascotRoam) {
@@ -383,6 +514,15 @@ extension MascotRoam {
         var covered: Bool
         var moves: Int
         var pane: [Double]?
+        /// The policy he is placed by (`Look.Mascot.Placement`), whether a finger has him, how
+        /// many drags have begun, and the pin he is placed at, as the roam holds them.
+        var placement = "roam"
+        var dragging = false
+        var drags = 0
+        var pin: [Double]?
+        /// The well and the transcript's frame as he read them, in the same space.
+        var well: [Double]?
+        var visible: [Double]?
         /// Counts the reports the canvas has made, one more each time, so a reader polling the
         /// latest can tell it missed none.
         var sequence = 0
@@ -402,7 +542,9 @@ extension MascotRoam {
         func numbers(_ rect: CGRect) -> [Double] { [rect.minX, rect.minY, rect.width, rect.height].map { Double($0) } }
         return Report(roost: roost.name, frame: picture.map(numbers), to: roost.frame.map(numbers),
                       hidden: hidden, walking: walking, covered: covered, moves: moves,
-                      pane: field?.pane.map(numbers))
+                      pane: field?.pane.map(numbers), placement: settings.placement.rawValue, dragging: dragging,
+                      drags: drags, pin: [Double(settings.pin.x), Double(settings.pin.y)],
+                      well: field?.well.map(numbers), visible: field.map { numbers($0.visible) })
     }
 }
 
@@ -465,12 +607,14 @@ struct MascotOverChat: UIViewRepresentable {
     var conditions: MascotDriver.Conditions
     var report: ((MascotRoam.Report) -> Void)?
     var face: ((MascotFacing) -> Void)?
+    var pin: ((CGPoint) -> Void)?
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
         canvas.onReport = report
         canvas.onFace = face
+        canvas.onPin = pin
         canvas.apply(input: input, field: field, settings: settings, interval: interval, ready: ready,
                      conditions: conditions)
     }
@@ -511,6 +655,8 @@ struct MascotLayer: View {
     var report: ((MascotRoam.Report) -> Void)?
     /// Told the facing each roost decides.
     var face: ((MascotFacing) -> Void)?
+    /// Told the pin a drag let go of him at.
+    var pin: ((CGPoint) -> Void)?
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -522,28 +668,32 @@ struct MascotLayer: View {
                            interval: look.mascot.frameInterval, ready: ready,
                            conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
                                              reduceMotion: reduceMotion),
-                           report: report, face: face)
+                           report: report, face: face, pin: pin)
                 .frame(width: proxy.size.width, height: proxy.size.height)
                 .opacity(opacity)
         }
+        // The canvas takes no touch of its own: a press on him is picked up by his recognizer on
+        // the window, which is handed only touches on his box and off the well.
         .allowsHitTesting(false)
         .accessibilityHidden(true)
     }
 }
 
 extension View {
-    /// Topo laid over this view, which is the chat: he stands where the frames its turns, rows and
-    /// glass report (`MascotScene`) leave him room, takes no room of his own and no touch, and is
-    /// nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — he is
-    /// not drawn, and his first decision where to stand comes after it. `face` is told the facing
-    /// each roost decides, for `Mascot.facing`.
+    /// Topo laid over this view, which is the chat: where the look places him (`Look.Mascot.placement`)
+    /// — roaming where the frames its turns, rows and glass report (`MascotScene`) leave him room,
+    /// on the glass, or at a pin — taking no room of his own and no touch but a long press on him,
+    /// and nothing to accessibility. Nil is no Topo. Until `ready` — the transcript read once — a
+    /// roaming Topo is not drawn, and his first decision where to stand comes after it. `face` is
+    /// told the facing each roost decides, for `Mascot.facing`, and `pin` the pin a drag let go of
+    /// him at.
     func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
                      ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil,
-                     face: ((MascotFacing) -> Void)? = nil) -> some View {
+                     face: ((MascotFacing) -> Void)? = nil, pin: ((CGPoint) -> Void)? = nil) -> some View {
         overlayPreferenceValue(MascotScene.self) { scene in
             if let state {
                 MascotLayer(state: state, scene: scene, opacity: opacity, covered: covered,
-                            keyboardTop: keyboardTop, ready: ready, report: report, face: face)
+                            keyboardTop: keyboardTop, ready: ready, report: report, face: face, pin: pin)
             }
         }
     }

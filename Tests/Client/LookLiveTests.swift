@@ -232,15 +232,20 @@ final class LookLiveTests: XCTestCase {
         let memory = memory(database, at: makeDirectory())
 
         await memory.sync()
+        // This device's override empty, whatever the simulator's defaults hold: the join is what
+        // is held here, and the override worn over it is `TuningTests`'.
+        let name = "topo-look-live-\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let tuning = Tuning(defaults: try XCTUnwrap(UserDefaults(suiteName: name)))
         var worn: Look?
-        _ = try LookStage.image(LookProbe { worn = $0 }.wearing(memory), look: Look())
+        _ = try LookStage.image(LookProbe { worn = $0 }.wearing(memory, tuning: tuning), look: Look())
         XCTAssertEqual(try LookCensus.different(try XCTUnwrap(worn), Look()), [],
                        "a vault with no document did not draw with the compiled look")
 
         try await write(#"{"bubble": {"cornerRadius": 3}}"#, to: path, in: database)
         await memory.sync()
         worn = nil
-        _ = try LookStage.image(LookProbe { worn = $0 }.wearing(memory), look: Look())
+        _ = try LookStage.image(LookProbe { worn = $0 }.wearing(memory, tuning: tuning), look: Look())
         XCTAssertEqual(try XCTUnwrap(worn).bubble.cornerRadius, 3,
                        "the look the memory read did not reach the subtree")
     }
