@@ -105,6 +105,7 @@
 		508EB5B8E3D4A3679611A869 /* TopoOnTheGlassTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD2BEF1581B6D3DF49DF650C /* TopoOnTheGlassTests.swift */; };
 		50B378B1C1B86503B32F9583 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		510B82888095A483E442BA47 /* TVRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7905C0DCB97E97379C3533 /* TVRootView.swift */; };
+		5167C9D8F2469979498A1DE8 /* fling.json in Resources */ = {isa = PBXBuildFile; fileRef = 522A26D8E0BA7917872C2EAC /* fling.json */; };
 		51836B7F6FB4BD51CBA11825 /* PressRefusalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */; };
 		522009A0F2242A782A610600 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A383104A833CDB1DFF33D305 /* Composer.swift */; };
 		525CF069E985418F523B38D8 /* GuestProcessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */; };
@@ -366,6 +367,7 @@
 		45A790C5DC880D6BBF044F6A /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
 		46425616D224D5EDABBDE93E /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		522A26D8E0BA7917872C2EAC /* fling.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fling.json; sourceTree = "<group>"; };
 		57BE8636EBBD805D555F974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5990B1776EC4BC101510B22E /* TopoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoAuth; path = Packages/TopoAuth; sourceTree = SOURCE_ROOT; };
 		5BC384737CD70F66D0AB8921 /* TopoCore */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoCore; path = Packages/TopoCore; sourceTree = SOURCE_ROOT; };
@@ -648,6 +650,7 @@
 			children = (
 				AA05A8C67947D4E32E7EF7D8 /* crossing-down.json */,
 				3EC5770ED2DCA16F30AA7C93 /* crossing-up.json */,
+				522A26D8E0BA7917872C2EAC /* fling.json */,
 			);
 			path = Traces;
 			sourceTree = "<group>";
@@ -1230,6 +1233,7 @@
 				07DD7564A112D8FE2FF4224F /* THIRD-PARTY in Resources */,
 				C9F4D88AD27E53ACDC93FD70 /* crossing-down.json in Resources */,
 				830E3862905FF4A78D5EA5B5 /* crossing-up.json in Resources */,
+				5167C9D8F2469979498A1DE8 /* fling.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

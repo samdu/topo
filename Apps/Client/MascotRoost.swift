@@ -605,12 +605,11 @@ struct MascotRoam: Equatable, Sendable {
         // Which way the words are going is what this geometry moved them: none is a still page,
         // whatever the last scroll did.
         heading = drift
-        if drift != 0 { follow(drift) }
+        let edge = drift != 0 && follow(drift, in: field)
         covered = isCovered
-        // Riding the words to the edge of where he may stand is the end of the ride: he decides
-        // again from there rather than being carried past it.
-        if riding, let picture, !field.room(settings.reach).insetBy(dx: -MascotRoost.epsilon, dy: -MascotRoost.epsilon)
-            .contains(picture) {
+        // Riding the words to the edge of where he may stand is the end of the ride: he stops at
+        // the edge, is drawn there and not past it, and decides a glide from inside his room.
+        if edge {
             move = nil
             decide(glide: true)
             unsettled = true
@@ -714,21 +713,28 @@ struct MascotRoam: Equatable, Sendable {
     /// The words moved `drift` points down the screen. Where a glide is going is a gap between
     /// words, so it moves with them and is still a gap on the next frame, and a decision taken
     /// while the transcript scrolls is one decision and not one a frame; a Topo riding the words
-    /// moves with them, glide and all.
-    private mutating func follow(_ drift: CGFloat) {
+    /// moves with them, glide and all, as far as the edge of his room (`MascotField.room`) and no
+    /// further. Answers whether the ride reached that edge, which is where it ends.
+    private mutating func follow(_ drift: CGFloat, in field: MascotField) -> Bool {
         if riding, let at = position {
-            position = CGPoint(x: at.x, y: at.y + drift)
+            let room = field.room(settings.reach)
+            let lowest = max(room.maxY - settings.size.height, room.minY)
+            let y = min(max(at.y + drift, room.minY), lowest)
+            let applied = y - at.y
+            position = CGPoint(x: at.x, y: y)
             if var move {
-                move.from.y += drift
-                move.to.y += drift
+                move.from.y += applied
+                move.to.y += applied
                 self.move = move
             }
-            if let frame = roost.frame { roost = .gap(frame.offsetBy(dx: 0, dy: drift)) }
+            if let frame = roost.frame { roost = .gap(frame.offsetBy(dx: 0, dy: applied)) }
+            return abs(applied - drift) > MascotRoost.epsilon
         } else if var move {
             move.to.y += drift
             self.move = move
             if let frame = roost.frame { roost = .gap(frame.offsetBy(dx: 0, dy: drift)) }
         }
+        return false
     }
 
     private mutating func decide(glide: Bool) {

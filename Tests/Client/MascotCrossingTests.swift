@@ -107,6 +107,63 @@ final class MascotCrossingTests: XCTestCase {
         XCTAssertFalse(Self.bubbles(in: field).contains { $0.intersects(picture) }, "he ended over a person's turn")
     }
 
+    /// Holds a run to his room: at every tick his box is inside the room his reach leaves him
+    /// (`MascotField.room`), and a tick he is not gliding on moves him no further than the words
+    /// moved since the tick before — riding them, never placed somewhere with no glide.
+    private func assertRoomAndNoSnap(_ roam: inout MascotRoam, events: [Trace.Event],
+                                     file: StaticString = #filePath, line: UInt = #line) throws {
+        var field: MascotField?
+        var scrolled: CGFloat = 0
+        var last: (picture: CGRect, walking: Bool)?
+        for event in events {
+            if let next = event.field {
+                if let field { scrolled += next.drift(since: field) }
+                roam.observe(next, at: event.t)
+                field = next
+                continue
+            }
+            roam.advance(to: event.t)
+            guard let field else { continue }
+            let picture = try XCTUnwrap(roam.picture, "t \(event.t): he stands nowhere", file: file, line: line)
+            let room = field.room(Self.settings.reach).insetBy(dx: -MascotRoost.epsilon, dy: -MascotRoost.epsilon)
+            XCTAssertTrue(room.contains(picture), "t \(event.t): \(picture) left his room \(room)", file: file, line: line)
+            if let last, !last.walking, !roam.walking {
+                XCTAssertLessThanOrEqual(abs(picture.minY - last.picture.minY), abs(scrolled) + MascotRoost.epsilon,
+                                         "t \(event.t): placed from \(last.picture.minY) to \(picture.minY) with no glide",
+                                         file: file, line: line)
+            }
+            last = (picture, roam.walking)
+            scrolled = 0
+        }
+    }
+
+    /// Flung up and down the `full` fixture, 24 swipes at 1,200 to 5,000 points a second: he
+    /// rides the words to the edge of his room and no further, and glides from there; never
+    /// drawn out of his room, never placed with no glide.
+    func testAFlingKeepsHimInHisRoomAndNeverSnaps() throws {
+        let trace = try trace("fling")
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: trace.standing)
+        try assertRoomAndNoSnap(&roam, events: trace.events)
+        XCTAssertGreaterThan(roam.moves, 10, "the fling moved him too little to hold anything")
+    }
+
+    /// A turn rising out of the glass at reading speed, a quarter of a point a geometry, until it
+    /// has carried him to the top of his room: he rides it there, stops at the edge, and glides
+    /// on from inside it.
+    func testARideAtReadingSpeedStopsAtTheEdgeOfHisRoom() throws {
+        var roam = MascotRoam(Self.settings, frame: 1.0 / 30, standing: CGPoint(x: 280, y: 440))
+        var events: [Trace.Event] = []
+        var time = 0.0
+        for y in stride(from: 560.0, through: -200.0, by: -0.25) {
+            events.append(Trace.Event(t: time, field: Self.page(CGFloat(y))))
+            time += 1.0 / 30
+            events.append(Trace.Event(t: time, field: nil))
+        }
+        for _ in 0..<120 { time += 1.0 / 30; events.append(Trace.Event(t: time, field: nil)) }
+        try assertRoomAndNoSnap(&roam, events: events)
+        XCTAssertFalse(roam.riding, "still riding once the words stopped")
+    }
+
     // MARK: Scripted
 
     static let visible = CGRect(x: 0, y: 0, width: 402, height: 628)
