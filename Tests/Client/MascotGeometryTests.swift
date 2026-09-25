@@ -282,7 +282,7 @@ final class MascotGeometryTests: XCTestCase {
                     let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
                     home = resting ? home + 1.0 / 30 : 0
                     // The head and the load settle from the engine's start in under two seconds.
-                    guard frame >= 60, home > 1, frame % 3 == 0 else { continue }
+                    guard frame >= 60, home > 1 else { continue }
                     engine.draw(&rgba)
                     reached.add(rgba)
                 }
