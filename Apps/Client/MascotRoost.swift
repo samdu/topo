@@ -258,6 +258,52 @@ struct MascotField: Equatable, Sendable, Codable {
         return false
     }
 
+    /// How far the words have moved down the screen since `previous`, in points: the transcript's
+    /// scroll between two geometries, up negative. A scroll moves the words and nothing else, so a
+    /// geometry whose transcript frame, pane, well or keyboard moved — the keyboard rising, the
+    /// glass going short — is not one, and is no move. Each obstacle is paired with every one of
+    /// the same place across and the same size in `previous`, and the move most of the pairs
+    /// agree on is the answer, the smallest of equals: the lines of a reply are alike and a line
+    /// apart, and only the true move pairs every one of them; the lines under the transcript, which
+    /// do not scroll, and a turn loaded or unloaded by the lazy stack are outvoted. Nothing paired
+    /// is no move.
+    func drift(since previous: MascotField) -> CGFloat {
+        guard visible == previous.visible, pane == previous.pane, well == previous.well,
+              keyboard == previous.keyboard else { return 0 }
+        func key(_ rect: CGRect) -> [Int] {
+            [Int((rect.minX * 2).rounded()), Int((rect.width * 2).rounded()), Int((rect.height * 2).rounded())]
+        }
+        var before: [[Int]: [CGFloat]] = [:]
+        for rect in previous.obstacles where rect.width > 0 && rect.height > 0 { before[key(rect), default: []].append(rect.minY) }
+        // Moves counted in quarters of a point, the finest a screen's layout is laid out in.
+        var votes: [Int: Int] = [:]
+        for rect in obstacles where rect.width > 0 && rect.height > 0 {
+            for y in before[key(rect)] ?? [] where abs(rect.minY - y) < Self.driftLimit {
+                votes[Int(((rect.minY - y) * 4).rounded()), default: 0] += 1
+            }
+        }
+        guard let best = votes.max(by: { a, b in a.value < b.value || (a.value == b.value && abs(a.key) > abs(b.key)) })
+        else { return 0 }
+        return CGFloat(best.key) / 4
+    }
+
+    /// The most the words are taken to move between two geometries: more is not a scroll but a
+    /// different page, and is no move.
+    static let driftLimit: CGFloat = 400
+
+    /// The word he is displaced by at `frame`: of the words within `clearance` of his box as far
+    /// as they can be seen, the one over most of it; nil when no word is.
+    func displacer(of frame: CGRect, clearance: CGFloat) -> CGRect? {
+        let seen = seen
+        let kept = frame.insetBy(dx: -clearance, dy: -clearance)
+        return obstacles.map { $0.intersection(seen) }
+            .filter { !$0.isNull && $0.width > 0 && $0.height > 0 && MascotRoost.overlap($0, kept) }
+            .max { a, b in
+                let x = a.intersection(kept), y = b.intersection(kept)
+                return x.width * x.height < y.width * y.height
+            }
+    }
+
     /// Whether anything he may not cover overlaps his box at `frame`: a word over the box, or the
     /// pane, the well or the keyboard over anything his reach round it can be drawn in.
     func covers(_ frame: CGRect, reach: MascotSprite.Reach = .none) -> Bool {
@@ -391,7 +437,14 @@ private extension Comparable {
 /// is never made mid-move, and a roost within `clearance` of where he stands is not a move while
 /// where he stands is a roost itself (`MascotRoost.holds`). A move is one eased glide at `speed` points a second on average — `hurry` times that on every frame
 /// anything is over him, and back to the stroll the frame he is clear — which under Reduce Motion
-/// is a placement with no glide. He is drawn above everything but the keyboard wherever he is, so
+/// is a placement with no glide.
+///
+/// A word that displaces him sends him to its far side from where it is going — under a word
+/// moving up the screen or standing still, over one moving down — so it passes over him once
+/// rather than pushing him ahead of it. Where a glide is going moves with the words as they
+/// scroll (`MascotField.drift`), so a decision taken while they move is still a gap on the next
+/// frame: one decision a crossing. With no room on the far side he goes to the near one and
+/// rides the words (`riding`) until they stop or carry him to the edge of where he may stand. He is drawn above everything but the keyboard wherever he is, so
 /// nothing is judged about whether he may be seen: he is drawn whenever he stands anywhere.
 struct MascotRoam: Equatable, Sendable {
     struct Settings: Equatable, Sendable {
@@ -461,6 +514,12 @@ struct MascotRoam: Equatable, Sendable {
     }
     /// How many glides have begun, for the tests.
     private(set) var moves = 0
+    /// Which way the words were last moving, in points down the screen at the last geometry that
+    /// moved them (up negative); none once the geometry has settled.
+    private(set) var heading: CGFloat = 0
+    /// He was displaced to the side of a word it is moving toward — there was no room behind it —
+    /// so he goes with the words until they stop, rather than being caught again and again.
+    private(set) var riding = false
     /// The geometry changed since the roost was last decided.
     private(set) var unsettled = false
     /// When the geometry last changed, and when the roam was last moved on.
@@ -474,9 +533,15 @@ struct MascotRoam: Equatable, Sendable {
     /// is not drawn until it has.
     private(set) var waiting = false
 
-    init(_ settings: Settings, frame: Double = 1.0 / 30) {
+    /// `standing` is where his picture's origin is to begin with, which a replay of a recorded run
+    /// starts from; nil, as the app has it, is nowhere.
+    init(_ settings: Settings, frame: Double = 1.0 / 30, standing: CGPoint? = nil) {
         self.settings = settings
         self.frame = frame
+        if let standing {
+            position = standing
+            roost = .gap(CGRect(origin: standing, size: settings.size))
+        }
     }
 
     /// His picture where it is now; nil while he stands nowhere.
@@ -505,10 +570,25 @@ struct MascotRoam: Equatable, Sendable {
     mutating func observe(_ field: MascotField, at time: Double) {
         now = max(now, time)
         guard field != self.field else { return }
+        let drift = self.field.map { field.drift(since: $0) } ?? 0
         self.field = field
         changed = now
         unsettled = true
+        if drift != 0 {
+            heading = drift
+            follow(drift)
+        }
         covered = isCovered
+        // Riding the words to the edge of where he may stand is the end of the ride: he decides
+        // again from there rather than being carried past it.
+        if riding, let picture, !field.room(settings.reach).insetBy(dx: -MascotRoost.epsilon, dy: -MascotRoost.epsilon)
+            .contains(picture) {
+            move = nil
+            decide(glide: true)
+            unsettled = true
+            covered = isCovered
+            return
+        }
         if let picture, case let reached = settings.reach.around(picture),
            reached.maxY > field.open.maxY + MascotRoost.epsilon
             || [field.pane, field.well].contains(where: { $0.map { MascotRoost.overlap($0, reached) } ?? false }) {
@@ -524,6 +604,14 @@ struct MascotRoam: Equatable, Sendable {
                 || field.crossesOffLimits(from: from, to: move.to, size: settings.size, reach: settings.reach) {
                 self.move = nil
                 decide(glide: true)
+                // A new roost within his clearance of where he was going is the same glide
+                // carried on, since the words he goes between moved and not his mind.
+                if let next = self.move, hypot(next.to.x - move.to.x, next.to.y - move.to.y) <= settings.clearance {
+                    var carried = move
+                    carried.to = next.to
+                    self.move = carried
+                    moves -= 1
+                }
                 // The geometry may still be moving: the settled decision follows as ever.
                 unsettled = true
                 covered = isCovered
@@ -587,18 +675,55 @@ struct MascotRoam: Equatable, Sendable {
         covered = isCovered
         guard unsettled, move == nil else { return }
         let quiet = now - changed
-        guard quiet >= settings.settle || (covered && quiet >= frame) else { return }
+        // A frame's quiet is a tick with no geometry since the one before, which the display
+        // link's timestamps and the clock's sums put a hair either side of the interval.
+        guard quiet >= settings.settle || (covered && quiet >= frame * 0.75) else { return }
+        if quiet >= settings.settle { heading = 0 }
         decide(glide: true)
         covered = isCovered
     }
 
+    /// The words moved `drift` points down the screen. Where a glide is going is a gap between
+    /// words, so it moves with them and is still a gap on the next frame, and a decision taken
+    /// while the transcript scrolls is one decision and not one a frame; a Topo riding the words
+    /// moves with them, glide and all.
+    private mutating func follow(_ drift: CGFloat) {
+        if riding, let at = position {
+            position = CGPoint(x: at.x, y: at.y + drift)
+            if var move {
+                move.from.y += drift
+                move.to.y += drift
+                self.move = move
+            }
+            if let frame = roost.frame { roost = .gap(frame.offsetBy(dx: 0, dy: drift)) }
+        } else if var move {
+            move.to.y += drift
+            self.move = move
+            if let frame = roost.frame { roost = .gap(frame.offsetBy(dx: 0, dy: drift)) }
+        }
+    }
+
     private mutating func decide(glide: Bool) {
         unsettled = false
+        riding = false
         guard let field else { return }
+        // Displaced by a word, he aims for its far side from where it is going — below a word
+        // moving up the screen, above one moving down — so it passes over him once rather than
+        // pushing him ahead of it; below a word that is not moving. The nearest gap to that aim
+        // is where he goes, so with no room there he goes to its near side instead.
+        let margin = settings.clearance.isFinite ? max(settings.clearance, 0) : 0
+        var aim = position
+        var displacer: CGRect?
+        if let picture, let word = field.displacer(of: picture, clearance: margin) {
+            displacer = word
+            aim = heading > 0
+                ? CGPoint(x: picture.minX, y: word.minY - margin - settings.size.height)
+                : CGPoint(x: picture.minX, y: word.maxY + margin)
+        }
         let next = waiting
             ? MascotRoost.none
             : MascotRoost.of(field, size: settings.size, clearance: settings.clearance, reach: settings.reach,
-                             from: position)
+                             from: aim)
         guard let to = next.frame?.origin else {
             roost = .none
             position = nil
@@ -620,6 +745,11 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         roost = next
+        // On the side of the word it is moving toward, he goes with the words until they stop.
+        if let displacer, heading != 0 {
+            riding = heading < 0 ? to.y + settings.size.height <= displacer.minY + MascotRoost.epsilon
+                                 : to.y >= displacer.maxY - MascotRoost.epsilon
+        }
         let distance = hypot(to.x - from.x, to.y - from.y)
         if !glide || settings.reduceMotion || distance == 0 {
             position = to
