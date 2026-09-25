@@ -35,18 +35,21 @@ final class TopoPlacementTests: XCTestCase {
             ChatReading.attach(app, "glass-\(transcript)", to: self)
             let resting = try XCTUnwrap(topo.paneRect).height
             ChatReading.raiseKeyboard(app)
-            let (_, up) = try ChatReading.wait(app, "\(transcript): on the short glass") { chat, now in
+            let (_, up) = try ChatReading.wait(app, "\(transcript): on the short glass, the rise drawn") { chat, now in
                 now.roost == "glass" && now.standing && (now.paneRect?.height ?? resting) < resting - 1
-                    && chat.presence == 1
+                    && chat.presence == 1 && Self.carried(now.trail, rising: true) != nil
             }
             try assertOnTheGlass(up, "\(transcript), keyboard up")
             XCTAssertLessThan(try XCTUnwrap(up.box).minY, try XCTUnwrap(topo.box).minY, "he did not ride the pane up")
+            assertRidesTheKeyboard(try XCTUnwrap(Self.carried(up.trail, rising: true)), "\(transcript), rising")
             ChatReading.attach(app, "glass-\(transcript)-keyboard", to: self)
             ChatReading.lowerKeyboard(app)
-            let (_, down) = try ChatReading.wait(app, "\(transcript): back on the resting glass") { _, now in
+            let (_, down) = try ChatReading.wait(app, "\(transcript): back on the resting glass, the fall drawn") { _, now in
                 now.roost == "glass" && now.standing && ChatReading.near(now.frame, topo.frame)
+                    && Self.carried(now.trail, rising: false) != nil
             }
             try assertOnTheGlass(down, "\(transcript), keyboard down")
+            assertRidesTheKeyboard(try XCTUnwrap(Self.carried(down.trail, rising: false)), "\(transcript), falling")
             app.terminate()
         }
     }
@@ -217,5 +220,45 @@ final class TopoPlacementTests: XCTestCase {
         XCTAssertEqual(topo.moves, 0, "\(label): a glide began before he stood where he was placed", file: file, line: line)
         XCTAssertFalse(topo.recent.contains { !$0.hidden && !ChatReading.near($0.frame, topo.frame) },
                        "\(label): drawn somewhere else first: \(topo.recent.map { $0.frame ?? [] })", file: file, line: line)
+    }
+
+    /// The last run of frames on the glass that the keyboard carried up (`rising`) or down: the
+    /// still frame before it, every moving frame, and the still frame after, with the keyboard's
+    /// edge having moved more than 100 points. Nil until such a run is complete.
+    static func carried(_ trail: [ChatReading.Topo.Drawn], rising: Bool) -> [ChatReading.Topo.Drawn]? {
+        var runs: [[ChatReading.Topo.Drawn]] = []
+        var run: [ChatReading.Topo.Drawn] = []
+        for sample in trail {
+            if sample.moving {
+                run.append(sample)
+            } else if run.contains(where: \.moving) {
+                run.append(sample)
+                runs.append(run)
+                run = [sample]
+            } else {
+                run = [sample]
+            }
+        }
+        return runs.last { run in
+            guard let first = run.first, let last = run.last, !first.moving, !last.moving, run.count >= 3 else { return false }
+            return rising ? last.keyboard < first.keyboard - 100 : last.keyboard > first.keyboard + 100
+        }
+    }
+
+    /// Frame by frame through a run the keyboard carried, he is as far along his way as the
+    /// keyboard is along its own: both go by the keyboard's one curve, the pane riding it and he
+    /// riding the pane. A Topo put at his end at once, or left at his start, is a whole run apart.
+    private func assertRidesTheKeyboard(_ run: [ChatReading.Topo.Drawn], _ label: String,
+                                        file: StaticString = #filePath, line: UInt = #line) {
+        guard let first = run.first, let last = run.last else { return XCTFail("\(label): no run", file: file, line: line) }
+        let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
+        XCTAssertGreaterThan(abs(him), 20, "\(label): he did not move with the pane: \(run)", file: file, line: line)
+        for sample in run.dropFirst().dropLast() {
+            let along = (sample.keyboard - first.keyboard) / keyboard
+            let his = (sample.top - first.top) / him
+            XCTAssertEqual(his, along, accuracy: 0.15,
+                           "\(label): at \(sample) he is \(Int(his * 100))% of his way and the keyboard \(Int(along * 100))%: \(run)",
+                           file: file, line: line)
+        }
     }
 }

@@ -408,7 +408,57 @@ final class MascotPlacementTests: XCTestCase {
         for _ in 0..<60 { canvas.step(Self.frame) }
     }
 
-    /// On the glass the picture is drawn inside the empty flank only: nothing of it over the well.
+    /// On the glass the picture is drawn in the stage SwiftUI places from the pane: inside the
+    /// empty flank only, nothing of it over the well, and at the same place in the stage as the
+    /// pane moves, so the stage carries him wherever it is drawn.
+    func testOnTheGlassHeIsDrawnInTheStageThePaneCarries() throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(x: 0, y: 0, width: 402, height: 874)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        let canvas = MascotCanvas(frame: window.bounds)
+        window.addSubview(canvas)
+        let port = MascotGlassPort()
+        canvas.glass = port
+        // As SwiftUI lays them out: the flank clipping, and the stage the picture's size inside it.
+        let flank = UIView()
+        flank.clipsToBounds = true
+        window.addSubview(flank)
+        let stageView = UIView()
+        flank.addSubview(stageView)
+        port.view = stageView
+        var inside: CGRect?
+        for (label, field) in [("resting", Self.field()), ("keyboard up", Self.field(keyboard: true))] {
+            let stage = try XCTUnwrap(MascotPerch.glassStage(field, size: Self.size))
+            let slot = try XCTUnwrap(MascotPerch.glassSlot(field))
+            let clip = CGRect(x: slot.minX, y: stage.minY, width: slot.width, height: slot.maxY - stage.minY)
+            flank.frame = clip
+            stageView.frame = stage.offsetBy(dx: -clip.minX, dy: -clip.minY)
+            canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: field,
+                         settings: Self.settings(.glass), interval: Self.frame, conditions: seen)
+            settle(canvas)
+            XCTAssertTrue(canvas.onGlassStage, "\(label): not drawn in the glass's stage")
+            let well = try XCTUnwrap(field.well), pane = try XCTUnwrap(field.pane)
+            let shown = canvas.shownFrame
+            XCTAssertFalse(shown.isEmpty, label)
+            XCTAssertGreaterThanOrEqual(shown.minX, well.maxX - 0.001, "\(label): drawn over the well: \(shown)")
+            XCTAssertLessThanOrEqual(shown.maxX, pane.maxX + 0.001, "\(label): drawn off the pane's end: \(shown)")
+            XCTAssertEqual(canvas.drawnFrame, MascotSprite.drawn(around: try XCTUnwrap(MascotPerch.glass(field, size: Self.size))),
+                           "\(label): not drawn where he stands")
+            let here = canvas.drawnFrame.offsetBy(dx: -stage.minX, dy: -stage.minY)
+            XCTAssertEqual(here, CGRect(origin: .zero, size: stage.size), "\(label): he does not fill the stage")
+            if let inside { XCTAssertEqual(here, inside, "\(label): he moved inside the stage, which is the pane's to move") }
+            inside = here
+        }
+        // A glide off the glass is drawn over the chat again.
+        canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: Self.field(keyboard: true),
+                     settings: Self.settings(.pinned, pin: CGPoint(x: 0.2, y: 0.2)), interval: Self.frame, conditions: seen)
+        XCTAssertFalse(canvas.onGlassStage, "gliding off the glass, still in its stage")
+    }
+
+    /// With no stage from SwiftUI, on the glass the picture is still drawn inside the empty flank
+    /// only: nothing of it over the well.
     func testOnTheGlassNothingOfHimIsDrawnOverTheWell() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
         let field = Self.field()

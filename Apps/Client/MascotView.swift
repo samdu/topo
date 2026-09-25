@@ -209,6 +209,11 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     }()
     /// Where the finger took his box from, as the offset of the box's origin from it.
     private var held: CGSize = .zero
+    /// The view SwiftUI places on the pane for him to stand in while he is on the glass
+    /// (`MascotGlassStage`), found through the port they share.
+    var glass: MascotGlassPort? {
+        didSet { if glass !== oldValue { glass?.canvas = self } }
+    }
 
     /// How long a press on him has to be still before it picks him up: long enough that a tap and
     /// the start of a scroll are over first.
@@ -267,7 +272,12 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// His box where the roam has it now, in the canvas: what the roost holds.
     var spriteFrame: CGRect { roam?.picture ?? .zero }
     /// The whole of the engine's picture as the layer draws it, round that box, in the canvas.
-    var drawnFrame: CGRect { sprite.frame.offsetBy(dx: stage.frame.minX, dy: stage.frame.minY) }
+    var drawnFrame: CGRect {
+        guard let parent = sprite.superlayer else { return sprite.frame }
+        return parent.convert(sprite.frame, to: layer)
+    }
+    /// Whether he is drawn in the glass's stage rather than over the chat.
+    var onGlassStage: Bool { sprite.superlayer != nil && sprite.superlayer === glass?.view?.layer }
     /// Whether he is being drawn at all.
     var showing: Bool { sprite.opacity > 0 }
 
@@ -281,6 +291,9 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         super.didMoveToWindow()
         sync()
     }
+
+    /// Drawn again as things stand: the glass's stage has come or gone.
+    func resync() { sync() }
 
     // MARK: Picking him up
 
@@ -382,9 +395,21 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         reschedule()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        stage.frame = clip(roam) ?? bounds
-        if let picture = roam.picture {
-            sprite.frame = MascotSprite.drawn(around: picture).offsetBy(dx: -stage.frame.minX, dy: -stage.frame.minY)
+        // On the glass he is drawn in the stage SwiftUI places from the pane, at the same place in
+        // it whatever the pane's height, so he is drawn wherever the pane is drawn, on the
+        // keyboard's curve, in the keyboard's own transaction; nothing here animates him.
+        if let (view, rect) = glassStage(roam) {
+            if sprite.superlayer !== view.layer { view.layer.addSublayer(sprite) }
+            stage.frame = bounds
+            if let picture = roam.picture {
+                sprite.frame = MascotSprite.drawn(around: picture).offsetBy(dx: -rect.minX, dy: -rect.minY)
+            }
+        } else {
+            if sprite.superlayer !== stage { stage.addSublayer(sprite) }
+            stage.frame = clip(roam) ?? bounds
+            if let picture = roam.picture {
+                sprite.frame = MascotSprite.drawn(around: picture).offsetBy(dx: -stage.frame.minX, dy: -stage.frame.minY)
+            }
         }
         sprite.opacity = roam.hidden ? 0 : 1
         CATransaction.commit()
@@ -395,23 +420,42 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         report(roam)
     }
 
-    /// What he is drawn inside: on the glass, standing there and not in a finger, the empty flank,
-    /// so no pose is drawn over the microphone; the whole canvas otherwise.
+    /// The glass's stage and where it is in the canvas, while he stands on the glass, not gliding
+    /// and not in a finger, and SwiftUI has put the stage in the window.
+    private func glassStage(_ roam: MascotRoam) -> (UIView, CGRect)? {
+        guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
+              let view = glass?.view, view.window != nil, view.window === window,
+              let rect = MascotPerch.glassStage(field, size: roam.settings.size) else { return nil }
+        return (view, rect)
+    }
+
+    /// What he is drawn inside with no glass stage to stand in: on the glass, standing there and
+    /// not in a finger, the empty flank, so no pose is drawn over the microphone; the whole canvas
+    /// otherwise.
     private func clip(_ roam: MascotRoam) -> CGRect? {
         guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
               let slot = MascotPerch.glassSlot(field)?.intersection(bounds), !slot.isNull else { return nil }
         return slot
     }
 
-    /// Where the picture is drawn, in the canvas, as the layer has it: the whole picture, clipped
-    /// to the flank on the glass.
+    /// Where the picture is drawn, in the canvas, as the layers have it: the whole picture, less
+    /// what every clipping layer it is inside cuts off — on the glass, the flank.
     var shownFrame: CGRect {
-        stage.frame.intersection(sprite.frame.offsetBy(dx: stage.frame.minX, dy: stage.frame.minY))
+        var shown = drawnFrame
+        var parent = sprite.superlayer
+        while let clip = parent, clip !== window?.layer {
+            if clip.masksToBounds { shown = shown.intersection(clip.convert(clip.bounds, to: layer)) }
+            parent = clip.superlayer
+        }
+        return shown
     }
 
     private func report(_ roam: MascotRoam) {
         guard let onReport else { return }
         var now = roam.report
+        #if DEBUG
+        now.trail = trail
+        #endif
         guard now != reported else { return }
         reported = now
         sequence += 1
@@ -477,6 +521,9 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// One frame, `dt` seconds on: the roam's clock and the engine moved on together.
     func step(_ dt: Double) {
         clock += dt
+        #if DEBUG
+        sample()
+        #endif
         roam?.advance(to: clock)
         #if DEBUG
         if let roam { MascotTrace.shared?.advanced(roam, at: clock) }
@@ -484,6 +531,38 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         sync()
         driver.tick(dt)
     }
+
+    #if DEBUG
+    /// While he is on the glass, what the screen shows each frame something is moving: the top of
+    /// his whole picture and the keyboard's top edge (the screen's foot where there is none), both
+    /// as drawn — the presentation layers, in the screen — each run of moving frames with the still
+    /// frame before it and the one after, so a suite can hold that he moves with the pane as the
+    /// keyboard carries it, frame by frame, from where he stood to where he stands.
+    private(set) var trail: [MascotRoam.Report.Drawn] = []
+    private var trailMoving = false
+    private var still: MascotRoam.Report.Drawn?
+
+    private func sample() {
+        guard let roam, case .glass = roam.roost, let window else { return }
+        let drawn = sprite.presentation() ?? sprite
+        let model = sprite.convert(sprite.bounds, to: nil)
+        let shown = drawn.convert(drawn.bounds, to: nil)
+        let keyboard = KeyboardProbe.edge()
+        let foot = window.frame.maxY
+        let moving = abs(shown.minY - model.minY) > 0.5 || (keyboard.map { abs($0.drawn - $0.model) > 0.5 } ?? false)
+        let now = MascotRoam.Report.Drawn(t: clock, top: Double(shown.minY + window.frame.minY),
+                                          keyboard: Double(min(keyboard?.drawn ?? foot, foot)), moving: moving)
+        defer { if trail.count > 120 { trail.removeFirst(trail.count - 120) } }
+        if moving {
+            if !trailMoving, let still { trail.append(still) }
+            trail.append(now)
+        } else if trailMoving {
+            trail.append(now)
+        }
+        trailMoving = moving
+        if !moving { still = now }
+    }
+    #endif
 
     /// The link holds its target, so the target is this rather than the canvas: a canvas taken
     /// out of the hierarchy is not kept alive by its own clock.
@@ -529,6 +608,16 @@ extension MascotRoam {
         /// The last reports, oldest first, each as its sequence, his frame, the pane and whether
         /// he stood nowhere: a reader polling the latest report sees every frame in between.
         var recent: [Glimpse] = []
+
+        /// The glass's frames as drawn while something moved (`MascotCanvas.trail`), debug only.
+        var trail: [Drawn] = []
+
+        struct Drawn: Codable, Equatable, Sendable {
+            var t: Double
+            var top: Double
+            var keyboard: Double
+            var moving: Bool
+        }
 
         struct Glimpse: Codable, Equatable, Sendable {
             var sequence: Int
@@ -597,6 +686,63 @@ final class MascotTrace {
 }
 #endif
 
+#if DEBUG
+/// The keyboard's top edge in the screen, as drawn and as laid out, for the glass's trail: the
+/// container UIKit slides the keyboard in with, in its text-effects window, read off its
+/// presentation layer.
+@MainActor
+enum KeyboardProbe {
+    static func edge() -> (drawn: CGFloat, model: CGFloat)? {
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows {
+                guard let host = find(in: window) else { continue }
+                let drawn = host.layer.presentation() ?? host.layer
+                let shown = drawn.convert(drawn.bounds, to: nil).offsetBy(dx: 0, dy: window.frame.minY)
+                let laid = host.convert(host.bounds, to: nil).offsetBy(dx: 0, dy: window.frame.minY)
+                return (shown.minY, laid.minY)
+            }
+        }
+        return nil
+    }
+
+    private static func find(in view: UIView) -> UIView? {
+        if NSStringFromClass(type(of: view)) == "UIKeyboardItemContainerView" { return view }
+        for sub in view.subviews { if let found = find(in: sub) { return found } }
+        return nil
+    }
+}
+#endif
+
+/// Where the canvas finds the stage SwiftUI places on the glass for him: the one object both
+/// views are handed.
+@MainActor
+final class MascotGlassPort {
+    weak var view: UIView? {
+        didSet { if view !== oldValue { canvas?.resync() } }
+    }
+    weak var canvas: MascotCanvas?
+}
+
+/// The stage he stands in on the glass: a view SwiftUI frames at `MascotPerch.glassStage` from the
+/// pane's own anchor, inside a clip of the flank, so both are animated in the same transaction as
+/// the pane — the keyboard's — and he, filling it, with them.
+struct MascotGlassStage: UIViewRepresentable {
+    let port: MascotGlassPort
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        view.accessibilityElementsHidden = true
+        port.view = view
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        if port.view !== view { port.view = view }
+    }
+}
+
 /// The canvas in SwiftUI.
 struct MascotOverChat: UIViewRepresentable {
     var input: TopoInput
@@ -608,10 +754,12 @@ struct MascotOverChat: UIViewRepresentable {
     var report: ((MascotRoam.Report) -> Void)?
     var face: ((MascotFacing) -> Void)?
     var pin: ((CGPoint) -> Void)?
+    var glass: MascotGlassPort?
 
     func makeUIView(context: Context) -> MascotCanvas { MascotCanvas(frame: .zero) }
 
     func updateUIView(_ canvas: MascotCanvas, context: Context) {
+        canvas.glass = glass
         canvas.onReport = report
         canvas.onFace = face
         canvas.onPin = pin
@@ -661,16 +809,39 @@ struct MascotLayer: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    @State private var port = MascotGlassPort()
+
     var body: some View {
         GeometryReader { proxy in
-            MascotOverChat(input: state.input, field: scene.field(in: proxy, keyboardTop: keyboardTop),
-                           settings: MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion),
-                           interval: look.mascot.frameInterval, ready: ready,
-                           conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
-                                             reduceMotion: reduceMotion),
-                           report: report, face: face, pin: pin)
-                .frame(width: proxy.size.width, height: proxy.size.height)
-                .opacity(opacity)
+            let field = scene.field(in: proxy, keyboardTop: keyboardTop)
+            let settings = MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion)
+            ZStack(alignment: .topLeading) {
+                MascotOverChat(input: state.input, field: field, settings: settings,
+                               interval: look.mascot.frameInterval, ready: ready,
+                               conditions: .init(active: scenePhase == .active, opacity: opacity, covered: covered,
+                                                 reduceMotion: reduceMotion),
+                               report: report, face: face, pin: pin, glass: port)
+                    .frame(width: proxy.size.width, height: proxy.size.height)
+                // On the glass, the stage is framed from the pane as laid out now, so SwiftUI
+                // draws it wherever it draws the pane, in the same transaction.
+                if look.mascot.placement == .glass, let field,
+                   let stage = MascotPerch.glassStage(field, size: settings.size),
+                   let slot = MascotPerch.glassSlot(field) {
+                    // The flank clips from the top of his picture to the pane's foot.
+                    let clip = CGRect(x: slot.minX, y: min(stage.minY, slot.maxY), width: slot.width,
+                                      height: max(slot.maxY - stage.minY, 0))
+                    ZStack(alignment: .topLeading) {
+                        MascotGlassStage(port: port)
+                            .frame(width: stage.width, height: stage.height)
+                            .offset(x: stage.minX - clip.minX, y: stage.minY - clip.minY)
+                    }
+                    .frame(width: clip.width, height: clip.height, alignment: .topLeading)
+                    .clipped()
+                    .offset(x: clip.minX, y: clip.minY)
+                }
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
+            .opacity(opacity)
         }
         // The canvas takes no touch of its own: a press on him is picked up by his recognizer on
         // the window, which is handed only touches on his box and off the well.

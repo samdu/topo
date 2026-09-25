@@ -33,8 +33,9 @@ enum ChatReading {
         var pin: [Double]?
         var well: [Double]?
         var visible: [Double]?
-        /// The last reports, oldest first.
+        /// The last reports, oldest first, and what the glass drew while something moved.
         var recent: [Glimpse] = []
+        var trail: [Drawn] = []
 
         struct Glimpse: Decodable {
             var sequence: Int
@@ -42,11 +43,16 @@ enum ChatReading {
             var hidden: Bool
         }
 
-        var description: String { String(format: "%.3f top %.1f keyboard %.1f%@", t, top, keyboard, moving ? " moving" : "") }
+        struct Drawn: Decodable, CustomStringConvertible {
+            var t: Double
+            var top: Double
+            var keyboard: Double
+            var moving: Bool
+            var description: String { String(format: "%.3f top %.1f keyboard %.1f%@", t, top, keyboard, moving ? " moving" : "") }
         }
 
         var description: String {
-            "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? [])"
+            "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? []) trail \(trail.suffix(30))"
         }
 
         /// Standing still where his roost has him.

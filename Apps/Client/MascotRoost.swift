@@ -488,6 +488,14 @@ enum MascotPerch {
         return CGRect(x: left, y: top, width: pane.maxX - left, height: pane.maxY - top)
     }
 
+    /// The view he is drawn in while he stands on the glass (`MascotGlassStage`): the whole
+    /// picture drawn round his box on the pane, which SwiftUI places from the pane's own frame
+    /// inside a clip of `glassSlot`, so where the pane is drawn — on the keyboard's curve as it
+    /// rises and falls — he is drawn with it, and his picture fills the stage at every height.
+    static func glassStage(_ field: MascotField, size: CGSize) -> CGRect? {
+        glass(field, size: size).map(MascotSprite.drawn(around:))
+    }
+
     /// His box at `pin`, a fraction of `frame` across and down, as the look carries it: the box's
     /// centre put there, then moved in only as far as it takes to keep his reach inside `frame` —
     /// the transcript's with the keyboard down — so the screen's edge holds him wherever the pin
