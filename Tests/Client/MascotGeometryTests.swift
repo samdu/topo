@@ -302,9 +302,10 @@ final class MascotGeometryTests: XCTestCase {
 
     /// Everything the app can ask the engine for is drawn inside `MascotSprite.reach`: the idle
     /// cycle with its corner and yoga, the walk, and every working pose, on every head and load
-    /// band, and the ways from one to another — a schedule of activities, the walk the roam puts on
-    /// him for a glide among them, each held a few seconds and idle held long enough for the
-    /// cycle's excursions, drawn every frame. How far each pose
+    /// band, and the ways from one to another — on every head and band a schedule that goes idle
+    /// through the cycle's first excursion and then into every activity in turn, the walk the
+    /// roam puts on him for a glide among them, and then more at random, drawn every frame, and
+    /// held to have entered each. How far each pose
     /// reaches past the box is recorded. The sign is recorded and not held: nothing in the app
     /// sets one.
     func testEveryPoseTheAppAsksForIsDrawnInsideTheReach() {
@@ -317,26 +318,42 @@ final class MascotGeometryTests: XCTestCase {
                 var schedule = Mulberry32(seed: UInt32(100 + m * 4 + b))
                 let engine = Topo(random: { random.next() })
                 var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
-                var activity = "idle", until = 22.0, time = 0.0
+                // Idle through the cycle's first excursion, then every activity in turn, idle and
+                // the walk between some of them, then the rest of the run at random.
+                var fixed: [(String, Double)] = [("idle", 32), ("walk", 3), ("thinking", 4), ("idle", 2), ("searching", 4),
+                                                 ("walk", 2), ("building", 4), ("writing", 4), ("idle", 2), ("calendar", 4)]
+                var activity = "idle", until = 0.0, time = 0.0
+                var entered: Set<String> = []
                 for _ in 0..<(90 * 30) {
                     time += 1.0 / 30
                     if time > until {
-                        activity = activities[Int(schedule.next() * Double(activities.count))]
-                        until = time + (activity == "idle" ? 20 + schedule.next() * 40 : schedule.next() * 5)
+                        if !fixed.isEmpty {
+                            let (next, hold) = fixed.removeFirst()
+                            activity = next
+                            until = time + hold
+                        } else {
+                            activity = activities[Int(schedule.next() * Double(activities.count))]
+                            until = time + (activity == "idle" ? 20 + schedule.next() * 40 : schedule.next() * 5)
+                        }
                     }
                     engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: activity, corner: 0))
                     engine.draw(&rgba)
                     let pose = engine.poseName
+                    entered.insert(pose)
                     poses[pose, default: Reach()].add(rgba)
                     guard let reached = poses[pose], !reached.isEmpty else { continue }
                     XCTAssertTrue(reach.contains(reached.rect),
                                   "\(model) \(tokens) \(pose): drawn in \(reached.rect), outside the reach \(reach)")
                     if !reach.contains(reached.rect) { return }
                 }
+                let missing = ["shelf", "walk", "thinking", "searching", "building", "writing", "calendar"].filter { !entered.contains($0) }
+                XCTAssertEqual(missing, [], "\(model) \(tokens): the schedule never entered these")
+                XCTAssertTrue(entered.contains("yoga") || entered.contains("corner"),
+                              "\(model) \(tokens): the schedule never took him on an excursion")
             }
         }
-        XCTAssertNotNil(poses["walk"], "the schedule never walked him")
-        XCTAssertNotNil(poses["yoga"] ?? poses["corner"], "the schedule never took him on an excursion")
+        XCTAssertNotNil(poses["yoga"], "no run took him to yoga")
+        XCTAssertNotNil(poses["corner"], "no run took him to the corner")
         var sign = Reach()
         for model in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"] {
             let engine = Topo(random: { 0.5 })
