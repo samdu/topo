@@ -79,10 +79,10 @@ final class DraftRowRenderTests: XCTestCase {
     /// The row under the look given, as pixels. The `TextField` in it is laid out by
     /// `ImageRenderer` and not drawn, which is exactly why the bubble is sized by a `Text` behind
     /// it: what is measured here is the size that `Text` gives it.
-    private func render(_ draft: Draft, look: Look = DraftRowRenderTests.look()) throws -> Raster {
+    private func render(_ draft: Draft, look: Look = DraftRowRenderTests.look(), width: CGFloat? = nil) throws -> Raster {
         let view = DraftRow(draft: draft)
             .environment(\.look, look)
-            .frame(width: width)
+            .frame(width: width ?? self.width)
             .background(Color.white)
         let renderer = ImageRenderer(content: view)
         renderer.scale = 3
@@ -348,6 +348,42 @@ final class DraftRowRenderTests: XCTestCase {
         let spaced = try box(try render(draft("bins?"), look: apart))
         XCTAssertLessThan(spaced.right, shipped.right,
                           "the look's spacing does not reach the room beside the bubble")
+    }
+
+    /// The person's inset at the top of its range on a 320-point phone leaves the column 288
+    /// points, less than the inset and what the row keeps: the inset yields, and the bubble keeps
+    /// its minimum width and Send its slot, inside the column, whole.
+    func testTheInsetYieldsSoSendStaysInTheColumnAtTheTopOfItsRange() throws {
+        let column = 320 - 2 * Look().transcript.horizontalPadding
+        var top = Self.look()
+        top.transcript.personLeadingInset = 200
+        var none = Self.look()
+        none.transcript.personLeadingInset = 0
+        let ink = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        let inset = try render(draft("bins?"), look: top, width: column)
+        let flush = try render(draft("bins?"), look: none, width: column)
+        let drawn = inset.pixels(matching: ink)
+        XCTAssertGreaterThan(drawn.count, 0, "Send is not drawn at the inset's top")
+        XCTAssertEqual(drawn.count, flush.pixels(matching: ink).count, "Send is cut off at the inset's top")
+        let slot = Int(Look().draft.slot * 3)
+        XCTAssertTrue(drawn.allSatisfy { $0.x >= inset.width - slot && $0.x < inset.width },
+                      "Send is not in its slot at the column's trailing edge")
+        let bubble = try box(inset)
+        XCTAssertGreaterThanOrEqual(bubble.right - bubble.left + 3, Int(Look().draft.minimumWidth * 3),
+                                    "the bubble lost its minimum width to the inset")
+        XCTAssertGreaterThanOrEqual(bubble.left, 0)
+    }
+
+    /// The inset the row takes: all of it where there is room, as much as leaves the row what it
+    /// keeps where there is not, and never less than none.
+    func testTheRowTakesTheInsetOnlyAsFarAsLeavesItsBubbleAndControl() {
+        let kept = DraftRow.kept(Look().draft)
+        XCTAssertEqual(kept, 160 + 8 + 36)
+        XCTAssertEqual(DraftRow.inset(100, keeping: kept, in: 370), 100)
+        XCTAssertEqual(DraftRow.inset(200, keeping: kept, in: 288), 84)
+        XCTAssertEqual(DraftRow.inset(200, keeping: kept, in: 150), 0)
+        XCTAssertEqual(DraftRow.inset(-5, keeping: kept, in: 370), 0)
+        XCTAssertEqual(DraftRow.inset(.infinity, keeping: kept, in: 370), 0)
     }
 
     /// A control that would send nothing says so: an empty row's send is faded by the look's
