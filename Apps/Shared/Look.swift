@@ -442,9 +442,9 @@ struct Look: Equatable, Sendable {
         /// or pinned at `pin`. A drag on him writes `pinned` and the pin to this device's override
         /// (`Tuning`).
         var placement = Placement.roam
-        /// Where his box's centre is put while he is `pinned`: a fraction of the transcript's width
-        /// and of its height with the keyboard down, 0 to 1 each, so a pin survives rotation and
-        /// another screen.
+        /// Where his box's centre is put while he is `pinned`: a fraction across and down the
+        /// transcript's frame carried down to the composer pane's foot (`MascotField.pinFrame`),
+        /// with the keyboard down, 0 to 1 each, so a pin survives rotation and another screen.
         var pin = CGPoint(x: 0.85, y: 0.8)
 
         /// The three places he can be.

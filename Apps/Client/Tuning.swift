@@ -84,7 +84,8 @@ final class Tuning {
     private(set) var values: [Knob: Double]
     /// Where he sits, as this device set it; nil is the vault's placement.
     private(set) var placement: Look.Mascot.Placement?
-    /// Where a drag left him, as fractions of the transcript's frame; nil is the vault's pin.
+    /// Where a drag left him, as fractions of the transcript's frame carried to the
+    /// pane's foot; nil is the vault's pin.
     private(set) var pin: CGPoint?
 
     init(defaults: UserDefaults = .standard) {

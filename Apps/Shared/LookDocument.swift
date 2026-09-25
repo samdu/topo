@@ -531,7 +531,7 @@ enum LookDocument {
         func placement(_ key: String, _ value: inout Look.Mascot.Placement) { named(key, &value) }
 
         /// Where a pinned Topo's centre is put: an object naming an `x` and a `y`, each a fraction
-        /// of the transcript's frame from 0 to 1. It is one place and not two numbers, so it is
+        /// from 0 to 1 of the transcript's frame carried down to the pane's foot. It is one place and not two numbers, so it is
         /// taken whole or refused whole: a pin with one half out of range, or missing, is not a
         /// place the person put him, and the compiled pin stands.
         func pin(_ key: String, _ value: inout CGPoint) {
@@ -542,8 +542,8 @@ enum LookDocument {
             var x: Double?, y: Double?
             let before = notes.count
             into(object, name(key)) { r in
-                x = r.amount("x", in: 0...1, "a fraction of the transcript's width between 0 and 1")
-                y = r.amount("y", in: 0...1, "a fraction of the transcript's height between 0 and 1")
+                x = r.amount("x", in: 0...1, "a fraction across the chat between 0 and 1")
+                y = r.amount("y", in: 0...1, "a fraction down the chat, from the transcript's top to the glass's foot, between 0 and 1")
             }
             guard let x, let y else {
                 if notes.count == before { note(key, "needs both an x and a y") }

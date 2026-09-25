@@ -194,8 +194,8 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     /// which is how it reaches `Mascot.facing` and so the engine: at the decision, not per frame.
     var onFace: ((MascotFacing) -> Void)?
     private var faced: MascotFacing?
-    /// Told the pin a drag let go of him at, as fractions of the transcript's frame with the
-    /// keyboard down, for this device's override to keep (`Tuning.pin(at:)`).
+    /// Told the pin a drag let go of him at, as fractions of the transcript's frame carried to
+    /// the pane's foot with the keyboard down, for this device's override to keep (`Tuning.pin(at:)`).
     var onPin: ((CGPoint) -> Void)?
     /// The press that picks him up. It lives on the window, where it sees the touches that start
     /// on his box, which land on whatever is under him.
@@ -309,9 +309,10 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
         return roam.grabbable(at: point)
     }
 
-    /// A press on him waits to be told it is not his before anything else under him acts on it —
-    /// a turn's own hold, a button — except a scroll, which begins on its own movement and ends
-    /// his press by moving.
+    /// His press waits on nothing, and every other recognizer waits for it to fail before it acts
+    /// on a touch it was handed — a turn's own hold, a button — except any pan
+    /// (`UIPanGestureRecognizer`, a scroll's among them), which begins on its own movement, and a
+    /// finger that moves past the slop ends his press.
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
         !(other is UIPanGestureRecognizer)

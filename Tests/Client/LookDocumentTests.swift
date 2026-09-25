@@ -191,10 +191,10 @@ final class LookDocumentTests: XCTestCase {
         let compiled = Look.Mascot().pin
         XCTAssertTrue((0...1).contains(compiled.x) && (0...1).contains(compiled.y), "the compiled pin \(compiled)")
         let refused: [(String, String)] = [
-            (#"{"x": 1.5, "y": 0.5}"#, "mascot.pin.x is 1.5, and a fraction of the transcript's width between 0 and 1 is read from 0.0 to 1.0"),
-            (#"{"x": 0.5, "y": -0.1}"#, "mascot.pin.y is -0.1, and a fraction of the transcript's height between 0 and 1 is read from 0.0 to 1.0"),
+            (#"{"x": 1.5, "y": 0.5}"#, "mascot.pin.x is 1.5, and a fraction across the chat between 0 and 1 is read from 0.0 to 1.0"),
+            (#"{"x": 0.5, "y": -0.1}"#, "mascot.pin.y is -0.1, and a fraction down the chat, from the transcript's top to the glass's foot, between 0 and 1 is read from 0.0 to 1.0"),
             (#"{"x": 0.5}"#, "mascot.pin needs both an x and a y"),
-            (#"{"x": "left", "y": 0.5}"#, "mascot.pin.x is not a fraction of the transcript's width between 0 and 1"),
+            (#"{"x": "left", "y": 0.5}"#, "mascot.pin.x is not a fraction across the chat between 0 and 1"),
             (#"[0.5, 0.5]"#, "mascot.pin is not an object naming an x and a y"),
         ]
         for (pin, note) in refused {

@@ -1099,7 +1099,7 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// The finger has let go: he is pinned where he is, as a fraction of the transcript's frame
-    /// with the keyboard down, which is answered for the look to keep. From here the roam is the
+    /// carried to the pane's foot with the keyboard down, which is answered for the look to keep. From here the roam is the
     /// pinned policy at that pin, so nothing moves him before the look catches up; with the
     /// keyboard up, it lifts him clear of it.
     mutating func drop() -> CGPoint? {
