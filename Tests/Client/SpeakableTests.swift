@@ -20,6 +20,14 @@ final class SpeakableTests: XCTestCase {
             ("`~/.claude/settings.json`", "tilde slash dot claude slash settings dot json"),
             ("`/home/topo`", "slash home slash topo"),
             ("Run `PrePromptSubmit` first.", "Run PrePromptSubmit first."),
+            ("`src/lib`", "src slash lib"),
+            ("`x.c`", "x dot c"),
+            ("Run `./look.json` now.", "Run dot slash look dot json now."),
+            ("`CLAUDE.md`", "CLAUDE dot md"),
+            ("`3.5`", "3 dot 5"),
+            ("`Tests/Client/`", "Tests slash Client slash"),
+            ("`/memory` or `and/or`", "slash memory or and slash or"),
+            ("Fetch `https://example.com/?file=look.json` again.", "Fetch https://example.com/?file=look.json again."),
         ])
     }
 
@@ -44,7 +52,7 @@ final class SpeakableTests: XCTestCase {
             ("Look in /home/topo.", "Look in slash home slash topo."),
             ("It is in ~/Desktop/", "It is in tilde slash Desktop"),
             ("Open Apps/Client.", "Open Apps slash Client."),
-            ("`Tests/Client/`", "Tests slash Client"),
+            ("Tests/Client/", "Tests slash Client"),
             ("In Packages/TopoCore now", "In Packages slash TopoCore now"),
             ("see src/my_module", "see src slash my_module"),
         ])
@@ -68,6 +76,11 @@ final class SpeakableTests: XCTestCase {
             ("At 9 a.m. today.", "At 9 a.m. today."),
             ("Mail sam@example.com today.", "Mail sam@example.com today."),
             ("See https://example.com/a.json now.", "See https://example.com/a.json now."),
+            ("See https://example.com/?file=look.json&path=/home/topo now.",
+             "See https://example.com/?file=look.json&path=/home/topo now."),
+            ("Go to www.example.com/look.json today.", "Go to www.example.com/look.json today."),
+            ("Open <https://example.com/look.json>.", "Open https://example.com/look.json."),
+            ("Mail look.json@example.com, then look.json.", "Mail look.json@example.com, then look dot json."),
             ("PrePromptSubmit", "PrePromptSubmit"),
             ("line one\nline two", "line one\nline two"),
         ])
