@@ -1,6 +1,6 @@
 # Installing Topo on a phone
 
-Topo is not in the App Store yet. Sam's iPhone 15 Pro (`83FAFEC2-7326-5E79-A186-AB8E1B0A32E3`) is the primary test device: it is paired with buddybox over the local network with Developer Mode on, so it takes a debug build directly (below) as well as the over-the-air builds. His other devices are not paired for direct installs and get builds from the install page only, so **every merge to main republishes the install page** (`publish-topo.sh`, under Cutting a build).
+Topo is not in the App Store yet. Sam's iPhone 15 Pro (`83FAFEC2-7326-5E79-A186-AB8E1B0A32E3`) is the primary test device: it is paired with buddybox over the local network with Developer Mode on, so it takes a debug build directly (below) as well as the over-the-air builds. His other devices are not paired for direct installs and get builds from the install page only, so **every merge to main republishes the install page**: the janitor (`docs/janitor.md`) runs `publish-topo.sh origin/main` (under Cutting a build) within fifteen minutes of the page's commit falling behind origin/main.
 
 Topo is not in the App Store yet. The iOS app ships over the air as a development-signed build for the devices enrolled on team 4A5NSJ6Y3G, so it runs only on those.
 
