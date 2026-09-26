@@ -39,7 +39,7 @@ final class MarkdownTests: XCTestCase {
             "paragraph 0 A paragraph.",
             "item(Topo.Markdown.Marker.bullet) 1 a bullet",
             "item(Topo.Markdown.Marker.number(1)) 1 a number",
-            "quote 0 a quote",
+            "paragraph 0 a quote",
             "code(language: Optional(\"swift\")) 0 let x = 1",
             "rule 0 ",
         ])
@@ -80,8 +80,59 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(summary(source), [
             "item(Topo.Markdown.Marker.bullet) 1 an item",
             "code(language: nil) 1 code in the item",
-            "quote 1 a quote in the item",
+            "paragraph 1 a quote in the item",
         ])
+    }
+
+    /// How many quotes a block sits inside, and how many of its lists sit outside the outermost
+    /// of them — the two counts the bars are drawn from. A quote's content is whatever markdown
+    /// puts in it, so a heading, a rule, a fence, a list item and a table's rows each carry the
+    /// quote they are in, and only a paragraph carried it before.
+    func testEveryBlockCarriesItsQuoteDepth() {
+        func quoted(_ source: String) -> [String] {
+            Markdown.blocks(source).map {
+                "\($0.kind) depth \($0.depth) quote \($0.quote) outside \($0.listsOutside) \(String($0.text.characters))"
+            }
+        }
+        XCTAssertEqual(quoted("> a\n>\n> > b\n> >\n> > > c"), [
+            "paragraph depth 0 quote 1 outside 0 a",
+            "paragraph depth 0 quote 2 outside 0 b",
+            "paragraph depth 0 quote 3 outside 0 c",
+        ])
+        XCTAssertEqual(quoted("> # head\n>\n> ---\n>\n> ```\n> code\n> ```"), [
+            "heading(level: 1) depth 0 quote 1 outside 0 head",
+            "rule depth 0 quote 1 outside 0 ",
+            "code(language: nil) depth 0 quote 1 outside 0 code",
+        ])
+        XCTAssertEqual(quoted("> | a | b |\n> |---|---|\n> | 1 | 2 |"), [
+            "paragraph depth 0 quote 1 outside 0 a  ·  b",
+            "paragraph depth 0 quote 1 outside 0 1  ·  2",
+        ])
+        // A list inside a quote is inside it: none of its lists lead the bars in, so the bars of
+        // the one quote stand in one column however deep the list goes.
+        XCTAssertEqual(quoted("> - a\n>   - b\n>\n>   more of a"), [
+            "item(Topo.Markdown.Marker.bullet) depth 1 quote 1 outside 0 a",
+            "item(Topo.Markdown.Marker.bullet) depth 2 quote 1 outside 0 b",
+            "paragraph depth 1 quote 1 outside 0 more of a",
+        ])
+        // A quote inside a list item is outside nothing: its own list leads its bar in, so the bar
+        // sits under the item's words.
+        XCTAssertEqual(quoted("- an item\n\n  > a quote\n\n  > - x"), [
+            "item(Topo.Markdown.Marker.bullet) depth 1 quote 0 outside 1 an item",
+            "paragraph depth 1 quote 1 outside 1 a quote",
+            "item(Topo.Markdown.Marker.bullet) depth 2 quote 1 outside 1 x",
+        ])
+        XCTAssertEqual(quoted("> - i"), ["item(Topo.Markdown.Marker.bullet) depth 1 quote 1 outside 0 i"])
+        XCTAssertEqual(quoted("a paragraph\n\n- an item"), [
+            "paragraph depth 0 quote 0 outside 0 a paragraph",
+            "item(Topo.Markdown.Marker.bullet) depth 1 quote 0 outside 1 an item",
+        ])
+    }
+
+    /// A quote's own lazy continuation is one paragraph of the quote it opened, at its level.
+    func testALazyNestedQuoteKeepsItsLevel() {
+        XCTAssertEqual(Markdown.blocks("> > lazy\ncontinued").map { ($0.quote, String($0.text.characters)) }
+            .map { "\($0.0) \($0.1)" }, ["2 lazy\ncontinued"])
     }
 
     func testCodeKeepsItsIndentationAndLosesOnlyItsLastNewline() {

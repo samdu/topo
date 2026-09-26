@@ -104,6 +104,21 @@ enum PreviewTurns {
         """),
     ])
 
+    /// A reply whose quote is inside another quote, so the bars are more than one: what Topo
+    /// stands clear of is one bar for each level, and each level's words beside them.
+    static let nestedQuote: [Turn] = make([
+        (.person, "What did the log say?"),
+        (.assistant, """
+        It quoted itself:
+
+        > The log is append-only.
+        >
+        > > Nothing you read changes under you.
+
+        So a read is safe to repeat.
+        """),
+    ])
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?
