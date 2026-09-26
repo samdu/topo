@@ -12,8 +12,9 @@
 # file. The CLI rotates the refresh token on first use, which spends the
 # secret, so the codex job writes the rotated file back to `CODEX_AUTH_JSON`
 # before it deletes the login; `CODEX_SECRET_PAT`, a fine-grained PAT on this
-# repository with Secrets: write, is what lets it. The job's `codex-login`
-# concurrency group keeps two runs from starting on the same login. A new
+# repository with Secrets: write, is what lets it. The `codex_wait` job holds
+# each run's `codex` until no other run's is in progress, so two runs do not
+# start on the same login (after a 25-minute bound it goes ahead). A new
 # `codex login` is needed only when the chain breaks — two runs on one login,
 # a rotation the job could not write back — and shows as `refresh token was
 # already used`. Store it as ONE line (`jq -c . auth.json | gh secret set
@@ -740,8 +741,82 @@ jobs:
   # take most of a run's wall clock, and the verdict arrives while they are
   # still going. The merge still needs both, since reviewer_ran and
   # review_gate read every suite job and `test`.
-  codex:
+  # One codex job at a time across the repository: each spends the login it
+  # starts from and writes the rotated one back, so two on the same login
+  # break the chain. The wait is its own job because a job receives its
+  # secrets when it starts: `codex` must start after the previous write-back,
+  # not wait inside itself holding the login that write-back replaced.
+  #
+  # Queue order is this job's own start (then its id). It waits while another
+  # run of this workflow has a `codex` job not yet completed, a `codex_wait`
+  # that started earlier and is still in progress, or a `codex_wait` that
+  # succeeded whose `codex` has not appeared yet. It polls every 20 seconds,
+  # and after 25 minutes it warns and lets the review go ahead. An API error
+  # counts as busy and is retried within the same bound.
+  codex_wait:
     needs: [select, topo_unit, others]
+    if: >-
+      needs.select.result == 'success' &&
+      needs.topo_unit.result == 'success' &&
+      needs.others.result == 'success' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Read-only, to list this workflow's runs and their jobs.
+      actions: read
+    steps:
+      - name: Wait for any other run's codex job to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          api="repos/$GITHUB_REPOSITORY/actions"
+          me=$(gh api "$api/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "codex_wait")][0] | {id, started_at}' 2>/dev/null) || me=""
+          if [ -z "$me" ] || [ "$me" = "null" ]; then
+            echo "::warning::Could not find this codex_wait job in the API; the review goes ahead without waiting."
+            exit 0
+          fi
+          deadline=$((SECONDS + 25 * 60))
+          while :; do
+            busy=""
+            if runs=$(gh api "$api/workflows/pr-validate.yaml/runs?status=in_progress&per_page=100" \
+                --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | .id"); then
+              for r in $runs; do
+                if ! jobs=$(gh api "$api/runs/$r/jobs?filter=latest&per_page=100"); then
+                  busy="the jobs of run $r could not be read"
+                  break
+                fi
+                why=$(jq -r --argjson me "$me" --arg r "$r" '
+                  ([.jobs[] | select(.name == "codex")][0]) as $c
+                  | ([.jobs[] | select(.name == "codex_wait")][0]) as $w
+                  | if $c != null and $c.status != "completed" then "run \($r): codex is \($c.status)"
+                    elif $w != null and $w.status == "in_progress"
+                      and ([$w.started_at, $w.id] < [$me.started_at, $me.id]) then "run \($r): earlier in the queue"
+                    elif $w != null and $w.conclusion == "success" and $c == null then "run \($r): codex about to start"
+                    else empty end' <<<"$jobs")
+                if [ -n "$why" ]; then busy="$why"; break; fi
+              done
+            else
+              busy="this workflow's runs could not be listed"
+            fi
+            if [ -z "$busy" ]; then
+              echo "No other codex job is running or ahead in the queue."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::Still waiting after 25 minutes ($busy); the review goes ahead, and may start on a login another job is about to rotate."
+              exit 0
+            fi
+            echo "Waiting: $busy"
+            sleep 20
+          done
+
+  codex:
+    needs: [select, topo_unit, others, codex_wait]
     # Same-repo branches only: a fork PR carries untrusted content and must
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
@@ -753,18 +828,10 @@ jobs:
       needs.select.result == 'success' &&
       needs.topo_unit.result == 'success' &&
       needs.others.result == 'success' &&
+      needs.codex_wait.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
-    # One codex job at a time across the repository: each run spends the login
-    # it starts from and writes the rotated one back, so two runs on the same
-    # login would break the chain. A running job is never cancelled by the
-    # group; GitHub holds one job pending behind it, and a newer arrival
-    # replaces that pending one, which concludes `cancelled` (reviewer_ran
-    # red, re-run it). This is on top of the workflow's per-PR group above.
-    concurrency:
-      group: codex-login
-      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
