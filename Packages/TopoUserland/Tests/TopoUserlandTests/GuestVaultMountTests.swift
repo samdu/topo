@@ -94,8 +94,10 @@ final class GuestVaultMountTests: XCTestCase {
     /// coordination until the file closes.
     func testAGuestWriteHoldsItsCoordinationUntilClose() async throws {
         let (host, point) = try vault()
+        // The last program is exec'd, as the process suites' are: a SIGKILL landing while the shell
+        // forks it can leave a child that never runs and is never confirmed gone.
         let writing = try await Guest.shared.spawn("/bin/sh", ["-c",
-            "exec 3>\(point)/n.md; echo a >&3; echo opened; sleep 1; echo b >&3; exec 3>&-; echo closed; sleep 300"])
+            "exec 3>\(point)/n.md; echo a >&3; echo opened; sleep 1; echo b >&3; exec 3>&-; echo closed; exec sleep 300"])
         var lines = writing.lines.makeAsyncIterator()
         let opened = await lines.next()
         XCTAssertEqual(opened, "opened")
@@ -114,7 +116,8 @@ final class GuestVaultMountTests: XCTestCase {
         let closed = await lines.next()
         XCTAssertEqual(closed, "closed")
         XCTAssertEqual(read, "a\nb\n", "the read was let in before the guest's write closed")
-        _ = await writing.terminate(within: .seconds(5))
+        let termination = await writing.terminate(within: .seconds(5))
+        XCTAssertTrue(termination.confirmed, "\(termination)")
     }
 
     /// A writer that never lets go, or a file that never comes down, is a failed read at the bound
@@ -217,7 +220,7 @@ final class GuestVaultMountTests: XCTestCase {
 
     func testUnmountWhileAGuestHoldsAFileIsRefusedAndTheMountStands() async throws {
         let (_, point) = try vault("held\n")
-        let holder = try await Guest.shared.spawn("/bin/sh", ["-c", "exec 3<\(point)/note.md; echo holding; sleep 300"])
+        let holder = try await Guest.shared.spawn("/bin/sh", ["-c", "exec 3<\(point)/note.md; echo holding; exec sleep 300"])
         var lines = holder.lines.makeAsyncIterator()
         _ = await lines.next()
 
