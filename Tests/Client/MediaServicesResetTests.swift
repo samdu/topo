@@ -737,7 +737,7 @@ final class MediaServicesResetTests: XCTestCase {
     }
 
     /// The voice is handed the reply as it is said (`Speakable`), not the markdown the transcript
-    /// draws: the file name read with its dot, the emphasis gone.
+    /// draws: the file name read with its dot, the emphasis gone, the code block its number.
     func testTheVoiceIsHandedTheReplyAsItIsSaid() async {
         let seams = Seams()
         let center = NotificationCenter()
@@ -748,9 +748,9 @@ final class MediaServicesResetTests: XCTestCase {
             return [toneFrame(0.5)]
         })
         let speaker = await self.speaker(seams, audio, center, engine: voice)
-        speaker.speak("Should I read `look.json`?\n\n**Yes.**")
-        await settle("both sentences to reach the voice") { heard.sentences.count == 2 }
-        XCTAssertEqual(heard.sentences, ["Should I read look dot json?", "Yes."])
+        speaker.speak("Should I read `look.json`?\n\n**Yes.**\n\n```swift\nlet x = 1\n```")
+        await settle("every sentence to reach the voice") { heard.sentences.count == 3 }
+        XCTAssertEqual(heard.sentences, ["Should I read look dot json?", "Yes.", "See code block 1."])
         speaker.stop()
     }
 

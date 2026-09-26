@@ -9,8 +9,9 @@ import Foundation
 /// markers and a link's address are gone before anything here sees the text, and a link is its
 /// words. What is here is what the parse leaves that a voice cannot read:
 ///
-/// - A fenced or indented code block is "A code block.", or "A swift code block." with its
-///   language: a voice reading code out is noise.
+/// - A fenced or indented code block is "See code block N.", N its number in the reply, which is
+///   the caption the transcript draws over it (`Markdown.Block.codeNumber`): a voice reading
+///   code out is noise, and the number is how the listener finds the block on the screen.
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
 /// - A rule is nothing.
@@ -45,8 +46,8 @@ enum Speakable {
             }
             finishTable()
             switch block.kind {
-            case .code(let language):
-                lines.append(codeBlock(language))
+            case .code:
+                lines.append(block.codeNumber.map { "See code block \($0)." } ?? "See the code block.")
             case .rule:
                 continue
             case .paragraph, .heading, .item:
@@ -55,14 +56,6 @@ enum Speakable {
         }
         finishTable()
         return lines.filter { !$0.allSatisfy(\.isWhitespace) }.joined(separator: "\n")
-    }
-
-    private static func codeBlock(_ language: String?) -> String {
-        guard let language = language?.trimmingCharacters(in: .whitespaces), !language.isEmpty else {
-            return "A code block."
-        }
-        let article = language.first.map { "aeiouAEIOU".contains($0) } == true ? "An" : "A"
-        return "\(article) \(language) code block."
     }
 
     /// A run of what could be a path or a file name: an optional leading `/` or `~/`, then names

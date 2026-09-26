@@ -73,12 +73,16 @@ final class SpeakableTests: XCTestCase {
         ])
     }
 
-    func testACodeBlockIsNamedNotRead() {
+    /// A code block is its number in the reply, the caption the transcript draws over it, and
+    /// never its language or its code.
+    func testACodeBlockIsReferredToByItsNumber() {
         check([
-            ("```swift\nlet x = look.json\n```", "A swift code block."),
-            ("```\nplain\n```", "A code block."),
-            ("```objc\n[x y];\n```", "An objc code block."),
-            ("Here:\n\n```sh\nls /tmp\n```\n\nDone.", "Here:\nA sh code block.\nDone."),
+            ("```swift\nlet x = look.json\n```", "See code block 1."),
+            ("```\nplain\n```", "See code block 1."),
+            ("Here:\n\n```sh\nls /tmp\n```\n\nDone.", "Here:\nSee code block 1.\nDone."),
+            ("First:\n\n```swift\na\n```\n\nthen:\n\n```\nb\n```\n\n- and\n\n  ```py\n  c\n  ```",
+             "First:\nSee code block 1.\nthen:\nSee code block 2.\nand\nSee code block 3."),
+            ("> ```\n> quoted\n> ```\n\n```\nafter\n```", "See code block 1.\nSee code block 2."),
         ])
     }
 

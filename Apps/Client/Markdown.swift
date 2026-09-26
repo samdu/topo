@@ -31,6 +31,10 @@ enum Markdown {
         /// a paragraph of its cells' words; this is what says it was one, for the voice
         /// (`Speakable`), which does not read a table out cell by cell.
         var row: TableRow? = nil
+        /// A code block's number in the reply, from 1 in the order they are written, nil for any
+        /// other block. The transcript draws it as the block's caption and the voice says it in
+        /// the block's place, so the two always name the same block.
+        var codeNumber: Int? = nil
     }
 
     struct TableRow: Equatable {
@@ -88,6 +92,8 @@ enum Markdown {
         var blocks: [Block] = []
         /// The list items whose marker has been drawn, so a second paragraph of one draws none.
         var marked: Set<Int> = []
+        /// The code blocks so far, which numbers the next.
+        var codeBlocks = 0
         /// The table row being gathered, and its cells so far.
         var row: (identity: Int, depth: Int, quote: Int, outside: Int, text: AttributedString,
                   table: TableRow?)?
@@ -144,7 +150,10 @@ enum Markdown {
             case .codeBlock(let language):
                 var code = String(text.characters)
                 if code.hasSuffix("\n") { code.removeLast() }
-                blocks.append(block(.code(language: language), AttributedString(code)))
+                var fence = block(.code(language: language), AttributedString(code))
+                codeBlocks += 1
+                fence.codeNumber = codeBlocks
+                blocks.append(fence)
             case .thematicBreak:
                 blocks.append(block(.rule, AttributedString()))
             default:

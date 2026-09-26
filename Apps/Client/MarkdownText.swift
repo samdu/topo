@@ -89,7 +89,7 @@ struct MarkdownText: View {
                 words(block.text, font: look.transcript.bodyFont, ink: ink(block))
             }
         case .code:
-            code(String(block.text.characters))
+            code(String(block.text.characters), number: block.codeNumber)
         case .rule:
             Rectangle()
                 .fill(look.markdown.marker)
@@ -115,10 +115,26 @@ struct MarkdownText: View {
             .mascotLines(bare)
     }
 
-    /// A fenced block in its own enclosure, scrolled sideways or wrapped as the look says. The
-    /// enclosure is drawn, so it is what Topo stands clear of, whole.
+    /// A fenced block in its own enclosure, scrolled sideways or wrapped as the look says, under
+    /// its number in the reply at its trailing edge, in the type and ink of a turn's time. The
+    /// number is what the voice says in the block's place ("See code block 2."), so a listener
+    /// can find the block it means.
+    private func code(_ text: String, number: Int?) -> some View {
+        VStack(alignment: .trailing, spacing: look.transcript.captionSpacing) {
+            if let number {
+                Text("\(number)")
+                    .font(look.transcript.labelFont)
+                    .foregroundStyle(look.transcript.caption)
+                    .mascotLines(bare)
+                    .accessibilityLabel("Code block \(number)")
+            }
+            enclosed(text)
+        }
+    }
+
+    /// The block's enclosure. It is drawn, so it is what Topo stands clear of, whole.
     @ViewBuilder
-    private func code(_ text: String) -> some View {
+    private func enclosed(_ text: String) -> some View {
         let words = Text(text)
             .font(look.markdown.codeFont.monospaced())
             .foregroundStyle(look.markdown.codeInk)
