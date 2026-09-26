@@ -823,4 +823,19 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.moves, moved + 1, "a place worth the glide was not gone to")
         XCTAssertEqual(roam.picture, roam.decision?.choice?.frame)
     }
+
+    /// A decision says why a roaming Topo stands where he stands; placed on the glass, nothing
+    /// does, and the last one made while he roamed is not kept.
+    func testAPlacedTopoKeepsNoDecision() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        XCTAssertNotNil(roam.decision)
+        var glass = Self.settings
+        glass.placement = .glass
+        roam.use(glass)
+        var time = start
+        while roam.needsTime, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "glass")
+        XCTAssertNil(roam.decision, "a decision made roaming outlived the move to the glass")
+    }
 }

@@ -764,7 +764,7 @@ struct MascotRoam: Equatable, Sendable {
     /// Where he is going, or standing.
     private(set) var roost: MascotRoost = .none
     /// The last decision where to stand (`MascotRoost.decide`), which a debug build shows; nil
-    /// before one, and while the transcript is still to be read.
+    /// before one, while the transcript is still to be read, and while the look places him.
     private(set) var decision: MascotRoost.Decision?
     /// How many decisions he has made, for the trace.
     private(set) var decisions = 0
@@ -1171,6 +1171,8 @@ struct MascotRoam: Equatable, Sendable {
         riding = false
         heading = 0
         covered = false
+        // Placed, he stands where the look puts him and no decision says why.
+        decision = nil
         guard let field, let target = perchFrame(field) else {
             roost = .none
             position = nil
