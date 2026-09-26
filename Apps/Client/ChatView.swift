@@ -423,7 +423,8 @@ struct ChatView: View {
 
     /// The glass under the transcript. What the microphone is doing is four facts read off
     /// `VoiceInput` here, with whether Topo is speaking, and drawn there; the press is handed
-    /// straight back to `micPressed`, which is the whole of this screen's part in a session. Its own top edge is read off its
+    /// straight back to `MicPress.gesture` with what the button showed as it landed, which is the
+    /// whole of this screen's part in a session. Its own top edge is read off its
     /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
     /// the edge the presence is read against.
     @ViewBuilder private func composer(keyboard: Bool) -> some View {
@@ -590,13 +591,16 @@ final class MicPress {
     /// every press, so a release the gesture never delivered strands nothing.
     private var stopping = false
 
-    /// The gesture's own call. The press is taken for what the button shows when the task runs,
-    /// as the chat has always read it.
+    /// The gesture's own call, as the finger lands or lifts. What the button is showing is read
+    /// here, synchronously, and the task acts on that: read when the task runs instead, a press on
+    /// Stop that lands as the reply ends would open the microphone, and a press on the microphone
+    /// as a reply begins would be taken for a stop.
     @discardableResult
-    func gesture(_ down: Bool, showing: @escaping () -> Composer.MicState, speaker: Speaker, voice: VoiceInput,
+    func gesture(_ down: Bool, showing: () -> Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never> {
-        Task {
-            guard let heard = await handle(down, mic: showing(), speaker: speaker, voice: voice) else { return }
+        let mic = showing()
+        return Task {
+            guard let heard = await handle(down, mic: mic, speaker: speaker, voice: voice) else { return }
             await send(heard)
         }
     }
