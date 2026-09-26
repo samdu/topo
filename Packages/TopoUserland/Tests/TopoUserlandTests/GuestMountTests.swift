@@ -82,4 +82,19 @@ final class GuestMountTests: XCTestCase {
         let reached = try await sh("cat \(point)/which; grep -c ' \(point) ' /proc/mounts")
         XCTAssertEqual(reached.output, "0\n", "the host directory is reachable at \(point)")
     }
+
+    /// What the refusal leaves alone: the guest's own filesystems, which reach nothing of the host,
+    /// are still its to mount.
+    func testTheGuestStillMountsItsOwnFilesystems() async throws {
+        let tmp = "/mnt/tmp-\(UUID().uuidString.prefix(8))"
+        let tmpfs = try await sh("mkdir -p \(tmp) && mount -t tmpfs tmpfs \(tmp) && echo kept > \(tmp)/f && cat \(tmp)/f "
+            + "&& grep -c ' \(tmp) ' /proc/mounts")
+        XCTAssertEqual(tmpfs.status, 0, tmpfs.errors)
+        XCTAssertEqual(tmpfs.output, "kept\n1\n")
+
+        let proc = "/mnt/proc-\(UUID().uuidString.prefix(8))"
+        let procfs = try await sh("mkdir -p \(proc) && mount -t proc proc \(proc) && [ -e \(proc)/self ] && echo proc")
+        XCTAssertEqual(procfs.status, 0, procfs.errors)
+        XCTAssertEqual(procfs.output, "proc\n")
+    }
 }
