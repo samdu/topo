@@ -27,6 +27,17 @@ enum Markdown {
         /// and nothing of the block's own markup. A link is its words and goes nowhere. Empty for
         /// a rule.
         var text: AttributedString
+        /// The table a row is one of, nil for a block that is not a table row. A row is drawn as
+        /// a paragraph of its cells' words; this is what says it was one, for the voice
+        /// (`Speakable`), which does not read a table out cell by cell.
+        var row: TableRow? = nil
+    }
+
+    struct TableRow: Equatable {
+        /// The table's identity in the parse, the same for every row of one table.
+        var table: Int
+        /// The header row, whose cells name the columns rather than holding a record.
+        var header: Bool
     }
 
     enum Kind: Equatable {
@@ -78,12 +89,13 @@ enum Markdown {
         /// The list items whose marker has been drawn, so a second paragraph of one draws none.
         var marked: Set<Int> = []
         /// The table row being gathered, and its cells so far.
-        var row: (identity: Int, depth: Int, quote: Int, outside: Int, text: AttributedString)?
+        var row: (identity: Int, depth: Int, quote: Int, outside: Int, text: AttributedString,
+                  table: TableRow?)?
 
         func finishRow() {
             if let done = row {
                 blocks.append(Block(kind: .paragraph, depth: done.depth, quote: done.quote,
-                                    listsOutside: done.outside, text: done.text))
+                                    listsOutside: done.outside, text: done.text, row: done.table))
             }
             row = nil
         }
@@ -110,7 +122,12 @@ enum Markdown {
                 let rowIdentity = components[1].identity
                 if row?.identity != rowIdentity {
                     finishRow()
-                    row = (rowIdentity, depth, quote, outside, text)
+                    // A cell's components are the cell, its row, then its table.
+                    let table = components.count > 2
+                        ? TableRow(table: components[2].identity,
+                                   header: components[1].kind == .tableHeaderRow)
+                        : nil
+                    row = (rowIdentity, depth, quote, outside, text, table)
                 } else {
                     row?.text += AttributedString(Self.cellSeparator)
                     row?.text += text

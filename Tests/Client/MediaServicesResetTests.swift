@@ -211,6 +211,14 @@ struct ScriptedVoice: VoiceEngine {
     }
 }
 
+/// The sentences a voice was asked to synthesise, in order.
+final class Heard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var kept: [String] = []
+    var sentences: [String] { lock.withLock { kept } }
+    func append(_ sentence: String) { lock.withLock { kept.append(sentence) } }
+}
+
 /// A voice whose second frame waits for the test to let it go, and which records having yielded
 /// it: the frame a media services reset lands in the middle of. Breaking out of the stream
 /// cancels the task behind it, which is what the sleep returns on, so the held frame is always
@@ -726,6 +734,24 @@ final class MediaServicesResetTests: XCTestCase {
         await drain()
         XCTAssertEqual(CapturingPlayerNode.scheduled.count, 1, "the held frame reached no player")
         XCTAssertEqual(seams.engines.count, 1, "and built no queue to reach one on")
+    }
+
+    /// The voice is handed the reply as it is said (`Speakable`), not the markdown the transcript
+    /// draws: the file name read with its dot, the emphasis gone.
+    func testTheVoiceIsHandedTheReplyAsItIsSaid() async {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let heard = Heard()
+        let voice = ScriptedVoice(frames: { sentence in
+            heard.append(sentence)
+            return [toneFrame(0.5)]
+        })
+        let speaker = await self.speaker(seams, audio, center, engine: voice)
+        speaker.speak("Should I read `look.json`?\n\n**Yes.**")
+        await settle("both sentences to reach the voice") { heard.sentences.count == 2 }
+        XCTAssertEqual(heard.sentences, ["Should I read look dot json?", "Yes."])
+        speaker.stop()
     }
 
     func testAReplyWhoseSessionWillNotActivateBuildsNothing() async {
