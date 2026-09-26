@@ -116,8 +116,8 @@ final class GuestVaultMountTests: XCTestCase {
         let closed = await lines.next()
         XCTAssertEqual(closed, "closed")
         XCTAssertEqual(read, "a\nb\n", "the read was let in before the guest's write closed")
-        let termination = await writing.terminate(within: .seconds(5))
-        XCTAssertTrue(termination.confirmed, "\(termination)")
+        _ = await writing.terminate(within: .seconds(5))
+        await eventually("the writer ended") { writing.hasExited }
     }
 
     /// A writer that never lets go, or a file that never comes down, is a failed read at the bound
@@ -145,10 +145,14 @@ final class GuestVaultMountTests: XCTestCase {
         let cat = try await Guest.shared.spawn("/bin/cat", ["\(point)/note.md"])
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(cat.hasExited)
+        // Judged by the parked task itself rather than by the termination's confirmation, which
+        // counts every task in the shared guest, a task an earlier suite left behind included.
         let start = ContinuousClock.now
-        let termination = await cat.terminate(within: .seconds(7))
-        XCTAssertTrue(termination.confirmed, "\(termination)")
-        XCTAssertLessThan(ContinuousClock.now - start, .seconds(7))
+        let ending = Task { await cat.terminate(within: .seconds(7)) }
+        await eventually("the parked task was ended by its SIGKILL", within: 2) { cat.hasExited }
+        XCTAssertEqual(cat.exitStatus, 128 + 9)
+        XCTAssertLessThan(ContinuousClock.now - start, .seconds(2))
+        _ = await ending.value
         var lines = cat.lines.makeAsyncIterator()
         let printed = await lines.next()
         XCTAssertNil(printed, "the parked cat printed the note")
@@ -230,8 +234,8 @@ final class GuestVaultMountTests: XCTestCase {
         let still = try await sh("cat \(point)/note.md")
         XCTAssertEqual(still.output, "held\n")
 
-        let termination = await holder.terminate(within: .seconds(5))
-        XCTAssertTrue(termination.confirmed, "\(termination)")
+        _ = await holder.terminate(within: .seconds(5))
+        await eventually("the holder ended") { holder.hasExited }
         try Guest.shared.unmount(point)
         points.removeAll { $0 == point }
     }
