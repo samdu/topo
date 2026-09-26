@@ -11,7 +11,7 @@ What is built, what comes next and in what order, what is parked, and the thread
 - The transcript bridge: the guest is the only brain, the ledger lines its conversation up with the log across crashes, and an unfinished turn is asked again by hand.
 - Voice: push to talk on Parakeet, replies read on Pocket TTS, both downloaded by the app and held behind the lock.
 - The memory as an Obsidian vault: local or in iCloud Drive, mirrored both ways under file coordination, moved between homes with one commit point.
-- The look as a document (`look.json`), the glass composer that goes short under the keyboard, the badge, and the transcript drawn by phone, watch and television.
+- The look as a document (`look.json`), the glass composer that goes short under the keyboard, the badge, and the transcript drawn by phone, watch and television, Topo's turns as markdown.
 - Topo on the glass: the pixel engine, poses from the guest's events, a calm idle with yoga, facing by side, roaming the chat without juddering under a turn.
 - The model picker, Tuning (placement and pin in every build, sliders in debug), diagnostics, About with the GPL text and the source commit.
 - Womble for iOS 12 devices, viewer only.
@@ -21,11 +21,10 @@ What is built, what comes next and in what order, what is parked, and the thread
 ## Next, in order
 
 1. **Topo's placement, #165.** Roam, glass or pinned by a long-press drag. Reviewed, device-checked, CI green; waits only on Sam's word to merge, since Codex is out until 27 September and automerge reads the red reviewer job.
-2. **Markdown in the transcript, #164.** Topo's replies carry fenced code and lists that draw as plain text today; this is the first thing a person notices after the mascot, and it touches nothing but `TranscriptView`, so it is cheap while the transcript is fresh in mind.
-3. **P5b: delete the Messages API.** `MessagesAPI`, `MessagesAPIBrain` and the model call in `TurnRunner` are compiled only for the suites; removing them closes #129 and takes a whole class of "falls back to the API" defects off the review's list. Before P6, because P6 adds a mount the bridge suites will need to cover and they should not still be running over two brains.
-4. **P6: the memory as a mount.** The vault folder into the guest, eviction handled through the fork's file coordination, the mirror untouched. This is what makes the mind able to read and write its own notes, and it is the last hole before P7 adds any more.
-5. **P7: the phone's own tools.** A loopback tool service and a small `topo` CLI in the guest (calendar, reminders, contacts, location, notify), found by a skill rather than paid for per turn. After P6, since notes are the tool everything else writes into.
-6. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`). Last because each step before it changes what review sees.
+2. **P5b: delete the Messages API.** `MessagesAPI`, `MessagesAPIBrain` and the model call in `TurnRunner` are compiled only for the suites; removing them closes #129 and takes a whole class of "falls back to the API" defects off the review's list. Before P6, because P6 adds a mount the bridge suites will need to cover and they should not still be running over two brains.
+3. **P6: the memory as a mount.** The vault folder into the guest, eviction handled through the fork's file coordination, the mirror untouched. This is what makes the mind able to read and write its own notes, and it is the last hole before P7 adds any more.
+4. **P7: the phone's own tools.** A loopback tool service and a small `topo` CLI in the guest (calendar, reminders, contacts, location, notify), found by a skill rather than paid for per turn. After P6, since notes are the tool everything else writes into.
+5. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`). Last because each step before it changes what review sees.
 
 ## Parked, and why
 

@@ -82,6 +82,28 @@ enum PreviewTurns {
                 + "scattered away, leaving the reds and oranges that travel straighter.")
         })
 
+    /// A reply that is more than a paragraph: a heading, inline code and emphasis, a list with a
+    /// nested item, a quote, and a fence with a line longer than any column.
+    static let markdown: [Turn] = make([
+        (.person, "How do I read the log from the phone?"),
+        (.assistant, """
+        ## Reading the log
+
+        Call `TurnLog.read(device:after:)` with the **last sequence** you saw, and *only* the newer turns come back.
+
+        - It reads the zone's change feed
+        - Then it filters by device:
+          1. its own turns
+          2. everyone else's
+
+        > The log is append-only: nothing you read changes under you.
+
+        ```swift
+        let turns = try await log.read(device: phone, after: lastSequence) // every turn after the last one this phone saw
+        ```
+        """),
+    ])
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?
@@ -178,17 +200,29 @@ struct ChatCanvas: View {
         .background(.thinMaterial)
     }
 }
+
+#Preview("Markdown") {
+    TranscriptView(turns: PreviewTurns.markdown)
+}
 #endif
 
 #if os(watchOS)
 #Preview("Transcript") {
     TranscriptView(turns: Array(PreviewTurns.long.suffix(4)))
 }
+
+#Preview("Markdown") {
+    TranscriptView(turns: PreviewTurns.markdown)
+}
 #endif
 
 #if os(tvOS)
 #Preview("Transcript") {
     TranscriptView(turns: PreviewTurns.long)
+}
+
+#Preview("Markdown") {
+    TranscriptView(turns: PreviewTurns.markdown)
 }
 #endif
 #endif
