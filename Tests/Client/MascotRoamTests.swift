@@ -838,4 +838,40 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.roost.name, "glass")
         XCTAssertNil(roam.decision, "a decision made roaming outlived the move to the glass")
     }
+
+    /// A glide to a place over words keeps going while that place is still a place at all
+    /// (`MascotRoost.admits`), however the words round it change; once the glass rises onto it,
+    /// it is decided again at once.
+    func testAGlideToAFallbackKeepsGoingWhileItsDestinationIsAPlace() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        let holed = Self.rows(holes: [(row: 2, x: 30, width: 40)])
+        roam.observe(holed, at: start + Self.frame)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide to the less covered place")
+        let destination = CGRect(origin: move.to, size: Self.size)
+        XCTAssertFalse(MascotRoost.holds(holed, frame: destination, clearance: 8, reach: Self.reach))
+        let decided = roam.decisions, moved = roam.moves
+        time += Self.frame
+        roam.advance(to: time)
+        // A row far from where he is going loses a word: the destination is still a place.
+        let changed = Self.rows(holes: [(row: 2, x: 30, width: 40), (row: 14, x: 300, width: 20)])
+        roam.observe(changed, at: time)
+        XCTAssertEqual(roam.decisions, decided, "a glide to a place that still is one was decided again")
+        XCTAssertEqual(roam.moves, moved)
+        XCTAssertEqual(roam.move?.to, move.to)
+        // The keyboard rises and the glass with it, onto where he is going.
+        let risen = MascotField(visible: changed.visible, obstacles: changed.obstacles,
+                                pane: CGRect(x: 41, y: 100, width: 320, height: 60),
+                                well: CGRect(x: 165, y: 104, width: 52, height: 52),
+                                keyboard: CGRect(x: 0, y: 170, width: 402, height: 500))
+        XCTAssertFalse(MascotRoost.admits(risen, frame: destination, clearance: 8, reach: Self.reach))
+        time += Self.frame
+        roam.observe(risen, at: time)
+        XCTAssertEqual(roam.decisions, decided + 1, "the glass rose onto where he was going and nothing was decided")
+        let now = try XCTUnwrap(roam.move.map { CGRect(origin: $0.to, size: Self.size) } ?? roam.picture)
+        XCTAssertTrue(MascotRoost.admits(risen, frame: now, clearance: 8, reach: Self.reach), "\(now) is no place")
+        XCTAssertFalse(roam.hidden)
+    }
 }
