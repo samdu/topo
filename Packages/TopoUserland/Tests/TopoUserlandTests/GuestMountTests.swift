@@ -3,7 +3,9 @@ import TopoUserland
 
 /// The two calls Claude Code is reached through, in the booted guest: a bind mount that is left
 /// alone when asked for again and refuses a second source at its point, and a link that is left
-/// alone, replaced when it points elsewhere, and never put over something that is not a link.
+/// alone, replaced when it points elsewhere, and never put over something that is not a link. And
+/// the guest's own `mount(2)`, which never reaches the host
+/// (`patches/ish/0004-guest-mount-real-refused.patch`).
 final class GuestMountTests: XCTestCase {
     private let fm = FileManager.default
     private var hosts: [URL] = []
@@ -64,5 +66,19 @@ final class GuestMountTests: XCTestCase {
         }
         let kept = try await sh("[ -L \(file) ] && echo link; cat \(file)")
         XCTAssertEqual(kept.output, "keep\n", "the file at the path was replaced")
+    }
+
+    /// The guest runs as root, so a realfs mount it could make for itself would be a bind mount of
+    /// any host path the app's sandbox can open. What it reaches is what the app mounts, and only
+    /// that.
+    func testTheGuestCannotMountTheHost() async throws {
+        let outside = try host("outside")
+        let point = "/mnt/host-\(UUID().uuidString.prefix(8))"
+        let attempt = try await sh("mkdir -p \(point) && mount -t real '\(outside.path)' \(point)")
+        XCTAssertNotEqual(attempt.status, 0, "the guest mounted a host directory: \(attempt.output)")
+        XCTAssertTrue(attempt.errors.contains("Operation not permitted"),
+                      "the mount was not refused as not permitted: \(attempt.errors)")
+        let reached = try await sh("cat \(point)/which; grep -c ' \(point) ' /proc/mounts")
+        XCTAssertEqual(reached.output, "0\n", "the host directory is reachable at \(point)")
     }
 }
