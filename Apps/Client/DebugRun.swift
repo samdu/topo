@@ -50,7 +50,8 @@ enum DebugRun {
     /// `LookDocument` field by field, so a UI suite can put the screen at the ends of the ranges
     /// the document accepts with no vault behind it. Nil when the variable is absent, which is
     /// every ordinary run.
-    static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
+    static let lookReading: LookDocument.Reading? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0) }
+    static let look: Look? = lookReading?.look
 
     #if os(iOS)
     /// `TOPO_DEBUG_TUNING=<look.json>`: this device's override (`Tuning`) set to that document at

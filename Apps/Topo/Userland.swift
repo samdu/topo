@@ -399,6 +399,17 @@ extension DebugRun {
     /// runs, with the base URL and no token. The only path in the app that boots the guest.
     /// Nothing at all when the variable is absent. `tokens` is the app's one provider over the
     /// ordinary tokens.
+    /// What the guest's command wrote and how it exited, as the userland run prints them, every
+    /// credential redacted: `env` there prints the guest's token and the tool service's.
+    static func guestLines(output: String, errors: String, status: Int32) -> [String] {
+        let output = redacted(output), errors = redacted(errors)
+        var lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.last == "" { lines.removeLast() }
+        return lines.map { "guest: \($0)" }
+            + errors.split(separator: "\n").map { "guest stderr: \($0)" }
+            + ["guest exit: \(status)"]
+    }
+
     @MainActor
     static func userland(_ userland: Userland = .shared, tokens: StoredTokenProvider,
                          environment: [String: String] = ProcessInfo.processInfo.environment) async {
@@ -432,15 +443,7 @@ extension DebugRun {
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
             let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment)
-            var lines = exit.output.split(separator: "\n", omittingEmptySubsequences: false)
-            if lines.last == "" { lines.removeLast() }
-            for line in lines {
-                say("guest: \(line)")
-            }
-            for line in exit.errors.split(separator: "\n") {
-                say("guest stderr: \(line)")
-            }
-            say("guest exit: \(exit.status)")
+            guestLines(output: exit.output, errors: exit.errors, status: exit.status).forEach(say)
         } catch {
             say("userland error: \(error)")
         }

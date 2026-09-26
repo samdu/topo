@@ -70,9 +70,9 @@ func exchange(port: UInt16, _ head: String, body: Data = Data(), host: NWEndpoin
 /// A well-formed call, with whatever headers are given in place of the usual ones.
 func call(port: UInt16, token: String, _ arguments: [String], extra: [String] = [],
           host: String? = nil, method: String = "POST", path: String = ToolService.path) -> (String, Data) {
-    let body = ToolRequest.body(arguments)
+    let body = ToolRequest.body(token: token, arguments)
     var head = "\(method) \(path) HTTP/1.1\r\nHost: \(host ?? "127.0.0.1:\(port)")\r\n"
-    head += "Authorization: Bearer \(token)\r\nContent-Length: \(body.count)\r\n"
+    head += "Content-Length: \(body.count)\r\n"
     for line in extra { head += line + "\r\n" }
     head += "\r\n"
     return (head, body)

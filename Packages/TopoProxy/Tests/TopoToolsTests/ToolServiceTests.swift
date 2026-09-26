@@ -25,15 +25,20 @@ import TopoProxy
         let (service, port, _) = try await startedService([tool])
         defer { Task { await service.stop() } }
         let token = await service.token
-        let body = ToolRequest.body(["echo", "x"])
-        let none = "POST /run HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(body.count)\r\n\r\n"
-        #expect(try await exchange(port: port, none, body: body).status == 401)
+        // No token line at all, an empty one, and the token in a header, where `wget` would have
+        // to be given it as an argument: none of them is this service's token.
+        for body in [Data(), Data("\n".utf8), ToolRequest.body(token: "", ["echo", "x"])] {
+            let none = "POST /run HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(body.count)\r\n\r\n"
+            #expect(try await exchange(port: port, none, body: body).status == 401)
+        }
+        let header = call(port: port, token: "", ["echo", "x"], extra: ["Authorization: Bearer \(token)"])
+        #expect(try await exchange(port: port, header.0, body: header.1).status == 401)
         let wrong = call(port: port, token: String(token.reversed()), ["echo", "x"])
         #expect(try await exchange(port: port, wrong.0, body: wrong.1).status == 401)
         let prefix = call(port: port, token: String(token.dropLast()), ["echo", "x"])
         #expect(try await exchange(port: port, prefix.0, body: prefix.1).status == 401)
-        let twice = call(port: port, token: token, ["echo", "x"], extra: ["Authorization: Bearer \(token)"])
-        #expect(try await exchange(port: port, twice.0, body: twice.1).status == 401)
+        let longer = call(port: port, token: token + "0", ["echo", "x"])
+        #expect(try await exchange(port: port, longer.0, body: longer.1).status == 401)
         #expect(tool.calls.isEmpty)
     }
 
@@ -83,7 +88,7 @@ import TopoProxy
         for _ in 0..<200 where logs.lines.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
         #expect(logs.lines.count == 3)
         for line in logs.lines {
-            for value in [token, secret, said, "Bearer"] {
+            for value in [token, secret, said] {
                 #expect(!line.contains(value), "logged \(value): \(line)")
             }
         }
@@ -109,6 +114,21 @@ import TopoProxy
         #expect(ContinuousClock.now - started < .seconds(5))
     }
 
+    /// Codex on #189: the bound runs from the connection's accept, so a client that sends a head
+    /// promising a body and then one byte of it is answered or closed at the bound, not held.
+    @Test func aClientThatNeverFinishesItsBodyIsLetGoAtTheBound() async throws {
+        let tool = ScriptedTool()
+        let (service, port, _) = try await startedService([tool], bound: .milliseconds(300))
+        defer { Task { await service.stop() } }
+        let token = await service.token
+        let (head, body) = call(port: port, token: token, ["echo", "x"])
+        let started = ContinuousClock.now
+        let answer = try await exchange(port: port, head, body: body.prefix(1))
+        #expect(ContinuousClock.now - started < .seconds(3), "held for \(ContinuousClock.now - started)")
+        #expect(answer.status != 200)
+        #expect(tool.calls.isEmpty)
+    }
+
     @Test func helpListsEveryToolAndAnUnknownOneIsAUsageError() async throws {
         let (service, port, _) = try await startedService([ScriptedTool(name: "echo"), ScriptedTool(name: "look")])
         defer { Task { await service.stop() } }
@@ -132,12 +152,13 @@ import TopoProxy
         let (service, port, _) = try await startedService([tool])
         defer { Task { await service.stop() } }
         let token = await service.token
-        for body in [Data("ZWNobw==".utf8), Data("echo\n".utf8), Data("/w==\n".utf8)] {
-            let head = "POST /run HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nAuthorization: Bearer \(token)\r\nContent-Length: \(body.count)\r\n\r\n"
+        for arguments in ["ZWNobw==", "echo\n", "/w==\n"] {
+            let body = Data((token + "\n" + arguments).utf8)
+            let head = "POST /run HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(body.count)\r\n\r\n"
             #expect(try await exchange(port: port, head, body: body).status == 400)
         }
         let large = Data(repeating: 0x61, count: ToolService.bodyLimit + 1)
-        let head = "POST /run HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nAuthorization: Bearer \(token)\r\nContent-Length: \(large.count)\r\n\r\n"
+        let head = "POST /run HTTP/1.1\r\nHost: 127.0.0.1:\(port)\r\nContent-Length: \(large.count)\r\n\r\n"
         #expect(try await exchange(port: port, head).status == 413)
         #expect(tool.calls.isEmpty)
     }
@@ -153,8 +174,11 @@ import TopoProxy
     /// Review focus 13.
     @Test func argumentsRoundTripWhateverTheyHoldIncludingEmptyOnes() throws {
         for arguments in [[], [""], ["", ""], ["a b", "c\nd", "ü", "$HOME", "'\"", ""], ["look", "set", "transcript.replyTrailingInset", "24"]] {
-            #expect(try ToolRequest.arguments(from: ToolRequest.body(arguments)) == arguments)
+            let split = try #require(ToolRequest.split(ToolRequest.body(token: "t0k", arguments)))
+            #expect(split.token == "t0k")
+            #expect(try ToolRequest.arguments(from: split.arguments) == arguments)
         }
+        #expect(ToolRequest.split(Data("no newline".utf8)) == nil)
         #expect(throws: ToolRequest.Refusal.unterminated) { try ToolRequest.arguments(from: Data("YQ==".utf8)) }
         #expect(throws: ToolRequest.Refusal.notBase64) { try ToolRequest.arguments(from: Data("a b\n".utf8)) }
         #expect(throws: ToolRequest.Refusal.notUTF8) { try ToolRequest.arguments(from: Data("/w==\n".utf8)) }

@@ -187,18 +187,37 @@ final class Tuning {
         return nil
     }
 
+    /// What taking back one path came to.
+    enum Taken: Equatable {
+        case reset
+        /// Nothing on this device had set it.
+        case unset
+        /// Not a field or a part the reader knows, or inside a compound field, which is taken back
+        /// whole: nothing changed, and this says why.
+        case refused(String)
+    }
+
     /// The mind takes back the fields at `paths`, whoever set them on this device; the vault's look
-    /// is worn there again. The answer is the paths nothing on this device had set.
-    func reset(_ paths: [[String]]) -> [[String]] {
-        var unset: [[String]] = []
-        for path in paths {
-            let before = document
-            mind = Self.removing(path, from: mind)
-            clearSlid(path)
-            if document == before { unset.append(path) }
+    /// is worn there again. A path is a whole field or a part, as the document's reader knows
+    /// them (`LookDocument.place(of:)`): taking one key out of a compound would leave a value the
+    /// reader refuses.
+    func reset(_ paths: [[String]]) -> [Taken] {
+        let taken = paths.map { path -> Taken in
+            let name = path.joined(separator: ".")
+            switch LookDocument.place(of: path) {
+            case .inside(let field):
+                return .refused("\(name) is part of \(field), which is set and taken back whole: reset \(field)")
+            case .unknown:
+                return .refused("\(name) is not a field of the look")
+            case .field, .part:
+                let before = document
+                mind = Self.removing(path, from: mind)
+                clearSlid(path)
+                return document == before ? .unset : .reset
+            }
         }
         save()
-        return unset
+        return taken
     }
 
     /// Whether the fields at `path` are set on this device, by anyone.

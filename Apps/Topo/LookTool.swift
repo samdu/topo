@@ -7,7 +7,7 @@ import TopoTools
 /// whatever `LookDocument` reads, judged by that reader before anything is kept.
 struct LookTool: Tool {
     /// The look under this device's override: the vault's (in a debug build the launch's, where
-    /// one was given), and what the vault's `look.json` said about itself.
+    /// one was given), and the reading that made it, which knows which fields it set.
     let vault: @MainActor @Sendable () -> (look: Look, reading: LookDocument.Reading)
     var tuning: @MainActor @Sendable () -> Tuning = { .shared }
 
@@ -21,7 +21,8 @@ struct LookTool: Tool {
                                                 set fields on this phone, at once; each is judged by the look's own
                                                 reader and one it refuses changes nothing and says why
     topo look reset [<part.field> …]            take those fields back (all of them with none named): the vault's
-                                                look is worn there again
+                                                look is worn there again. A field is taken back whole: mascot.pin,
+                                                not mascot.pin.x
 
     A value is JSON where it parses as JSON (24, 0.5, ["#101010", "#F0F0F0"], {"x": 0.5, "y": 0.2})
     and a plain word otherwise (glass, roam, #1E8C9E). Lengths are points.
@@ -62,7 +63,7 @@ struct LookTool: Tool {
         let (look, reading) = vault()
         switch arguments.first {
         case nil, "show":
-            return .ok(show(worn: tuning.worn(over: look), under: look, tuning: tuning, reading: reading))
+            return .ok(show(worn: tuning.worn(over: look), tuning: tuning, reading: reading))
         case "set":
             let pairs = Array(arguments.dropFirst())
             guard !pairs.isEmpty, pairs.count.isMultiple(of: 2) else {
@@ -91,23 +92,29 @@ struct LookTool: Tool {
                 return .ok(had ? "reset: everything this phone had set; the vault's look is worn again\n"
                                : "reset: nothing was set on this phone\n")
             }
-            let unset = Set(tuning.reset(named.map(Self.path)).map { $0.joined(separator: ".") })
-            let lines = named.map { unset.contains($0) ? "unchanged: \($0) was not set on this phone" : "reset: \($0)" }
-            return .ok(lines.joined(separator: "\n") + "\n")
+            let taken = tuning.reset(named.map(Self.path))
+            var refused = false
+            let lines = zip(named, taken).map { name, taken in
+                switch taken {
+                case .reset: return "reset: \(name)"
+                case .unset: return "unchanged: \(name) was not set on this phone"
+                case .refused(let why): refused = true; return "refused: \(why)"
+                }
+            }
+            return ToolReply(status: refused ? ToolReply.refused : ToolReply.ok, text: lines.joined(separator: "\n") + "\n")
         case let other?:
             return .usage("topo look: no \(other)\n\n\(usage)\n")
         }
     }
 
     @MainActor
-    private func show(worn: Look, under vault: Look, tuning: Tuning, reading: LookDocument.Reading) -> String {
-        let compiled = Look()
+    private func show(worn: Look, tuning: Tuning, reading: LookDocument.Reading) -> String {
         var lines: [String] = []
         for field in Self.fields {
             let source: String
             if tuning.sets(Self.path(field.path)) {
                 source = "this phone"
-            } else if field.value(vault) != field.value(compiled) {
+            } else if reading.fields.contains(field.path) {
                 source = "look.json"
             } else {
                 source = "the compiled look"

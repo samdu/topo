@@ -41,13 +41,15 @@ public enum GuestTools {
     request="$(mktemp)" || exit 3
     response="$(mktemp)" || { rm -f "$request"; exit 3; }
     trap 'rm -f "$request" "$response"' EXIT
-    # One argument a line, each in base64, so whatever it holds arrives whole.
+    # The token first, in the body: printf is bash's own, so the token is in no process's
+    # arguments, where every process in the guest could read it. Then one argument a line, each
+    # in base64, so whatever it holds arrives whole.
+    printf '%s\n' "$TOPO_TOOLS_TOKEN" > "$request"
     for argument in "$@"; do
         printf '%s' "$argument" | base64 | tr -d '\n' >> "$request"
         printf '\n' >> "$request"
     done
     if ! failure="$(wget -q -T 100 -O "$response" \
-            --header "Authorization: Bearer $TOPO_TOOLS_TOKEN" \
             --header "Content-Type: text/plain" \
             --post-file "$request" "$TOPO_TOOLS_URL/run" 2>&1)"; then
         case "$failure" in

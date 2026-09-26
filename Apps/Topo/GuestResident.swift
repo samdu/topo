@@ -384,18 +384,26 @@ extension DebugRun {
     /// service's — and anything past
     /// 300 characters cut, since a result can be a whole file.
     static func toolResultLine(tool: String, isError: Bool, text: String) -> String {
-        var shown = text.trimmingCharacters(in: .newlines)
+        var shown = redacted(text.trimmingCharacters(in: .newlines))
+        shown = shown.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "\\n")
+        if shown.count > 300 { shown = String(shown.prefix(300)) + "…" }
+        return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
+    }
+
+    /// `text` with every credential a debug run could print hidden: an `sk-ant-` key, a `Bearer`
+    /// value, the guest's token variable and the tool service's. Everything the guest writes goes
+    /// through this before it is printed.
+    static func redacted(_ text: String) -> String {
+        var shown = text
         for (pattern, replacement) in [
             (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
             (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
             (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
-            (#"(TOPO_TOOLS_TOKEN=)\S+"#, "$1[redacted]"),
+            (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
         ] {
             shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
         }
-        shown = shown.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "\\n")
-        if shown.count > 300 { shown = String(shown.prefix(300)) + "…" }
-        return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
+        return shown
     }
 
     /// Waits until the app is in the foreground and the resident process is up.

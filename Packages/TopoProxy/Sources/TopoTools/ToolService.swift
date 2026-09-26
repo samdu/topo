@@ -10,17 +10,18 @@ import TopoProxy
 /// whose answer is `200 text/plain`: a first line `exit: <status>`, then what the tool said.
 ///
 /// Loopback is not private — any process on the device, and a web page open beside the app, can
-/// reach `127.0.0.1` — so every request carries `Authorization: Bearer <token>`, the token made
-/// once when the service is, handed to the guest only in the environment of the process the app
-/// starts (`environment`), and compared in constant time. A request is refused before any tool
-/// runs when it carries no such token, carries an `Origin` or a `Sec-Fetch-*` header (a browser's
-/// marks, and a browser has no business here), names a `Host` other than `127.0.0.1` at this port,
-/// or is not `POST /run`. One request per connection, then the connection closes.
+/// reach `127.0.0.1` — so every request's body starts with a token (`ToolRequest`), made once
+/// when the service is, handed to the guest only in the environment of the process the app starts
+/// (`environment`), and compared in constant time. A request is refused before any tool runs when
+/// it carries no such token, carries an `Origin` or a `Sec-Fetch-*` header (a browser's marks, and
+/// a browser has no business here), names a `Host` other than `127.0.0.1` at this port, or is not
+/// `POST /run`. One request per connection, then the connection closes.
 ///
-/// Every call is bounded (`bound`, 90 s: under the 120 s Claude Code's Bash tool gives a command
-/// by default) and answered at the bound with `ToolReply.timedOut` whether or not the tool has
-/// stopped. It logs each call's tool, status and time, and each refusal's reason, and never an
-/// argument, a header value or anything a tool said.
+/// Every connection is bounded (`bound`, 90 s: under the 120 s Claude Code's Bash tool gives a
+/// command by default) from the moment it is accepted: a request not read by then is answered 408
+/// and closed, and a call not answered by then is answered with `ToolReply.timedOut` whether or
+/// not the tool has stopped. It logs each call's tool, status and time, and each refusal's reason,
+/// and never an argument, a header value or anything a tool said.
 public actor ToolService {
     public typealias Log = @Sendable (String) -> Void
 
@@ -124,8 +125,9 @@ public actor ToolService {
         inbound.start(queue: queue)
         let gate = Gate(token: token, port: port)
         let table = table, bound = bound, log = log
+        let deadline = ContinuousClock.now + bound
         Task.detached {
-            await Self.serve(inbound, gate: gate, table: table, bound: bound, log: log)
+            await Self.serve(inbound, gate: gate, table: table, deadline: deadline, bound: bound, log: log)
             connection.cancel()
             await self.forget(id)
         }
@@ -135,18 +137,35 @@ public actor ToolService {
         connections[id] = nil
     }
 
-    /// One request on one connection: judged, run within the bound, answered.
-    private static func serve(_ inbound: Inbound, gate: Gate, table: ToolTable, bound: Duration, log: Log) async {
+    /// One request on one connection: read and run by `deadline`, judged, answered.
+    private static func serve(_ inbound: Inbound, gate: Gate, table: ToolTable, deadline: ContinuousClock.Instant,
+                              bound: Duration, log: @escaping Log) async {
+        // A client that never finishes its request is answered at the deadline and let go: the
+        // read ends when the connection does.
+        let read = First()
+        let timer = Task {
+            try await Task.sleep(until: deadline)
+            guard read.claim() else { return }
+            log("refused 408: the request was not whole within \(Int(bound / .seconds(1))) s")
+            try? await inbound.send(plain(status: 408, "refused\n"))
+            inbound.connection.cancel()
+        }
         let request: InboundRequest
         do {
-            guard let read = try await RequestReader.next(from: inbound, bodyLimit: bodyLimit) else { return }
-            request = read
+            let next = try await RequestReader.next(from: inbound, bodyLimit: bodyLimit)
+            guard read.claim() else { return }
+            timer.cancel()
+            guard let next else { return }
+            request = next
         } catch let error as WireError {
+            guard read.claim() else { return }
+            timer.cancel()
             guard error != .closed else { return }
             log("refused \(error.status): unreadable request")
             try? await inbound.send(plain(status: error.status, "refused\n"))
             return
         } catch {
+            timer.cancel()
             return
         }
         if let refusal = gate.judge(request) {
@@ -156,14 +175,14 @@ public actor ToolService {
         }
         let arguments: [String]
         do {
-            arguments = try ToolRequest.arguments(from: request.body)
+            arguments = try ToolRequest.arguments(from: ToolRequest.split(request.body)?.arguments ?? Data())
         } catch {
             log("refused 400: the arguments are not base64 lines of UTF-8")
             try? await inbound.send(plain(status: 400, "refused\n"))
             return
         }
         let started = ContinuousClock.now
-        let reply = await bounded(arguments, table: table, bound: bound)
+        let reply = await bounded(arguments, table: table, until: deadline, bound: bound)
         // The tool's name only when it is one: an unknown word is an argument like any other.
         let name = arguments.first.flatMap { table.tool(named: $0)?.name } ?? (arguments.first == "help" || arguments.isEmpty ? "help" : "unknown")
         let milliseconds = Int((ContinuousClock.now - started) / .milliseconds(1))
@@ -174,14 +193,15 @@ public actor ToolService {
     /// The call, answered by the tool or by the bound, whichever comes first. The tool is not
     /// waited for past the bound: a tool that ignores cancellation (a prompt nobody answers) runs
     /// on, answering nobody.
-    static func bounded(_ arguments: [String], table: ToolTable, bound: Duration) async -> ToolReply {
+    static func bounded(_ arguments: [String], table: ToolTable, until deadline: ContinuousClock.Instant,
+                        bound: Duration) async -> ToolReply {
         let once = Once()
         let seconds = Int(bound / .seconds(1))
         let late = ToolReply(status: ToolReply.timedOut, text:
             "topo: no answer within \(seconds) s. If the phone is showing a permission prompt, ask the person to answer it, then try again.\n")
         return await withCheckedContinuation { (continuation: CheckedContinuation<ToolReply, Never>) in
             let work = Task { await table.run(arguments) }
-            let timer = Task { try await Task.sleep(for: bound) }
+            let timer = Task { try await Task.sleep(until: deadline) }
             Task {
                 let reply = await work.value
                 timer.cancel()
@@ -225,8 +245,7 @@ struct Gate: Sendable {
         guard hosts.count == 1, ["127.0.0.1", "127.0.0.1:\(port)"].contains(hosts[0]) else {
             return Refusal(status: 403, reason: "not addressed to 127.0.0.1:\(port)")
         }
-        let authorizations = headers.values("Authorization")
-        guard authorizations.count == 1, Self.equal(authorizations[0], "Bearer " + token) else {
+        guard let given = ToolRequest.split(request.body)?.token, Self.equal(given, token) else {
             return Refusal(status: 401, reason: "no token, or not this service's")
         }
         guard request.path == ToolService.path, request.target == ToolService.path else {
@@ -246,6 +265,19 @@ struct Gate: Sendable {
         var difference: UInt8 = 0
         for index in x.indices { difference |= x[index] ^ y[index] }
         return difference == 0
+    }
+}
+
+/// Says yes once: to whichever of two racers claims it first.
+final class First: @unchecked Sendable {
+    private let lock = NSLock()
+    private var claimed = false
+
+    func claim() -> Bool {
+        lock.withLock {
+            defer { claimed = true }
+            return !claimed
+        }
     }
 }
 

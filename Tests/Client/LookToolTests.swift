@@ -15,15 +15,13 @@ final class LookToolTests: XCTestCase {
         return UserDefaults(suiteName: name)!
     }
 
-    private var vault: Look {
-        var look = Look()
-        look.transcript.replyTrailingInset = 80
-        return look
-    }
+    /// The vault's look.json, and what it makes.
+    private static let vaultDocument = #"{"transcript": {"replyTrailingInset": 80}}"#
+    private var vault: Look { LookDocument.read(Self.vaultDocument).look }
 
-    private func tool(_ tuning: Tuning, knobs: Bool = true) -> LookTool {
-        let vault = vault
-        return LookTool(vault: { (vault, LookDocument.Reading(look: vault)) }, tuning: { tuning })
+    private func tool(_ tuning: Tuning, document: String = LookToolTests.vaultDocument) -> LookTool {
+        let reading = LookDocument.read(document)
+        return LookTool(vault: { (reading.look, reading) }, tuning: { tuning })
     }
 
     func testASetIsWornAtOnceAndOutlivesALaunch() async throws {
@@ -134,7 +132,47 @@ final class LookToolTests: XCTestCase {
         XCTAssertTrue(reply.text.contains("transcript.replyTrailingInset 80 pt (0–200 pt) from look.json"), reply.text)
         XCTAssertTrue(reply.text.contains("mascot.clearance \(Int(Look().mascot.clearance)) pt (0–64 pt) from the compiled look"), reply.text)
         XCTAssertTrue(reply.text.contains("Also set on this phone:\nbubble.cornerRadius 3"), reply.text)
-        XCTAssertTrue(reply.text.hasSuffix("no look.json; the compiled look\n"), reply.text)
+        XCTAssertTrue(reply.text.hasSuffix("look.json: 1 field\n"), reply.text)
+    }
+
+    /// Codex on #189: where a value came from is where it was read, not a guess from its value, so
+    /// a look.json that sets a field to the compiled default is still what set it.
+    func testAFieldTheVaultSetsToItsDefaultIsSaidToComeFromLookJSON() async throws {
+        let tuning = Tuning(defaults: defaults())
+        let clearance = String(format: "%g", Double(Look().mascot.clearance))
+        let reply = await tool(tuning, document: #"{"mascot": {"clearance": \#(clearance)}}"#).run([])
+        XCTAssertTrue(reply.text.contains("mascot.clearance \(clearance) pt (0–64 pt) from look.json"), reply.text)
+        XCTAssertTrue(reply.text.contains("mascot.scale \(String(format: "%g", Double(Look().mascot.scale))) pt a pixel (0.25–4 pt a pixel) from the compiled look"), reply.text)
+    }
+
+    /// Codex on #189: a compound field is set and taken back whole. A path into one is refused and
+    /// changes nothing, where taking one key out of it left a pin the reader then refused.
+    func testResettingPartOfACompoundFieldIsRefused() async throws {
+        let tuning = Tuning(defaults: defaults())
+        let set = await tool(tuning).run(["set", "mascot.pin", #"{"x": 0.3, "y": 0.4}"#])
+        XCTAssertEqual(set.status, ToolReply.ok, set.text)
+        let before = tuning.document
+        let reply = await tool(tuning).run(["reset", "mascot.pin.x"])
+        XCTAssertEqual(reply.status, ToolReply.refused, reply.text)
+        XCTAssertTrue(reply.text.contains("mascot.pin"), reply.text)
+        XCTAssertEqual(tuning.document, before)
+        XCTAssertEqual(tuning.worn(over: vault).mascot.pin, CGPoint(x: 0.3, y: 0.4))
+        let nothing = await tool(tuning).run(["reset", "mascot.wings"])
+        XCTAssertEqual(nothing.status, ToolReply.refused, nothing.text)
+        let whole = await tool(tuning).run(["reset", "mascot.pin"])
+        XCTAssertEqual(whole.text, "reset: mascot.pin\n")
+        XCTAssertFalse(tuning.sets(["mascot", "pin"]))
+    }
+
+    /// Codex on #189: the userland run prints what the guest's command wrote, and `env` there is
+    /// the tool service's token unless it is redacted on that printer too.
+    func testTheUserlandRunRedactsTheToolToken() {
+        let lines = DebugRun.guestLines(output: "TOPO_TOOLS_TOKEN=abc123\nCLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-xyz\nPWD=/\n",
+                                        errors: "Authorization: Bearer def456\n", status: 0)
+        let all = lines.joined(separator: "\n")
+        for secret in ["abc123", "oat01-xyz", "def456"] { XCTAssertFalse(all.contains(secret), all) }
+        XCTAssertEqual(lines, ["guest: TOPO_TOOLS_TOKEN=[redacted]", "guest: CLAUDE_CODE_OAUTH_TOKEN=[redacted]",
+                               "guest: PWD=/", "guest stderr: Authorization: Bearer [redacted]", "guest exit: 0"])
     }
 
     func testAWrongCallIsAUsageError() async throws {

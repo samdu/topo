@@ -48,6 +48,9 @@ enum LookDocument {
         /// Every field the document named and did not get, in the order they were read, each
         /// saying which field and why. Empty is a document that was taken whole.
         var notes: [String] = []
+        /// Every field the document was taken for, by its path (`transcript.spacing`,
+        /// `mascot.pin`): where a value in the look came from the document, and not the base.
+        var fields: Set<String> = []
 
         /// The diagnostics `look` row. A count alone is a device run that has to be repeated to
         /// learn anything, so the first few reasons are named and the rest are counted.
@@ -81,20 +84,53 @@ enum LookDocument {
         }
         let reader = Reader()
         var look = base
-        reader.into(root, "") { r in
-            r.object("transcript") { transcript(&look.transcript, $0) }
-            r.object("markdown") { markdown(&look.markdown, $0) }
-            r.object("bubble") { enclosure(&look.bubble, $0) }
-            r.object("plain") { enclosure(&look.plain, $0) }
-            r.object("draft") { draft(&look.draft, $0) }
-            r.object("jewel") { jewel(&look.jewel, $0) }
-            r.object("press") { press(&look.press, $0) }
-            r.object("badge") { badge(&look.badge, $0) }
-            r.object("settings") { settings(&look.settings, $0) }
-            r.object("composer") { composer(&look.composer, $0) }
-            r.object("mascot") { mascot(&look.mascot, $0) }
+        reader.into(root, "") { r in parts(r, &look) }
+        return Reading(look: look, state: .read(fields: reader.applied), notes: reader.notes, fields: Set(reader.taken))
+    }
+
+    /// What a path names in a look.json.
+    enum Place: Equatable {
+        /// A part, which holds fields: `transcript`, `composer.well`.
+        case part
+        /// A field, set and taken back whole, a compound (`mascot.pin`) included.
+        case field
+        /// Something inside this compound field, which is not set or taken back alone.
+        case inside(String)
+        /// Nothing the reader knows.
+        case unknown
+    }
+
+    /// Where `path` is, asked of the reader itself: a document holding `null` at `path` is read,
+    /// and the reader says which keys it walked into as parts and which it asked for as fields.
+    static func place(of path: [String]) -> Place {
+        guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return .unknown }
+        var object: [String: Any] = [path[path.count - 1]: NSNull()]
+        for key in path.dropLast().reversed() { object = [key: object] }
+        let reader = Reader()
+        var scratch = Look()
+        reader.into(object, "") { r in parts(r, &scratch) }
+        for count in 1..<path.count where !reader.parts.contains(path.prefix(count).joined(separator: ".")) {
+            let outer = Array(path.prefix(count))
+            return place(of: outer) == .field ? .inside(outer.joined(separator: ".")) : .unknown
         }
-        return Reading(look: look, state: .read(fields: reader.applied), notes: reader.notes)
+        let name = path.joined(separator: ".")
+        if reader.parts.contains(name) { return .part }
+        return reader.notes.contains("\(name) is null") ? .field : .unknown
+    }
+
+    /// The document's top level: each part, read where it is named.
+    private static func parts(_ r: Reader, _ look: inout Look) {
+        r.object("transcript") { transcript(&look.transcript, $0) }
+        r.object("markdown") { markdown(&look.markdown, $0) }
+        r.object("bubble") { enclosure(&look.bubble, $0) }
+        r.object("plain") { enclosure(&look.plain, $0) }
+        r.object("draft") { draft(&look.draft, $0) }
+        r.object("jewel") { jewel(&look.jewel, $0) }
+        r.object("press") { press(&look.press, $0) }
+        r.object("badge") { badge(&look.badge, $0) }
+        r.object("settings") { settings(&look.settings, $0) }
+        r.object("composer") { composer(&look.composer, $0) }
+        r.object("mascot") { mascot(&look.mascot, $0) }
     }
 
     // MARK: The parts of a look, each read where it is named
@@ -280,6 +316,10 @@ enum LookDocument {
         /// How many fields the document was taken for. A compound — a shadow, a size, a font —
         /// counts once, as one field of the look.
         private(set) var applied = 0
+        /// The path of every field taken, in the order the document is walked.
+        private(set) var taken: [String] = []
+        /// The path of every part walked into.
+        private(set) var parts: Set<String> = []
         private var here: [String: Any] = [:]
         private var path = ""
         private var asked: Set<String> = []
@@ -302,7 +342,14 @@ enum LookDocument {
         func object(_ key: String, _ body: (Reader) -> Void) {
             guard let value = take(key) else { return }
             guard let object = value as? [String: Any] else { return note(key, "is not an object") }
+            parts.insert(name(key))
             into(object, name(key), body)
+        }
+
+        /// The field at `key` was taken.
+        private func took(_ key: String) {
+            applied += 1
+            taken.append(name(key))
         }
 
         private func take(_ key: String) -> Any? {
@@ -322,7 +369,7 @@ enum LookDocument {
         /// length is a value no view is promised to survive — and bounded well above any screen.
         func length(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...4000, "a length in points") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -333,7 +380,7 @@ enum LookDocument {
         /// the person's reach.
         func reach(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 8...4000, "a length in points, at least 8") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -341,7 +388,7 @@ enum LookDocument {
         /// How much of the screen's width something takes, bounded below for the same reason.
         func fraction(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.1...1, "a share of the width between 0.1 and 1") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -351,7 +398,7 @@ enum LookDocument {
         /// than the stroke it walls is a mark with no floor left in it.
         func fractionOfOne(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...0.25, "a share between 0 and 0.25") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -361,7 +408,7 @@ enum LookDocument {
         /// floor of its own besides (`Look.Composer.Well.pressable`).
         func compactShare(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.5...1, "a share of the resting height between 0.5 and 1") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -371,7 +418,7 @@ enum LookDocument {
         /// once for every list it is inside and the words have to stay in the column.
         func indent(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...64, "a length in points between 0 and 64") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -382,14 +429,14 @@ enum LookDocument {
         /// 320-point phone keeps a column of words 88 points wide or more.
         func inset(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...200, "a length in points between 0 and 200") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
 
         func clearance(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...64, "a length in points between 0 and 64") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -398,7 +445,7 @@ enum LookDocument {
         /// ends in under a minute rather than never, and at most 400, past which it is a jump.
         func roamSpeed(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 10...400, "a speed in points a second between 10 and 400") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -407,7 +454,7 @@ enum LookDocument {
         /// 20, past which a move out from under a turn is a jump.
         func hurry(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 1...20, "a multiple of the roam speed between 1 and 20") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -417,7 +464,7 @@ enum LookDocument {
         /// where he no longer fits.
         func roamSettle(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0.1...5, "a time in seconds between 0.1 and 5") {
-                applied += 1
+                took(key)
                 value = number
             }
         }
@@ -427,7 +474,7 @@ enum LookDocument {
         /// what it outlines.
         func outline(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.1...8, "a width in points between 0.1 and 8") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -435,7 +482,7 @@ enum LookDocument {
         /// An alpha, or anything else that is a share of one.
         func alpha(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0...1, "a number between 0 and 1") {
-                applied += 1
+                took(key)
                 value = number
             }
         }
@@ -444,7 +491,7 @@ enum LookDocument {
         /// thing to ask for; the bound is where it stops meaning anything.
         func saturation(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0...4, "a number between 0 and 4") {
-                applied += 1
+                took(key)
                 value = number
             }
         }
@@ -453,7 +500,7 @@ enum LookDocument {
         /// quarter nothing of a pixel is left to see; over four one pixel is a block.
         func pixelScale(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.25...4, "a number of points to a pixel between 0.25 and 4") {
-                applied += 1
+                took(key)
                 value = CGFloat(number)
             }
         }
@@ -463,21 +510,21 @@ enum LookDocument {
         /// clock asked to tick without end.
         func frameInterval(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: (1.0 / 120)...1, "a time in seconds between 1/120 and 1") {
-                applied += 1
+                took(key)
                 value = number
             }
         }
 
         func seconds(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0...10, "a time in seconds, up to 10") {
-                applied += 1
+                took(key)
                 value = number
             }
         }
 
         func degrees(_ key: String, _ value: inout Angle) {
             if let number = amount(key, in: -3600...3600, "an angle in degrees") {
-                applied += 1
+                took(key)
                 value = .degrees(number)
             }
         }
@@ -489,14 +536,14 @@ enum LookDocument {
                 guard text == "infinity" else {
                     return note(key, "is not a length in points or \"infinity\"")
                 }
-                applied += 1
+                took(key)
                 value = .infinity
                 return
             }
             guard let number = finite(raw), (0...20000).contains(number) else {
                 return note(key, "is not a length in points between 0 and 20000, or \"infinity\"")
             }
-            applied += 1
+            took(key)
             value = CGFloat(number)
         }
 
@@ -538,7 +585,7 @@ enum LookDocument {
         /// colour in both appearances, which is what a jewel's own glass wants.
         func colour(_ key: String, _ value: inout Color) {
             if let colour = paint(key) {
-                applied += 1
+                took(key)
                 value = colour
             }
         }
@@ -565,7 +612,7 @@ enum LookDocument {
                 }
                 colours.append(colour)
             }
-            applied += 1
+            took(key)
             value = colours
         }
 
@@ -603,7 +650,7 @@ enum LookDocument {
                 if notes.count == before { note(key, "needs both an x and a y") }
                 return
             }
-            applied += 1
+            took(key)
             value = CGPoint(x: x, y: y)
         }
 
@@ -616,7 +663,7 @@ enum LookDocument {
             guard let text = raw as? String, (1...200).contains(text.count) else {
                 return note(key, "is not the name of a picture in the app")
             }
-            applied += 1
+            took(key)
             value = text
         }
 
@@ -626,7 +673,7 @@ enum LookDocument {
             guard let text = raw as? String, let mode = Self.blends[text] else {
                 return note(key, "is not one of \(Self.listed(Self.blends.keys))")
             }
-            applied += 1
+            took(key)
             value = mode
         }
 
@@ -643,7 +690,7 @@ enum LookDocument {
             guard let text = raw as? String, let one = T(rawValue: text) else {
                 return note(key, "is not one of \(Self.cases(T.self))")
             }
-            applied += 1
+            took(key)
             value = one
         }
 
@@ -655,7 +702,7 @@ enum LookDocument {
         /// A weight of type, by the name SwiftUI gives it.
         func weight(_ key: String, _ value: inout Font.Weight) {
             if let weight = weighed(key) {
-                applied += 1
+                took(key)
                 value = weight
             }
         }
@@ -709,7 +756,7 @@ enum LookDocument {
                 guard let style = Self.styles[text] else {
                     return note(key, "is not one of \(Self.listed(Self.styles.keys))")
                 }
-                applied += 1
+                took(key)
                 value = .system(style)
                 return
             }
@@ -732,7 +779,7 @@ enum LookDocument {
                 return
             }
             if let weight { font = font.weight(weight) }
-            applied += 1
+            took(key)
             value = font
         }
 
@@ -762,7 +809,7 @@ enum LookDocument {
                 }
             }
             guard named else { return }
-            applied += 1
+            took(key)
             value = shadow
         }
 
@@ -787,7 +834,7 @@ enum LookDocument {
                 }
             }
             guard named else { return }
-            applied += 1
+            took(key)
             value = point
         }
     }

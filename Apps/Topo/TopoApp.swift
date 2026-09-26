@@ -45,7 +45,7 @@ struct TopoApp: App {
         GuestResident.shared.toolTable = [
             LookTool(vault: {
                 #if DEBUG
-                (DebugRun.look ?? memory.look, memory.lookReading)
+                DebugRun.lookReading.map { ($0.look, $0) } ?? (memory.look, memory.lookReading)
                 #else
                 (memory.look, memory.lookReading)
                 #endif

@@ -32,7 +32,7 @@ final class GuestToolScriptTests: XCTestCase {
 
     override func tearDown() async throws {
         await service?.stop()
-        try? FileManager.default.removeItem(at: home)
+        if let home { try? FileManager.default.removeItem(at: home) }
     }
 
     /// Echoes its arguments one to a line, each between brackets, and exits with the status the
@@ -77,6 +77,36 @@ final class GuestToolScriptTests: XCTestCase {
         let failed = try await topo("echo 6 refused", environment)
         XCTAssertEqual(failed.status, 6)
         XCTAssertEqual(failed.output, "[refused]\n")
+    }
+
+    /// Codex on #189: a process's argv is readable by every process in the guest, so the token
+    /// is never in one. Every command `topo` runs is put behind a wrapper that writes down its
+    /// arguments before running the real one, and none of what was written holds the token.
+    func testNoCommandTopoRunsIsGivenTheTokenAsAnArgument() async throws {
+        let environment = try await started()
+        let token = try XCTUnwrap(environment[ToolService.tokenVariable])
+        let script = "\(point!)/\(GuestTools.scriptPath)"
+        let commands = try String(contentsOf: home.appendingPathComponent(GuestTools.scriptPath), encoding: .utf8)
+        let named = ["wget", "base64", "tr", "mktemp", "rm", "tail", "cat", "head", "sed"]
+            .filter { commands.contains($0 + " ") || commands.contains("$(" + $0) }
+        XCTAssertTrue(named.contains("wget"))
+        let wrap = """
+        wrapped=$(mktemp -d) || exit 90
+        for name in \(named.joined(separator: " ")); do
+            real=$(command -v "$name") || continue
+            case "$real" in /*) ;; *) continue ;; esac
+            printf '#!/bin/sh\\nprintf "%%s\\\\n" "%s $*" >> %s/argv\\nexec %s "$@"\\n' "$name" "$wrapped" "$real" > "$wrapped/$name"
+            chmod +x "$wrapped/$name"
+        done
+        PATH="$wrapped:$PATH" \(script) echo 0 a; echo "status $?"
+        cat "$wrapped/argv"
+        """
+        var env = Guest.environment
+        env.merge(environment) { _, new in new }
+        let exit = try await Guest.shared.run("/bin/bash", ["-c", wrap], environment: env)
+        XCTAssertTrue(exit.output.hasPrefix("[a]\nstatus 0\n"), exit.output + exit.errors + " service: " + lines.text)
+        XCTAssertTrue(exit.output.contains("\nwget "), "the wrapper never ran: " + exit.output)
+        XCTAssertFalse(exit.output.contains(token), "a command was given the token: " + exit.output)
     }
 
     func testNoArgumentsIsHelp() async throws {
