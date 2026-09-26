@@ -939,4 +939,24 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.picture?.origin, move.to)
         XCTAssertFalse(roam.hidden)
     }
+
+    /// A new clearance mid-glide to a fallback places him at once where the new decision puts
+    /// him: where the glide was cut short is not a place he stands.
+    func testANewClearanceMidGlideToAFallbackPlacesHimWhereTheDecisionPutsHim() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 40)]), at: start + Self.frame)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertNotNil(roam.move, "no glide to the less covered place")
+        for _ in 0..<15 { time += Self.frame; roam.advance(to: time) }
+        // The hole narrows to one worth no glide from a place he stands: mid-glide, he goes on.
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 10)]), at: time)
+        XCTAssertNotNil(roam.move)
+        var wider = Self.settings
+        wider.clearance = 9
+        roam.use(wider)
+        XCTAssertNil(roam.move)
+        XCTAssertEqual(roam.picture, roam.decision?.choice?.frame, "he stayed where the glide was cut short")
+    }
 }

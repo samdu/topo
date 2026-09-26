@@ -987,15 +987,17 @@ struct MascotRoam: Equatable, Sendable {
             return
         }
         if switched, position != nil {
+            let cut = move != nil
             move = nil
-            decide(glide: !reroost)
+            decide(glide: !reroost, standing: !cut)
             unsettled = true
             covered = isCovered
             return
         }
         if reroost, position != nil {
+            let cut = move != nil
             move = nil
-            decide(glide: false)
+            decide(glide: false, standing: !cut)
         } else if reroost || switched {
             // Not drawn: the new size may fit where the old did not, decided once it settles.
             changed = now
