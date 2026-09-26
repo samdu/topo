@@ -662,8 +662,13 @@ extension MascotRoam {
                 clears = choice?.clears
                 cost = choice.map { Double($0.cost) }
                 aim = [Double(decision.aim.x), Double(decision.aim.y)]
+                #if DEBUG
                 candidates = decision.candidates.count
                 clearing = decision.clearing
+                #else
+                candidates = 0
+                clearing = 0
+                #endif
             }
         }
 

@@ -376,12 +376,15 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertTrue(MascotRoost.holds(up, frame: gap, clearance: 8, reach: Self.reach))
         XCTAssertFalse(MascotRoost.overlap(gap, up.pane!), "\(gap) over the glass")
 
-        // Down again, into a full chat: nothing clears, and he stands over the words, drawn.
+        // Down again, into a full chat: nothing clears, and he stands over the words, drawn —
+        // where he stood, since every place is as covered as any other.
         roam.observe(full, at: time)
         while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
         XCTAssertFalse(roam.hidden)
-        XCTAssertEqual(roam.decision?.choice?.clears, false)
-        XCTAssertEqual(roam.picture, roam.decision?.choice?.frame)
+        let choice = try XCTUnwrap(roam.decision?.choice)
+        XCTAssertFalse(choice.clears)
+        XCTAssertEqual(roam.picture, gap)
+        XCTAssertEqual(MascotRoost.cost(of: gap, words: full.words), choice.cost, accuracy: 0.001)
 
         // A scroll opening room at the top of the chat sends him there.
         roam.observe(Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)]), at: time)
@@ -740,5 +743,84 @@ final class MascotRoamTests: XCTestCase {
         // The first frame of the glide, covered, is the hurry's: ten frames' worth of the ease.
         let hurried = move.at(Self.frame * 10)
         XCTAssertEqual(second.y, hurried.y, accuracy: 0.01, "the glide out from over words did not hurry: \(first) → \(second)")
+    }
+
+    /// Rows of words the full width of the column, 20 points tall every 30 down to the glass: no
+    /// gap his box fits, so every place is a fallback. `holes` are cut from the rows, each as
+    /// (row index, x, width), and `grown` is added to the first row's height.
+    static func rows(holes: [(row: Int, x: CGFloat, width: CGFloat)] = [], grown: CGFloat = 0) -> MascotField {
+        var obstacles: [CGRect] = []
+        for row in 0..<18 {
+            let y = CGFloat(row * 30)
+            let height = row == 0 ? 20 + grown : 20
+            var x: CGFloat = 0
+            for hole in holes.filter({ $0.row == row }).sorted(by: { $0.x < $1.x }) {
+                obstacles.append(CGRect(x: x, y: y, width: hole.x - x, height: height))
+                x = hole.x + hole.width
+            }
+            obstacles.append(CGRect(x: x, y: y, width: 402 - x, height: height))
+        }
+        return field(obstacles)
+    }
+
+    /// Standing over words because nothing clears them, a reply growing under him every frame
+    /// weighs no place until it stops, and then weighs once: he is covered by choice, so he waits
+    /// for the settle like a Topo standing clear, and moves at most once.
+    func testAtAFallbackAGrowingReplyIsDecidedAtTheSettle() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        XCTAssertEqual(roam.decision?.choice?.clears, false)
+        XCTAssertTrue(roam.covered)
+        let decided = roam.decisions, moved = roam.moves
+        var time = start
+        // A line a frame for 150 frames, each geometry followed by a tick of the clock a frame on.
+        for step in 1...150 {
+            roam.observe(Self.rows(grown: CGFloat(step)), at: time)
+            time += Self.frame
+            roam.advance(to: time)
+        }
+        XCTAssertEqual(roam.decisions, decided, "decided while the reply grew a line a frame")
+        XCTAssertEqual(roam.moves, moved)
+        // Three points every tenth of a second for five seconds, the clock ticking in between.
+        for step in 1...50 {
+            roam.observe(Self.rows(grown: 150 + CGFloat(step * 3)), at: time)
+            let next = time + 0.1
+            while time < next - 1e-9 { time += Self.frame; roam.advance(to: time) }
+        }
+        XCTAssertEqual(roam.decisions, decided, "decided while the reply grew three points a tenth of a second")
+        while roam.needsTime, time < start + 30 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.decisions, decided + 1, "the settle after the growth did not decide once")
+        XCTAssertLessThanOrEqual(roam.moves, moved + 1)
+        XCTAssertFalse(roam.hidden)
+    }
+
+    /// At a fallback, a place that uncovers less than `fallbackGain` of his box beyond where he
+    /// stands is weighed and not gone to; one that uncovers more is a glide.
+    func testAtAFallbackOnlyAPlaceWorthTheGlideMovesHim() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        let standing = try XCTUnwrap(roam.picture)
+        let gain = Self.size.width * Self.size.height * MascotRoost.fallbackGain
+        // A hole in the third row at the far left, 10 points wide: 200 square points uncovered.
+        XCTAssertLessThan(10 * 20, gain)
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 10)]), at: start + Self.frame)
+        var time = start + Self.frame
+        let decided = roam.decisions, moved = roam.moves
+        while roam.needsTime, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.decisions, decided + 1)
+        let small = try XCTUnwrap(roam.decision?.choice)
+        XCTAssertFalse(small.clears)
+        XCTAssertLessThan(small.cost, MascotRoost.cost(of: standing, words: roam.field!.words) - 1,
+                          "the hole was not a less covered place: \(small)")
+        XCTAssertEqual(roam.moves, moved, "a place a hair less covered was a glide")
+        XCTAssertEqual(roam.picture, standing)
+        XCTAssertEqual(roam.roost, .gap(standing))
+        // Forty points wide: 800 square points, more than the gain.
+        XCTAssertGreaterThan(40 * 20, gain)
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 40)]), at: time)
+        let later = time
+        while roam.needsTime, time < later + 30 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.moves, moved + 1, "a place worth the glide was not gone to")
+        XCTAssertEqual(roam.picture, roam.decision?.choice?.frame)
     }
 }

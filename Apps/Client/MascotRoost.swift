@@ -419,10 +419,12 @@ enum MascotRoost: Equatable, Sendable {
         var relaxed = false
         /// The place chosen; nil when none was, and he stands nowhere.
         var choice: Candidate?
-        /// Every place weighed.
+        #if DEBUG
+        /// Every place weighed, which only a debug build keeps, for the overlay and the report.
         var candidates: [Candidate] = []
         /// How many of `candidates` clear the words.
         var clearing = 0
+        #endif
 
         /// The roost it comes to: the chosen place, or nowhere.
         var roost: MascotRoost { choice.map { .gap($0.frame) } ?? .none }
@@ -504,8 +506,10 @@ enum MascotRoost: Equatable, Sendable {
                     let clears = !wordRegions.contains(where: { strictlyInside(point, $0) })
                     let frame = CGRect(origin: point, size: size)
                     let candidate = Candidate(frame: frame, cost: clears ? 0 : cost(of: frame, words: words), clears: clears)
+                    #if DEBUG
                     decision.candidates.append(candidate)
                     if clears { decision.clearing += 1 }
+                    #endif
                     let distance = hypot(x - aim.x, y - aim.y)
                     // A place that clears beats one that does not; then the least cost; then the
                     // nearest; then the one further right, then higher up.
@@ -560,6 +564,10 @@ enum MascotRoost: Equatable, Sendable {
         let keep = MascotSprite.Reach.all(margin).union(reach)
         return !field.offLimits.contains { overlap($0, keep.around(frame)) }
     }
+
+    /// The share of his box a least-covered place has to uncover beyond where he stands, at a
+    /// fallback, to be worth a glide: a tenth, about a line of text across him at any scale.
+    static let fallbackGain: CGFloat = 0.1
 
     /// A thousandth of a point: what two edges that meet are allowed to share without counting as
     /// an overlap, since the edges are sums of floating-point sizes.
@@ -1024,8 +1032,12 @@ struct MascotRoam: Equatable, Sendable {
         guard unsettled, move == nil else { return }
         let quiet = now - changed
         // A frame's quiet is a tick with no geometry since the one before, which the display
-        // link's timestamps and the clock's sums put a hair either side of the interval.
-        guard quiet >= settings.settle || (covered && quiet >= frame * 0.75) else { return }
+        // link's timestamps and the clock's sums put a hair either side of the interval. Standing
+        // where no place cleared the words he is covered by choice, and waits for the settle like
+        // a Topo standing clear: a frame's quiet would weigh the lattice again on nearly every
+        // frame of a reply that grows under him.
+        let fallback = decision?.choice?.clears == false
+        guard quiet >= settings.settle || (covered && !fallback && quiet >= frame * 0.75) else { return }
         if quiet >= settings.settle { heading = 0 }
         decide(glide: true)
         covered = isCovered
@@ -1098,6 +1110,19 @@ struct MascotRoam: Equatable, Sendable {
             face(field)
             position = to
             return
+        }
+        // Where no place clears, where he stands is kept while it is a place at all and the one
+        // chosen uncovers no more than `fallbackGain` of his box beyond it: least-covered places a
+        // hair apart would otherwise have him gliding with every line that grows.
+        if let choice = decision?.choice, !choice.clears {
+            let here = CGRect(origin: from, size: settings.size)
+            if MascotRoost.admits(field, frame: here, clearance: fallbackClearance, reach: settings.reach),
+               MascotRoost.cost(of: here, words: field.words) - choice.cost
+                <= settings.size.width * settings.size.height * MascotRoost.fallbackGain {
+                roost = .gap(here)
+                face(field)
+                return
+            }
         }
         // Within his own room of where he stands is where he stands — where that is a roost as it
         // stands; one that is not moves however short the move.
