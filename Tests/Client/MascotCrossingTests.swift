@@ -19,16 +19,35 @@ final class MascotCrossingTests: XCTestCase {
         var standing: CGPoint
         var events: [Event]
 
-        /// A geometry handed to the roam, or with none, a tick of its clock.
+        /// A geometry handed to the roam, or with none, a tick of its clock; or a decision the
+        /// roam made, which is neither and is left out of the replay.
         struct Event: Decodable {
             var t: Double
             var field: MascotField?
+            var decision: Decided?
         }
+
+        /// That a line carries a decision, whatever it holds.
+        struct Decided: Decodable {}
     }
 
     private func trace(_ name: String) throws -> Trace {
         let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: name, withExtension: "json"), name)
-        return try JSONDecoder().decode(Trace.self, from: Data(contentsOf: url))
+        return try Self.replay(Data(contentsOf: url))
+    }
+
+    /// A recording as the replay reads it: its geometries and ticks.
+    static func replay(_ data: Data) throws -> Trace {
+        var trace = try JSONDecoder().decode(Trace.self, from: data)
+        trace.events.removeAll { $0.decision != nil }
+        return trace
+    }
+
+    /// A decision line in a recording is not a tick: it is left out, so the replay sees the
+    /// geometries and ticks alone.
+    func testADecisionLineIsNoTick() throws {
+        let json = #"{"standing": [0, 0], "events": [{"t": 1}, {"t": 1.5, "decision": {"aim": [0, 0]}}, {"t": 2}]}"#
+        XCTAssertEqual(try Self.replay(Data(json.utf8)).events.map(\.t), [1, 2])
     }
 
     /// In `full` the person's turns are the bubbles across the column, 167 points tall; of them,

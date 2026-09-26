@@ -249,34 +249,38 @@ final class MascotRoamTests: XCTestCase {
     }
 
     /// A geometry change that lands within the settle of the last one defers the decision; the
-    /// decision comes a settle after the last change and not before. He is not drawn while a
-    /// chat with no gap streams, flickering between full and one with room at its top, and is
-    /// placed in the room only once it holds still.
+    /// decision comes a settle after the last change and not before. Standing clear in the room at
+    /// the top of a chat that streams, flickering between two layouts that both leave him clear,
+    /// he decides nothing while it streams and decides once it holds still, counted by the
+    /// decisions the roam has made.
     func testTheRoostWaitsForTheGeometryToSettle() throws {
-        let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
         let roomy = Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)])
-        let (placed, start) = settled(full)
-        var roam = placed
-        XCTAssertEqual(roam.roost.name, "none")
-        XCTAssertTrue(roam.hidden)
+        let roomier = Self.field([CGRect(x: 0, y: 240, width: 402, height: 388)])
+        var roam = MascotRoam(Self.settings, frame: Self.frame, standing: CGPoint(x: 100, y: 20))
+        roam.observe(roomy, at: 0)
+        var start = 0.0
+        while roam.needsTime, start < 5 { start += Self.frame; roam.advance(to: start) }
+        let decided = roam.decisions
+        XCTAssertEqual(decided, 1)
+        XCTAssertFalse(roam.covered)
         var time = start
         for step in 0..<11 {
             time = start + Double(step) * 0.3
-            roam.observe(step.isMultiple(of: 2) ? roomy : full, at: time)
+            roam.observe(step.isMultiple(of: 2) ? roomier : roomy, at: time)
             roam.advance(to: time)
-            XCTAssertTrue(roam.hidden, "decided within the settle of a change")
+            XCTAssertEqual(roam.decisions, decided, "decided within the settle of a change")
         }
         let last = time
         while time < last + 0.6 - Self.frame {
             time += Self.frame / 2
             roam.advance(to: time)
-            XCTAssertTrue(roam.hidden, "decided before the settle at \(time - last)")
+            XCTAssertEqual(roam.decisions, decided, "decided before the settle at \(time - last)")
         }
-        while roam.hidden, time < last + 2 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertFalse(roam.hidden)
-        XCTAssertEqual(roam.moves, 0, "a glide from nowhere")
+        while roam.decisions == decided, time < last + 2 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.decisions, decided + 1)
         XCTAssertGreaterThanOrEqual(time - last, 0.6 - 1e-9)
         XCTAssertEqual(roam.roost.name, "gap")
+        XCTAssertFalse(roam.hidden)
     }
 
     /// Until the transcript has been read he is not drawn, however empty the page: the page is
@@ -342,16 +346,18 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertLessThanOrEqual(frame.maxY, 200 - Self.settings.clearance + 0.001, "not in the room the read left")
     }
 
-    /// Not drawn for want of a gap, every geometry change asks for a new roost: the keyboard
+    /// Over words for want of a gap, every geometry change asks for a new roost: the keyboard
     /// rising, which lifts the glass and the transcript's end, opens room above the glass and he
-    /// is placed in it; with the keyboard down again and the chat full he is not drawn. A scroll
-    /// that opens room does the same.
-    func testWithNowhereToStandAGeometryChangeThatOpensAGapPlacesHim() throws {
+    /// goes to it; with the keyboard down again and the chat full he stands over the words, drawn,
+    /// and a scroll that opens room sends him to it.
+    func testOverWordsAGeometryChangeThatOpensAGapSendsHimToIt() throws {
         let full = Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)])
         let (placed, start) = settled(full)
         var roam = placed
-        XCTAssertEqual(roam.roost.name, "none")
-        XCTAssertTrue(roam.hidden)
+        XCTAssertEqual(roam.roost.name, "gap")
+        XCTAssertEqual(roam.decision?.choice?.clears, false)
+        XCTAssertFalse(roam.hidden, "with no place clear of the words he was not drawn")
+        XCTAssertTrue(roam.covered, "standing over words is not covered")
         XCTAssertFalse(roam.needsTime)
 
         // The keyboard rises: the glass sits on it, full height, and the transcript's end rises
@@ -370,16 +376,22 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertTrue(MascotRoost.holds(up, frame: gap, clearance: 8, reach: Self.reach))
         XCTAssertFalse(MascotRoost.overlap(gap, up.pane!), "\(gap) over the glass")
 
-        // Down again, into a full chat: nothing holds him, and he is not drawn.
+        // Down again, into a full chat: nothing clears, and he stands over the words, drawn —
+        // where he stood, since every place is as covered as any other.
         roam.observe(full, at: time)
         while roam.needsTime, time < start + 60 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "none")
-        XCTAssertTrue(roam.hidden)
+        XCTAssertFalse(roam.hidden)
+        let choice = try XCTUnwrap(roam.decision?.choice)
+        XCTAssertFalse(choice.clears)
+        XCTAssertEqual(roam.picture, gap)
+        XCTAssertEqual(MascotRoost.cost(of: gap, words: full.words), choice.cost, accuracy: 0.001)
 
-        // A scroll opening room at the top of the chat places him there.
+        // A scroll opening room at the top of the chat sends him there.
         roam.observe(Self.field([CGRect(x: 0, y: 150, width: 402, height: 478)]), at: time)
         while roam.needsTime, time < start + 90 { time += Self.frame; roam.advance(to: time) }
-        XCTAssertEqual(roam.roost.name, "gap", "a scroll opened room and he was not placed in it")
+        XCTAssertEqual(roam.decision?.choice?.clears, true, "a scroll opened room and he was not sent to it")
+        let clear = try XCTUnwrap(roam.picture)
+        XCTAssertTrue(MascotRoost.holds(roam.field!, frame: clear, clearance: 8, reach: Self.reach))
         XCTAssertFalse(roam.hidden)
     }
 
@@ -706,17 +718,245 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertFalse(roam.hidden)
     }
 
-    /// A chat that has nothing that holds him — no gap — has no Topo, and
-    /// one that holds him again places him, once it settles, with no glide from nowhere.
-    func testNowhereToStandIsNoTopoAndBackIsAPlacement() {
+    /// A chat with nothing that clears him — no gap — has him over the least of its words, drawn;
+    /// and one with room again sends him to it with a glide, at the hurry from its first frame,
+    /// since standing on words he is covered.
+    func testWithNoGapHeStandsOverWordsAndRoomIsAGlideOut() throws {
         let (placed, start) = settled(Self.field([CGRect(x: 0, y: 0, width: 402, height: 628)]))
         var roam = placed
-        XCTAssertNil(roam.position)
-        XCTAssertTrue(roam.hidden)
-        XCTAssertFalse(roam.needsTime)
-        roam.observe(Self.field([]), at: start)
-        roam.advance(to: start + 0.6)
         XCTAssertNotNil(roam.position)
-        XCTAssertEqual(roam.moves, 0)
+        XCTAssertFalse(roam.hidden)
+        XCTAssertTrue(roam.covered)
+        XCTAssertEqual(roam.moves, 0, "a glide from nowhere")
+        XCTAssertFalse(roam.needsTime)
+        // Room opens at the top; the words are still over where he stands.
+        roam.observe(Self.field([CGRect(x: 0, y: 200, width: 402, height: 428)]), at: start + Self.frame)
+        XCTAssertTrue(roam.covered)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 5 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide out from over the words")
+        XCTAssertEqual(roam.moves, 1)
+        let first = try XCTUnwrap(roam.position)
+        time += Self.frame
+        roam.advance(to: time)
+        let second = try XCTUnwrap(roam.position)
+        // The first frame of the glide, covered, is the hurry's: ten frames' worth of the ease.
+        let hurried = move.at(Self.frame * 10)
+        XCTAssertEqual(second.y, hurried.y, accuracy: 0.01, "the glide out from over words did not hurry: \(first) → \(second)")
+    }
+
+    /// Rows of words the full width of the column, 20 points tall every 30 down to the glass: no
+    /// gap his box fits, so every place is a fallback. `holes` are cut from the rows, each as
+    /// (row index, x, width), and `grown` is added to the first row's height.
+    static func rows(holes: [(row: Int, x: CGFloat, width: CGFloat)] = [], grown: CGFloat = 0) -> MascotField {
+        var obstacles: [CGRect] = []
+        for row in 0..<18 {
+            let y = CGFloat(row * 30)
+            let height = row == 0 ? 20 + grown : 20
+            var x: CGFloat = 0
+            for hole in holes.filter({ $0.row == row }).sorted(by: { $0.x < $1.x }) {
+                obstacles.append(CGRect(x: x, y: y, width: hole.x - x, height: height))
+                x = hole.x + hole.width
+            }
+            obstacles.append(CGRect(x: x, y: y, width: 402 - x, height: height))
+        }
+        return field(obstacles)
+    }
+
+    /// Standing over words because nothing clears them, a reply growing under him every frame
+    /// weighs no place until it stops, and then weighs once: he is covered by choice, so he waits
+    /// for the settle like a Topo standing clear, and moves at most once.
+    func testAtAFallbackAGrowingReplyIsDecidedAtTheSettle() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        XCTAssertEqual(roam.decision?.choice?.clears, false)
+        XCTAssertTrue(roam.covered)
+        let decided = roam.decisions, moved = roam.moves
+        var time = start
+        // A line a frame for 150 frames, each geometry followed by a tick of the clock a frame on.
+        for step in 1...150 {
+            roam.observe(Self.rows(grown: CGFloat(step)), at: time)
+            time += Self.frame
+            roam.advance(to: time)
+        }
+        XCTAssertEqual(roam.decisions, decided, "decided while the reply grew a line a frame")
+        XCTAssertEqual(roam.moves, moved)
+        // Three points every tenth of a second for five seconds, the clock ticking in between.
+        for step in 1...50 {
+            roam.observe(Self.rows(grown: 150 + CGFloat(step * 3)), at: time)
+            let next = time + 0.1
+            while time < next - 1e-9 { time += Self.frame; roam.advance(to: time) }
+        }
+        XCTAssertEqual(roam.decisions, decided, "decided while the reply grew three points a tenth of a second")
+        while roam.needsTime, time < start + 30 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.decisions, decided + 1, "the settle after the growth did not decide once")
+        XCTAssertLessThanOrEqual(roam.moves, moved + 1)
+        XCTAssertFalse(roam.hidden)
+    }
+
+    /// At a fallback, a place that uncovers less than `fallbackGain` of his box beyond where he
+    /// stands is weighed and not gone to; one that uncovers more is a glide.
+    func testAtAFallbackOnlyAPlaceWorthTheGlideMovesHim() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        let standing = try XCTUnwrap(roam.picture)
+        let gain = Self.size.width * Self.size.height * MascotRoost.fallbackGain
+        // A hole in the third row at the far left, 10 points wide: 200 square points uncovered.
+        XCTAssertLessThan(10 * 20, gain)
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 10)]), at: start + Self.frame)
+        var time = start + Self.frame
+        let decided = roam.decisions, moved = roam.moves
+        while roam.needsTime, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.decisions, decided + 1)
+        let small = try XCTUnwrap(roam.decision?.choice)
+        XCTAssertFalse(small.clears)
+        XCTAssertLessThan(small.cost, MascotRoost.cost(of: standing, words: roam.field!.words) - 1,
+                          "the hole was not a less covered place: \(small)")
+        XCTAssertEqual(roam.moves, moved, "a place a hair less covered was a glide")
+        XCTAssertEqual(roam.picture, standing)
+        XCTAssertEqual(roam.roost, .gap(standing))
+        // Forty points wide: 800 square points, more than the gain.
+        XCTAssertGreaterThan(40 * 20, gain)
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 40)]), at: time)
+        let later = time
+        while roam.needsTime, time < later + 30 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.moves, moved + 1, "a place worth the glide was not gone to")
+        XCTAssertEqual(roam.picture, roam.decision?.choice?.frame)
+    }
+
+    /// A decision says why a roaming Topo stands where he stands; placed on the glass, nothing
+    /// does, and the last one made while he roamed is not kept.
+    func testAPlacedTopoKeepsNoDecision() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        XCTAssertNotNil(roam.decision)
+        var glass = Self.settings
+        glass.placement = .glass
+        roam.use(glass)
+        var time = start
+        while roam.needsTime, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertEqual(roam.roost.name, "glass")
+        XCTAssertNil(roam.decision, "a decision made roaming outlived the move to the glass")
+    }
+
+    /// A glide to a place over words keeps going while that place is still a place at all
+    /// (`MascotRoost.admits`), however the words round it change; once the glass rises onto it,
+    /// it is decided again at once.
+    func testAGlideToAFallbackKeepsGoingWhileItsDestinationIsAPlace() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        let holed = Self.rows(holes: [(row: 2, x: 30, width: 40)])
+        roam.observe(holed, at: start + Self.frame)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide to the less covered place")
+        let destination = CGRect(origin: move.to, size: Self.size)
+        XCTAssertFalse(MascotRoost.holds(holed, frame: destination, clearance: 8, reach: Self.reach))
+        let decided = roam.decisions, moved = roam.moves
+        time += Self.frame
+        roam.advance(to: time)
+        // A row far from where he is going loses a word: the destination is still a place.
+        let changed = Self.rows(holes: [(row: 2, x: 30, width: 40), (row: 14, x: 300, width: 20)])
+        roam.observe(changed, at: time)
+        XCTAssertEqual(roam.decisions, decided, "a glide to a place that still is one was decided again")
+        XCTAssertEqual(roam.moves, moved)
+        XCTAssertEqual(roam.move?.to, move.to)
+        // The keyboard rises and the glass with it, onto where he is going.
+        let risen = MascotField(visible: changed.visible, obstacles: changed.obstacles,
+                                pane: CGRect(x: 41, y: 100, width: 320, height: 60),
+                                well: CGRect(x: 165, y: 104, width: 52, height: 52),
+                                keyboard: CGRect(x: 0, y: 170, width: 402, height: 500))
+        XCTAssertFalse(MascotRoost.admits(risen, frame: destination, clearance: 8, reach: Self.reach))
+        time += Self.frame
+        roam.observe(risen, at: time)
+        XCTAssertEqual(roam.decisions, decided + 1, "the glass rose onto where he was going and nothing was decided")
+        let now = try XCTUnwrap(roam.move.map { CGRect(origin: $0.to, size: Self.size) } ?? roam.picture)
+        XCTAssertTrue(MascotRoost.admits(risen, frame: now, clearance: 8, reach: Self.reach), "\(now) is no place")
+        XCTAssertTrue(roam.move != nil || roam.picture == roam.decision?.choice?.frame,
+                      "he stopped mid-glide at \(String(describing: roam.picture)), short of \(String(describing: roam.decision?.choice))")
+        XCTAssertFalse(roam.hidden)
+    }
+
+    /// A glide to a fallback whose destination stops being a place is decided again and goes on to
+    /// the new one: where it was cut short is somewhere he was passing, not a place he stands, so
+    /// the hold at a fallback does not leave him there.
+    func testAGlideToAFallbackCutShortGoesOnToTheNewPlace() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        let holed = Self.rows(holes: [(row: 2, x: 30, width: 40)])
+        roam.observe(holed, at: start + Self.frame)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide to the less covered place")
+        for _ in 0..<15 { time += Self.frame; roam.advance(to: time) }
+        let passing = try XCTUnwrap(roam.picture)
+        XCTAssertNotEqual(passing.origin, move.to)
+        // The transcript's leading edge moves in past where he is going, and not past him.
+        let narrowed = MascotField(visible: CGRect(x: 60, y: 0, width: 342, height: 628), obstacles: holed.obstacles,
+                                   pane: holed.pane, well: holed.well)
+        XCTAssertFalse(MascotRoost.admits(narrowed, frame: CGRect(origin: move.to, size: Self.size), clearance: 8,
+                                          reach: Self.reach))
+        XCTAssertTrue(MascotRoost.admits(narrowed, frame: passing, clearance: 8, reach: Self.reach))
+        time += Self.frame
+        roam.observe(narrowed, at: time)
+        while roam.move != nil, time < start + 30 { time += Self.frame; roam.advance(to: time) }
+        let choice = try XCTUnwrap(roam.decision?.choice)
+        XCTAssertEqual(roam.picture, choice.frame, "he stopped where the glide was cut short, \(passing)")
+        XCTAssertFalse(roam.hidden)
+    }
+
+    /// A glide to a gap the glass kept his reach alone for (`Decision.relaxed`) is a glide to a
+    /// roost like any other: a geometry arriving every frame of it, leaving where he is going as
+    /// it was, decides nothing, and he arrives.
+    func testAGlideToAGapTheGlassKeptHisReachAloneForIsNotDecidedAgain() throws {
+        let size = MascotSprite.size(scale: 1), reach = MascotSprite.reach(scale: 1)
+        let settings = MascotRoam.Settings(size: size, clearance: 32, reach: reach, speed: 40, settle: 0.6)
+        func field(_ height: CGFloat) -> MascotField {
+            MascotField(visible: CGRect(x: 0, y: 0, width: 393, height: 700),
+                        obstacles: [CGRect(x: 0, y: 0, width: 150, height: height)],
+                        pane: CGRect(x: 36, y: 130, width: 320, height: 56),
+                        well: CGRect(x: 172, y: 134, width: 48, height: 48),
+                        keyboard: CGRect(x: 0, y: 194, width: 393, height: 336))
+        }
+        var roam = MascotRoam(settings, frame: Self.frame, standing: CGPoint(x: 18, y: 30))
+        roam.observe(field(100), at: 0)
+        var time = 0.0
+        while roam.move == nil, time < 5 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide out from over the word")
+        XCTAssertEqual(roam.decision?.relaxed, true)
+        XCTAssertEqual(roam.decision?.choice?.clears, true)
+        let decided = roam.decisions, moved = roam.moves
+        var step = 0
+        while roam.move != nil, time < 30 {
+            step += 1
+            roam.observe(field(step.isMultiple(of: 2) ? 100 : 101), at: time)
+            time += Self.frame
+            roam.advance(to: time)
+            XCTAssertEqual(roam.decisions, decided, "decided again mid-glide at \(time)")
+        }
+        XCTAssertGreaterThan(step, 10)
+        XCTAssertEqual(roam.moves, moved)
+        XCTAssertEqual(roam.picture?.origin, move.to)
+        XCTAssertFalse(roam.hidden)
+    }
+
+    /// A new clearance mid-glide to a fallback places him at once where the new decision puts
+    /// him: where the glide was cut short is not a place he stands.
+    func testANewClearanceMidGlideToAFallbackPlacesHimWhereTheDecisionPutsHim() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 40)]), at: start + Self.frame)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        XCTAssertNotNil(roam.move, "no glide to the less covered place")
+        for _ in 0..<15 { time += Self.frame; roam.advance(to: time) }
+        // The hole narrows to one worth no glide from a place he stands: mid-glide, he goes on.
+        roam.observe(Self.rows(holes: [(row: 2, x: 30, width: 10)]), at: time)
+        XCTAssertNotNil(roam.move)
+        var wider = Self.settings
+        wider.clearance = 9
+        roam.use(wider)
+        XCTAssertNil(roam.move)
+        XCTAssertEqual(roam.picture, roam.decision?.choice?.frame, "he stayed where the glide was cut short")
     }
 }

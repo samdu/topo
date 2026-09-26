@@ -224,6 +224,19 @@ enum LookDocument {
         r.frameInterval("frameInterval", &value.frameInterval)
         r.placement("placement", &value.placement)
         r.pin("pin", &value.pin)
+        r.object("debug") { mascotDebug(&value.debug, $0) }
+    }
+
+    private static func mascotDebug(_ value: inout Look.Mascot.Debug, _ r: Reader) {
+        r.colour("box", &value.box)
+        r.colour("reach", &value.reach)
+        r.colour("room", &value.room)
+        r.colour("candidate", &value.candidate)
+        r.colour("clearing", &value.clearing)
+        r.colour("chosen", &value.chosen)
+        r.colour("words", &value.words)
+        r.outline("lineWidth", &value.lineWidth)
+        r.outline("hairline", &value.hairline)
     }
 
     private static func flank(_ value: inout Look.Composer.Flank, _ r: Reader) {
@@ -405,6 +418,16 @@ enum LookDocument {
             if let number = amount(key, in: 0.1...5, "a time in seconds between 0.1 and 5") {
                 applied += 1
                 value = number
+            }
+        }
+
+        /// The width of an outline drawn over the chat to show something rather than to be it:
+        /// from a tenth of a point, the finest a screen shows, to 8, past which an outline covers
+        /// what it outlines.
+        func outline(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0.1...8, "a width in points between 0.1 and 8") {
+                applied += 1
+                value = CGFloat(number)
             }
         }
 

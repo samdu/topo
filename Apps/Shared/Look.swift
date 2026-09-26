@@ -546,6 +546,27 @@ struct Look: Equatable, Sendable {
         /// transcript's frame carried down to the composer pane's foot (`MascotField.pinFrame`),
         /// with the keyboard down, 0 to 1 each, so a pin survives rotation and another screen.
         var pin = CGPoint(x: 0.85, y: 0.8)
+        /// How a debug build draws his field over the chat when the settings sheet's Tuning section
+        /// shows it: nothing a release build draws.
+        var debug = Debug()
+
+        /// The overlay of his field (`MascotFieldOverlay`): his box and, fainter, his reach, the room
+        /// his box may stand in, every place the last decision weighed — the ones that clear the
+        /// words filled — with the one it chose, and the words as he read them.
+        struct Debug: Equatable, Sendable {
+            var box = Color.red
+            var reach = Color.red.opacity(0.35)
+            var room = Color.blue.opacity(0.7)
+            /// Every place weighed, outlined; one path, so where they overlap is no darker.
+            var candidate = Color.orange.opacity(0.25)
+            /// The places that clear the words, filled as one shape.
+            var clearing = Color.green.opacity(0.18)
+            var chosen = Color.green
+            var words = Color.purple.opacity(0.3)
+            /// The width of every outline but a candidate's, and a candidate's, in points.
+            var lineWidth: CGFloat = 2
+            var hairline: CGFloat = 0.5
+        }
 
         /// The three places he can be.
         enum Placement: String, Equatable, Sendable, CaseIterable {

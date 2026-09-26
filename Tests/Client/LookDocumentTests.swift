@@ -160,6 +160,29 @@ final class LookDocumentTests: XCTestCase {
         }
     }
 
+    /// The overlay of his field is drawn in colours and widths of its own: an outline's width is
+    /// read from a tenth of a point to 8, its ends taken and past either refused, each alone, and
+    /// a colour that is not one refused, leaving the rest as the document said.
+    func testTheOverlayOfHisFieldIsReadInItsOwnRanges() {
+        for width in [0.1, 8] {
+            let reading = LookDocument.read(#"{"mascot": {"debug": {"lineWidth": \#(width), "hairline": \#(width)}}}"#)
+            XCTAssertEqual(reading.notes, [], "\(width)")
+            XCTAssertEqual(reading.look.mascot.debug.lineWidth, CGFloat(width))
+            XCTAssertEqual(reading.look.mascot.debug.hairline, CGFloat(width))
+        }
+        for width in [0, 0.09, 8.01, -1, 4000] {
+            let reading = LookDocument.read(##"{"mascot": {"debug": {"lineWidth": \##(width), "hairline": \##(width), "box": "#000000"}}}"##)
+            XCTAssertEqual(reading.look.mascot.debug.lineWidth, Look.Mascot.Debug().lineWidth, "\(width)")
+            XCTAssertEqual(reading.look.mascot.debug.hairline, Look.Mascot.Debug().hairline, "\(width)")
+            XCTAssertNotEqual(reading.look.mascot.debug.box, Look.Mascot.Debug().box, "\(width) took the box's colour down with it")
+            XCTAssertEqual(reading.notes.count, 2, "\(width): \(reading.notes)")
+        }
+        let wrong = LookDocument.read(#"{"mascot": {"debug": {"chosen": "green", "lineWidth": 4}}}"#)
+        XCTAssertEqual(wrong.look.mascot.debug.chosen, Look.Mascot.Debug().chosen)
+        XCTAssertEqual(wrong.look.mascot.debug.lineWidth, 4)
+        XCTAssertEqual(wrong.notes.count, 1, "\(wrong.notes)")
+    }
+
     /// Where Topo sits is one of three names, and anything else is refused with the names listed,
     /// leaving every other field of his as the document said.
     func testThePlacementIsOneOfThreeNames() {

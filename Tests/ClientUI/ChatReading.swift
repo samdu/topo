@@ -36,6 +36,16 @@ enum ChatReading {
         /// The last reports, oldest first, and what the glass drew while something moved.
         var recent: [Glimpse] = []
         var trail: [Drawn] = []
+        /// The roam's last decision where to stand, as the report sums it up.
+        var decision: Decision?
+
+        struct Decision: Decodable {
+            var chosen: [Double]?
+            var clears: Bool?
+            var cost: Double?
+            var candidates: Int
+            var clearing: Int
+        }
 
         struct Glimpse: Decodable {
             var sequence: Int
@@ -52,7 +62,7 @@ enum ChatReading {
         }
 
         var description: String {
-            "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? []) trail \(trail.suffix(30))"
+            "\(roost) (\(placement)) at \(frame ?? []) to \(to ?? []) hidden \(hidden) walking \(walking) dragging \(dragging) drags \(drags) moves \(moves) pin \(pin ?? []) pane \(pane ?? []) well \(well ?? []) decision \(decision.map { "chosen \($0.chosen ?? []) clears \($0.clears.map(String.init) ?? "-") cost \($0.cost ?? -1) of \($0.candidates), \($0.clearing) clear" } ?? "none") trail \(trail.suffix(30))"
         }
 
         /// Standing still where his roost has him.
