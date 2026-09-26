@@ -237,11 +237,12 @@ struct CodeBlockPulse: ViewModifier {
 
     @ViewBuilder
     func body(content: Content) -> some View {
+        let enclosure = enclosure, pulse = pulse
         if let still {
-            content.overlay { outline(pulse.level(at: still)) }
+            content.overlay { Self.outline(pulse.level(at: still), enclosure: enclosure, pulse: pulse) }
         } else {
             content.keyframeAnimator(initialValue: pulse.duration, trigger: trigger) { content, time in
-                content.overlay { outline(pulse.level(at: time)) }
+                content.overlay { Self.outline(pulse.level(at: time), enclosure: enclosure, pulse: pulse) }
             } keyframes: { _ in
                 // The clock of the pulse, run from its start to its end; what it draws at each
                 // moment is `level`, so the ease is the pulse's own and not the keyframe's.
@@ -255,7 +256,8 @@ struct CodeBlockPulse: ViewModifier {
 
     /// The outline at `level`, 0 at rest and 1 at the peak: its width and its opacity both
     /// that share of the look's, drawn inside the enclosure's edge so it covers nothing beside it.
-    private func outline(_ level: Double) -> some View {
+    private nonisolated static func outline(_ level: Double, enclosure: Look.Enclosure,
+                                            pulse: Look.Markdown.Pulse) -> some View {
         RoundedRectangle(cornerRadius: enclosure.cornerRadius, style: .continuous)
             .strokeBorder(pulse.accent.opacity(pulse.opacity * level), lineWidth: pulse.width * level)
             .allowsHitTesting(false)
