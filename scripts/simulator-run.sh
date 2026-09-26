@@ -34,7 +34,8 @@
 # simulator's keychain, which --erase is how you clear.
 #
 # Every turn a debug build takes goes to Haiku, whatever the model setting says: the pin is
-# ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/MessagesAPI.swift.
+# ClaudeModel.pinned in Packages/TopoTurn/Sources/TopoTurn/ClaudeModel.swift, and APIProxy.pinnedModel
+# in the guest's proxy.
 #
 # --talk runs the TopoTalk scheme's one UI test (Tests/ClientTalk) and nothing else: it fetches
 # and verifies the ear's models into EAR_MODELS (build/ear-models) and the voice's into

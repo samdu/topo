@@ -8,20 +8,15 @@ public struct BrainRequest: Sendable, Equatable {
     /// The person's turns the reply answers: the one just said, or the heads of the log waiting
     /// for a reply.
     public var answering: [Turn]
-    /// The turns a brain with no memory of its own is sent, the answered ones last: the last
-    /// `TurnRunner.historyLimit` of the log.
-    public var history: [Turn]
     /// The parents the reply is written with.
     public var parents: [TurnRef]
     /// The reply's nonce (`TurnRunner.replyNonce(for:)`), the same on every device.
     public var nonce: String
     public var model: ClaudeModel
 
-    public init(context: [Turn], answering: [Turn], history: [Turn], parents: [TurnRef], nonce: String,
-                model: ClaudeModel) {
+    public init(context: [Turn], answering: [Turn], parents: [TurnRef], nonce: String, model: ClaudeModel) {
         self.context = context
         self.answering = answering
-        self.history = history
         self.parents = parents
         self.nonce = nonce
         self.model = model
@@ -72,18 +67,23 @@ extension Brain {
     public func forget() async {}
 }
 
-/// The Messages API as a brain: the history in, the reply out, nothing kept. The phone's
-/// production brain is Claude Code in the guest; this one is compiled so the suites can drive the
-/// seam, and nothing in the app constructs it.
-public struct MessagesAPIBrain: Brain {
-    public let api: MessagesAPI
+/// A reply as the harness keeps it.
+public struct Reply: Sendable, Equatable {
+    public var text: String
+    public var model: String
+    /// Every token of context the reply was written over, cached or not.
+    public var context: Int
+    public var outputTokens: Int
 
-    public init(api: MessagesAPI) { self.api = api }
-
-    public func answer(_ request: BrainRequest) async throws -> Reply {
-        try await api.complete(TurnRunner.messages(from: request.history), model: request.model,
-                               system: TurnRunner.systemPrompt)
+    public init(text: String, model: String, context: Int, outputTokens: Int) {
+        self.text = text
+        self.model = model
+        self.context = context
+        self.outputTokens = outputTokens
     }
 
-    public func describe() async -> String { "the Messages API" }
+    /// A reply found already in the log: its text is the turn's, and nothing else is known.
+    init(recovered turn: Turn, model: ClaudeModel) {
+        self.init(text: turn.text, model: model.rawValue, context: 0, outputTokens: 0)
+    }
 }

@@ -67,8 +67,8 @@ final class MascotGeometryTests: XCTestCase {
     static let fixtures: [Fixture] = [
         Fixture(name: "an empty chat", field: field([]), roost: "gap"),
         // Long turns on both sides, reaching under the pane as a scrolled transcript does: the
-        // person's across the column, Topo's to the column's edge less his margin (110 points), so
-        // the margin beside a reply is room.
+        // person's across the column, Topo's to 110 points short of the column's edge, so the
+        // room beside a reply holds him.
         Fixture(name: "long turns on both sides",
                 field: field(rows(height: 80, topoHeight: 160, personMinX: 60, topoMaxX: 276, until: 700)),
                 roost: "gap"),
@@ -661,9 +661,11 @@ final class MascotGeometryTests: XCTestCase {
     /// Over an empty chat, a chat with room beside its turns and one with none, at the default
     /// look and the ends of the ranges for his size and clearance: he is drawn exactly where a
     /// roost holds him — at every look here but a scale of 4, whose 616-point picture no phone
-    /// holds — and a look at which he is not drawn fails unless no roost holds him; his picture as the canvas draws it overlaps no
-    /// turn and none of the pane, measured from the frames the views report as drawn; and every
-    /// pixel of the pane is the same with him as without.
+    /// holds — and a look at which he is not drawn fails unless no roost holds him; his picture as
+    /// the canvas draws it overlaps none of the pane, and no turn wherever a place clears the
+    /// words, measured from the frames the views report as drawn — the full chat at the default
+    /// look traps him, its reply margin narrower than his picture, so there he stands over the
+    /// least of its words; and every pixel of the pane is the same with him as without.
     func testTheChatAsDrawnHasHimClearOfEveryWordAndTheMicrophone() throws {
         for (name, turns, roost) in [("empty", [Turn](), "gap"), ("full", PreviewTurns.full, "gap"),
                                      ("fitting", PreviewTurns.fitting, nil)] as [(String, [Turn], String?)] {
@@ -691,14 +693,18 @@ final class MascotGeometryTests: XCTestCase {
                     XCTAssertEqual(roam.roost.name, roost, label)
                     XCTAssertFalse(roam.hidden, label)
                 }
-                let expected = MascotRoost.of(field, size: MascotSprite.size(scale: mascot.scale),
-                                              clearance: mascot.clearance, reach: MascotSprite.reach(scale: mascot.scale),
-                                              from: nil)
+                let decision = MascotRoost.decide(field, size: MascotSprite.size(scale: mascot.scale),
+                                                  clearance: mascot.clearance, reach: MascotSprite.reach(scale: mascot.scale),
+                                                  from: nil)
+                let expected = decision.roost
                 XCTAssertEqual(roam.roost, expected, label)
+                if name == "full", mascot == Look.Mascot() {
+                    XCTAssertEqual(decision.choice?.clears, false, "\(label): the reply margin did not trap him")
+                }
                 XCTAssertEqual(canvas.showing, expected != .none,
                                "\(label): drawn \(canvas.showing), where a roost \(expected.name == "none" ? "holds nothing" : "holds him")")
-                // Every look here holds him but the largest: a full chat holds him in the margin
-                // beside its replies, and at a scale of 4 his reach is wider than the screen.
+                // Every look here holds him but the largest, whose reach is wider than the screen;
+                // where no place clears, he stands over the least of the words.
                 let held = mascot.scale < 4
                 XCTAssertEqual(canvas.showing, held, "\(label): \(expected.name)")
                 if canvas.showing {
@@ -718,8 +724,10 @@ final class MascotGeometryTests: XCTestCase {
                     }
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.well!), "\(label): drawn over the well")
                     XCTAssertFalse(MascotRoost.overlap(drawn, field.pane!), "\(label): drawn over the pane")
-                    for obstacle in field.covering {
-                        XCTAssertFalse(MascotRoost.overlap(drawn, obstacle), "\(label): drawn over \(obstacle)")
+                    if decision.choice?.clears == true {
+                        for obstacle in field.covering {
+                            XCTAssertFalse(MascotRoost.overlap(drawn, obstacle), "\(label): drawn over \(obstacle)")
+                        }
                     }
                 }
                 try assertPaneUnchanged(without, with, field: field, canvas: canvas, label)
@@ -759,10 +767,10 @@ final class MascotGeometryTests: XCTestCase {
     /// A person's turn reports its bubble and not the row's width, so the room a short bubble
     /// leaves on its left is room. On the 393-point phone Sam's screenshot came from
     /// (`device-a70490e-trapped-on-flank.png`), the turn "Nothing, just testing the continuity
-    /// feature :p" keeps the person's inset (`personLeadingInset`, 110 points, with the column's
-    /// 16) and wraps within it, so its bubble starts at least 126 points in and ends at the
-    /// column's edge, and the room left of it holds his picture at his own size with its
-    /// clearance. A narrower turn of two lines in the same place (`continuityShort`) leaves room a
+    /// feature :p" keeps the person's inset (`personLeadingInset`, 70 points, with the column's
+    /// 16) and wraps within it, so its bubble starts at least 86 points in and ends at the
+    /// column's edge, and the room left of it holds his picture 60 points wide with its clearance
+    /// but not at his own size, so he can be trapped beside it. A narrower turn of two lines in the same place (`continuityShort`) leaves room a
     /// picture 74 points wide fits.
     func testTheRoomBesideAShortBubbleIsAGap() throws {
         let phone = CGSize(width: 393, height: 852)
@@ -782,8 +790,8 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertEqual(bubble.maxX, 377, accuracy: 2)
         XCTAssertTrue(MascotRoost.holds(field, frame: beside(bubble, width: 60), clearance: clearance),
                       "the room left of the bubble is not room: \(field.covering)")
-        XCTAssertTrue(MascotRoost.holds(field, frame: beside(bubble, width: MascotSprite.box.width), clearance: clearance),
-                      "the room left of the bubble does not hold him at his own size: \(field.covering)")
+        XCTAssertFalse(MascotRoost.holds(field, frame: beside(bubble, width: MascotSprite.box.width), clearance: clearance),
+                       "the room left of the bubble holds him at his own size: \(field.covering)")
 
         let short = try stage(PreviewTurns.continuityShort, mascot: Look.Mascot(), size: phone)
         defer { short.window.isHidden = true }
@@ -794,13 +802,14 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     /// Topo's reply reports its lines and not its frame, which is as wide as its widest line, and
-    /// keeps a margin after them (`replyTrailingInset`, 110 points on the phone): with the
-    /// column's padding, 116 points on the 393-point phone, it holds his picture at a scale of 1
-    /// and its clearance from the words, with his reach inside the screen's edge, and the ends of short lines
-    /// add to it. `PreviewTurns.continuity` scrolled to its end, as the phone Sam's screenshot
-    /// came from rests, and `PreviewTurns.ragged`, whose last reply ends in two short paragraphs,
-    /// each hold him there, on the right, beside the reply.
-    func testTheMarginBesideAReplyIsRoom() throws {
+    /// keeps a margin after them (`replyTrailingInset`, 70 points on the phone): with the
+    /// column's padding, 86 points on the 393-point phone, too narrow for his picture at a scale
+    /// of 1 with its clearance and his reach, so a reply whose lines run to the column's edge
+    /// traps him, and the ends of short lines add to it. `PreviewTurns.continuity` scrolled to its
+    /// end, as the phone Sam's screenshot came from rests, has him trapped: he stands on the right
+    /// beside the reply, over the least of its words. `PreviewTurns.ragged`, whose last reply ends
+    /// in two short paragraphs, frees him beside them, clear of every line.
+    func testTheMarginBesideAReplyTrapsHimUnlessItsLinesEndShort() throws {
         let phone = CGSize(width: 393, height: 852)
         var original = Look.Mascot()
         original.scale = 1
@@ -815,18 +824,20 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertGreaterThan(lines.count, 10, "\(name): Topo's replies did not report their lines: \(field.covering)")
             let edge = field.visible.maxX - look.transcript.horizontalPadding - look.transcript.replyTrailingInset
             XCTAssertLessThanOrEqual(lines.map(\.maxX).max() ?? 0, edge + 0.5, "\(name): a line ran into the margin")
-            XCTAssertLessThanOrEqual(size.width + MascotSprite.reach(scale: 1).right + clearance, field.visible.maxX - edge,
-                                     "\(name): the margin does not hold him")
+            XCTAssertGreaterThan(size.width + MascotSprite.reach(scale: 1).right + clearance, field.visible.maxX - edge,
+                                 "\(name): the margin alone holds him")
             let spot = try XCTUnwrap(chat.canvas?.roam?.roost.frame, "\(name): he stands nowhere")
             XCTAssertEqual(chat.canvas?.roam?.roost.name, "gap", name)
             XCTAssertTrue(chat.canvas?.showing ?? false, name)
             XCTAssertGreaterThan(spot.midX, field.visible.midX, "\(name): not on the right: \(spot)")
             let alongside = lines.filter { $0.minY < spot.maxY + clearance && $0.maxY > spot.minY - clearance }
             XCTAssertFalse(alongside.isEmpty, "\(name): not beside the reply: \(spot)")
-            for line in alongside {
-                XCTAssertGreaterThanOrEqual(spot.minX, line.maxX + clearance - 0.001, "\(name): over \(line): \(spot)")
-            }
+            let clears = try XCTUnwrap(chat.canvas?.roam?.decision?.choice, "\(name): no choice").clears
+            XCTAssertEqual(clears, name == "ragged", "\(name): \(spot)")
             if name == "ragged" {
+                for line in alongside {
+                    XCTAssertGreaterThanOrEqual(spot.minX, line.maxX + clearance - 0.001, "\(name): over \(line): \(spot)")
+                }
                 let short = lines.sorted { $0.minY < $1.minY }.suffix(2)
                 XCTAssertTrue(short.allSatisfy { $0.maxX < 150 }, "the two short paragraphs: \(lines)")
                 for line in short {

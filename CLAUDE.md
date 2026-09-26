@@ -25,7 +25,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 
 - **CloudKit is truth, sockets are speed.** State (transcript log, pairing record, primary lease) lives in the private CloudKit database; the push that wakes the primary, direct sockets and the punched tunnel only make live turns fast. With no socket the app still works off the records, just slower.
 - One container, `iCloud.zone.hexagon.topo`, private database, custom zone `Topo`. Every bundle reads and writes that one, so the identifiers are a contract between them and not a per-target setting.
-- A debug build only ever talks to Haiku 4.5, because every debug build here is signed into a real subscription: the pin is at the wire (`ClaudeModel.effective`) and in the guest's proxy (`APIProxy.pinnedModel`), never only at the picker (`docs/simulator.md`, *The one rule*).
+- A debug build only ever talks to Haiku 4.5, because every debug build here is signed into a real subscription: the pin is in the resident's launch (`ClaudeModel.effective`, its `--model`) and at the wire in the guest's proxy (`APIProxy.pinnedModel`), never only at the picker (`docs/simulator.md`, *The one rule*).
 - Tokens live in the device keychain, never synced; only the primary and the hub ever hold one.
 - A block handed to the system from a main-actor context and called back off the main thread (the input tap, on the audio thread) is written `@Sendable`: without it the closure is main-actor-isolated by inference, and Swift 6 opens it with an executor check that traps off the main thread, past any `catch`.
 
