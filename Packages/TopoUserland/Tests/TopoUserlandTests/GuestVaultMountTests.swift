@@ -145,14 +145,14 @@ final class GuestVaultMountTests: XCTestCase {
         let cat = try await Guest.shared.spawn("/bin/cat", ["\(point)/note.md"])
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertFalse(cat.hasExited)
-        // Judged by the parked task itself rather than by the termination's confirmation, which
-        // counts every task in the shared guest, a task an earlier suite left behind included.
         let start = ContinuousClock.now
         let ending = Task { await cat.terminate(within: .seconds(7)) }
         await eventually("the parked task was ended by its SIGKILL", within: 2) { cat.hasExited }
         XCTAssertEqual(cat.exitStatus, 128 + 9)
         XCTAssertLessThan(ContinuousClock.now - start, .seconds(2))
-        _ = await ending.value
+        let termination = await ending.value
+        XCTAssertTrue(termination.confirmed, "\(termination)")
+        XCTAssertLessThan(termination.elapsed, .seconds(7))
         var lines = cat.lines.makeAsyncIterator()
         let printed = await lines.next()
         XCTAssertNil(printed, "the parked cat printed the note")
@@ -205,6 +205,95 @@ final class GuestVaultMountTests: XCTestCase {
                        "the rest of the vault was not the guest's to empty")
     }
 
+    /// A vault holding the mirror's baseline, as the mirror leaves it.
+    private func vaultWithBaseline() throws -> (host: URL, point: String, baseline: Data) {
+        let (host, point) = try vault()
+        let own = host.appendingPathComponent(".topo", isDirectory: true)
+        try fm.createDirectory(at: own, withIntermediateDirectories: true)
+        let baseline = Data(#"{"version":1,"files":{},"heads":{}}"#.utf8)
+        try baseline.write(to: own.appendingPathComponent("mirror.json"))
+        return (host, point, baseline)
+    }
+
+    /// A link the guest makes to the mirror's folder, or to its baseline, reaches neither: not
+    /// read through, not written through, not removed through.
+    func testALinkToTheMirrorsFolderReachesNothingThroughIt() async throws {
+        let (host, point, baseline) = try vaultWithBaseline()
+        for command in [
+            "cd \(point) && ln -s .topo alias && cat alias/mirror.json",
+            "cd \(point) && echo {} > alias/mirror.json",
+            "cd \(point) && ln -s .topo/mirror.json m && cat m",
+            "cd \(point) && echo {} > m",
+            "cd \(point) && rm alias/mirror.json",
+            "cd \(point) && mv alias/mirror.json taken.json",
+        ] {
+            let attempt = try await sh(command)
+            XCTAssertNotEqual(attempt.status, 0, "reached the mirror's folder through a link: \(command)")
+            XCTAssertFalse(attempt.output.contains("version"), "read the baseline through a link: \(command)")
+        }
+        XCTAssertEqual(try Data(contentsOf: host.appendingPathComponent(".topo/mirror.json")), baseline)
+    }
+
+    /// The guest resolves a path's links before the vault's filesystem sees it, and keeps what it
+    /// resolved for a while (per thread, 100 ms), so by the time the host opens the path a folder
+    /// in it can have become a link — here to the mirror's folder. A shell reads and writes
+    /// `d/mirror.json` in a loop of builtins, one thread, while `d` goes back and forth between a
+    /// folder and a link to `.topo` under it: the host follows no link on the way, so the loop never
+    /// reads the baseline and never writes it.
+    func testAFolderSwappedForALinkUnderTheGuestReachesNothing() async throws {
+        let (host, point, baseline) = try vaultWithBaseline()
+        let d = host.appendingPathComponent("d").path
+        let parked = host.appendingPathComponent("d-parked").path
+        XCTAssertEqual(mkdir(d, 0o755), 0)
+
+        // Eight swaps each way, then `stop` in the vault ends the guest's loop.
+        let stop = host.appendingPathComponent("stop").path
+        let swapping = Task.detached {
+            for _ in 0..<8 {
+                rename(d, parked)
+                symlink(".topo", d)
+                usleep(130_000)
+                unlink(d)
+                rename(parked, d)
+                usleep(130_000)
+            }
+            close(open(stop, O_CREAT | O_WRONLY, 0o644))
+        }
+        let loop = try await sh("cd \(point) && { i=0; while [ ! -e stop ] && [ $i -lt 200000 ]; do l=; read -r l < d/mirror.json; "
+            + "case \"$l\" in *version*) echo \"READ $l\";; esac; echo corrupted > d/mirror.json; i=$((i+1)); done; "
+            + "echo \"loops $i\"; } 2>/dev/null")
+        await swapping.value
+        XCTAssertTrue(loop.output.contains("loops "), loop.output)
+        XCTAssertFalse(loop.output.contains("READ"), "the guest read the baseline through a swapped folder: \(loop.output.prefix(200))")
+        XCTAssertEqual(try Data(contentsOf: host.appendingPathComponent(".topo/mirror.json")), baseline,
+                       "the guest wrote the baseline through a swapped folder")
+    }
+
+    /// Sign-out's order in the guest: the resident is ended, and only then is the vault taken away.
+    /// The resident here holds a file in the vault open, as Claude Code does mid-Read, so a mount
+    /// taken away before its end has answered is refused as busy.
+    func testASignOutEndsTheResidentBeforeTheVaultIsTakenAway() async throws {
+        let (host, point) = try vault()
+        let directory = fm.temporaryDirectory.appendingPathComponent("session-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        hosts.append(directory)
+        let launcher = HoldingLauncher(point: point)
+        let session = GuestSession(launcher: launcher, store: SessionFile(url: directory.appendingPathComponent(".guest-session")))
+        await session.foreground()
+        try await session.ready()
+        await eventually("the resident holds a file in the vault") {
+            fm.fileExists(atPath: host.appendingPathComponent("holding").path)
+        }
+        XCTAssertThrowsError(try Guest.shared.unmount(point), "the resident did not hold the vault")
+
+        await session.forgetSession()
+        XCTAssertNoThrow(try Guest.shared.unmount(point), "the vault was taken away before the resident had ended")
+        points.removeAll { $0 == point }
+
+        let outcome = await session.background(budget: .zero)
+        if case .ended(_, let termination) = outcome { XCTAssertTrue(termination.confirmed, "\(termination)") }
+    }
+
     /// A folder made again is reached through a mount made again.
     func testUnmountAndMountAgainReachesTheNewFolder() async throws {
         let (_, point) = try vault("a\n")
@@ -254,5 +343,21 @@ final class GuestVaultMountTests: XCTestCase {
         let wrote = try await sh("cd \(homePoint) && ls > /dev/null && printf 'kept\\n' > memory/p6.md")
         XCTAssertEqual(wrote.status, 0, wrote.errors)
         XCTAssertEqual(try String(contentsOf: vaultHost.appendingPathComponent("p6.md"), encoding: .utf8), "kept\n")
+    }
+}
+
+/// A resident that holds a file of the vault open, as Claude Code does in the middle of a Read, and
+/// says so with a file beside it; every launch after the first holds nothing.
+private final class HoldingLauncher: ResidentLauncher, @unchecked Sendable {
+    let point: String
+    private let lock = NSLock()
+    private var launches = 0
+
+    init(point: String) { self.point = point }
+
+    func launch(resume session: String?, model: String?, memory: Bool?) async throws -> any ResidentProcess {
+        let first = lock.withLock { () -> Bool in launches += 1; return launches == 1 }
+        let script = first ? "exec 3<\(point)/note.md; : > \(point)/holding; exec sleep 300" : "cd / && exec sleep 300"
+        return try await Guest.shared.spawn("/bin/sh", ["-c", script])
     }
 }

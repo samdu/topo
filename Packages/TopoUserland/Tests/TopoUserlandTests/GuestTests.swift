@@ -48,13 +48,18 @@ final class GuestTests: XCTestCase {
         XCTAssertEqual(exit.output, "topo-42 5\n")
     }
 
-    func testAMissingProgramIsRefusedAtTheStart() async throws {
+    /// A program that does not exist is refused, and leaves nothing behind: the task made for it
+    /// ends, so a termination after it, which counts every task in the guest, is still confirmed.
+    func testAMissingProgramIsRefusedAtTheStartAndLeavesNoTask() async throws {
         _ = try SharedGuest.booted()
         do {
             _ = try await Guest.shared.run("/bin/no-such-program")
             XCTFail("a program that does not exist started")
         } catch Guest.Failure.spawn {
         }
+        let after = try await Guest.shared.spawn("/bin/sleep", ["30"])
+        let termination = await after.terminate(within: .seconds(5))
+        XCTAssertTrue(termination.confirmed, "\(termination)")
     }
 
     /// iSH's kernel is process-global: a second boot would be a second init and a second root

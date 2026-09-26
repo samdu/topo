@@ -62,25 +62,23 @@ final class GuestResident {
     var memory: Memory?
     /// The memory's folder in the guest.
     let vault = VaultMount(seam: .guest)
-    /// Where the vault's lines go once the guest has started.
-    private var vaultLog: (@Sendable (String) -> Void)?
 
     /// Brings the guest's mount of the memory into line with the home, and answers whether it is
-    /// mounted. Asked at every launch of the resident and before every turn.
+    /// mounted. Asked when the session is made and before every turn; never by a launch, so a
+    /// process started after a sign-out mounts nothing.
     func reconcileMemory() throws -> Bool {
         let home = memory?.home ?? .local
         let local = memory?.localDirectory ?? Memory.standardDirectory
-        let mounted = try vault.reconcile(home: home, local: local)
-        return mounted
+        return try vault.reconcile(home: home, local: local)
     }
 
-    /// The launch's answer: a mount that could not be brought into line is said in the log and
-    /// told to the resident as a memory it cannot reach, rather than failing the launch.
-    func memoryAtLaunch() -> Bool {
+    /// What the first process is told: a mount that could not be brought into line is said in the
+    /// log and told as a memory it cannot reach, rather than failing the start.
+    private func memoryAtStart(log: @Sendable (String) -> Void) -> Bool {
         do {
             return try reconcileMemory()
         } catch {
-            vaultLog?("memory: \(error)")
+            log("memory: \(error)")
             return false
         }
     }
@@ -121,11 +119,11 @@ final class GuestResident {
                 self.proxyPort = port
             }
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            self.vaultLog = log
-            let launcher = ClaudeLauncher(memory: { await GuestResident.shared.memoryAtLaunch() }) {
+            let launcher = ClaudeLauncher {
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
             }
-            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model, log: log)
+            let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
+                                       memory: self.memoryAtStart(log: log), log: log)
             self.session = session
             let lifecycle = GuestLifecycle(session: session, time: ApplicationBackgroundTime(),
                                            report: { outcome in log("background: \(outcome)") })
@@ -195,19 +193,23 @@ struct ResidentConversation: GuestConversation {
 
     func ready() async throws {
         let session = try await session()
+        // The home may have moved, or its folder been made again, since the process was launched:
+        // a turn is never sent into a mount of a folder that is not the memory's. What the mount
+        // came to is what the process must have been told, and one told otherwise is replaced
+        // before the turn goes to it (`GuestSession.use(memory:)`).
+        let mounted: Bool
+        do {
+            mounted = try await GuestResident.shared.reconcileMemory()
+        } catch {
+            throw GuestBridgeError.notReady("\(error)")
+        }
+        await session.use(memory: mounted)
         do {
             try await session.ready()
         } catch GuestSession.Refusal.notResident {
             throw GuestBridgeError.notReady("Claude Code is not resident while the app is in the background")
         } catch {
             throw GuestBridgeError.notReady("Claude Code did not start: \(error)")
-        }
-        // The home may have moved, or its folder been made again, since the process was launched:
-        // a turn is never sent into a mount of a folder that is not the memory's.
-        do {
-            _ = try await GuestResident.shared.reconcileMemory()
-        } catch {
-            throw GuestBridgeError.notReady("\(error)")
         }
     }
 
@@ -242,14 +244,16 @@ struct ResidentConversation: GuestConversation {
     }
 
     func forget() async {
-        if let session = await GuestResident.shared.session {
-            await session.forgetSession()
-        } else {
-            GuestResident.sessionFile.clear()
+        // The resident is ended first, and waited for; then the mount goes, and then the grant on
+        // the person's iCloud Drive folder: the memory is not reachable from a signed-out guest,
+        // and the grant is not held past the login.
+        await GuestResident.shared.vault.forget { @MainActor in
+            if let session = GuestResident.shared.session {
+                await session.forgetSession()
+            } else {
+                GuestResident.sessionFile.clear()
+            }
         }
-        // After the resident has gone: the memory is not reachable from a signed-out guest, and
-        // the grant on the person's iCloud Drive folder is not held past the login.
-        await GuestResident.shared.vault.forget()
     }
 
     func status() async -> String {

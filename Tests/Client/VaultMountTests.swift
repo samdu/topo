@@ -15,6 +15,7 @@ final class VaultMountTests: XCTestCase {
         var calls: [String] = []
         var identities: [URL: VaultMount.Identity] = [:]
         var unmountFails = false
+        var linkFails = false
         var accessRefused = false
 
         var seam: VaultMount.Seam {
@@ -24,7 +25,10 @@ final class VaultMountTests: XCTestCase {
                     if self.unmountFails { throw NSError(domain: "guest", code: -16) }
                     self.calls.append("unmount")
                 },
-                link: { self.calls.append("link") },
+                link: {
+                    if self.linkFails { throw NSError(domain: "guest", code: -17) }
+                    self.calls.append("link")
+                },
                 startAccess: { self.calls.append("start \($0.lastPathComponent)"); return !self.accessRefused },
                 stopAccess: { self.calls.append("stop \($0.lastPathComponent)") },
                 identity: { self.identities[$0] },
@@ -93,6 +97,28 @@ final class VaultMountTests: XCTestCase {
         XCTAssertEqual(mount.standing, before)
     }
 
+    /// The home's `memory` link is the path the mind is told; one that cannot be made — the guest
+    /// has put a folder of its own there — is a memory the mind cannot reach, whether the mount is
+    /// new or standing, and the next reconcile tries the link again.
+    func testALinkThatCannotBeMadeSaysTheMemoryIsNotMounted() throws {
+        let recorder = Recorder()
+        let mount = VaultMount(seam: recorder.seam)
+        XCTAssertTrue(try mount.reconcile(home: .local, local: local))
+        recorder.linkFails = true
+        XCTAssertFalse(try mount.reconcile(home: .local, local: local), "a standing mount the home's link misses was said to be mounted")
+
+        let fresh = VaultMount(seam: recorder.seam)
+        recorder.calls = []
+        XCTAssertFalse(try fresh.reconcile(home: .local, local: local), "a new mount the home's link misses was said to be mounted")
+        XCTAssertEqual(recorder.calls, ["mount Vault"])
+        XCTAssertNotNil(fresh.standing, "the mount itself stands")
+
+        recorder.linkFails = false
+        recorder.calls = []
+        XCTAssertTrue(try fresh.reconcile(home: .local, local: local))
+        XCTAssertEqual(recorder.calls, ["link"])
+    }
+
     func testALostHomeMountsNothingAndSaysSo() throws {
         let recorder = Recorder()
         let mount = VaultMount(seam: recorder.seam)
@@ -117,27 +143,50 @@ final class VaultMountTests: XCTestCase {
         XCTAssertNil(mount.standing)
     }
 
-    func testForgetUnmountsAndStopsAccess() throws {
+    func testForgetUnmountsAndStopsAccess() async throws {
         let recorder = Recorder()
         recorder.identities[vault] = .init(device: 2, inode: 7)
         let mount = VaultMount(seam: recorder.seam)
         _ = try mount.reconcile(home: .iCloudDrive(picked: root, folder: vault), local: local)
         recorder.calls = []
-        mount.forget()
-        XCTAssertEqual(recorder.calls, ["unmount", "stop com~apple~CloudDocs"])
+        await mount.forget { recorder.calls.append("end") }
+        XCTAssertEqual(recorder.calls, ["end", "unmount", "stop com~apple~CloudDocs"])
         XCTAssertNil(mount.standing)
+    }
+
+    /// The end is awaited, not started: while the resident's teardown is still running, nothing
+    /// is unmounted and no access is stopped.
+    func testForgetWaitsForTheResidentsEndBeforeTakingAnythingAway() async throws {
+        let recorder = Recorder()
+        recorder.identities[vault] = .init(device: 2, inode: 7)
+        let mount = VaultMount(seam: recorder.seam)
+        _ = try mount.reconcile(home: .iCloudDrive(picked: root, folder: vault), local: local)
+        recorder.calls = []
+        let (ended, finish) = AsyncStream<Void>.makeStream()
+        let forgetting = Task { @MainActor in
+            await mount.forget {
+                recorder.calls.append("ending")
+                for await _ in ended { break }
+                recorder.calls.append("ended")
+            }
+        }
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(recorder.calls, ["ending"], "the mount or its grant went while the resident was still ending")
+        finish.yield()
+        await forgetting.value
+        XCTAssertEqual(recorder.calls, ["ending", "ended", "unmount", "stop com~apple~CloudDocs"])
     }
 
     /// A mount a teardown that did not confirm still holds: the grant goes anyway, and the next
     /// reconcile takes the mount away before anything else, even for the same folder.
-    func testAForgetThatCannotUnmountStopsTheGrantAndLeavesTheMountStale() throws {
+    func testAForgetThatCannotUnmountStopsTheGrantAndLeavesTheMountStale() async throws {
         let recorder = Recorder()
         recorder.identities[vault] = .init(device: 2, inode: 7)
         let mount = VaultMount(seam: recorder.seam)
         _ = try mount.reconcile(home: .iCloudDrive(picked: root, folder: vault), local: local)
         recorder.unmountFails = true
         recorder.calls = []
-        mount.forget()
+        await mount.forget {}
         XCTAssertEqual(recorder.calls, ["stop com~apple~CloudDocs"])
         recorder.unmountFails = false
         recorder.calls = []

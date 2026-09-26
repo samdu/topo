@@ -17,18 +17,27 @@
 //     the waiting task (`_EINTR`), since a host semaphore is not something the kernel's signal
 //     wakes, and a task parked here would otherwise hold a teardown past its bound.
 //   - `.topo` at the mount's root is the mirror's own (its baseline) and is refused `_EACCES`.
+//   - The host follows no link: every call is made from the path's folder, opened from the root
+//     with `O_NOFOLLOW_ANY`, on a last name it does not follow either (`place_at`). The guest has
+//     resolved its own links before a path gets here, but a folder on the way can have become a
+//     link by the time the host walks it — the guest keeps what it resolved per thread for 100 ms
+//     — and a host that followed it would reach `.topo`, or anywhere the app can, under a name
+//     that is neither. So a path's text is the host's path, which is what `.topo` is judged by.
 //
 // Nothing here holds a kernel lock while it waits: the fs op is called with none of the mount,
 // pid or spawn locks held, and the wait takes only the task's own signal lock, for a read.
 
 #import <Foundation/Foundation.h>
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include "kernel/errno.h"
 #include "kernel/fs.h"
 #include "kernel/signal.h"
 #include "kernel/task.h"
 #include "fs/fd.h"
+#include "fs/fix_path.h"
 #include "fs/real.h"
 
 #include "topo_ish.h"
@@ -78,6 +87,73 @@ static bool is_mirrors(const char *path) {
     static const char name[] = ".topo";
     size_t n = sizeof(name) - 1;
     return strncmp(path, name, n) == 0 && (path[n] == '\0' || path[n] == '/');
+}
+
+// Where a path's last name is, reached with no link followed: its folder opened from the vault's
+// root with `O_NOFOLLOW_ANY`, which fails `ELOOP` on a link anywhere on the way, and the mount as
+// realfs sees it with that folder for its root, so realfs's own call on the name walks nothing.
+// The root itself is its own place.
+struct place {
+    struct mount mount;
+    char name[MAX_PATH + 2];
+};
+
+static int place_at(struct mount *mount, const char *path, struct place *place) {
+    while (path[0] == '/')
+        path++;
+    place->mount = *mount;
+    const char *slash = strrchr(path, '/');
+    int folder;
+    if (slash == NULL) {
+        folder = openat(mount->root_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        snprintf(place->name, sizeof(place->name), "%s%s", path[0] == '\0' ? "" : "/", path);
+    } else {
+        char parent[MAX_PATH];
+        size_t length = (size_t) (slash - path);
+        if (length >= sizeof(parent))
+            return _ENAMETOOLONG;
+        memcpy(parent, path, length);
+        parent[length] = '\0';
+        folder = openat(mount->root_fd, parent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW_ANY | O_CLOEXEC);
+        snprintf(place->name, sizeof(place->name), "/%s", slash + 1);
+    }
+    if (folder < 0)
+        return errno_map();
+    place->mount.root_fd = folder;
+    return 0;
+}
+
+static void place_close(struct place *place) {
+    close(place->mount.root_fd);
+}
+
+// `body` on `path`'s place: the mount rooted at its folder, and its last name.
+static int in_place(struct mount *mount, const char *path, int (^body)(struct mount *at, const char *name)) {
+    struct place place;
+    int err = place_at(mount, path, &place);
+    if (err < 0)
+        return err;
+    err = body(&place.mount, place.name);
+    place_close(&place);
+    return err;
+}
+
+// `body` on the places of `src` and `dst`, for the two calls that name two paths.
+static int in_places(struct mount *mount, const char *src, const char *dst,
+                     int (^body)(int from, const char *from_name, int to, const char *to_name)) {
+    struct place from, to;
+    int err = place_at(mount, src, &from);
+    if (err < 0)
+        return err;
+    err = place_at(mount, dst, &to);
+    if (err < 0) {
+        place_close(&from);
+        return err;
+    }
+    err = body(from.mount.root_fd, fix_path(from.name), to.mount.root_fd, fix_path(to.name));
+    place_close(&to);
+    place_close(&from);
+    return err;
 }
 
 static int posix_error(NSError *error) {
@@ -165,12 +241,13 @@ static int coordinated(NSURL *url, NSURL *other, bool writing, NSUInteger option
     return await_coordination(wait, coordinator);
 }
 
+// A change to `path`, made in its place under a coordinated write.
 static int coordinated_write(struct mount *mount, const char *path, NSUInteger options,
-                             int (^body)(void)) {
+                             int (^body)(struct mount *at, const char *name)) {
     if (is_mirrors(path))
         return _EACCES;
     return coordinated(url_in(mount, path), nil, true, options,
-                       ^int(NSURL *url, TopoVaultWait *wait) { return body(); }, NULL);
+                       ^int(NSURL *url, TopoVaultWait *wait) { return in_place(mount, path, body); }, NULL);
 }
 
 // The fd ops are realfs's with the close replaced, so a held write lets go when its file closes.
@@ -199,16 +276,24 @@ static struct fd *vault_open(struct mount *mount, const char *path, int flags, i
     if (is_mirrors(path))
         return ERR_PTR(_EACCES);
     make_fdops();
-    struct statbuf stat;
-    int found = realfs_stat(mount, path, &stat);
+    // The guest followed the last name's link, if it was one, before the path got here: the
+    // host follows none.
+    int host_flags = flags | O_NOFOLLOW_;
+    __block struct statbuf stat;
+    int found = in_place(mount, path, ^int(struct mount *at, const char *name) { return realfs_stat(at, name, &stat); });
     bool writing = (flags & O_ACCMODE_) != O_RDONLY_ || (flags & (O_CREAT_ | O_TRUNC_));
     bool regular = found == 0 && S_ISREG(stat.mode);
     bool creating = found == _ENOENT && (flags & O_CREAT_);
     if (!regular && !creating) {
         // A directory (a listing), or a name that is not there and is not being made.
-        struct fd *fd = realfs_open(mount, path, flags, mode);
-        if (!IS_ERR(fd))
-            fd->ops = &vault_fdops;
+        __block struct fd *fd = NULL;
+        int err = in_place(mount, path, ^int(struct mount *at, const char *name) {
+            fd = realfs_open(at, name, host_flags, mode);
+            return IS_ERR(fd) ? (int) PTR_ERR(fd) : 0;
+        });
+        if (err < 0)
+            return ERR_PTR(err);
+        fd->ops = &vault_fdops;
         return fd;
     }
 
@@ -217,9 +302,13 @@ static struct fd *vault_open(struct mount *mount, const char *path, int flags, i
     NSUInteger options = !writing ? 0
         : (flags & O_TRUNC_) ? NSFileCoordinatorWritingForReplacing : NSFileCoordinatorWritingForMerging;
     int err = coordinated(url_in(mount, path), nil, writing, options, ^int(NSURL *url, TopoVaultWait *wait) {
-        struct fd *fd = realfs_open(mount, path, flags, mode);
-        if (IS_ERR(fd))
-            return (int) PTR_ERR(fd);
+        __block struct fd *fd = NULL;
+        int failed = in_place(mount, path, ^int(struct mount *at, const char *name) {
+            fd = realfs_open(at, name, host_flags, mode);
+            return IS_ERR(fd) ? (int) PTR_ERR(fd) : 0;
+        });
+        if (failed < 0)
+            return failed;
         fd->ops = &vault_fdops;
         if (hold != NULL)
             fd->fs_data = (__bridge_retained void *) hold;
@@ -251,29 +340,35 @@ static int vault_umount(struct mount *mount) {
 }
 
 static int vault_unlink(struct mount *mount, const char *path) {
-    return coordinated_write(mount, path, NSFileCoordinatorWritingForDeleting, ^{ return realfs_unlink(mount, path); });
+    return coordinated_write(mount, path, NSFileCoordinatorWritingForDeleting,
+                             ^(struct mount *at, const char *name) { return realfs_unlink(at, name); });
 }
 
 static int vault_rmdir(struct mount *mount, const char *path) {
-    return coordinated_write(mount, path, NSFileCoordinatorWritingForDeleting, ^{ return realfs_rmdir(mount, path); });
+    return coordinated_write(mount, path, NSFileCoordinatorWritingForDeleting,
+                             ^(struct mount *at, const char *name) { return realfs_rmdir(at, name); });
 }
 
 static int vault_mkdir(struct mount *mount, const char *path, mode_t_ mode) {
-    return coordinated_write(mount, path, 0, ^{ return realfs_mkdir(mount, path, mode); });
+    return coordinated_write(mount, path, 0, ^(struct mount *at, const char *name) { return realfs_mkdir(at, name, mode); });
 }
 
 static int vault_symlink(struct mount *mount, const char *target, const char *link) {
-    return coordinated_write(mount, link, 0, ^{ return realfs_symlink(mount, target, link); });
+    return coordinated_write(mount, link, 0, ^(struct mount *at, const char *name) { return realfs_symlink(at, target, name); });
 }
 
 static int vault_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_t_ dev) {
-    return coordinated_write(mount, path, 0, ^{ return realfs_mknod(mount, path, mode, dev); });
+    return coordinated_write(mount, path, 0, ^(struct mount *at, const char *name) { return realfs_mknod(at, name, mode, dev); });
 }
 
 static int vault_link(struct mount *mount, const char *src, const char *dst) {
-    if (is_mirrors(src))
+    if (is_mirrors(src) || is_mirrors(dst))
         return _EACCES;
-    return coordinated_write(mount, dst, 0, ^{ return realfs_link(mount, src, dst); });
+    return coordinated(url_in(mount, dst), nil, true, 0, ^int(NSURL *url, TopoVaultWait *wait) {
+        return in_places(mount, src, dst, ^int(int from, const char *from_name, int to, const char *to_name) {
+            return linkat(from, from_name, to, to_name, 0) < 0 ? errno_map() : 0;
+        });
+    }, NULL);
 }
 
 static int vault_rename(struct mount *mount, const char *src, const char *dst) {
@@ -281,33 +376,69 @@ static int vault_rename(struct mount *mount, const char *src, const char *dst) {
         return _EACCES;
     NSURL *from = url_in(mount, src), *to = url_in(mount, dst);
     return coordinated(from, to, true, 0, ^int(NSURL *url, TopoVaultWait *wait) {
-        return realfs_rename(mount, src, dst);
+        return in_places(mount, src, dst, ^int(int from, const char *from_name, int to, const char *to_name) {
+            return renameat(from, from_name, to, to_name) < 0 ? errno_map() : 0;
+        });
     }, NULL);
 }
 
+// realfs's setattr and utime follow a link in the last name; these follow none.
 static int vault_setattr(struct mount *mount, const char *path, struct attr attr) {
     // A size is the file's content; a mode or an owner is not.
     NSUInteger options = attr.type == attr_size ? NSFileCoordinatorWritingForMerging
                                                 : NSFileCoordinatorWritingContentIndependentMetadataOnly;
-    return coordinated_write(mount, path, options, ^{ return realfs_setattr(mount, path, attr); });
+    return coordinated_write(mount, path, options, ^int(struct mount *at, const char *name) {
+        const char *last = fix_path(name);
+        int folder = at->root_fd;
+        switch (attr.type) {
+        case attr_uid:
+        case attr_gid: {
+            uid_t owner = attr.type == attr_uid ? attr.uid : (uid_t) -1;
+            gid_t group = attr.type == attr_gid ? attr.gid : (gid_t) -1;
+            if (fchownat(folder, last, owner, group, AT_SYMLINK_NOFOLLOW) < 0)
+                return errno == EPERM ? 0 : errno_map(); // not root on the host, as realfs has it
+            return 0;
+        }
+        case attr_mode:
+            return fchmodat(folder, last, attr.mode, AT_SYMLINK_NOFOLLOW) < 0 ? errno_map() : 0;
+        case attr_size: {
+            int fd = openat(folder, last, O_RDWR | O_NOFOLLOW | O_CLOEXEC);
+            if (fd < 0)
+                return errno_map();
+            int err = ftruncate(fd, attr.size) < 0 ? errno_map() : 0;
+            close(fd);
+            return err;
+        }
+        default:
+            return realfs_setattr(at, name, attr);
+        }
+    });
 }
 
 static int vault_stat(struct mount *mount, const char *path, struct statbuf *stat) {
     if (is_mirrors(path))
         return _EACCES;
-    return realfs_stat(mount, path, stat);
+    return in_place(mount, path, ^int(struct mount *at, const char *name) { return realfs_stat(at, name, stat); });
 }
 
 static ssize_t vault_readlink(struct mount *mount, const char *path, char *buf, size_t size) {
     if (is_mirrors(path))
         return _EACCES;
-    return realfs_readlink(mount, path, buf, size);
+    __block ssize_t length = 0;
+    int err = in_place(mount, path, ^int(struct mount *at, const char *name) {
+        length = realfs_readlink(at, name, buf, size);
+        return length < 0 ? (int) length : 0;
+    });
+    return err < 0 ? err : length;
 }
 
 static int vault_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
     if (is_mirrors(path))
         return _EACCES;
-    return realfs_utime(mount, path, atime, mtime);
+    return in_place(mount, path, ^int(struct mount *at, const char *name) {
+        struct timespec times[2] = {atime, mtime};
+        return utimensat(at->root_fd, fix_path(name), times, AT_SYMLINK_NOFOLLOW) < 0 ? errno_map() : 0;
+    });
 }
 
 const struct fs_ops topo_vaultfs = {
