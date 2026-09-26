@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import TopoAuth
 import TopoProxy
+import TopoTools
 import TopoUserland
 
 /// A file of the manifest as the downloader hands it over: where it landed, verified, and the pin
@@ -388,9 +389,11 @@ extension DebugRun {
 
     /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs and Claude Code, boot
     /// the guest, verify Claude Code and mount it at `/usr/local/bin/claude`, start the API proxy on
-    /// loopback, run the command under `/bin/sh -c` in `Guest.environment` (the environment every
+    /// loopback, start the tool service with `topo` in the home the resident gets (mounted, as the
+    /// resident's is), run the command under `/bin/sh -c` in `Guest.environment` (the environment every
     /// launch path hands the guest, Claude Code's updater off in it) with `ANTHROPIC_BASE_URL`
-    /// pointing at the proxy and `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token, and print what
+    /// pointing at the proxy, `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token and the tool
+    /// service's two variables, and print what
     /// it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh --userland` to
     /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
     /// runs, with the base URL and no token. The only path in the app that boots the guest.
@@ -422,6 +425,9 @@ extension DebugRun {
             defer { Task { await proxy.stop() } }
             var guestEnvironment = Guest.environment
             guestEnvironment["ANTHROPIC_BASE_URL"] = APIProxy.baseURL(port: port)
+            // The tool service and `topo`, as the resident has them, so a command can call a tool.
+            guestEnvironment.merge(try await GuestResident.shared.prepareTools { line in say(line) }) { _, new in new }
+            say("userland: tools on \(guestEnvironment[ToolService.urlVariable] ?? "nothing"), topo at \(GuestTools.command)")
             let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, provider: tokens)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
