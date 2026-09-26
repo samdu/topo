@@ -288,10 +288,6 @@ jobs:
           claude="$(scripts/fetch-pinned.sh claude-code "$HOME/claude-code")"
           echo "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" >> "$GITHUB_ENV"
 
-      # Booted while the build runs, so the suite does not wait on it.
-      - name: Boot the simulator
-        run: xcrun simctl boot "$SIMULATOR_UDID"
-
       - name: xcodebuild build-for-testing (Topo)
         run: |
           set -euo pipefail
@@ -299,6 +295,12 @@ jobs:
             -project Topo.xcodeproj -scheme Topo \
             -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
             2>&1 | tee "$RESULTS/Topo-unit-build.log"
+
+      # Booted after the build, not beside it: a first boot on this three-core runner
+      # holds xcodebuild minutes before it resolves the package graph, and slows the
+      # compile after it, which costs more than the boot.
+      - name: Boot the simulator
+        run: xcrun simctl boot "$SIMULATOR_UDID"
 
       - name: xcodebuild test (Topo, unit and userland)
         # The cooperative pool pinned to one thread in the test runner, as for
