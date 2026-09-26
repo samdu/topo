@@ -34,13 +34,15 @@ final class StopWhileSpeakingTests: XCTestCase {
     /// hears `heard`, sharing one audio session. The microphone prompt answers yes, so a press
     /// goes through `pressDown` and `pressUp` as the chat's does. The speaker asks the microphone
     /// whether it is open, as the app wires the two.
-    private func chat(heard: String = "") async -> (Speaker, VoiceInput, HeldVoice) {
+    private func chat(heard: String = "",
+                      permission: @escaping @MainActor () async -> Bool = { true }) async -> (Speaker, VoiceInput, HeldVoice) {
         let held = HeldVoice()
-        let (speaker, input, _) = await chat(heard: heard, voice: held)
+        let (speaker, input, _) = await chat(heard: heard, voice: held, permission: permission)
         return (speaker, input, held)
     }
 
-    private func chat(heard: String, voice engine: any VoiceEngine) async -> (Speaker, VoiceInput, Seams) {
+    private func chat(heard: String, voice engine: any VoiceEngine,
+                      permission: @escaping @MainActor () async -> Bool) async -> (Speaker, VoiceInput, Seams) {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
@@ -57,7 +59,7 @@ final class StopWhileSpeakingTests: XCTestCase {
         let input = VoiceInput(audio: audio, ear: ear, center: center,
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
-                               permission: { true })
+                               permission: permission)
         speaker.microphoneOpen = { input.listening }
         return (speaker, input, seams)
     }
@@ -243,6 +245,45 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(showing().appearance, .stop)
     }
 
+    /// Round four's blocker: the press has left the gesture but the microphone is not yet
+    /// listening — `VoiceInput.begin` is waiting on the permission prompt — when a reply lands. It
+    /// is not read: the microphone is opening from the press on, and the reply waits for the
+    /// release like any other.
+    func testAReplyLandingWhileTheMicrophoneIsOpeningWaitsForTheRelease() async {
+        let prompt = Prompt()
+        let (speaker, voice, held) = await chat(heard: "purple elephants", permission: { await prompt.ask() })
+        defer { prompt.allow(); held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let sent = Sent()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+
+        let down = press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }
+        await settle("the prompt to be up") { prompt.up }
+        XCTAssertFalse(voice.listening, "the microphone is still opening")
+
+        // The reply lands while the prompt is up.
+        speaker.speak("Paris is the capital. It is on the Seine.", answering: "earlier")
+        await drain()
+        XCTAssertFalse(speaker.speaking, "the reply was read while the microphone was opening")
+        XCTAssertEqual(speaker.report.speaks, 0, "the reply reached the voice while the microphone was opening")
+
+        // The prompt is answered, the microphone opens, and the reply still waits.
+        prompt.allow()
+        await down?.value
+        XCTAssertTrue(voice.listening)
+        utterance(into: voice.sink)
+        await drain()
+        XCTAssertFalse(speaker.speaking, "the reply was read into the open microphone")
+        XCTAssertEqual(speaker.report.speaks, 0)
+
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertEqual(sent.texts, ["purple elephants"], "the release did not send the recording")
+        await settle("the reply to start once the microphone closed") { speaker.report.started }
+        XCTAssertEqual(speaker.report.speaks, 1)
+        XCTAssertEqual(showing().appearance, .stop)
+    }
+
     /// A tap's two callbacks back to back, neither awaited before the other: the press reaches
     /// `pressDown` and the release `pressUp`, in that order, and the tap leaves the microphone
     /// open hands free with nothing sent and nothing taken for a stop.
@@ -266,6 +307,26 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertTrue(voice.handsFree, "the release was taken for the end of a hold, or ran before the press")
         XCTAssertEqual(sent.texts, [])
         XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).appearance, .handsFree)
+    }
+}
+
+/// A microphone prompt that stays up until the test answers it.
+@MainActor
+private final class Prompt {
+    private var answer: CheckedContinuation<Bool, Never>?
+    private(set) var up = false
+
+    func ask() async -> Bool {
+        await withCheckedContinuation { continuation in
+            answer = continuation
+            up = true
+        }
+    }
+
+    func allow() {
+        up = false
+        answer?.resume(returning: true)
+        answer = nil
     }
 }
 
