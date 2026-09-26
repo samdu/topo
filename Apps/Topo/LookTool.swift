@@ -133,7 +133,8 @@ struct LookTool: Tool {
         return lines.joined(separator: "\n") + "\n"
     }
 
-    /// Every field a document sets, by path, its value as JSON. A pin is one field.
+    /// Every field a document sets, by path, its value as JSON. A compound field (`mascot.pin`,
+    /// `composer.glow`) is one field, as the reader reads it: only a part is walked into.
     private static func leaves(of document: String?) -> [(path: String, value: String)] {
         guard let data = document?.data(using: .utf8),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
@@ -141,7 +142,7 @@ struct LookTool: Tool {
         func walk(_ object: [String: Any], _ prefix: String) {
             for key in object.keys.sorted() {
                 let path = prefix.isEmpty ? key : "\(prefix).\(key)"
-                if let inner = object[key] as? [String: Any], key != "pin" {
+                if let inner = object[key] as? [String: Any], LookDocument.place(of: Self.path(path)) == .part {
                     walk(inner, path)
                 } else {
                     found.append((path, json(object[key] as Any)))

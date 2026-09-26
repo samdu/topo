@@ -168,7 +168,8 @@ final class Tuning {
     /// "replyTrailingInset"]`), to a JSON value. It is judged first by the document's own reader,
     /// read alone onto `look`: kept only when the reader took it whole, with no note; otherwise
     /// nothing changes and the reader's note is the answer. Kept, it is worn at once, and replaces
-    /// whatever a slider, the placement or a drag had set for that field.
+    /// whatever a slider, the placement or a drag had set for that field. A part (`mascot`) is the
+    /// fields it names, each set as if named alone, so the fields it does not name stay set.
     func set(_ path: [String], to value: Any, over look: Look) -> String? {
         let name = path.joined(separator: ".")
         guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return "\(name) is not a field of the look" }
@@ -181,8 +182,10 @@ final class Tuning {
         let reading = LookDocument.read(text, onto: look)
         if let note = reading.notes.first { return note }
         guard case .read(let fields) = reading.state, fields > 0 else { return "\(name) sets nothing" }
-        mind = Self.setting(path, to: value, in: mind)
-        clearSlid(path)
+        for (field, value) in Self.fields(path, value) {
+            mind = Self.setting(field, to: value, in: mind)
+            clearSlid(field)
+        }
         save()
         return nil
     }
@@ -236,6 +239,13 @@ final class Tuning {
         for knob in Knob.allCases where [knob.part, knob.rawValue].starts(with: path) { values[knob] = nil }
         if ["mascot", "placement"].starts(with: path) { placement = nil }
         if ["mascot", "pin"].starts(with: path) || path.starts(with: ["mascot", "pin"]) { pin = nil }
+    }
+
+    /// `value` at `path` as the fields it sets, by path: a part's object is each of the fields in
+    /// it, a part inside it included, and a field, a compound one included, is itself.
+    private static func fields(_ path: [String], _ value: Any) -> [(path: [String], value: Any)] {
+        guard let object = value as? [String: Any], LookDocument.place(of: path) == .part else { return [(path, value)] }
+        return object.flatMap { fields(path + [$0.key], $0.value) }
     }
 
     private static func setting(_ path: [String], to value: Any, in object: [String: Any]) -> [String: Any] {
