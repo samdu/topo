@@ -1,0 +1,17 @@
+diff --git a/fs/mount.c b/fs/mount.c
+index 68435ede..c971126c 100644
+--- a/fs/mount.c
++++ b/fs/mount.c
+@@ -206,6 +206,12 @@ dword_t sys_mount(addr_t source_addr, addr_t point_addr, addr_t type_addr, dword
+     }
+     if (fs == NULL)
+         return _EINVAL;
++    // What the guest may reach of the host is what the app mounts into it, and nothing the guest
++    // asks for: a realfs mount made from inside is a bind mount of any path the app's own sandbox
++    // can open (its whole container, and every folder the app holds security-scoped access to).
++    // The app's own mounts go through do_mount and are not this call.
++    if (fs == &realfs)
++        return _EPERM;
+ 
+     struct statbuf stat;
+     int err = generic_statat(AT_PWD, point_raw, &stat, true);
