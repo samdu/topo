@@ -172,6 +172,22 @@ final class LookToolTests: XCTestCase {
         }
     }
 
+    /// Codex on #189: a font is replaced whole by the reader, so a second set of it replaces the
+    /// first rather than merging into it: a style set after a size is the style, before and after
+    /// a relaunch, and not the stale size.
+    func testAFontSetTwiceIsTheSecond() async throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        let first = await tool(tuning).run(["set", "transcript.bodyFont", #"{"size":18}"#])
+        XCTAssertEqual(first.status, ToolReply.ok, first.text)
+        let second = await tool(tuning).run(["set", "transcript.bodyFont", #"{"style":"body"}"#])
+        XCTAssertEqual(second.status, ToolReply.ok, second.text)
+        for kept in [tuning, Tuning(defaults: store)] {
+            XCTAssertEqual(kept.worn(over: vault).transcript.bodyFont, Font.system(.body))
+            XCTAssertFalse(kept.document?.contains("size") ?? true, kept.document ?? "nil")
+        }
+    }
+
     /// Codex on #189: each field a whole part names is judged alone, so one the reader refuses
     /// takes none of the others down with it.
     func testAPartsRefusedFieldLeavesItsOtherFieldsSet() async throws {
