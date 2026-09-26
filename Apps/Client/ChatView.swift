@@ -423,7 +423,7 @@ struct ChatView: View {
 
     /// The glass under the transcript. What the microphone is doing is four facts read off
     /// `VoiceInput` here, with whether Topo is speaking, and drawn there; the press is handed
-    /// straight back to `MicPress.gesture` with what the button showed as it landed, which is the
+    /// straight back to `MicPress.gesture` with the state the composer drew it in, which is the
     /// whole of this screen's part in a session. Its own top edge is read off its
     /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
     /// the edge the presence is read against.
@@ -580,40 +580,46 @@ extension Composer.MicState {
     }
 }
 
-/// The chat's press on the microphone, routed by what the glass was drawing when it landed.
-/// While Topo is speaking the button is Stop (`Composer.MicState.Appearance.stop`): the press
-/// ends the reply and opens nothing, and its release is that press's own, so it reaches no
-/// session either, even though the button is the microphone again by then. Any other press stops
-/// a reply still being read, so the microphone does not hear the speaker, and goes to `VoiceInput`.
+/// The chat's press on the microphone, routed by the state the composer drew it in. While Topo
+/// is speaking the button is Stop (`Composer.MicState.Appearance.stop`): the press ends the reply
+/// and opens nothing, and its release is that press's own, so it reaches no session either, even
+/// though the button is the microphone again by then. Any other press stops a reply still being
+/// read, so the microphone does not hear the speaker, and goes to `VoiceInput`.
+///
+/// Every decision is made in the gesture's callback, in the order the callbacks come, and only
+/// the call into `VoiceInput` is left to a task: a stop is over before the callback returns and
+/// its release spawns nothing, so no scheduling of the tasks can put a release in front of its
+/// press or turn one kind of press into the other.
 @MainActor
 final class MicPress {
     /// The last press down was a stop, so the release that follows it is one too. Set afresh on
     /// every press, so a release the gesture never delivered strands nothing.
     private var stopping = false
 
-    /// The gesture's own call. RED: reads the state live and routes inside the task, as before.
+    /// The gesture's own call, as the finger lands or lifts, with the state the composer drew
+    /// the button in: the press is what the person saw, not what the speaker says by the time
+    /// the callback runs. Answers the task carrying the press to `VoiceInput`, and nil for a stop
+    /// and its release, which reach nothing. What a release heard is handed to `send`.
     @discardableResult
     func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
                  send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
-        let mic = Composer.MicState(voice, speaking: speaker.speaking)
-        return Task {
-            guard let heard = await handle(down, mic: mic, speaker: speaker, voice: voice) else { return }
-            await send(heard)
-        }
-    }
-
-    /// What a release heard, to be sent, or nil.
-    func handle(_ down: Bool, mic: Composer.MicState, speaker: Speaker, voice: VoiceInput) async -> String? {
         guard down else {
             if stopping {
                 stopping = false
                 return nil
             }
-            return await voice.pressUp(as: .chat)
+            return Task {
+                guard let heard = await voice.pressUp(as: .chat) else { return }
+                await send(heard)
+            }
         }
-        stopping = mic.appearance == .stop
+        stopping = drawn.appearance == .stop
         speaker.stop()
-        return stopping ? nil : await voice.pressDown(as: .chat)
+        if stopping { return nil }
+        return Task {
+            guard let heard = await voice.pressDown(as: .chat) else { return }
+            await send(heard)
+        }
     }
 }
 #endif
