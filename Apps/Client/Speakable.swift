@@ -17,11 +17,17 @@ import Foundation
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
 /// - A rule is nothing.
-/// - In the words of every other block, inline code included, a file name or a path is read with
-///   its punctuation said: `look.json` "look dot json", `/home/topo` "slash home slash topo",
-///   `~/.claude` "tilde slash dot claude". A capitalised name of five letters or more
-///   (`CLAUDE.md`, `README.md`) is a word shouted, and is read as the word; a shorter one is left
-///   as it is written, since it is more likely an initialism the voice should spell.
+/// - In the words of every other block, a URL or an address is left exactly as written: it is
+///   found first and no rule below runs inside it.
+/// - Inline code is a literal, so its punctuation is said wherever it is, with no judgement of what
+///   it names: every `/` "slash", every `.` with no space after it "dot" (`./look.json` "dot slash
+///   look dot json", `x.c` "x dot c"), every `~` "tilde".
+/// - Outside backticks, a file name or a path is read with its punctuation said: `look.json` "look
+///   dot json", `/home/topo` "slash home slash topo", `~/.claude` "tilde slash dot claude",
+///   `Apps/Client` "Apps slash Client", while `e.g.`, `3.5` and `and/or` are left as written. A
+///   capitalised name of five letters or more (`CLAUDE.md`, `README.md`) is a word shouted, and
+///   is read as the word; a shorter one is left as it is written, since it is more likely an
+///   initialism the voice should spell.
 ///
 /// Pocket reads text as it is given, with no normalisation beyond quotes and whitespace, so none
 /// of this is done further down.
@@ -53,7 +59,7 @@ enum Speakable {
             case .rule:
                 continue
             case .paragraph, .heading, .item:
-                lines.append(words(String(block.text.characters)))
+                lines.append(words(block.text))
             }
         }
         finishTable()
@@ -89,8 +95,57 @@ enum Speakable {
     private static let dotted = try! NSRegularExpression(
         pattern: #"^(?:[\w\-]{2,}(?:\.[A-Za-z][\w\-]*)+|(?:\.[A-Za-z][\w\-]*)+|[\w\-](?:\.[A-Za-z][\w\-]*)*\.[A-Za-z][\w\-]+)$"#)
 
-    /// The words of one block with every path and file name in them read aloud.
-    static func words(_ text: String) -> String {
+    /// A URL, with or without its scheme, or an address: left exactly as it is written.
+    private static let address = try! NSRegularExpression(
+        pattern: #"(?:[A-Za-z][A-Za-z0-9+.\-]*://|www\.)[^\s<>]+|[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+"#)
+
+    /// The words of one block as they are said: inline code as a literal, everything else by the
+    /// rules for bare text, and every URL and address in either left alone. Runs of spaces the
+    /// saying leaves are closed up, and each line trimmed.
+    static func words(_ text: AttributedString) -> String {
+        var out = ""
+        for run in text.runs {
+            let piece = String(text[run.range].characters)
+            let literal = run.inlinePresentationIntent?.contains(.code) == true
+            out += outsideAddresses(piece, literal ? Self.literal : Self.bare)
+        }
+        return out.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespaces) }
+            .joined(separator: "\n")
+    }
+
+    /// `say` applied to what lies between the URLs and addresses in `text`, and never to them.
+    private static func outsideAddresses(_ text: String, _ say: (String) -> String) -> String {
+        let source = text as NSString
+        var out = ""
+        var last = 0
+        for match in address.matches(in: text, range: NSRange(location: 0, length: source.length)) {
+            out += say(source.substring(with: NSRange(location: last, length: match.range.location - last)))
+            out += source.substring(with: match.range)
+            last = match.range.location + match.range.length
+        }
+        return out + say(source.substring(from: last))
+    }
+
+    /// Inline code: every slash, tilde, and dot followed by something, said.
+    private static func literal(_ code: String) -> String {
+        let characters = Array(code)
+        var out = ""
+        for (index, character) in characters.enumerated() {
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            switch character {
+            case "/": out += " slash "
+            case "~": out += " tilde "
+            case "." where next.map { !$0.isWhitespace } == true: out += " dot "
+            default: out.append(character)
+            }
+        }
+        return out
+    }
+
+    /// Bare text: every path and file name in it read aloud, and nothing else touched.
+    private static func bare(_ text: String) -> String {
         let source = text as NSString
         var out = ""
         var last = 0
