@@ -204,30 +204,32 @@ final class MarkdownRenderTests: XCTestCase {
     /// A quote and a list interleaved. Every bar of one quote stands in one column however deeply
     /// the list inside it nests, and a quote inside a list item keeps the item's indent.
     func testAQuoteAndAListInterleave() throws {
-        let look = look(.phone)
-        let indent = look.markdown.listIndent
+        for screen in Look.Screen.allCases {
+            let look = look(screen)
+            let indent = look.markdown.listIndent
+            let margin = look.transcript.horizontalPadding
 
-        // A nested list inside one quote: one bar, one column, both rows.
-        let inQuote = try draw(turn(.assistant, "> - a\n>   - b"), look)
-        let bars = try XCTUnwrap(inQuote.runs(barInk), "a quoted list drew no bar")
-        XCTAssertEqual(bars.count, 1, "the bars of one quote stood in \(bars.count) columns: \(bars)")
-        XCTAssertEqual(CGFloat(bars[0].lowerBound) / inQuote.scale, look.transcript.horizontalPadding, accuracy: 1,
-                       "the bar of a quoted list is not at the margin")
+            // A nested list inside one quote: one bar, one column, both rows.
+            let inQuote = try draw(turn(.assistant, "> - a\n>   - b"), look)
+            let bars = try XCTUnwrap(inQuote.runs(barInk), "\(screen): a quoted list drew no bar")
+            XCTAssertEqual(bars.count, 1, "\(screen): the bars of one quote stood in \(bars.count) columns: \(bars)")
+            XCTAssertEqual(CGFloat(bars[0].lowerBound) / inQuote.scale, margin, accuracy: 1,
+                           "\(screen): the bar of a quoted list is not at the margin")
 
-        // A quote inside a list item keeps the item's indent, so its bar sits one indent in.
-        let inItem = try draw(turn(.assistant, "- an item\n\n  > a quote"), look)
-        let itemBars = try XCTUnwrap(inItem.runs(barInk), "a quote in an item drew no bar")
-        XCTAssertEqual(itemBars.count, 1, "a quote in an item drew \(itemBars.count) columns of bar")
-        XCTAssertEqual(CGFloat(itemBars[0].lowerBound) / inItem.scale,
-                       look.transcript.horizontalPadding + indent, accuracy: 1,
-                       "the quote in an item did not keep the item's indent")
+            // A quote inside a list item keeps the item's indent, so its bar sits one indent in.
+            let inItem = try draw(turn(.assistant, "- an item\n\n  > a quote"), look)
+            let itemBars = try XCTUnwrap(inItem.runs(barInk), "\(screen): a quote in an item drew no bar")
+            XCTAssertEqual(itemBars.count, 1, "\(screen): a quote in an item drew \(itemBars.count) columns of bar")
+            XCTAssertEqual(CGFloat(itemBars[0].lowerBound) / inItem.scale, margin + indent, accuracy: 1,
+                           "\(screen): the quote in an item did not keep the item's indent")
 
-        // A list item inside a quote puts its marker after the bar, and the bar at the margin.
-        let itemInQuote = try draw(turn(.assistant, "> - i"), look)
-        let quoteBars = try XCTUnwrap(itemInQuote.runs(barInk), "a quoted item drew no bar")
-        XCTAssertEqual(quoteBars.count, 1, "a quoted item drew \(quoteBars.count) columns of bar")
-        XCTAssertEqual(CGFloat(quoteBars[0].lowerBound) / itemInQuote.scale, look.transcript.horizontalPadding,
-                       accuracy: 1, "a quoted item's bar is not at the margin")
+            // A list item inside a quote puts its marker after the bar, and the bar at the margin.
+            let itemInQuote = try draw(turn(.assistant, "> - i"), look)
+            let quoteBars = try XCTUnwrap(itemInQuote.runs(barInk), "\(screen): a quoted item drew no bar")
+            XCTAssertEqual(quoteBars.count, 1, "\(screen): a quoted item drew \(quoteBars.count) columns of bar")
+            XCTAssertEqual(CGFloat(quoteBars[0].lowerBound) / itemInQuote.scale, margin, accuracy: 1,
+                           "\(screen): a quoted item's bar is not at the margin")
+        }
     }
 
     /// A rendered stage as bytes, with the questions worth asking of it.
