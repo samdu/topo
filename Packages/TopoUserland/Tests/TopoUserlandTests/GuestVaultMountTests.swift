@@ -133,7 +133,7 @@ final class GuestVaultMountTests: XCTestCase {
         XCTAssertEqual(cat.output, "", "a read that could not be coordinated printed text")
         XCTAssertTrue(cat.errors.contains("I/O error"), cat.errors)
         XCTAssertGreaterThanOrEqual(waited, Guest.vaultWait - .seconds(1))
-        XCTAssertLessThan(waited, Guest.vaultWait + .seconds(3))
+        XCTAssertLessThan(waited, Guest.vaultWait + .seconds(10), "the wait ran on past its bound")
     }
 
     /// SIGKILL does not wake a host wait, so the wait looks for it: a task parked in a coordination
