@@ -11,7 +11,9 @@ import Foundation
 ///
 /// - A fenced or indented code block is "See code block N.", N its number in the reply, which is
 ///   the caption the transcript draws over it (`Markdown.Block.codeNumber`): a voice reading
-///   code out is noise, and the number is how the listener finds the block on the screen.
+///   code out is noise, and the number is how the listener finds the block on the screen. It is
+///   a line of its own, so it is a sentence of its own, and the speaker cues the block as it
+///   begins (`codeBlock(saidBy:)`, `Speaker.cue`).
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
 /// - A rule is nothing.
