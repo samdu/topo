@@ -42,11 +42,11 @@ struct TranscriptView: View {
                             TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
                         }
                     }
-                    ForEach(queued.before) { QueuedTurnRow(turn: $0) }
+                    ForEach(queued.before) { QueuedTurnRow(turn: $0).id($0.id) }
                     if let draft, draft.state != .hidden {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
-                    ForEach(queued.after) { QueuedTurnRow(turn: $0) }
+                    ForEach(queued.after) { QueuedTurnRow(turn: $0).id($0.id) }
                 }
                 .padding(.horizontal, look.transcript.horizontalPadding)
                 .padding(.vertical, look.transcript.spacing)
@@ -60,18 +60,26 @@ struct TranscriptView: View {
             // The row appearing, and each line it grows by, keep it where the newest turn was.
             .onChange(of: draft?.state) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: queued.before.last?.id) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
         }
     }
 
-    /// What the transcript scrolls to: the row being written, while there is one, and the newest
-    /// turn otherwise. The row is the end of the transcript while it is shown, so a caption
-    /// arriving with no keyboard is scrolled to like anything else.
+    /// The row being written, as the transcript scrolls to it.
     static let draftID = "draft"
 
+    /// What the transcript scrolls to: whatever is drawn last. That is a turn on its way said
+    /// after the row's, then the row while it is shown, then a turn on its way said before it,
+    /// then the newest turn — so a caption arriving with no keyboard is scrolled to like anything
+    /// else, and a turn still owed below the row is never left under the fold.
+    var end: AnyHashable? {
+        if let last = queued.after.last { return AnyHashable(last.id) }
+        if (draft?.state ?? .hidden) != .hidden { return AnyHashable(Self.draftID) }
+        if let last = queued.before.last { return AnyHashable(last.id) }
+        return turns.last.map { AnyHashable($0.ref) }
+    }
+
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
-        let end: AnyHashable? = (draft?.state ?? .hidden) != .hidden
-            ? AnyHashable(Self.draftID)
-            : turns.last.map { AnyHashable($0.ref) }
         guard let end else { return }
         if animated {
             withAnimation { proxy.scrollTo(end, anchor: .bottom) }

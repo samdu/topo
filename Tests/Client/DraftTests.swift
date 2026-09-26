@@ -443,3 +443,59 @@ private func XCTAssertEqual(_ a: Int, _ b: Int, accuracy: Int, _ message: String
                             file: StaticString = #filePath, line: UInt = #line) {
     XCTAssertLessThanOrEqual(abs(a - b), accuracy, "\(message) (\(a) vs \(b))", file: file, line: line)
 }
+
+/// Where the transcript comes to rest when the row is not the last thing it draws. A relaunch
+/// over two owed turns draws the row holding the older and the newer below it; on a transcript
+/// taller than the screen, the newer has to be on the screen, not under the fold. Drawn through a
+/// real window (`LookStage`), since `ImageRenderer` lays out nothing inside a `ScrollView`.
+@MainActor
+final class TranscriptEndTests: XCTestCase {
+    /// The draft's sending colour in a blue nothing else on the stage is drawn in, so every blue
+    /// band down the picture is one bubble of a turn on its way.
+    private static func look() -> Look {
+        var look = Look()
+        look.draft.sending.accent = Color(red: 0, green: 0, blue: 1)
+        return look
+    }
+
+    private func turns(_ count: Int) -> [Turn] {
+        (1...count).map { n in
+            Turn(ref: TurnRef(device: DeviceID("phone"), sequence: Int64(n)), parents: [],
+                 role: n.isMultiple(of: 2) ? .assistant : .person,
+                 text: "Turn \(n), long enough to take a line or two of the transcript's width on a phone.",
+                 at: Date(timeIntervalSince1970: 1_700_000_000 + Double(n)))
+        }
+    }
+
+    /// The runs of picture rows with blue in them, top to bottom, as (first row, last row).
+    private func blueBands(_ image: UIImage) throws -> [(Int, Int)] {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let width = cgImage.width, height = cgImage.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var bands: [(Int, Int)] = []
+        for y in 0..<height {
+            var blue = false
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                if bytes[i] < 30, bytes[i + 1] < 30, bytes[i + 2] > 220 { blue = true; break }
+            }
+            guard blue else { continue }
+            if let last = bands.last, last.1 >= y - 2 { bands[bands.count - 1].1 = y } else { bands.append((y, y)) }
+        }
+        return bands
+    }
+
+    func testANewerTurnOnItsWayBelowTheRowIsOnTheScreen() throws {
+        let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+        let view = TranscriptView(turns: turns(30), draft: draft,
+                                  queued: ([], [QueuedTurn(text: "and book the flights", nonce: "newer")]))
+            .background(Color.white)
+        let bands = try blueBands(try LookStage.image(view, look: Self.look()))
+        XCTAssertEqual(bands.count, 2,
+                       "expected the row and the turn below it on the screen, found \(bands.count) bubble(s) of a turn on its way")
+    }
+}

@@ -169,15 +169,19 @@ final class Harness {
         owed.filter { !said($0.nonce) }
     }
 
-    /// How many of the answering loop's intervals the stopped line waits before the loop sends it
-    /// again, by how many of the loop's attempts in a row have failed: the next pass after the
-    /// first, then two, four and eight intervals, and twelve — a minute at the chat's five
-    /// seconds — from then on, until an attempt gets the line moving.
+    /// How many of the answering loop's intervals of time the stopped line waits, from a failed
+    /// attempt, before the loop sends it again, by how many of the loop's attempts in a row have
+    /// failed: one interval after the first, then two, four and eight, and twelve — a minute at
+    /// the chat's five seconds — from then on, until an attempt gets the line moving. Time and
+    /// not passes, because a push's `wake()` runs a pass early and must not bring an attempt
+    /// forward with it.
     static let retryBackoff = [1, 2, 4, 8, 12]
     /// The loop's attempts in a row that left the line stopped. Cleared when the line empties.
     private var failedRetries = 0
-    /// The loop's passes still to go before it sends the stopped line again.
-    private var passesUntilRetry = 0
+    /// The loop sends the stopped line again no sooner than this. Nil when nothing has failed.
+    private var retryNotBefore: Date?
+    /// The time, for the backoff: the clock in the app, a clock the test moves in the suites.
+    private let now: @Sendable () -> Date
 
     /// `brain` is what answers, chosen here and nowhere else: never per turn, and never on a
     /// failure. `relay` is where the brain tells what the guest is doing, when it is the guest.
@@ -186,7 +190,8 @@ final class Harness {
          defaults: UserDefaults = .standard,
          brain: any Brain, relay: GuestRelay = GuestRelay(),
          leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
-         pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+         pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+         now: @escaping @Sendable () -> Date = { Date() }) {
         self.database = RecordingDatabase(database)
         self.tokens = tokens
         self.device = device
@@ -196,6 +201,7 @@ final class Harness {
         self.relay = relay
         self.leaseSleep = leaseSleep
         self.pause = pause
+        self.now = now
         log = TurnLog(database: self.database)
         spokenNonces = defaults.stringArray(forKey: Self.spokenKey) ?? []
         if let data = defaults.data(forKey: Self.outboxKey),
@@ -268,7 +274,7 @@ final class Harness {
         pending = []
         spokenNonces = []
         failedRetries = 0
-        passesUntilRetry = 0
+        retryNotBefore = nil
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
         // What the guest kept of the last login's conversation goes with it.
@@ -456,7 +462,7 @@ final class Harness {
         status = nil
         if pending.isEmpty {
             failedRetries = 0
-            passesUntilRetry = 0
+            retryNotBefore = nil
         }
     }
 
@@ -464,18 +470,19 @@ final class Harness {
     /// stopped line — a send, the button under the transcript, a launch — so without this a turn
     /// that failed on a bad minute waits for the person or the next launch, however soon iCloud
     /// comes back. It sends the line from its head under the nonces it already carries, which is
-    /// the same retry the button makes, and backs off by `retryBackoff` while it keeps failing.
-    private func retryStoppedLine() async {
+    /// the same retry the button makes, and backs off by `retryBackoff` intervals of time while it
+    /// keeps failing. The loop calls it only after a read that got through: a pass that could not
+    /// read the log is no attempt at sending, and does not count as a failed one.
+    private func retryStoppedLine(every interval: Duration) async {
         guard hasWaiting else { return }
-        if passesUntilRetry > 0 {
-            passesUntilRetry -= 1
-            return
-        }
+        if let retryNotBefore, now() < retryNotBefore { return }
         let login = self.login
         await drain()
         // A sign-out during the attempt emptied the line, and the counts went with it.
         guard self.login == login, hasWaiting else { return }
-        passesUntilRetry = Self.retryBackoff[min(failedRetries, Self.retryBackoff.count - 1)] - 1
+        let waits = Self.retryBackoff[min(failedRetries, Self.retryBackoff.count - 1)]
+        let seconds = Double(interval.components.seconds) + Double(interval.components.attoseconds) / 1e18
+        retryNotBefore = now().addingTimeInterval(seconds * Double(waits))
         failedRetries += 1
     }
 
@@ -621,9 +628,10 @@ final class Harness {
             let served = wakers
             wakers = []
             await onPass?()
-            await refresh()
-            // A line that stopped on a failure goes again from here, on the loop's own time.
-            await retryStoppedLine()
+            let read = await refresh()
+            // A line that stopped on a failure goes again from here, on the loop's own time, once
+            // the log can be read at all.
+            if read { await retryStoppedLine(every: interval) }
             guard self.login == login else { return }
             // The guest is warmed as the chat runs, so it is up by the time the words are; this
             // waits for nothing.
