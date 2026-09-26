@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Where the chat's notices are drawn: in the navigation bar beside the badge, and not over the
@@ -6,7 +7,9 @@ import XCTest
 /// The turn never settles: the app is launched with `TOPO_DEBUG_REPLY_DELAY`, which holds the
 /// harness before the model call, so a notice stands for the length of the test on any host —
 /// the status of the turn in flight on one with an iCloud account behind the simulator, the
-/// failure on one without. Either is a notice, and both are held to the same place.
+/// failure on one without. Either is a notice, and both are held to the same place. The three
+/// things a notice says are each held on their own off `TOPO_DEBUG_NOTICES`, which puts them in
+/// the bar whatever the host's iCloud does.
 @MainActor
 final class StatusNoticeTests: XCTestCase {
     override func setUp() {
@@ -35,7 +38,8 @@ final class StatusNoticeTests: XCTestCase {
         XCTAssertTrue(found, "a turn went and no notice said so")
         let words = notices.staticTexts.firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the notices hold no words")
-        XCTAssertFalse(words.label.isEmpty, "the notice is empty")
+        XCTAssertTrue(Self.heldTurn.contains(words.label),
+                      "the notice says \"\(words.label)\", none of what a held turn says: \(Self.heldTurn)")
 
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "no badge in the navigation bar")
@@ -48,11 +52,98 @@ final class StatusNoticeTests: XCTestCase {
                                  "the notice at \(words.frame) is under the row at \(inFlight.frame)")
     }
 
+    /// Each of the three things the notices say, in the harness's words, in the bar: level with
+    /// the badge, clear of it to its leading side, and above the transcript's frame, where Topo's
+    /// room starts. The failure is read whole, wrapped onto a second line rather than cut short.
+    func testEachNoticeSaysItsWordsInTheBarBesideTheBadge() throws {
+        for (fixture, said) in Self.fixtures {
+            let app = launch(fixture)
+            let texts = try words(app, fixture)
+            XCTAssertEqual(texts.map(\.label), said, "\(fixture): the notice's words")
+            try holdInTheBar(app, texts, fixture)
+            if fixture == "error" {
+                let line = UIFont.preferredFont(forTextStyle: .caption1).lineHeight
+                XCTAssertGreaterThan(texts[0].frame.height, line * 1.5,
+                                     "the failure at \(texts[0].frame) is one line, cut short rather than wrapped")
+            }
+            app.terminate()
+        }
+    }
+
+    /// A look whose notice font is absurdly large still leaves every notice in the bar, beside the
+    /// badge and above the transcript, at no more than two lines of the largest the bar holds.
+    func testAnAbsurdNoticeFontStaysInTheBar() throws {
+        let look = #"{"transcript": {"noticeFont": {"size": 400}}}"#
+        let tallest = 2 * UIFont.systemFont(ofSize: 15).lineHeight + 1
+        for (fixture, said) in Self.fixtures {
+            let app = launch(fixture, look: look)
+            let texts = try words(app, fixture)
+            XCTAssertEqual(texts.map(\.label), said, "\(fixture): the notice's words")
+            for text in texts {
+                XCTAssertLessThanOrEqual(text.frame.height, tallest,
+                                         "\(fixture): \"\(text.label)\" at \(text.frame) is more than two lines of the bar's largest")
+            }
+            try holdInTheBar(app, texts, fixture)
+            app.terminate()
+        }
+    }
+
     // MARK: -
 
-    private func attach(_ app: XCUIApplication) {
+    /// What a turn held before the model call can say: where it is, or iCloud's refusal on a
+    /// simulator whose iCloud read is refused.
+    private static let heldTurn: Set<String> = [
+        "Reaching iCloud…",
+        "iCloud refused the read. Check you're signed in on this device.",
+        "iCloud is out of reach. Topo will try again.",
+    ]
+
+    /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
+    private static let fixtures: [(String, [String])] = [
+        ("busy", ["Reaching iCloud…", "· 2 waiting"]),
+        ("error", ["iCloud refused the read. Check you're signed in on this device."]),
+        ("info", ["Another device is claiming primary. What you said is in the log; the reply will appear here."]),
+    ]
+
+    private func launch(_ fixture: String, look: String = "{}") -> XCUIApplication {
+        ChatReading.launch(transcript: "full", tuning: "", look: look,
+                           environment: ["TOPO_DEBUG_NOTICES": fixture])
+    }
+
+    private func words(_ app: XCUIApplication, _ fixture: String) throws -> [XCUIElement] {
+        let notices = app.descendants(matching: .any).matching(identifier: "topo-notices").firstMatch
+        XCTAssertTrue(notices.waitForExistence(timeout: 60), "\(fixture): no notice in the bar")
+        XCTAssertTrue(notices.staticTexts.firstMatch.waitForExistence(timeout: 10), "\(fixture): the notices hold no words")
+        attach(app, fixture)
+        return notices.staticTexts.allElementsBoundByIndex
+    }
+
+    /// Every line of words level with the badge, wholly to its leading side, and above the
+    /// transcript's frame as the chat reports it.
+    private func holdInTheBar(_ app: XCUIApplication, _ texts: [XCUIElement], _ fixture: String) throws {
+        let badge = app.buttons["topo-debug-chat"]
+        XCTAssertTrue(badge.waitForExistence(timeout: 10), "\(fixture): no badge in the navigation bar")
+        let mic = ChatReading.microphone(app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "\(fixture): the chat screen")
+        let (_, topo) = try ChatReading.wait(app, "reporting the transcript's frame") { _, topo in
+            topo.visibleRect != nil && topo.wellRect != nil
+        }
+        let offset = try XCTUnwrap(ChatReading.offset(topo, mic: mic), "\(fixture): no well in the report")
+        let transcript = try XCTUnwrap(topo.visibleRect).offsetBy(dx: offset.dx, dy: offset.dy)
+        for text in texts {
+            let frame = text.frame
+            XCTAssertLessThanOrEqual(abs(frame.midY - badge.frame.midY), badge.frame.height / 2,
+                                     "\(fixture): \"\(text.label)\" at \(frame) is not level with the badge at \(badge.frame)")
+            XCTAssertLessThanOrEqual(frame.maxX, badge.frame.minX,
+                                     "\(fixture): \"\(text.label)\" at \(frame) runs into the badge at \(badge.frame)")
+            XCTAssertLessThanOrEqual(frame.maxY, transcript.minY + 0.5,
+                                     "\(fixture): \"\(text.label)\" at \(frame) reaches down over the transcript at \(transcript)")
+        }
+    }
+
+    private func attach(_ app: XCUIApplication, _ name: String = "notices") {
         let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "notices"
+        attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
     }

@@ -474,6 +474,31 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(sized.state, .read(fields: 1), "a font counts as the one field it is")
     }
 
+    /// The notice's font is drawn in the navigation bar beside the badge, which holds two lines of
+    /// no more than `largestNotice` points: a larger size is drawn at that, and a larger style is
+    /// refused, so no document puts a notice down over the transcript.
+    func testTheNoticeFontIsNoLargerThanTheBarHolds() {
+        let huge = LookDocument.read("{ \"transcript\": { \"noticeFont\": { \"size\": 400, \"weight\": \"heavy\" } } }")
+        XCTAssertEqual(huge.look.transcript.noticeFont,
+                       Font.system(size: CGFloat(Look.Transcript.largestNotice)).weight(.heavy))
+        XCTAssertEqual(huge.state, .read(fields: 1), "the size is drawn at the most, not refused")
+        XCTAssertEqual(huge.notes.count, 1, "and the document is told so: \(huge.notes)")
+
+        let title = LookDocument.read("{ \"transcript\": { \"noticeFont\": \"largeTitle\" } }")
+        XCTAssertEqual(title.look.transcript.noticeFont, Look().transcript.noticeFont)
+        XCTAssertEqual(title.notes.count, 1, "\(title.notes)")
+        let styledTitle = LookDocument.read("{ \"transcript\": { \"noticeFont\": { \"style\": \"title\" } } }")
+        XCTAssertEqual(styledTitle.look.transcript.noticeFont, Look().transcript.noticeFont)
+        XCTAssertEqual(styledTitle.notes.count, 1, "\(styledTitle.notes)")
+
+        let small = LookDocument.read("{ \"transcript\": { \"noticeFont\": \"footnote\" } }")
+        XCTAssertEqual(small.look.transcript.noticeFont, .system(.footnote))
+        XCTAssertEqual(small.notes, [])
+
+        let body = LookDocument.read("{ \"transcript\": { \"bodyFont\": { \"size\": 400 } } }")
+        XCTAssertEqual(body.look.transcript.bodyFont, Font.system(size: 400), "only the notice is held to the bar")
+    }
+
     /// The cut edge of the well is a gradient, so its colours are a list — and a list holding
     /// something that is not a colour is not half a gradient.
     func testAListOfColoursIsAllOfThemOrNoneOfThem() {

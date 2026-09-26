@@ -29,6 +29,7 @@ enum DebugRun {
     static let softwareKeyboardVariable = "TOPO_DEBUG_SOFTWARE_KEYBOARD"
     static let transcriptVariable = "TOPO_DEBUG_TRANSCRIPT"
     static let tuningVariable = "TOPO_DEBUG_TUNING"
+    static let noticesVariable = "TOPO_DEBUG_NOTICES"
 
     #if os(iOS)
     /// `TOPO_DEBUG_SOFTWARE_KEYBOARD=1`: the keyboard on the screen even in a simulator with the
@@ -53,6 +54,22 @@ enum DebugRun {
     static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
 
     #if os(iOS)
+    /// `TOPO_DEBUG_NOTICES=<busy|error|info>`: the chat's notices (`ChatNotices`) say one of their
+    /// three things whatever the harness is doing, so a UI suite can hold each in the bar on any
+    /// host: a turn in flight with two behind it, iCloud refusing the read, and a turn left in the
+    /// log for another device's primary. The words are the harness's own. Nil when the variable is
+    /// absent or names none of them.
+    @MainActor static var notices: ChatNotices.Said? { notices(ProcessInfo.processInfo.environment) }
+
+    @MainActor static func notices(_ environment: [String: String]) -> ChatNotices.Said? {
+        switch environment[noticesVariable] {
+        case "busy": ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 3)
+        case "error": ChatNotices.Said(error: Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission))))
+        case "info": ChatNotices.Said(info: Harness.limbInfo(.contended))
+        default: nil
+        }
+    }
+
     /// `TOPO_DEBUG_TUNING=<look.json>`: this device's override (`Tuning`) set to that document at
     /// launch, before anything reads it, and kept, as a drag or the settings sheet keeps it; empty
     /// removes it. So a UI suite starts from a known override and a relaunch without the variable

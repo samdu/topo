@@ -295,9 +295,18 @@ struct ChatView: View {
     /// The item is there only while there is something to say: an item the bar first laid out
     /// empty is one it never draws, whatever it later holds.
     @ToolbarContentBuilder private var notices: some ToolbarContent {
-        if ChatNotices.any(in: harness) {
-            ToolbarItem(placement: .principal) { ChatNotices() }
+        let said = shownNotices
+        if said.any {
+            ToolbarItem(placement: .principal) { ChatNotices(notices: said) }
         }
+    }
+
+    /// The harness's notices, or in a debug build the fixture `TOPO_DEBUG_NOTICES` names.
+    private var shownNotices: ChatNotices.Said {
+        #if DEBUG
+        if let fixture = DebugRun.notices { return fixture }
+        #endif
+        return ChatNotices.Said(harness)
     }
 
     /// The mark at the trailing edge, and what the spoken-turn test reads off it.
@@ -542,43 +551,72 @@ struct ChatView: View {
 /// glass under the transcript is the controls'. The bar is above the transcript's frame, which is
 /// where Topo's room starts, so none of them is his obstacle.
 struct ChatNotices: View {
-    @Environment(Harness.self) private var harness
+    /// What there is to say, read off the harness.
+    struct Said: Equatable {
+        var busy = false
+        var status: String?
+        /// How many turns are on the line, the one in flight included.
+        var waiting = 0
+        var error: String?
+        var info: String?
+
+        /// Whether there is anything to say.
+        var any: Bool { busy || error != nil || info != nil }
+
+        /// Where the turn in flight is: a spinner alone reads as nothing.
+        var progress: String? { busy ? status ?? "Working…" : nil }
+
+        /// The turns behind the one in flight.
+        var queued: String? { busy && waiting > 1 ? "· \(waiting - 1) waiting" : nil }
+    }
+
+    let notices: Said
     @Environment(\.look) private var look
 
     /// What the UI suite finds the notices by.
     static let identifier = "topo-notices"
 
-    /// Whether there is anything to say.
-    static func any(in harness: Harness) -> Bool {
-        harness.busy || harness.error != nil || harness.info != nil
-    }
+    /// The most lines one notice takes: the bar holds two beside the badge.
+    static let lines = 2
+
+    /// The largest text setting the notices follow. The bar is a fixed height, so past this the
+    /// words would reach down over the transcript; the system's own bar titles stop growing too.
+    static let largestType = DynamicTypeSize.xLarge
 
     var body: some View {
         VStack {
-            if harness.busy {
-                // A turn in flight always says where it is; a spinner alone reads as nothing.
+            if let progress = notices.progress {
                 HStack {
                     ProgressView()
-                    Text(harness.status ?? "Working…")
-                    if harness.waiting.count > 1 {
-                        Text("· \(harness.waiting.count - 1) waiting")
-                            .foregroundStyle(look.transcript.caption)
+                    Text(progress)
+                    if let queued = notices.queued {
+                        Text(queued).foregroundStyle(look.transcript.caption)
                     }
                 }
             }
-            if let error = harness.error {
+            if let error = notices.error {
                 Text(error).foregroundStyle(look.transcript.trouble)
             }
-            if let info = harness.info {
+            if let info = notices.info {
                 Text(info).foregroundStyle(look.transcript.caption)
             }
         }
         .font(look.transcript.noticeFont)
+        .lineLimit(Self.lines)
+        .truncationMode(.tail)
+        .dynamicTypeSize(...Self.largestType)
         .multilineTextAlignment(.center)
         // The bar offers its item one line; a notice is read whole, wrapping below it.
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier(Self.identifier)
+    }
+}
+
+extension ChatNotices.Said {
+    @MainActor init(_ harness: Harness) {
+        self.init(busy: harness.busy, status: harness.status, waiting: harness.waiting.count,
+                  error: harness.error, info: harness.info)
     }
 }
 

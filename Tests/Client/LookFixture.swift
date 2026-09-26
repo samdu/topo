@@ -25,7 +25,7 @@ enum LookFixture {
         "personLeadingInset": 30,
         "bodyFont": { "style": "largeTitle", "weight": "black" },
         "labelFont": { "style": "title", "weight": "light" },
-        "noticeFont": { "size": 31, "weight": "heavy" },
+        "noticeFont": { "size": 14, "weight": "heavy" },
         "text": ["#101010", "#F0F0F0"],
         "caption": ["#202020", "#E0E0E0"],
         "trouble": ["#303030", "#D0D0D0"]

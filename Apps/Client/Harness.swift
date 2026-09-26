@@ -478,7 +478,7 @@ final class Harness {
                 guard inFlight == generation, !Task.isCancelled, let writer else { return false }
                 let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
                 show(person)
-                info = Self.describe(outcome) + " What you said is in the log; the reply will appear here."
+                info = Self.limbInfo(outcome)
                 status = nil
                 return true
             } catch {
@@ -717,6 +717,11 @@ final class Harness {
 
     private static func clock(_ date: Date) -> String {
         date.formatted(date: .omitted, time: .standard)
+    }
+
+    /// What the chat says when a turn went into the log for another device's primary to answer.
+    static func limbInfo(_ outcome: LeaseOutcome) -> String {
+        describe(outcome) + " What you said is in the log; the reply will appear here."
     }
 
     static func describe(_ outcome: LeaseOutcome) -> String {
