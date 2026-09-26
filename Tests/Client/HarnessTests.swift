@@ -864,11 +864,13 @@ final class HarnessIntegrationTests: XCTestCase {
         await phone.send("water the plants")
 
         let open = Task { await phone.answering(every: .seconds(5)) }
-        for pass in 1...8 {
+        for pass in 1...7 {
             try await eventually("pass \(pass)") { await beats.passes >= pass }
             await beats.tick()
         }
-        // The loop's attempts on passes 1, 2, 4 and 8 have failed; its next would be pass 16.
+        try await eventually("pass 8") { await beats.passes >= 8 }
+        // The loop is paused after pass 8. Its attempts on passes 1, 2, 4 and 8 have failed; its
+        // next would be pass 16.
         await db.refuseReads(false)
         await phone.retry()
         XCTAssertTrue(phone.waiting.isEmpty, "the button's retry did not send the line")
