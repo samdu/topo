@@ -340,6 +340,12 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
+    /// Whether a microphone is open. RED: not yet read.
+    var microphoneOpen: @MainActor () -> Bool = { false }
+
+    /// A microphone closed. RED: nothing to do yet.
+    func microphoneClosed() {}
+
     /// Ends the reply in flight and leaves any wait standing, which is what `speak` needs: the
     /// reply about to be read replaces the one before it without the keeper stopping between them.
     private func cancel() {

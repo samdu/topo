@@ -54,8 +54,13 @@ struct TopoApp: App {
         let (ear, spoken) = ModelHousekeeping.launch(clear: ModelHousekeeping.clearCompileCache,
                                                      ear: { Ear() }, voice: { Voice() })
         #endif
-        _voice = State(initialValue: VoiceInput(audio: audio, ear: ear))
-        _speaker = State(initialValue: Speaker(audio: audio, voice: spoken))
+        let voice = VoiceInput(audio: audio, ear: ear)
+        let speaker = Speaker(audio: audio, voice: spoken)
+        // A reply is not read into an open microphone: one that lands while it is open waits for
+        // it to close (`Speaker.speak`).
+        speaker.microphoneOpen = { voice.listening }
+        _voice = State(initialValue: voice)
+        _speaker = State(initialValue: speaker)
         // What says, on a device run with no debugger attached, when iOS suspended the process.
         #if DEBUG
         AudioLog.startHeartbeat()

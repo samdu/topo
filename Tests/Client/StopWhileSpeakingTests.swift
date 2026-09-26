@@ -32,13 +32,19 @@ final class StopWhileSpeakingTests: XCTestCase {
     /// A speaker over a resident voice whose second frame is held back, so a reply it starts
     /// cannot end on its own under the test, and a microphone over a resident ear whose release
     /// hears `heard`, sharing one audio session. The microphone prompt answers yes, so a press
-    /// goes through `pressDown` and `pressUp` as the chat's does.
+    /// goes through `pressDown` and `pressUp` as the chat's does. The speaker asks the microphone
+    /// whether it is open, as the app wires the two.
     private func chat(heard: String = "") async -> (Speaker, VoiceInput, HeldVoice) {
+        let held = HeldVoice()
+        let (speaker, input, _) = await chat(heard: heard, voice: held)
+        return (speaker, input, held)
+    }
+
+    private func chat(heard: String, voice engine: any VoiceEngine) async -> (Speaker, VoiceInput, Seams) {
         let seams = Seams()
         let center = NotificationCenter()
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
-        let held = HeldVoice()
-        let voice = Voice(engine: held)
+        let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
         await settle("the voice to load") { voice.state == .ready }
         let speaker = Speaker(audio: audio, voice: voice, center: center,
@@ -52,7 +58,8 @@ final class StopWhileSpeakingTests: XCTestCase {
                                makeEngine: { seams.makeEngine() },
                                formats: { seams.readFormats($0) },
                                permission: { true })
-        return (speaker, input, held)
+        speaker.microphoneOpen = { input.listening }
+        return (speaker, input, seams)
     }
 
     /// Topo mid-reply: Say it again, which is `speak` with no turn behind it.
@@ -180,19 +187,108 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertTrue(voice.handsFree, "the tap left the microphone open")
         XCTAssertEqual(showing().appearance, .handsFree)
 
-        // Say it again starts while it is open, and the person goes on talking.
-        await startSpeaking(speaker)
+        // Say it again while it is open, and the person goes on talking. The reply waits for the
+        // microphone rather than being read into it.
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine."))
         utterance(into: voice.sink)
+        XCTAssertFalse(speaker.speaking, "a reply was read into the open microphone")
+        XCTAssertEqual(speaker.report.speaks, 0)
         XCTAssertEqual(showing().appearance, .handsFree, "the open microphone was turned into a stop")
         XCTAssertEqual(showing().label, "Listening; press to send")
 
-        // The press on the waveform sends, and the release after it reaches nothing.
+        // The press on the waveform sends, then the reply is read and the button is Stop.
         await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
-        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["purple elephants"], "what the open microphone heard was not sent")
         XCTAssertFalse(voice.listening)
-        XCTAssertFalse(speaker.speaking, "the press stopped the reply")
-        XCTAssertEqual(showing().appearance, .idle)
+        await settle("the reply to start once the microphone closed") { speaker.report.started }
+        XCTAssertTrue(speaker.speaking)
+        XCTAssertEqual(showing().appearance, .stop)
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertEqual(voice.releases, 2, "the release after the sending press reaches VoiceInput, which ignores it")
+        XCTAssertEqual(sent.texts, ["purple elephants"])
+    }
+
+    /// The blocker from review: a spoken reply landing while the person holds the microphone is
+    /// not read into it. Nothing is spoken until the release; the release sends what was held,
+    /// and then the reply is read, with the button as Stop.
+    func testAReplyLandingWhileTheMicrophoneIsHeldWaitsForTheRelease() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let sent = Sent()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+
+        // The thumb comes down and stays.
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(voice.listening)
+        XCTAssertEqual(showing().appearance, .held)
+
+        // The reply to an earlier spoken turn lands, as `Harness.onReply` hands it over.
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "earlier"),
+                      "the reply is taken, to be read once the microphone closes")
+        utterance(into: voice.sink)
+        await drain()
+        XCTAssertFalse(speaker.speaking, "the reply was read into the held microphone")
+        XCTAssertEqual(speaker.report.speaks, 0, "the reply reached the voice while the microphone was held")
+        XCTAssertEqual(showing().appearance, .held)
+
+        // A hold, not a tap: the release sends what was said.
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertEqual(sent.texts, ["purple elephants"], "the release did not send the recording")
+        XCTAssertFalse(voice.listening)
+        await settle("the reply to start once the microphone closed") { speaker.report.started }
+        XCTAssertEqual(speaker.report.speaks, 1)
+        XCTAssertTrue(speaker.speaking)
+        XCTAssertEqual(showing().appearance, .stop)
+    }
+
+    /// A tap's two callbacks back to back, neither awaited before the other: the press reaches
+    /// `pressDown` and the release `pressUp`, in that order, and the tap leaves the microphone
+    /// open hands free with nothing sent and nothing taken for a stop.
+    func testABackToBackTapOpensTheMicrophoneHandsFree() async {
+        let (speaker, voice, held) = await chat()
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let sent = Sent()
+        let drawn = Composer.MicState(voice, speaking: speaker.speaking)
+        XCTAssertEqual(drawn.appearance, .idle)
+
+        let down = press.gesture(true, drawn: drawn, speaker: speaker, voice: voice) { sent.add($0) }
+        let up = press.gesture(false, drawn: drawn, speaker: speaker, voice: voice) { sent.add($0) }
+        XCTAssertNotNil(down)
+        XCTAssertNotNil(up)
+        await down?.value
+        await up?.value
+        XCTAssertEqual(voice.presses, 1)
+        XCTAssertEqual(voice.releases, 1)
+        XCTAssertTrue(voice.listening, "the tap opened the microphone")
+        XCTAssertTrue(voice.handsFree, "the release was taken for the end of a hold, or ran before the press")
+        XCTAssertEqual(sent.texts, [])
+        XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).appearance, .handsFree)
+    }
+
+    /// A reply read to its end, not stopped: the button is Stop while it plays and the microphone
+    /// once the speaker has let it go. The play queue's engine renders offline here, so the test
+    /// pulls the audio through it until the reply is heard.
+    func testAReplyThatFinishesPutsTheMicrophoneBack() async throws {
+        let (speaker, voice, seams) = await chat(heard: "", voice: ScriptedVoice())
+        defer { speaker.stop(); voice.cancel() }
+        XCTAssertTrue(speaker.speak("Paris."))
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).appearance, .stop)
+
+        let engine = try XCTUnwrap(seams.engines.last { $0.isInManualRenderingMode }, "no play engine")
+        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat, frameCapacity: 4_096))
+        for _ in 0..<200 where speaker.speaking {
+            _ = try engine.renderOffline(4_096, to: buffer)
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        await settle("the reply to end") { !speaker.speaking }
+        XCTAssertTrue(speaker.report.finished, "the reply came to its end rather than being stopped")
+        let after = Composer.MicState(voice, speaking: speaker.speaking)
+        XCTAssertEqual(after.appearance, .idle)
+        XCTAssertEqual(after.label, "Hold to talk")
     }
 }
 

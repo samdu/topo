@@ -289,6 +289,10 @@ struct ChatView: View {
         // The keyboard coming up ends a hands-free session: a person who has started typing is
         // not still talking. What was heard stays in the row, to be finished by hand.
         .onChange(of: row.typing) { _, up in if up { voice.cancel(.chat) } }
+        // A reply that landed while the microphone was open is read once it closes, however it
+        // closed: a release, the keyboard, the scene going. A press closes it too and says so
+        // itself (`MicPress`), so the reply does not wait on this screen's next update.
+        .onChange(of: voice.listening) { _, open in if !open { speaker.microphoneClosed() } }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
             // it, so nothing said into it was meant. A reply plays on — that is what the hold is
@@ -609,7 +613,9 @@ final class MicPress {
                 return nil
             }
             return Task {
-                guard let heard = await voice.pressUp(as: .chat) else { return }
+                let heard = await voice.pressUp(as: .chat)
+                speaker.microphoneClosed()
+                guard let heard else { return }
                 await send(heard)
             }
         }
@@ -617,7 +623,9 @@ final class MicPress {
         speaker.stop()
         if stopping { return nil }
         return Task {
-            guard let heard = await voice.pressDown(as: .chat) else { return }
+            let heard = await voice.pressDown(as: .chat)
+            speaker.microphoneClosed()
+            guard let heard else { return }
             await send(heard)
         }
     }
