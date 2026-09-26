@@ -10,6 +10,7 @@ import XCTest
 @MainActor
 final class VaultMountTests: XCTestCase {
     /// Everything the mount did, in order, and what the disk answers.
+    @MainActor
     private final class Recorder {
         var calls: [String] = []
         var identities: [URL: VaultMount.Identity] = [:]
