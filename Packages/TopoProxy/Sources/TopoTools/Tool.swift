@@ -34,6 +34,8 @@ public struct ToolReply: Sendable, Equatable {
     public static let unreachable: Int32 = 3
     /// The call ran past the service's bound.
     public static let timedOut: Int32 = 4
+    /// The phone's owner has not let Topo use what the call needs; the text says where to allow it.
+    public static let denied: Int32 = 5
     /// Part of the call was refused, and the text says which part and why.
     public static let refused: Int32 = 6
 
@@ -64,7 +66,8 @@ public struct ToolTable: Sendable {
         }
         lines += ["", "topo help <tool> says how to call one.",
                   "Exit status: 0 done, 1 failed, 2 not a call the tool takes, 3 the app did not answer,",
-                  "4 the call took too long, 6 part of it refused (the text says which)."]
+                  "4 the call took too long, 5 not allowed on this phone (the text says where to allow it),",
+                  "6 part of it refused (the text says which)."]
         return lines.joined(separator: "\n") + "\n"
     }
 

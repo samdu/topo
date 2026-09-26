@@ -1,16 +1,29 @@
 import UIKit
+import UserNotifications
 
 /// The app delegate the SwiftUI app adapts, for the UIKit callbacks SwiftUI has no spelling of:
 /// iOS relaunching the app because the models' background session finished, and a silent push
-/// saying the log moved. It holds no state of its own; each callback hands off to what owns it.
-final class TopoAppDelegate: NSObject, UIApplicationDelegate {
+/// saying the log moved, and a notification `topo notify` scheduled arriving while the app is in
+/// front. It holds no state of its own; each callback hands off to what owns it.
+final class TopoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     @MainActor
     func application(_ application: UIApplication,
                      didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         // No permission to ask for: a content-available push needs the device token and nothing
         // from the person.
         application.registerForRemoteNotifications()
+        // Being the delegate asks for nothing; it is what shows a notification that comes due
+        // while the app is in front, which iOS would otherwise drop.
+        UNUserNotificationCenter.current().delegate = self
         return true
+    }
+
+    /// A notification `topo notify` scheduled, come due with the app in front: shown as it would
+    /// be with the app away. The silent pushes that wake the loop are not notifications and never
+    /// come here.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
+        async -> UNNotificationPresentationOptions {
+        [.banner, .list, .sound]
     }
 
     /// Touching `ModelDownloads.shared` recreates the session under its identifier, which is what

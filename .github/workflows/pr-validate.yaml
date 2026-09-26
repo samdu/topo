@@ -543,6 +543,12 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/ci-require-tests-test.sh
 
+      # check-built-plist.sh against hand-made products: each usage string the
+      # phone's tools ask under, missing or empty, fails.
+      - name: check-built-plist.sh refuses a product missing a usage string
+        if: ${{ !cancelled() }}
+        run: scripts/tests/check-built-plist-test.sh
+
       # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
       # patch that does not apply, a populated deps/linux, and options that are
       # not arm64/ish/asbestos each fail.
