@@ -165,29 +165,49 @@ final class Tuning {
     }
 
     /// The mind sets one field of the look, named by its path in the document (`["transcript",
-    /// "replyTrailingInset"]`), to a JSON value. It is judged first by the document's own reader,
-    /// read alone onto `look`: kept only when the reader took it whole, with no note; otherwise
-    /// nothing changes and the reader's note is the answer. Kept, it is worn at once, and replaces
-    /// whatever a slider, the placement or a drag had set for that field. A part (`mascot`) is the
-    /// fields it names, each set as if named alone, so the fields it does not name stay set.
-    func set(_ path: [String], to value: Any, over look: Look) -> String? {
+    /// "replyTrailingInset"]`), to a JSON value. A part (`mascot`) is the fields its object names,
+    /// each set as if named alone, so the fields it does not name stay set. Each field is judged
+    /// first by the document's own reader, read alone onto `look`: kept only when the reader took it
+    /// whole, with no note; otherwise that field is unchanged and the reader's note says why, and
+    /// the others still apply. Kept, a field is worn at once and replaces whatever a slider, the
+    /// placement or a drag had set for it; a compound field's object (`composer.glow`) is merged
+    /// into what was set for it before, as the reader wears it, so `{"x": 2}` after `{"radius":
+    /// 9}` keeps the radius.
+    func set(_ path: [String], to value: Any, over look: Look) -> (kept: [String], refused: [String]) {
         let name = path.joined(separator: ".")
-        guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return "\(name) is not a field of the look" }
-        let alone = Self.setting(path, to: value, in: [:])
-        guard JSONSerialization.isValidJSONObject(alone),
-              let data = try? JSONSerialization.data(withJSONObject: alone, options: [.sortedKeys]),
-              let text = String(data: data, encoding: .utf8) else {
-            return "\(name) is not a value a look.json can hold"
-        }
-        let reading = LookDocument.read(text, onto: look)
-        if let note = reading.notes.first { return note }
-        guard case .read(let fields) = reading.state, fields > 0 else { return "\(name) sets nothing" }
-        for (field, value) in Self.fields(path, value) {
-            mind = Self.setting(field, to: value, in: mind)
+        guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return ([], ["\(name) is not a field of the look"]) }
+        let named = Self.fields(path, value)
+        guard !named.isEmpty else { return ([], ["\(name) sets nothing"]) }
+        var kept: [String] = [], refused: [String] = []
+        for (field, value) in named {
+            let fieldName = field.joined(separator: ".")
+            let alone = Self.setting(field, to: value, in: [:])
+            guard JSONSerialization.isValidJSONObject(alone),
+                  let data = try? JSONSerialization.data(withJSONObject: alone, options: [.sortedKeys]),
+                  let text = String(data: data, encoding: .utf8) else {
+                refused.append("\(fieldName) is not a value a look.json can hold")
+                continue
+            }
+            let reading = LookDocument.read(text, onto: look)
+            if let note = reading.notes.first { refused.append(note); continue }
+            guard case .read(let count) = reading.state, count > 0 else { refused.append("\(fieldName) sets nothing"); continue }
+            var merged = value
+            if let object = value as? [String: Any], let before = stored(field) as? [String: Any] {
+                merged = Self.merge(object, under: before)
+            }
+            mind = Self.setting(field, to: merged, in: mind)
             clearSlid(field)
+            kept.append(fieldName)
         }
-        save()
-        return nil
+        if !kept.isEmpty { save() }
+        return (kept, refused)
+    }
+
+    /// What this device has set at `path`, whoever set it.
+    private func stored(_ path: [String]) -> Any? {
+        var here: Any? = Self.merge(mind, under: slid)
+        for key in path { here = (here as? [String: Any])?[key] }
+        return here
     }
 
     /// What taking back one path came to.
