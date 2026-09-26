@@ -54,4 +54,4 @@ What is built, what comes next and in what order, what is parked, and the thread
 
 ### Flakes on CI
 
-#91, #122, #124, #126, #127, #141, #146, #159: each is a timing bound on a cold runner, noted rather than fixed. `topo_unit` has grown to about 27 minutes on the full lane and is now the long pole.
+#91, #122, #124, #126, #127, #141, #146, #159: each is a timing bound on a cold runner, noted rather than fixed. `topo_ui`, at about 19 minutes, is the long pole; `topo_unit` takes about 17.
