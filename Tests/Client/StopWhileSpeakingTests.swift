@@ -284,6 +284,41 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(showing().appearance, .stop)
     }
 
+    /// The reply that waited for the microphone, refused by the session at the release: it is
+    /// not lost. It keeps waiting and its turn stays unsettled (so its spoken mark stands), and
+    /// the next close reads it and settles it.
+    func testAWaitingReplyTheSessionRefusesAtTheReleaseIsStillOwed() async {
+        let held = HeldVoice()
+        let (speaker, voice, seams) = await chat(heard: "purple elephants", voice: held, permission: { true })
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let sent = Sent()
+        let settled = Sent()
+        speaker.settled = { settled.add($0) }
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "earlier"))
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        XCTAssertEqual(settled.texts, [], "a reply still waiting settled its turn")
+
+        // The play queue's engine will not start when the release comes to read the reply.
+        seams.playEngineRefusals = 1
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertEqual(sent.texts, ["purple elephants"])
+        XCTAssertFalse(speaker.speaking, "nothing renders, so nothing is read")
+        XCTAssertTrue(speaker.waitingForMicrophone, "the refused reply was dropped")
+        XCTAssertEqual(settled.texts, [], "the refused reply settled its turn, so it is owed nothing")
+
+        // The next close reads it, and only then is its turn settled.
+        speaker.microphoneClosed()
+        await settle("the reply to start") { speaker.report.started }
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        XCTAssertEqual(settled.texts, ["earlier"])
+    }
+
     /// A tap's two callbacks back to back, neither awaited before the other: the press reaches
     /// `pressDown` and the release `pressUp`, in that order, and the tap leaves the microphone
     /// open hands free with nothing sent and nothing taken for a stop.
