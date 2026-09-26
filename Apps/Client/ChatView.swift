@@ -32,6 +32,8 @@ struct ChatView: View {
     /// height, because it changes in a transaction of its own ahead of the keyboard, so the
     /// surface fades in on the presence's time where it stands and then rides up with the pane.
     @State private var focused = false
+    /// Which way the press on the microphone went, so its release follows it.
+    @State private var micPress = MicPress()
     /// The bottom of the screen's safe area with no keyboard in it, which is what the keyboard's
     /// is measured against (`KeyboardInset`). Nil until it has been measured.
     @State private var restingBottomInset: CGFloat?
@@ -342,11 +344,10 @@ struct ChatView: View {
     }
 
     /// Hold to talk and release to send; a tap opens the microphone until the next press. The
-    /// session logic is `VoiceInput`'s; this only sends what a press hands back.
+    /// session logic is `VoiceInput`'s and the routing `MicPress`'s; this only sends what a press
+    /// hands back.
     private func micPressed(_ down: Bool) async {
-        if down { speaker.stop() }
-        let heard = down ? await voice.pressDown(as: .chat) : await voice.pressUp(as: .chat)
-        guard let heard else { return }
+        guard let heard = await micPress.handle(down, mic: micState, speaker: speaker, voice: voice) else { return }
         await sendSpoken(heard)
     }
 
@@ -425,8 +426,7 @@ struct ChatView: View {
 
     /// The four facts the glass draws the microphone from, read off `VoiceInput`.
     private var micState: Composer.MicState {
-        Composer.MicState(canListen: voice.canListen, listening: voice.listening,
-                          owner: voice.owner, handsFree: voice.handsFree)
+        Composer.MicState(voice, speaking: speaker.speaking)
     }
 
     /// The glass under the transcript. What the microphone is doing is four facts read off
@@ -569,6 +569,26 @@ enum ReadAloud {
             .compactMap { ref in turns.first { $0.ref == ref } }
             .first { $0.role == .person && spoken.contains($0.nonce) }?
             .nonce
+    }
+}
+
+extension Composer.MicState {
+    /// What the chat's glass draws: the four facts read off `VoiceInput`, and whether the
+    /// speaker is reading a reply.
+    @MainActor init(_ voice: VoiceInput, speaking: Bool) {
+        self.init(canListen: voice.canListen, listening: voice.listening, owner: voice.owner,
+                  handsFree: voice.handsFree, speaking: speaking)
+    }
+}
+
+/// The chat's press on the microphone, routed. Any press stops a reply still being read, so the
+/// microphone does not hear the speaker, and goes to `VoiceInput`.
+@MainActor
+final class MicPress {
+    /// What a release heard, to be sent, or nil.
+    func handle(_ down: Bool, mic: Composer.MicState, speaker: Speaker, voice: VoiceInput) async -> String? {
+        if down { speaker.stop() }
+        return down ? await voice.pressDown(as: .chat) : await voice.pressUp(as: .chat)
     }
 }
 #endif

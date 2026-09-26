@@ -52,6 +52,8 @@ struct Composer: View {
         var owner: VoiceInput.Gate?
         /// Opened by a tap, so it stays open until the next press.
         var handsFree = false
+        /// The speaker is reading a reply aloud (`Speaker.speaking`).
+        var speaking = false
 
         /// The four states the glass draws.
         enum Appearance: String, Equatable, Sendable, CaseIterable {
@@ -64,6 +66,8 @@ struct Composer: View {
             case handsFree
             /// A press would be refused. The diagnostics `speech` row says why.
             case dimmed
+            /// Topo is reading a reply aloud: a press stops him and opens nothing.
+            case stop
         }
 
         /// The microphone is open on this screen.
