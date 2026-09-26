@@ -20,10 +20,24 @@ import TopoCore
 ///
 /// Every `speak` is a generation. A frame that lands after a `stop` belongs to no reply and
 /// changes nothing.
+///
+/// A sentence that stands for a code block ("See code block N.", `Speakable.codeBlock(saidBy:)`)
+/// is a cue (`cue`) the moment it begins to be heard: its first frame is marked on the play queue,
+/// and the mark fires when everything scheduled before that frame has been heard, which is when
+/// the sentence starts. The transcript scrolls to the block, pulses its outline and sends Topo to
+/// stand beside it from that value. A reply that is not read aloud makes none.
 @MainActor
 @Observable
 final class Speaker {
     private(set) var speaking = false
+    /// The code block the reply being read has just reached, with the reply it is in; nil until
+    /// one has been. It is not cleared when the reply ends — a pulse that has played and a Topo
+    /// who has gone are left as they are — and a reply read again reaches its blocks afresh.
+    private(set) var cue: CodeBlockCue?
+    /// Counts cues, so a block reached a second time is a new one.
+    private var cues = 0
+    /// The turn the reply being read is, which a cue names; nil for text that is no turn.
+    private var reply: TurnRef?
 
     let voice: Voice
     private let audio: AudioSession
@@ -80,15 +94,18 @@ final class Speaker {
     /// production clock is the continuous one, which a system-time step does not move.
     private let now: () -> TimeInterval
 
+    /// `heard` is what counts as a frame heard: played back through the hardware on a phone. An
+    /// engine rendering offline in a test plays nothing back, and counts a frame rendered instead.
     init(audio: AudioSession, voice: Voice = Voice(), center: NotificationCenter = .default,
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          ceiling: Duration = .seconds(120),
-         now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime) {
+         now: @escaping () -> TimeInterval = PrimaryLease.continuousUptime,
+         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) {
         self.audio = audio
         self.voice = voice
         self.ceiling = ceiling
         self.now = now
-        queue = PlayQueue(makeEngine: makeEngine, center: center)
+        queue = PlayQueue(makeEngine: makeEngine, center: center, heard: heard)
         queue.onDrained = { [weak self] in Task { @MainActor in self?.drained() } }
         queue.onPlayed = { [weak self] in Task { @MainActor in self?.progressed() } }
         // The queue rebuilds its engine on a configuration change, and a rebuilt engine under a
@@ -266,13 +283,14 @@ final class Speaker {
     /// is resident by the first reply; idempotent.
     func prepare() { voice.prepare() }
 
-    /// Reads `text` aloud, and says whether it took the reply. A voice that is not resident, and
+    /// Reads `text` aloud, and says whether it took the reply. `reply` is the turn the text is,
+    /// which the cues of its code blocks name (`cue`). A voice that is not resident, and
     /// a session that will not activate, each speak nothing, build nothing and answer false: the
     /// reply is still owed, its turn's wait still stands, and whoever holds the reply offers it
     /// again. The session comes first, before the queue exists: a player node spoken to under a
     /// session that is not active is the crash, not a silence.
     @discardableResult
-    func speak(_ text: String, answering nonce: String? = nil) -> Bool {
+    func speak(_ text: String, answering nonce: String? = nil, reply: TurnRef? = nil) -> Bool {
         cancel()
         guard voice.ready else {
             #if DEBUG
@@ -327,6 +345,7 @@ final class Speaker {
         replySynth = 0
         DebugRun.say("speak: session ok, pocket")
         #endif
+        self.reply = reply
         speakLocally(text)
         return true
     }
@@ -343,6 +362,7 @@ final class Speaker {
     /// reply about to be read replaces the one before it without the keeper stopping between them.
     private func cancel() {
         generation += 1
+        reply = nil
         chain = nil
         making = 0
         queue.stop()
@@ -374,6 +394,14 @@ final class Speaker {
         let started = now()
         let idle = queue.isIdle
         var first: Double?
+        // A sentence that stands for a code block marks its first frame: the cue fires when
+        // everything before it has been heard, which is when the sentence begins.
+        let block = Speakable.codeBlock(saidBy: sentence)
+        let begins: (@Sendable () -> Void)? = block.map { number in
+            { @Sendable [weak self] in
+                Task { @MainActor in self?.reached(number, generation: mine) }
+            }
+        }
         var samples = 0
         var rate = Voice.rate
         do {
@@ -385,7 +413,7 @@ final class Speaker {
                 rate = frame.rate
                 samples += frame.samples.count
                 guard !frame.samples.isEmpty else { continue }
-                try queue.play(frame.samples, rate: frame.rate)
+                try queue.play(frame.samples, rate: frame.rate, begins: first == nil ? begins : nil)
                 progressed()
                 if first == nil {
                     first = now() - started
@@ -420,6 +448,18 @@ final class Speaker {
             DebugRun.say("voice: say failed — \(error.localizedDescription)")
             #endif
         }
+    }
+
+    /// The sentence standing for code block `number` has begun to be heard. A cue of a reply
+    /// since stopped or replaced reaches nothing.
+    private func reached(_ number: Int, generation mine: Int) {
+        guard generation == mine else { return }
+        #if DEBUG
+        report.blocks.append(number)
+        #endif
+        guard let reply else { return }
+        cues += 1
+        cue = CodeBlockCue(reply: reply, number: number, serial: cues)
     }
 
     /// One sentence is made, played or failed. The reply is over when nothing is left to make
@@ -495,7 +535,8 @@ extension Speaker {
     /// audio that made. Neither is ever a stand-in — `first` is written once, when that frame is
     /// scheduled, and is nil when no frame ever was; `rtf` is nil until then and counts only the
     /// sentences that scheduled one. The `voice:` console line carries the same two numbers per
-    /// sentence, for a run that can read the console.
+    /// sentence, for a run that can read the console. `blocks` is the code blocks the reply has
+    /// reached, in the order their sentences began to be heard.
     struct Report: Codable, Equatable {
         var speaks = 0
         var engine: Engine?
@@ -504,6 +545,7 @@ extension Speaker {
         var finished = false
         var first: Double?
         var rtf: Double?
+        var blocks: [Int] = []
     }
 }
 #endif
@@ -539,6 +581,8 @@ final class PlayQueue: @unchecked Sendable {
     private var engine: AVAudioEngine?
     private let makeEngine: () -> AVAudioEngine
     private let center: NotificationCenter
+    /// What counts as a buffer heard (`Speaker.init`'s `heard`).
+    private let heard: AVAudioPlayerNodeCompletionCallbackType
     private var configurationObserver: NSObjectProtocol?
     private(set) var node: AVAudioPlayerNode?
     /// The silence. A second node rather than a quiet buffer on the first: what it renders must
@@ -561,6 +605,10 @@ final class PlayQueue: @unchecked Sendable {
     /// What is scheduled and not yet heard, in the order it was scheduled, so a rebuild puts back
     /// what the dead engine forgot rather than only knowing how much there was.
     private var queued: [(era: Int, buffer: AVAudioPCMBuffer)] = []
+    /// What fires once a buffer has been heard, by the buffer: the beginning of what was
+    /// scheduled right behind it (`play`'s `begins`). Guarded by the lock, kept across a rebuild
+    /// with the buffers it waits on, and dropped with them by `stop`.
+    private var marks: [ObjectIdentifier: [@Sendable () -> Void]] = [:]
     /// Bumped by `stop` and by a rebuild. Stopping the node fires the completion of every buffer
     /// it discards, and without this the count would run negative and the queue never read as
     /// drained — or a rebuild's rescheduled buffers would be cancelled by their own predecessors.
@@ -577,9 +625,11 @@ final class PlayQueue: @unchecked Sendable {
     var running: Bool { engine?.isRunning ?? false }
 
     init(makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
-         center: NotificationCenter = .default) {
+         center: NotificationCenter = .default,
+         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) {
         self.makeEngine = makeEngine
         self.center = center
+        self.heard = heard
     }
 
     /// The engine, the player and the time-pitch unit are built on the first frame, because the
@@ -587,8 +637,13 @@ final class PlayQueue: @unchecked Sendable {
     /// after the first pays for a route. Called on the main actor, as `reset()` is: the chain's
     /// tasks inherit `Speaker`'s, and these three and the format are guarded by that and not by
     /// the lock, which counts what is scheduled for the audio thread.
+    ///
+    /// `begins` fires once everything scheduled before this frame has been heard — at once when
+    /// nothing is — on the audio thread or the caller's: the moment the frame starts to be heard.
+    /// A frame that is not queued (a format the queue cannot build) fires nothing, and a `stop`
+    /// drops it with the frames it waited on.
     @MainActor
-    func play(_ samples: [Float], rate: Int) throws {
+    func play(_ samples: [Float], rate: Int, begins: (@Sendable () -> Void)? = nil) throws {
         guard !samples.isEmpty else { return }
         // While the engine is dead — from an interruption's `.began` until something rebuilds —
         // the frame is owed rather than played. Restarting a dead engine here throws, and the
@@ -600,10 +655,19 @@ final class PlayQueue: @unchecked Sendable {
         else { throw VoiceError.noPlayer }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
-        let era: Int = lock.withLock {
+        let (era, alreadyBegun): (Int, Bool) = lock.withLock {
+            var alreadyBegun = false
+            if let begins {
+                if let last = queued.last?.buffer {
+                    marks[ObjectIdentifier(last), default: []].append(begins)
+                } else {
+                    alreadyBegun = true
+                }
+            }
             queued.append((epoch, buffer))
-            return epoch
+            return (epoch, alreadyBegun)
         }
+        if alreadyBegun { begins?() }
         guard !dead else { return }
         do {
             try start()
@@ -638,17 +702,20 @@ final class PlayQueue: @unchecked Sendable {
     }
 
     private func schedule(_ buffer: AVAudioPCMBuffer, era: Int) {
-        node?.scheduleBuffer(buffer, completionCallbackType: .dataPlayedBack) { [weak self] _ in
+        node?.scheduleBuffer(buffer, completionCallbackType: heard) { [weak self] _ in
             guard let self else { return }
             var played = false
+            var begun: [@Sendable () -> Void] = []
             let done: Bool = self.lock.withLock {
                 guard era == self.epoch else { return false }
                 played = true
                 if let index = self.queued.firstIndex(where: { $0.buffer === buffer }) {
                     self.queued.remove(at: index)
+                    begun = self.marks.removeValue(forKey: ObjectIdentifier(buffer)) ?? []
                 }
                 return self.queued.isEmpty
             }
+            begun.forEach { $0() }
             if done { self.onDrained?() } else if played { self.onPlayed?() }
         }
     }
@@ -815,6 +882,7 @@ final class PlayQueue: @unchecked Sendable {
     func stop() {
         lock.withLock {
             queued.removeAll()
+            marks.removeAll()
             epoch += 1
         }
         node?.stop()

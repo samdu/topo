@@ -41,9 +41,9 @@ final class MarkdownRenderTests: XCTestCase {
         return look
     }
 
-    private func draw(_ turn: Turn, _ look: Look) throws -> Pixels {
+    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil) throws -> Pixels {
         let row = VStack(spacing: 0) {
-            TurnRow(turn: turn)
+            TurnRow(turn: turn, cue: cue)
                 .padding(.horizontal, look.transcript.horizontalPadding)
             Spacer(minLength: 0)
         }
@@ -97,6 +97,71 @@ final class MarkdownRenderTests: XCTestCase {
                                      "\(screen): block \(index + 1)'s caption reads more like \(2 - index) (\(own) vs \(other))")
             }
         }
+    }
+
+    /// The pulse's ink, a colour nothing else on the stage is.
+    private let pulseInk = UIColor(red: 0.5, green: 0, blue: 1, alpha: 1)
+
+    /// The outline a reached code block breathes with, in its two states: at rest it draws
+    /// nothing — before the pulse, between its two breaths and at its end — and at the peak of
+    /// each breath it rings the block's enclosure in the look's accent, inside the enclosure's own
+    /// edge, at the look's width. A block the voice has not reached draws nothing either.
+    func testAReachedBlocksOutlineBreathesInTheAccentAndRestsAtNothing() throws {
+        var look = look(.phone)
+        look.markdown.codePulse.accent = Color(pulseInk)
+        // Opaque, so the peak is the ink itself rather than a blend of it a match cannot name.
+        look.markdown.codePulse.opacity = 1
+        look.markdown.codePulse.width = 3
+        let pulse = look.markdown.codePulse
+        let reply = turn(.assistant, "Here:\n\n```\nlet x = 1\n```")
+        func at(_ time: Double?, number: Int = 1) throws -> Pixels {
+            try draw(reply, look, cue: time.map { CodeBlockCue(reply: reply.ref, number: number, serial: 1, still: $0) })
+        }
+        let unreached = try at(nil)
+        let enclosure = try XCTUnwrap(unreached.columns(outline))
+        let enclosureRows = try XCTUnwrap(unreached.rows(outline))
+        XCTAssertEqual(unreached.count(pulseInk), 0, "an unreached block pulses")
+        for rest in [0, pulse.cycle, pulse.duration, pulse.duration + 1] {
+            XCTAssertEqual(try at(rest).count(pulseInk), 0, "at \(rest)s the outline is drawn")
+        }
+        XCTAssertEqual(try at(pulse.cycle / 2, number: 2).count(pulseInk), 0, "another block's cue pulsed this one")
+        for peak in [pulse.cycle / 2, pulse.cycle * 1.5] {
+            let drawn = try at(peak)
+            let columns = try XCTUnwrap(drawn.columns(pulseInk), "nothing drawn at the peak, \(peak)s")
+            let rows = try XCTUnwrap(drawn.rows(pulseInk))
+            // Round the enclosure and inside it, to a pixel of antialiasing.
+            XCTAssertEqual(columns.lowerBound, enclosure.lowerBound, accuracy: 2)
+            XCTAssertEqual(columns.upperBound, enclosure.upperBound, accuracy: 2)
+            XCTAssertEqual(rows.lowerBound, enclosureRows.lowerBound, accuracy: 2)
+            XCTAssertEqual(rows.upperBound, enclosureRows.upperBound, accuracy: 2)
+            // A ring, the width of the look's: its left edge is that many points of the ink.
+            let middle = (rows.lowerBound + rows.upperBound) / 2
+            let thick = drawn.run(pulseInk, row: middle, from: columns.lowerBound)
+            XCTAssertEqual(CGFloat(thick) / drawn.scale, pulse.width, accuracy: 1, "the ring is \(thick) pixels at the peak")
+            XCTAssertLessThan(drawn.count(pulseInk), (columns.count * rows.count) / 3, "the block is filled, not outlined")
+        }
+    }
+
+    /// The breath is eased the whole way and happens twice: it starts and ends at nothing, peaks
+    /// at the middle of each breath, and never jumps — a pulse, not a flash.
+    func testThePulseBreathesTwiceWithNoJump() {
+        let pulse = Look.Markdown.Pulse()
+        XCTAssertEqual(Look.Markdown.Pulse.cycles, 2)
+        XCTAssertLessThan(pulse.opacity, 1, "the peak is opaque, which is a flash")
+        XCTAssertGreaterThanOrEqual(pulse.cycle, 0.3)
+        let step = 0.001
+        var levels: [Double] = []
+        var time = -0.1
+        while time <= pulse.duration + 0.1 { levels.append(pulse.level(at: time)); time += step }
+        XCTAssertEqual(levels.first, 0)
+        XCTAssertEqual(levels.last, 0)
+        let jump = zip(levels, levels.dropFirst()).map { abs($1 - $0) }.max() ?? 0
+        XCTAssertLessThanOrEqual(jump, .pi * step / pulse.cycle + 1e-9, "the outline jumps \(jump) in a millisecond")
+        let peaks = (1..<(levels.count - 1)).filter { i in
+            levels[i - 1] < levels[i] && levels[i] >= levels[i + 1] && levels[i] > 0.99
+        }
+        XCTAssertEqual(peaks.count, 2, "not two breaths")
+        XCTAssertEqual(pulse.level(at: pulse.cycle / 2), 1, accuracy: 1e-9)
     }
 
     /// How alike two masks are, their top-left corners aligned: the pixels inked in both over
@@ -358,6 +423,13 @@ final class MarkdownRenderTests: XCTestCase {
                 return nil
             }
             return (top...bottom).map { y in (left...right).map { inked($0, y) } }
+        }
+
+        /// How many pixels of a colour run from `x` rightward along row `y`.
+        func run(_ colour: UIColor, row y: Int, from x: Int) -> Int {
+            var n = 0
+            while x + n < width, matches(colour, (y * width + x + n) * 4) { n += 1 }
+            return n
         }
 
         /// The rows a colour is found in, first to last.

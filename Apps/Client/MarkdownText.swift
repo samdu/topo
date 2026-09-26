@@ -1,4 +1,5 @@
 import SwiftUI
+import TopoCore
 
 /// Topo's words drawn as their blocks (`Markdown.blocks`): paragraphs and headings as text, list
 /// items behind their markers, rules, fenced code in an enclosure of its own, and whatever sits
@@ -13,6 +14,13 @@ import SwiftUI
 struct MarkdownText: View {
     let source: String
     var bare = true
+    /// The turn these words are, which names each code block's place in the transcript
+    /// (`CodeBlockCue.Place`) so the transcript can scroll to it. Nil draws the same words with no
+    /// place to be scrolled to.
+    var reply: TurnRef?
+    /// The code block of these words the voice has reached, if any: its enclosure pulses, and it
+    /// is what Topo stands beside.
+    var cue: CodeBlockCue?
     @Environment(\.look) private var look
 
     var body: some View {
@@ -119,8 +127,12 @@ struct MarkdownText: View {
     /// its number in the reply at its trailing edge, in the type and ink of a turn's time. The
     /// number is what the voice says in the block's place ("See code block 2."), so a listener
     /// can find the block it means.
+    ///
+    /// When the voice reaches the block (`cue`), its enclosure pulses (`CodeBlockPulse`) and
+    /// reports itself as the frame Topo stands beside (`mascotBeside`).
     private func code(_ text: String, number: Int?) -> some View {
-        VStack(alignment: .trailing, spacing: look.transcript.captionSpacing) {
+        let reached = number != nil && cue?.number == number ? cue : nil
+        return VStack(alignment: .trailing, spacing: look.transcript.captionSpacing) {
             if let number {
                 Text("\(number)")
                     .font(look.transcript.labelFont)
@@ -129,7 +141,11 @@ struct MarkdownText: View {
                     .accessibilityLabel("Code block \(number)")
             }
             enclosed(text)
+                .modifier(CodeBlockPulse(enclosure: look.markdown.codeBlock, pulse: look.markdown.codePulse,
+                                         trigger: reached?.serial, still: reached?.still))
+                .mascotBeside(reached?.serial)
         }
+        .id(CodeBlockCue.Place(reply: reply, number: number))
     }
 
     /// The block's enclosure. It is drawn, so it is what Topo stands clear of, whole.
@@ -180,5 +196,68 @@ struct MarkdownText: View {
             text[range].swiftUI.foregroundColor = look.codeInk
         }
         return text
+    }
+}
+
+/// The voice has reached a code block of a reply: the sentence that stands for it ("See code block
+/// N.", `Speakable.line(forCodeBlock:)`) has begun. The transcript scrolls the block into view, its
+/// enclosure pulses and Topo goes to stand on the other side of the transcript from it. Only a
+/// reply being read aloud makes one (`Speaker.cue`), so a block that is only in the transcript is
+/// never reached.
+struct CodeBlockCue: Equatable, Sendable {
+    /// The reply being read.
+    var reply: TurnRef
+    /// The block's number in the reply, as its caption draws it.
+    var number: Int
+    /// Counts cues, so the same block reached twice — the reply said again — is a new one.
+    var serial: Int
+    /// A moment of the pulse, in seconds from its start, drawn still and not animated: a
+    /// preview's or a render's. Nil is the pulse as it plays.
+    var still: Double?
+
+    /// Where a code block is in the transcript, which it is scrolled to by.
+    struct Place: Hashable {
+        var reply: TurnRef?
+        var number: Int?
+    }
+
+    var place: Place { Place(reply: reply, number: number) }
+}
+
+/// A code block's outline breathing when the voice reaches it: from nothing to the look's width
+/// and opacity in its accent and back, `Look.Markdown.Pulse.cycles` times, eased all the way
+/// (`Pulse.level`), over the enclosure's own shape. It plays each time `trigger` changes to a
+/// new value and draws nothing at rest; with `still` it draws that moment of the pulse and plays
+/// nothing.
+struct CodeBlockPulse: ViewModifier {
+    let enclosure: Look.Enclosure
+    let pulse: Look.Markdown.Pulse
+    let trigger: Int?
+    var still: Double?
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if let still {
+            content.overlay { outline(pulse.level(at: still)) }
+        } else {
+            content.keyframeAnimator(initialValue: pulse.duration, trigger: trigger) { content, time in
+                content.overlay { outline(pulse.level(at: time)) }
+            } keyframes: { _ in
+                // The clock of the pulse, run from its start to its end; what it draws at each
+                // moment is `level`, so the ease is the pulse's own and not the keyframe's.
+                KeyframeTrack(\.self) {
+                    MoveKeyframe(0)
+                    LinearKeyframe(pulse.duration, duration: pulse.duration)
+                }
+            }
+        }
+    }
+
+    /// The outline at `level`, 0 at rest and 1 at the peak: its width and its opacity both
+    /// that share of the look's, drawn inside the enclosure's edge so it covers nothing beside it.
+    private func outline(_ level: Double) -> some View {
+        RoundedRectangle(cornerRadius: enclosure.cornerRadius, style: .continuous)
+            .strokeBorder(pulse.accent.opacity(pulse.opacity * level), lineWidth: pulse.width * level)
+            .allowsHitTesting(false)
     }
 }

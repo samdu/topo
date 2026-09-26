@@ -130,6 +130,14 @@ enum LookDocument {
         r.colour("quoteText", &value.quoteText)
         r.colour("marker", &value.marker)
         r.indent("ruleWidth", &value.ruleWidth)
+        r.object("codePulse") { pulse(&value.codePulse, $0) }
+    }
+
+    private static func pulse(_ value: inout Look.Markdown.Pulse, _ r: Reader) {
+        r.colour("accent", &value.accent)
+        r.outline("width", &value.width)
+        r.alpha("opacity", &value.opacity)
+        r.breath("cycle", &value.cycle)
     }
 
     private static func enclosure(_ value: inout Look.Enclosure, _ r: Reader) {
@@ -463,6 +471,15 @@ enum LookDocument {
         /// clock asked to tick without end.
         func frameInterval(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: (1.0 / 120)...1, "a time in seconds between 1/120 and 1") {
+                applied += 1
+                value = number
+            }
+        }
+
+        /// One breath of a pulse: from a third of a second, under which a breath is a flash, to 5,
+        /// past which it is too slow to be seen as one.
+        func breath(_ key: String, _ value: inout Double) {
+            if let number = amount(key, in: 0.3...5, "a time in seconds between 0.3 and 5") {
                 applied += 1
                 value = number
             }

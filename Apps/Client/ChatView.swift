@@ -234,7 +234,7 @@ struct ChatView: View {
                 guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
                 // Only a reply the speaker took is read: one it refused is still owed, so the
                 // turn stays marked spoken and the next pass offers the reply again.
-                guard speaker.speak(reply.text, answering: asked) else { return false }
+                guard speaker.speak(reply.text, answering: asked, reply: reply.ref) else { return false }
                 harness.answeredAloud(asked)
                 return true
             }
@@ -388,10 +388,11 @@ struct ChatView: View {
                                   // typed turn's reply — never read aloud as it lands — is heard.
                                   replay: Replay(speaking: speaker.speaking,
                                                  canSpeak: speaker.voice.ready,
-                                                 say: { speaker.speak($0) },
+                                                 say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow)
+                                  draft: draftRow,
+                                  cue: speaker.cue)
         if #available(iOS 18, *) {
             view
                 // Where the transcript stops drawing, measured down from the transcript's own

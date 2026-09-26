@@ -917,6 +917,137 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    // MARK: Beside a code block the voice has reached
+
+    /// A code block left of the transcript's midline, one right of it, and one across the
+    /// column as a reply draws it, each with a line of the reply over it.
+    static let leftHeavy = CGRect(x: 16, y: 220, width: 240, height: 120)
+    static let rightHeavy = CGRect(x: 146, y: 220, width: 240, height: 120)
+    static let acrossTheColumn = CGRect(x: 16, y: 220, width: 300, height: 120)
+
+    private func beside(_ block: CGRect, in field: MascotField) -> MascotRoost.Decision {
+        MascotRoost.beside(block, in: field, size: MascotSprite.size(scale: Look.Mascot().scale),
+                           clearance: Look.Mascot().clearance, reach: MascotSprite.reach(scale: Look.Mascot().scale))
+    }
+
+    /// With the voice at a block left of the midline he stands right of it, and at one right of
+    /// the midline left of it: on the other side of the block's frame, level with it, clear of
+    /// it and of every word — where the roost chooser alone, from where he stood, keeps him on
+    /// the block's own side.
+    func testBesideABlockHeStandsOnTheOtherSideOfIt() throws {
+        let size = MascotSprite.size(scale: Look.Mascot().scale)
+        let clearance = Look.Mascot().clearance
+        let reach = MascotSprite.reach(scale: Look.Mascot().scale)
+        for (name, block, standing) in [("left-heavy", Self.leftHeavy, CGPoint(x: 30, y: 40)),
+                                        ("right-heavy", Self.rightHeavy, CGPoint(x: 280, y: 40))] {
+            let field = Self.field([CGRect(x: 16, y: 190, width: 200, height: 20), block])
+            // Where he stands already is a gap on the block's side: the chooser alone keeps him.
+            let kept = try XCTUnwrap(MascotRoost.decide(field, size: size, clearance: clearance, reach: reach,
+                                                        from: standing).choice, name)
+            XCTAssertEqual(kept.frame.midX < Self.visible.midX, block.midX < Self.visible.midX,
+                           "\(name): the fixture does not start him on the block's side")
+
+            let decision = beside(block, in: field)
+            let chosen = try XCTUnwrap(decision.choice, "\(name): nowhere to stand")
+            XCTAssertTrue(chosen.clears, "\(name): \(chosen.frame) is over words")
+            if block.midX <= Self.visible.midX {
+                XCTAssertGreaterThanOrEqual(chosen.frame.minX, block.maxX + clearance - 0.001,
+                                            "\(name): \(chosen.frame) is not right of \(block)")
+            } else {
+                XCTAssertLessThanOrEqual(chosen.frame.maxX, block.minX - clearance + 0.001,
+                                         "\(name): \(chosen.frame) is not left of \(block)")
+            }
+            XCTAssertTrue(chosen.frame.maxY > block.minY && chosen.frame.minY < block.maxY,
+                          "\(name): \(chosen.frame) is not level with \(block)")
+            XCTAssertTrue(MascotRoost.holds(field, frame: chosen.frame, clearance: clearance, reach: reach),
+                          "\(name): \(chosen.frame) is not a roost of the whole transcript")
+        }
+    }
+
+    /// A block across the column, as a reply draws one, leaves a margin narrower than he is: he
+    /// still stands on its other side, over the least of it, inside the screen and off the glass.
+    func testBesideABlockAcrossTheColumnHeStandsInItsMarginOverTheLeastOfIt() throws {
+        let block = Self.acrossTheColumn
+        // The reply above and below it, across the column too and meeting it: nowhere clears,
+        // and every place in the margin is over as much.
+        let field = Self.field([CGRect(x: 16, y: 0, width: 300, height: 220), block,
+                                CGRect(x: 16, y: 340, width: 300, height: 288)])
+        let chosen = try XCTUnwrap(beside(block, in: field).choice)
+        let reach = MascotSprite.reach(scale: Look.Mascot().scale)
+        XCTAssertFalse(chosen.clears, "the fixture leaves a gap")
+        XCTAssertGreaterThanOrEqual(chosen.frame.minX, block.midX, "\(chosen.frame) reaches the block's own side")
+        XCTAssertEqual(chosen.frame.midY, block.midY, accuracy: 0.001, "not level with the block")
+        XCTAssertEqual(chosen.frame.maxX, Self.visible.maxX - reach.right, accuracy: 0.001,
+                       "not flush with the edge of his room, the least of him over the block")
+        XCTAssertTrue(MascotRoost.admits(field, frame: chosen.frame, clearance: Look.Mascot().clearance, reach: reach))
+    }
+
+    /// Through the roam: a block the voice reaches, reported with the geometry, sends him across
+    /// the transcript to its other side in one glide once the geometry has settled; the same
+    /// block scrolled is not visited again; the next cue, at a block on the other side, sends him
+    /// back. Placed on the glass or at a pin he is not moved.
+    func testTheRoamGoesToStandBesideEachBlockTheVoiceReaches() throws {
+        let settings = MascotRoam.Settings(Look.Mascot(), reduceMotion: false)
+        let lines = [CGRect(x: 16, y: 190, width: 200, height: 20)]
+        var roam = MascotRoam(settings)
+        var time = 0.0
+        func run(_ field: MascotField) {
+            roam.observe(field, at: time)
+            let until = time + 30
+            while roam.needsTime, time < until {
+                time += 1.0 / 30
+                roam.advance(to: time)
+            }
+        }
+        var field = Self.field(lines + [Self.rightHeavy])
+        run(field)
+        let start = try XCTUnwrap(roam.roost.frame)
+        XCTAssertGreaterThan(start.midX, Self.visible.midX, "he starts on the right")
+
+        field.beside = MascotField.Beside(frame: Self.rightHeavy, serial: 1)
+        run(field)
+        let left = try XCTUnwrap(roam.roost.frame)
+        XCTAssertLessThanOrEqual(left.maxX, Self.rightHeavy.minX, "\(left) is not left of the right-heavy block")
+        XCTAssertEqual(roam.picture, left, "the glide did not end where it was going")
+        XCTAssertEqual(roam.moves, 1, "not one glide")
+        XCTAssertEqual(roam.visited, 1)
+
+        // The same cue, the transcript scrolled a little: not a second visit.
+        var scrolled = Self.field((lines + [Self.rightHeavy]).map { $0.offsetBy(dx: 0, dy: -4) })
+        scrolled.beside = MascotField.Beside(frame: Self.rightHeavy.offsetBy(dx: 0, dy: -4), serial: 1)
+        run(scrolled)
+        XCTAssertEqual(roam.moves, 1, "the same block visited again")
+
+        // The next reply lands with its block on the left, and he settles as he would; then the
+        // voice reaches it.
+        var next = Self.field(lines + [Self.leftHeavy])
+        run(next)
+        let before = roam.moves
+        XCTAssertEqual(roam.visited, 1)
+        next.beside = MascotField.Beside(frame: Self.leftHeavy, serial: 2)
+        run(next)
+        let right = try XCTUnwrap(roam.roost.frame)
+        XCTAssertGreaterThanOrEqual(right.minX, Self.leftHeavy.maxX, "\(right) is not right of the left-heavy block")
+        XCTAssertEqual(roam.picture, right)
+        XCTAssertEqual(roam.moves, before + 1, "not one glide")
+        XCTAssertEqual(roam.visited, 2)
+        XCTAssertEqual(roam.facing, .right)
+
+        var pinLook = Look.Mascot()
+        pinLook.placement = .pinned
+        var pinned = MascotRoam(MascotRoam.Settings(pinLook, reduceMotion: false))
+        var placed = Self.field(lines + [Self.leftHeavy])
+        pinned.observe(placed, at: 0)
+        var clock = 0.0
+        while pinned.needsTime, clock < 30 { clock += 1.0 / 30; pinned.advance(to: clock) }
+        let pin = try XCTUnwrap(pinned.roost.frame)
+        placed.beside = MascotField.Beside(frame: Self.leftHeavy, serial: 1)
+        pinned.observe(placed, at: clock)
+        while pinned.needsTime, clock < 60 { clock += 1.0 / 30; pinned.advance(to: clock) }
+        XCTAssertEqual(pinned.roost.frame, pin, "a pinned Topo went to the block")
+        XCTAssertNil(pinned.visited)
+    }
+
     // MARK: Facing
 
     /// The facing is which half of the transcript his centre is in: right of the midline faces

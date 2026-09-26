@@ -47,7 +47,7 @@ enum Speakable {
             finishTable()
             switch block.kind {
             case .code:
-                lines.append(block.codeNumber.map { "See code block \($0)." } ?? "See the code block.")
+                lines.append(block.codeNumber.map(line(forCodeBlock:)) ?? "See the code block.")
             case .rule:
                 continue
             case .paragraph, .heading, .item:
@@ -56,6 +56,21 @@ enum Speakable {
         }
         finishTable()
         return lines.filter { !$0.allSatisfy(\.isWhitespace) }.joined(separator: "\n")
+    }
+
+    /// What the voice says in code block `number`'s place, a line of its own.
+    static func line(forCodeBlock number: Int) -> String { "See code block \(number)." }
+
+    /// The code block a sentence of the spoken text stands for, when it is one: the line
+    /// `line(forCodeBlock:)` writes, which `Speaker.sentences` always cuts as a sentence of its own,
+    /// since it is a line of its own with one full stop at its end.
+    static func codeBlock(saidBy sentence: String) -> Int? {
+        let prefix = "See code block ", suffix = "."
+        guard sentence.hasPrefix(prefix), sentence.hasSuffix(suffix) else { return nil }
+        let digits = sentence.dropFirst(prefix.count).dropLast(suffix.count)
+        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), let number = Int(digits), number > 0,
+              line(forCodeBlock: number) == sentence else { return nil }
+        return number
     }
 
     /// A run of what could be a path or a file name: an optional leading `/` or `~/`, then names
