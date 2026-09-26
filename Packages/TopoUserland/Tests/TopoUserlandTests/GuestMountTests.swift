@@ -76,7 +76,8 @@ final class GuestMountTests: XCTestCase {
         let point = "/mnt/host-\(UUID().uuidString.prefix(8))"
         let attempt = try await sh("mkdir -p \(point) && mount -t real '\(outside.path)' \(point)")
         XCTAssertNotEqual(attempt.status, 0, "the guest mounted a host directory: \(attempt.output)")
-        XCTAssertTrue(attempt.errors.contains("Operation not permitted"),
+        // EPERM, which BusyBox's mount words as its own.
+        XCTAssertTrue(attempt.errors.contains("permission denied"),
                       "the mount was not refused as not permitted: \(attempt.errors)")
         let reached = try await sh("cat \(point)/which; grep -c ' \(point) ' /proc/mounts")
         XCTAssertEqual(reached.output, "0\n", "the host directory is reachable at \(point)")
