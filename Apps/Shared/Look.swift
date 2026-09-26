@@ -165,9 +165,12 @@ struct Look: Equatable, Sendable {
         /// wrapped. A watch's crown and a television's remote move the transcript and nothing
         /// inside it, so there it wraps.
         var codeOverflow: CodeOverflow
-        /// The bar down the leading side of a quote, and its width.
+        /// The bar down the leading side of a quote, and its width. A quote inside a quote draws
+        /// one for each level it is inside.
         var quoteBar: Color = Theme.textMuted
         var quoteBarWidth: CGFloat
+        /// Between a bar and what comes after it: the next level's bar, or the words.
+        var quoteIndent: CGFloat
         /// A quote's words.
         var quoteText: Color = Theme.textMuted
         /// A list item's marker, and a rule.
@@ -200,6 +203,7 @@ struct Look: Equatable, Sendable {
                 codeFont = .system(.caption2)
                 codeOverflow = .wrap
                 quoteBarWidth = 2
+                quoteIndent = 4
                 ruleWidth = 1
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 6, horizontalPadding: 6, verticalPadding: 4,
@@ -214,6 +218,7 @@ struct Look: Equatable, Sendable {
                 codeFont = .system(.body)
                 codeOverflow = .wrap
                 quoteBarWidth = 4
+                quoteIndent = 10
                 ruleWidth = 2
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 12, horizontalPadding: 20, verticalPadding: 14,
@@ -228,6 +233,7 @@ struct Look: Equatable, Sendable {
                 codeFont = .system(.callout)
                 codeOverflow = .scroll
                 quoteBarWidth = 3
+                quoteIndent = 6
                 ruleWidth = 1
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 8, horizontalPadding: 10, verticalPadding: 8,

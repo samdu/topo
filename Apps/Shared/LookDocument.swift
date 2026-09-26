@@ -126,6 +126,7 @@ enum LookDocument {
         r.codeOverflow("codeOverflow", &value.codeOverflow)
         r.colour("quoteBar", &value.quoteBar)
         r.indent("quoteBarWidth", &value.quoteBarWidth)
+        r.indent("quoteIndent", &value.quoteIndent)
         r.colour("quoteText", &value.quoteText)
         r.colour("marker", &value.marker)
         r.indent("ruleWidth", &value.ruleWidth)
@@ -365,9 +366,9 @@ enum LookDocument {
             }
         }
 
-        /// Room inside a reply, between its blocks or before a list's words, and the width of a
-        /// quote's bar or a rule: none to 64 points, since a list indents by it once for every
-        /// list it is inside and the words have to stay in the column.
+        /// Room inside a reply, between its blocks, before a list's words or after a quote's bar,
+        /// and the width of a quote's bar or a rule: none to 64 points, since a list indents by it
+        /// once for every list it is inside and the words have to stay in the column.
         func indent(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...64, "a length in points between 0 and 64") {
                 applied += 1

@@ -836,6 +836,34 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// A quote inside a quote reports a bar for each level, so Topo stands clear of both: they are
+    /// in two columns, not one, and the words beside them report their lines as any other words do
+    /// (`PreviewTurns.nestedQuote`).
+    func testANestedQuoteReportsABarPerLevel() throws {
+        let phone = CGSize(width: 393, height: 852)
+        let look = Look()
+        let chat = try stage(PreviewTurns.nestedQuote, mascot: Look.Mascot(), size: phone)
+        defer { chat.window.isHidden = true }
+        let field = try XCTUnwrap(chat.canvas?.roam?.field)
+        let edge = field.visible.maxX - look.transcript.horizontalPadding - look.transcript.replyTrailingInset
+        let reply = field.covering.filter { $0.minX < 100 && $0 != field.pane && $0 != field.well }
+        let bars = reply.filter { $0.width <= look.markdown.quoteBarWidth + 0.5 && $0.height > 10 }
+        XCTAssertGreaterThanOrEqual(bars.count, 3, "the nested quote's bars were not all reported: \(reply)")
+        let columns = Set(bars.map { ($0.minX * 2).rounded() / 2 })
+        XCTAssertGreaterThanOrEqual(columns.count, 2, "every bar was reported in one column: \(bars)")
+        let inner = look.transcript.horizontalPadding + look.markdown.quoteBarWidth + look.markdown.quoteIndent
+        XCTAssertTrue(columns.contains { abs($0 - inner) < 1.5 },
+                      "no bar stands where the second level's does (\(inner)): \(columns.sorted())")
+        let lines = reply.filter { $0.height < 30 && $0.width > look.markdown.quoteBarWidth + 1 }
+        XCTAssertGreaterThanOrEqual(lines.count, 4, "the quote's words did not report their lines: \(reply)")
+        for rect in reply {
+            XCTAssertLessThanOrEqual(rect.maxX, edge + 0.5, "a block ran into the margin: \(rect)")
+        }
+        let spot = try XCTUnwrap(chat.canvas?.roam?.roost.frame, "he stands nowhere")
+        XCTAssertTrue(MascotRoost.holds(field, frame: spot, clearance: look.mascot.clearance),
+                      "he stands over a block: \(spot) \(field.covering)")
+    }
+
     /// A reply drawn as markdown reports its blocks: each text's lines one at a time — the
     /// heading's, the paragraphs', each list item's marker and words — and what draws a shape of
     /// its own whole: the fence's enclosure and the quote's bar. None of it runs into the reply's
