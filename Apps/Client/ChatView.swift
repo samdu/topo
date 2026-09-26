@@ -343,14 +343,6 @@ struct ChatView: View {
                 forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
     }
 
-    /// Hold to talk and release to send; a tap opens the microphone until the next press. The
-    /// session logic is `VoiceInput`'s and the routing `MicPress`'s; this only sends what a press
-    /// hands back.
-    private func micPressed(_ down: Bool) async {
-        guard let heard = await micPress.handle(down, mic: micState, speaker: speaker, voice: voice) else { return }
-        await sendSpoken(heard)
-    }
-
     private func sendSpoken(_ heard: String) async {
         row.text = ""
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -437,7 +429,13 @@ struct ChatView: View {
     @ViewBuilder private func composer(keyboard: Bool) -> some View {
         let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
                             keyboard: keyboard,
-                            micPressed: { down in Task { await micPressed(down) } },
+                            // Hold to talk and release to send; a tap opens the microphone until
+                            // the next press. The session logic is `VoiceInput`'s and the routing
+                            // `MicPress`'s; this only sends what a press hands back.
+                            micPressed: { down in
+                                micPress.gesture(down, showing: { micState }, speaker: speaker, voice: voice,
+                                                 send: { await sendSpoken($0) })
+                            },
                             micReport: micReport)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
@@ -591,6 +589,17 @@ final class MicPress {
     /// The last press down was a stop, so the release that follows it is one too. Set afresh on
     /// every press, so a release the gesture never delivered strands nothing.
     private var stopping = false
+
+    /// The gesture's own call. The press is taken for what the button shows when the task runs,
+    /// as the chat has always read it.
+    @discardableResult
+    func gesture(_ down: Bool, showing: @escaping () -> Composer.MicState, speaker: Speaker, voice: VoiceInput,
+                 send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never> {
+        Task {
+            guard let heard = await handle(down, mic: showing(), speaker: speaker, voice: voice) else { return }
+            await send(heard)
+        }
+    }
 
     /// What a release heard, to be sent, or nil.
     func handle(_ down: Bool, mic: Composer.MicState, speaker: Speaker, voice: VoiceInput) async -> String? {

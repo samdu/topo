@@ -375,9 +375,19 @@ final class ComposerRenderTests: XCTestCase {
         let stop = Composer.MicState(speaking: true)
         XCTAssertNotEqual(try raster(look: look), try raster(stop, look: look),
                           "the stop button looks the same as the microphone")
+        // Stop is never dimmed, since stopping needs no ear: over an ear that cannot listen it is
+        // the same picture as over one that can, and the look's dimmed alpha does not reach it,
+        // while it does reach the dimmed microphone.
+        let deaf = Composer.MicState(canListen: false, speaking: true)
+        XCTAssertEqual(try raster(stop, look: look), try raster(deaf, look: look),
+                       "a stop over an ear that cannot listen was drawn dimmed")
+        var faint = flatLook()
+        faint.composer.dimmedOpacity = 0.1
+        XCTAssertEqual(try raster(deaf, look: look), try raster(deaf, look: faint),
+                       "the look's dimmed alpha reached the stop")
         XCTAssertNotEqual(try raster(Composer.MicState(canListen: false), look: look),
-                          try raster(Composer.MicState(canListen: false, speaking: true), look: look),
-                          "a stop over an ear that cannot listen was drawn dimmed, though stopping needs no ear")
+                          try raster(Composer.MicState(canListen: false), look: faint),
+                          "the faint look does not dim the microphone, so the check above says nothing")
 
         var big = flatLook()
         big.composer.glyph.size = look.composer.glyph.size * 1.6
@@ -385,19 +395,20 @@ final class ComposerRenderTests: XCTestCase {
                           "the look's glyph size does not reach the stop mark")
     }
 
-    /// The cut the mark is pressed at is `Look.press`, which is one treatment for both marks,
-    /// so a change to it reaches the microphone.
+    /// The cut the mark is pressed at is `Look.press`, which is one treatment for every mark,
+    /// so a change to it reaches the microphone and the stop alike.
     func testTheCutIsDrawnFromTheLooksOnePress() throws {
         let look = flatLook()
-
         var flat = flatLook()
         flat.press.wall = 0
-        XCTAssertNotEqual(try raster(look: look), try raster(look: flat),
-                          "the look's wall does not reach the microphone's cut")
-
         var lit = flatLook()
         lit.press.catchLight = Color(red: 1, green: 0.85, blue: 0.4)
-        XCTAssertNotEqual(try raster(look: look), try raster(look: lit),
-                          "the look's catch light does not reach the microphone's cut")
+
+        for (name, mic) in [("microphone", Composer.MicState()), ("stop", Composer.MicState(speaking: true))] {
+            XCTAssertNotEqual(try raster(mic, look: look), try raster(mic, look: flat),
+                              "the look's wall does not reach the \(name)'s cut")
+            XCTAssertNotEqual(try raster(mic, look: look), try raster(mic, look: lit),
+                              "the look's catch light does not reach the \(name)'s cut")
+        }
     }
 }
