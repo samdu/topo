@@ -66,7 +66,9 @@ final class MarkdownRenderTests: XCTestCase {
 
     /// Each code block carries its number in the reply — what the voice says in its place, "See
     /// code block N" — drawn over the block at its trailing edge in the caption's ink, on every
-    /// screen.
+    /// screen. Which digit is drawn is read off the pixels: each caption is matched against the
+    /// digits drawn alone in the same type and ink, and has to be nearer its own number than the
+    /// other block's, so the same number on both blocks fails.
     func testACodeBlockIsCaptionedWithItsNumber() throws {
         for screen in Look.Screen.allCases {
             var look = look(screen)
@@ -74,15 +76,42 @@ final class MarkdownRenderTests: XCTestCase {
             let pixels = try draw(turn(.assistant, "```\nlet x = 1\n```\n\n```\nlet y = 2\n```"), look)
             let blocks = try XCTUnwrap(pixels.rowRuns(outline), "\(screen): no enclosure")
             XCTAssertEqual(blocks.count, 2, "\(screen): two fences drew \(blocks)")
+            guard blocks.count == 2 else { continue }
             let columns = try XCTUnwrap(pixels.columns(outline))
             let trailingHalf = (columns.lowerBound + columns.count / 2)...columns.upperBound
+            let digits = try ["1", "2"].map { digit in
+                let alone = Text(digit).font(look.transcript.labelFont).foregroundStyle(Color(captionInk))
+                    .padding(8).background(Color.white)
+                let drawn = try Pixels(LookStage.image(alone, look: look, size: CGSize(width: 80, height: 80)))
+                return try XCTUnwrap(drawn.mask(rows: 0..<drawn.height, columns: 0...(drawn.width - 1)),
+                                     "\(screen): \(digit) drew nothing alone")
+            }
             var above = 0
-            for block in blocks {
-                let number = pixels.count(captionInk, rows: above..<block.lowerBound, columns: trailingHalf)
-                XCTAssertGreaterThan(number, 3, "\(screen): no number over the block at rows \(block)")
+            for (index, block) in blocks.enumerated() {
+                let caption = pixels.mask(rows: above..<block.lowerBound, columns: trailingHalf)
                 above = block.upperBound + 1
+                let drawn = try XCTUnwrap(caption, "\(screen): no number over block \(index + 1)")
+                let own = Self.overlap(drawn, digits[index])
+                let other = Self.overlap(drawn, digits[1 - index])
+                XCTAssertGreaterThan(own, other,
+                                     "\(screen): block \(index + 1)'s caption reads more like \(2 - index) (\(own) vs \(other))")
             }
         }
+    }
+
+    /// How alike two masks are, their top-left corners aligned: the pixels inked in both over
+    /// those inked in either.
+    private static func overlap(_ a: [[Bool]], _ b: [[Bool]]) -> Double {
+        var both = 0, either = 0
+        for y in 0..<max(a.count, b.count) {
+            for x in 0..<max(a.first?.count ?? 0, b.first?.count ?? 0) {
+                let inA = y < a.count && x < a[y].count && a[y][x]
+                let inB = y < b.count && x < b[y].count && b[y][x]
+                if inA && inB { both += 1 }
+                if inA || inB { either += 1 }
+            }
+        }
+        return either == 0 ? 0 : Double(both) / Double(either)
     }
 
     /// A code line longer than the column stays in the column: the phone scrolls it inside its
@@ -315,9 +344,20 @@ final class MarkdownRenderTests: XCTestCase {
             return runs
         }
 
-        /// How many pixels of a colour are in a region.
-        func count(_ colour: UIColor, rows: Range<Int>, columns: ClosedRange<Int>) -> Int {
-            rows.reduce(0) { total, y in total + columns.filter { matches(colour, (y * width + $0) * 4) }.count }
+        /// The caption ink's pixels in a region, cropped to where they are: anything drawn in it
+        /// on white, antialiased edges included, since the ink has no blue and white is all blue.
+        /// Nil when there are none.
+        func mask(rows: Range<Int>, columns: ClosedRange<Int>) -> [[Bool]]? {
+            let inked = { (x: Int, y: Int) in
+                let i = (y * width + x) * 4
+                return bytes[i + 2] < 128 && bytes[i] > 200
+            }
+            let ys = rows.filter { y in columns.contains { inked($0, y) } }
+            let xs = columns.filter { x in rows.contains { inked(x, $0) } }
+            guard let top = ys.first, let bottom = ys.last, let left = xs.first, let right = xs.last else {
+                return nil
+            }
+            return (top...bottom).map { y in (left...right).map { inked($0, y) } }
         }
 
         /// The rows a colour is found in, first to last.

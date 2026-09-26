@@ -65,11 +65,12 @@ enum Speakable {
     private static let candidate = try! NSRegularExpression(
         pattern: #"(?<![\w/.~:@\-])(?:~?/)?[\w.\-]+(?:/[\w.\-]+)*/?"#)
 
-    /// A name with an extension: two or more characters (or none, for `.claude`) before the first
-    /// dot, and a letter after every dot. Two characters, so `e.g.` and `i.e.` are not names; a
-    /// letter, so `3.5` and `v1.2` are not.
+    /// A name with an extension: a letter after every dot, so `3.5` and `v1.2` are not names.
+    /// Before the first dot, two or more characters, or none (`.claude`), or one when the last
+    /// extension is two or more (`a.py`): so `e.g.`, `i.e.` and `a.m.`, one letter either side,
+    /// are not names.
     private static let dotted = try! NSRegularExpression(
-        pattern: #"^(?:[\w\-]{2,})?(?:\.[A-Za-z][\w\-]*)+$"#)
+        pattern: #"^(?:[\w\-]{2,}(?:\.[A-Za-z][\w\-]*)+|(?:\.[A-Za-z][\w\-]*)+|[\w\-](?:\.[A-Za-z][\w\-]*)*\.[A-Za-z][\w\-]+)$"#)
 
     /// The words of one block with every path and file name in them read aloud.
     static func words(_ text: String) -> String {
@@ -97,12 +98,31 @@ enum Speakable {
         if body.count > 1, body.hasSuffix("/") { body.removeLast() }
         let segments = body.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         let isPath = body.hasPrefix("/") || body.hasPrefix("~/")
-        guard let name = segments.last, isPath || isDotted(name) else { return candidate }
+        guard let name = segments.last, isPath || isDotted(name) || isDirectory(segments) else {
+            return candidate
+        }
         let said = segments.map { segment -> String in
             if segment == "~" { return "tilde" }
             return isDotted(segment) ? file(segment) : segment
         }
         return said.joined(separator: " slash ").trimmingCharacters(in: .whitespaces) + stop
+    }
+
+    /// A relative path with no file at its end, told from `and/or`, `he/she`, `A/B`, `TCP/IP` and
+    /// `1/2` by the shape of its names: every one a capitalised word (`Apps/Client`), or any one
+    /// in CamelCase (`Packages/TopoCore`) or with an underscore (`src/my_module`), and none of
+    /// them a number.
+    private static func isDirectory(_ segments: [String]) -> Bool {
+        guard segments.count >= 2, segments.allSatisfy({ !$0.isEmpty && !$0.allSatisfy(\.isNumber) }) else {
+            return false
+        }
+        let capitalised = segments.allSatisfy { segment in
+            segment.first?.isUppercase == true && segment.dropFirst().contains(where: \.isLowercase)
+        }
+        let camel = segments.contains { segment in
+            zip(segment, segment.dropFirst()).contains { $0.isLowercase && $1.isUppercase }
+        }
+        return capitalised || camel || segments.contains { $0.contains("_") }
     }
 
     private static func isDotted(_ segment: String) -> Bool {

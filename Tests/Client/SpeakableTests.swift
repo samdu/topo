@@ -32,6 +32,8 @@ final class SpeakableTests: XCTestCase {
             ("API.md", "API dot md"),
             (".gitignore", "dot gitignore"),
             ("Apps/Client/Speaker.swift", "Apps slash Client slash Speaker dot swift"),
+            ("Run a.py first.", "Run a dot py first."),
+            ("`x.md`", "x dot md"),
         ])
     }
 
@@ -41,6 +43,10 @@ final class SpeakableTests: XCTestCase {
             ("/home/topo", "slash home slash topo"),
             ("Look in /home/topo.", "Look in slash home slash topo."),
             ("It is in ~/Desktop/", "It is in tilde slash Desktop"),
+            ("Open Apps/Client.", "Open Apps slash Client."),
+            ("`Tests/Client/`", "Tests slash Client"),
+            ("In Packages/TopoCore now", "In Packages slash TopoCore now"),
+            ("see src/my_module", "see src slash my_module"),
         ])
     }
 
@@ -53,6 +59,13 @@ final class SpeakableTests: XCTestCase {
             ("Bring snacks, e.g. crisps, i.e. food.", "Bring snacks, e.g. crisps, i.e. food."),
             ("Wait... what?", "Wait... what?"),
             ("Tea and/or coffee.", "Tea and/or coffee."),
+            ("Ask him/her.", "Ask him/her."),
+            ("Yes/no?", "Yes/no?"),
+            ("An A/B test.", "An A/B test."),
+            ("Over TCP/IP.", "Over TCP/IP."),
+            ("Add 1/2 a cup.", "Add 1/2 a cup."),
+            ("On 9/26/2026.", "On 9/26/2026."),
+            ("At 9 a.m. today.", "At 9 a.m. today."),
             ("Mail sam@example.com today.", "Mail sam@example.com today."),
             ("See https://example.com/a.json now.", "See https://example.com/a.json now."),
             ("PrePromptSubmit", "PrePromptSubmit"),
