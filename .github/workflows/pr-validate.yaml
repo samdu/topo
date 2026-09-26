@@ -7,14 +7,21 @@
 # job costs no reviewer round.
 #
 # Codex signs in with a ChatGPT-mode login rather than an API key: the
-# `CODEX_AUTH_JSON` secret is the contents of a `~/.codex/auth.json` from a
-# `codex login`, written into a private codex-home for the run, and the CLI
-# authenticates from that file. Store it as ONE line (`jq -c . auth.json |
-# gh secret set CODEX_AUTH_JSON`): the runner registers every line of a
-# multi-line secret as a secret value of its own, so a pretty-printed file's
-# `{` and `}` lines become values the log mask and the verdict's sanitise step
-# both rewrite. Refresh it with a new `codex login` when the reviewer starts
-# failing with 401s.
+# `CODEX_AUTH_JSON` secret is the current `auth.json` of that login, written
+# into a private codex-home for the run, and the CLI authenticates from that
+# file. The CLI rotates the refresh token on first use, which spends the
+# secret, so the codex job writes the rotated file back to `CODEX_AUTH_JSON`
+# before it deletes the login; `CODEX_SECRET_PAT`, a fine-grained PAT on this
+# repository with Secrets: write, is what lets it. The `codex_wait` job holds
+# each run's `codex` until no other run's is in progress, so two runs do not
+# start on the same login (after a 25-minute bound it goes ahead). A new
+# `codex login` is needed only when the chain breaks — two runs on one login,
+# a rotation the job could not write back — and shows as `refresh token was
+# already used`. Store it as ONE line (`jq -c . auth.json | gh secret set
+# CODEX_AUTH_JSON`), as the write-back does: the runner registers every line
+# of a multi-line secret as a secret value of its own, so a pretty-printed
+# file's `{` and `}` lines become values the log mask and the verdict's
+# sanitise step both rewrite.
 #
 # That login is a reusable credential on a runner that also holds PR content,
 # and Codex reads that content. The exposure is bounded, not removed: the
@@ -734,8 +741,82 @@ jobs:
   # take most of a run's wall clock, and the verdict arrives while they are
   # still going. The merge still needs both, since reviewer_ran and
   # review_gate read every suite job and `test`.
-  codex:
+  # One codex job at a time across the repository: each spends the login it
+  # starts from and writes the rotated one back, so two on the same login
+  # break the chain. The wait is its own job because a job receives its
+  # secrets when it starts: `codex` must start after the previous write-back,
+  # not wait inside itself holding the login that write-back replaced.
+  #
+  # Queue order is this job's own start (then its id). It waits while another
+  # run of this workflow has a `codex` job not yet completed, a `codex_wait`
+  # that started earlier and is still in progress, or a `codex_wait` that
+  # succeeded whose `codex` has not appeared yet. It polls every 20 seconds,
+  # and after 25 minutes it warns and lets the review go ahead. An API error
+  # counts as busy and is retried within the same bound.
+  codex_wait:
     needs: [select, topo_unit, others]
+    if: >-
+      needs.select.result == 'success' &&
+      needs.topo_unit.result == 'success' &&
+      needs.others.result == 'success' &&
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Read-only, to list this workflow's runs and their jobs.
+      actions: read
+    steps:
+      - name: Wait for any other run's codex job to finish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          api="repos/$GITHUB_REPOSITORY/actions"
+          me=$(gh api "$api/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            --jq '[.jobs[] | select(.name == "codex_wait")][0] | {id, started_at}' 2>/dev/null) || me=""
+          if [ -z "$me" ] || [ "$me" = "null" ]; then
+            echo "::warning::Could not find this codex_wait job in the API; the review goes ahead without waiting."
+            exit 0
+          fi
+          deadline=$((SECONDS + 25 * 60))
+          while :; do
+            busy=""
+            if runs=$(gh api "$api/workflows/pr-validate.yaml/runs?status=in_progress&per_page=100" \
+                --jq ".workflow_runs[] | select(.id != $GITHUB_RUN_ID) | .id"); then
+              for r in $runs; do
+                if ! jobs=$(gh api "$api/runs/$r/jobs?filter=latest&per_page=100"); then
+                  busy="the jobs of run $r could not be read"
+                  break
+                fi
+                why=$(jq -r --argjson me "$me" --arg r "$r" '
+                  ([.jobs[] | select(.name == "codex")][0]) as $c
+                  | ([.jobs[] | select(.name == "codex_wait")][0]) as $w
+                  | if $c != null and $c.status != "completed" then "run \($r): codex is \($c.status)"
+                    elif $w != null and $w.status == "in_progress"
+                      and ([$w.started_at, $w.id] < [$me.started_at, $me.id]) then "run \($r): earlier in the queue"
+                    elif $w != null and $w.conclusion == "success" and $c == null then "run \($r): codex about to start"
+                    else empty end' <<<"$jobs")
+                if [ -n "$why" ]; then busy="$why"; break; fi
+              done
+            else
+              busy="this workflow's runs could not be listed"
+            fi
+            if [ -z "$busy" ]; then
+              echo "No other codex job is running or ahead in the queue."
+              exit 0
+            fi
+            if [ "$SECONDS" -ge "$deadline" ]; then
+              echo "::warning::Still waiting after 25 minutes ($busy); the review goes ahead, and may start on a login another job is about to rotate."
+              exit 0
+            fi
+            echo "Waiting: $busy"
+            sleep 20
+          done
+
+  codex:
+    needs: [select, topo_unit, others, codex_wait]
     # Same-repo branches only: a fork PR carries untrusted content and must
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
@@ -747,6 +828,7 @@ jobs:
       needs.select.result == 'success' &&
       needs.topo_unit.result == 'success' &&
       needs.others.result == 'success' &&
+      needs.codex_wait.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -1119,6 +1201,42 @@ jobs:
           retention-days: 7
           overwrite: true
           if-no-files-found: error
+
+      # The CLI rotates the refresh token on its first use, so the login it
+      # leaves in codex-home is the only live one and the secret it started
+      # from is spent. Writing it back is what lets the next job sign in. It
+      # runs on failure and cancellation too: a rotation happens whether or not
+      # the review finished. The file is compared and piped, never printed.
+      - name: Write the rotated Codex login back to the secret
+        if: ${{ always() }}
+        env:
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          GH_TOKEN: ${{ secrets.CODEX_SECRET_PAT }}
+        run: |
+          set -euo pipefail
+          auth="$RUNNER_TEMP/codex-home/auth.json"
+          if [ ! -f "$auth" ]; then
+            echo "No Codex login on the runner; nothing to write back."
+            exit 0
+          fi
+          if ! jq -e '.auth_mode == "chatgpt" and (.tokens.access_token | type) == "string"' \
+            "$auth" >/dev/null 2>&1; then
+            echo "::warning::The Codex login on the runner is not a chatgpt-mode auth.json; the secret is left as it is."
+            exit 0
+          fi
+          if [ -n "$CODEX_AUTH_JSON" ] \
+            && [ "$(jq -cS . "$auth")" = "$(printf '%s' "$CODEX_AUTH_JSON" | jq -cS . 2>/dev/null || true)" ]; then
+            echo "The Codex login is unchanged; nothing to write back."
+            exit 0
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The Codex login rotated but CODEX_SECRET_PAT is unset, so CODEX_AUTH_JSON is now spent. Set CODEX_SECRET_PAT (a fine-grained PAT on this repository with Secrets: write), then mint a new login with codex login."
+            exit 1
+          fi
+          # One line, for the same reason as the header's: every line of a
+          # multi-line secret is registered as a secret value of its own.
+          jq -c . "$auth" | gh secret set CODEX_AUTH_JSON -R "$GITHUB_REPOSITORY"
+          echo "Wrote the rotated Codex login back to CODEX_AUTH_JSON."
 
       - name: Delete the Codex login
         if: ${{ always() }}

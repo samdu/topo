@@ -3,8 +3,8 @@
 # the suite jobs select, topo_unit, topo_ui and others, and the gate and review jobs — rather than
 # one discovered from the file: the workflow has exactly those jobs; `test` needs and reads in its
 # SUITE_RESULTS exactly the suite jobs; `codex` needs and spells out
-# `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others), never
-# `topo_ui` or `test`, so the review runs beside the UI tests; and `reviewer_ran` and
+# `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others) and
+# `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; and `reviewer_ran` and
 # `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
 # reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. Then
 # it runs the two snippets that read those results — `test`'s `Require every suite job passed` and
@@ -37,7 +37,7 @@ jobs = YAML.load_file(path).fetch("jobs")
 # The jobs by name, written out here rather than discovered, so a suite job deleted from the
 # workflow is a difference and not a job that silently stops being checked.
 suite = %w[select topo_unit topo_ui others]
-review = %w[test codex post_feedback reviewer_ran review_gate]
+review = %w[test codex_wait codex post_feedback reviewer_ran review_gate]
 # What the reviewer waits on: the suite less the UI tests, which it runs beside.
 fast = suite - %w[topo_ui]
 bad = 0
@@ -58,7 +58,8 @@ end
 
 check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
 check.(needs.("test").sort == suite.sort, "test needs exactly the suite jobs (#{needs.('test').join(', ')})")
-check.(needs.("codex").sort == fast.sort, "codex needs exactly the fast jobs #{fast.join(', ')} (#{needs.('codex').join(', ')})")
+check.(needs.("codex").sort == (fast + %w[codex_wait]).sort, "codex needs exactly the fast jobs #{fast.join(', ')} and codex_wait (#{needs.('codex').join(', ')})")
+check.(needs.("codex_wait").sort == fast.sort, "codex_wait needs exactly the fast jobs #{fast.join(', ')} (#{needs.('codex_wait').join(', ')})")
 check.(needs.("reviewer_ran").sort == (suite + %w[test codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
 check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, codex and post_feedback (#{needs.('review_gate').join(', ')})")
 
@@ -69,8 +70,8 @@ pairs.each { |job, read| check.(job == read, "test's SUITE_RESULTS reads #{job} 
 
 cif = jobs.fetch("codex").fetch("if")
 read = cif.scan(/needs\.(\w+)\.result == 'success'/).flatten
-check.(read.sort == fast.sort, "codex's if reads exactly the fast jobs (#{read.join(', ')})")
-fast.each do |job|
+check.(read.sort == (fast + %w[codex_wait]).sort, "codex's if reads exactly the fast jobs and codex_wait (#{read.join(', ')})")
+(fast + %w[codex_wait]).each do |job|
   check.(cif.include?("needs.#{job}.result == 'success'"), "codex's if spells out needs.#{job}.result == 'success'")
 end
 (suite + ["test"]).each do |job|
