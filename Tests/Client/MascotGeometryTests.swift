@@ -249,6 +249,32 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// Where a decision found no place that clears, `frame` is the one it chose and covers words
+    /// — by area, not only within his clearance of them — and no less than the least covered
+    /// place weighed, nor than any admitted place at a whole point of the room.
+    static func assertTrappedAtTheLeastCost(_ decision: MascotRoost.Decision, frame: CGRect, _ label: String,
+                                            file: StaticString = #filePath, line: UInt = #line) throws {
+        let field = decision.field
+        let choice = try XCTUnwrap(decision.choice, "\(label): he stands nowhere", file: file, line: line)
+        XCTAssertFalse(choice.clears, "\(label): a place cleared the words", file: file, line: line)
+        XCTAssertEqual(frame, choice.frame, "\(label): he stands other than where the decision chose", file: file, line: line)
+        let covered = area(over: field.words, of: frame)
+        XCTAssertGreaterThan(covered, 0, "\(label): \(frame) is beside the words and over none", file: file, line: line)
+        let weighed = try XCTUnwrap(decision.candidates.map(\.cost).min(), label, file: file, line: line)
+        XCTAssertLessThanOrEqual(covered, weighed + 0.001, "\(label): a place \(weighed) covered was weighed", file: file, line: line)
+        let room = field.room(decision.reach)
+        let clearance = decision.relaxed ? 0 : decision.clearance
+        var least = CGFloat.infinity
+        for y in stride(from: room.minY.rounded(.up), through: room.maxY - decision.size.height, by: 1) {
+            for x in stride(from: room.minX.rounded(.up), through: room.maxX - decision.size.width, by: 1) {
+                let place = CGRect(origin: CGPoint(x: x, y: y), size: decision.size)
+                guard MascotRoost.admits(field, frame: place, clearance: clearance, reach: decision.reach) else { continue }
+                least = min(least, area(over: field.words, of: place))
+            }
+        }
+        XCTAssertLessThanOrEqual(covered, least + 0.001, "\(label): a place \(least) covered was missed", file: file, line: line)
+    }
+
     /// The area of `frame` over `words`.
     static func area(over words: [CGRect], of frame: CGRect) -> CGFloat {
         words.reduce(0) { sum, word in
@@ -699,7 +725,7 @@ final class MascotGeometryTests: XCTestCase {
                 let expected = decision.roost
                 XCTAssertEqual(roam.roost, expected, label)
                 if name == "full", mascot == Look.Mascot() {
-                    XCTAssertEqual(decision.choice?.clears, false, "\(label): the reply margin did not trap him")
+                    try Self.assertTrappedAtTheLeastCost(decision, frame: canvas.spriteFrame, label)
                 }
                 XCTAssertEqual(canvas.showing, expected != .none,
                                "\(label): drawn \(canvas.showing), where a roost \(expected.name == "none" ? "holds nothing" : "holds him")")
@@ -832,9 +858,11 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertGreaterThan(spot.midX, field.visible.midX, "\(name): not on the right: \(spot)")
             let alongside = lines.filter { $0.minY < spot.maxY + clearance && $0.maxY > spot.minY - clearance }
             XCTAssertFalse(alongside.isEmpty, "\(name): not beside the reply: \(spot)")
-            let clears = try XCTUnwrap(chat.canvas?.roam?.decision?.choice, "\(name): no choice").clears
-            XCTAssertEqual(clears, name == "ragged", "\(name): \(spot)")
-            if name == "ragged" {
+            let decision = try XCTUnwrap(chat.canvas?.roam?.decision, "\(name): no decision")
+            if name == "continuity" {
+                try Self.assertTrappedAtTheLeastCost(decision, frame: spot, name)
+            } else {
+                XCTAssertEqual(decision.choice?.clears, true, "\(name): \(spot)")
                 for line in alongside {
                     XCTAssertGreaterThanOrEqual(spot.minX, line.maxX + clearance - 0.001, "\(name): over \(line): \(spot)")
                 }
