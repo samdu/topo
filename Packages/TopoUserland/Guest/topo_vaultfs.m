@@ -140,7 +140,8 @@ static int coordinated(NSURL *url, NSURL *other, bool writing, NSUInteger option
         if (hold != NULL && result == 0)
             dispatch_semaphore_wait(hold, DISPATCH_TIME_FOREVER);
     };
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    // Default, not user-initiated: a held write waits here on the guest thread that closes it.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
         NSError *error = nil;
         if (other != nil) {
             [coordinator coordinateWritingItemAtURL:url options:NSFileCoordinatorWritingForMoving
