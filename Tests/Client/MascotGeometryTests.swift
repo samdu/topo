@@ -774,6 +774,34 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// A reply drawn as markdown reports its blocks: each text's lines one at a time — the
+    /// heading's, the paragraphs', each list item's marker and words — and what draws a shape of
+    /// its own whole: the fence's enclosure and the quote's bar. None of it runs into the reply's
+    /// margin, and he stands in a gap clear of every one of them (`PreviewTurns.markdown`).
+    func testAMarkdownReplyReportsItsBlocks() throws {
+        let phone = CGSize(width: 393, height: 852)
+        let look = Look()
+        let chat = try stage(PreviewTurns.markdown, mascot: Look.Mascot(), size: phone)
+        defer { chat.window.isHidden = true }
+        let field = try XCTUnwrap(chat.canvas?.roam?.field)
+        let edge = field.visible.maxX - look.transcript.horizontalPadding - look.transcript.replyTrailingInset
+        let reply = field.covering.filter { $0.minX < 100 && $0 != field.pane && $0 != field.well }
+        let fence = reply.filter { $0.height > 30 && $0.width > edge - 16 - 2 }
+        XCTAssertEqual(fence.count, 1, "the fence's enclosure was not reported whole: \(reply)")
+        let lines = reply.filter { $0.height < 30 }
+        XCTAssertGreaterThanOrEqual(lines.count, 12, "the reply's blocks did not report their lines: \(reply)")
+        let markers = lines.filter { $0.width < 20 }
+        XCTAssertGreaterThanOrEqual(markers.count, 4, "the list's markers were not reported: \(lines)")
+        XCTAssertTrue(reply.contains { $0.width < 5 && $0.height > 18 }, "the quote's bar was not reported: \(reply)")
+        for rect in reply {
+            XCTAssertLessThanOrEqual(rect.maxX, edge + 0.5, "a block ran into the margin: \(rect)")
+        }
+        let spot = try XCTUnwrap(chat.canvas?.roam?.roost.frame, "he stands nowhere")
+        XCTAssertEqual(chat.canvas?.roam?.roost.name, "gap")
+        XCTAssertTrue(MascotRoost.holds(field, frame: spot, clearance: look.mascot.clearance),
+                      "he stands over a block: \(spot) \(field.covering)")
+    }
+
     /// With him drawn somewhere, the stage is different somewhere: the test above is not holding
     /// two pictures of nothing.
     func testHeIsDrawnAtAll() throws {

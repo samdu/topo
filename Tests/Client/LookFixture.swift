@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 161
+    static let fields = 182
 
     static let full = """
     {
@@ -28,6 +28,31 @@ enum LookFixture {
         "noticeFont": { "size": 31, "weight": "heavy" },
         "text": ["#101010", "#F0F0F0"],
         "caption": ["#202020", "#E0E0E0"]
+      },
+      "markdown": {
+        "blockSpacing": 13,
+        "listIndent": 27,
+        "markerSpacing": 9,
+        "heading1Font": { "style": "largeTitle", "weight": "heavy" },
+        "heading2Font": { "size": 33, "weight": "light" },
+        "heading3Font": { "style": "caption", "weight": "black" },
+        "codeFont": { "size": 19, "weight": "medium" },
+        "codeInk": ["#123456", "#654321"],
+        "codeBlock": {
+          "accent": ["#AB0000", "#00AB00"],
+          "fillOpacity": 0.33,
+          "strokeWidth": 3,
+          "cornerRadius": 14,
+          "horizontalPadding": 17,
+          "verticalPadding": 15,
+          "surface": "glass"
+        },
+        "codeOverflow": "wrap",
+        "quoteBar": ["#00AB00", "#AB0000"],
+        "quoteBarWidth": 7,
+        "quoteText": ["#330033", "#CCFFCC"],
+        "marker": ["#003333", "#FFCCCC"],
+        "ruleWidth": 5
       },
       "bubble": {
         "accent": ["#FF0000", "#00FF00"],

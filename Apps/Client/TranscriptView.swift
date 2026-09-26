@@ -96,13 +96,7 @@ struct TurnRow: View {
 
     var body: some View {
         VStack(alignment: mine ? .trailing : .leading, spacing: look.transcript.captionSpacing) {
-            Text(turn.text)
-                .font(look.transcript.bodyFont)
-                .foregroundStyle(look.transcript.text)
-                .fixedSize(horizontal: false, vertical: true)
-                // Words with nothing drawn around them are their lines, so the room at the end of
-                // a short line is room for Topo.
-                .mascotLines(bare)
+            words
                 .padding(.horizontal, enclosure.horizontalPadding)
                 .padding(.vertical, enclosure.verticalPadding)
                 .background { TurnShape.fill(enclosure) }
@@ -136,6 +130,24 @@ struct TurnRow: View {
         // to be somewhere focus can land.
         .focusable()
         #endif
+    }
+
+    /// Topo's words are markdown, drawn as their blocks. The person's are drawn as they were
+    /// typed: the row they are written in is drawn at the size the landed turn will be, which a
+    /// turn restyled on landing would not be, and what they typed is theirs to see as typed.
+    /// Words with nothing drawn around them report their lines, so the room at the end of a
+    /// short line is room for Topo.
+    @ViewBuilder
+    private var words: some View {
+        if mine {
+            Text(turn.text)
+                .font(look.transcript.bodyFont)
+                .foregroundStyle(look.transcript.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .mascotLines(bare)
+        } else {
+            MarkdownText(source: turn.text, bare: bare)
+        }
     }
 }
 

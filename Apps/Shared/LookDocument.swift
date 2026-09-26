@@ -83,6 +83,7 @@ enum LookDocument {
         var look = base
         reader.into(root, "") { r in
             r.object("transcript") { transcript(&look.transcript, $0) }
+            r.object("markdown") { markdown(&look.markdown, $0) }
             r.object("bubble") { enclosure(&look.bubble, $0) }
             r.object("plain") { enclosure(&look.plain, $0) }
             r.object("draft") { draft(&look.draft, $0) }
@@ -110,6 +111,24 @@ enum LookDocument {
         r.font("noticeFont", &value.noticeFont)
         r.colour("text", &value.text)
         r.colour("caption", &value.caption)
+    }
+
+    private static func markdown(_ value: inout Look.Markdown, _ r: Reader) {
+        r.indent("blockSpacing", &value.blockSpacing)
+        r.indent("listIndent", &value.listIndent)
+        r.indent("markerSpacing", &value.markerSpacing)
+        r.font("heading1Font", &value.heading1Font)
+        r.font("heading2Font", &value.heading2Font)
+        r.font("heading3Font", &value.heading3Font)
+        r.font("codeFont", &value.codeFont)
+        r.colour("codeInk", &value.codeInk)
+        r.object("codeBlock") { enclosure(&value.codeBlock, $0) }
+        r.codeOverflow("codeOverflow", &value.codeOverflow)
+        r.colour("quoteBar", &value.quoteBar)
+        r.indent("quoteBarWidth", &value.quoteBarWidth)
+        r.colour("quoteText", &value.quoteText)
+        r.colour("marker", &value.marker)
+        r.indent("ruleWidth", &value.ruleWidth)
     }
 
     private static func enclosure(_ value: inout Look.Enclosure, _ r: Reader) {
@@ -346,6 +365,16 @@ enum LookDocument {
             }
         }
 
+        /// Room inside a reply, between its blocks or before a list's words, and the width of a
+        /// quote's bar or a rule: none to 64 points, since a list indents by it once for every
+        /// list it is inside and the words have to stay in the column.
+        func indent(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0...64, "a length in points between 0 and 64") {
+                applied += 1
+                value = CGFloat(number)
+            }
+        }
+
         /// The room Topo keeps from every word, in points: none to 64. Past that a phone has no
         /// gap wide enough for him and he is always on the glass.
         /// Room kept clear beside a column of words: at most 200 points, so a reply on a
@@ -549,6 +578,7 @@ enum LookDocument {
         // MARK: Names
 
         func surface(_ key: String, _ value: inout Look.Surface) { named(key, &value) }
+        func codeOverflow(_ key: String, _ value: inout Look.Markdown.CodeOverflow) { named(key, &value) }
 
         /// Where Topo sits: `"roam"`, `"glass"` or `"pinned"`.
         func placement(_ key: String, _ value: inout Look.Mascot.Placement) { named(key, &value) }
