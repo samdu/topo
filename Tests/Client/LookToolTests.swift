@@ -135,6 +135,34 @@ final class LookToolTests: XCTestCase {
         XCTAssertTrue(reply.text.hasSuffix("look.json: 1 field\n"), reply.text)
     }
 
+    /// Codex on #189: setting a whole part sets the fields it names and leaves the others standing,
+    /// the mind's and the sliders' alike, where it replaced the part's saved object.
+    func testSettingAPartLeavesTheFieldsItDoesNotNameStanding() async throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        tuning.set(.roamSpeed, to: 100)
+        let scale = await tool(tuning).run(["set", "mascot.scale", "2"])
+        XCTAssertEqual(scale.status, ToolReply.ok, scale.text)
+        let part = await tool(tuning).run(["set", "mascot", #"{"clearance":20}"#])
+        XCTAssertEqual(part.status, ToolReply.ok, part.text)
+        for worn in [tuning.worn(over: vault), Tuning(defaults: store).worn(over: vault)] {
+            XCTAssertEqual(worn.mascot.clearance, 20)
+            XCTAssertEqual(worn.mascot.scale, 2)
+            XCTAssertEqual(worn.mascot.roamSpeed, 100)
+        }
+    }
+
+    /// Codex on #189: a compound field is shown as the one field the reader reads, with its value
+    /// as JSON, not as the keys inside it.
+    func testShowListsACompoundFieldWhole() async throws {
+        let tuning = Tuning(defaults: defaults())
+        let set = await tool(tuning).run(["set", "composer.glow", #"{"radius":9}"#])
+        XCTAssertEqual(set.status, ToolReply.ok, set.text)
+        let reply = await tool(tuning).run([])
+        XCTAssertTrue(reply.text.contains("Also set on this phone:\ncomposer.glow {\"radius\":9}\n"), reply.text)
+        XCTAssertFalse(reply.text.contains("composer.glow.radius"), reply.text)
+    }
+
     /// Codex on #189: where a value came from is where it was read, not a guess from its value, so
     /// a look.json that sets a field to the compiled default is still what set it.
     func testAFieldTheVaultSetsToItsDefaultIsSaidToComeFromLookJSON() async throws {

@@ -125,7 +125,7 @@ import TopoProxy
         let started = ContinuousClock.now
         let answer = try await exchange(port: port, head, body: body.prefix(1))
         #expect(ContinuousClock.now - started < .seconds(3), "held for \(ContinuousClock.now - started)")
-        #expect(answer.status != 200)
+        #expect(answer.status == 408)
         #expect(tool.calls.isEmpty)
     }
 
