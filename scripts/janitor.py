@@ -26,8 +26,10 @@ judgement:
   4. removes a linked worktree whose tip is exactly the head of a merged PR
      on its branch, merged more than `SWEEP` ago, with no PR open on the
      branch and nothing uncommitted — killing first any tmux session with a
-     pane in it — and deletes the local branch, which by then names nothing
-     the merged PR's head does not keep;
+     pane in it, then reading the tip again immediately before the remove —
+     and deletes the branch ref only if it still names that merged head
+     (`update-ref -d` with the old value), so a commit landing at any point
+     is never dropped;
   5. reports, once per condition per head and again every `REPEAT` while it
      holds: a verdict that blocks, a draft untouched for `GRACE`, a green PR
      with Proof boxes unticked, a ready PR with no validate run, a run
@@ -42,7 +44,10 @@ peer token, as `topo-janitor` on the host `buddy-janitor`; a report the far
 bridge does not take is kept in the state file and sent with the next. A
 quiet pass sends nothing. Nothing here reads a review, merges over a red or
 missing verdict, or edits code. One pass at a time: the state directory
-holds a lock, and a pass that finds it held exits.
+holds a lock, and a pass that finds it held exits. The state file is written
+after every action that changes the world — a merge, a rerun, a publish begun,
+a sweep — and again as the pass ends, whatever ended it (a SIGTERM included),
+so what was done is never done twice and what was said is never lost.
 
 State: ~/.local/state/topo-janitor/state.json (override with --state).
 """
@@ -54,6 +59,7 @@ import json
 import os
 import re
 import shlex
+import signal
 import subprocess
 import sys
 import tempfile
@@ -84,17 +90,20 @@ PENDING_MAX = 200                  # report lines kept for a later delivery
 
 UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)   # automerge.yaml's own test
 SUITE_JOBS = ("topo_unit", "topo_ui", "others")
-NO_VERDICT_JOBS = ("reviewer_ran",)
-# A suite job red at one of these steps is the infrastructure's, not the code's:
-# nothing of the PR ran, or the tests had already passed.
+REVIEW_CHAIN = ("codex_wait", "codex", "post_feedback", "reviewer_ran", "review_gate")
+# A suite job red at one of these steps, and no other, is the runner's own
+# machinery failing around the PR's code: the simulator, the audio lane, a
+# cache, a checkout or upload action. A red anywhere else in the job — the
+# build, a fetch of pinned inputs, a script test, the tests, the step that
+# counts them — is the code's, and is never rerun.
 SETUP_STEPS = {
     "Set up job", "Boot the simulator", "Lane", "Audio loopback for the microphone test",
-    "Cache the ear's models", "The ear's models for the microphone test",
-    "The rootfs, bash and Claude Code for the userland suites", "Cache the manifest's files",
+    "Cache the ear's models", "The ear's models for the microphone test", "Cache the manifest's files",
     "Clear Topo's privacy grants on the simulator", "Audio lane holds before the microphone test",
     "Audio lane holds after the microphone test", "Upload logs and result bundles", "Complete job",
 }
-SETUP_PREFIXES = ("Run actions/", "Run ./.github/actions/", "Post Run ", "Join the tailnet")
+SETUP_PREFIXES = ("Run actions/", "Post Run ", "Join the tailnet")
+NOT_GREEN = ("failure", "cancelled", "timed_out")
 
 
 # --- time ------------------------------------------------------------------
@@ -151,9 +160,14 @@ def parse_worktrees(porcelain):
 
 def infra_red(job):
     """Whether a red suite job failed in the infrastructure rather than the code:
-    no step of its own failed (the runner was lost), or every failed step is a
-    setup, lane or upload step. A failed build, test or script step is the code's."""
-    failed = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
+    it concluded `failure` with no step of its own failing (the runner was lost),
+    or every step that did not pass is a setup, lane or upload step. A step
+    cancelled or timed out is not green; a job cancelled or timed out is not a
+    failure of the infrastructure's kind. A failed build, test or script step
+    is the code's."""
+    if job.get("conclusion") != "failure":
+        return False
+    failed = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") in NOT_GREEN]
     if not failed:
         return True
     return all(n in SETUP_STEPS or n.startswith(SETUP_PREFIXES) for n in failed)
@@ -216,10 +230,13 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
             report("cancelled", f"{title}: its newest validate run was cancelled {minutes(since)} ago and nothing ran after it; a push starts one.")
         return out
 
-    red = [j for j in jobs if j.get("conclusion") == "failure"]
+    red = [j for j in jobs if j.get("conclusion") in NOT_GREEN]
     red_names = [j["name"] for j in red]
     suite_red = [j for j in red if j["name"] in SUITE_JOBS]
-    no_verdict = any(j["name"] in NO_VERDICT_JOBS for j in red) and not suite_red
+    # No verdict: the reviewer chain is red and nothing outside it is — a red
+    # `select`, `test` or suite job is the run's own failure, not the reviewer's.
+    no_verdict = ("reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
+                  and not suite_red)
     infra_suite = bool(suite_red) and all(infra_red(j) for j in suite_red)
     rerun_key = f"{n}:{head}"
     if infra_suite or no_verdict:
@@ -277,7 +294,7 @@ def decide_sweep(worktrees, checkout, history, now):
         at = min(parse_time(p["mergedAt"]) for p in merged if p.get("mergedAt"))
         if now - at < SWEEP:
             continue
-        out.append({"path": wt["path"], "branch": wt["branch"], "number": merged[0]["number"], "age": now - at})
+        out.append({"path": wt["path"], "branch": wt["branch"], "head": wt["head"], "number": merged[0]["number"], "age": now - at})
     return out
 
 
@@ -294,9 +311,10 @@ class Shell:
     Every failure is a RuntimeError: a timeout, a non-zero exit, an answer that
     is not JSON."""
 
-    def __init__(self, dry=False, log=None):
+    def __init__(self, dry=False, log=None, publish_timeout=45 * 60):
         self.dry = dry
         self.log = log or (lambda s: print(s, file=sys.stderr, flush=True))
+        self.publish_timeout = publish_timeout
 
     def run(self, argv, timeout=120, check=True, mutating=False, **kw):
         if mutating and self.dry:
@@ -364,15 +382,19 @@ class Shell:
         return self.run(["gh", "api", f"repos/{REPO}/commits/main", "--jq", ".sha"]).stdout.strip()
 
     def published_commit(self):
-        p = self.run(["curl", "-sS", "-m", "20", INSTALL_PAGE], check=False)
+        """The commit the install page carries; None when the page has none.
+        A page that cannot be read is an error, not a page with nothing on it."""
+        p = self.run(["curl", "-sS", "-f", "-m", "20", INSTALL_PAGE], check=False)
+        if p.returncode != 0:
+            raise RuntimeError(f"the install page did not answer: {p.stderr.strip()[-200:]}")
         try:
             return json.loads(p.stdout).get("commit")
         except (ValueError, AttributeError):
-            return None
+            raise RuntimeError("the install page's version.json is not JSON")
 
     def publish(self):
         script = os.path.expanduser(PUBLISH)
-        p = self.run(["bash", script, "origin/main"], timeout=45 * 60, check=False, mutating=True)
+        p = self.run(["bash", script, "origin/main"], timeout=self.publish_timeout, check=False, mutating=True)
         return p.returncode == 0, (p.stdout + p.stderr)
 
     def worktrees(self, checkout):
@@ -393,9 +415,16 @@ class Shell:
     def kill_tmux(self, name):
         self.run(["tmux", "kill-session", "-t", f"={name}"], mutating=True)
 
-    def remove_worktree(self, checkout, path, branch):
+    def tip(self, path):
+        return self.run(["git", "-C", path, "rev-parse", "HEAD"]).stdout.strip()
+
+    def remove_worktree(self, checkout, path):
         self.run(["git", "-C", checkout, "worktree", "remove", path], mutating=True)
-        self.run(["git", "-C", checkout, "branch", "-D", branch], mutating=True, check=False)
+
+    def delete_branch_at(self, checkout, branch, head):
+        """Delete the branch ref only while it still names `head`: git refuses
+        the update when the ref has moved, so a commit that landed is kept."""
+        self.run(["git", "-C", checkout, "update-ref", "-d", f"refs/heads/{branch}", head], mutating=True)
 
     def post(self, url, body, token):
         """POST JSON with a bearer. Answers (status, text); raises RuntimeError
@@ -406,9 +435,12 @@ class Shell:
             with urllib.request.urlopen(req, timeout=15) as r:
                 return r.status, r.read().decode(errors="replace")[:200]
         except urllib.error.HTTPError as ex:
-            return ex.code, ex.read().decode(errors="replace")[:200]
-        except (urllib.error.URLError, OSError) as ex:
-            raise RuntimeError(str(ex)[:200])
+            try:
+                return ex.code, ex.read().decode(errors="replace")[:200]
+            except Exception as inner:  # noqa: BLE001 — a body that cannot be read is still the status
+                return ex.code, f"(body unreadable: {inner})"[:200]
+        except Exception as ex:  # noqa: BLE001 — a bridge answering badly is a delivery that did not happen
+            raise RuntimeError(f"{type(ex).__name__}: {str(ex)[:160]}")
 
 
 # --- the report ------------------------------------------------------------
@@ -429,14 +461,15 @@ def peer_token(path=MESH_ENV):
     return None
 
 
-def deliver(sh, lines, state, now, dry=False, log=print, warn=None):
+def deliver(sh, state, now, dry=False, log=print, warn=None):
     """One message to buddy-prime through its bridge's /deliver, as the fleet's
     bridges forward to each other: this host's verified name as `from`, the
-    janitor as `sender`. A 400 is the far bridge refusing the message for good,
-    so the lines are dropped and said to have been; anything else keeps them."""
+    janitor as `sender`. What is sent is the state's pending lines, which every
+    pass appends to as it goes. A 400 is the far bridge refusing the message
+    for good, so the lines are dropped and said to have been; anything else
+    keeps them."""
     warn = warn or (lambda s: print(s, file=sys.stderr, flush=True))
-    pending = state.get("pending", [])
-    lines = pending + lines
+    lines = list(state.get("pending", []))
     if len(lines) > PENDING_MAX:
         dropped = len(lines) - PENDING_MAX
         lines = [f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped."] + lines[-PENDING_MAX:]
@@ -445,8 +478,9 @@ def deliver(sh, lines, state, now, dry=False, log=print, warn=None):
     text = f"[{FROM}] pass at {now.strftime('%Y-%m-%dT%H:%MZ')}\n" + "\n".join(f"- {l}" for l in lines)
     if dry:
         log(text)
+        state["pending"] = []
         return
-    token = peer_token()
+    token = peer_token(MESH_ENV)
     if not token:
         warn(f"report not delivered (no BRIDGE_PEER_TOKEN in {MESH_ENV}); kept for the next pass")
         state["pending"] = lines
@@ -487,13 +521,17 @@ def save_state(path, state):
     os.replace(tmp, path)
 
 
-def run_pass(sh, state, now, checkout, lines, verbose=False):
-    """One pass. What it did and found is appended to `lines` as it goes, so a
-    pass that stops early has still said what it did before it stopped."""
+def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
+    """One pass. What it did and found goes onto `state["pending"]` as it goes,
+    and `persist()` writes the state after every action that changed the world,
+    so a pass that stops early — an error, a signal mid-publish — has still
+    recorded what it did and said before it stopped."""
     quiet = []
     state.setdefault("fired", {})
     state.setdefault("rerun", {})
     state.setdefault("publish", {})
+    state.setdefault("pending", [])
+    lines = state["pending"]
 
     def say(key, text):
         """A line that stands while its condition does: once per REPEAT."""
@@ -533,6 +571,7 @@ def run_pass(sh, state, now, checkout, lines, verbose=False):
                 try:
                     sh.merge(w["number"], w["head"])
                     lines.append(w["text"])
+                    persist()
                 except RuntimeError as ex:
                     say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
             elif w["kind"] == "rerun":
@@ -540,6 +579,7 @@ def run_pass(sh, state, now, checkout, lines, verbose=False):
                     sh.rerun(w["run_id"])
                     state["rerun"][w["key"]] = {"run": w["run_id"], "at": now.isoformat()}
                     lines.append(w["text"])
+                    persist()
                 except RuntimeError as ex:
                     say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused: {ex}")
             else:
@@ -562,6 +602,11 @@ def run_pass(sh, state, now, checkout, lines, verbose=False):
         published = sh.published_commit()
         why = decide_publish(published, main_sha, state, now)
         if why:
+            # Recorded before it runs: a publish that times out, or a pass that
+            # dies under it, is still an attempt, and is not made again until
+            # PUBLISH_RETRY has passed.
+            state["publish"][main_sha] = {"at": now.isoformat(), "ok": None}
+            persist()
             ok, log = sh.publish()
             state["publish"][main_sha] = {"at": now.isoformat(), "ok": ok}
             if ok:
@@ -569,10 +614,11 @@ def run_pass(sh, state, now, checkout, lines, verbose=False):
             else:
                 tail = " | ".join(l.strip() for l in log.strip().splitlines()[-6:])
                 lines.append(f"republishing the install page at {main_sha[:7]} failed ({why}): {tail}")
+            persist()
         else:
             quiet.append(f"install page: at {published}, main is {(main_sha or '')[:7]}")
     except RuntimeError as ex:
-        say("publish:read", f"could not check the install page: {ex}")
+        say("publish:read", f"could not check or publish the install page: {ex}")
 
     # 4: worktrees whose tip is a merged PR's head.
     try:
@@ -594,9 +640,22 @@ def run_pass(sh, state, now, checkout, lines, verbose=False):
                 killed = sorted({s for s, cwd in sh.tmux_panes() if cwd == root or cwd.startswith(root + "/")})
                 for s in killed:
                     sh.kill_tmux(s)
-                sh.remove_worktree(checkout, wt["path"], wt["branch"])
+                # The tip is read again here, after every call that took time,
+                # and the ref is deleted only while it still names that head:
+                # a commit landing anywhere in between is kept.
+                tip = sh.tip(wt["path"])
+                if tip != wt["head"]:
+                    say(key, f"worktree {name} ({wt['branch']}) moved to {tip[:7]} while the sweep looked; left.")
+                    continue
+                sh.remove_worktree(checkout, wt["path"])
+                try:
+                    sh.delete_branch_at(checkout, wt["branch"], wt["head"])
+                    kept = ""
+                except RuntimeError:
+                    kept = f"; the branch ref moved past {wt['head'][:7]} and is kept"
                 tm = f"; killed tmux {', '.join(killed)}" if killed else ""
-                lines.append(f"swept worktree {name} ({wt['branch']}, #{wt['number']} merged {minutes(wt['age'])} ago; its tip was the merged head){tm}.")
+                lines.append(f"swept worktree {name} ({wt['branch']}, #{wt['number']} merged {minutes(wt['age'])} ago; its tip was the merged head){tm}{kept}.")
+                persist()
             except RuntimeError as ex:
                 say(key, f"worktree {name} ({wt['branch']}, #{wt['number']} merged) will not remove: {ex}")
     except RuntimeError as ex:
@@ -616,7 +675,6 @@ def run_pass(sh, state, now, checkout, lines, verbose=False):
     if verbose:
         for q in quiet:
             print(q, file=sys.stderr)
-    return lines
 
 
 def main(argv=None):
@@ -625,6 +683,8 @@ def main(argv=None):
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--state", default="~/.local/state/topo-janitor/state.json")
     ap.add_argument("--checkout", default=CHECKOUT)
+    ap.add_argument("--publish-timeout", type=float, default=45 * 60, metavar="SECONDS",
+                    help="how long publish-topo.sh may run before it is killed and recorded as no answer")
     a = ap.parse_args(argv)
     now = datetime.now(timezone.utc)
     path = os.path.expanduser(a.state)
@@ -636,15 +696,26 @@ def main(argv=None):
         print("another pass holds the lock; exiting", file=sys.stderr)
         return 0
     state = load_state(path)
-    sh = Shell(dry=a.dry_run)
-    lines = []
+    sh = Shell(dry=a.dry_run, publish_timeout=a.publish_timeout)
+
+    def persist():
+        if not a.dry_run:
+            save_state(path, state)
+
+    def terminated(signum, frame):
+        # launchctl bootout and a reboot send SIGTERM; raising here runs the
+        # finally below (and subprocess.run kills the child it was waiting on).
+        raise SystemExit(f"terminated by signal {signum}")
+
+    signal.signal(signal.SIGTERM, terminated)
     try:
-        run_pass(sh, state, now, os.path.expanduser(a.checkout), lines, verbose=a.verbose)
-    except Exception as ex:  # noqa: BLE001 — the pass ends here, and what it did is still reported
-        lines.append(f"the pass stopped early: {type(ex).__name__}: {str(ex)[:200]}")
-    deliver(sh, lines, state, now, dry=a.dry_run)
-    if not a.dry_run:
-        save_state(path, state)
+        try:
+            run_pass(sh, state, now, os.path.expanduser(a.checkout), persist, verbose=a.verbose)
+        except (Exception, SystemExit) as ex:  # noqa: BLE001 — the pass ends here, and what it did is still reported
+            state.setdefault("pending", []).append(f"the pass stopped early: {type(ex).__name__}: {str(ex)[:200]}")
+        deliver(sh, state, now, dry=a.dry_run)
+    finally:
+        persist()
     return 0
 
 

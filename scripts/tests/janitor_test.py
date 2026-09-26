@@ -43,10 +43,10 @@ def run(conclusion="success", status="completed", since=timedelta(minutes=30)):
             "updated_at": ago(since)}
 
 
-def job(name, conclusion, failed_step=None, i=1):
+def job(name, conclusion, failed_step=None, i=1, step_conclusion="failure"):
     steps = [{"name": "Set up job", "conclusion": "success"}]
     if failed_step:
-        steps.append({"name": failed_step, "conclusion": "failure"})
+        steps.append({"name": failed_step, "conclusion": step_conclusion})
     return {"id": i, "name": name, "conclusion": conclusion, "steps": steps}
 
 
@@ -118,6 +118,32 @@ class Decisions(unittest.TestCase):
         self.assertEqual(kinds(w), ["report:red"])
         self.assertIn("topo_ui", w[0]["text"])
 
+    def test_infra_red_is_every_red_step_in_setup_and_only_a_failure(self):
+        setup = job("topo_ui", "failure", "Boot the simulator")
+        self.assertTrue(janitor.infra_red(setup))
+        setup["steps"].append({"name": TEST_STEP, "conclusion": "failure"})
+        self.assertFalse(janitor.infra_red(setup), "one red test step among the setup reds is the code's")
+        self.assertFalse(janitor.infra_red(job("topo_ui", "cancelled", "Boot the simulator")), "a cancelled job is not a lost runner")
+        self.assertFalse(janitor.infra_red(job("topo_ui", "timed_out")))
+        self.assertFalse(janitor.infra_red(job("topo_ui", "failure", TEST_STEP, step_conclusion="cancelled")),
+                         "a test step cancelled by its timeout-minutes is not green")
+        self.assertFalse(janitor.infra_red(job("topo_ui", "failure", "Run ./.github/actions/prepare")))
+        self.assertTrue(janitor.infra_red(job("topo_ui", "failure", "Run actions/checkout@v4")))
+
+    def test_reds_at_prepare_the_pinned_fetch_and_the_count_are_the_codes(self):
+        for step in ("Run ./.github/actions/prepare", "The rootfs, bash and Claude Code for the userland suites",
+                     "Every test the lane names ran and passed", "scripts/build-ish.sh"):
+            wants = janitor.decide_pr(pr(), run("failure"), jobs(topo_unit=("failure", step)), {}, NOW)
+            self.assertNotIn("rerun", kinds(wants), step)
+
+    def test_a_cancelled_suite_job_or_a_red_select_is_not_rerun(self):
+        wants = janitor.decide_pr(pr(), run("failure"), jobs(topo_ui="cancelled", reviewer_ran="failure"), {}, NOW)
+        self.assertNotIn("rerun", kinds(wants), "a cancelled suite job beside a missing verdict is the run's own")
+        wants = janitor.decide_pr(pr(), run("failure"), jobs(select="failure", reviewer_ran="failure", review_gate="failure"), {}, NOW)
+        self.assertNotIn("rerun", kinds(wants), "a red select is not the reviewer's doing")
+        wants = janitor.decide_pr(pr(), run("failure"), jobs(codex="failure", reviewer_ran="failure", review_gate="failure"), {}, NOW)
+        self.assertEqual(kinds(wants), ["rerun"], "the reviewer chain red on its own is no verdict")
+
     def test_a_suite_job_whose_tests_failed_is_never_rerun(self):
         j = jobs(test="failure", topo_unit=("failure", TEST_STEP), reviewer_ran="failure")
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
@@ -172,6 +198,12 @@ class Decisions(unittest.TestCase):
         self.assertTrue(janitor.due(state, "k", NOW))
         self.assertTrue(janitor.due({}, "k", NOW))
 
+    def test_a_publish_recorded_as_begun_is_not_tried_again_inside_the_retry(self):
+        state = {"publish": {LONG_MAIN: {"at": ago(timedelta(minutes=50)), "ok": None}}}
+        self.assertIsNone(janitor.decide_publish("abc1234", LONG_MAIN, state, NOW))
+        state = {"publish": {LONG_MAIN: {"at": ago(janitor.PUBLISH_RETRY + timedelta(minutes=1)), "ok": None}}}
+        self.assertTrue(janitor.decide_publish("abc1234", LONG_MAIN, state, NOW))
+
     def test_the_install_page_is_republished_only_when_behind_and_not_just_tried(self):
         self.assertIsNone(janitor.decide_publish("abc1234", "abc1234" + "0" * 33, {}, NOW))
         self.assertIsNotNone(janitor.decide_publish("abc1234", LONG_MAIN, {}, NOW))
@@ -221,6 +253,37 @@ class Decisions(unittest.TestCase):
         self.assertEqual(janitor.unchecked_boxes("- [x] a\n  * [ ] b\n- [ ] c"), 2)
         self.assertEqual(janitor.unchecked_boxes(None), 0)
 
+    def test_a_command_that_gives_no_answer_in_time_is_a_runtime_error(self):
+        with self.assertRaises(RuntimeError) as cm:
+            janitor.Shell().run([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.3)
+        self.assertIn("no answer", str(cm.exception))
+        with self.assertRaises(RuntimeError):
+            janitor.Shell().run(["/nonexistent/tool"])
+
+    def test_more_pending_lines_than_the_cap_drops_the_oldest_and_says_so(self):
+        sent = []
+        class Sh:
+            def post(self, url, body, token):
+                sent.append(body["text"]); return 200, "ok"
+        with tempfile.TemporaryDirectory() as d:
+            env = os.path.join(d, "env")
+            with open(env, "w") as f:
+                f.write("export BRIDGE_PEER_TOKEN=t\n")
+            old = janitor.MESH_ENV
+            janitor.MESH_ENV = env
+            try:
+                state = {"pending": [f"line {i}" for i in range(janitor.PENDING_MAX + 30)]}
+                janitor.deliver(Sh(), state, NOW, log=lambda s: None, warn=lambda s: None)
+            finally:
+                janitor.MESH_ENV = old
+        self.assertEqual(len(sent), 1)
+        lines = sent[0].splitlines()[1:]
+        self.assertEqual(len(lines), janitor.PENDING_MAX + 1, "the newest PENDING_MAX lines under one line saying what was dropped")
+        self.assertIn("30 older lines", lines[0])
+        self.assertNotIn("line 0", sent[0].splitlines()[1])
+        self.assertIn(f"line {janitor.PENDING_MAX + 29}", lines[-1])
+        self.assertEqual(state["pending"], [])
+
     def test_the_peer_token_is_read_off_the_bridges_env_file(self):
         with tempfile.TemporaryDirectory() as d:
             p = os.path.join(d, "env")
@@ -251,12 +314,21 @@ if tool == "gh":
 elif tool == "git":
     if "worktree" in a and "list" in a: out(S["worktrees"])
     if "status" in a: out(S.get("status", {}).get(a[a.index("-C") + 1], ""))
+    if "rev-parse" in a: out(S.get("tip", "2222"))
+    if "update-ref" in a and S.get("ref_moved"): print("cannot lock ref: is at 3333 but expected 2222", file=sys.stderr); sys.exit(1)
     sys.exit(0)
 elif tool == "tmux":
     if a[0] == "list-panes": out(S["panes"])
     sys.exit(0)
-elif tool == "curl": out(json.dumps({"commit": S["published"]}))
-elif tool == "bash": print("fake publish: " + " ".join(a)); sys.exit(S.get("publish_exit", 0))
+elif tool == "curl":
+    if S.get("page_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
+    out(json.dumps({"commit": S["published"]}))
+elif tool == "bash":
+    if S.get("publish_snapshot"):
+        import shutil; shutil.copy(os.environ["JANITOR_STATE"], S["publish_snapshot"])
+    if S.get("publish_hang"):
+        import time; time.sleep(float(S["publish_hang"]))
+    print("fake publish: " + " ".join(a)); sys.exit(S.get("publish_exit", 0))
 print("unscripted: " + tool + " " + " ".join(a), file=sys.stderr); sys.exit(1)
 '''
 
@@ -266,6 +338,7 @@ class Bridge(http.server.BaseHTTPRequestHandler):
     bearer, answers what the test scripted."""
     status = 200
     received = []
+    short_body = False   # a 200 with a Content-Length longer than what is sent: IncompleteRead at the client
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -273,8 +346,16 @@ class Bridge(http.server.BaseHTTPRequestHandler):
         Bridge.received.append({"path": self.path, "auth": self.headers.get("Authorization"), "body": body})
         self.send_response(Bridge.status)
         self.send_header("Content-Type", "application/json")
+        answer = json.dumps({"status": "delivered" if Bridge.status == 200 else "no"}).encode()
+        if Bridge.short_body:
+            self.send_header("Content-Length", str(len(answer) + 500))
+            self.end_headers()
+            self.wfile.write(answer)
+            self.wfile.flush()
+            self.close_connection = True
+            return
         self.end_headers()
-        self.wfile.write(json.dumps({"status": "delivered" if Bridge.status == 200 else "no"}).encode())
+        self.wfile.write(answer)
 
     def log_message(self, *a):
         pass
@@ -293,7 +374,7 @@ class WholePass(unittest.TestCase):
         cls.server.server_close()
 
     def setUp(self):
-        Bridge.status, Bridge.received = 200, []
+        Bridge.status, Bridge.received, Bridge.short_body = 200, [], False
         self.work = tempfile.mkdtemp(prefix="janitor-test")
         self.addCleanup(lambda: subprocess.run(["rm", "-rf", self.work]))
         self.bin = os.path.join(self.work, "bin")
@@ -313,22 +394,26 @@ class WholePass(unittest.TestCase):
         os.makedirs(self.wt)
         self.env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_LOG=self.log,
                         FAKE_SCRIPT=self.script, HOME=self.work, TOPO_JANITOR_DELIVER_URL=self.url,
-                        TOPO_JANITOR_MESH_ENV=self.mesh_env)
+                        TOPO_JANITOR_MESH_ENV=self.mesh_env, JANITOR_STATE=self.state)
 
     def run_pass(self, script, extra=()):
+        """One pass; `calls` is what this pass ran, not every pass so far."""
         with open(self.script, "w") as f:
             json.dump(script, f)
+        before = self.calls()
         p = subprocess.run([sys.executable, SCRIPT, "--state", self.state, "--checkout", "/r/topo", "--verbose", *extra],
                            env=self.env, capture_output=True, text=True, timeout=60)
-        calls = ""
-        if os.path.exists(self.log):
-            with open(self.log) as f:
-                calls = f.read()
-        return p, calls
+        return p, self.calls()[len(before):]
 
     def state_file(self):
         with open(self.state) as f:
             return json.load(f)
+
+    def calls(self):
+        if not os.path.exists(self.log):
+            return ""
+        with open(self.log) as f:
+            return f.read()
 
     def scripted(self, **kw):
         s = {"prs": [pr()], "runs": {HEAD: [run()]}, "jobs": jobs(test="success", reviewer_ran="success"),
@@ -350,7 +435,11 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("=topo-older", calls)
         self.assertNotIn("=other", calls)
         self.assertIn(f"git -C /r/topo worktree remove {self.wt}", calls)
-        self.assertLess(calls.index("kill-session"), calls.index("worktree remove"))
+        self.assertIn("git -C /r/topo update-ref -d refs/heads/buddy/old 2222", calls)
+        self.assertNotIn("branch -D", calls)
+        self.assertLess(calls.index("kill-session"), calls.index(f"git -C {self.wt} rev-parse HEAD"))
+        self.assertLess(calls.index("rev-parse HEAD"), calls.index("worktree remove"))
+        self.assertLess(calls.index("worktree remove"), calls.index("update-ref -d"))
         self.assertNotIn("publish-topo", calls)
         self.assertEqual(len(Bridge.received), 1)
         got = Bridge.received[0]
@@ -387,7 +476,25 @@ class WholePass(unittest.TestCase):
             {"number": 5, "state": "MERGED", "mergedAt": ago(timedelta(hours=30)), "headRefOid": "2220"}]})
         p, calls = self.run_pass(s)
         self.assertNotIn("worktree remove", calls)
-        self.assertNotIn("branch -D", calls)
+        self.assertNotIn("update-ref", calls)
+
+    def test_a_commit_landing_while_the_sweep_looked_leaves_the_worktree_and_the_ref(self):
+        p, calls = self.run_pass(self.scripted(tip="3333"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("kill-session", calls, "the sessions were already killed when the tip was read again")
+        self.assertNotIn("worktree remove", calls)
+        self.assertNotIn("update-ref", calls)
+        self.assertIn("moved to 3333 while the sweep looked; left", Bridge.received[-1]["body"]["text"])
+        p, calls = self.run_pass(self.scripted(ref_moved=True))
+        self.assertIn("worktree remove", calls)
+        self.assertIn("update-ref -d refs/heads/buddy/old 2222", calls)
+        self.assertIn("the branch ref moved past 2222 and is kept", Bridge.received[-1]["body"]["text"])
+
+    def test_a_pane_in_a_subdirectory_of_the_worktree_is_killed_and_a_sibling_prefix_is_not(self):
+        s = self.scripted(panes=f"deep\t{self.wt}/Packages/TopoCore\ntopo-older\t{self.wt}-2/x")
+        p, calls = self.run_pass(s)
+        self.assertIn("tmux kill-session -t =deep", calls)
+        self.assertNotIn("=topo-older", calls)
 
     def test_a_dry_run_runs_nothing_and_prints_the_report(self):
         p, calls = self.run_pass(self.scripted(published="abc1234"), extra=["--dry-run"])
@@ -409,7 +516,74 @@ class WholePass(unittest.TestCase):
         self.assertIn("fake publish", text)
         self.assertIn(LONG_MAIN, self.state_file()["publish"])
         p, calls = self.run_pass(self.scripted(published="abc1234", publish_exit=1))
-        self.assertEqual(calls.count("publish-topo.sh"), 1)
+        self.assertNotIn("publish-topo.sh", calls, "a failed publish waits out the retry")
+
+    def test_the_rerun_key_and_the_lines_are_on_disk_before_the_publish_runs(self):
+        snap = os.path.join(self.work, "state-at-publish.json")
+        s = self.scripted(published="abc1234", publish_snapshot=snap,
+                          prs=[pr(), pr(number=8, headRefOid="feedface0")],
+                          runs={HEAD: [run()], "feedface0": [run("failure")]},
+                          jobs=jobs(topo_unit="success", others="success", topo_ui="success", reviewer_ran="failure"))
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("publish-topo", calls)
+        with open(snap) as f:
+            at_publish = json.load(f)
+        self.assertIn("8:feedface0", at_publish["rerun"])
+        self.assertTrue(any("merged #7" in l for l in at_publish["pending"]))
+        self.assertTrue(any("reran the failed jobs of #8" in l for l in at_publish["pending"]))
+        self.assertIsNone(at_publish["publish"][LONG_MAIN]["ok"], "the publish is recorded as begun before it runs")
+        self.assertTrue(self.state_file()["publish"][LONG_MAIN]["ok"])
+
+    def test_a_pass_killed_under_the_publish_has_saved_and_does_nothing_twice(self):
+        s = self.scripted(published="abc1234", publish_hang=30)
+        with open(self.script, "w") as f:
+            json.dump(s, f)
+        proc = subprocess.Popen([sys.executable, SCRIPT, "--state", self.state, "--checkout", "/r/topo"],
+                                env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        import time
+        deadline = time.time() + 20
+        while time.time() < deadline and "publish-topo" not in self.calls():
+            time.sleep(0.1)
+        self.assertIn("publish-topo", self.calls(), "the publish never started")
+        proc.send_signal(15)
+        out, err = proc.communicate(timeout=20)
+        self.assertNotEqual(proc.returncode, -15, "SIGTERM was not turned into an ordinary exit")
+        state = self.state_file()
+        self.assertEqual(state["pending"], [], "the report was delivered before the process ended: " + err)
+        self.assertTrue(any("merged #7" in l for l in Bridge.received[-1]["body"]["text"].splitlines()))
+        self.assertIn("stopped early: SystemExit", Bridge.received[-1]["body"]["text"])
+        self.assertIsNone(state["publish"][LONG_MAIN]["ok"])
+        Bridge.received = []
+        p, calls = self.run_pass(self.scripted(published="abc1234", prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
+        self.assertNotIn("publish-topo", calls, "a publish that was begun is not begun again inside the retry")
+        self.assertEqual(Bridge.received, [])
+
+    def test_a_publish_that_gives_no_answer_is_recorded_and_not_tried_every_pass(self):
+        s = self.scripted(published="abc1234", publish_hang=3)
+        p, calls = self.run_pass(s, extra=["--publish-timeout", "0.5"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("gave no answer", Bridge.received[-1]["body"]["text"])
+        self.assertIsNone(self.state_file()["publish"][LONG_MAIN]["ok"])
+        p, calls = self.run_pass(self.scripted(published="abc1234", prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
+        self.assertNotIn("publish-topo", calls)
+
+    def test_an_install_page_that_cannot_be_read_is_said_and_never_republished(self):
+        p, calls = self.run_pass(self.scripted(page_down=True))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("publish-topo", calls)
+        self.assertIn("could not check or publish the install page", Bridge.received[-1]["body"]["text"])
+        self.assertNotIn("publish", self.state_file()["publish"])
+
+    def test_a_pass_that_stops_on_an_error_still_delivers_what_it_did_and_saves(self):
+        # A PR the list answers with no head is a KeyError, which nothing inside the pass expects.
+        p, calls = self.run_pass(self.scripted(prs=[pr(), {"number": 8, "isDraft": False}]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("gh pr merge 7", calls)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertIn("merged #7", text)
+        self.assertIn("the pass stopped early: KeyError", text)
+        self.assertEqual(self.state_file()["pending"], [])
 
     def test_no_verdict_is_rerun_once_and_the_second_red_names_the_failing_tests(self):
         j = jobs(test="failure", topo_unit=("failure", "Boot the simulator"), reviewer_ran="failure")
@@ -420,7 +594,7 @@ class WholePass(unittest.TestCase):
         self.assertIn("gh run rerun 99 --repo samdu/topo --failed", calls)
         self.assertNotIn("pr merge", calls)
         p, calls = self.run_pass(s)
-        self.assertEqual(calls.count("run rerun"), 1)
+        self.assertNotIn("run rerun", calls)
         text = Bridge.received[-1]["body"]["text"]
         self.assertIn("red again", text)
         self.assertIn("TopoTests.EarTests.testTheEarHears", text)
@@ -443,7 +617,7 @@ class WholePass(unittest.TestCase):
         self.assertIn(f"7:{HEAD}", self.state_file()["rerun"], "an unread PR list is not an empty one")
         self.assertIn("could not read the open PRs", Bridge.received[-1]["body"]["text"])
         p, calls = self.run_pass(s)
-        self.assertEqual(calls.count("run rerun"), 1)
+        self.assertNotIn("run rerun", calls)
 
     def test_a_standing_condition_is_said_once_per_window(self):
         s = self.scripted(prs=[pr(body="- [ ] device: phone")])
@@ -465,6 +639,20 @@ class WholePass(unittest.TestCase):
         Bridge.status = 400
         p, _ = self.run_pass(self.scripted())
         self.assertIn("dropped", p.stderr)
+        self.assertEqual(self.state_file()["pending"], [])
+
+    def test_a_bridge_that_answers_badly_keeps_the_report_and_the_state(self):
+        Bridge.short_body = True
+        p, _ = self.run_pass(self.scripted())
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("kept for the next pass", p.stderr)
+        self.assertIn("IncompleteRead", p.stderr)
+        state = self.state_file()
+        self.assertTrue(any("merged #7" in l for l in state["pending"]))
+        Bridge.short_body = False
+        p, calls = self.run_pass(self.scripted(prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("merged #7", Bridge.received[-1]["body"]["text"])
         self.assertEqual(self.state_file()["pending"], [])
 
     def test_no_peer_token_keeps_the_report(self):
