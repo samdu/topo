@@ -363,8 +363,8 @@ enum MascotRoost: Equatable, Sendable {
     case glass(CGRect)
     /// Where a person pinned him, placed `pinned`, or where a drag has him now.
     case pinned(CGRect)
-    /// No place holds him at all — the transcript unread, his reach wider than the room — and he
-    /// is not drawn.
+    /// No place holds him at all — the transcript unread, his reach wider or taller than the room
+    /// — and he is not drawn.
     case none
 
     var frame: CGRect? {
@@ -414,14 +414,15 @@ enum MascotRoost: Equatable, Sendable {
         /// What the nearest place is measured from: where he stands, or where a word displacing
         /// him sends him, or the room's bottom trailing corner before he has stood anywhere.
         var aim: CGPoint
+        /// The pane, the well and the keyboard kept his reach alone and not the clearance, since
+        /// kept at the clearance they left no place at all.
+        var relaxed = false
+        /// The place chosen; nil when none was, and he stands nowhere.
+        var choice: Candidate?
+        /// Every place weighed.
         var candidates: [Candidate] = []
         /// How many of `candidates` clear the words.
         var clearing = 0
-        /// The index of the one chosen in `candidates`; nil when none was, and he stands nowhere.
-        var chosen: Int?
-
-        /// The candidate chosen.
-        var choice: Candidate? { chosen.map { candidates[$0] } }
 
         /// The roost it comes to: the chosen place, or nowhere.
         var roost: MascotRoost { choice.map { .gap($0.frame) } ?? .none }
@@ -440,7 +441,9 @@ enum MascotRoost: Equatable, Sendable {
     /// and of two as near the one further right, then the one higher up. With none that clears he
     /// stands where the least of his box is over words (`cost`), with the same rule between
     /// places that cost the same: over words rather than nowhere, since hiding him is worse than
-    /// covering a line. The aim is `from`, or with none the room's bottom trailing corner, the
+    /// covering a line. Where the pane, the well and the keyboard, kept at the clearance, leave no
+    /// place at all, they keep his reach alone (`Decision.relaxed`), which the room's bottom edge
+    /// always leaves him. The aim is `from`, or with none the room's bottom trailing corner, the
     /// right margin just above the glass.
     ///
     /// He stands nowhere only where there is no place at all: a size that is not one, or a room
@@ -452,7 +455,7 @@ enum MascotRoost: Equatable, Sendable {
         let open = field.room(reach)
         let home = CGPoint(x: open.maxX - size.width, y: open.maxY - size.height)
         let aim = from ?? home
-        var decision = Decision(field: field, size: size, clearance: margin, reach: reach, room: open, aim: aim)
+        let decision = Decision(field: field, size: size, clearance: margin, reach: reach, room: open, aim: aim)
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite,
               size.width <= open.width, size.height <= open.height else { return decision }
         let allowedX = open.minX...(open.maxX - size.width)
@@ -469,57 +472,74 @@ enum MascotRoost: Equatable, Sendable {
         let words = field.words
         let keep = MascotSprite.Reach.all(margin)
         let wordRegions = words.map { forbids((rect: $0, keep: keep)) }
-        let offLimits = field.offLimits.map { forbids((rect: $0, keep: keep.union(reach))) }
-        let everything = wordRegions + offLimits
-        // The lattice: the aim's own x and y, the room's edges and every forbidden region's
-        // edges, which is where the nearest place that clears is, since it is the aim itself or
-        // on the edge of a region, at the aim's x or y or at a corner of two; and the edges at
-        // which his box starts and stops overlapping each word, which with those are where the
-        // area over words, bilinear between them, is least.
-        var xs: Set<CGFloat> = [aim.x.clamped(to: allowedX), allowedX.lowerBound, allowedX.upperBound]
-        var ys: Set<CGFloat> = [aim.y.clamped(to: allowedY), allowedY.lowerBound, allowedY.upperBound]
-        for region in everything {
-            for x in [region.minX, region.maxX] where allowedX.contains(x) { xs.insert(x) }
-            for y in [region.minY, region.maxY] where allowedY.contains(y) { ys.insert(y) }
-        }
-        for word in words {
-            for x in [word.minX - size.width, word.minX, word.maxX - size.width, word.maxX] where allowedX.contains(x) {
-                xs.insert(x)
+        // One pass over the lattice, with the pane, the well and the keyboard kept at `glass`.
+        func weigh(_ glass: MascotSprite.Reach) -> Decision {
+            var decision = decision
+            let offLimits = field.offLimits.map { forbids((rect: $0, keep: glass)) }
+            let everything = wordRegions + offLimits
+            // The lattice: the aim's own x and y, the room's edges and every forbidden region's
+            // edges, which is where the nearest place that clears is, since it is the aim itself or
+            // on the edge of a region, at the aim's x or y or at a corner of two; and the edges at
+            // which his box starts and stops overlapping each word, which with those are where the
+            // area over words, bilinear between them, is least.
+            var xs: Set<CGFloat> = [aim.x.clamped(to: allowedX), allowedX.lowerBound, allowedX.upperBound]
+            var ys: Set<CGFloat> = [aim.y.clamped(to: allowedY), allowedY.lowerBound, allowedY.upperBound]
+            for region in everything {
+                for x in [region.minX, region.maxX] where allowedX.contains(x) { xs.insert(x) }
+                for y in [region.minY, region.maxY] where allowedY.contains(y) { ys.insert(y) }
             }
-            for y in [word.minY - size.height, word.minY, word.maxY - size.height, word.maxY] where allowedY.contains(y) {
-                ys.insert(y)
-            }
-        }
-        var best: (index: Int, cost: CGFloat, distance: CGFloat)?
-        for y in ys.sorted() {
-            for x in xs.sorted() {
-                let point = CGPoint(x: x, y: y)
-                guard !offLimits.contains(where: { strictlyInside(point, $0) }) else { continue }
-                let clears = !wordRegions.contains(where: { strictlyInside(point, $0) })
-                let frame = CGRect(origin: point, size: size)
-                let cost = clears ? 0 : words.reduce(CGFloat(0)) { sum, word in
-                    let over = word.intersection(frame)
-                    return over.isNull ? sum : sum + over.width * over.height
+            for word in words {
+                for x in [word.minX - size.width, word.minX, word.maxX - size.width, word.maxX] where allowedX.contains(x) {
+                    xs.insert(x)
                 }
-                decision.candidates.append(Candidate(frame: frame, cost: cost, clears: clears))
-                if clears { decision.clearing += 1 }
-                let distance = hypot(x - aim.x, y - aim.y)
-                // A place that clears beats one that does not; then the least cost; then the
-                // nearest; then the one further right, then higher up.
-                let rank = clears ? -CGFloat.infinity : cost
-                if let best {
-                    let bestFrame = decision.candidates[best.index].frame
-                    let better = rank < best.cost - epsilon
-                        || (abs(rank - best.cost) <= epsilon || rank == best.cost)
-                        && (distance < best.distance - epsilon
-                            || (abs(distance - best.distance) <= epsilon && (-x, y) < (-bestFrame.minX, bestFrame.minY)))
-                    guard better else { continue }
+                for y in [word.minY - size.height, word.minY, word.maxY - size.height, word.maxY] where allowedY.contains(y) {
+                    ys.insert(y)
                 }
-                best = (decision.candidates.count - 1, rank, distance)
             }
+            var best: (candidate: Candidate, rank: CGFloat, distance: CGFloat)?
+            for y in ys.sorted() {
+                for x in xs.sorted() {
+                    let point = CGPoint(x: x, y: y)
+                    guard !offLimits.contains(where: { strictlyInside(point, $0) }) else { continue }
+                    let clears = !wordRegions.contains(where: { strictlyInside(point, $0) })
+                    let frame = CGRect(origin: point, size: size)
+                    let candidate = Candidate(frame: frame, cost: clears ? 0 : cost(of: frame, words: words), clears: clears)
+                    decision.candidates.append(candidate)
+                    if clears { decision.clearing += 1 }
+                    let distance = hypot(x - aim.x, y - aim.y)
+                    // A place that clears beats one that does not; then the least cost; then the
+                    // nearest; then the one further right, then higher up.
+                    let rank = clears ? -CGFloat.infinity : candidate.cost
+                    if let best {
+                        let bestFrame = best.candidate.frame
+                        let better = rank < best.rank - epsilon
+                            || (abs(rank - best.rank) <= epsilon || rank == best.rank)
+                            && (distance < best.distance - epsilon
+                                || (abs(distance - best.distance) <= epsilon && (-x, y) < (-bestFrame.minX, bestFrame.minY)))
+                        guard better else { continue }
+                    }
+                    best = (candidate, rank, distance)
+                }
+            }
+            decision.choice = best?.candidate
+            return decision
         }
-        decision.chosen = best?.index
-        return decision
+        // Where the pane, the well or the keyboard kept at the clearance leaves no place at all,
+        // they keep his reach alone, which the bottom of the room always leaves him: standing is
+        // worth more than the margin.
+        let kept = weigh(keep.union(reach))
+        guard kept.choice == nil else { return kept }
+        var reached = weigh(reach)
+        reached.relaxed = true
+        return reached
+    }
+
+    /// The area of `frame` over `words`.
+    static func cost(of frame: CGRect, words: [CGRect]) -> CGFloat {
+        words.reduce(CGFloat(0)) { sum, word in
+            let over = word.intersection(frame)
+            return over.isNull ? sum : sum + over.width * over.height
+        }
     }
 
     /// Whether `frame` is a roost as it stands: a gap — inside `field.room(reach)`, with no word
@@ -751,6 +771,10 @@ struct MascotRoam: Equatable, Sendable {
     /// well or the keyboard his reach.
     private(set) var covered = false
 
+    /// What a fallback keeps from the pane, the well and the keyboard beside his reach: the
+    /// clearance, or nothing where the last decision had to give it up (`Decision.relaxed`).
+    private var fallbackClearance: CGFloat { decision?.relaxed == true ? 0 : settings.clearance }
+
     private var isCovered: Bool {
         guard settings.placement == .roam, !dragging, let picture, let field else { return false }
         return field.covers(picture, reach: settings.reach)
@@ -876,7 +900,7 @@ struct MascotRoam: Equatable, Sendable {
             // decides again.
             let stands = MascotRoost.holds(field, frame: destination, clearance: settings.clearance, reach: settings.reach)
                 || (decision?.choice?.clears == false
-                    && MascotRoost.admits(field, frame: destination, clearance: settings.clearance, reach: settings.reach))
+                    && MascotRoost.admits(field, frame: destination, clearance: fallbackClearance, reach: settings.reach))
             if !stands
                 || field.crossesOffLimits(from: from, to: move.to, size: settings.size, reach: settings.reach) {
                 self.move = nil

@@ -184,7 +184,8 @@ final class MascotGeometryTests: XCTestCase {
                 XCTAssertEqual(choice.frame.size, size, label)
                 XCTAssertTrue(fixture.field.visible.insetBy(dx: -0.001, dy: -0.001).contains(reach.around(choice.frame)),
                               "\(label): his reach \(reach.around(choice.frame)) is cut by the screen's edge")
-                XCTAssertTrue(MascotRoost.admits(fixture.field, frame: choice.frame, clearance: clearance, reach: reach),
+                XCTAssertTrue(MascotRoost.admits(fixture.field, frame: choice.frame, clearance: decision.relaxed ? 0 : clearance,
+                                                 reach: reach),
                               "\(label): \(choice.frame) is not a place")
                 for limit in fixture.field.offLimits {
                     XCTAssertFalse(MascotRoost.overlap(reach.around(choice.frame), limit), "\(label): over \(limit)")
@@ -229,10 +230,11 @@ final class MascotGeometryTests: XCTestCase {
             let decision = MascotRoost.decide(fixture.field, size: Self.size, clearance: 8, from: nil)
             XCTAssertEqual(decision.field, fixture.field, fixture.name)
             XCTAssertFalse(decision.candidates.isEmpty, fixture.name)
-            let chosen = try XCTUnwrap(decision.chosen, fixture.name)
-            XCTAssertEqual(decision.roost.frame, decision.candidates[chosen].frame, fixture.name)
+            let choice = try XCTUnwrap(decision.choice, fixture.name)
+            XCTAssertTrue(decision.candidates.contains(choice), fixture.name)
+            XCTAssertEqual(decision.roost.frame, choice.frame, fixture.name)
             XCTAssertEqual(decision.clearing, decision.candidates.filter(\.clears).count, fixture.name)
-            XCTAssertEqual(decision.candidates[chosen].clears, decision.clearing > 0,
+            XCTAssertEqual(choice.clears, decision.clearing > 0,
                            "\(fixture.name): a place that clears was passed over, or none was and one was chosen")
             for candidate in decision.candidates {
                 XCTAssertTrue(MascotRoost.admits(fixture.field, frame: candidate.frame, clearance: 8),
@@ -253,6 +255,45 @@ final class MascotGeometryTests: XCTestCase {
             let over = word.intersection(frame)
             return over.isNull ? sum : sum + over.width * over.height
         }
+    }
+
+    /// A room that fits his box and his reach but not the clearance kept from the glass still
+    /// holds him: at a scale of 1 and a clearance of 32, keyboard up, with 120 to 140 points above
+    /// the pane, the pane, the well and the keyboard kept at the clearance forbid the whole room,
+    /// and they keep his reach alone instead. He stands at the bottom of the room, his reach clear
+    /// of all three and inside the screen's edge, and a roam settled there is drawn.
+    func testWhereTheClearanceFromTheGlassLeavesNoPlaceHisReachAloneIsKept() throws {
+        let size = MascotSprite.size(scale: 1), reach = MascotSprite.reach(scale: 1)
+        for height in 120...140 {
+            let top = CGFloat(height)
+            let field = MascotField(visible: CGRect(x: 0, y: 0, width: 393, height: 700),
+                                    pane: CGRect(x: 36, y: top, width: 320, height: 56),
+                                    well: CGRect(x: 172, y: top + 4, width: 48, height: 48),
+                                    keyboard: CGRect(x: 0, y: top + 64, width: 393, height: 336))
+            let label = "\(height) points above the pane"
+            let decision = MascotRoost.decide(field, size: size, clearance: 32, reach: reach, from: nil)
+            let choice = try XCTUnwrap(decision.choice, "\(label): he stands nowhere")
+            XCTAssertTrue(decision.relaxed, label)
+            XCTAssertEqual(decision.roost, .gap(choice.frame), label)
+            XCTAssertTrue(field.room(reach).insetBy(dx: -0.001, dy: -0.001).contains(choice.frame), label)
+            XCTAssertTrue(field.visible.insetBy(dx: -0.001, dy: -0.001).contains(reach.around(choice.frame)), label)
+            for limit in field.offLimits {
+                XCTAssertFalse(MascotRoost.overlap(reach.around(choice.frame), limit), "\(label): his reach over \(limit)")
+            }
+            XCTAssertTrue(MascotRoost.admits(field, frame: choice.frame, clearance: 0, reach: reach), label)
+
+            var roam = MascotRoam(MascotRoam.Settings(size: size, clearance: 32, reach: reach, speed: 40, settle: 0.6))
+            roam.observe(field, at: 0)
+            var time = 0.0
+            while roam.needsTime, time < 10 { time += 1.0 / 30; roam.advance(to: time) }
+            XCTAssertFalse(roam.hidden, "\(label): a roam settled here is not drawn")
+            XCTAssertEqual(roam.picture, choice.frame, label)
+        }
+        // With room for the clearance, it is kept.
+        let roomy = MascotField(visible: CGRect(x: 0, y: 0, width: 393, height: 700),
+                                pane: CGRect(x: 36, y: 200, width: 320, height: 56),
+                                keyboard: CGRect(x: 0, y: 264, width: 393, height: 336))
+        XCTAssertFalse(MascotRoost.decide(roomy, size: size, clearance: 32, reach: reach, from: nil).relaxed)
     }
 
     /// Under the keyboard the glass rides on it, short, and it is off limits as it is at the foot
