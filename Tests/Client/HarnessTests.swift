@@ -66,17 +66,6 @@ final class HarnessIntegrationTests: XCTestCase {
         GuestBridgeError.failed("the process ended mid-turn: \(message)").description
     }
 
-    /// What a guest session that has seen none of the log is sent, for `words` said after `unseen`:
-    /// one input, the log so far and then the words, since the guest keeps its own conversation.
-    fileprivate func asked(unseen: [(TurnRole, String)], saying words: String) -> [String] {
-        let turns = unseen.enumerated().map { index, turn in
-            Turn(ref: TurnRef(device: DeviceID("any"), sequence: Int64(index + 1)), parents: [], role: turn.0,
-                 text: turn.1, at: Date())
-        }
-        let person = Turn(ref: TurnRef(device: DeviceID("any"), sequence: 99), parents: [], role: .person, text: words, at: Date())
-        return [GuestBridge.render(unseen: turns, answering: [person], fresh: true)]
-    }
-
     fileprivate func makeDefaults() -> UserDefaults {
         let name = "topo.tests.harness.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
@@ -620,7 +609,12 @@ final class HarnessIntegrationTests: XCTestCase {
         guard answered.count == 4 else { return XCTFail("expected 4 turns in the log, found \(answered.map(\.text))") }
         XCTAssertEqual(answered[3].parents, [answered[2].ref])
         XCTAssertEqual(answered[3].ref.device, DeviceID("hub"))
-        XCTAssertEqual(hubTransport.sent, [asked(unseen: [(.person, "one"), (.assistant, "one back")], saying: "two")])
+        // The hub's guest has seen none of the log, so it is sent one input: the log so far, oldest
+        // first, then the words. Written out rather than rendered, so the order is held here.
+        XCTAssertEqual(hubTransport.sent, [[
+            "[The conversation so far, from the log on their devices — the last 2 turns, oldest first:]\n\n"
+                + "Them: one\n\nYou, answering on another device: one back\n\n[They now say:]\n\ntwo",
+        ]])
         XCTAssertEqual(phoneTransport.sent.count, 1)
     }
 
