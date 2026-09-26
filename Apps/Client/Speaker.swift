@@ -6,8 +6,9 @@ import TopoCore
 /// Reads a reply aloud, wherever the process is: a reply to a spoken turn is heard whether the
 /// phone is locked, pocketed or showing another app. What keeps the process there is the hold —
 /// `AudioSession.Hold`, counted, answered by the play queue's keeper — which stands from the
-/// release of the press until the reply has been read, one wait per turn said and not answered. Pressing the microphone stops a reply, so
-/// the mic does not hear the speaker; so does the Stop item, a sign-out and a media services
+/// release of the press until the reply has been read, one wait per turn said and not answered. Pressing the microphone stops a reply — the
+/// button is Stop while one is read, and a press on it opens nothing — so the mic does not hear
+/// the speaker; so does the Stop item, a sign-out and a media services
 /// reset. An interruption does not: iOS posts one at the lock screen with nothing in it, so a
 /// `.began` marks the engine dead and leaves the hold standing, and the rebuild at `.ended` or at
 /// the configuration change carries the reply on. No hold outlives its ceiling either way.

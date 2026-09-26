@@ -424,14 +424,14 @@ struct ChatView: View {
                                holdsTopo: look.mascot.placement == .glass)
     }
 
-    /// The four facts the glass draws the microphone from, read off `VoiceInput`.
+    /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
     private var micState: Composer.MicState {
         Composer.MicState(voice, speaking: speaker.speaking)
     }
 
     /// The glass under the transcript. What the microphone is doing is four facts read off
-    /// `VoiceInput` here and drawn there; the press is handed straight back to `micPressed`,
-    /// which is the whole of this screen's part in a session. Its own top edge is read off its
+    /// `VoiceInput` here, with whether Topo is speaking, and drawn there; the press is handed
+    /// straight back to `micPressed`, which is the whole of this screen's part in a session. Its own top edge is read off its
     /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
     /// the edge the presence is read against.
     @ViewBuilder private func composer(keyboard: Bool) -> some View {
@@ -581,14 +581,29 @@ extension Composer.MicState {
     }
 }
 
-/// The chat's press on the microphone, routed. Any press stops a reply still being read, so the
-/// microphone does not hear the speaker, and goes to `VoiceInput`.
+/// The chat's press on the microphone, routed by what the glass was drawing when it landed.
+/// While Topo is speaking the button is Stop (`Composer.MicState.Appearance.stop`): the press
+/// ends the reply and opens nothing, and its release is that press's own, so it reaches no
+/// session either, even though the button is the microphone again by then. Any other press stops
+/// a reply still being read, so the microphone does not hear the speaker, and goes to `VoiceInput`.
 @MainActor
 final class MicPress {
+    /// The last press down was a stop, so the release that follows it is one too. Set afresh on
+    /// every press, so a release the gesture never delivered strands nothing.
+    private var stopping = false
+
     /// What a release heard, to be sent, or nil.
     func handle(_ down: Bool, mic: Composer.MicState, speaker: Speaker, voice: VoiceInput) async -> String? {
-        if down { speaker.stop() }
-        return down ? await voice.pressDown(as: .chat) : await voice.pressUp(as: .chat)
+        guard down else {
+            if stopping {
+                stopping = false
+                return nil
+            }
+            return await voice.pressUp(as: .chat)
+        }
+        stopping = mic.appearance == .stop
+        speaker.stop()
+        return stopping ? nil : await voice.pressDown(as: .chat)
     }
 }
 #endif

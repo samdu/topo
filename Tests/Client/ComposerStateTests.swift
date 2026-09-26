@@ -9,9 +9,10 @@ import XCTest
 @MainActor
 final class ComposerStateTests: XCTestCase {
     private func state(canListen: Bool = true, listening: Bool = false,
-                       owner: VoiceInput.Gate? = nil, handsFree: Bool = false) -> Composer.MicState {
+                       owner: VoiceInput.Gate? = nil, handsFree: Bool = false,
+                       speaking: Bool = false) -> Composer.MicState {
         Composer.MicState(canListen: canListen, listening: listening, owner: owner,
-                          handsFree: handsFree)
+                          handsFree: handsFree, speaking: speaking)
     }
 
     func testNothingOpenIsIdle() {
@@ -60,7 +61,7 @@ final class ComposerStateTests: XCTestCase {
                        .dimmed)
     }
 
-    /// The three labels are the only route the two UI suites have to this button, and they are
+    /// Out of speech, the three labels are the UI suites' route to this button, and they are
     /// read off `listening` and `handsFree` alone — as the chat screen read them before the
     /// composer existed, with no owner in the question.
     func testTheLabelsAreTheThreeTheSuitesLookFor() {
@@ -71,5 +72,38 @@ final class ComposerStateTests: XCTestCase {
         XCTAssertEqual(state(listening: true, owner: .chat, handsFree: true).label,
                        "Listening; press to send")
         XCTAssertEqual(state(handsFree: true).label, "Listening; press to send")
+    }
+
+    /// While Topo is speaking the button is Stop, whether or not a press would open the
+    /// microphone, since stopping needs none.
+    func testSpeakingMakesItAStopButton() {
+        for mic in [state(speaking: true), state(canListen: false, speaking: true),
+                    state(listening: true, owner: .firstRun, speaking: true)] {
+            XCTAssertEqual(mic.appearance, .stop, "\(mic)")
+            XCTAssertEqual(mic.label, "Stop speaking")
+            XCTAssertEqual(mic.glyph, "stop.fill")
+            XCTAssertFalse(mic.open, "a stop leaves the glass clear")
+            XCTAssertFalse(mic.holding)
+        }
+    }
+
+    /// This screen's open microphone keeps its state over a reply: the next press on a hands-free
+    /// session is the one that sends, and a held one is under the thumb already.
+    func testAnOpenMicrophoneIsNotTurnedIntoAStop() {
+        let handsFree = state(listening: true, owner: .chat, handsFree: true, speaking: true)
+        XCTAssertEqual(handsFree.appearance, .handsFree)
+        XCTAssertEqual(handsFree.label, "Listening; press to send")
+        XCTAssertEqual(handsFree.glyph, "waveform")
+        let held = state(listening: true, owner: .chat, speaking: true)
+        XCTAssertEqual(held.appearance, .held)
+        XCTAssertEqual(held.label, "Listening; release to send")
+    }
+
+    /// The reply over, by its end or by a stop, the button is the microphone again.
+    func testTheEndOfSpeakingPutsTheMicrophoneBack() {
+        XCTAssertEqual(state(speaking: false).appearance, .idle)
+        XCTAssertEqual(state(speaking: false).label, "Hold to talk")
+        XCTAssertEqual(state(speaking: false).glyph, "mic.fill")
+        XCTAssertEqual(state(canListen: false, speaking: false).appearance, .dimmed)
     }
 }

@@ -32,16 +32,17 @@ struct Composer: View {
     /// short and tall again on the keyboard's curve and in step with it.
     var keyboard = false
     /// Called with true on the press and false on the release. The session logic is
-    /// `VoiceInput`'s; this passes the press on and nothing else.
+    /// `VoiceInput`'s, and a press while Topo is speaking is a stop (`MicPress`); this passes the
+    /// press on and nothing else.
     var micPressed: (Bool) -> Void = { _ in }
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
     @Environment(\.look) private var look
 
-    /// What the microphone is doing, and which of the four the glass draws for it. The chat
-    /// screen reads the four facts off `VoiceInput` and this decides what they look like, so
-    /// the mapping is a value a test can make rather than a branch inside a view.
+    /// What the microphone is doing, and which of the five the glass draws for it. The chat
+    /// screen reads four facts off `VoiceInput` and one off `Speaker`, and this decides what they
+    /// look like, so the mapping is a value a test can make rather than a branch inside a view.
     struct MicState: Equatable, Sendable {
         /// A press would open the microphone: not denied, and the ear resident.
         var canListen = true
@@ -55,7 +56,7 @@ struct Composer: View {
         /// The speaker is reading a reply aloud (`Speaker.speaking`).
         var speaking = false
 
-        /// The four states the glass draws.
+        /// The five states the glass draws.
         enum Appearance: String, Equatable, Sendable, CaseIterable {
             /// Nothing is open and a press would open something.
             case idle
@@ -80,14 +81,30 @@ struct Composer: View {
         /// The owner is asked before the manner of opening: a session this screen does not own
         /// leaves the glass alone however it was opened, so `handsFree` is read only once the
         /// microphone is known to be this screen's.
+        ///
+        /// A reply being read makes the button Stop unless this screen's microphone is open, and
+        /// ahead of a press that would be refused, since stopping needs no microphone. An open one
+        /// keeps its state: the next press on it is the one that sends, and it stops the reply too.
         var appearance: Appearance {
-            if !canListen { .dimmed } else if !mine { .idle } else if handsFree { .handsFree } else { .held }
+            if speaking, !mine { .stop } else if !canListen { .dimmed } else if !mine { .idle }
+            else if handsFree { .handsFree } else { .held }
         }
 
-        /// `VoiceInput`'s state in words, which is the only route the two UI suites have to
-        /// this button.
+        /// `VoiceInput`'s state in words, or Stop while Topo is speaking: the only route the UI
+        /// suites have to this button.
         var label: String {
-            handsFree ? "Listening; press to send" : listening ? "Listening; release to send" : "Hold to talk"
+            appearance == .stop ? "Stop speaking"
+                : handsFree ? "Listening; press to send" : listening ? "Listening; release to send" : "Hold to talk"
+        }
+
+        /// The mark cut into the stone: the waveform hands free, a stop while Topo is speaking, the
+        /// microphone otherwise. A held press reads off the glass, not the mark.
+        var glyph: String {
+            switch appearance {
+            case .handsFree: "waveform"
+            case .stop: "stop.fill"
+            case .idle, .held, .dimmed: "mic.fill"
+            }
         }
     }
 
@@ -208,10 +225,9 @@ struct Composer: View {
                     .opacity(mic.appearance == .dimmed ? look.composer.dimmedOpacity : 1)
             }
             .overlay {
-                // The waveform is hands free, not listening: a held press reads off the glass.
                 // The symbol is a mask and not ink: what is drawn is the stone under it and the
                 // two walls of the cut, from `Look.press`.
-                Image(systemName: mic.appearance == .handsFree ? "waveform" : "mic.fill")
+                Image(systemName: mic.glyph)
                     .font(.system(size: look.composer.glyph.size, weight: look.composer.glyph.weight))
                     .pressed(look.press, into: jewel, diameter: geometry.restingJewel,
                              cast: mic.open ? look.composer.glyph.openCast : .clear)
@@ -226,8 +242,8 @@ struct Composer: View {
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
                 micPressed(down)
             }
-            // The two UI suites look this button up by its label, which is `VoiceInput`'s state
-            // in words.
+            // The UI suites look this button up by its label, which is `VoiceInput`'s state in
+            // words, or Stop while Topo is speaking.
             .accessibilityLabel(mic.label)
             #if DEBUG
             // What the UI test decodes after a press: the counters, the branch it took, and what

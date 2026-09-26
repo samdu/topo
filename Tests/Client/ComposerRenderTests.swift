@@ -368,6 +368,23 @@ final class ComposerRenderTests: XCTestCase {
                        "the open cast reached the mark at rest, where there is nothing to cast")
     }
 
+    /// While Topo is speaking the mark is a stop, cut through the same `Pressed` at the look's
+    /// glyph size, on the resting stone rather than a dimmed one.
+    func testTheStopMarkIsCutFromTheLook() throws {
+        let look = flatLook()
+        let stop = Composer.MicState(speaking: true)
+        XCTAssertNotEqual(try raster(look: look), try raster(stop, look: look),
+                          "the stop button looks the same as the microphone")
+        XCTAssertNotEqual(try raster(Composer.MicState(canListen: false), look: look),
+                          try raster(Composer.MicState(canListen: false, speaking: true), look: look),
+                          "a stop over an ear that cannot listen was drawn dimmed, though stopping needs no ear")
+
+        var big = flatLook()
+        big.composer.glyph.size = look.composer.glyph.size * 1.6
+        XCTAssertNotEqual(try raster(stop, look: look), try raster(stop, look: big),
+                          "the look's glyph size does not reach the stop mark")
+    }
+
     /// The cut the mark is pressed at is `Look.press`, which is one treatment for both marks,
     /// so a change to it reaches the microphone.
     func testTheCutIsDrawnFromTheLooksOnePress() throws {
