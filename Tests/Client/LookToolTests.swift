@@ -153,14 +153,36 @@ final class LookToolTests: XCTestCase {
     }
 
     /// Codex on #189: a compound field is shown as the one field the reader reads, with its value
-    /// as JSON, not as the keys inside it.
-    func testShowListsACompoundFieldWhole() async throws {
+    /// as JSON, not as the keys inside it; and a second partial set of it merges into the first,
+    /// as the reader wears it, rather than replacing what is kept.
+    func testACompoundFieldIsMergedAcrossSetsAndShownWhole() async throws {
+        let store = defaults()
+        let tuning = Tuning(defaults: store)
+        let first = await tool(tuning).run(["set", "composer.glow", #"{"radius":9}"#])
+        XCTAssertEqual(first.status, ToolReply.ok, first.text)
+        let second = await tool(tuning).run(["set", "composer.glow", #"{"x":2}"#])
+        XCTAssertEqual(second.status, ToolReply.ok, second.text)
+        for kept in [tuning, Tuning(defaults: store)] {
+            let glow = kept.worn(over: vault).composer.glow
+            XCTAssertEqual(glow.radius, 9)
+            XCTAssertEqual(glow.x, 2)
+            let reply = await tool(kept).run([])
+            XCTAssertTrue(reply.text.contains("Also set on this phone:\ncomposer.glow {\"radius\":9,\"x\":2}\n"), reply.text)
+            XCTAssertFalse(reply.text.contains("composer.glow.radius"), reply.text)
+        }
+    }
+
+    /// Codex on #189: each field a whole part names is judged alone, so one the reader refuses
+    /// takes none of the others down with it.
+    func testAPartsRefusedFieldLeavesItsOtherFieldsSet() async throws {
         let tuning = Tuning(defaults: defaults())
-        let set = await tool(tuning).run(["set", "composer.glow", #"{"radius":9}"#])
-        XCTAssertEqual(set.status, ToolReply.ok, set.text)
-        let reply = await tool(tuning).run([])
-        XCTAssertTrue(reply.text.contains("Also set on this phone:\ncomposer.glow {\"radius\":9}\n"), reply.text)
-        XCTAssertFalse(reply.text.contains("composer.glow.radius"), reply.text)
+        let reply = await tool(tuning).run(["set", "mascot", #"{"scale":2,"clearance":99}"#])
+        XCTAssertEqual(reply.status, ToolReply.refused, reply.text)
+        XCTAssertTrue(reply.text.contains("set: mascot.scale\n"), reply.text)
+        XCTAssertTrue(reply.text.contains("refused: mascot.clearance"), reply.text)
+        let worn = tuning.worn(over: vault)
+        XCTAssertEqual(worn.mascot.scale, 2)
+        XCTAssertEqual(worn.mascot.clearance, Look().mascot.clearance)
     }
 
     /// Codex on #189: where a value came from is where it was read, not a guess from its value, so
