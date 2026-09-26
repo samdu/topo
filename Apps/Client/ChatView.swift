@@ -291,41 +291,14 @@ struct ChatView: View {
         .padding(.bottom, 8)
     }
 
-    /// What the chat says it is doing, in the navigation bar beside the badge rather than over
-    /// the composer: the turn in flight and where it is, the last failure, and something that
-    /// went right but not the usual way. They are there to be read when something is slow or
-    /// wrong, and the glass under the transcript is the controls'. The bar is above the
-    /// transcript's frame, which is where Topo's room starts, so none of them is his obstacle.
-    private var notices: some ToolbarContent {
-        ToolbarItem(placement: .principal) {
-            VStack {
-                if harness.busy {
-                    // A turn in flight always says where it is; a spinner alone reads as nothing.
-                    HStack {
-                        ProgressView()
-                        Text(harness.status ?? "Working…")
-                        if harness.waiting.count > 1 {
-                            Text("· \(harness.waiting.count - 1) waiting")
-                                .foregroundStyle(look.transcript.caption)
-                        }
-                    }
-                }
-                if let error = harness.error {
-                    Text(error).foregroundStyle(look.transcript.trouble)
-                }
-                if let info = harness.info {
-                    Text(info).foregroundStyle(look.transcript.caption)
-                }
-            }
-            .font(look.transcript.noticeFont)
-            .multilineTextAlignment(.center)
-            .accessibilityElement(children: .contain)
-            .accessibilityIdentifier(Self.noticesIdentifier)
+    /// What the chat says it is doing, in the navigation bar beside the badge (`ChatNotices`).
+    /// The item is there only while there is something to say: an item the bar first laid out
+    /// empty is one it never draws, whatever it later holds.
+    @ToolbarContentBuilder private var notices: some ToolbarContent {
+        if ChatNotices.any(in: harness) {
+            ToolbarItem(placement: .principal) { ChatNotices() }
         }
     }
-
-    /// What the UI suite finds the notices by.
-    static let noticesIdentifier = "topo-notices"
 
     /// The mark at the trailing edge, and what the spoken-turn test reads off it.
     private var badgeItem: some ToolbarContent {
@@ -560,6 +533,52 @@ struct ChatView: View {
                 speaker.endAwaiting(taken, "the turn was taken back")
             }
         }
+    }
+}
+
+/// What the chat says it is doing, in the navigation bar beside the badge rather than over the
+/// composer: the turn in flight and where it is, the last failure, and something that went right
+/// but not the usual way. They are there to be read when something is slow or wrong, and the
+/// glass under the transcript is the controls'. The bar is above the transcript's frame, which is
+/// where Topo's room starts, so none of them is his obstacle.
+struct ChatNotices: View {
+    @Environment(Harness.self) private var harness
+    @Environment(\.look) private var look
+
+    /// What the UI suite finds the notices by.
+    static let identifier = "topo-notices"
+
+    /// Whether there is anything to say.
+    static func any(in harness: Harness) -> Bool {
+        harness.busy || harness.error != nil || harness.info != nil
+    }
+
+    var body: some View {
+        VStack {
+            if harness.busy {
+                // A turn in flight always says where it is; a spinner alone reads as nothing.
+                HStack {
+                    ProgressView()
+                    Text(harness.status ?? "Working…")
+                    if harness.waiting.count > 1 {
+                        Text("· \(harness.waiting.count - 1) waiting")
+                            .foregroundStyle(look.transcript.caption)
+                    }
+                }
+            }
+            if let error = harness.error {
+                Text(error).foregroundStyle(look.transcript.trouble)
+            }
+            if let info = harness.info {
+                Text(info).foregroundStyle(look.transcript.caption)
+            }
+        }
+        .font(look.transcript.noticeFont)
+        .multilineTextAlignment(.center)
+        // The bar offers its item one line; a notice is read whole, wrapping below it.
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(Self.identifier)
     }
 }
 

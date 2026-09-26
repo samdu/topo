@@ -24,7 +24,15 @@ final class StatusNoticeTests: XCTestCase {
         app.buttons["Send"].tap()
 
         let notices = app.descendants(matching: .any).matching(identifier: "topo-notices").firstMatch
-        XCTAssertTrue(notices.waitForExistence(timeout: 30), "a turn went and no notice said so")
+        let found = notices.waitForExistence(timeout: 30)
+        if !found {
+            attach(app)
+            let tree = XCTAttachment(string: app.debugDescription + "\n\nREPORT " + String(describing: app.buttons["topo-debug-chat"].value))
+            tree.name = "tree"
+            tree.lifetime = .keepAlways
+            add(tree)
+        }
+        XCTAssertTrue(found, "a turn went and no notice said so")
         let words = notices.staticTexts.firstMatch
         XCTAssertTrue(words.waitForExistence(timeout: 10), "the notices hold no words")
         XCTAssertFalse(words.label.isEmpty, "the notice is empty")
