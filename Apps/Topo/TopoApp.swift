@@ -39,7 +39,10 @@ struct TopoApp: App {
         mascot.follow(harness)
         _harness = State(initialValue: harness)
         _mascot = State(initialValue: mascot)
-        _memory = State(initialValue: Memory.standard())
+        let memory = Memory.standard()
+        _memory = State(initialValue: memory)
+        // The guest's mount of the memory follows the same home the mirror runs against.
+        GuestResident.shared.memory = memory
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()

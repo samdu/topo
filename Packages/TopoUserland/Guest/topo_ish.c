@@ -564,7 +564,13 @@ static void stop_speaking_as_init(struct task *previous) {
     pthread_mutex_unlock(&spawn_lock);
 }
 
-int topo_ish_mount(const char *host_dir, const char *point_raw) {
+// The vault's filesystem: realfs with every open of a regular file and every mutation made under
+// file coordination (topo_vaultfs.m).
+extern const struct fs_ops topo_vaultfs;
+
+// A mount of `fs` from `host_dir` at `point`, the contract `topo_ish_mount` states: a standing mount
+// of the same source by the same filesystem is left alone, anything else there is refused EBUSY.
+static int mount_with(const struct fs_ops *fs, const char *host_dir, const char *point_raw) {
     if (!booted)
         return _ENODEV;
     // realfs keeps the source by its real path, so that is what an existing mount is compared by.
@@ -589,13 +595,36 @@ int topo_ish_mount(const char *host_dir, const char *point_raw) {
         }
     }
     if (standing)
-        err = strcmp(mount->source, source) == 0 ? 0 : _EBUSY;
+        err = strcmp(mount->source, source) == 0 && mount->fs == fs ? 0 : _EBUSY;
     else
-        err = do_mount(&realfs, source, point, "", 0);
+        err = do_mount(fs, source, point, "", 0);
     unlock(&mounts_lock);
 out:
     stop_speaking_as_init(previous);
     free(source);
+    return err;
+}
+
+int topo_ish_mount(const char *host_dir, const char *point) {
+    return mount_with(&realfs, host_dir, point);
+}
+
+int topo_ish_mount_vault(const char *host_dir, const char *point) {
+    return mount_with(&topo_vaultfs, host_dir, point);
+}
+
+int topo_ish_unmount(const char *point_raw) {
+    if (!booted)
+        return _ENODEV;
+    struct task *previous = speak_as_init();
+    char point[MAX_PATH];
+    int err = path_normalize(AT_PWD, point_raw, point, N_SYMLINK_NOFOLLOW);
+    if (err >= 0) {
+        lock(&mounts_lock);
+        err = do_umount(point);
+        unlock(&mounts_lock);
+    }
+    stop_speaking_as_init(previous);
     return err;
 }
 

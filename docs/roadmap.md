@@ -11,7 +11,7 @@ What is built, what comes next and in what order, what is parked, and the thread
 - The transcript bridge: the guest is the only brain, the ledger lines its conversation up with the log across crashes, and an unfinished turn is asked again by hand.
 - One brain (P5b): `TurnRunner` asks a `Brain` and the app has one, the guest; the package suite drives the runner over a scripted brain and the app's suites drive the harness over the guest.
 - Voice: push to talk on Parakeet, replies read on Pocket TTS, both downloaded by the app and held behind the lock.
-- The memory as an Obsidian vault: local or in iCloud Drive, mirrored both ways under file coordination, moved between homes with one commit point.
+- The memory as an Obsidian vault: local or in iCloud Drive, mirrored both ways under file coordination, moved between homes with one commit point, and mounted into the guest at `/home/topo/memory` with every open coordinated, so the mind reads and writes its own notes.
 - The look as a document (`look.json`), the glass composer that goes short under the keyboard, the badge, and the transcript drawn by phone, watch and television, Topo's turns as markdown.
 - Topo on the glass: the pixel engine, poses from the guest's events, a calm idle with yoga, facing by side, roaming the chat without juddering under a turn.
 - The model picker, Tuning (placement and pin in every build, sliders in debug), diagnostics, About with the GPL text and the source commit.
@@ -23,9 +23,8 @@ What is built, what comes next and in what order, what is parked, and the thread
 
 ## Next, in order
 
-1. **P6: the memory as a mount.** The vault folder into the guest, eviction handled through the fork's file coordination, the mirror untouched. This is what makes the mind able to read and write its own notes, and it is the last hole before P7 adds any more.
-2. **P7: the phone's own tools.** A loopback tool service and a small `topo` CLI in the guest (calendar, reminders, contacts, location, notify), found by a skill rather than paid for per turn. After P6, since notes are the tool everything else writes into.
-3. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`). Last because each step before it changes what review sees.
+1. **P7: the phone's own tools.** A loopback tool service and a small `topo` CLI in the guest (calendar, reminders, contacts, location, notify), found by a skill rather than paid for per turn. After P6, since notes are the tool everything else writes into.
+2. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`). Last because each step before it changes what review sees.
 
 Not sequenced, on the issue list: #172's fix round and its re-review; #129, the proxy's debug pin skipping a non-canonical `/v1/messages` path; #177, Topo's movement under fast scrolling (a survey of game steering first); #178, nested blockquotes; #179, markdown round two — swift-markdown as the parser, tables that scroll sideways, tap-to-full-screen on code and tables, tappable links.
 

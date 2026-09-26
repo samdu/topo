@@ -189,6 +189,8 @@ EOF
   defines=(-DGUEST_ARM64=1 -DENGINE_ASBESTOS=1 -DLOG_HANDLER_DPRINTF=1 -std=gnu11)
   "${cc[@]}" -O2 -g -w "${defines[@]}" "${includes[@]}" -c "$source_dir/tools/fakefs.c" -o "$dir/obj/glue/fakefs.o"
   "${cc[@]}" -O2 -g -Wall -Wno-unused-parameter "${defines[@]}" "${includes[@]}" -c "$glue/topo_ish.c" -o "$dir/obj/glue/topo_ish.o"
+  # The vault's filesystem is Objective-C: NSFileCoordinator has no C interface.
+  "${cc[@]}" -O2 -g -Wall -Wno-unused-parameter -fobjc-arc "${defines[@]}" "${includes[@]}" -c "$glue/topo_vaultfs.m" -o "$dir/obj/glue/topo_vaultfs.o"
 
   libtool -static -no_warning_for_no_symbols -o "$dir/libTopoIsh.a" \
     "$dir/meson/libish.a" "$dir/meson/libish_emu.a" "$dir/meson/libfakefs.a" \

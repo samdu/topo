@@ -153,6 +153,28 @@ final class StreamJSONTests: XCTestCase {
                        ["-c", "cd \"$HOME\" && exec \"$@\"", "sh", "/usr/local/bin/claude"])
     }
 
+    /// The resident is told where its memory is when the vault is mounted, and that it cannot be
+    /// reached when it is not, as an appended system prompt: an argument, so nothing the resident
+    /// starts inherits it. A launcher asked nothing says nothing.
+    func testTheMemoryLineSaysWhetherTheVaultIsMounted() async throws {
+        func prompt(_ arguments: [String]) -> String? {
+            arguments.firstIndex(of: "--append-system-prompt").map { arguments[$0 + 1] }
+        }
+        let mounted = try XCTUnwrap(prompt(ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true)))
+        XCTAssertTrue(mounted.contains("/home/topo/memory"), mounted)
+        XCTAssertTrue(mounted.contains("relative paths"), mounted)
+        let unreachable = try XCTUnwrap(prompt(ClaudeLauncher.arguments(model: nil, resume: nil, memory: false)))
+        XCTAssertTrue(unreachable.contains("cannot be reached"), unreachable)
+        XCTAssertNil(prompt(ClaudeLauncher.arguments(model: nil, resume: nil)))
+        XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1", memory: true).suffix(2), ["--resume", "S1"])
+        XCTAssertEqual(ClaudeLauncher.memory, ClaudeLauncher.home + "/memory")
+
+        let launcher = ClaudeLauncher(memory: { true }) { [:] }
+        let environment = try await launcher.launchEnvironment()
+        XCTAssertFalse(environment.values.contains { $0.contains("Obsidian vault") },
+                       "the memory line reached the environment, which what the resident starts inherits")
+    }
+
     /// The bypass is set only by the resident's launcher: its command line carries the flag and
     /// its environment `IS_SANDBOX=1`, which Claude Code needs to bypass as root. Whatever the
     /// resident starts inherits the environment, so `IS_SANDBOX`, by design; the flag is an
