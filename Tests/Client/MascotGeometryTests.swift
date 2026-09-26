@@ -832,8 +832,8 @@ final class MascotGeometryTests: XCTestCase {
     /// column's padding, 86 points on the 393-point phone, too narrow for his picture at a scale
     /// of 1 with its clearance and his reach, so a reply whose lines run to the column's edge
     /// traps him, and the ends of short lines add to it. `PreviewTurns.continuity` scrolled to its
-    /// end, as the phone Sam's screenshot came from rests, has him trapped: he stands on the right
-    /// beside the reply, over the least of its words. `PreviewTurns.ragged`, whose last reply ends
+    /// end, as the phone Sam's screenshot came from rests, has him trapped: once any glide has ended he is
+    /// drawn on the right beside the reply, over the least of its words. `PreviewTurns.ragged`, whose last reply ends
     /// in two short paragraphs, frees him beside them, clear of every line.
     func testTheMarginBesideAReplyTrapsHimUnlessItsLinesEndShort() throws {
         let phone = CGSize(width: 393, height: 852)
@@ -852,13 +852,20 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertLessThanOrEqual(lines.map(\.maxX).max() ?? 0, edge + 0.5, "\(name): a line ran into the margin")
             XCTAssertGreaterThan(size.width + MascotSprite.reach(scale: 1).right + clearance, field.visible.maxX - edge,
                                  "\(name): the margin alone holds him")
-            let spot = try XCTUnwrap(chat.canvas?.roam?.roost.frame, "\(name): he stands nowhere")
-            XCTAssertEqual(chat.canvas?.roam?.roost.name, "gap", name)
-            XCTAssertTrue(chat.canvas?.showing ?? false, name)
+            // The scroll may have sent him gliding: let him arrive, then measure where he is drawn.
+            let canvas = try XCTUnwrap(chat.canvas, name)
+            var frames = 0
+            while canvas.roam?.needsTime == true, frames < 900 { canvas.step(1.0 / 30); frames += 1 }
+            XCTAssertEqual(canvas.roam?.needsTime, false, "\(name): still moving after 30 seconds")
+            let roost = try XCTUnwrap(canvas.roam?.roost.frame, "\(name): he stands nowhere")
+            let spot = canvas.spriteFrame
+            XCTAssertEqual(spot, roost, "\(name): drawn at \(spot), not where he stands, \(roost)")
+            XCTAssertEqual(canvas.roam?.roost.name, "gap", name)
+            XCTAssertTrue(canvas.showing, name)
             XCTAssertGreaterThan(spot.midX, field.visible.midX, "\(name): not on the right: \(spot)")
             let alongside = lines.filter { $0.minY < spot.maxY + clearance && $0.maxY > spot.minY - clearance }
             XCTAssertFalse(alongside.isEmpty, "\(name): not beside the reply: \(spot)")
-            let decision = try XCTUnwrap(chat.canvas?.roam?.decision, "\(name): no decision")
+            let decision = try XCTUnwrap(canvas.roam?.decision, "\(name): no decision")
             if name == "continuity" {
                 try Self.assertTrappedAtTheLeastCost(decision, frame: spot, name)
             } else {
