@@ -577,7 +577,7 @@ enum MascotRoost: Equatable, Sendable {
     }
 
     /// The share of his box a least-covered place has to uncover beyond where he stands, at a
-    /// fallback, to be worth a glide: a tenth, about a line of text across him at any scale.
+    /// fallback, to be worth a glide: a tenth, a band across him a tenth of his height.
     static let fallbackGain: CGFloat = 0.1
 
     /// A thousandth of a point: what two edges that meet are allowed to share without counting as
