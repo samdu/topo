@@ -185,6 +185,17 @@ class Decisions(unittest.TestCase):
         self.assertEqual(kinds(w), ["report:verdict", "report:idle"])
         self.assertIn("review_gate", w[1]["text"])
 
+    def test_a_blocking_verdict_is_reported_beside_a_suite_red_of_either_kind(self):
+        j = jobs(topo_ui=("failure", "Boot the simulator"), reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:verdict", "rerun"], "the verdict is said and the setup red still rerun")
+        j = jobs(topo_ui=("failure", TEST_STEP), reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:verdict"], "a test red does not hide the verdict")
+        j = jobs(topo_ui=("failure", TEST_STEP), reviewer_ran="failure", review_gate="failure")
+        w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), [], "a review_gate red under a reviewer that never ran is no verdict")
+
     def test_a_cancelled_run_with_nothing_after_it_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)), ["report:cancelled"])
 
@@ -300,10 +311,11 @@ with open(os.environ["FAKE_LOG"], "a") as f: f.write(tool + " " + " ".join(a) + 
 S = json.load(open(os.environ["FAKE_SCRIPT"]))
 def out(x): print(json.dumps(x) if not isinstance(x, str) else x); sys.exit(0)
 if tool == "gh":
+    limit = int(a[a.index("--limit") + 1]) if "--limit" in a else 10**9
     if a[:2] == ["pr", "list"] and "--state" in a and a[a.index("--state") + 1] == "open":
         if S.get("prs_garbage"): out("<html>rate limited</html>")
-        out(S["prs"])
-    if a[:2] == ["pr", "list"] and "--head" in a: out(S["history"].get(a[a.index("--head") + 1], []))
+        out(S["prs"][:limit])
+    if a[:2] == ["pr", "list"] and "--head" in a: out(S["history"].get(a[a.index("--head") + 1], [])[:limit])
     if a[:2] == ["variable", "get"]: out("false")
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]; out(S["runs"].get(head, []))
@@ -318,7 +330,9 @@ elif tool == "git":
     if "update-ref" in a and S.get("ref_moved"): print("cannot lock ref: is at 3333 but expected 2222", file=sys.stderr); sys.exit(1)
     sys.exit(0)
 elif tool == "tmux":
-    if a[0] == "list-panes": out(S["panes"])
+    if a[0] == "list-panes":
+        if S.get("tmux_stderr"): print(S["tmux_stderr"], file=sys.stderr); sys.exit(1)
+        out(S["panes"])
     sys.exit(0)
 elif tool == "curl":
     if S.get("page_down"): print("curl: (22) The requested URL returned error: 502", file=sys.stderr); sys.exit(22)
@@ -490,6 +504,32 @@ class WholePass(unittest.TestCase):
         self.assertIn("update-ref -d refs/heads/buddy/old 2222", calls)
         self.assertIn("the branch ref moved past 2222 and is kept", Bridge.received[-1]["body"]["text"])
 
+    def test_a_branch_history_that_fills_its_page_is_not_read_as_whole(self):
+        old = {"number": 1, "state": "OPEN", "mergedAt": None, "headRefOid": "0000"}
+        newer = [{"number": 2 + i, "state": "MERGED", "mergedAt": ago(timedelta(hours=30)), "headRefOid": "2222"} for i in range(100)]
+        p, calls = self.run_pass(self.scripted(history={"buddy/old": newer + [old]}))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("worktree remove", calls)
+        self.assertNotIn("kill-session", calls)
+        self.assertIn("PR history could not be read", Bridge.received[-1]["body"]["text"])
+
+    def test_an_open_pr_list_that_fills_its_page_is_not_read_as_whole(self):
+        many = [pr(number=100 + i, headRefOid=f"{i:040d}") for i in range(200)]
+        p, calls = self.run_pass(self.scripted(prs=many))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("pr merge", calls)
+        self.assertIn("could not read the open PRs", Bridge.received[-1]["body"]["text"])
+        self.assertIn("limit", Bridge.received[-1]["body"]["text"])
+
+    def test_tmux_that_cannot_list_its_panes_stops_the_sweep_and_no_server_is_no_panes(self):
+        p, calls = self.run_pass(self.scripted(tmux_stderr="error connecting to /tmp/tmux-501/default (Permission denied)"))
+        self.assertNotIn("worktree remove", calls)
+        self.assertIn("will not remove", Bridge.received[-1]["body"]["text"])
+        self.assertIn("tmux list-panes exited 1", Bridge.received[-1]["body"]["text"])
+        p, calls = self.run_pass(self.scripted(tmux_stderr="no server running on /private/tmp/tmux-501/default"))
+        self.assertIn("worktree remove", calls)
+        self.assertNotIn("kill-session", calls)
+
     def test_a_pane_in_a_subdirectory_of_the_worktree_is_killed_and_a_sibling_prefix_is_not(self):
         s = self.scripted(panes=f"deep\t{self.wt}/Packages/TopoCore\ntopo-older\t{self.wt}-2/x")
         p, calls = self.run_pass(s)
@@ -506,6 +546,11 @@ class WholePass(unittest.TestCase):
         self.assertIn("republished the install page", p.stdout)
         self.assertEqual(Bridge.received, [])
         self.assertFalse(os.path.exists(self.state))
+        fresh = os.path.join(self.work, "never", "state.json")
+        self.state = fresh
+        p, calls = self.run_pass(self.scripted(published="abc1234"), extra=["--dry-run"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertFalse(os.path.exists(os.path.dirname(fresh)), "a dry run made the state directory")
 
     def test_the_install_page_is_republished_from_origin_main_and_a_failure_is_reported_with_its_tail(self):
         p, calls = self.run_pass(self.scripted(published="abc1234", publish_exit=1))
@@ -602,9 +647,10 @@ class WholePass(unittest.TestCase):
     def test_a_genuine_test_failure_is_never_rerun(self):
         j = jobs(test="failure", topo_unit=("failure", TEST_STEP), reviewer_ran="failure")
         s = self.scripted(runs={HEAD: [run("failure")]}, jobs=j)
-        for _ in range(3):
+        for i in range(3):
             p, calls = self.run_pass(s)
-        self.assertNotIn("run rerun", calls)
+            self.assertNotIn("run rerun", calls, f"pass {i + 1}")
+            self.assertEqual(self.state_file().get("rerun"), {}, f"pass {i + 1}")
 
     def test_a_pr_list_that_cannot_be_read_keeps_the_rerun_state_and_the_pass_still_reports(self):
         j = jobs(test="failure", topo_unit=("failure", "Boot the simulator"))

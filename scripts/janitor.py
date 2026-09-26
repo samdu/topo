@@ -233,6 +233,10 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     red = [j for j in jobs if j.get("conclusion") in NOT_GREEN]
     red_names = [j["name"] for j in red]
     suite_red = [j for j in red if j["name"] in SUITE_JOBS]
+    # The verdict first, whatever else is red: the reviewer ran beside the
+    # suites, so a blocking review and a suite red arrive on the same run.
+    if "review_gate" in red_names and "reviewer_ran" not in red_names:
+        report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
     # No verdict: the reviewer chain is red and nothing outside it is — a red
     # `select`, `test` or suite job is the run's own failure, not the reviewer's.
     no_verdict = ("reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
@@ -251,8 +255,6 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
         report("red", f"{title}: red again on {short} after one rerun ({detail}); {why}.")
         return out
 
-    if "review_gate" in red_names and not suite_red:
-        report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
     if age > IDLE:
         detail = ", ".join(red_names) or conclusion
         report("idle", f"{title}: nothing has moved for {minutes(age)}; validate is {conclusion} ({detail}).")
@@ -343,9 +345,17 @@ class Shell:
             args += ["--jq", jq]
         return self.gh_json(*args)
 
+    def listed(self, limit, *args):
+        """A `gh pr list` whose answer is shorter than its limit: one that fills
+        the page may have left PRs off it, and is refused rather than read as whole."""
+        prs = self.gh_json("pr", "list", "--repo", REPO, "--limit", str(limit), *args) or []
+        if len(prs) >= limit:
+            raise RuntimeError(f"gh pr list answered {len(prs)} PRs, its limit; the list may not be whole")
+        return prs
+
     def open_prs(self):
-        return self.gh_json("pr", "list", "--repo", REPO, "--state", "open", "--limit", "50", "--json",
-                            "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels")
+        return self.listed(200, "--state", "open", "--json",
+                           "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels")
 
     def require_label(self):
         """automerge.yaml's label rule: True, False, or None when it cannot be read
@@ -404,12 +414,15 @@ class Shell:
         return self.run(["git", "-C", path, "status", "--porcelain"]).stdout.strip() == ""
 
     def pr_history(self, branch):
-        return self.gh_json("pr", "list", "--repo", REPO, "--state", "all", "--head", branch,
-                            "--limit", "30", "--json", "number,state,mergedAt,headRefOid") or []
+        return self.listed(100, "--state", "all", "--head", branch, "--json", "number,state,mergedAt,headRefOid")
 
     def tmux_panes(self):
         """Every pane of every session as (session, current path)."""
         p = self.run(["tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}"], check=False)
+        if p.returncode != 0:
+            if "no server running" in (p.stderr or ""):
+                return []   # no tmux at all is no sessions to kill
+            raise RuntimeError(f"tmux list-panes exited {p.returncode}: {p.stderr.strip()[-200:]}")
         return [tuple(l.split("\t", 1)) for l in p.stdout.splitlines() if "\t" in l]
 
     def kill_tmux(self, name):
@@ -629,7 +642,14 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
                 seen[branch] = sh.pr_history(branch)
             return seen[branch]
 
-        for wt in decide_sweep(sh.worktrees(checkout), checkout, history, now):
+        worktrees = sh.worktrees(checkout)
+        candidates = []
+        for wt in worktrees:
+            try:
+                candidates += decide_sweep([wt], checkout, history, now)
+            except RuntimeError as ex:
+                say(f"sweep:{wt['path']}", f"worktree {os.path.basename(wt['path'])} ({wt.get('branch')}): its PR history could not be read, left: {ex}")
+        for wt in candidates:
             name = os.path.basename(wt["path"])
             key = f"sweep:{wt['path']}"
             try:
@@ -688,13 +708,14 @@ def main(argv=None):
     a = ap.parse_args(argv)
     now = datetime.now(timezone.utc)
     path = os.path.expanduser(a.state)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    lock = open(path + ".lock", "w")
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        print("another pass holds the lock; exiting", file=sys.stderr)
-        return 0
+    if not a.dry_run:   # a dry run writes nothing: no directory, no lock, no state
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        lock = open(path + ".lock", "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            print("another pass holds the lock; exiting", file=sys.stderr)
+            return 0
     state = load_state(path)
     sh = Shell(dry=a.dry_run, publish_timeout=a.publish_timeout)
 
