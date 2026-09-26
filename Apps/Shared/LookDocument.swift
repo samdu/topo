@@ -111,6 +111,7 @@ enum LookDocument {
         r.font("noticeFont", &value.noticeFont)
         r.colour("text", &value.text)
         r.colour("caption", &value.caption)
+        r.colour("trouble", &value.trouble)
     }
 
     private static func markdown(_ value: inout Look.Markdown, _ r: Reader) {

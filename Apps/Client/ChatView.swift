@@ -93,27 +93,6 @@ struct ChatView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 transcript
-                if harness.busy {
-                    // A turn in flight always says where it is; a spinner alone reads as nothing.
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text(harness.status ?? "Working…")
-                        if harness.waiting.count > 1 {
-                            Text("· \(harness.waiting.count - 1) waiting").foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.footnote)
-                    .mascotObstacle()
-                    .padding(.bottom, 8)
-                }
-                if let error = harness.error {
-                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).mascotObstacle()
-                        .padding(.bottom, 8)
-                }
-                if let info = harness.info {
-                    Text(info).font(.footnote).foregroundStyle(.secondary).padding(.horizontal).mascotObstacle()
-                        .padding(.bottom, 8)
-                }
                 if harness.hasWaiting {
                     // The line stopped on a failure; what was said is kept and goes again from here.
                     lineButton(harness.waiting.count == 1 ? "Send \"\(harness.waiting[0])\" again"
@@ -164,6 +143,7 @@ struct ChatView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                notices
                 // The jewel is the glass here, so from iOS 26 on the bar puts none of its own
                 // behind it. That is a shape the bar draws rather than a value the badge does,
                 // so it is an availability branch and not a `Look` field.
@@ -310,6 +290,42 @@ struct ChatView: View {
         .mascotObstacle()
         .padding(.bottom, 8)
     }
+
+    /// What the chat says it is doing, in the navigation bar beside the badge rather than over
+    /// the composer: the turn in flight and where it is, the last failure, and something that
+    /// went right but not the usual way. They are there to be read when something is slow or
+    /// wrong, and the glass under the transcript is the controls'. The bar is above the
+    /// transcript's frame, which is where Topo's room starts, so none of them is his obstacle.
+    private var notices: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            VStack {
+                if harness.busy {
+                    // A turn in flight always says where it is; a spinner alone reads as nothing.
+                    HStack {
+                        ProgressView()
+                        Text(harness.status ?? "Working…")
+                        if harness.waiting.count > 1 {
+                            Text("· \(harness.waiting.count - 1) waiting")
+                                .foregroundStyle(look.transcript.caption)
+                        }
+                    }
+                }
+                if let error = harness.error {
+                    Text(error).foregroundStyle(look.transcript.trouble)
+                }
+                if let info = harness.info {
+                    Text(info).foregroundStyle(look.transcript.caption)
+                }
+            }
+            .font(look.transcript.noticeFont)
+            .multilineTextAlignment(.center)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(Self.noticesIdentifier)
+        }
+    }
+
+    /// What the UI suite finds the notices by.
+    static let noticesIdentifier = "topo-notices"
 
     /// The mark at the trailing edge, and what the spoken-turn test reads off it.
     private var badgeItem: some ToolbarContent {

@@ -102,6 +102,9 @@ struct Look: Equatable, Sendable {
         var text: Color = Theme.text
         /// A time, and the notice.
         var caption: Color = Theme.textMuted
+        /// A failure the chat reports in the navigation bar: the one line of the chat whose
+        /// colour says state, since it is the one that must not read as a caption.
+        var trouble: Color = .red
 
         init(_ screen: Screen = .current) {
             switch screen {
