@@ -904,4 +904,39 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.picture, choice.frame, "he stopped where the glide was cut short, \(passing)")
         XCTAssertFalse(roam.hidden)
     }
+
+    /// A glide to a gap the glass kept his reach alone for (`Decision.relaxed`) is a glide to a
+    /// roost like any other: a geometry arriving every frame of it, leaving where he is going as
+    /// it was, decides nothing, and he arrives.
+    func testAGlideToAGapTheGlassKeptHisReachAloneForIsNotDecidedAgain() throws {
+        let size = MascotSprite.size(scale: 1), reach = MascotSprite.reach(scale: 1)
+        let settings = MascotRoam.Settings(size: size, clearance: 32, reach: reach, speed: 40, settle: 0.6)
+        func field(_ height: CGFloat) -> MascotField {
+            MascotField(visible: CGRect(x: 0, y: 0, width: 393, height: 700),
+                        obstacles: [CGRect(x: 0, y: 0, width: 150, height: height)],
+                        pane: CGRect(x: 36, y: 130, width: 320, height: 56),
+                        well: CGRect(x: 172, y: 134, width: 48, height: 48),
+                        keyboard: CGRect(x: 0, y: 194, width: 393, height: 336))
+        }
+        var roam = MascotRoam(settings, frame: Self.frame, standing: CGPoint(x: 18, y: 30))
+        roam.observe(field(100), at: 0)
+        var time = 0.0
+        while roam.move == nil, time < 5 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide out from over the word")
+        XCTAssertEqual(roam.decision?.relaxed, true)
+        XCTAssertEqual(roam.decision?.choice?.clears, true)
+        let decided = roam.decisions, moved = roam.moves
+        var step = 0
+        while roam.move != nil, time < 30 {
+            step += 1
+            roam.observe(field(step.isMultiple(of: 2) ? 100 : 101), at: time)
+            time += Self.frame
+            roam.advance(to: time)
+            XCTAssertEqual(roam.decisions, decided, "decided again mid-glide at \(time)")
+        }
+        XCTAssertGreaterThan(step, 10)
+        XCTAssertEqual(roam.moves, moved)
+        XCTAssertEqual(roam.picture?.origin, move.to)
+        XCTAssertFalse(roam.hidden)
+    }
 }

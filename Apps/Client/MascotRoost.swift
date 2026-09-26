@@ -550,9 +550,20 @@ enum MascotRoost: Equatable, Sendable {
     /// within `clearance` of it and neither the pane, the well nor the keyboard within that or his
     /// reach. The small-move threshold keeps him only where this holds.
     static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat, reach: MascotSprite.Reach = .none) -> Bool {
+        holds(field, frame: frame, clearance: clearance, glass: clearance, reach: reach)
+    }
+
+    /// `holds`, with the pane, the well and the keyboard kept at `glass` beside his reach rather
+    /// than at the clearance: 0 is a gap of a decision that kept his reach alone
+    /// (`Decision.relaxed`).
+    static func holds(_ field: MascotField, frame: CGRect, clearance: CGFloat, glass: CGFloat,
+                      reach: MascotSprite.Reach = .none) -> Bool {
         let margin = clearance.isFinite ? max(clearance, 0) : 0
+        let kept = glass.isFinite ? max(glass, 0) : 0
         guard field.room(reach).insetBy(dx: -epsilon, dy: -epsilon).contains(frame) else { return false }
-        return !field.kept(clearance: margin, reach: reach).contains { overlap($0.rect, $0.keep.around(frame)) }
+        let clear = MascotSprite.Reach.all(margin).around(frame)
+        let reached = MascotSprite.Reach.all(kept).union(reach).around(frame)
+        return !field.words.contains { overlap($0, clear) } && !field.offLimits.contains { overlap($0, reached) }
     }
 
     /// Whether `frame` is a place he may stand at all, words aside: inside `field.room(reach)`,
@@ -905,8 +916,9 @@ struct MascotRoam: Equatable, Sendable {
             let destination = CGRect(origin: move.to, size: settings.size)
             // Where no place cleared the words, where he was going was the least covered one and
             // never a gap: it stands while it is a place at all, and the settle after the glide
-            // decides again.
-            let stands = MascotRoost.holds(field, frame: destination, clearance: settings.clearance, reach: settings.reach)
+            // decides again. A gap the glass kept his reach alone for is judged by that margin.
+            let stands = MascotRoost.holds(field, frame: destination, clearance: settings.clearance,
+                                           glass: fallbackClearance, reach: settings.reach)
                 || (decision?.choice?.clears == false
                     && MascotRoost.admits(field, frame: destination, clearance: fallbackClearance, reach: settings.reach))
             if !stands
