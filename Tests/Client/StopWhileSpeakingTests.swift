@@ -89,74 +89,78 @@ final class StopWhileSpeakingTests: XCTestCase {
     }
 
     /// The press the issue is about: pressing during the reply stops it and starts no voice turn,
-    /// and the release is that press's own, so it reaches no session either.
+    /// and the release is that press's own, so it reaches no session either. Both are decided in
+    /// the gesture's callback: the reply is stopped before the callback returns, and the release
+    /// of a stop spawns no task, so nothing a scheduler does can put it in front of its press.
     func testAPressWhileSpeakingStopsTheReplyAndOpensNoTurn() async {
         let (speaker, voice, held) = await speakingChat()
         defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
         let press = MicPress()
+        let sent = Sent()
+        let drawn = Composer.MicState(voice, speaking: speaker.speaking)
+        XCTAssertEqual(drawn.appearance, .stop)
 
-        // Each half of the gesture is its own task, as the chat hands them over.
-        Task { _ = await press.handle(true, mic: Composer.MicState(voice, speaking: speaker.speaking),
-                                      speaker: speaker, voice: voice) }
-        await settle("the reply to stop") { !speaker.speaking }
+        // The press and its release, back to back, with nothing run in between.
+        let down = press.gesture(true, drawn: drawn, speaker: speaker, voice: voice) { sent.add($0) }
+        XCTAssertFalse(speaker.speaking, "the stop waited for a task instead of happening at the callback")
+        let after = Composer.MicState(voice, speaking: speaker.speaking)
+        let up = press.gesture(false, drawn: after, speaker: speaker, voice: voice) { sent.add($0) }
+        XCTAssertNil(down, "the stop spawned a task")
+        XCTAssertNil(up, "the release of a stop spawned a task that could reach pressUp ahead of its press")
+
+        await up?.value
+        await down?.value
         await drain()
         XCTAssertEqual(voice.presses, 0, "the press reached VoiceInput and began a session")
+        XCTAssertEqual(voice.releases, 0, "the release of a stop reached VoiceInput")
         XCTAssertNil(voice.owner, "a press while speaking left the microphone claimed")
         XCTAssertFalse(voice.listening)
         XCTAssertFalse(speaker.report.finished, "the reply was stopped, not finished")
-
-        // The button is the microphone again as soon as the reply is gone, with the thumb still down.
-        let after = Composer.MicState(voice, speaking: speaker.speaking)
+        XCTAssertEqual(sent.texts, [])
+        // The button is the microphone again.
         XCTAssertEqual(after.appearance, .idle)
-        XCTAssertEqual(after.label, "Hold to talk")
-
-        let heard = await press.handle(false, mic: after, speaker: speaker, voice: voice)
-        XCTAssertNil(heard, "the release of a stop sent something")
-        XCTAssertEqual(voice.releases, 0, "the release of a stop reached VoiceInput")
-        XCTAssertEqual(voice.presses, 0)
-        XCTAssertNil(voice.owner)
         XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).label, "Hold to talk")
     }
 
-    /// The press is what the button showed when the finger landed. Stop was showing; the reply
-    /// ends before the gesture's task runs. The press is still a stop: nothing reaches
-    /// `VoiceInput`, from the press or from its release.
-    func testAStopPressedAsTheReplyEndsOpensNoTurn() async {
+    /// The press is what the composer drew, not what the speaker says by the time the callback
+    /// runs. Stop was drawn and the reply has ended since: the press is still a stop, and nothing
+    /// reaches `VoiceInput`.
+    func testAStopDrawnAsTheReplyEndsOpensNoTurn() async {
         let (speaker, voice, held) = await speakingChat()
         defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
         let press = MicPress()
         let sent = Sent()
-        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
-
-        let down = press.gesture(true, showing: showing, speaker: speaker, voice: voice) { sent.add($0) }
-        // The reply ends between the finger landing and the task running.
+        let drawn = Composer.MicState(voice, speaking: speaker.speaking)
+        XCTAssertEqual(drawn.appearance, .stop)
+        // The reply ends between the frame being drawn and the finger's callback.
         speaker.stop()
-        await down.value
-        XCTAssertEqual(voice.presses, 0, "a press on Stop reached VoiceInput because the reply ended first")
+
+        await press.gesture(true, drawn: drawn, speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await drain()
+        XCTAssertEqual(voice.presses, 0, "a press on the drawn Stop reached VoiceInput because the reply had ended")
         XCTAssertNil(voice.owner)
         XCTAssertFalse(voice.listening)
 
-        await press.gesture(false, showing: showing, speaker: speaker, voice: voice) { sent.add($0) }.value
+        let after = Composer.MicState(voice, speaking: speaker.speaking)
+        await press.gesture(false, drawn: after, speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(voice.releases, 0, "the release of a stop reached VoiceInput")
         XCTAssertEqual(sent.texts, [])
-        XCTAssertFalse(speaker.speaking)
     }
 
-    /// The other way round: the microphone was showing, and a reply begins before the task runs.
-    /// The press is the microphone's — it stops that reply, so the mic does not hear it, and opens
-    /// the session — and is not taken for a stop.
-    func testAMicrophonePressedAsAReplyBeginsOpensTheMicrophone() async {
+    /// The other way round: the microphone was drawn, and a reply began before the callback. The
+    /// press is the microphone's — it stops that reply, so the mic does not hear it, and opens the
+    /// session — and is not taken for a stop.
+    func testAMicrophoneDrawnAsAReplyBeginsOpensTheMicrophone() async {
         let (speaker, voice, held) = await chat()
         defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
         let press = MicPress()
-        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
-        XCTAssertEqual(showing().appearance, .idle)
-
-        let down = press.gesture(true, showing: showing, speaker: speaker, voice: voice) { _ in }
-        // Say it again lands between the finger landing and the task running.
+        let drawn = Composer.MicState(voice, speaking: speaker.speaking)
+        XCTAssertEqual(drawn.appearance, .idle)
+        // Say it again lands between the frame being drawn and the finger's callback.
         XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine."))
-        await down.value
-        XCTAssertEqual(voice.presses, 1, "a press on the microphone was taken for a stop")
+
+        await press.gesture(true, drawn: drawn, speaker: speaker, voice: voice) { _ in }?.value
+        XCTAssertEqual(voice.presses, 1, "a press on the drawn microphone was taken for a stop")
         XCTAssertTrue(voice.listening, "the microphone opened")
         XCTAssertFalse(speaker.speaking, "the press stops the reply, so the mic does not hear it")
     }
@@ -171,8 +175,8 @@ final class StopWhileSpeakingTests: XCTestCase {
         let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
 
         // A tap opens the chat's microphone hands free.
-        await press.gesture(true, showing: showing, speaker: speaker, voice: voice) { sent.add($0) }.value
-        await press.gesture(false, showing: showing, speaker: speaker, voice: voice) { sent.add($0) }.value
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertTrue(voice.handsFree, "the tap left the microphone open")
         XCTAssertEqual(showing().appearance, .handsFree)
 
@@ -183,8 +187,8 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(showing().label, "Listening; press to send")
 
         // The press on the waveform sends, and the release after it reaches nothing.
-        await press.gesture(true, showing: showing, speaker: speaker, voice: voice) { sent.add($0) }.value
-        await press.gesture(false, showing: showing, speaker: speaker, voice: voice) { sent.add($0) }.value
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertEqual(sent.texts, ["purple elephants"], "what the open microphone heard was not sent")
         XCTAssertFalse(voice.listening)
         XCTAssertFalse(speaker.speaking, "the press stopped the reply")

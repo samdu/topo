@@ -31,10 +31,11 @@ struct Composer: View {
     /// fall is animated in, and nothing here animates it on a curve of its own, so the pane goes
     /// short and tall again on the keyboard's curve and in step with it.
     var keyboard = false
-    /// Called with true on the press and false on the release. The session logic is
-    /// `VoiceInput`'s, and a press while Topo is speaking is a stop (`MicPress`); this passes the
-    /// press on and nothing else.
-    var micPressed: (Bool) -> Void = { _ in }
+    /// Called with true on the press and false on the release, and the state the microphone was
+    /// drawn in when it came: the press is what the person saw. The session logic is
+    /// `VoiceInput`'s, and a press on Stop is a stop (`MicPress`); this passes the press on and
+    /// nothing else.
+    var micPressed: (Bool, MicState) -> Void = { _, _ in }
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
@@ -240,7 +241,7 @@ struct Composer: View {
             // Topo is never drawn over it.
             .mascotWell()
             .onLongPressGesture(minimumDuration: 0, maximumDistance: 60) {} onPressingChanged: { down in
-                micPressed(down)
+                micPressed(down, mic)
             }
             // The UI suites look this button up by its label, which is `VoiceInput`'s state in
             // words, or Stop while Topo is speaking.

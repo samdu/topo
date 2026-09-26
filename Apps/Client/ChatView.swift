@@ -433,8 +433,8 @@ struct ChatView: View {
                             // Hold to talk and release to send; a tap opens the microphone until
                             // the next press. The session logic is `VoiceInput`'s and the routing
                             // `MicPress`'s; this only sends what a press hands back.
-                            micPressed: { down in
-                                micPress.gesture(down, showing: { micState }, speaker: speaker, voice: voice,
+                            micPressed: { down, drawn in
+                                micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
                                                  send: { await sendSpoken($0) })
                             },
                             micReport: micReport)
@@ -591,14 +591,11 @@ final class MicPress {
     /// every press, so a release the gesture never delivered strands nothing.
     private var stopping = false
 
-    /// The gesture's own call, as the finger lands or lifts. What the button is showing is read
-    /// here, synchronously, and the task acts on that: read when the task runs instead, a press on
-    /// Stop that lands as the reply ends would open the microphone, and a press on the microphone
-    /// as a reply begins would be taken for a stop.
+    /// The gesture's own call. RED: reads the state live and routes inside the task, as before.
     @discardableResult
-    func gesture(_ down: Bool, showing: () -> Composer.MicState, speaker: Speaker, voice: VoiceInput,
-                 send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never> {
-        let mic = showing()
+    func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
+                 send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
+        let mic = Composer.MicState(voice, speaking: speaker.speaking)
         return Task {
             guard let heard = await handle(down, mic: mic, speaker: speaker, voice: voice) else { return }
             await send(heard)
