@@ -401,6 +401,42 @@ final class MascotGeometryTests: XCTestCase {
 
     // MARK: His picture
 
+    /// The runs both engine tests make: every facing, every head, and one token count in each
+    /// load band (default, warning, reset, untrusted), each with its own seeds.
+    private struct Run: Sendable {
+        let facing: MascotFacing, model: String, tokens: Double, m: Int, b: Int
+        var label: String { "\(model) \(tokens) facing \(facing.rawValue)" }
+
+        static let all: [Run] = MascotFacing.allCases.flatMap { facing in
+            ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated().flatMap { m, model in
+                [1_000.0, 210_000, 260_000, 320_000].enumerated().map { b, tokens in
+                    Run(facing: facing, model: model, tokens: tokens, m: m, b: b)
+                }
+            }
+        }
+    }
+
+    /// `work` for each run, on as many cores as there are: every run owns its engine and its
+    /// seeds, and the engine's globals are all constants, so the runs share nothing. The results
+    /// come back in the runs' order, for the assertions to be made on the main actor.
+    nonisolated private static func each<T: Sendable>(_ runs: [Run], _ work: @Sendable (Run) -> T) -> [T] {
+        let slots = Slots<T>(runs.count)
+        DispatchQueue.concurrentPerform(iterations: runs.count) { i in
+            let value = work(runs[i])
+            slots.lock.lock()
+            slots.values[i] = value
+            slots.lock.unlock()
+        }
+        return slots.values.map { $0! }
+    }
+
+    /// Where `each` puts each run's result, one slot per run, written under a lock.
+    private final class Slots<T>: @unchecked Sendable {
+        let lock = NSLock()
+        var values: [T?]
+        init(_ count: Int) { values = Array(repeating: nil, count: count) }
+    }
+
     /// He rests inside `MascotSprite.box`: sitting on the shelf at home, breathing, blinking,
     /// looking about and his arms drifting, on every head and every load band, nothing is drawn
     /// outside it. Each run is two minutes of the idle cycle, which is more than one turn of the
@@ -408,29 +444,30 @@ final class MascotGeometryTests: XCTestCase {
     /// walk home, the corner and yoga are not rest.
     func testHeRestsInsideTheBox() {
         let box = MascotSprite.box
-        var reached = Reach()
-        for facing in MascotFacing.allCases {
-            for (m, model) in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated() {
-                // One token count in each band: default, warning, reset, untrusted.
-                for (b, tokens) in [1_000.0, 210_000, 260_000, 320_000].enumerated() {
-                    var random = Mulberry32(seed: UInt32(m * 4 + b + 1))
-                    let engine = Topo(random: { random.next() })
-                    var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
-                    var home = 0.0
-                    for frame in 0..<(120 * 30) {
-                        engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: "idle", corner: 0,
-                                                          facing: facing.rawValue))
-                        let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
-                        home = resting ? home + 1.0 / 30 : 0
-                        // The head and the load settle from the engine's start in under two seconds,
-                        // and he has turned by then.
-                        guard frame >= 60, home > 1 else { continue }
-                        XCTAssertEqual(engine.facing, facing.rawValue)
-                        engine.draw(&rgba)
-                        reached.add(rgba)
-                    }
-                }
+        let runs = Self.each(Run.all) { run -> (reached: Reach, otherFacing: Int) in
+            var random = Mulberry32(seed: UInt32(run.m * 4 + run.b + 1))
+            let engine = Topo(random: { random.next() })
+            var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+            var reached = Reach(), otherFacing = 0
+            var home = 0.0
+            for frame in 0..<(120 * 30) {
+                engine.update(1.0 / 30, TopoInput(model: run.model, tokens: run.tokens, activity: "idle", corner: 0,
+                                                  facing: run.facing.rawValue))
+                let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
+                home = resting ? home + 1.0 / 30 : 0
+                // The head and the load settle from the engine's start in under two seconds,
+                // and he has turned by then.
+                guard frame >= 60, home > 1 else { continue }
+                if engine.facing != run.facing.rawValue { otherFacing += 1 }
+                engine.draw(&rgba)
+                reached.add(rgba)
             }
+            return (reached, otherFacing)
+        }
+        var reached = Reach()
+        for (run, result) in zip(Run.all, runs) {
+            XCTAssertEqual(result.otherFacing, 0, "\(run.label): frames drawn at rest in another facing")
+            reached.add(result.reached)
         }
         XCTAssertFalse(reached.isEmpty, "he never rested")
         let rest = reached.rect
@@ -453,50 +490,51 @@ final class MascotGeometryTests: XCTestCase {
     /// sets one.
     func testEveryPoseTheAppAsksForIsDrawnInsideTheReach() {
         let reach = MascotSprite.reach, box = MascotSprite.box
-        let activities = ["idle", "walk", "thinking", "searching", "building", "writing", "calendar"]
-        var poses: [String: Reach] = [:]
-        for facing in MascotFacing.allCases {
-        for (m, model) in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated() {
-            for (b, tokens) in [1_000.0, 210_000, 260_000, 320_000].enumerated() {
-                var random = Mulberry32(seed: UInt32(m * 4 + b + 1))
-                var schedule = Mulberry32(seed: UInt32(100 + m * 4 + b))
-                let engine = Topo(random: { random.next() })
-                var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
-                // Idle through the cycle's first excursion, then every activity in turn, idle and
-                // the walk between some of them, then the rest of the run at random.
-                var fixed: [(String, Double)] = [("idle", 32), ("walk", 3), ("thinking", 4), ("idle", 2), ("searching", 4),
-                                                 ("walk", 2), ("building", 4), ("writing", 4), ("idle", 2), ("calendar", 4)]
-                var activity = "idle", until = 0.0, time = 0.0
-                var entered: Set<String> = []
-                for _ in 0..<(90 * 30) {
-                    time += 1.0 / 30
-                    if time > until {
-                        if !fixed.isEmpty {
-                            let (next, hold) = fixed.removeFirst()
-                            activity = next
-                            until = time + hold
-                        } else {
-                            activity = activities[Int(schedule.next() * Double(activities.count))]
-                            until = time + (activity == "idle" ? 20 + schedule.next() * 40 : schedule.next() * 5)
-                        }
+        let runs = Self.each(Run.all) { run -> (poses: [String: Reach], entered: Set<String>) in
+            let activities = ["idle", "walk", "thinking", "searching", "building", "writing", "calendar"]
+            var random = Mulberry32(seed: UInt32(run.m * 4 + run.b + 1))
+            var schedule = Mulberry32(seed: UInt32(100 + run.m * 4 + run.b))
+            let engine = Topo(random: { random.next() })
+            var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
+            // Idle through the cycle's first excursion, then every activity in turn, idle and
+            // the walk between some of them, then the rest of the run at random.
+            var fixed: [(String, Double)] = [("idle", 32), ("walk", 3), ("thinking", 4), ("idle", 2), ("searching", 4),
+                                             ("walk", 2), ("building", 4), ("writing", 4), ("idle", 2), ("calendar", 4)]
+            var activity = "idle", until = 0.0, time = 0.0
+            var poses: [String: Reach] = [:], entered: Set<String> = []
+            for _ in 0..<(90 * 30) {
+                time += 1.0 / 30
+                if time > until {
+                    if !fixed.isEmpty {
+                        let (next, hold) = fixed.removeFirst()
+                        activity = next
+                        until = time + hold
+                    } else {
+                        activity = activities[Int(schedule.next() * Double(activities.count))]
+                        until = time + (activity == "idle" ? 20 + schedule.next() * 40 : schedule.next() * 5)
                     }
-                    engine.update(1.0 / 30, TopoInput(model: model, tokens: tokens, activity: activity, corner: 0,
-                                                      facing: facing.rawValue))
-                    engine.draw(&rgba)
-                    let pose = engine.poseName
-                    entered.insert(pose)
-                    poses[pose, default: Reach()].add(rgba)
-                    guard let reached = poses[pose], !reached.isEmpty else { continue }
-                    XCTAssertTrue(reach.contains(reached.rect),
-                                  "\(model) \(tokens) \(pose): drawn in \(reached.rect), outside the reach \(reach)")
-                    if !reach.contains(reached.rect) { return }
                 }
-                let missing = ["shelf", "walk", "thinking", "searching", "building", "writing", "calendar"].filter { !entered.contains($0) }
-                XCTAssertEqual(missing, [], "\(model) \(tokens): the schedule never entered these")
-                XCTAssertTrue(entered.contains("yoga") || entered.contains("corner"),
-                              "\(model) \(tokens): the schedule never took him on an excursion")
+                engine.update(1.0 / 30, TopoInput(model: run.model, tokens: run.tokens, activity: activity, corner: 0,
+                                                  facing: run.facing.rawValue))
+                engine.draw(&rgba)
+                let pose = engine.poseName
+                entered.insert(pose)
+                poses[pose, default: Reach()].add(rgba)
             }
+            return (poses, entered)
         }
+        var poses: [String: Reach] = [:]
+        for (run, result) in zip(Run.all, runs) {
+            for (pose, reached) in result.poses.sorted(by: { $0.key < $1.key }) where !reached.isEmpty {
+                XCTAssertTrue(reach.contains(reached.rect),
+                              "\(run.label) \(pose): drawn in \(reached.rect), outside the reach \(reach)")
+                poses[pose, default: Reach()].add(reached)
+            }
+            let missing = ["shelf", "walk", "thinking", "searching", "building", "writing", "calendar"]
+                .filter { !result.entered.contains($0) }
+            XCTAssertEqual(missing, [], "\(run.label): the schedule never entered these")
+            XCTAssertTrue(result.entered.contains("yoga") || result.entered.contains("corner"),
+                          "\(run.label): the schedule never took him on an excursion")
         }
         XCTAssertNotNil(poses["yoga"], "no run took him to yoga")
         XCTAssertNotNil(poses["corner"], "no run took him to the corner")
@@ -521,7 +559,7 @@ final class MascotGeometryTests: XCTestCase {
     }
 
     /// The union of the pixels drawn across frames of the engine's picture.
-    private struct Reach {
+    private struct Reach: Sendable {
         var x0 = Topo.width, y0 = Topo.height, x1 = -1, y1 = -1
         var isEmpty: Bool { x1 < 0 }
         var rect: CGRect { CGRect(x: x0, y: y0, width: x1 - x0 + 1, height: y1 - y0 + 1) }
@@ -531,23 +569,38 @@ final class MascotGeometryTests: XCTestCase {
             x0 = min(x0, other.x0); y0 = min(y0, other.y0); x1 = max(x1, other.x1); y1 = max(y1, other.y1)
         }
 
-        /// Only what is outside the union so far is looked at: a row inside it, only past its ends.
+        /// Only what is outside the union so far is looked at: a row outside it, from each end to
+        /// its first drawn pixel; a row inside it, only past its ends. The scan is `while` loops
+        /// over a pointer to the alpha bytes because this bundle is built `-Onone`, where a `for`
+        /// over a range goes through the generic iterator on every pixel of every frame.
         mutating func add(_ rgba: [UInt8]) {
-            rgba.withUnsafeBufferPointer { pixels in
-                for y in 0..<Topo.height {
-                    let row = y * Topo.width
+            let width = Topo.width
+            rgba.withUnsafeBufferPointer { buffer in
+                let alpha = buffer.baseAddress! + 3
+                var y = 0
+                while y < Topo.height {
+                    let row = alpha + y * width * 4
                     if isEmpty || y < y0 || y > y1 {
-                        for x in 0..<Topo.width where pixels[(row + x) * 4 + 3] > 0 {
-                            x0 = min(x0, x); y0 = min(y0, y); x1 = max(x1, x); y1 = max(y1, y)
+                        var left = 0
+                        while left < width, row[left * 4] == 0 { left += 1 }
+                        if left < width {
+                            var right = width - 1
+                            while row[right * 4] == 0 { right -= 1 }
+                            x0 = min(x0, left); y0 = min(y0, y); x1 = max(x1, right); y1 = max(y1, y)
                         }
-                        continue
+                    } else {
+                        var x = 0
+                        while x < x0 {
+                            if row[x * 4] > 0 { x0 = x; break }
+                            x += 1
+                        }
+                        x = width - 1
+                        while x > x1 {
+                            if row[x * 4] > 0 { x1 = x; break }
+                            x -= 1
+                        }
                     }
-                    for x in 0..<x0 where pixels[(row + x) * 4 + 3] > 0 { x0 = x; break }
-                    var x = Topo.width - 1
-                    while x > x1 {
-                        if pixels[(row + x) * 4 + 3] > 0 { x1 = x; break }
-                        x -= 1
-                    }
+                    y += 1
                 }
             }
         }
@@ -685,10 +738,19 @@ final class MascotGeometryTests: XCTestCase {
         let scale = Int(with.image.scale)
         let width = Int(screen.width) * scale
         var differing = 0
-        for y in Int(controls.minY) * scale..<Int(controls.maxY) * scale {
-            for x in Int(controls.minX) * scale..<Int(controls.maxX) * scale {
-                let i = (y * width + x) * 4
-                for c in 0..<4 where abs(Int(drawn[i + c]) - Int(bare[i + c])) > 2 { differing += 1 }
+        // `while` over pointers: this bundle is `-Onone`, where ranges cost seconds a picture.
+        bare.withUnsafeBufferPointer { bare in
+            drawn.withUnsafeBufferPointer { drawn in
+                var y = Int(controls.minY) * scale
+                while y < Int(controls.maxY) * scale {
+                    var i = (y * width + Int(controls.minX) * scale) * 4
+                    let end = (y * width + Int(controls.maxX) * scale) * 4
+                    while i < end {
+                        if abs(Int(drawn[i]) - Int(bare[i])) > 2 { differing += 1 }
+                        i += 1
+                    }
+                    y += 1
+                }
             }
         }
         XCTAssertEqual(differing, 0, "\(label): the pane changed with him over the chat")

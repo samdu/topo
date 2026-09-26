@@ -174,8 +174,26 @@ enum LookStage {
             bytesPerRow: cgImage.width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
-        XCTAssertGreaterThan(Set(bytes).count, 8, "the stage drew a blank picture, so it says nothing")
+        XCTAssertGreaterThan(distinct(bytes, upTo: 9), 8, "the stage drew a blank picture, so it says nothing")
         return bytes
+    }
+
+    /// How many different values `bytes` holds, counted no further than `limit`. The pixel loops
+    /// here are `while` loops over pointers because this bundle is built `-Onone`, where a `Set`
+    /// of a whole screen's bytes, or a `for` over them, costs seconds a picture.
+    static func distinct(_ bytes: [UInt8], upTo limit: Int) -> Int {
+        var seen = [Bool](repeating: false, count: 256), count = 0
+        bytes.withUnsafeBufferPointer { values in
+            seen.withUnsafeMutableBufferPointer { seen in
+                var i = 0
+                while i < values.count, count < limit {
+                    let value = Int(values[i])
+                    if !seen[value] { seen[value] = true; count += 1 }
+                    i += 1
+                }
+            }
+        }
+        return count
     }
 
     /// Whether two pictures are pictures of two different things.
@@ -187,9 +205,16 @@ enum LookStage {
     /// What is asked here is therefore that something differ by more than a shade.
     static func differ(_ a: [UInt8], _ b: [UInt8], by shade: UInt8 = 2) throws -> Bool {
         guard a.count == b.count else { return true }
-        for (one, other) in zip(a, b) where one > other ? one - other > shade : other - one > shade {
-            return true
+        return a.withUnsafeBufferPointer { a in
+            b.withUnsafeBufferPointer { b in
+                var i = 0
+                while i < a.count {
+                    let one = a[i], other = b[i]
+                    if one > other ? one - other > shade : other - one > shade { return true }
+                    i += 1
+                }
+                return false
+            }
         }
-        return false
     }
 }
