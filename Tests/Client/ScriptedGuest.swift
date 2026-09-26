@@ -2,8 +2,14 @@ import Foundation
 import TopoCore
 import TopoTurn
 import TopoUserland
+import XCTest
 
 @testable import Topo
+
+/// The far end of a scripted guest's model: a Messages request in, the API's status and body out.
+protocol Transport: Sendable {
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse)
+}
 
 /// The guest as a test scripts it: what each input comes to, played the way the resident Claude
 /// Code plays it — the updates on the stream, and the session transcript written under `home` as
@@ -201,7 +207,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private func next(for text: String) async throws -> Answer {
         if let scripted = lock.withLock({ script.isEmpty ? nil : script.removeFirst() }) { return scripted }
         guard let transport else { return .notReceived("nothing scripted") }
-        var request = URLRequest(url: MessagesAPI.endpoint)
+        var request = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         request.httpMethod = "POST"
         request.httpBody = try JSONSerialization.data(withJSONObject: ["messages": [["role": "user", "content": text]]])
         let (data, response) = try await transport.send(request)
@@ -244,5 +250,16 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         append(["type": "assistant", "uuid": UUID().uuidString, "sessionId": session,
                 "message": ["id": "msg-\(id)", "model": model, "role": "assistant", "stop_reason": "end_turn",
                             "content": [["type": "text", "text": text]]]], session: session)
+    }
+}
+
+extension XCTestCase {
+    /// The guest as a harness's brain, answering from `transport`: a `GuestBridge` over a
+    /// `ScriptedGuest` with a home and a ledger of its own, removed when the test ends.
+    func guestBrain(over transport: any Transport) -> any Brain {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("guest-\(UUID().uuidString)")
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let guest = ScriptedGuest(home: directory.appendingPathComponent("home"), transport: transport)
+        return GuestBridge(conversation: guest, ledger: directory.appendingPathComponent("ledger.json"))
     }
 }
