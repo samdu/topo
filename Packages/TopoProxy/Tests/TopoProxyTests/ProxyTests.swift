@@ -481,7 +481,8 @@ import TopoAuth
     /// A path the upstream resolves to `/v1/messages` is pinned however it is spelled: a doubled
     /// or trailing slash, a dot segment, percent-encoding, or any of them behind a query.
     @Test(arguments: ["//v1/messages", "/v1//messages", "/v1/messages/", "/v1/./messages", "/v1/x/../messages",
-                      "/./v1/messages?beta=true", "/v1/%6Dessages", "/v1%2Fmessages", "/V1/Messages"])
+                      "/./v1/messages?beta=true", "/v1/%6Dessages", "/v1%2Fmessages", "/V1/Messages",
+                      "/v1\\messages", "/v1/%256Dessages"])
     func aNonCanonicalMessagesPathIsPinned(_ target: String) async throws {
         let upstream = StubUpstream()
         let (proxy, port, _) = try await startedProxy(upstream)
@@ -492,6 +493,23 @@ import TopoAuth
         let seen = try #require(upstream.requests.first)
         let body = try #require(try JSONSerialization.jsonObject(with: seen.body ?? Data()) as? [String: Any])
         #expect(body["model"] as? String == "claude-haiku-4-5-20251001", "\(target) went upstream unpinned")
+    }
+
+    /// A target still percent-encoded after the decode passes is pinned, and answered at once:
+    /// decoding it layer by layer would read the whole target once per layer.
+    @Test func aDeeplyEncodedTargetIsPinnedWithoutDecodingItAll() async throws {
+        let target = "/v1/%25" + String(repeating: "25", count: 30_000)
+        let upstream = StubUpstream()
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        let started = ContinuousClock.now
+        try await client.send(post(target, body: #"{"model":"claude-opus-5"}"#))
+        #expect(try await client.readResponse().head.status == 200)
+        #expect(ContinuousClock.now - started < .seconds(1))
+        let seen = try #require(upstream.requests.first)
+        let body = try #require(try JSONSerialization.jsonObject(with: seen.body ?? Data()) as? [String: Any])
+        #expect(body["model"] as? String == "claude-haiku-4-5-20251001")
     }
 
     /// Only the messages endpoint is the pin's: another path's body goes through as it was sent.

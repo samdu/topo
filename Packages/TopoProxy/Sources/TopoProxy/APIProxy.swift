@@ -17,8 +17,8 @@ import TopoAuth
 ///
 /// In a debug build the `model` of every `/v1/messages` body is rewritten to `pinnedModel`
 /// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
-/// is judged in its canonical form (`canonical(_:)`), since the upstream resolves a doubled
-/// slash, a dot segment or percent-encoding to the same endpoint.
+/// is judged in its canonical form (`pinsModel(_:)`), so a doubled slash, a dot segment or
+/// percent-encoding does not take a request past the pin.
 public actor APIProxy {
     public typealias Log = @Sendable (String) -> Void
 
@@ -196,7 +196,7 @@ struct Forwarder: Sendable {
         }
         var body = request.body
         #if DEBUG
-        if let pinned = APIProxy.pinnedModel, request.method == "POST", Self.canonical(request.path) == "/v1/messages" {
+        if let pinned = APIProxy.pinnedModel, request.method == "POST", Self.pinsModel(request.path) {
             guard let rewritten = Self.pin(body, to: pinned) else {
                 log("\(line) refused: the debug pin could not read the body")
                 try? await inbound.send(Self.errorResponse(status: 400, type: "invalid_request_error",
@@ -250,13 +250,29 @@ struct Forwarder: Sendable {
     }
 
     /// The body with its `model` replaced, or nil when it is not a JSON object.
-    /// A path as the pin judges it: percent-encoding decoded until nothing is left to decode,
+    /// How many layers of percent-encoding the pin decodes. A path still encoded after that many
+    /// is one no client writes, and is pinned rather than decoded further: each pass reads the
+    /// whole path, and the path is the guest's to make as long as the head allows.
+    static let decodePasses = 3
+
+    /// True when the debug pin rewrites a request to `path`: its canonical form is
+    /// `/v1/messages`, or it is still percent-encoded after `decodePasses`. Errs towards pinning:
+    /// a spelling the upstream would not route to messages costs nothing more than a pinned model.
+    static func pinsModel(_ path: String) -> Bool {
+        guard let canonical = canonical(path) else { return true }
+        return canonical == "/v1/messages"
+    }
+
+    /// A path as the pin judges it: percent-encoding decoded for up to `decodePasses` layers,
     /// backslashes read as slashes, empty and `.` segments dropped, `..` resolved, lowercased, and
-    /// with no trailing slash. It errs towards naming `/v1/messages`: a spelling the upstream would
-    /// not resolve there costs nothing more than a pinned model.
-    static func canonical(_ path: String) -> String {
+    /// with no trailing slash. Nil when a layer of encoding is left after the last pass.
+    static func canonical(_ path: String) -> String? {
         var decoded = path
-        while let next = decoded.removingPercentEncoding, next != decoded { decoded = next }
+        for _ in 0..<decodePasses {
+            guard let next = decoded.removingPercentEncoding, next != decoded else { break }
+            decoded = next
+        }
+        if let next = decoded.removingPercentEncoding, next != decoded { return nil }
         var segments: [Substring] = []
         for segment in decoded.lowercased().replacingOccurrences(of: "\\", with: "/").split(separator: "/") {
             switch segment {
