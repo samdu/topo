@@ -1,9 +1,10 @@
 import Foundation
 
-/// Topo's words as blocks: paragraphs, headings, list items, quotes, fenced code and rules, each
-/// with its inline styles still on it. The parse is Foundation's (`AttributedString(markdown:)`
-/// with the full syntax), which already marks every run with the block it belongs to; what is
-/// here is the cut into blocks, since SwiftUI's `Text` draws inline styles and nothing of a block.
+/// Topo's words as blocks: paragraphs, headings, list items, fenced code and rules, each with its
+/// inline styles still on it and with how many lists and how many quotes it sits inside. The parse
+/// is Foundation's (`AttributedString(markdown:)` with the full syntax), which already marks every
+/// run with the block it belongs to; what is here is the cut into blocks, since SwiftUI's `Text`
+/// draws inline styles and nothing of a block.
 ///
 /// A single newline stays a line break, as a reply's newlines always have, rather than folding into
 /// a space as CommonMark folds it. Beyond that CommonMark's own readings stand: a line's leading
@@ -15,6 +16,13 @@ enum Markdown {
         /// How many lists the block sits inside: 0 at the margin, 1 for a top-level item and
         /// anything under it, and so on down.
         var depth: Int
+        /// How many quotes the block sits inside: 0 at the margin, 2 inside a quote in a quote.
+        /// Each level is drawn as a bar of its own.
+        var quote: Int = 0
+        /// How many of `depth`'s lists sit outside the outermost quote. A quote's bars stand in
+        /// one column whatever is nested inside it, so the lists outside a quote lead the bars in
+        /// and the lists inside it lead only what the bars enclose.
+        var listsOutside: Int = 0
         /// The block's words with their inline intents — emphasis, strong, code, strikethrough —
         /// and nothing of the block's own markup. A link is its words and goes nowhere. Empty for
         /// a rule.
@@ -27,8 +35,6 @@ enum Markdown {
         /// The first paragraph of a list item, which carries the item's marker. A later paragraph
         /// of the same item is a `paragraph` at the item's depth.
         case item(Marker)
-        /// A paragraph inside a block quote.
-        case quote
         /// A fenced or indented code block, its text as written with the final newline gone.
         case code(language: String?)
         case rule
@@ -72,17 +78,26 @@ enum Markdown {
         /// The list items whose marker has been drawn, so a second paragraph of one draws none.
         var marked: Set<Int> = []
         /// The table row being gathered, and its cells so far.
-        var row: (identity: Int, depth: Int, text: AttributedString)?
+        var row: (identity: Int, depth: Int, quote: Int, outside: Int, text: AttributedString)?
 
         func finishRow() {
-            if let done = row { blocks.append(Block(kind: .paragraph, depth: done.depth, text: done.text)) }
+            if let done = row {
+                blocks.append(Block(kind: .paragraph, depth: done.depth, quote: done.quote,
+                                    listsOutside: done.outside, text: done.text))
+            }
             row = nil
         }
 
         for (intent, range) in parsed.runs[\.presentationIntent] {
             let text = lineBroken(parsed[range])
             let components = intent?.components ?? []
-            let depth = components.filter { $0.kind == .orderedList || $0.kind == .unorderedList }.count
+            let isList = { (kind: PresentationIntent.Kind) in kind == .orderedList || kind == .unorderedList }
+            let depth = components.filter { isList($0.kind) }.count
+            let quote = components.filter { $0.kind == .blockQuote }.count
+            // The components are innermost first, so the lists after the last quote are the ones
+            // outside every quote; with no quote at all, every list is outside.
+            let outside = components.lastIndex(where: { $0.kind == .blockQuote })
+                .map { last in components[components.index(after: last)...].filter { isList($0.kind) }.count } ?? depth
             guard let innermost = components.first else {
                 // A block of HTML carries no block intent, and is a paragraph of its words.
                 finishRow()
@@ -95,7 +110,7 @@ enum Markdown {
                 let rowIdentity = components[1].identity
                 if row?.identity != rowIdentity {
                     finishRow()
-                    row = (rowIdentity, depth, text)
+                    row = (rowIdentity, depth, quote, outside, text)
                 } else {
                     row?.text += AttributedString(Self.cellSeparator)
                     row?.text += text
@@ -103,25 +118,27 @@ enum Markdown {
                 continue
             }
             finishRow()
+            func block(_ kind: Kind, _ text: AttributedString) -> Block {
+                Block(kind: kind, depth: depth, quote: quote, listsOutside: outside, text: text)
+            }
             switch innermost.kind {
             case .header(let level):
-                blocks.append(Block(kind: .heading(level: level), depth: depth, text: text))
+                blocks.append(block(.heading(level: level), text))
             case .codeBlock(let language):
                 var code = String(text.characters)
                 if code.hasSuffix("\n") { code.removeLast() }
-                blocks.append(Block(kind: .code(language: language), depth: depth, text: AttributedString(code)))
+                blocks.append(block(.code(language: language), AttributedString(code)))
             case .thematicBreak:
-                blocks.append(Block(kind: .rule, depth: depth, text: AttributedString()))
+                blocks.append(block(.rule, AttributedString()))
             default:
                 let item = components.dropFirst().first { if case .listItem = $0.kind { true } else { false } }
-                let quoted = components.contains { $0.kind == .blockQuote }
                 if let item, case .listItem(let ordinal) = item.kind,
                    components.firstIndex(where: { $0.identity == item.identity }) == 1,
                    marked.insert(item.identity).inserted {
                     let ordered = components.dropFirst(2).first.map { $0.kind == .orderedList } ?? false
-                    blocks.append(Block(kind: .item(ordered ? .number(ordinal) : .bullet), depth: depth, text: text))
+                    blocks.append(block(.item(ordered ? .number(ordinal) : .bullet), text))
                 } else {
-                    blocks.append(Block(kind: quoted ? .quote : .paragraph, depth: depth, text: text))
+                    blocks.append(block(.paragraph, text))
                 }
             }
         }

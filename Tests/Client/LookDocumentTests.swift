@@ -233,17 +233,19 @@ final class LookDocumentTests: XCTestCase {
     /// two, a length below nothing, a code block's radius of the wrong kind — takes nothing else
     /// down with it.
     func testTheMarkdownFieldsAreReadAndABadOneFallsBackAlone() {
-        let good = LookDocument.read(#"{"markdown": {"blockSpacing": 3, "codeOverflow": "wrap", "codeBlock": {"cornerRadius": 2}}}"#)
+        let good = LookDocument.read(#"{"markdown": {"blockSpacing": 3, "quoteIndent": 5, "codeOverflow": "wrap", "codeBlock": {"cornerRadius": 2}}}"#)
         XCTAssertEqual(good.notes, [])
         XCTAssertEqual(good.look.markdown.blockSpacing, 3)
+        XCTAssertEqual(good.look.markdown.quoteIndent, 5)
         XCTAssertEqual(good.look.markdown.codeOverflow, .wrap)
         XCTAssertEqual(good.look.markdown.codeBlock.cornerRadius, 2)
 
-        let bad = LookDocument.read(#"{"markdown": {"codeOverflow": "sideways", "listIndent": -4, "codeBlock": {"cornerRadius": "round", "verticalPadding": 3}, "ruleWidth": 4, "blockSpacing": 65}}"#)
-        XCTAssertEqual(bad.notes.count, 4, "\(bad.notes)")
+        let bad = LookDocument.read(#"{"markdown": {"codeOverflow": "sideways", "listIndent": -4, "quoteIndent": 65, "codeBlock": {"cornerRadius": "round", "verticalPadding": 3}, "ruleWidth": 4, "blockSpacing": 65}}"#)
+        XCTAssertEqual(bad.notes.count, 5, "\(bad.notes)")
         XCTAssertTrue(bad.notes.contains { $0.contains("markdown.codeOverflow") && $0.contains("\"scroll\"") }, "\(bad.notes)")
         XCTAssertEqual(bad.look.markdown.codeOverflow, Look().markdown.codeOverflow)
         XCTAssertEqual(bad.look.markdown.listIndent, Look().markdown.listIndent)
+        XCTAssertEqual(bad.look.markdown.quoteIndent, Look().markdown.quoteIndent, "past 64 points is refused")
         XCTAssertEqual(bad.look.markdown.codeBlock.cornerRadius, Look().markdown.codeBlock.cornerRadius)
         XCTAssertEqual(bad.look.markdown.codeBlock.verticalPadding, 3)
         XCTAssertEqual(bad.look.markdown.ruleWidth, 4)

@@ -17,6 +17,11 @@ final class MarkdownRenderTests: XCTestCase {
     private let stage = CGSize(width: 393, height: 520)
     /// The code block's outline, in a colour nothing else on the stage is.
     private let outline = UIColor(red: 1, green: 0, blue: 0.5, alpha: 1)
+    /// A quote's bars, and a quote's words, each in a colour of its own: a bar counted by its
+    /// pixels alone would be indistinguishable from one bar of twice the width, and from the
+    /// enclosure of a fence inside the quote.
+    private let barInk = UIColor(red: 0, green: 0.6, blue: 1, alpha: 1)
+    private let quoteInk = UIColor(red: 0, green: 0.5, blue: 0, alpha: 1)
 
     private func turn(_ role: TurnRole, _ text: String) -> Turn {
         Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 1), parents: [], role: role,
@@ -29,6 +34,8 @@ final class MarkdownRenderTests: XCTestCase {
         var look = Look(screen)
         look.markdown.codeBlock.accent = Color(outline)
         look.markdown.codeBlock.strokeWidth = 2
+        look.markdown.quoteBar = Color(barInk)
+        look.markdown.quoteText = Color(quoteInk)
         return look
     }
 
@@ -114,6 +121,117 @@ final class MarkdownRenderTests: XCTestCase {
         }
     }
 
+    // MARK: Quotes
+
+    /// A quote is drawn behind one bar for each level it sits inside, each `quoteIndent` from the
+    /// next, and its words start after the last of them: `> > b` draws two bars where `> a` draws
+    /// one, on every screen.
+    func testEachQuoteLevelDrawsItsOwnBar() throws {
+        for screen in Look.Screen.allCases {
+            let look = look(screen)
+            let width = look.markdown.quoteBarWidth
+            let step = width + look.markdown.quoteIndent
+
+            let one = try draw(turn(.assistant, "> a quote"), look)
+            let bars = try XCTUnwrap(one.runs(barInk), "\(screen): no bar at all")
+            XCTAssertEqual(bars.count, 1, "\(screen): one level drew \(bars.count) bars")
+
+            let two = try draw(turn(.assistant, "> > a quote"), look)
+            let nested = try XCTUnwrap(two.runs(barInk), "\(screen): no bar in a nested quote")
+            XCTAssertEqual(nested.count, 2, "\(screen): two levels drew \(nested.count) bars: \(nested)")
+            for (level, run) in nested.enumerated() {
+                XCTAssertEqual(CGFloat(run.count) / one.scale, width, accuracy: 1,
+                               "\(screen): bar \(level) is not \(width) points wide")
+            }
+            XCTAssertEqual(CGFloat(nested[1].lowerBound - nested[0].lowerBound) / one.scale, step, accuracy: 1,
+                           "\(screen): the second bar is not \(step) points after the first")
+            XCTAssertEqual(CGFloat(nested[0].lowerBound - bars[0].lowerBound) / one.scale, 0, accuracy: 1,
+                           "\(screen): the outer bar moved")
+
+            // The words come after the last bar, one step further in than at one level.
+            let near = try XCTUnwrap(one.columns(quoteInk), "\(screen): the quote's words were not drawn")
+            let far = try XCTUnwrap(two.columns(quoteInk), "\(screen): the nested quote's words were not drawn")
+            XCTAssertEqual(CGFloat(far.lowerBound - near.lowerBound) / one.scale, step, accuracy: 2,
+                           "\(screen): the nested quote's words did not move in by \(step)")
+        }
+    }
+
+    /// Three levels under a look whose bars and insets are far wider than the default: the bars are
+    /// drawn at their width and the words are still inside the reply's column, as a long code line
+    /// is. The top of both ranges (64 points each) spends more than a phone's column on three
+    /// levels of bar, so what is held here is a look well above the default rather than its ceiling.
+    func testADeepQuoteUnderAWideLookStaysInTheColumn() throws {
+        var look = look(.phone)
+        look.markdown.quoteBarWidth = 8
+        look.markdown.quoteIndent = 16
+        let pixels = try draw(turn(.assistant, "> > > deep"), look)
+        let bars = try XCTUnwrap(pixels.runs(barInk), "no bars")
+        XCTAssertEqual(bars.count, 3, "three levels drew \(bars.count) bars: \(bars)")
+        let words = try XCTUnwrap(pixels.columns(quoteInk), "the deep quote's words were not drawn")
+        let edge = (stage.width - look.transcript.horizontalPadding - look.transcript.replyTrailingInset) * pixels.scale
+        XCTAssertLessThanOrEqual(CGFloat(words.upperBound), edge + 1, "the words ran past the column")
+        XCTAssertGreaterThanOrEqual(CGFloat(words.lowerBound),
+                                    (look.transcript.horizontalPadding + 3 * (8 + 16)) * pixels.scale - 2,
+                                    "the words did not clear the bars")
+    }
+
+    /// A quote holds whatever markdown puts in it, and each of those keeps its bar: a heading and a
+    /// fence inside a quote are drawn behind one, and the fence keeps its own enclosure inside the
+    /// column — on the phone, where it is a horizontal scroller, as on the screens that wrap it.
+    func testAQuotedHeadingAndFenceKeepTheirBar() throws {
+        for screen in Look.Screen.allCases {
+            let look = look(screen)
+            let heading = try draw(turn(.assistant, "> # a head"), look)
+            XCTAssertNotNil(heading.runs(barInk), "\(screen): a quoted heading drew no bar")
+
+            let quoted = try draw(turn(.assistant, "> ```\n> let x = 1\n> ```"), look)
+            let bars = try XCTUnwrap(quoted.runs(barInk), "\(screen): a quoted fence drew no bar")
+            XCTAssertEqual(bars.count, 1, "\(screen): a quoted fence drew \(bars.count) bars")
+            let enclosure = try XCTUnwrap(quoted.columns(outline), "\(screen): a quoted fence drew no enclosure")
+            let edge = (stage.width - look.transcript.horizontalPadding - look.transcript.replyTrailingInset) * quoted.scale
+            XCTAssertLessThanOrEqual(CGFloat(enclosure.upperBound), edge + 1, "\(screen): the quoted fence ran past the column")
+
+            // And it is no narrower than the bare fence less the bar and its inset, so a scroller
+            // squeezed to nothing inside the bars fails rather than passes.
+            let bare = try XCTUnwrap(try draw(turn(.assistant, "```\nlet x = 1\n```"), look).columns(outline),
+                                     "\(screen): no bare enclosure")
+            let step = (look.markdown.quoteBarWidth + look.markdown.quoteIndent) * quoted.scale
+            XCTAssertGreaterThanOrEqual(CGFloat(enclosure.count), CGFloat(bare.count) - step - 2,
+                                        "\(screen): the quoted fence lost more width than the bar it stands behind")
+        }
+    }
+
+    /// A quote and a list interleaved. Every bar of one quote stands in one column however deeply
+    /// the list inside it nests, and a quote inside a list item keeps the item's indent.
+    func testAQuoteAndAListInterleave() throws {
+        for screen in Look.Screen.allCases {
+            let look = look(screen)
+            let indent = look.markdown.listIndent
+            let margin = look.transcript.horizontalPadding
+
+            // A nested list inside one quote: one bar, one column, both rows.
+            let inQuote = try draw(turn(.assistant, "> - a\n>   - b"), look)
+            let bars = try XCTUnwrap(inQuote.runs(barInk), "\(screen): a quoted list drew no bar")
+            XCTAssertEqual(bars.count, 1, "\(screen): the bars of one quote stood in \(bars.count) columns: \(bars)")
+            XCTAssertEqual(CGFloat(bars[0].lowerBound) / inQuote.scale, margin, accuracy: 1,
+                           "\(screen): the bar of a quoted list is not at the margin")
+
+            // A quote inside a list item keeps the item's indent, so its bar sits one indent in.
+            let inItem = try draw(turn(.assistant, "- an item\n\n  > a quote"), look)
+            let itemBars = try XCTUnwrap(inItem.runs(barInk), "\(screen): a quote in an item drew no bar")
+            XCTAssertEqual(itemBars.count, 1, "\(screen): a quote in an item drew \(itemBars.count) columns of bar")
+            XCTAssertEqual(CGFloat(itemBars[0].lowerBound) / inItem.scale, margin + indent, accuracy: 1,
+                           "\(screen): the quote in an item did not keep the item's indent")
+
+            // A list item inside a quote puts its marker after the bar, and the bar at the margin.
+            let itemInQuote = try draw(turn(.assistant, "> - i"), look)
+            let quoteBars = try XCTUnwrap(itemInQuote.runs(barInk), "\(screen): a quoted item drew no bar")
+            XCTAssertEqual(quoteBars.count, 1, "\(screen): a quoted item drew \(quoteBars.count) columns of bar")
+            XCTAssertEqual(CGFloat(quoteBars[0].lowerBound) / itemInQuote.scale, margin, accuracy: 1,
+                           "\(screen): a quoted item's bar is not at the margin")
+        }
+    }
+
     /// A rendered stage as bytes, with the questions worth asking of it.
     private struct Pixels {
         let bytes: [UInt8]
@@ -146,6 +264,20 @@ final class MarkdownRenderTests: XCTestCase {
             for y in 0..<height { for x in 0..<width where matches(colour, (y * width + x) * 4) { found.append(x) } }
             guard let low = found.min(), let high = found.max() else { return nil }
             return low...high
+        }
+
+        /// The disjoint column runs a colour is found in, leading first: one per bar, so two bars
+        /// are two runs and one bar of twice the width is one.
+        func runs(_ colour: UIColor) -> [ClosedRange<Int>]? {
+            var found: Set<Int> = []
+            for y in 0..<height { for x in 0..<width where matches(colour, (y * width + x) * 4) { found.insert(x) } }
+            guard !found.isEmpty else { return nil }
+            var runs: [ClosedRange<Int>] = []
+            for x in found.sorted() {
+                if let last = runs.last, x == last.upperBound + 1 { runs[runs.count - 1] = last.lowerBound...x }
+                else { runs.append(x...x) }
+            }
+            return runs
         }
 
         /// The rows a colour is found in, first to last.

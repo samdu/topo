@@ -1,9 +1,10 @@
 import SwiftUI
 
 /// Topo's words drawn as their blocks (`Markdown.blocks`): paragraphs and headings as text, list
-/// items behind their markers, quotes behind a bar, rules, and fenced code in an enclosure of its
-/// own. Every value is the look's (`Look.Markdown`), and a paragraph is drawn in the transcript's
-/// own type and ink, as the transcript draws words.
+/// items behind their markers, rules, fenced code in an enclosure of its own, and whatever sits
+/// inside a quote behind a bar for each quote it is inside. Every value is the look's
+/// (`Look.Markdown`), and a paragraph is drawn in the transcript's own type and ink, as the
+/// transcript draws words.
 ///
 /// `bare` is whether the turn draws nothing round its words. Then what Topo stands clear of is
 /// the words themselves: each text reports its own lines (`mascotLines`), and what draws a shape
@@ -17,27 +18,67 @@ struct MarkdownText: View {
     var body: some View {
         VStack(alignment: .leading, spacing: look.markdown.blockSpacing) {
             ForEach(Array(Markdown.cached(source).enumerated()), id: \.offset) { _, block in
-                row(block)
-                    .padding(.leading, lead(block))
+                quoted(block)
+                    .padding(.leading, leadOutside(block))
             }
         }
     }
 
-    /// How far a block is led in: a list item by the lists round it less its own, so its marker
-    /// sits where its list starts, and anything else inside an item by all of them, so it sits
-    /// one indent in from the item's marker.
-    private func lead(_ block: Markdown.Block) -> CGFloat {
-        if case .item = block.kind { return CGFloat(max(block.depth - 1, 0)) * look.markdown.listIndent }
-        return CGFloat(block.depth) * look.markdown.listIndent
+    /// A block behind a bar for each quote it sits inside, the bars as tall as what they enclose.
+    /// The lists outside the quote have led the bars in already; the lists inside it lead only
+    /// what the bars enclose, so every bar of one quote stands in one column however deeply what
+    /// is inside it is nested.
+    @ViewBuilder
+    private func quoted(_ block: Markdown.Block) -> some View {
+        if block.quote > 0 {
+            HStack(alignment: .top, spacing: look.markdown.quoteIndent) {
+                ForEach(0..<block.quote, id: \.self) { _ in
+                    Rectangle()
+                        .fill(look.markdown.quoteBar)
+                        .frame(width: look.markdown.quoteBarWidth)
+                        .mascotObstacle(bare)
+                }
+                row(block)
+                    .padding(.leading, leadInside(block))
+            }
+            // The bars are as tall as the words beside them.
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+            row(block)
+        }
+    }
+
+    /// How far a block is led in before its bars: by the lists it sits inside that are outside
+    /// its outermost quote. A block with no quote has every list outside it, so this is the whole
+    /// of its lead and is what it was before there were bars.
+    private func leadOutside(_ block: Markdown.Block) -> CGFloat {
+        lead(block, lists: block.listsOutside, holdsTheMarker: inside(block) == 0)
+    }
+
+    /// How far what the bars enclose is led in: by the lists the block sits inside the quote.
+    private func leadInside(_ block: Markdown.Block) -> CGFloat {
+        lead(block, lists: inside(block), holdsTheMarker: true)
+    }
+
+    /// How many lists the block sits inside its outermost quote.
+    private func inside(_ block: Markdown.Block) -> Int { block.depth - block.listsOutside }
+
+    /// `lists` indents, less the one a list item's own marker is drawn for, so the marker sits
+    /// where its list starts and anything else inside the item sits one indent in from it. The
+    /// innermost list is the one the marker belongs to, so only the side holding it discounts one.
+    private func lead(_ block: Markdown.Block, lists: Int, holdsTheMarker: Bool) -> CGFloat {
+        var lists = lists
+        if case .item = block.kind, holdsTheMarker { lists = max(lists - 1, 0) }
+        return CGFloat(lists) * look.markdown.listIndent
     }
 
     @ViewBuilder
     private func row(_ block: Markdown.Block) -> some View {
         switch block.kind {
         case .paragraph:
-            words(block.text, font: look.transcript.bodyFont, ink: look.transcript.text)
+            words(block.text, font: look.transcript.bodyFont, ink: ink(block))
         case .heading(let level):
-            words(block.text, font: look.markdown.headingFont(level), ink: look.transcript.text)
+            words(block.text, font: look.markdown.headingFont(level), ink: ink(block))
                 .accessibilityAddTraits(.isHeader)
         case .item(let marker):
             HStack(alignment: .firstTextBaseline, spacing: look.markdown.markerSpacing) {
@@ -45,18 +86,8 @@ struct MarkdownText: View {
                     .font(look.transcript.bodyFont)
                     .foregroundStyle(look.markdown.marker)
                     .mascotLines(bare)
-                words(block.text, font: look.transcript.bodyFont, ink: look.transcript.text)
+                words(block.text, font: look.transcript.bodyFont, ink: ink(block))
             }
-        case .quote:
-            HStack(alignment: .top, spacing: look.markdown.markerSpacing) {
-                Rectangle()
-                    .fill(look.markdown.quoteBar)
-                    .frame(width: look.markdown.quoteBarWidth)
-                    .mascotObstacle(bare)
-                words(block.text, font: look.transcript.bodyFont, ink: look.markdown.quoteText)
-            }
-            // The bar is as tall as the words beside it.
-            .fixedSize(horizontal: false, vertical: true)
         case .code:
             code(String(block.text.characters))
         case .rule:
@@ -66,6 +97,12 @@ struct MarkdownText: View {
                 .frame(maxWidth: .infinity)
                 .mascotObstacle(bare)
         }
+    }
+
+    /// A block's words: the transcript's own ink, or a quote's whatever block it is, since words
+    /// inside a quote are a quote's words. A fence keeps the look's code ink, being code still.
+    private func ink(_ block: Markdown.Block) -> Color {
+        block.quote > 0 ? look.markdown.quoteText : look.transcript.text
     }
 
     /// Words of a block, with inline code in the look's code type and ink and every other
