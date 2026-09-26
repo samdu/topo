@@ -1,5 +1,6 @@
 import SwiftUI
 import TopoAuth
+import TopoTools
 
 @main
 struct TopoApp: App {
@@ -41,7 +42,11 @@ struct TopoApp: App {
         _mascot = State(initialValue: mascot)
         let memory = Memory.standard()
         _memory = State(initialValue: memory)
-        // The phone's own tools, which the guest's `topo` reaches through the tool service.
+        // The phone's own tools, which the guest's `topo` reaches through the tool service. Making
+        // them asks for nothing: each permission is asked for by the first call that needs it.
+        let broker = PermissionBroker()
+        let eventKit = EventKitStore()
+        let location = LocationPermission()
         GuestResident.shared.toolTable = [
             LookTool(vault: {
                 #if DEBUG
@@ -50,6 +55,12 @@ struct TopoApp: App {
                 (memory.look, memory.lookReading)
                 #endif
             }),
+            RemindersTool(store: eventKit, authorizer: EventKitAuthorizer(entity: .reminder, store: eventKit), broker: broker),
+            CalendarTool(store: eventKit, authorizer: EventKitAuthorizer(entity: .event, store: eventKit), broker: broker),
+            NotifyTool(scheduler: UserNotificationScheduler(), authorizer: NotificationAuthorizer(), broker: broker),
+            ContactsTool(directory: ContactStoreDirectory(), authorizer: ContactsAuthorizer(), broker: broker),
+            LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
+                         broker: broker),
         ]
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
