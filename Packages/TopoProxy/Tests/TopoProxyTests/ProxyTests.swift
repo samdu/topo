@@ -478,6 +478,35 @@ import TopoAuth
         #expect((body["messages"] as? [[String: Any]])?.first?["content"] as? String == "hi")
     }
 
+    /// A path the upstream resolves to `/v1/messages` is pinned however it is spelled: a doubled
+    /// or trailing slash, a dot segment, percent-encoding, or any of them behind a query.
+    @Test(arguments: ["//v1/messages", "/v1//messages", "/v1/messages/", "/v1/./messages", "/v1/x/../messages",
+                      "/./v1/messages?beta=true", "/v1/%6Dessages", "/v1%2Fmessages", "/V1/Messages"])
+    func aNonCanonicalMessagesPathIsPinned(_ target: String) async throws {
+        let upstream = StubUpstream()
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        try await client.send(post(target, body: #"{"model":"claude-opus-5","max_tokens":5,"messages":[]}"#))
+        #expect(try await client.readResponse().head.status == 200)
+        let seen = try #require(upstream.requests.first)
+        let body = try #require(try JSONSerialization.jsonObject(with: seen.body ?? Data()) as? [String: Any])
+        #expect(body["model"] as? String == "claude-haiku-4-5-20251001", "\(target) went upstream unpinned")
+    }
+
+    /// Only the messages endpoint is the pin's: another path's body goes through as it was sent.
+    @Test(arguments: ["/v1/messages/count_tokens", "/v1/messagesx", "/v1/models"])
+    func anotherPathIsNotRewritten(_ target: String) async throws {
+        let upstream = StubUpstream()
+        let (proxy, port, _) = try await startedProxy(upstream)
+        defer { Task { await proxy.stop() } }
+        let client = try await WireClient(port: port)
+        let sent = #"{"model":"claude-opus-5"}"#
+        try await client.send(post(target, body: sent))
+        #expect(try await client.readResponse().head.status == 200)
+        #expect(upstream.requests.first?.body == Data(sent.utf8))
+    }
+
     /// A body the pin cannot read is not forwarded unpinned.
     @Test func aBodyThePinCannotReadIsRefused() async throws {
         let upstream = StubUpstream()

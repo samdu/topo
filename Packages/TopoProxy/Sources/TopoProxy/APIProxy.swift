@@ -16,7 +16,9 @@ import TopoAuth
 /// is. A client that goes away mid-response cancels the upstream request.
 ///
 /// In a debug build the `model` of every `/v1/messages` body is rewritten to `pinnedModel`
-/// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku.
+/// before it is forwarded, whatever the guest asked for, so a debug build spends Haiku. The path
+/// is judged in its canonical form (`canonical(_:)`), since the upstream resolves a doubled
+/// slash, a dot segment or percent-encoding to the same endpoint.
 public actor APIProxy {
     public typealias Log = @Sendable (String) -> Void
 
@@ -194,7 +196,7 @@ struct Forwarder: Sendable {
         }
         var body = request.body
         #if DEBUG
-        if let pinned = APIProxy.pinnedModel, request.method == "POST", request.path == "/v1/messages" {
+        if let pinned = APIProxy.pinnedModel, request.method == "POST", Self.canonical(request.path) == "/v1/messages" {
             guard let rewritten = Self.pin(body, to: pinned) else {
                 log("\(line) refused: the debug pin could not read the body")
                 try? await inbound.send(Self.errorResponse(status: 400, type: "invalid_request_error",
@@ -248,6 +250,24 @@ struct Forwarder: Sendable {
     }
 
     /// The body with its `model` replaced, or nil when it is not a JSON object.
+    /// A path as the pin judges it: percent-encoding decoded until nothing is left to decode,
+    /// backslashes read as slashes, empty and `.` segments dropped, `..` resolved, lowercased, and
+    /// with no trailing slash. It errs towards naming `/v1/messages`: a spelling the upstream would
+    /// not resolve there costs nothing more than a pinned model.
+    static func canonical(_ path: String) -> String {
+        var decoded = path
+        while let next = decoded.removingPercentEncoding, next != decoded { decoded = next }
+        var segments: [Substring] = []
+        for segment in decoded.lowercased().replacingOccurrences(of: "\\", with: "/").split(separator: "/") {
+            switch segment {
+            case ".": continue
+            case "..": _ = segments.popLast()
+            default: segments.append(segment)
+            }
+        }
+        return "/" + segments.joined(separator: "/")
+    }
+
     static func pin(_ body: Data, to model: String) -> Data? {
         guard var object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return nil }
         object["model"] = model
