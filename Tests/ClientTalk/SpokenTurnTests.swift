@@ -4,7 +4,7 @@ import XCTest
 /// A spoken question, answered aloud, end to end: `capital-of-france.wav` looping into the
 /// simulator's microphone, the hold on the chat screen's microphone, Parakeet hearing it, the
 /// words sent as a spoken turn through the ordinary harness (the lease, the CloudKit log, the
-/// Messages API, Haiku in a debug build), the reply landing in the log as that turn's child, and
+/// guest's Claude Code, Haiku in a debug build), the reply landing in the log as that turn's child, and
 /// the speaker reading that reply to its end.
 ///
 /// Nothing is stubbed and nothing is skipped: every prerequisite missing is a failure naming it.

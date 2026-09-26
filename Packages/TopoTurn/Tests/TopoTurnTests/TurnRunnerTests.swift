@@ -5,10 +5,10 @@ import TopoCoreTesting
 @testable import TopoTurn
 
 @Suite struct TurnRunnerTests {
-    @Test func aTurnTakesTheLeaseAppendsBothSidesAndSendsHistory() async throws {
+    @Test func aTurnTakesTheLeaseAppendsBothSidesAndAsksWithTheLog() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("Reply one")), (200, reply("Reply two")))
-        let (runner, lease) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("Reply one"), .success("Reply two"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
 
         let first = try await runner.run("I forgot the bins", model: .sonnet5)
         #expect(await lease.isPrimary())
@@ -19,10 +19,12 @@ import TopoCoreTesting
 
         let second = try await runner.run("and the milk", model: .fable51)
         #expect(second.person.parents == [first.assistant.ref])
-        let body = try #require(transport.lastBody)
-        #expect(body["model"] as? String == ClaudeModel.effective(.fable51).rawValue)
-        let messages = try #require(body["messages"] as? [[String: String]])
-        #expect(messages.map { $0["content"] } == ["I forgot the bins", "Reply one", "and the milk"])
+        let asked = try #require(brain.requests.last)
+        #expect(asked.model == .fable51)
+        #expect(asked.context.map(\.text) == ["I forgot the bins", "Reply one"])
+        #expect(asked.answering == [second.person])
+        #expect(asked.parents == [second.person.ref])
+        #expect(asked.nonce == TurnRunner.replyNonce(for: [second.person.ref]))
 
         let transcript = try await TurnLog(database: db).read()
         #expect(transcript.ordered.map(\.text) == ["I forgot the bins", "Reply one", "and the milk", "Reply two"])
@@ -31,8 +33,8 @@ import TopoCoreTesting
 
     @Test func progressReportsEachStepAndThePersonsTurnBeforeTheReply() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("ok")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("ok"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let steps = Steps()
         let result = try await runner.run("words", model: .sonnet5) { await steps.add($0) }
         let seen = await steps.all
@@ -44,40 +46,41 @@ import TopoCoreTesting
         let other = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: AlwaysConfirms(),
                                  sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         guard case .primary = try await other.acquire() else { Issue.record("hub should claim"); return }
-        let transport = RecordingTransport((200, reply("never")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport, probe: AlwaysConfirms())
+        let brain = ScriptedBrain(.success("never"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
         await #expect(throws: TurnRunnerError.self) { try await runner.run("hello?", model: .sonnet5) }
-        #expect(transport.requests.isEmpty)
+        #expect(brain.requests.isEmpty)
         #expect(try await TurnLog(database: db).read().isEmpty)
     }
 
     @Test func aFailedCallLeavesThePersonsTurnInTheLog() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((500, "{}"), (200, reply("ok now")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.failure(Refused()), .success("ok now"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         do {
             _ = try await runner.run("first", model: .sonnet5)
             Issue.record("expected the reply to fail")
         } catch TurnRunnerError.replyFailed(let person, let underlying) {
             #expect(person.text == "first")
-            #expect(underlying as? MessagesAPIError == .http(status: 500, message: nil))
+            #expect(underlying is Refused)
         }
         let after = try await TurnLog(database: db).read()
         #expect(after.ordered.map(\.text) == ["first"])
 
         let second = try await runner.run("second", model: .sonnet5)
         #expect(second.person.parents == after.heads)
-        let messages = try #require(transport.lastBody?["messages"] as? [[String: String]])
-        #expect(messages == [["role": "user", "content": "first\n\nsecond"]])
+        let asked = try #require(brain.requests.last)
+        #expect(asked.context.map(\.text) == ["first"])
+        #expect(asked.answering.map(\.text) == ["second"])
     }
 
     @Test func aDeviceDisplacedDuringTheCallDoesNotWriteTheReply() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("too late")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("too late"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
                                sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
-        transport.duringRequest = { _ = try? await hub.acquire() }
+        brain.duringAnswer = { _ = try? await hub.acquire() }
         do {
             _ = try await runner.run("hello", model: .sonnet5)
             Issue.record("expected displacement")
@@ -91,8 +94,8 @@ import TopoCoreTesting
 
     @Test func aClaimLandingBetweenTheReplyAndItsWriteRefusesTheWrite() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("two brains")))
-        let (runner, lease) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("two brains"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
         let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
                                sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         // The claim lands inside the save of the reply's batch, after every check the runner
@@ -116,35 +119,36 @@ import TopoCoreTesting
 
     @Test func theSameNonceAgainFindsTheTurnAlreadyInTheLog() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((500, "{}"), (200, reply("ok")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.failure(Refused()), .success("ok"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let nonce = "same-nonce"
         _ = try? await runner.run("once", model: .sonnet5, nonce: nonce)
         let again = try await runner.run("once", model: .sonnet5, nonce: nonce)
         #expect(again.person.nonce == nonce)
-        // The recovered turn goes to the model once, not joined with itself.
-        let messages = try #require(transport.lastBody?["messages"] as? [[String: String]])
-        #expect(messages == [["role": "user", "content": "once"]])
+        // The recovered turn is asked once: it is answered, not also context.
+        let asked = try #require(brain.requests.last)
+        #expect(asked.context.isEmpty)
+        #expect(asked.answering.map(\.text) == ["once"])
         let transcript = try await TurnLog(database: db).read()
         #expect(transcript.ordered.map(\.text) == ["once", "ok"])
     }
 
     @Test func aRetryAfterTheReplyLandedReturnsThatReplyWithoutAnotherCall() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("the reply")), (200, reply("never")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("the reply"), .success("never"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let nonce = "cut-off-after-commit"
         let first = try await runner.run("words", model: .sonnet5, nonce: nonce)
         let again = try await runner.run("words", model: .sonnet5, nonce: nonce)
         #expect(again.assistant == first.assistant)
-        #expect(transport.requests.count == 1)
+        #expect(brain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.count == 2)
     }
 
     @Test func thePrimaryAnswersATurnALimbWroteIntoTheLog() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("from the phone")))
-        let (runner, lease) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("from the phone"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
         #expect(try await runner.answerPending(model: .sonnet5) == nil)
         #expect(!(await lease.isPrimary()))
 
@@ -154,26 +158,26 @@ import TopoCoreTesting
         #expect(answer.role == .assistant && answer.text == "from the phone")
         #expect(answer.parents == [asked.ref])
         #expect(await lease.isPrimary())
-        let messages = try #require(transport.lastBody?["messages"] as? [[String: String]])
-        #expect(messages == [["role": "user", "content": "bins?"]])
+        let request = try #require(brain.requests.last)
+        #expect(request.context.isEmpty && request.answering == [asked])
         // Answered, so nothing is pending; no second call.
         #expect(try await runner.answerPending(model: .sonnet5) == nil)
-        #expect(transport.requests.count == 1)
+        #expect(brain.requests.count == 1)
     }
 
     @Test func aReplyThatFailedIsRetriedOnTheNextPassAndNeverDoubled() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((500, "{}"), (200, reply("second time")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.failure(Refused()), .success("second time"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
         _ = try await watch.append(.person, "hello", parents: [])
-        await #expect(throws: MessagesAPIError.self) { try await runner.answerPending(model: .sonnet5) }
+        await #expect(throws: Refused.self) { try await runner.answerPending(model: .sonnet5) }
         let answer = try #require(try await runner.answerPending(model: .sonnet5))
         #expect(answer.text == "second time")
 
         // Another primary answering the same words finds this reply by its nonce and makes no call.
-        let other = RecordingTransport((200, reply("never")))
-        let (hub, _) = try await makeRunner(database: db, device: "hub", transport: other)
+        let other = ScriptedBrain(.success("never"))
+        let (hub, _) = try await makeRunner(database: db, device: "hub", brain: other)
         #expect(try await hub.answerPending(model: .sonnet5) == nil)
         #expect(other.requests.isEmpty)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["hello", "second time"])
@@ -181,15 +185,15 @@ import TopoCoreTesting
 
     @Test func aTurnAcceptedAndThenFailedByTheModelIsAnsweredOnceByALaterPass() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((500, "{}"), (200, reply("second time")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.failure(Refused()), .success("second time"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         do {
             _ = try await runner.run("I forgot the bins", model: .sonnet5)
             Issue.record("expected the reply to fail")
         } catch TurnRunnerError.replyFailed(let person, let underlying) {
             // The app accepted the turn: it is in the log, so its caller owes nothing for it.
             #expect(person.text == "I forgot the bins")
-            #expect(underlying as? MessagesAPIError == .http(status: 500, message: nil))
+            #expect(underlying is Refused)
         }
         let accepted = try await TurnLog(database: db).read()
         #expect(accepted.ordered.map(\.text) == ["I forgot the bins"])
@@ -199,17 +203,17 @@ import TopoCoreTesting
         #expect(answer.parents == accepted.heads)
         // Exactly one reply: the next pass finds nothing waiting and makes no call.
         #expect(try await runner.answerPending(model: .sonnet5) == nil)
-        #expect(transport.requests.count == 2)
+        #expect(brain.requests.count == 2)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["I forgot the bins", "second time"])
     }
 
     @Test func aTurnLeftByADisplacedDeviceIsAnsweredOnceByTheDeviceThatTookTheLease() async throws {
         let db = InMemoryRecordDatabase()
-        let phone = RecordingTransport((200, reply("too late")))
-        let (runner, _) = try await makeRunner(database: db, transport: phone)
-        let hubTransport = RecordingTransport((200, reply("from the hub")))
-        let (hub, hubLease) = try await makeRunner(database: db, device: "hub", transport: hubTransport)
-        phone.duringRequest = { _ = try? await hubLease.acquire() }
+        let phone = ScriptedBrain(.success("too late"))
+        let (runner, _) = try await makeRunner(database: db, brain: phone)
+        let hubBrain = ScriptedBrain(.success("from the hub"))
+        let (hub, hubLease) = try await makeRunner(database: db, device: "hub", brain: hubBrain)
+        phone.duringAnswer = { _ = try? await hubLease.acquire() }
         do {
             _ = try await runner.run("bins?", model: .sonnet5)
             Issue.record("expected displacement")
@@ -226,14 +230,14 @@ import TopoCoreTesting
         #expect(try await hub.answerPending(model: .sonnet5) == nil)
         #expect(try await runner.answerPending(model: .sonnet5) == nil)
         #expect(phone.requests.count == 1)
-        #expect(hubTransport.requests.count == 1)
+        #expect(hubBrain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "from the hub"])
     }
 
     @Test func aForkOfPersonTurnsGetsOneReplyContinuingEveryHead() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("both")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("both"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let log = TurnLog(database: db)
         let a = try await log.writer(for: DeviceID("watch")).append(.person, "one", parents: [])
         let b = try await log.writer(for: DeviceID("pad")).append(.person, "two", parents: [])
@@ -244,13 +248,13 @@ import TopoCoreTesting
 
     @Test func aReadWithTurnsMissingIsNotAnswered() async throws {
         let db = InMemoryRecordDatabase()
-        let transport = RecordingTransport((200, reply("never")))
-        let (runner, _) = try await makeRunner(database: db, transport: transport)
+        let brain = ScriptedBrain(.success("never"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
         let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
         // A turn continuing from one the read cannot see: the read is incomplete.
         _ = try await watch.append(.person, "second", parents: [TurnRef(device: DeviceID("ghost"), sequence: 1)])
         #expect(try await runner.answerPending(model: .sonnet5) == nil)
-        #expect(transport.requests.isEmpty)
+        #expect(brain.requests.isEmpty)
     }
 
     @Test func theReplyNonceIsFixedLengthAndOrderBlind() {
@@ -259,20 +263,6 @@ import TopoCoreTesting
         #expect(TurnRunner.replyNonce(for: [a]) != TurnRunner.replyNonce(for: [b]))
         let wide = (1...500).map { TurnRef(device: DeviceID("device-\($0)"), sequence: Int64($0)) }
         #expect(TurnRunner.replyNonce(for: wide).count == "answer/".count + 64)
-    }
-
-    @Test func historyIsCappedAndRolesAlternate() {
-        let d = DeviceID("d")
-        var turns: [Turn] = []
-        for i in 1...50 {
-            turns.append(Turn(ref: TurnRef(device: d, sequence: Int64(i)), parents: [], role: i % 2 == 0 ? .assistant : .person, text: "t\(i)", at: Date()))
-        }
-        let messages = TurnRunner.messages(from: turns.suffix(39))
-        #expect(messages.count == 38)
-        #expect(messages.first?.role == .user)
-        #expect(messages.first?.content == "t13")
-        let leadingAssistant = TurnRunner.messages(from: [turns[1], turns[2]])
-        #expect(leadingAssistant == [ChatMessage(role: .user, content: "t3")])
     }
 }
 

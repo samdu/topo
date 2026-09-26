@@ -308,11 +308,11 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(reading.notes, [])
     }
 
-    /// The margin after Topo's turns: 110 points on the phone and none on the watch or the
+    /// The margin after Topo's turns: 70 points on the phone and none on the watch or the
     /// television, read from 0 to 200, so a reply keeps a column of words on the narrowest
     /// phone; past either end the field alone falls back.
     func testTheReplyTrailingInsetIsReadInItsRange() {
-        XCTAssertEqual(Look.Transcript(.phone).replyTrailingInset, 110)
+        XCTAssertEqual(Look.Transcript(.phone).replyTrailingInset, 70)
         XCTAssertEqual(Look.Transcript(.watch).replyTrailingInset, 0)
         XCTAssertEqual(Look.Transcript(.tv).replyTrailingInset, 0)
         for inset in [0, 200] as [CGFloat] {
@@ -334,7 +334,7 @@ final class LookDocumentTests: XCTestCase {
         for screen in [Look.Screen.phone, .watch, .tv] {
             XCTAssertEqual(Look.Transcript(screen).personLeadingInset, Look.Transcript(screen).replyTrailingInset, "\(screen)")
         }
-        XCTAssertEqual(Look.Transcript(.phone).personLeadingInset, 110)
+        XCTAssertEqual(Look.Transcript(.phone).personLeadingInset, 70)
         for inset in [0, 200] as [CGFloat] {
             let reading = LookDocument.read(#"{"transcript": {"personLeadingInset": \#(inset), "spacing": 9}}"#)
             XCTAssertEqual(reading.look.transcript.personLeadingInset, inset)
