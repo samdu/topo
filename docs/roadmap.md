@@ -14,17 +14,20 @@ What is built, what comes next and in what order, what is parked, and the thread
 - The look as a document (`look.json`), the glass composer that goes short under the keyboard, the badge, and the transcript drawn by phone, watch and television, Topo's turns as markdown.
 - Topo on the glass: the pixel engine, poses from the guest's events, a calm idle with yoga, facing by side, roaming the chat without juddering under a turn.
 - The model picker, Tuning (placement and pin in every build, sliders in debug), diagnostics, About with the GPL text and the source commit.
+- Topo's placement: roam, glass or pinned by a long-press drag, kept in Tuning (#165); when nothing clears the words he stands where the least of his box covers them (#172, in its fix round).
+- Markdown in Topo's replies: fenced and inline code, emphasis, headings, lists, quotes and rules from Foundation's parser, styled by `Look.Markdown` (#173).
 - Womble for iOS 12 devices, viewer only.
 - The hub app skeleton (`TopoHub`), holding the lease and showing the pairing code.
 - CI: the three-job PR check with the audio lane, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`.
 
 ## Next, in order
 
-1. **Topo's placement, #165.** Roam, glass or pinned by a long-press drag. Reviewed, device-checked, CI green; waits only on Sam's word to merge, since Codex is out until 27 September and automerge reads the red reviewer job.
-2. **P5b: delete the Messages API.** `MessagesAPI`, `MessagesAPIBrain` and the model call in `TurnRunner` are compiled only for the suites; removing them closes #129 and takes a whole class of "falls back to the API" defects off the review's list. Before P6, because P6 adds a mount the bridge suites will need to cover and they should not still be running over two brains.
-3. **P6: the memory as a mount.** The vault folder into the guest, eviction handled through the fork's file coordination, the mirror untouched. This is what makes the mind able to read and write its own notes, and it is the last hole before P7 adds any more.
-4. **P7: the phone's own tools.** A loopback tool service and a small `topo` CLI in the guest (calendar, reminders, contacts, location, notify), found by a skill rather than paid for per turn. After P6, since notes are the tool everything else writes into.
-5. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`). Last because each step before it changes what review sees.
+1. **P5b: delete the Messages API.** `MessagesAPI`, `MessagesAPIBrain` and the model call in `TurnRunner` are compiled only for the suites; removing them closes #129 and takes a whole class of "falls back to the API" defects off the review's list. Before P6, because P6 adds a mount the bridge suites will need to cover and they should not still be running over two brains.
+2. **P6: the memory as a mount.** The vault folder into the guest, eviction handled through the fork's file coordination, the mirror untouched. This is what makes the mind able to read and write its own notes, and it is the last hole before P7 adds any more.
+3. **P7: the phone's own tools.** A loopback tool service and a small `topo` CLI in the guest (calendar, reminders, contacts, location, notify), found by a skill rather than paid for per turn. After P6, since notes are the tool everything else writes into.
+4. **P8: TestFlight with the guest.** Bundle size, export compliance re-judged now that a rootfs with OpenSSL ships, the App Review risk written down (`docs/testflight.md`). Last because each step before it changes what review sees.
+
+Not sequenced, on the issue list: #172's fix round and its re-review; #177, Topo's movement under fast scrolling (a survey of game steering first); #178, nested blockquotes; #179, markdown round two — swift-markdown as the parser, tables that scroll sideways, tap-to-full-screen on code and tables, tappable links.
 
 ## Parked, and why
 
@@ -37,10 +40,6 @@ What is built, what comes next and in what order, what is parked, and the thread
 - need to implement a (+) button on the glass for inserting attachments
 - need a model + effort selector on the glass — opens to a panel with a model size slider, topo remains visible with this panel open so his head size can react in real time to model changes
 - first-run progress screen with progress bars for environment setup, speech setup, and transcription setup — need to decide how to show this progress when launching a newly-updated app that already has a log, since it will jump straight to the transcript while things download in the background
-
-### Pull requests
-
-- **#165** at `59056be`: suites, `test` and `review_gate` green; Codex failed on its usage limit; merge is `gh api -X PUT repos/samdu/topo/pulls/165/merge -f merge_method=squash -f sha=<head>` on Sam's word. One device line unticked and skippable: a `placement: glass` set in the vault's `look.json` rather than Tuning still glides him at launch, because the vault's look is read only after a sync.
 
 ### Deferred proof gaps
 
