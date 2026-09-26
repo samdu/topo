@@ -596,6 +596,20 @@ enum LookCensus {
 
     private static func alike<T: Equatable>(_ a: T, _ b: Any) -> Bool { a == (b as? T) }
 
+    /// What a path names, as the reader knows it: a part holds fields, top-level or nested; a
+    /// field is one, a compound included; a key inside a compound is inside it.
+    func testThePlaceOfAPathIsTheReaders() {
+        for part in ["transcript", "mascot", "composer.well", "mascot.debug"] {
+            XCTAssertEqual(LookDocument.place(of: part.split(separator: ".").map(String.init)), .part, part)
+        }
+        for field in ["mascot.scale", "mascot.pin", "composer.glow"] {
+            XCTAssertEqual(LookDocument.place(of: field.split(separator: ".").map(String.init)), .field, field)
+        }
+        XCTAssertEqual(LookDocument.place(of: ["composer", "glow", "radius"]), .inside("composer.glow"))
+        XCTAssertEqual(LookDocument.place(of: ["mascot", "wings"]), .unknown)
+        XCTAssertEqual(LookDocument.place(of: ["nothing"]), .unknown)
+    }
+
     private static func resolved(_ colour: Color) -> [UIColor] {
         [UITraitCollection(userInterfaceStyle: .light), UITraitCollection(userInterfaceStyle: .dark)]
             .map { UIColor(colour).resolvedColor(with: $0) }

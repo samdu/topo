@@ -101,20 +101,25 @@ enum LookDocument {
     }
 
     /// Where `path` is, asked of the reader itself: a document holding `null` at `path` is read,
-    /// and the reader says which keys it walked into as parts and which it asked for as fields.
+    /// and the reader says which keys it walked into as parts and which it asked for as fields;
+    /// one holding an empty object there says whether `path` is itself a part.
     static func place(of path: [String]) -> Place {
         guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return .unknown }
-        var object: [String: Any] = [path[path.count - 1]: NSNull()]
-        for key in path.dropLast().reversed() { object = [key: object] }
-        let reader = Reader()
-        var scratch = Look()
-        reader.into(object, "") { r in parts(r, &scratch) }
+        func probe(_ leaf: Any) -> Reader {
+            var object: [String: Any] = [path[path.count - 1]: leaf]
+            for key in path.dropLast().reversed() { object = [key: object] }
+            let reader = Reader()
+            var scratch = Look()
+            reader.into(object, "") { r in parts(r, &scratch) }
+            return reader
+        }
+        let reader = probe(NSNull())
         for count in 1..<path.count where !reader.parts.contains(path.prefix(count).joined(separator: ".")) {
             let outer = Array(path.prefix(count))
             return place(of: outer) == .field ? .inside(outer.joined(separator: ".")) : .unknown
         }
         let name = path.joined(separator: ".")
-        if reader.parts.contains(name) { return .part }
+        if probe([String: Any]()).parts.contains(name) { return .part }
         return reader.notes.contains("\(name) is null") ? .field : .unknown
     }
 
