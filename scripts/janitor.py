@@ -241,7 +241,11 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     # `select`, `test` or suite job is the run's own failure, not the reviewer's.
     no_verdict = ("reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
                   and not suite_red)
-    infra_suite = bool(suite_red) and all(infra_red(j) for j in suite_red)
+    # `test` is the gate and is red whenever a suite job is; the reviewer chain
+    # waits on the suites. Any other red — `select`, a job this script does not
+    # know — is the run's own, and no runner red beside it is rerun.
+    others_red = [j["name"] for j in red if j["name"] not in SUITE_JOBS + ("test",) + REVIEW_CHAIN]
+    infra_suite = bool(suite_red) and not others_red and all(infra_red(j) for j in suite_red)
     rerun_key = f"{n}:{head}"
     if infra_suite or no_verdict:
         why = ("the reviewer never ran (no verdict)" if no_verdict
@@ -367,9 +371,12 @@ class Shell:
             return False
         return None
 
-    def newest_run(self, head):
+    def newest_run(self, head, number):
+        """The newest pull_request validate run for this head that GitHub ties to
+        this PR: two PRs can share a head, and one's green run is not the other's."""
         runs = self.gh_api(f"repos/{REPO}/actions/workflows/{WORKFLOW}/runs?head_sha={head}&event=pull_request&per_page=100",
-                           "[.workflow_runs[] | {id, status, conclusion, created_at, updated_at}]") or []
+                           "[.workflow_runs[] | {id, status, conclusion, created_at, updated_at, prs: [.pull_requests[].number]}]") or []
+        runs = [r for r in runs if number in (r.get("prs") or [])]
         runs.sort(key=lambda r: (r["created_at"], r["id"]))
         return runs[-1] if runs else None
 
@@ -498,7 +505,12 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
         warn(f"report not delivered (no BRIDGE_PEER_TOKEN in {MESH_ENV}); kept for the next pass")
         state["pending"] = lines
         return
-    body = {"id": str(uuid.uuid4()), "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text}
+    # The id is kept with the lines: a bridge that took the message and then
+    # answered badly is sent the same id again, so a receiver keying on it sees
+    # one report, not two. A new id only once the bridge has answered for good.
+    message_id = state.get("pending_id") or str(uuid.uuid4())
+    state["pending_id"] = message_id
+    body = {"id": message_id, "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text}
     try:
         status, answer = sh.post(MESH_DELIVER_URL, body, token)
     except RuntimeError as ex:
@@ -507,9 +519,11 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
         return
     if status == 200:
         state["pending"] = []
+        state.pop("pending_id", None)
     elif status == 400:
         warn(f"report refused for good by {REPORT_TO}'s bridge ({answer}); {len(lines)} line(s) dropped")
         state["pending"] = []
+        state.pop("pending_id", None)
     else:
         warn(f"report not delivered ({status} {answer}); kept for the next pass")
         state["pending"] = lines
@@ -568,7 +582,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
         try:
             run = jobs = None
             if not pr["isDraft"]:
-                run = sh.newest_run(head)
+                run = sh.newest_run(head, n)
                 jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
             wants = decide_pr(pr, run, jobs or [], state, now, require_label)
         except RuntimeError as ex:
@@ -666,6 +680,11 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
                 tip = sh.tip(wt["path"])
                 if tip != wt["head"]:
                     say(key, f"worktree {name} ({wt['branch']}) moved to {tip[:7]} while the sweep looked; left.")
+                    continue
+                # And the branch is asked again: a PR opened from it since the
+                # history was read makes this its worktree, not a leftover.
+                if any(p.get("state") == "OPEN" for p in sh.pr_history(wt["branch"])):
+                    say(key, f"worktree {name} ({wt['branch']}) got an open PR while the sweep looked; left.")
                     continue
                 sh.remove_worktree(checkout, wt["path"])
                 try:

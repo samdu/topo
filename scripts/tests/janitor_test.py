@@ -38,9 +38,9 @@ def pr(**kw):
     return d
 
 
-def run(conclusion="success", status="completed", since=timedelta(minutes=30)):
+def run(conclusion="success", status="completed", since=timedelta(minutes=30), number=7):
     return {"id": 99, "status": status, "conclusion": conclusion, "created_at": ago(since + timedelta(minutes=20)),
-            "updated_at": ago(since)}
+            "updated_at": ago(since), "pull_requests": [{"number": number}]}
 
 
 def job(name, conclusion, failed_step=None, i=1, step_conclusion="failure"):
@@ -196,6 +196,13 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), [], "a review_gate red under a reviewer that never ran is no verdict")
 
+    def test_a_red_select_beside_a_setup_red_holds_the_rerun_and_a_red_gate_does_not(self):
+        j = jobs(select="failure", topo_ui=("failure", "Boot the simulator"), test="failure")
+        self.assertNotIn("rerun", kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)))
+        j = jobs(topo_ui=("failure", "Boot the simulator"), test="failure", reviewer_ran="failure", review_gate="failure")
+        self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), ["rerun"],
+                         "the gate and the reviewer chain are red because the suite is; that is still a runner red")
+
     def test_a_cancelled_run_with_nothing_after_it_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)), ["report:cancelled"])
 
@@ -315,10 +322,15 @@ if tool == "gh":
     if a[:2] == ["pr", "list"] and "--state" in a and a[a.index("--state") + 1] == "open":
         if S.get("prs_garbage"): out("<html>rate limited</html>")
         out(S["prs"][:limit])
-    if a[:2] == ["pr", "list"] and "--head" in a: out(S["history"].get(a[a.index("--head") + 1], [])[:limit])
+    if a[:2] == ["pr", "list"] and "--head" in a:
+        branch = a[a.index("--head") + 1]
+        asked = open(os.environ["FAKE_LOG"]).read().count("--head " + branch)
+        if asked > 1 and branch in S.get("history_later", {}): out(S["history_later"][branch][:limit])
+        out(S["history"].get(branch, [])[:limit])
     if a[:2] == ["variable", "get"]: out("false")
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
-        head = a[1].split("head_sha=")[1].split("&")[0]; out(S["runs"].get(head, []))
+        head = a[1].split("head_sha=")[1].split("&")[0]
+        out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
     if a[0] == "api" and a[1].endswith("/logs"): out(S.get("log", ""))
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
@@ -504,6 +516,24 @@ class WholePass(unittest.TestCase):
         self.assertIn("update-ref -d refs/heads/buddy/old 2222", calls)
         self.assertIn("the branch ref moved past 2222 and is kept", Bridge.received[-1]["body"]["text"])
 
+    def test_another_prs_green_run_on_the_same_head_merges_nothing(self):
+        s = self.scripted(prs=[pr(), pr(number=8, headRefName="buddy/y")], runs={HEAD: [run(number=8)]})
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("gh pr merge 8", calls)
+        self.assertNotIn("gh pr merge 7", calls, "PR 8's run is not PR 7's, whatever the head")
+        self.assertIn("#7 (buddy/x): ready with no validate run", Bridge.received[-1]["body"]["text"])
+
+    def test_a_pr_opened_from_the_branch_while_the_sweep_looked_keeps_its_worktree(self):
+        later = {"buddy/old": [{"number": 5, "state": "MERGED", "mergedAt": ago(timedelta(hours=30)), "headRefOid": "2222"},
+                               {"number": 9, "state": "OPEN", "mergedAt": None, "headRefOid": "2222"}]}
+        p, calls = self.run_pass(self.scripted(history_later=later))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(calls.count("--head buddy/old"), 2, "asked once to decide and once before the remove")
+        self.assertNotIn("worktree remove", calls)
+        self.assertNotIn("update-ref", calls)
+        self.assertIn("got an open PR while the sweep looked; left", Bridge.received[-1]["body"]["text"])
+
     def test_a_branch_history_that_fills_its_page_is_not_read_as_whole(self):
         old = {"number": 1, "state": "OPEN", "mergedAt": None, "headRefOid": "0000"}
         newer = [{"number": 2 + i, "state": "MERGED", "mergedAt": ago(timedelta(hours=30)), "headRefOid": "2222"} for i in range(100)]
@@ -567,7 +597,7 @@ class WholePass(unittest.TestCase):
         snap = os.path.join(self.work, "state-at-publish.json")
         s = self.scripted(published="abc1234", publish_snapshot=snap,
                           prs=[pr(), pr(number=8, headRefOid="feedface0")],
-                          runs={HEAD: [run()], "feedface0": [run("failure")]},
+                          runs={HEAD: [run()], "feedface0": [run("failure", number=8)]},
                           jobs=jobs(topo_unit="success", others="success", topo_ui="success", reviewer_ran="failure"))
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
@@ -695,11 +725,18 @@ class WholePass(unittest.TestCase):
         self.assertIn("IncompleteRead", p.stderr)
         state = self.state_file()
         self.assertTrue(any("merged #7" in l for l in state["pending"]))
+        self.assertEqual(len(Bridge.received), 1, "the bridge took the message before answering badly")
+        first_id = Bridge.received[0]["body"]["id"]
+        self.assertEqual(state["pending_id"], first_id)
         Bridge.short_body = False
         p, calls = self.run_pass(self.scripted(prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
         self.assertNotIn("pr merge", calls)
         self.assertIn("merged #7", Bridge.received[-1]["body"]["text"])
+        self.assertEqual(Bridge.received[-1]["body"]["id"], first_id, "the retry is the same message, by id")
         self.assertEqual(self.state_file()["pending"], [])
+        self.assertNotIn("pending_id", self.state_file())
+        p, calls = self.run_pass(self.scripted())
+        self.assertNotEqual(Bridge.received[-1]["body"]["id"], first_id, "a report the bridge answered gets a new id")
 
     def test_no_peer_token_keeps_the_report(self):
         os.remove(self.mesh_env)
