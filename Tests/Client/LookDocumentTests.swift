@@ -610,6 +610,15 @@ enum LookCensus {
         XCTAssertEqual(LookDocument.place(of: ["nothing"]), .unknown)
     }
 
+    /// Which compound fields read an object onto what they hold, as the reader says: a shadow
+    /// and a point do; a font and a pin are replaced whole; a scalar and a part are not compounds.
+    func testTheReaderSaysWhichCompoundsMerge() {
+        XCTAssertTrue(LookDocument.merges(["composer", "glow"]))
+        for path in [["transcript", "bodyFont"], ["mascot", "pin"], ["mascot", "scale"], ["mascot"], ["nothing"]] {
+            XCTAssertFalse(LookDocument.merges(path), path.joined(separator: "."))
+        }
+    }
+
     private static func resolved(_ colour: Color) -> [UIColor] {
         [UITraitCollection(userInterfaceStyle: .light), UITraitCollection(userInterfaceStyle: .dark)]
             .map { UIColor(colour).resolvedColor(with: $0) }

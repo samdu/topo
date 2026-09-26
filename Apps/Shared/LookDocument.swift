@@ -105,22 +105,32 @@ enum LookDocument {
     /// one holding an empty object there says whether `path` is itself a part.
     static func place(of path: [String]) -> Place {
         guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return .unknown }
-        func probe(_ leaf: Any) -> Reader {
-            var object: [String: Any] = [path[path.count - 1]: leaf]
-            for key in path.dropLast().reversed() { object = [key: object] }
-            let reader = Reader()
-            var scratch = Look()
-            reader.into(object, "") { r in parts(r, &scratch) }
-            return reader
-        }
-        let reader = probe(NSNull())
+        let reader = probe(path, NSNull())
         for count in 1..<path.count where !reader.parts.contains(path.prefix(count).joined(separator: ".")) {
             let outer = Array(path.prefix(count))
             return place(of: outer) == .field ? .inside(outer.joined(separator: ".")) : .unknown
         }
         let name = path.joined(separator: ".")
-        if probe([String: Any]()).parts.contains(name) { return .part }
+        if probe(path, [String: Any]()).parts.contains(name) { return .part }
         return reader.notes.contains("\(name) is null") ? .field : .unknown
+    }
+
+    /// Whether the compound field at `path` reads an object onto what it already holds, so that
+    /// an object naming some of its keys keeps the rest (a shadow, a point), rather than replacing
+    /// it whole (a font, a pin). Asked of the reader itself.
+    static func merges(_ path: [String]) -> Bool {
+        guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return false }
+        return probe(path, [String: Any]()).merging.contains(path.joined(separator: "."))
+    }
+
+    /// A reader that has read a document holding `leaf` at `path` and nothing else.
+    private static func probe(_ path: [String], _ leaf: Any) -> Reader {
+        var object: [String: Any] = [path[path.count - 1]: leaf]
+        for key in path.dropLast().reversed() { object = [key: object] }
+        let reader = Reader()
+        var scratch = Look()
+        reader.into(object, "") { r in parts(r, &scratch) }
+        return reader
     }
 
     /// The document's top level: each part, read where it is named.
@@ -325,6 +335,8 @@ enum LookDocument {
         private(set) var taken: [String] = []
         /// The path of every part walked into.
         private(set) var parts: Set<String> = []
+        /// The path of every compound field that reads an object onto what it already holds.
+        private(set) var merging: Set<String> = []
         private var here: [String: Any] = [:]
         private var path = ""
         private var asked: Set<String> = []
@@ -796,6 +808,7 @@ enum LookDocument {
             guard let object = raw as? [String: Any] else {
                 return note(key, "is not an object naming a colour, a radius and an offset")
             }
+            merging.insert(name(key))
             var shadow = value
             var named = false
             into(object, name(key)) { r in
@@ -826,6 +839,7 @@ enum LookDocument {
             guard let object = raw as? [String: Any] else {
                 return note(key, "is not an object naming an x and a y")
             }
+            merging.insert(name(key))
             var point = value
             var named = false
             into(object, name(key)) { r in
