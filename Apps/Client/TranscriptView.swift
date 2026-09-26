@@ -17,6 +17,9 @@ struct TranscriptView: View {
     /// about to become. Nil on a screen with nothing to write with — the watch, the television,
     /// a viewer — and the row is then never drawn.
     var draft: Draft?
+    /// Turns on their way that the row is not holding: said before its own, and said after it.
+    /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
+    var queued: (before: [QueuedTurn], after: [QueuedTurn]) = ([], [])
     @Environment(\.look) private var look
 
     var body: some View {
@@ -39,9 +42,11 @@ struct TranscriptView: View {
                             TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
                         }
                     }
+                    ForEach(queued.before) { QueuedTurnRow(turn: $0) }
                     if let draft, draft.state != .hidden {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
+                    ForEach(queued.after) { QueuedTurnRow(turn: $0) }
                 }
                 .padding(.horizontal, look.transcript.horizontalPadding)
                 .padding(.vertical, look.transcript.spacing)
@@ -148,6 +153,38 @@ struct TurnRow: View {
         } else {
             MarkdownText(source: turn.text, bare: bare)
         }
+    }
+}
+
+/// Words on the line that are not in the log and not in the row: a turn on its way that nothing
+/// else draws.
+struct QueuedTurn: Identifiable, Equatable {
+    let text: String
+    let nonce: String
+    var id: String { nonce }
+}
+
+/// A turn on its way that the row is not holding, drawn where the person's turn will land and in
+/// the colour the row draws a turn on its way in (`look.draft.sending`): it is not a turn until the
+/// log has it, and then it is drawn as one, in the person's own bubble.
+struct QueuedTurnRow: View {
+    let turn: QueuedTurn
+    @Environment(\.look) private var look
+
+    var body: some View {
+        let enclosure = look.draft.sending
+        Text(turn.text)
+            .font(look.transcript.bodyFont)
+            .foregroundStyle(look.transcript.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, enclosure.horizontalPadding)
+            .padding(.vertical, enclosure.verticalPadding)
+            .background { TurnShape.fill(enclosure) }
+            .mascotObstacle()
+            .padding(.leading, look.transcript.personLeadingInset)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue("Sending")
     }
 }
 

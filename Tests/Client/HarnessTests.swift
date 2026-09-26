@@ -781,6 +781,125 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(transport.sent.count, 2)
     }
 
+    // MARK: The line that stopped, sent again by the loop
+
+    /// The phone on 2026-09-26: a typed turn stops the line because iCloud is out of reach —
+    /// reads refused, so the writer cannot be made and the transcript cannot be read — and the
+    /// chat says Topo will try again. iCloud comes back while the answering loop runs. The loop's
+    /// next pass sends the line, under the nonce it was first said with, with nobody pressing
+    /// anything and no relaunch; and the read failure it was showing goes once a read gets
+    /// through.
+    func testTheLoopSendsAStoppedLineOnceICloudIsBack() async throws {
+        let memory = InMemoryRecordDatabase()
+        let db = FailingDatabase(memory)
+        await db.refuseReads(true)
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Done."))),
+                            pause: { try await beats.pause($0) })
+        await phone.send("water the plants")
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn went while iCloud was out of reach")
+        XCTAssertTrue(phone.hasWaiting)
+        let nonce = try XCTUnwrap(phone.owed.first?.nonce)
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn went while iCloud was still out of reach")
+        XCTAssertNotNil(phone.error, "the chat does not say why the turn is waiting")
+
+        await db.refuseReads(false)
+        await beats.tick()
+        try await eventually("the loop sending the line") { phone.waiting.isEmpty }
+        open.cancel()
+        await open.value
+
+        let turns = try await log(memory)
+        XCTAssertEqual(turns.map(\.text), ["water the plants", "Done."], "the loop did not send the stopped line")
+        XCTAssertEqual(turns.first?.nonce, nonce, "the retry said the words under a second nonce")
+        XCTAssertNil(phone.error, "the chat still says the read failed")
+    }
+
+    /// While iCloud stays out of reach the loop keeps trying, and backs off as it fails: the
+    /// first attempt on the first pass, then one, two, four and eight intervals apart, then
+    /// twelve for good. An attempt is the line being sent (the harness busy), counted by the pass
+    /// it ran in; the answering pass's own reach for iCloud is not one.
+    func testTheLoopBacksOffWhileTheLineKeepsFailing() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        await db.refuseReads(true)
+        let beats = Beats()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                guard await MainActor.run(body: { seen.harness?.busy ?? false }) else { return }
+                                await attempts.note(await beats.passes + 1)
+                            },
+                            pause: { try await beats.pause($0) })
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...41 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            await beats.tick()
+        }
+        open.cancel()
+        await open.value
+
+        let passes = await attempts.passes
+        XCTAssertEqual(passes, [1, 2, 4, 8, 16, 28, 40], "the loop's attempts are not backing off as they fail")
+        XCTAssertEqual(phone.waiting, ["water the plants"])
+    }
+
+    /// A success clears the backoff: after a run of failures, a line that went and a new turn
+    /// that stops it again is sent on the very next pass, not on the pass the old backoff named.
+    func testALineThatWentStartsItsBackoffAgain() async throws {
+        let memory = InMemoryRecordDatabase()
+        let db = FailingDatabase(memory)
+        await db.refuseReads(true)
+        let beats = Beats()
+        let phone = harness(db, defaults: makeDefaults(),
+                            transport: ScriptedTransport((200, reply("Done.")), (200, reply("Also done."))),
+                            pause: { try await beats.pause($0) })
+        await phone.send("water the plants")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...8 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            await beats.tick()
+        }
+        // The loop's attempts on passes 1, 2, 4 and 8 have failed; its next would be pass 16.
+        await db.refuseReads(false)
+        await phone.retry()
+        XCTAssertTrue(phone.waiting.isEmpty, "the button's retry did not send the line")
+
+        await db.refuseReads(true)
+        await phone.send("and the ferns")
+        XCTAssertEqual(phone.waiting, ["and the ferns"])
+        await db.refuseReads(false)
+        await beats.tick()
+        try await eventually("pass 9") { await beats.passes >= 9 }
+        XCTAssertTrue(phone.waiting.isEmpty, "the backoff from before the line went was carried over")
+        open.cancel()
+        await open.value
+
+        let turns = try await log(memory).filter { $0.role == .person }.map(\.text)
+        XCTAssertEqual(turns, ["water the plants", "and the ferns"])
+    }
+
+    /// "Couldn't read the transcript" is about the last read, so the next read that gets through
+    /// takes it down, with nothing on the line to send.
+    func testAReadThatGetsThroughClearsTheReadFailure() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await db.refuseReads(true)
+        await phone.refresh()
+        XCTAssertEqual(phone.error, "Couldn't read the transcript: iCloud is out of reach. Topo will try again.")
+        await db.refuseReads(false)
+        await phone.refresh()
+        XCTAssertNil(phone.error, "a read got through and the chat still says it did not")
+    }
+
     // MARK: The reply that is read aloud
 
     /// A reply written by another primary — the hub, or a phone holding the lease.
@@ -1346,6 +1465,18 @@ private actor Answers {
 private actor Switch {
     private(set) var isOn = true
     func set(_ on: Bool) { isOn = on }
+}
+
+/// The passes of the answering loop in which the line was sent.
+private actor Attempts {
+    private(set) var passes: [Int] = []
+    func note(_ pass: Int) { passes.append(pass) }
+    func reset() { passes = [] }
+}
+
+/// The harness a closure made before it needs to ask about it.
+@MainActor private final class Seen {
+    weak var harness: Harness?
 }
 
 /// The answering loop's pause, driven by the test: each pause counts a finished pass and waits
