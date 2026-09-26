@@ -12,44 +12,53 @@ judgement:
   1. merges a PR that meets every condition automerge.yaml merges on — ready,
      on main, its newest pull_request validate run green, no unchecked box in
      the description, the automerge label when the repository requires one —
-     and that automerge has left unmerged for `grace` minutes, pinned to the
-     head the green run was read for;
+     and that automerge has left unmerged for `GRACE`, pinned to the head the
+     green run was read for;
   2. reruns the failed jobs of a red validate run once per head when the red
-     is a suite job (`test`) or the reviewer never ran (`reviewer_ran`), the
-     run has been over for `settle` minutes and no run is in progress; a run
-     red again after that is reported with its failing jobs and tests;
+     is the infrastructure's: a suite job that failed before or after its
+     tests ran (a setup step, an upload, a runner that gave no step), or the
+     reviewer never ran (`reviewer_ran` red with every suite job green). A
+     suite job whose tests, build or scripts failed is never rerun. The run
+     has to be over for `SETTLE` and nothing in progress; red again after
+     the rerun, it is reported with its failing jobs and tests;
   3. republishes the over-the-air install page when the commit it carries is
      not origin/main's;
-  4. removes a linked worktree whose branch's PR merged more than `sweep`
-     hours ago, killing first any tmux session sitting in it;
-  5. reports, once per condition per head every `repeat` minutes: a verdict
-     that blocks, a draft untouched for `grace`, a green PR with Proof boxes
-     unticked, a ready PR with no validate run, a run cancelled with nothing
-     after it, and a PR nothing has touched for `idle` minutes while no run
-     is in progress.
+  4. removes a linked worktree whose tip is exactly the head of a merged PR
+     on its branch, merged more than `SWEEP` ago, with no PR open on the
+     branch and nothing uncommitted — killing first any tmux session with a
+     pane in it — and deletes the local branch, which by then names nothing
+     the merged PR's head does not keep;
+  5. reports, once per condition per head and again every `REPEAT` while it
+     holds: a verdict that blocks, a draft untouched for `GRACE`, a green PR
+     with Proof boxes unticked, a ready PR with no validate run, a run
+     cancelled with nothing after it, and a PR nothing has touched for
+     `IDLE` while no run is in progress.
 
 Everything it decides is a function of what it read; everything it does is a
 `gh`, `git`, `tmux` or shell call behind `Shell`, so `--dry-run` prints the
-pass instead. The report, when there is one, goes into buddy-prime through
-the mesh socket its bridge registers on this host, as one message from
-`topo-janitor`; an undeliverable report is kept in the state file and sent
-with the next. A quiet pass sends nothing. Nothing here reads a review,
-merges over a red or missing verdict, or edits code.
+pass instead. The report, when there is one, is posted to buddy-prime's mesh
+bridge over the fleet's authenticated `/deliver` route with this host's own
+peer token, as `topo-janitor` on the host `buddy-janitor`; a report the far
+bridge does not take is kept in the state file and sent with the next. A
+quiet pass sends nothing. Nothing here reads a review, merges over a red or
+missing verdict, or edits code. One pass at a time: the state directory
+holds a lock, and a pass that finds it held exits.
 
 State: ~/.local/state/topo-janitor/state.json (override with --state).
 """
 from __future__ import annotations
 
 import argparse
-import glob
-import hashlib
+import fcntl
 import json
 import os
 import re
 import shlex
-import socket
 import subprocess
 import sys
+import tempfile
+import urllib.error
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -58,7 +67,9 @@ WORKFLOW = "pr-validate.yaml"
 INSTALL_PAGE = "https://experiments.hexagon.zone/ota/files/623f17f9f38db5b81d0b/version.json"
 PUBLISH = "~/github/experiments/ota/publish-topo.sh"
 CHECKOUT = "~/github/topo"
-REG_DIR = os.path.expanduser("~/.claude/sessions")
+MESH_DELIVER_URL = os.environ.get("TOPO_JANITOR_DELIVER_URL", "http://192.168.1.201/mesh/buddy-prime/deliver")
+MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
+MESH_SELF = "buddy-janitor"   # this host's verified mesh name; the sender below is the janitor's
 REPORT_TO = "buddy-prime"
 FROM = "topo-janitor"
 
@@ -67,12 +78,23 @@ SETTLE = timedelta(minutes=10)     # a red run is left this long before a rerun
 IDLE = timedelta(minutes=45)       # nothing moving, nothing running
 REPEAT = timedelta(minutes=180)    # a standing condition is said again after this
 SWEEP = timedelta(hours=24)        # a merged branch's worktree lives this long
-PUBLISH_RETRY = timedelta(hours=2)  # a failed publish is tried again after this
-PENDING_MAX = 60                   # report lines kept for a later delivery
+PUBLISH_RETRY = timedelta(hours=2)  # a publish is not tried again for one commit inside this
+PUBLISH_KEEP = timedelta(days=7)   # publish records older than this are forgotten
+PENDING_MAX = 200                  # report lines kept for a later delivery
 
 UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)   # automerge.yaml's own test
-SUITE_JOBS = ("test",)
+SUITE_JOBS = ("topo_unit", "topo_ui", "others")
 NO_VERDICT_JOBS = ("reviewer_ran",)
+# A suite job red at one of these steps is the infrastructure's, not the code's:
+# nothing of the PR ran, or the tests had already passed.
+SETUP_STEPS = {
+    "Set up job", "Boot the simulator", "Lane", "Audio loopback for the microphone test",
+    "Cache the ear's models", "The ear's models for the microphone test",
+    "The rootfs, bash and Claude Code for the userland suites", "Cache the manifest's files",
+    "Clear Topo's privacy grants on the simulator", "Audio lane holds before the microphone test",
+    "Audio lane holds after the microphone test", "Upload logs and result bundles", "Complete job",
+}
+SETUP_PREFIXES = ("Run actions/", "Run ./.github/actions/", "Post Run ", "Join the tailnet")
 
 
 # --- time ------------------------------------------------------------------
@@ -127,12 +149,22 @@ def parse_worktrees(porcelain):
     return out
 
 
+def infra_red(job):
+    """Whether a red suite job failed in the infrastructure rather than the code:
+    no step of its own failed (the runner was lost), or every failed step is a
+    setup, lane or upload step. A failed build, test or script step is the code's."""
+    failed = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") == "failure"]
+    if not failed:
+        return True
+    return all(n in SETUP_STEPS or n.startswith(SETUP_PREFIXES) for n in failed)
+
+
 def decide_pr(pr, run, jobs, state, now, require_label=False):
     """What one open PR wants from this pass.
 
     Returns a list of dicts: {"kind": merge|rerun|report, "key": ..., "text": ...}.
     `run` is the newest pull_request validate run for the PR's head, or None;
-    `jobs` its jobs as [{name, conclusion, id}]. Pure: nothing is read or done.
+    `jobs` its jobs as [{name, conclusion, id, steps}]. Pure: nothing is read or done.
     """
     n, head = pr["number"], pr["headRefOid"]
     short = head[:7]
@@ -188,9 +220,11 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     red_names = [j["name"] for j in red]
     suite_red = [j for j in red if j["name"] in SUITE_JOBS]
     no_verdict = any(j["name"] in NO_VERDICT_JOBS for j in red) and not suite_red
+    infra_suite = bool(suite_red) and all(infra_red(j) for j in suite_red)
     rerun_key = f"{n}:{head}"
-    if suite_red or no_verdict:
-        why = "the reviewer never ran (no verdict)" if no_verdict else f"a suite job is red ({', '.join(j['name'] for j in suite_red)})"
+    if infra_suite or no_verdict:
+        why = ("the reviewer never ran (no verdict)" if no_verdict
+               else f"a suite job failed outside its tests ({', '.join(j['name'] for j in suite_red)})")
         if rerun_key not in state.get("rerun", {}):
             if since > SETTLE:
                 out.append({"kind": "rerun", "key": rerun_key, "run_id": run["id"], "number": n,
@@ -200,7 +234,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
         report("red", f"{title}: red again on {short} after one rerun ({detail}); {why}.")
         return out
 
-    if "review_gate" in red_names:
+    if "review_gate" in red_names and not suite_red:
         report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
     if age > IDLE:
         detail = ", ".join(red_names) or conclusion
@@ -222,20 +256,28 @@ def decide_publish(published_commit, main_sha, state, now):
     return f"the page carries {published_commit or 'nothing'} and origin/main is {main_sha[:7]}"
 
 
-def decide_sweep(worktrees, checkout, merged_at, now):
-    """Worktrees to remove: linked, on a branch, whose PR merged over SWEEP ago.
+def decide_sweep(worktrees, checkout, history, now):
+    """Worktrees to remove: linked, on a branch with no open PR, whose tip is the
+    very head a PR on that branch was merged at, more than SWEEP ago.
 
-    `merged_at(branch)` answers the merge time of the branch's PR, or None.
+    `history(branch)` answers every PR ever opened from the branch as
+    [{number, state, mergedAt, headRefOid}]. A branch name reused for a later
+    PR, or a tip with commits past what was merged, matches nothing.
     """
     out = []
     for wt in worktrees:
         if os.path.realpath(wt["path"]) == os.path.realpath(checkout) or not wt.get("branch"):
             continue
-        m = merged_at(wt["branch"])
-        if not m or now - m["mergedAt"] < SWEEP:
+        prs = history(wt["branch"]) or []
+        if any(p.get("state") == "OPEN" for p in prs):
             continue
-        out.append({"path": wt["path"], "branch": wt["branch"], "number": m["number"],
-                    "age": now - m["mergedAt"]})
+        merged = [p for p in prs if p.get("state") == "MERGED" and p.get("headRefOid") == wt.get("head")]
+        if not merged:
+            continue
+        at = min(parse_time(p["mergedAt"]) for p in merged if p.get("mergedAt"))
+        if now - at < SWEEP:
+            continue
+        out.append({"path": wt["path"], "branch": wt["branch"], "number": merged[0]["number"], "age": now - at})
     return out
 
 
@@ -248,7 +290,9 @@ def due(state, key, now):
 # --- the shell -------------------------------------------------------------
 
 class Shell:
-    """Every process the janitor runs. `dry` runs nothing that changes anything."""
+    """Every process the janitor runs. `dry` runs nothing that changes anything.
+    Every failure is a RuntimeError: a timeout, a non-zero exit, an answer that
+    is not JSON."""
 
     def __init__(self, dry=False, log=None):
         self.dry = dry
@@ -258,13 +302,22 @@ class Shell:
         if mutating and self.dry:
             self.log(f"dry-run: {shlex.join(argv)}")
             return subprocess.CompletedProcess(argv, 0, "", "")
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, **kw)
+        try:
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, **kw)
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(f"{shlex.join(argv[:3])}… gave no answer in {timeout} s")
+        except OSError as ex:
+            raise RuntimeError(f"{shlex.join(argv[:1])}: {ex}")
         if check and p.returncode != 0:
             raise RuntimeError(f"{shlex.join(argv[:3])}… exited {p.returncode}: {p.stderr.strip()[-400:]}")
         return p
 
     def gh_json(self, *args):
-        return json.loads(self.run(["gh", *args]).stdout or "null")
+        out = self.run(["gh", *args]).stdout
+        try:
+            return json.loads(out or "null")
+        except ValueError:
+            raise RuntimeError(f"gh {shlex.join(args[:2])}… answered something that is not JSON")
 
     def gh_api(self, path, jq=None):
         args = ["api", path]
@@ -282,7 +335,7 @@ class Shell:
         p = self.run(["gh", "variable", "get", "AUTOMERGE_REQUIRE_LABEL", "--repo", REPO], check=False)
         if p.returncode == 0:
             return p.stdout.strip() == "true"
-        if "variable not found" in (p.stderr or "").lower() or "not found" in (p.stderr or "").lower():
+        if "not found" in (p.stderr or "").lower():
             return False
         return None
 
@@ -294,7 +347,7 @@ class Shell:
 
     def jobs(self, run_id):
         return self.gh_api(f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
-                           "[.jobs[] | {id, name, conclusion}]") or []
+                           "[.jobs[] | {id, name, conclusion, steps: [.steps[] | {name, conclusion}]}]") or []
 
     def job_log(self, job_id):
         p = self.run(["gh", "api", f"repos/{REPO}/actions/jobs/{job_id}/logs"], timeout=120, check=False)
@@ -325,90 +378,93 @@ class Shell:
     def worktrees(self, checkout):
         return parse_worktrees(self.run(["git", "-C", checkout, "worktree", "list", "--porcelain"]).stdout)
 
-    def merged_pr(self, branch):
-        rows = self.gh_json("pr", "list", "--repo", REPO, "--state", "merged", "--head", branch,
-                            "--limit", "1", "--json", "number,mergedAt") or []
-        if not rows:
-            return None
-        return {"number": rows[0]["number"], "mergedAt": parse_time(rows[0]["mergedAt"])}
+    def worktree_clean(self, path):
+        return self.run(["git", "-C", path, "status", "--porcelain"]).stdout.strip() == ""
 
-    def tmux_sessions(self):
-        p = self.run(["tmux", "list-sessions", "-F", "#{session_name}\t#{pane_current_path}"], check=False)
+    def pr_history(self, branch):
+        return self.gh_json("pr", "list", "--repo", REPO, "--state", "all", "--head", branch,
+                            "--limit", "30", "--json", "number,state,mergedAt,headRefOid") or []
+
+    def tmux_panes(self):
+        """Every pane of every session as (session, current path)."""
+        p = self.run(["tmux", "list-panes", "-a", "-F", "#{session_name}\t#{pane_current_path}"], check=False)
         return [tuple(l.split("\t", 1)) for l in p.stdout.splitlines() if "\t" in l]
 
     def kill_tmux(self, name):
-        self.run(["tmux", "kill-session", "-t", name], mutating=True)
+        self.run(["tmux", "kill-session", "-t", f"={name}"], mutating=True)
 
     def remove_worktree(self, checkout, path, branch):
         self.run(["git", "-C", checkout, "worktree", "remove", path], mutating=True)
         self.run(["git", "-C", checkout, "branch", "-D", branch], mutating=True, check=False)
 
+    def post(self, url, body, token):
+        """POST JSON with a bearer. Answers (status, text); raises RuntimeError
+        when nothing answers."""
+        req = urllib.request.Request(url, data=json.dumps(body).encode(),
+                                     headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as r:
+                return r.status, r.read().decode(errors="replace")[:200]
+        except urllib.error.HTTPError as ex:
+            return ex.code, ex.read().decode(errors="replace")[:200]
+        except (urllib.error.URLError, OSError) as ex:
+            raise RuntimeError(str(ex)[:200])
+
 
 # --- the report ------------------------------------------------------------
 
-def find_session(name):
-    """The live registration named `name`, newest first; None when there is none."""
-    regs = []
-    for path in glob.glob(os.path.join(REG_DIR, "*.json")):
-        try:
-            with open(path) as f:
-                reg = json.load(f)
-            os.kill(int(reg.get("pid")), 0)
-        except (OSError, ValueError, TypeError):
-            continue
-        if reg.get("name") == name and reg.get("messagingSocketPath"):
-            regs.append(reg)
-    regs.sort(key=lambda r: r.get("updatedAt") or 0, reverse=True)
-    return regs[0] if regs else None
-
-
-def send_to_session(reg, text):
-    """One mesh envelope into the session's socket, with its inbox token when it
-    publishes one. Raises OSError when the socket will not take it."""
-    sock = reg["messagingSocketPath"]
-    auth = b""
-    digest = hashlib.sha256(sock.encode()).hexdigest()
-    for key in glob.glob(os.path.join(REG_DIR, f"*.{digest}.key")):
-        try:
-            with open(key) as f:
-                token = json.load(f).get("peerToken")
-        except (OSError, ValueError):
-            continue
-        if token:
-            auth = (json.dumps({"type": "auth", "token": token}) + "\n").encode()
-            break
-    origin = f"uds:/nonexistent/{FROM}.sock"
-    content = (f'<cross-session-message from="{origin}" from-name="{FROM}">\n{text}\n'
-               "</cross-session-message>")
-    env = {"msgV": 1, "msg_id": str(uuid.uuid4()), "type": "user",
-           "message": {"role": "user", "content": content}, "priority": "next", "from": origin}
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(5)
+def peer_token(path=MESH_ENV):
+    """This host's own mesh peer token, from the bridge's env file
+    (`export BRIDGE_PEER_TOKEN=…`). None when the file or the line is absent."""
     try:
-        s.connect(sock)
-        s.sendall(auth + (json.dumps(env) + "\n").encode())
-    finally:
-        s.close()
+        with open(os.path.expanduser(path)) as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("export "):
+                    line = line[len("export "):]
+                if line.startswith("BRIDGE_PEER_TOKEN="):
+                    return line.split("=", 1)[1].strip().strip("'\"") or None
+    except OSError:
+        return None
+    return None
 
 
-def deliver(lines, state, now, dry=False, log=print, warn=None):
+def deliver(sh, lines, state, now, dry=False, log=print, warn=None):
+    """One message to buddy-prime through its bridge's /deliver, as the fleet's
+    bridges forward to each other: this host's verified name as `from`, the
+    janitor as `sender`. A 400 is the far bridge refusing the message for good,
+    so the lines are dropped and said to have been; anything else keeps them."""
     warn = warn or (lambda s: print(s, file=sys.stderr, flush=True))
     pending = state.get("pending", [])
-    lines = (pending + lines)[-PENDING_MAX:]
+    lines = pending + lines
+    if len(lines) > PENDING_MAX:
+        dropped = len(lines) - PENDING_MAX
+        lines = [f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped."] + lines[-PENDING_MAX:]
     if not lines:
         return
     text = f"[{FROM}] pass at {now.strftime('%Y-%m-%dT%H:%MZ')}\n" + "\n".join(f"- {l}" for l in lines)
     if dry:
         log(text)
         return
-    reg = find_session(REPORT_TO)
+    token = peer_token()
+    if not token:
+        warn(f"report not delivered (no BRIDGE_PEER_TOKEN in {MESH_ENV}); kept for the next pass")
+        state["pending"] = lines
+        return
+    body = {"id": str(uuid.uuid4()), "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text}
     try:
-        if not reg:
-            raise OSError(f"no live session named {REPORT_TO} on this host")
-        send_to_session(reg, text)
-        state["pending"] = []
-    except OSError as ex:
+        status, answer = sh.post(MESH_DELIVER_URL, body, token)
+    except RuntimeError as ex:
         warn(f"report not delivered ({ex}); kept for the next pass")
+        state["pending"] = lines
+        return
+    if status == 200:
+        state["pending"] = []
+    elif status == 400:
+        warn(f"report refused for good by {REPORT_TO}'s bridge ({answer}); {len(lines)} line(s) dropped")
+        state["pending"] = []
+    else:
+        warn(f"report not delivered ({status} {answer}); kept for the next pass")
         state["pending"] = lines
 
 
@@ -423,69 +479,82 @@ def load_state(path):
 
 
 def save_state(path, state):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    d = os.path.dirname(path)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".state-", suffix=".json")
+    with os.fdopen(fd, "w") as f:
         json.dump(state, f, indent=1, sort_keys=True)
     os.replace(tmp, path)
 
 
-def run_pass(sh, state, now, checkout, verbose=False):
-    lines = []
+def run_pass(sh, state, now, checkout, lines, verbose=False):
+    """One pass. What it did and found is appended to `lines` as it goes, so a
+    pass that stops early has still said what it did before it stopped."""
     quiet = []
     state.setdefault("fired", {})
     state.setdefault("rerun", {})
     state.setdefault("publish", {})
 
+    def say(key, text):
+        """A line that stands while its condition does: once per REPEAT."""
+        if due(state, key, now):
+            lines.append(text)
+            state["fired"][key] = now.isoformat()
+        else:
+            quiet.append(f"{key}: said within the last {minutes(REPEAT)}")
+
     # 1, 2, 5: the open PRs.
+    prs, prs_ok = [], False
     try:
         prs = sh.open_prs()
+        prs_ok = True
         require_label = sh.require_label()
     except RuntimeError as ex:
-        lines.append(f"could not read the open PRs: {ex}")
-        prs, require_label = [], False
+        say("prs:read", f"could not read the open PRs: {ex}")
+        require_label = None
     for pr in prs:
+        n, head = pr["number"], pr["headRefOid"]
         try:
             run = jobs = None
             if not pr["isDraft"]:
-                run = sh.newest_run(pr["headRefOid"])
+                run = sh.newest_run(head)
                 jobs = sh.jobs(run["id"]) if run and run["status"] == "completed" else []
             wants = decide_pr(pr, run, jobs or [], state, now, require_label)
         except RuntimeError as ex:
-            lines.append(f"#{pr['number']}: could not read its runs: {ex}")
+            say(f"{n}:read:{head}", f"#{n}: could not read its runs: {ex}")
             if "rate limit" in str(ex).lower():
                 lines.append("GitHub is rate limiting; the rest of the PRs wait for the next pass.")
                 break
             continue
         if not wants:
-            quiet.append(f"#{pr['number']}: nothing to do")
+            quiet.append(f"#{n}: nothing to do")
         for w in wants:
             if w["kind"] == "merge":
                 try:
                     sh.merge(w["number"], w["head"])
                     lines.append(w["text"])
                 except RuntimeError as ex:
-                    lines.append(f"#{w['number']}: merge refused: {ex}")
+                    say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
             elif w["kind"] == "rerun":
                 try:
                     sh.rerun(w["run_id"])
                     state["rerun"][w["key"]] = {"run": w["run_id"], "at": now.isoformat()}
                     lines.append(w["text"])
                 except RuntimeError as ex:
-                    lines.append(f"#{w['number']}: rerun refused: {ex}")
-            elif due(state, w["key"], now):
+                    say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused: {ex}")
+            else:
                 text = w["text"]
-                if ":red:" in w["key"]:
+                if ":red:" in w["key"] and due(state, w["key"], now):
                     names = []
                     for j in jobs or []:
-                        if j.get("conclusion") == "failure" and j["name"] in ("topo_unit", "topo_ui", "others"):
-                            names += failing_tests(sh.job_log(j["id"]))
+                        if j.get("conclusion") == "failure" and j["name"] in SUITE_JOBS:
+                            try:
+                                names += failing_tests(sh.job_log(j["id"]))
+                            except RuntimeError:
+                                pass
                     if names:
                         text += " Failing: " + "; ".join(dict.fromkeys(names)) + "."
-                lines.append(text)
-                state["fired"][w["key"]] = now.isoformat()
-            else:
-                quiet.append(f"{w['key']}: said within the last {minutes(REPEAT)}")
+                say(w["key"], text)
 
     # 3: the install page.
     try:
@@ -503,40 +572,46 @@ def run_pass(sh, state, now, checkout, verbose=False):
         else:
             quiet.append(f"install page: at {published}, main is {(main_sha or '')[:7]}")
     except RuntimeError as ex:
-        lines.append(f"could not check the install page: {ex}")
+        say("publish:read", f"could not check the install page: {ex}")
 
-    # 4: worktrees of merged branches.
+    # 4: worktrees whose tip is a merged PR's head.
     try:
-        merged = {}
+        seen = {}
 
-        def merged_at(branch):
-            if branch not in merged:
-                merged[branch] = sh.merged_pr(branch)
-            return merged[branch]
+        def history(branch):
+            if branch not in seen:
+                seen[branch] = sh.pr_history(branch)
+            return seen[branch]
 
-        for wt in decide_sweep(sh.worktrees(checkout), checkout, merged_at, now):
-            killed = []
-            for name, cwd in sh.tmux_sessions():
-                if cwd == wt["path"] or cwd.startswith(wt["path"].rstrip("/") + "/"):
-                    sh.kill_tmux(name)
-                    killed.append(name)
+        for wt in decide_sweep(sh.worktrees(checkout), checkout, history, now):
+            name = os.path.basename(wt["path"])
+            key = f"sweep:{wt['path']}"
             try:
+                if not sh.worktree_clean(wt["path"]):
+                    say(key, f"worktree {name} ({wt['branch']}, #{wt['number']} merged {minutes(wt['age'])} ago) has uncommitted changes; left, with its sessions.")
+                    continue
+                root = wt["path"].rstrip("/")
+                killed = sorted({s for s, cwd in sh.tmux_panes() if cwd == root or cwd.startswith(root + "/")})
+                for s in killed:
+                    sh.kill_tmux(s)
                 sh.remove_worktree(checkout, wt["path"], wt["branch"])
                 tm = f"; killed tmux {', '.join(killed)}" if killed else ""
-                lines.append(f"swept worktree {os.path.basename(wt['path'])} ({wt['branch']}, #{wt['number']} merged {minutes(wt['age'])} ago){tm}.")
+                lines.append(f"swept worktree {name} ({wt['branch']}, #{wt['number']} merged {minutes(wt['age'])} ago; its tip was the merged head){tm}.")
             except RuntimeError as ex:
-                key = f"sweep:{wt['path']}"
-                if due(state, key, now):
-                    lines.append(f"worktree {os.path.basename(wt['path'])} ({wt['branch']}, #{wt['number']} merged) will not remove: {ex}")
-                    state["fired"][key] = now.isoformat()
+                say(key, f"worktree {name} ({wt['branch']}, #{wt['number']} merged) will not remove: {ex}")
     except RuntimeError as ex:
-        lines.append(f"could not read the worktrees: {ex}")
+        say("sweep:read", f"could not read the worktrees: {ex}")
 
-    # Forget fired keys for heads that no longer exist, so the file does not grow.
-    live = {pr["headRefOid"] for pr in prs}
-    state["fired"] = {k: v for k, v in state["fired"].items()
-                      if k.startswith("sweep:") or k.rsplit(":", 1)[-1] in live}
-    state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}
+    # Forget what no open PR carries, so the file does not grow — but only on a
+    # pass that read the PRs, since an unread list is not an empty one.
+    if prs_ok:
+        live = {pr["headRefOid"] for pr in prs}
+        state["fired"] = {k: v for k, v in state["fired"].items()
+                          if (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
+                          or k.endswith(":read") or k.rsplit(":", 1)[-1] in live}
+        state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}
+    state["publish"] = {k: v for k, v in state["publish"].items()
+                        if (t := parse_time(v.get("at"))) and now - t < PUBLISH_KEEP}
 
     if verbose:
         for q in quiet:
@@ -553,10 +628,21 @@ def main(argv=None):
     a = ap.parse_args(argv)
     now = datetime.now(timezone.utc)
     path = os.path.expanduser(a.state)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lock = open(path + ".lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("another pass holds the lock; exiting", file=sys.stderr)
+        return 0
     state = load_state(path)
     sh = Shell(dry=a.dry_run)
-    lines = run_pass(sh, state, now, os.path.expanduser(a.checkout), verbose=a.verbose)
-    deliver(lines, state, now, dry=a.dry_run)
+    lines = []
+    try:
+        run_pass(sh, state, now, os.path.expanduser(a.checkout), lines, verbose=a.verbose)
+    except Exception as ex:  # noqa: BLE001 — the pass ends here, and what it did is still reported
+        lines.append(f"the pass stopped early: {type(ex).__name__}: {str(ex)[:200]}")
+    deliver(sh, lines, state, now, dry=a.dry_run)
     if not a.dry_run:
         save_state(path, state)
     return 0
