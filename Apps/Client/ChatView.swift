@@ -587,8 +587,10 @@ extension Composer.MicState {
 /// The chat's press on the microphone, routed by the state the composer drew it in. While Topo
 /// is speaking the button is Stop (`Composer.MicState.Appearance.stop`): the press ends the reply
 /// and opens nothing, and its release is that press's own, so it reaches no session either, even
-/// though the button is the microphone again by then. Any other press stops a reply still being
-/// read, so the microphone does not hear the speaker, and goes to `VoiceInput`.
+/// though the button is the microphone again by then. A press on the closed microphone stops a
+/// reply still being read, so the microphone does not hear the speaker, and goes to `VoiceInput`;
+/// one on the open microphone goes to `VoiceInput` alone, and closing it lets a reply that waited
+/// for it be read (`Speaker.microphoneClosed`).
 ///
 /// Every decision is made in the gesture's callback, in the order the callbacks come, and only
 /// the call into `VoiceInput` is left to a task: a stop is over before the callback returns and
@@ -620,7 +622,10 @@ final class MicPress {
             }
         }
         stopping = drawn.appearance == .stop
-        speaker.stop()
+        // A press on a closed microphone stops what is being read, so the mic does not hear it.
+        // One on the open microphone leaves the speaker alone: nothing is read while it is open,
+        // and a reply waiting for it to close is read once this press closes it.
+        if !drawn.open { speaker.stop() }
         if stopping { return nil }
         return Task {
             let heard = await voice.pressDown(as: .chat)

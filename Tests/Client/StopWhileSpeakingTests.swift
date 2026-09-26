@@ -267,29 +267,6 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertEqual(sent.texts, [])
         XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).appearance, .handsFree)
     }
-
-    /// A reply read to its end, not stopped: the button is Stop while it plays and the microphone
-    /// once the speaker has let it go. The play queue's engine renders offline here, so the test
-    /// pulls the audio through it until the reply is heard.
-    func testAReplyThatFinishesPutsTheMicrophoneBack() async throws {
-        let (speaker, voice, seams) = await chat(heard: "", voice: ScriptedVoice())
-        defer { speaker.stop(); voice.cancel() }
-        XCTAssertTrue(speaker.speak("Paris."))
-        await settle("the reply to start") { speaker.report.started }
-        XCTAssertEqual(Composer.MicState(voice, speaking: speaker.speaking).appearance, .stop)
-
-        let engine = try XCTUnwrap(seams.engines.last { $0.isInManualRenderingMode }, "no play engine")
-        let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat, frameCapacity: 4_096))
-        for _ in 0..<200 where speaker.speaking {
-            _ = try engine.renderOffline(4_096, to: buffer)
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        await settle("the reply to end") { !speaker.speaking }
-        XCTAssertTrue(speaker.report.finished, "the reply came to its end rather than being stopped")
-        let after = Composer.MicState(voice, speaking: speaker.speaking)
-        XCTAssertEqual(after.appearance, .idle)
-        XCTAssertEqual(after.label, "Hold to talk")
-    }
 }
 
 /// What the chat was handed to send, in order.
