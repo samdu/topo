@@ -872,6 +872,36 @@ final class MascotRoamTests: XCTestCase {
         XCTAssertEqual(roam.decisions, decided + 1, "the glass rose onto where he was going and nothing was decided")
         let now = try XCTUnwrap(roam.move.map { CGRect(origin: $0.to, size: Self.size) } ?? roam.picture)
         XCTAssertTrue(MascotRoost.admits(risen, frame: now, clearance: 8, reach: Self.reach), "\(now) is no place")
+        XCTAssertTrue(roam.move != nil || roam.picture == roam.decision?.choice?.frame,
+                      "he stopped mid-glide at \(String(describing: roam.picture)), short of \(String(describing: roam.decision?.choice))")
+        XCTAssertFalse(roam.hidden)
+    }
+
+    /// A glide to a fallback whose destination stops being a place is decided again and goes on to
+    /// the new one: where it was cut short is somewhere he was passing, not a place he stands, so
+    /// the hold at a fallback does not leave him there.
+    func testAGlideToAFallbackCutShortGoesOnToTheNewPlace() throws {
+        let (placed, start) = settled(Self.rows())
+        var roam = placed
+        let holed = Self.rows(holes: [(row: 2, x: 30, width: 40)])
+        roam.observe(holed, at: start + Self.frame)
+        var time = start + Self.frame
+        while roam.move == nil, time < start + 10 { time += Self.frame; roam.advance(to: time) }
+        let move = try XCTUnwrap(roam.move, "no glide to the less covered place")
+        for _ in 0..<15 { time += Self.frame; roam.advance(to: time) }
+        let passing = try XCTUnwrap(roam.picture)
+        XCTAssertNotEqual(passing.origin, move.to)
+        // The transcript's leading edge moves in past where he is going, and not past him.
+        let narrowed = MascotField(visible: CGRect(x: 60, y: 0, width: 342, height: 628), obstacles: holed.obstacles,
+                                   pane: holed.pane, well: holed.well)
+        XCTAssertFalse(MascotRoost.admits(narrowed, frame: CGRect(origin: move.to, size: Self.size), clearance: 8,
+                                          reach: Self.reach))
+        XCTAssertTrue(MascotRoost.admits(narrowed, frame: passing, clearance: 8, reach: Self.reach))
+        time += Self.frame
+        roam.observe(narrowed, at: time)
+        while roam.move != nil, time < start + 30 { time += Self.frame; roam.advance(to: time) }
+        let choice = try XCTUnwrap(roam.decision?.choice)
+        XCTAssertEqual(roam.picture, choice.frame, "he stopped where the glide was cut short, \(passing)")
         XCTAssertFalse(roam.hidden)
     }
 }

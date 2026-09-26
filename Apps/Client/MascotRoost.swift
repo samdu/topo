@@ -912,7 +912,7 @@ struct MascotRoam: Equatable, Sendable {
             if !stands
                 || field.crossesOffLimits(from: from, to: move.to, size: settings.size, reach: settings.reach) {
                 self.move = nil
-                decide(glide: true)
+                decide(glide: true, standing: false)
                 // A new roost within his clearance of where he was going is the same glide
                 // carried on, since the words he goes between moved and not his mind: not counted
                 // as another, and timed from where he is to where it now ends, so he does not jump
@@ -1070,7 +1070,9 @@ struct MascotRoam: Equatable, Sendable {
         return false
     }
 
-    private mutating func decide(glide: Bool) {
+    /// `standing` is false for a glide cut short, where he is is only somewhere he was passing,
+    /// and nothing holds him there.
+    private mutating func decide(glide: Bool, standing: Bool = true) {
         unsettled = false
         riding = false
         guard let field else { return }
@@ -1111,10 +1113,11 @@ struct MascotRoam: Equatable, Sendable {
             position = to
             return
         }
-        // Where no place clears, where he stands is kept while it is a place at all and the one
-        // chosen uncovers no more than `fallbackGain` of his box beyond it: least-covered places a
-        // hair apart would otherwise have him gliding with every line that grows.
-        if let choice = decision?.choice, !choice.clears {
+        // Where no place clears, where he stands — not where a glide was cut short — is kept while
+        // it is a place at all and the one chosen uncovers no more than `fallbackGain` of his box
+        // beyond it: least-covered places a hair apart would otherwise have him gliding with every
+        // line that grows.
+        if standing, let choice = decision?.choice, !choice.clears {
             let here = CGRect(origin: from, size: settings.size)
             if MascotRoost.admits(field, frame: here, clearance: fallbackClearance, reach: settings.reach),
                MascotRoost.cost(of: here, words: field.words) - choice.cost
