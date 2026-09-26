@@ -247,7 +247,7 @@ final class TopoOnTheGlassTests: XCTestCase {
     /// at 0, so the turns span the column, and his clearance at the top of its range, which takes
     /// the room at the top of the chat as well (`noClearPlace`, kept as a drag's pin would be and
     /// cleared after): the chat's report says he is drawn, his frame inside the screen and off the
-    /// glass, the decision cleared no place and chose where he stands.
+    /// glass, the decision cleared no place and he stands at his roost.
     func testWithNoPlaceClearOfTheWordsHeIsDrawnOverThemAndTheWellKeepsItsPress() throws {
         addTeardownBlock { ChatReading.launch(transcript: "empty", tuning: "").terminate() }
         let app = ChatReading.launch(transcript: "full", tuning: Self.noClearPlace)
@@ -260,7 +260,9 @@ final class TopoOnTheGlassTests: XCTestCase {
         let decision = try XCTUnwrap(topo.decision)
         XCTAssertEqual(decision.clearing, 0, "a place clear of the words was weighed and passed over: \(topo)")
         XCTAssertGreaterThan(decision.candidates, 0)
-        XCTAssertTrue(ChatReading.near(decision.chosen, topo.frame), "he does not stand where the decision chose: \(topo)")
+        // Where he stands is his roost: the place chosen, or where he stood, where the place chosen
+        // uncovers too little more to be worth a glide (`MascotRoost.fallbackGain`).
+        XCTAssertTrue(ChatReading.near(topo.to, topo.frame), "he does not stand at his roost: \(topo)")
         let box = try XCTUnwrap(topo.box)
         let offset = try XCTUnwrap(ChatReading.offset(topo, mic: mic), "no well in the report")
         let onScreen = box.offsetBy(dx: offset.dx, dy: offset.dy)
