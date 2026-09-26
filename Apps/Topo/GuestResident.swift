@@ -58,6 +58,33 @@ final class GuestResident {
     /// The session once `start` has made it, nil before.
     private(set) var session: GuestSession?
 
+    /// The app's memory, whose home the guest's mount follows (`TopoApp` sets it).
+    var memory: Memory?
+    /// The memory's folder in the guest.
+    let vault = VaultMount(seam: .guest)
+    /// Where the vault's lines go once the guest has started.
+    private var vaultLog: (@Sendable (String) -> Void)?
+
+    /// Brings the guest's mount of the memory into line with the home, and answers whether it is
+    /// mounted. Asked at every launch of the resident and before every turn.
+    func reconcileMemory() throws -> Bool {
+        let home = memory?.home ?? .local
+        let local = memory?.localDirectory ?? Memory.standardDirectory
+        let mounted = try vault.reconcile(home: home, local: local)
+        return mounted
+    }
+
+    /// The launch's answer: a mount that could not be brought into line is said in the log and
+    /// told to the resident as a memory it cannot reach, rather than failing the launch.
+    func memoryAtLaunch() -> Bool {
+        do {
+            return try reconcileMemory()
+        } catch {
+            vaultLog?("memory: \(error)")
+            return false
+        }
+    }
+
     /// The model a process is started with: the setting, as the debug pin makes it.
     static var model: String {
         let setting = UserDefaults.standard.string(forKey: Harness.modelKey).flatMap(ClaudeModel.init(rawValue:))
@@ -94,7 +121,8 @@ final class GuestResident {
                 self.proxyPort = port
             }
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            let launcher = ClaudeLauncher {
+            self.vaultLog = log
+            let launcher = ClaudeLauncher(memory: { await GuestResident.shared.memoryAtLaunch() }) {
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model, log: log)
@@ -174,6 +202,13 @@ struct ResidentConversation: GuestConversation {
         } catch {
             throw GuestBridgeError.notReady("Claude Code did not start: \(error)")
         }
+        // The home may have moved, or its folder been made again, since the process was launched:
+        // a turn is never sent into a mount of a folder that is not the memory's.
+        do {
+            _ = try await GuestResident.shared.reconcileMemory()
+        } catch {
+            throw GuestBridgeError.notReady("\(error)")
+        }
     }
 
     func warm() async {
@@ -212,6 +247,9 @@ struct ResidentConversation: GuestConversation {
         } else {
             GuestResident.sessionFile.clear()
         }
+        // After the resident has gone: the memory is not reachable from a signed-out guest, and
+        // the grant on the person's iCloud Drive folder is not held past the login.
+        await GuestResident.shared.vault.forget()
     }
 
     func status() async -> String {
@@ -375,3 +413,18 @@ extension DebugRun {
     }
 }
 #endif
+
+extension VaultMount.Seam {
+    /// The guest's own: the vault's filesystem at `ClaudeLauncher.vault`, the home's `memory` link
+    /// to it, and the grant started and stopped on the URL it is on.
+    static var guest: VaultMount.Seam {
+        VaultMount.Seam(
+            mount: { try Guest.shared.mountVault($0, at: ClaudeLauncher.vault) },
+            unmount: { try Guest.shared.unmount(ClaudeLauncher.vault) },
+            link: { try Guest.shared.link(ClaudeLauncher.vault, at: ClaudeLauncher.memory) },
+            startAccess: { $0.startAccessingSecurityScopedResource() },
+            stopAccess: { $0.stopAccessingSecurityScopedResource() },
+            identity: { VaultMount.Identity.of($0) },
+            makeFolder: { try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true) })
+    }
+}
