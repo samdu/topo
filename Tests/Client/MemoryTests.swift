@@ -104,7 +104,7 @@ final class MemoryTests: XCTestCase {
         let transport = ScriptedTransport()
         let beats = Beats()
         let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
-                              defaults: makeDefaults(), brain: messagesBrain(over: transport),
+                              defaults: makeDefaults(), brain: guestBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
         harness.onPass = { [memory] in await memory.sync() }
@@ -130,7 +130,7 @@ final class MemoryTests: XCTestCase {
         transport.duringRequest = { await order.add("model") }
         let beats = Beats()
         let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
-                              defaults: makeDefaults(), brain: messagesBrain(over: transport),
+                              defaults: makeDefaults(), brain: guestBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
         harness.onPass = { [memory] in
@@ -165,7 +165,7 @@ final class MemoryTests: XCTestCase {
         transport.duringRequest = { await order.add("model") }
         let beats = Beats()
         let harness = Harness(database: db, tokens: FixedToken(), device: phone, ensureZone: {},
-                              defaults: makeDefaults(), brain: messagesBrain(over: transport),
+                              defaults: makeDefaults(), brain: guestBrain(over: transport),
                               leaseSleep: { _ in try await Task.sleep(for: .seconds(3600)) },
                               pause: { try await beats.pause($0) })
         harness.onPass = { [memory] in
@@ -616,7 +616,7 @@ private actor Beats {
 
 private struct Timeout: Error {}
 
-/// The Messages API's far end: answers from a queue and records what each request carried.
+/// The far end of the scripted guest's model: answers from a queue and records what each request carried.
 private final class ScriptedTransport: Transport, @unchecked Sendable {
     private let lock = NSLock()
     private var replies: [(Int, String)]

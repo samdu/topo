@@ -56,7 +56,7 @@ From scratch, not a fork: the current app is a Daphne client with a Buddy screen
 What is built: sign in with Claude, the CloudKit log and lease, the phone's own harness, the memory (the mirror, both homes on the phone, revisions and conflict copies), push to talk with the on-device ear and voice (one of each, both FluidAudio on the device, no fallback), a spoken reply heard behind the lock under a bounded audio hold, the voice surviving a media services reset, the push that wakes the primary, and Claude Code in the userland answering the chat, fetched at first launch and warmed on foreground, with its turns written to the log. What follows, in order; each step is the next thing the one before it makes possible.
 
 1. **TestFlight with the production schema** — the second milestone, so App Store constraints surface early.
-2. **The rest of Claude Code on the phone.** The memory folder mounted into the userland, and the direct Messages API code, which nothing in the app composes, taken out.
+2. **The rest of Claude Code on the phone.** The memory folder mounted into the userland.
 3. **The phone's own tools**, through the userland. Reminders and the calendar through EventKit, the home through HomeKit, the device itself (battery, location, the clock, the network it is on), the share sheet as the way things arrive. OpenMinis is the map for which tools a phone agent needs and how they are shaped; the code is native Swift against the platform frameworks, because OpenMinis is GPL and nothing of it ships in a bundle.
 4. **The hub.** The Mac app with the CLI, pairing, the lease taken from a live holder, the lid opening after a week.
 5. **Womble and the board.** Old iPads on the wall, the household container, the house agent.

@@ -32,8 +32,8 @@ final class Harness {
         set { relay.handler = newValue }
     }
     private let relay: GuestRelay
-    /// The tokens of context the last reply this phone asked for was written over, as the API
-    /// counted them — input and both cache counts (`Reply.context`); nil until one has been answered here, and again after
+    /// The tokens of context the last reply this phone asked for was written over, cached or not
+    /// (`Reply.context`); nil until one has been answered here, and again after
     /// a sign-out, since the context was the last login's. A reply another primary wrote, or one found already in the log,
     /// says nothing of its context and leaves this as it was.
     private(set) var context: Int?
@@ -531,10 +531,6 @@ final class Harness {
         switch error {
         case TurnRunnerError.displaced:
             "Another device became primary while Claude was answering. What you said is in the log; the reply will appear here."
-        case MessagesAPIError.refused:
-            "Claude declined that one."
-        case MessagesAPIError.http(let status, let message):
-            message ?? "Claude answered \(status)."
         case let error as GuestBridgeError:
             error.description
         case TokenProviderError.signedOut:
