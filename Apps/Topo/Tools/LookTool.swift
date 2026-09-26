@@ -70,17 +70,20 @@ struct LookTool: Tool {
                 return .usage("topo look set takes a field and a value, as many pairs as you like\n\n\(usage)\n")
             }
             var lines: [String] = []
-            var refused = 0
+            var (kept, refused) = (0, 0)
             for index in stride(from: 0, to: pairs.count, by: 2) {
                 let (field, text) = (pairs[index], pairs[index + 1])
-                if let note = tuning.set(Self.path(field), to: Self.value(text), over: tuning.worn(over: look)) {
-                    refused += 1
-                    lines.append("refused: \(note)")
-                } else {
+                let answer = tuning.set(Self.path(field), to: Self.value(text), over: tuning.worn(over: look))
+                if answer.refused.isEmpty {
                     lines.append("set: \(field) \(text)")
+                } else {
+                    lines += answer.kept.map { "set: \($0)" }
+                    lines += answer.refused.map { "refused: \($0)" }
                 }
+                kept += answer.kept.count
+                refused += answer.refused.count
             }
-            if refused < pairs.count / 2 {
+            if kept > 0 {
                 lines.append("Worn now on this phone; Settings › Tuning › Reset, or topo look reset, takes it back.")
             }
             return ToolReply(status: refused == 0 ? ToolReply.ok : ToolReply.refused, text: lines.joined(separator: "\n") + "\n")

@@ -34,6 +34,7 @@ Not sequenced, on the issue list: #172's fix round and its re-review; #129, the 
 ## Parked, and why
 
 - **The hub as a running mind.** `TopoHub` holds the lease and shows the pairing code but runs no turns; the phone is the primary until the guest path is complete, since it has to stand-alone if it's a user's only device.
+- **Full Messages access on the hub.** iOS gives a third-party app no way to read or send iMessages, so this is the Mac's alone: the hub reads the Messages database and sends through Messages.app, the way the buddybox relay does. Waits on the hub running turns.
 - **Sockets and the tunnel** (`Packages/TopoLink` beyond the LAN probe). CloudKit is truth and works with no socket; speed comes after the mind does.
 - **The house board** (`docs/board.md`). Designed, with `TopoBoard` in place; no screen draws it until one person's mind is worth sharing a wall with.
 
