@@ -71,7 +71,7 @@ final class TurnMenuTests: XCTestCase {
         XCTAssertEqual(edited?.text, "Morning.")
         XCTAssertEqual(copied, "Morning.")
 
-        let his = TurnMenu.items(for: theirs, replay: Replay(canSpeak: true, say: { said = $0 }),
+        let his = TurnMenu.items(for: theirs, replay: Replay(canSpeak: true, say: { said = $0.text }),
                                  copy: { copied = $0 })
         his.first { $0.title == "Say again" }?.act()
         his.first { $0.title == "Copy" }?.act()

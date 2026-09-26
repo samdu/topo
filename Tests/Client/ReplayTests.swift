@@ -21,7 +21,7 @@ final class ReplayTests: XCTestCase {
     private func replay(speaking: Bool = false, canSpeak: Bool = true) -> (Replay, Calls) {
         let calls = Calls()
         let replay = Replay(speaking: speaking, canSpeak: canSpeak,
-                            say: { calls.said.append($0) }, stopSpeaking: { calls.stops += 1 })
+                            say: { calls.said.append($0.text) }, stopSpeaking: { calls.stops += 1 })
         return (replay, calls)
     }
 

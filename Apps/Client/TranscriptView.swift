@@ -17,6 +17,9 @@ struct TranscriptView: View {
     /// about to become. Nil on a screen with nothing to write with — the watch, the television,
     /// a viewer — and the row is then never drawn.
     var draft: Draft?
+    /// The code block the voice has just reached (`Speaker.cue`): scrolled into view, and drawn
+    /// pulsing by the reply it is in. Nil on a screen with no voice.
+    var cue: CodeBlockCue?
     @Environment(\.look) private var look
 
     var body: some View {
@@ -36,7 +39,8 @@ struct TranscriptView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         ForEach(turns) { turn in
-                            TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
+                            TurnRow(turn: turn, replay: replay, actions: actions,
+                                    cue: cue?.reply == turn.ref ? cue : nil).id(turn.ref)
                         }
                     }
                     if let draft, draft.state != .hidden {
@@ -55,6 +59,12 @@ struct TranscriptView: View {
             // The row appearing, and each line it grows by, keep it where the newest turn was.
             .onChange(of: draft?.state) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
+            // A block the voice reaches is brought into view, by as little as shows it whole: one
+            // already on the screen does not move.
+            .onChange(of: cue?.serial) { _, _ in
+                guard let cue else { return }
+                withAnimation { proxy.scrollTo(cue.place, anchor: nil) }
+            }
         }
     }
 
@@ -83,6 +93,8 @@ struct TurnRow: View {
     let turn: Turn
     var replay = Replay()
     var actions = TurnActions()
+    /// The code block of this turn the voice has reached, if any.
+    var cue: CodeBlockCue?
     @Environment(\.look) private var look
 
     private var mine: Bool { turn.role == .person }
@@ -146,7 +158,7 @@ struct TurnRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .mascotLines(bare)
         } else {
-            MarkdownText(source: turn.text, bare: bare)
+            MarkdownText(source: turn.text, bare: bare, reply: turn.ref, cue: cue)
         }
     }
 }
@@ -421,7 +433,9 @@ struct Replay {
     /// downloading Pocket is offered nothing rather than offered an item it would hear nothing
     /// from, and the diagnostics `voice` row says how far along it is.
     var canSpeak = false
-    var say: @MainActor (String) -> Void = { _ in }
+    /// Says a turn again; the turn rather than its words, so what the voice reaches in it is
+    /// shown on it (`CodeBlockCue`).
+    var say: @MainActor (Turn) -> Void = { _ in }
     var stopSpeaking: @MainActor () -> Void = {}
 
     /// What holding `turn` offers, or nothing at all. A person's own turn offers nothing: their
@@ -431,7 +445,7 @@ struct Replay {
         if speaking {
             return Offer(title: "Stop", systemImage: "stop.fill", act: stopSpeaking)
         }
-        return Offer(title: "Say again", systemImage: "speaker.wave.2", act: { say(turn.text) })
+        return Offer(title: "Say again", systemImage: "speaker.wave.2", act: { say(turn) })
     }
 
     /// One menu item: what it reads and what it does.

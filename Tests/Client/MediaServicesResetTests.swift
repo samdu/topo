@@ -666,7 +666,8 @@ final class MediaServicesResetTests: XCTestCase {
     private func speaker(_ seams: Seams, _ audio: AudioSession, _ center: NotificationCenter,
                          engine: any VoiceEngine = ScriptedVoice(), ready: Bool = true,
                          ceiling: Duration = .seconds(120),
-                         clock: ManualClock? = nil) async -> Speaker {
+                         clock: ManualClock? = nil,
+                         heard: AVAudioPlayerNodeCompletionCallbackType = .dataPlayedBack) async -> Speaker {
         CapturingPlayerNode.scheduled = []
         let voice = Voice(engine: engine)
         voice.load(base: URL(fileURLWithPath: "/dev/null"))
@@ -674,7 +675,8 @@ final class MediaServicesResetTests: XCTestCase {
         return Speaker(audio: audio, voice: voice, center: center,
                        makeEngine: { seams.makePlayEngine(rate: Voice.rate) },
                        ceiling: ceiling,
-                       now: clock.map { clock in { clock.now } } ?? PrimaryLease.continuousUptime)
+                       now: clock.map { clock in { clock.now } } ?? PrimaryLease.continuousUptime,
+                       heard: heard)
     }
 
     func testAReplyActivatesTheSessionBeforeItBuildsTheQueueAndScheduling() async {
@@ -751,6 +753,74 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.speak("Should I read `look.json`?\n\n**Yes.**\n\n```swift\nlet x = 1\n```")
         await settle("every sentence to reach the voice") { heard.sentences.count == 3 }
         XCTAssertEqual(heard.sentences, ["Should I read look dot json?", "Yes.", "See code block 1."])
+        speaker.stop()
+    }
+
+    /// Each code block's sentence is a cue as it begins to be heard, in the order the reply says
+    /// them: nothing is cued while the sentences are only made and queued, and each block's cue
+    /// comes when everything before its sentence has been heard. The engine renders offline, so
+    /// hearing is rendering, a slice at a time.
+    func testEachCodeBlockIsCuedInOrderAsItsSentenceBeginsToBeHeard() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center, heard: .dataRendered)
+        let reply = TurnRef(device: DeviceID("phone"), sequence: 7)
+        speaker.speak("Here is the first.\n\n```\nlet a = 1\n```\n\nThen the second.\n\n```\nlet b = 2\n```\n\n"
+                      + "```\nlet c = 3\n```", reply: reply)
+        // Five sentences, one frame each, all made and queued with nothing heard.
+        await settle("every sentence to be queued") {
+            CapturingPlayerNode.scheduled.filter { $0 == 1_920 }.count == 5
+        }
+        await drain()
+        XCTAssertEqual(speaker.report.blocks, [], "a block was cued before a word was heard")
+        XCTAssertNil(speaker.cue)
+
+        let engine = try XCTUnwrap(seams.engines.last)
+        let out = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
+                                                 frameCapacity: engine.manualRenderingMaximumFrameCount))
+        var seen: [CodeBlockCue] = []
+        for _ in 0..<200 where seen.count < 3 {
+            _ = try engine.renderOffline(256, to: out)
+            await drain()
+            if let cue = speaker.cue, cue != seen.last { seen.append(cue) }
+        }
+        XCTAssertEqual(seen.map(\.number), [1, 2, 3], "the blocks were not cued one by one in order")
+        XCTAssertEqual(seen.map(\.reply), [reply, reply, reply])
+        XCTAssertEqual(seen.map(\.serial), [1, 2, 3])
+        XCTAssertEqual(speaker.report.blocks, [1, 2, 3])
+        speaker.stop()
+    }
+
+    /// A reply stopped before its block is heard cues nothing, and one said again cues its block
+    /// afresh under a new serial.
+    func testAStoppedReplyCuesNothingAndOneSaidAgainCuesAfresh() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center, heard: .dataRendered)
+        let reply = TurnRef(device: DeviceID("phone"), sequence: 8)
+        let text = "First.\n\n```\nlet a = 1\n```"
+        speaker.speak(text, reply: reply)
+        await settle("both sentences queued") { CapturingPlayerNode.scheduled.filter { $0 == 1_920 }.count == 2 }
+        speaker.stop()
+        let engine = try XCTUnwrap(seams.engines.last)
+        let out = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat,
+                                                 frameCapacity: engine.manualRenderingMaximumFrameCount))
+        // The engine is stopped with the reply; whatever it renders, nothing is cued.
+        for _ in 0..<20 { _ = try? engine.renderOffline(256, to: out) }
+        await drain()
+        XCTAssertNil(speaker.cue, "a stopped reply's block was cued")
+
+        CapturingPlayerNode.scheduled = []
+        // Its block first: said again, it is cued as it starts, with nothing before it.
+        speaker.speak("```\nlet a = 1\n```", reply: reply)
+        await settle("the block cued") { speaker.cue != nil }
+        XCTAssertEqual(speaker.cue?.number, 1)
+        XCTAssertEqual(speaker.cue?.serial, 1)
+        speaker.speak("```\nlet a = 1\n```", reply: reply)
+        await settle("the block cued again") { speaker.cue?.serial == 2 }
+        XCTAssertEqual(speaker.cue?.number, 1)
         speaker.stop()
     }
 
