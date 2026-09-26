@@ -608,8 +608,8 @@ actor GuestBridge: Brain {
         recent.removeAll { $0.nonce == request.nonce }
         recent.append((request.nonce, text))
         if recent.count > 16 { recent.removeFirst(recent.count - 16) }
-        return Reply(text: text, model: model ?? ClaudeModel.effective(request.model).rawValue, stopReason: nil,
-              inputTokens: usage?.context ?? 0, outputTokens: usage?.output ?? 0)
+        return Reply(text: text, model: model ?? ClaudeModel.effective(request.model).rawValue,
+                     context: usage?.context ?? 0, outputTokens: usage?.output ?? 0)
     }
 
     private func record(_ pending: GuestLedger.Pending?) throws {

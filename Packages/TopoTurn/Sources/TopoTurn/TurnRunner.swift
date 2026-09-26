@@ -56,13 +56,6 @@ public actor TurnRunner {
     private let writer: TurnWriter
     private let lease: PrimaryLease
     private let brain: any Brain
-    /// How many turns of history go to the model with the new one.
-    public var historyLimit = 40
-
-    public static let systemPrompt = """
-    You are Topo, one person's assistant, speaking with them on their own device. Be brief and \
-    concrete. When they tell you something they forgot, help them act on it now.
-    """
 
     public init(log: TurnLog, writer: TurnWriter, lease: PrimaryLease, brain: any Brain) {
         self.log = log
@@ -108,10 +101,8 @@ public actor TurnRunner {
             }
         }
         do {
-            // On a retry `before` already holds the recovered person turn; it goes to the model once.
-            let context = before.ordered.filter { $0.ref != person.ref }
-            let request = BrainRequest(context: context, answering: [person],
-                                       history: context.suffix(historyLimit - 1) + [person],
+            // On a retry `before` already holds the recovered person turn; it is asked once.
+            let request = BrainRequest(context: before.ordered.filter { $0.ref != person.ref }, answering: [person],
                                        parents: [person.ref], nonce: replyNonce, model: model)
             let reply = try await brain.answer(request)
             await progress?(.savingReply)
@@ -165,10 +156,8 @@ public actor TurnRunner {
             .filter { $0.role == .person && !skipped.contains($0.ref) }
         // Settling what was owed can find the waiting turn cut off: nothing is left to answer.
         guard !answering.isEmpty else { return nil }
-        let ordered = transcript.ordered
-        let request = BrainRequest(context: ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
-                                   answering: answering, history: Array(ordered.suffix(historyLimit)),
-                                   parents: transcript.heads, nonce: nonce, model: model)
+        let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
+                                   answering: answering, parents: transcript.heads, nonce: nonce, model: model)
         let reply = try await brain.answer(request)
         // A pass that was stopped — a sign-out cancels the one in flight — writes nothing.
         try Task.checkCancellation()
@@ -212,21 +201,5 @@ public actor TurnRunner {
         let canonical = heads.sorted().map(\.description).joined(separator: "\n")
         let digest = SHA256.hash(data: Data(canonical.utf8))
         return "answer/" + digest.map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// Turns as the API takes them: roles alternate, so consecutive turns of one role are joined,
-    /// and the list starts with the person.
-    static func messages(from turns: some Sequence<Turn>) -> [ChatMessage] {
-        var out: [ChatMessage] = []
-        for turn in turns {
-            let role: ChatMessage.Role = turn.role == .person ? .user : .assistant
-            if out.isEmpty, role == .assistant { continue }
-            if let last = out.last, last.role == role {
-                out[out.count - 1].content += "\n\n" + turn.text
-            } else {
-                out.append(ChatMessage(role: role, content: turn.text))
-            }
-        }
-        return out
     }
 }

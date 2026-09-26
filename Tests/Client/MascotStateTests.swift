@@ -185,7 +185,7 @@ final class MascotStateTests: XCTestCase {
     // MARK: The chat's harness
 
     /// With no guest turn, he wears the model the harness asks and the context of its last reply,
-    /// and never a pose: the Messages API turn runs no tools.
+    /// and never a pose: poses come from the guest's events.
     func testTheHarnessSetsTheModelAndTheContextAndNoPose() {
         let mascot = Mascot(model: "claude-sonnet-5")
         mascot.harness(model: "claude-haiku-4-5-20251001", tokens: nil)

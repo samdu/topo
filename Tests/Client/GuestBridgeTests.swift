@@ -760,8 +760,7 @@ final class GuestBridgeTests: XCTestCase {
     func testTheAppComposesTheGuestAsItsOnlyBrain() {
         let harness = Harness.standard(tokens: StoredTokenProvider(store: InMemoryTokenStore(nil)),
                                        database: InMemoryRecordDatabase())
-        XCTAssertNotNil(harness.guest)
-        XCTAssertFalse(harness.brain is MessagesAPIBrain)
+        XCTAssertNotNil(harness.guest, "the brain is the guest")
     }
 
     /// A guest that is not ready leaves the person's turn in the log unanswered, with the reason
