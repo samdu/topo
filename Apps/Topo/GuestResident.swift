@@ -1,6 +1,7 @@
 import Foundation
 import TopoAuth
 import TopoProxy
+import TopoTools
 import TopoTurn
 import TopoUserland
 import UIKit
@@ -22,7 +23,8 @@ final class ApplicationBackgroundTime: BackgroundTime {
 }
 
 /// The resident Claude Code on this phone: the guest booted once per process, the app's
-/// `Documents/home` mounted as its home, the API proxy on loopback, and the one `GuestSession`,
+/// `Documents/home` mounted as its home, the API proxy and the tool service on loopback with the
+/// `topo` command and its skill written into the home, and the one `GuestSession`,
 /// carried through the app's lifecycle by a `GuestLifecycle` — started on the foreground, ended on
 /// the way out once the grace is spent. The session id the next process resumes is kept in
 /// `Documents/.guest-session`, beside the home, and the bridge's ledger in
@@ -39,6 +41,12 @@ final class GuestResident {
     private var proxyPort: UInt16?
     private var lifecycle: GuestLifecycle?
     private var proxy: APIProxy?
+    /// The tool service and what the guest is handed to reach it, once started.
+    private var tools: ToolService?
+    private var toolsEnvironment: [String: String]?
+    /// The tools the service answers with: the app's own, set before the first start
+    /// (`TopoApp`). A start before they are set answers `topo help` with none.
+    var toolTable: [any Tool] = []
     private var observers: [NSObjectProtocol] = []
 
     /// The app's `Documents/home`, mounted at `ClaudeLauncher.home`.
@@ -73,12 +81,7 @@ final class GuestResident {
                log: @escaping @Sendable (String) -> Void) async throws -> GuestSession {
         try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
-            if !self.homeMounted {
-                let home = Self.homeDirectory
-                try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
-                try Guest.shared.mount(home, at: ClaudeLauncher.home)
-                self.homeMounted = true
-            }
+            let toolsEnvironment = try await self.prepareTools(log: log)
             let port: UInt16
             if let running = self.proxyPort {
                 port = running
@@ -96,6 +99,7 @@ final class GuestResident {
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
             let launcher = ClaudeLauncher {
                 try await APIProxy.guestEnvironment(port: port, credential: credential).environment
+                    .merging(toolsEnvironment) { own, _ in own }
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model, log: log)
             self.session = session
@@ -106,6 +110,40 @@ final class GuestResident {
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
         }
+    }
+
+    /// The home mounted, the tool service started, `topo` and its skill written into the home and
+    /// `topo` linked onto the guest's path; the answer is what the guest's environment gains to
+    /// reach the service. Each step is done once per process and kept, so a start tried again after
+    /// a failure picks up from the step that failed. Needs a booted guest.
+    func prepareTools(log: @escaping @Sendable (String) -> Void) async throws -> [String: String] {
+        let home = Self.homeDirectory
+        if !homeMounted {
+            try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            try Guest.shared.mount(home, at: ClaudeLauncher.home)
+            homeMounted = true
+        }
+        if let toolsEnvironment { return toolsEnvironment }
+        let service: ToolService
+        if let tools {
+            service = tools
+        } else {
+            service = try ToolService(tools: toolTable, log: { log("tools: \($0)") })
+            tools = service
+        }
+        let port: UInt16
+        do {
+            port = try await service.start()
+        } catch {
+            await service.stop()
+            tools = nil
+            throw error
+        }
+        try GuestTools.install(home: home)
+        try Guest.shared.link(ClaudeLauncher.home + "/" + GuestTools.scriptPath, at: GuestTools.command)
+        let environment = ToolService.environment(port: port, token: await service.token)
+        toolsEnvironment = environment
+        return environment
     }
 
     private func follow(_ lifecycle: GuestLifecycle) {
@@ -342,20 +380,30 @@ extension DebugRun {
 
     /// One tool result as the guest-turn run prints it: `tool result: <tool>: ok: <text>` or
     /// `…: error: <text>`, the text on one line (a newline written `\n`), a credential in it
-    /// redacted — an `sk-ant-` key, a `Bearer` value, the guest's token variable — and anything past
+    /// redacted — an `sk-ant-` key, a `Bearer` value, the guest's token variable, the tool
+    /// service's — and anything past
     /// 300 characters cut, since a result can be a whole file.
     static func toolResultLine(tool: String, isError: Bool, text: String) -> String {
-        var shown = text.trimmingCharacters(in: .newlines)
+        var shown = redacted(text.trimmingCharacters(in: .newlines))
+        shown = shown.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "\\n")
+        if shown.count > 300 { shown = String(shown.prefix(300)) + "…" }
+        return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
+    }
+
+    /// `text` with every credential a debug run could print hidden: an `sk-ant-` key, a `Bearer`
+    /// value, the guest's token variable and the tool service's. Everything the guest writes goes
+    /// through this before it is printed.
+    static func redacted(_ text: String) -> String {
+        var shown = text
         for (pattern, replacement) in [
             (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
             (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
             (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
+            (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
         ] {
             shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
         }
-        shown = shown.replacingOccurrences(of: "\r", with: "").replacingOccurrences(of: "\n", with: "\\n")
-        if shown.count > 300 { shown = String(shown.prefix(300)) + "…" }
-        return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
+        return shown
     }
 
     /// Waits until the app is in the foreground and the resident process is up.

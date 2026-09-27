@@ -14,15 +14,15 @@ public struct HTTPField: Sendable, Equatable {
 
 extension Array where Element == HTTPField {
     /// Every value under `name`, compared without case.
-    func values(_ name: String) -> [String] {
+    package func values(_ name: String) -> [String] {
         filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }.map(\.value)
     }
 
-    func value(_ name: String) -> String? { values(name).first }
+    package func value(_ name: String) -> String? { values(name).first }
 
     /// The comma-separated tokens of every `name` line, lowercased: `Connection`,
     /// `Transfer-Encoding`, `Expect`.
-    func tokens(_ name: String) -> [String] {
+    package func tokens(_ name: String) -> [String] {
         values(name).flatMap { $0.split(separator: ",") }
             .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
             .filter { !$0.isEmpty }
@@ -31,7 +31,7 @@ extension Array where Element == HTTPField {
 
 /// Why a request could not be read, and the status it is answered with before the connection
 /// closes.
-enum WireError: Error, Equatable {
+package enum WireError: Error, Equatable {
     case malformed(String)
     case headTooLarge
     case bodyTooLarge
@@ -39,7 +39,7 @@ enum WireError: Error, Equatable {
     /// The client went away mid-request; nothing is answered.
     case closed
 
-    var status: Int {
+    package var status: Int {
         switch self {
         case .malformed: 400
         case .headTooLarge: 431
@@ -52,21 +52,21 @@ enum WireError: Error, Equatable {
 
 /// A request as it came off the wire: the head parsed by CFNetwork's `CFHTTPMessage`, the body
 /// de-framed from `Content-Length` or chunked.
-struct InboundRequest: Sendable {
-    var method: String
+package struct InboundRequest: Sendable {
+    package var method: String
     /// The request-target exactly as the client wrote it, path and query.
-    var target: String
+    package var target: String
     /// "HTTP/1.1" or "HTTP/1.0".
-    var version: String
-    var headers: [HTTPField]
-    var body: Data
+    package var version: String
+    package var headers: [HTTPField]
+    package var body: Data
 
     /// The path without its query.
-    var path: String { String(target.prefix { $0 != "?" }) }
+    package var path: String { String(target.prefix { $0 != "?" }) }
 
     /// Whether the connection stays open after the response: HTTP/1.1 unless the client said
     /// `Connection: close`, HTTP/1.0 only if it asked for keep-alive (which is not offered, so no).
-    var keepAlive: Bool {
+    package var keepAlive: Bool {
         version == "HTTP/1.1" && !headers.tokens("Connection").contains("close")
     }
 }
@@ -82,8 +82,8 @@ struct InboundRequest: Sendable {
 /// connection fails or is cancelled — a reset, or the RST a closed socket answers the next write
 /// with — and only that fires `whenEnded`. A client that closed outright is therefore seen at the
 /// first write after its close, which on a streamed reply is the next event or ping.
-final class Inbound: @unchecked Sendable {
-    let connection: NWConnection
+package final class Inbound: @unchecked Sendable {
+    package let connection: NWConnection
     private let limit: Int
     private let lock = NSLock()
     private var buffer = Data()
@@ -95,12 +95,12 @@ final class Inbound: @unchecked Sendable {
     private var waiter: CheckedContinuation<Void, Never>?
     private var onEnd: (@Sendable () -> Void)?
 
-    init(_ connection: NWConnection, limit: Int) {
+    package init(_ connection: NWConnection, limit: Int) {
         self.connection = connection
         self.limit = limit
     }
 
-    func start(queue: DispatchQueue) {
+    package func start(queue: DispatchQueue) {
         connection.stateUpdateHandler = { [weak self] state in
             switch state {
             case .failed, .cancelled: self?.end()
@@ -147,7 +147,7 @@ final class Inbound: @unchecked Sendable {
 
     /// Calls `handler` once, when the client goes away or the connection fails — now, if it
     /// already has. Replaces any handler set before.
-    func whenEnded(_ handler: (@Sendable () -> Void)?) {
+    package func whenEnded(_ handler: (@Sendable () -> Void)?) {
         let now: Bool = lock.withLock {
             if ended { return true }
             onEnd = handler
@@ -186,7 +186,7 @@ final class Inbound: @unchecked Sendable {
     /// Everything up to and including the first `delimiter`, or nil when the stream ended with
     /// nothing buffered (a client that closed between requests). Throws when more than `maximum`
     /// bytes arrive with no delimiter, or the stream ends partway.
-    func read(through delimiter: Data, maximum: Int, tooLarge: WireError) async throws -> Data? {
+    package func read(through delimiter: Data, maximum: Int, tooLarge: WireError) async throws -> Data? {
         while true {
             let (bytes, finished) = snapshot
             if let found = bytes.range(of: delimiter) {
@@ -204,7 +204,7 @@ final class Inbound: @unchecked Sendable {
     }
 
     /// Exactly `count` bytes.
-    func read(count: Int) async throws -> Data {
+    package func read(count: Int) async throws -> Data {
         while true {
             let (bytes, finished) = snapshot
             if bytes.count >= count { return take(count) }
@@ -213,7 +213,7 @@ final class Inbound: @unchecked Sendable {
         }
     }
 
-    func send(_ data: Data) async throws {
+    package func send(_ data: Data) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             connection.send(content: data, completion: .contentProcessed { error in
                 if let error { continuation.resume(throwing: error) } else { continuation.resume() }
@@ -222,14 +222,14 @@ final class Inbound: @unchecked Sendable {
     }
 }
 
-enum RequestReader {
-    static let crlf = Data("\r\n".utf8)
-    static let headEnd = Data("\r\n\r\n".utf8)
-    static let headLimit = 64 * 1024
+package enum RequestReader {
+    package static let crlf = Data("\r\n".utf8)
+    package static let headEnd = Data("\r\n\r\n".utf8)
+    package static let headLimit = 64 * 1024
     static let continueLine = Data("HTTP/1.1 100 Continue\r\n\r\n".utf8)
 
     /// The next request on the connection, or nil when the client closed cleanly between requests.
-    static func next(from inbound: Inbound, bodyLimit: Int) async throws -> InboundRequest? {
+    package static func next(from inbound: Inbound, bodyLimit: Int) async throws -> InboundRequest? {
         guard let raw = try await inbound.read(through: headEnd, maximum: headLimit, tooLarge: .headTooLarge) else { return nil }
         var request = try parseHead(raw)
         request.body = try await body(for: request, from: inbound, limit: bodyLimit)
@@ -319,7 +319,7 @@ enum RequestReader {
     }
 }
 
-enum ResponseWriter {
+package enum ResponseWriter {
     static let reasons: [Int: String] = [
         200: "OK", 201: "Created", 202: "Accepted", 204: "No Content",
         301: "Moved Permanently", 302: "Found", 303: "See Other", 304: "Not Modified",
@@ -330,7 +330,7 @@ enum ResponseWriter {
         504: "Gateway Timeout", 529: "Overloaded",
     ]
 
-    static func head(status: Int, headers: [HTTPField]) -> Data {
+    package static func head(status: Int, headers: [HTTPField]) -> Data {
         var text = "HTTP/1.1 \(status) \(reasons[status] ?? "Status")\r\n"
         for field in headers { text += "\(field.name): \(field.value)\r\n" }
         text += "\r\n"
