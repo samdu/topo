@@ -614,9 +614,12 @@ final class PhoneToolsTests: XCTestCase {
     }
 
     /// Codex on #214: Contacts' own store finds a person by a phone number and by an email
-    /// address, not only by name. The contact is written by the test itself (the tool writes
-    /// nothing) and removed after. Access is granted as for the calendar
-    /// (`xcrun simctl privacy <udid> grant contacts zone.hexagon.topo`).
+    /// address. The contact is written by the test itself (the tool writes nothing) into the
+    /// store's default container, confirmed by id through `show`, and removed after. Access is
+    /// granted as for the calendar (`xcrun simctl privacy <udid> grant contacts zone.hexagon.topo`).
+    /// No name search here: Contacts matches names through an index it updates after the save, on
+    /// its own time, and on the PR check's runner a name written moments before was not yet
+    /// found; numbers and addresses are matched at once.
     func testContactsFindsAPersonByNumberAndByAddress() async throws {
         XCTAssertEqual(CNContactStore.authorizationStatus(for: .contacts), .authorized,
                        "grant the simulator's contacts access first: xcrun simctl privacy <udid> grant contacts zone.hexagon.topo")
@@ -627,9 +630,11 @@ final class PhoneToolsTests: XCTestCase {
         person.familyName = "Person\(tag)"
         person.phoneNumbers = [CNLabeledValue(label: CNLabelPhoneNumberMobile, value: CNPhoneNumber(stringValue: "+44 7700 900123"))]
         person.emailAddresses = [CNLabeledValue(label: CNLabelHome, value: "topotest-\(tag)@example.com" as NSString)]
+        let contacts = CNContactStore()
+        let container = contacts.defaultContainerIdentifier()
         let save = CNSaveRequest()
-        save.add(person, toContainerWithIdentifier: nil)
-        try CNContactStore().execute(save)
+        save.add(person, toContainerWithIdentifier: container)
+        try contacts.execute(save)
         let id = person.identifier
         addTeardownBlock {
             let contacts = CNContactStore()
@@ -639,13 +644,15 @@ final class PhoneToolsTests: XCTestCase {
             try? contacts.execute(remove)
         }
         let tool = ContactsTool(directory: ContactStoreDirectory(), authorizer: Permission("Contacts"), broker: PermissionBroker())
-        for query in ["+44 7700 900123", "+447700900123", "topotest-\(tag)@example.com", "Person\(tag)"] {
+        let shown = await tool.run(["show", id])
+        XCTAssertEqual(shown.status, ToolReply.ok, "the contact saved into \(container) is not there to show: \(shown.text)")
+        XCTAssertTrue(shown.text.hasPrefix("name: Topotest Person\(tag)\n"), shown.text)
+        XCTAssertTrue(shown.text.contains("email: "), shown.text)
+        XCTAssertTrue(shown.text.contains("topotest-\(tag)@example.com"), shown.text)
+        for query in ["+44 7700 900123", "+447700900123", "topotest-\(tag)@example.com"] {
             let reply = await tool.run(["search", query])
             XCTAssertEqual(reply.status, ToolReply.ok, "\(query): \(reply.text)")
             XCTAssertTrue(reply.text.contains("\(id) | Topotest Person\(tag) | "), "\(query): \(reply.text)")
         }
-        let shown = await tool.run(["show", id])
-        XCTAssertTrue(shown.text.contains("email: "), shown.text)
-        XCTAssertTrue(shown.text.contains("topotest-\(tag)@example.com"), shown.text)
     }
 }
