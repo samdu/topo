@@ -4,8 +4,8 @@ import XCTest
 /// debug report (`DebugRun.ChatReport`), and the microphone's counters, off its own
 /// (`VoiceInput.Report`). Both are debug-only accessibility values.
 enum ChatReading {
-    /// The button's three labels, `VoiceInput`'s state in words.
-    static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send"]
+    /// The button's labels: `VoiceInput`'s state in words, or Stop while Topo is speaking.
+    static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send", "Stop speaking"]
 
     struct Chat: Decodable {
         var mascot: Topo?

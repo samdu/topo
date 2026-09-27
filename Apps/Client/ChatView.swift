@@ -32,6 +32,8 @@ struct ChatView: View {
     /// height, because it changes in a transaction of its own ahead of the keyboard, so the
     /// surface fades in on the presence's time where it stands and then rides up with the pane.
     @State private var focused = false
+    /// Which way the press on the microphone went, so its release follows it.
+    @State private var micPress = MicPress()
     /// The bottom of the screen's safe area with no keyboard in it, which is what the keyboard's
     /// is measured against (`KeyboardInset`). Nil until it has been measured.
     @State private var restingBottomInset: CGFloat?
@@ -227,17 +229,8 @@ struct ChatView: View {
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
-            harness.onReply = { reply in
-                // The mark is the decision, made at the release: a reply whose turn is marked is
-                // read whatever the setting says now, since the setting governs what the next
-                // release decides and not what a turn already released is owed.
-                guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-                // Only a reply the speaker took is read: one it refused is still owed, so the
-                // turn stays marked spoken and the next pass offers the reply again.
-                guard speaker.speak(reply.text, answering: asked, reply: reply.ref) else { return false }
-                harness.answeredAloud(asked)
-                return true
-            }
+            harness.onReply = { reply in SpokenReply.read(reply, harness: harness, speaker: speaker) }
+            speaker.settled = { nonce in harness.answeredAloud(nonce) }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
             defer {
@@ -245,6 +238,7 @@ struct ChatView: View {
                 // aloud any more, so nothing keeps the process awake for one.
                 harness.onReply = nil
                 harness.onTurnFailed = nil
+                speaker.settled = nil
                 speaker.endAllWaits("the chat stopped answering")
             }
             await withDiscardingTaskGroup { group in
@@ -341,15 +335,6 @@ struct ChatView: View {
                 forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
     }
 
-    /// Hold to talk and release to send; a tap opens the microphone until the next press. The
-    /// session logic is `VoiceInput`'s; this only sends what a press hands back.
-    private func micPressed(_ down: Bool) async {
-        if down { speaker.stop() }
-        let heard = down ? await voice.pressDown(as: .chat) : await voice.pressUp(as: .chat)
-        guard let heard else { return }
-        await sendSpoken(heard)
-    }
-
     private func sendSpoken(_ heard: String) async {
         row.text = ""
         guard !heard.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -424,21 +409,27 @@ struct ChatView: View {
                                holdsTopo: look.mascot.placement == .glass)
     }
 
-    /// The four facts the glass draws the microphone from, read off `VoiceInput`.
+    /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
     private var micState: Composer.MicState {
-        Composer.MicState(canListen: voice.canListen, listening: voice.listening,
-                          owner: voice.owner, handsFree: voice.handsFree)
+        Composer.MicState(voice, speaking: speaker.speaking)
     }
 
     /// The glass under the transcript. What the microphone is doing is four facts read off
-    /// `VoiceInput` here and drawn there; the press is handed straight back to `micPressed`,
-    /// which is the whole of this screen's part in a session. Its own top edge is read off its
+    /// `VoiceInput` here, with whether Topo is speaking, and drawn there; the press is handed
+    /// straight back to `MicPress.gesture` with the state the composer drew it in, which is the
+    /// whole of this screen's part in a session. Its own top edge is read off its
     /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
     /// the edge the presence is read against.
     @ViewBuilder private func composer(keyboard: Bool) -> some View {
         let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
                             keyboard: keyboard,
-                            micPressed: { down in Task { await micPressed(down) } },
+                            // Hold to talk and release to send; a tap opens the microphone until
+                            // the next press. The session logic is `VoiceInput`'s and the routing
+                            // `MicPress`'s; this only sends what a press hands back.
+                            micPressed: { down, drawn in
+                                micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
+                                                 send: { await sendSpoken($0) })
+                            },
                             micReport: micReport)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
@@ -570,6 +561,112 @@ enum ReadAloud {
             .compactMap { ref in turns.first { $0.ref == ref } }
             .first { $0.role == .person && spoken.contains($0.nonce) }?
             .nonce
+    }
+}
+
+/// Reads a reply that waited for the microphone once the microphone closes, however it closed —
+/// a release, the keyboard, the scene going, a reset — by watching `VoiceInput.listening`. Not a
+/// view, so it runs behind the lock and whether or not the chat is drawn; the app starts it once.
+/// A press closes the microphone too and says so itself (`MicPress`), so the reply does not wait
+/// on the watch's hop.
+@MainActor
+enum MicrophoneWatch {
+    static func start(_ voice: VoiceInput, _ speaker: Speaker) {
+        withObservationTracking {
+            _ = voice.listening
+        } onChange: { [weak voice, weak speaker] in
+            // Called as the value is about to change, so the answer is read on the next turn.
+            Task { @MainActor in
+                guard let voice, let speaker else { return }
+                if !voice.listening { speaker.microphoneClosed() }
+                start(voice, speaker)
+            }
+        }
+    }
+}
+
+/// A spoken turn's reply read aloud: the chat's `Harness.onReply`, answering whether the harness
+/// is done with the reply.
+@MainActor
+enum SpokenReply {
+    static func read(_ reply: Turn, harness: Harness, speaker: Speaker) -> Bool {
+        // The mark is the decision, made at the release: a reply whose turn is marked is read
+        // whatever the setting says now, since the setting governs what the next release decides
+        // and not what a turn already released is owed.
+        guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+        // Only a reply the speaker took is read: one it refused is still owed, so the turn stays
+        // marked spoken and the next pass offers the reply again.
+        guard speaker.speak(reply.text, answering: asked, reply: reply.ref) else { return false }
+        // A reply waiting for the microphone keeps its turn marked until it is read
+        // (`Speaker.settled`), so one the session refuses when the microphone closes is still owed.
+        if !speaker.waitingForMicrophone { harness.answeredAloud(asked) }
+        return true
+    }
+}
+
+extension Composer.MicState {
+    /// What the chat's glass draws: the four facts read off `VoiceInput`, and whether the
+    /// speaker is reading a reply.
+    @MainActor init(_ voice: VoiceInput, speaking: Bool) {
+        self.init(canListen: voice.canListen, listening: voice.listening, owner: voice.owner,
+                  handsFree: voice.handsFree, speaking: speaking)
+    }
+}
+
+/// The chat's press on the microphone, routed by the state the composer drew it in. While Topo
+/// is speaking the button is Stop (`Composer.MicState.Appearance.stop`): the press ends the reply
+/// and opens nothing, and its release is that press's own, so it reaches no session either, even
+/// though the button is the microphone again by then. A press on the closed microphone stops a
+/// reply still being read, so the microphone does not hear the speaker, and goes to `VoiceInput`;
+/// one on the open microphone goes to `VoiceInput` alone, and closing it lets a reply that waited
+/// for it be read (`Speaker.microphoneClosed`).
+///
+/// Every decision is made in the gesture's callback, in the order the callbacks come, and only
+/// the call into `VoiceInput` is left to a task: a stop is over before the callback returns and
+/// its release spawns nothing, so no scheduling of the tasks can put a release in front of its
+/// press or turn one kind of press into the other.
+@MainActor
+final class MicPress {
+    /// The last press down was a stop, so the release that follows it is one too. Set afresh on
+    /// every press, so a release the gesture never delivered strands nothing.
+    private var stopping = false
+
+    /// The gesture's own call, as the finger lands or lifts, with the state the composer drew
+    /// the button in: the press is what the person saw, not what the speaker says by the time
+    /// the callback runs. Answers the task carrying the press to `VoiceInput`, and nil for a stop
+    /// and its release, which reach nothing. What a release heard is handed to `send`.
+    @discardableResult
+    func gesture(_ down: Bool, drawn: Composer.MicState, speaker: Speaker, voice: VoiceInput,
+                 send: @escaping @MainActor (String) async -> Void) -> Task<Void, Never>? {
+        guard down else {
+            if stopping {
+                stopping = false
+                return nil
+            }
+            return Task {
+                let heard = await voice.pressUp(as: .chat)
+                speaker.microphoneClosed()
+                guard let heard else { return }
+                await send(heard)
+            }
+        }
+        stopping = drawn.appearance == .stop
+        // A press on a closed microphone stops what is being read, so the mic does not hear it.
+        // One on the open microphone leaves the speaker alone: nothing is read while it is open,
+        // and a reply waiting for it to close is read once this press closes it.
+        if stopping {
+            speaker.stop()
+        } else if !drawn.open {
+            // From here to `pressDown`'s answer the microphone is opening, and nothing is read.
+            speaker.microphoneOpening()
+        }
+        if stopping { return nil }
+        return Task {
+            let heard = await voice.pressDown(as: .chat)
+            speaker.microphoneOpened()
+            guard let heard else { return }
+            await send(heard)
+        }
     }
 }
 #endif

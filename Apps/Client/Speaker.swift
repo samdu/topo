@@ -6,8 +6,9 @@ import TopoCore
 /// Reads a reply aloud, wherever the process is: a reply to a spoken turn is heard whether the
 /// phone is locked, pocketed or showing another app. What keeps the process there is the hold —
 /// `AudioSession.Hold`, counted, answered by the play queue's keeper — which stands from the
-/// release of the press until the reply has been read, one wait per turn said and not answered. Pressing the microphone stops a reply, so
-/// the mic does not hear the speaker; so does the Stop item, a sign-out and a media services
+/// release of the press until the reply has been read, one wait per turn said and not answered. Pressing the microphone stops a reply — the
+/// button is Stop while one is read, and a press on it opens nothing — so the mic does not hear
+/// the speaker; so does the Stop item, a sign-out and a media services
 /// reset. An interruption does not: iOS posts one at the lock screen with nothing in it, so a
 /// `.began` marks the engine dead and leaves the hold standing, and the rebuild at `.ended` or at
 /// the configuration change carries the reply on. No hold outlives its ceiling either way.
@@ -16,7 +17,9 @@ import TopoCore
 /// sentences, each synthesised behind the one before and pushed to the play queue frame by frame
 /// as it decodes, paced by the queue's time-pitch unit at `Voice.tempo`, so what a listener waits
 /// for is the first frame of the first sentence rather than the reply. A reply given to a voice
-/// that is not resident is not spoken at all; the diagnostics `voice` row says why.
+/// that is not resident is not spoken at all; the diagnostics `voice` row says why. Nor is one
+/// read into an open microphone: it waits until the microphone closes (`microphoneOpen`,
+/// `microphoneClosed`).
 ///
 /// Every `speak` is a generation. A frame that lands after a `stop` belongs to no reply and
 /// changes nothing.
@@ -78,6 +81,9 @@ final class Speaker {
     private var chain: Task<Void, Never>?
     /// Sentences of the current reply not yet made.
     private var making = 0
+    /// A reply that landed while a microphone was open, to be read once it closes. Its wait stands
+    /// until then. One at most: each reply cuts off the one before it anyway.
+    private var deferred: (text: String, nonce: String?)?
     #if DEBUG
     /// What the last reply was and whether it was heard to the end, for the UI test.
     private(set) var report = Report()
@@ -300,6 +306,16 @@ final class Speaker {
             nonce.map { refusals[$0, default: 0] += 1 }
             return false
         }
+        // Taken, and read once the microphone closes (`microphoneClosed`), with nothing touched
+        // before then: no session, no queue, and the turn's wait left standing.
+        if microphoneBusy {
+            deferred = (text, nonce)
+            #if DEBUG
+            DebugRun.say("speak: waiting for the microphone to close")
+            #endif
+            AudioLog.say("the reply waits for the microphone to close")
+            return true
+        }
         do {
             try audio.ensureActive()
         } catch {
@@ -358,9 +374,78 @@ final class Speaker {
         endAllWaits("stopped")
     }
 
+    /// Whether a microphone is open, asked at every `speak`. A reply is never read into one: the
+    /// microphone would hear it, and the turn being said would carry Topo's words. The app answers
+    /// with `VoiceInput.listening`.
+    var microphoneOpen: @MainActor () -> Bool = { false }
+
+    /// A press is opening a microphone: set at the press, before `VoiceInput` has awaited the
+    /// permission prompt or started anything, so a reply landing in between waits as it would for
+    /// one already open. `microphoneOpened` clears it.
+    private var opening = false
+
+    /// Told the nonce of a spoken turn whose reply waited for the microphone, once that reply has
+    /// been taken or dropped. Until then its turn stays marked spoken (`Harness.answeredAloud` is
+    /// held back), so a reply the session refused at the release is still owed.
+    var settled: (@MainActor (String) -> Void)?
+
+    /// A reply is waiting for the microphone to close.
+    var waitingForMicrophone: Bool { deferred != nil }
+
+    #if DEBUG
+    /// The spoken turns a wait is standing for, for a test.
+    var awaiting: [String] { waits.keys.sorted() }
+    #endif
+
+    /// The press's call into `VoiceInput` has returned: the microphone is listening, or the
+    /// press opened nothing, or it closed a hands-free session. It is no longer opening, and a
+    /// reply that waited is read if no microphone is open.
+    func microphoneOpened() {
+        opening = false
+        microphoneClosed()
+    }
+
+    private var microphoneBusy: Bool { opening || microphoneOpen() }
+
+    /// A press is about to open the microphone. What is being read stops, so the microphone does
+    /// not hear it, and every other wait goes, as at any press; a reply waiting for the microphone
+    /// waits on with its wait, since opening it again is no reason to lose it — it is read when
+    /// this one closes.
+    func microphoneOpening() {
+        let waiting = deferred
+        deferred = nil
+        cancel()
+        deferred = waiting
+        waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
+        opening = true
+    }
+
+    /// The press that opened a microphone has done what it was going to, or a microphone closed:
+    /// the reply that landed while it was open is read now, and the button it was pressed on
+    /// becomes Stop. Free while a microphone is still open or nothing is waiting. A reply the
+    /// session refuses here keeps waiting, its turn still marked, for the next close or the next
+    /// pass that offers it after a relaunch.
+    func microphoneClosed() {
+        guard let waiting = deferred, !microphoneBusy else { return }
+        deferred = nil
+        AudioLog.say("the microphone closed; reading the reply that waited for it")
+        guard speak(waiting.text, answering: waiting.nonce) else {
+            deferred = waiting
+            AudioLog.say("the reply that waited for the microphone was not taken; it waits on")
+            return
+        }
+        waiting.nonce.map { settled?($0) }
+    }
+
     /// Ends the reply in flight and leaves any wait standing, which is what `speak` needs: the
     /// reply about to be read replaces the one before it without the keeper stopping between them.
+    /// A reply waiting for the microphone goes too: its turn is settled unread and its wait let go.
     private func cancel() {
+        if let dropped = deferred?.nonce {
+            settled?(dropped)
+            endAwaiting(dropped, "its reply will not be read")
+        }
+        deferred = nil
         generation += 1
         reply = nil
         chain = nil
