@@ -9,11 +9,13 @@ struct ConnectionsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.look) private var look
     @State private var confirmingDisconnect = false
+    @State private var confirmingOnePasswordDisconnect = false
 
     var body: some View {
         NavigationStack {
             Form {
                 github
+                onePassword
             }
             .navigationTitle("Connections")
             .navigationBarTitleDisplayMode(.inline)
@@ -56,6 +58,40 @@ struct ConnectionsView: View {
             Text("GitHub")
         } footer: {
             githubFooter
+        }
+    }
+
+    private var onePassword: some View {
+        Section {
+            switch connections.onePassword {
+            case .disconnected, .failed:
+                if case let .failed(words) = connections.onePassword { Text(words) }
+                Button("Create a service account") { connections.open(Connections.onePasswordServiceAccounts) }
+                PasteButton(payloadType: String.self) { strings in
+                    guard let text = strings.first else { return }
+                    connections.connectOnePassword(pasted: text)
+                }
+            case .verifying:
+                Label("Checking the token with 1Password…", systemImage: "hourglass")
+                Button("Cancel", role: .cancel) { connections.cancelOnePassword() }
+            case let .connected(vaults):
+                LabeledContent("Vaults", value: vaults)
+                Button("Disconnect", role: .destructive) { confirmingOnePasswordDisconnect = true }
+                    .confirmationDialog("Disconnect 1Password?", isPresented: $confirmingOnePasswordDisconnect,
+                                        titleVisibility: .visible) {
+                        Button("Disconnect", role: .destructive) { connections.disconnectOnePassword() }
+                    } message: {
+                        Text("Topo forgets the service-account token on this phone. The service account stays in 1Password until you delete it there.")
+                    }
+            }
+        } header: {
+            Text("1Password")
+        } footer: {
+            if case .connected = connections.onePassword {
+                Text("Topo reads secrets from these vaults when you ask it to, through a service account only this phone holds.")
+            } else {
+                Text("Make a service account for the one vault Topo may read, read-only, and copy its token; then paste it here.")
+            }
         }
     }
 

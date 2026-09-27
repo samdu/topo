@@ -66,6 +66,7 @@ struct TopoApp: App {
             NotifyTool(scheduler: UserNotificationScheduler(), authorizer: NotificationAuthorizer(), broker: broker),
             ContactsTool(directory: ContactStoreDirectory(), authorizer: ContactsAuthorizer(), broker: broker),
             GitHubTool(store: connections.store),
+            SecretTool(store: connections.store, onePassword: GuestOnePassword()),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
                          broker: broker),
         ]

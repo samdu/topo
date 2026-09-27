@@ -13,6 +13,8 @@ struct Fetched: Sendable, Equatable {
     let sha256: String
     /// The release the entry is pinned to, where it names one (Claude Code's version).
     let version: String?
+    /// The file inside the archive the app runs, pinned on its own (`op` in 1Password's zip).
+    var binary: ModelManifest.File? = nil
 
     /// The file as a layer of the fakefs, with its pin.
     var layer: RootfsLayer { RootfsLayer(file: file, pin: RootfsPin(size: size, sha256: sha256)) }
@@ -58,7 +60,7 @@ final class DownloadedEntry: DownloadSource {
                 }
                 return .success(model.files.map {
                     Fetched(file: downloads.store.location(of: $0, in: model), size: $0.size,
-                            sha256: $0.sha256, version: model.version)
+                            sha256: $0.sha256, version: model.version, binary: model.binary)
                 })
             })
         }
@@ -110,6 +112,8 @@ final class Userland {
     private let source: any DownloadSource
     private let shellSource: any DownloadSource
     private let claudeSource: any DownloadSource
+    private let onePasswordSource: any DownloadSource
+    private var onePasswordInstall: Task<OnePasswordInstaller, Error>?
     /// Whether a fetch is on its way, so a foreground during one asks for nothing more.
     private var fetching = false
     /// What the rootfs's fetch and the packages' fetch settled with, until both have.
@@ -122,11 +126,53 @@ final class Userland {
     private var booting: Task<ClaudeCodeInstaller.Installed, Error>?
 
     init(installer: RootfsInstaller = .standard(), source: (any DownloadSource)? = nil,
-         shellSource: (any DownloadSource)? = nil, claudeSource: (any DownloadSource)? = nil) {
+         shellSource: (any DownloadSource)? = nil, claudeSource: (any DownloadSource)? = nil,
+         onePasswordSource: (any DownloadSource)? = nil) {
         self.installer = installer
         self.source = source ?? DownloadedEntry(ModelManifest.rootfs)
         self.shellSource = shellSource ?? DownloadedEntry(ModelManifest.shell)
         self.claudeSource = claudeSource ?? DownloadedEntry(ModelManifest.claudeCode)
+        self.onePasswordSource = onePasswordSource ?? DownloadedEntry(ModelManifest.onePassword)
+    }
+
+    /// Where `op` is extracted to: beside the fakefs, outside the downloader's homes, whose sweep
+    /// removes whatever in a home is not a manifest file.
+    static let onePasswordDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("Userland/op-cli", isDirectory: true)
+
+    /// `op` mounted into the booted guest, once per process: fetches 1Password's zip on first
+    /// asking (never on a foreground, since most people never connect 1Password), boots the guest,
+    /// and extracts, verifies and mounts `op` off the main thread. A failure is not kept, so the
+    /// next call tries again.
+    func onePassword() async throws -> OnePasswordInstaller {
+        if let onePasswordInstall { return try await onePasswordInstall.value }
+        let task = Task { @MainActor in
+            let files = try await withCheckedThrowingContinuation { continuation in
+                self.onePasswordSource.fetch { continuation.resume(with: $0) }
+            }
+            guard files.count == 1, let zip = files.first, let binary = zip.binary else {
+                throw ModelDownloadFailure(id: ModelManifest.onePassword, why: "the entry is not one zip with its binary")
+            }
+            let installer = OnePasswordInstaller(zip: zip.file, directory: Self.onePasswordDirectory,
+                                                 pin: ClaudeCodePin(version: zip.version ?? "", size: binary.size,
+                                                                    sha256: binary.sha256))
+            _ = try await self.bootGuest()
+            let extract = try await Self.offThePool { try installer.mount(into: Guest.shared) }
+            var extracted: (status: Int32, errors: String)?
+            if extract {
+                let exit = try await Guest.shared.run("/bin/sh", ["-c", installer.extraction])
+                extracted = (exit.status, exit.errors)
+            }
+            try await Self.offThePool { [extracted] in try installer.complete(extracted: extracted) }
+            return installer
+        }
+        onePasswordInstall = task
+        do {
+            return try await task.value
+        } catch {
+            onePasswordInstall = nil
+            throw error
+        }
     }
 
     /// Asks for every download: the rootfs and the packages, imported once both are here, and
@@ -221,6 +267,13 @@ final class Userland {
                 self.claude = .failed(String(describing: error))
                 waiting.forEach { $0.resume(throwing: error) }
             }
+        }
+    }
+
+    /// Blocking work — a digest of a whole binary — on a queue of its own.
+    private static func offThePool<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(with: Result { try work() }) }
         }
     }
 
