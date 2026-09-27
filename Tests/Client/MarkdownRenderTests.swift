@@ -376,7 +376,9 @@ final class MarkdownRenderTests: XCTestCase {
         XCTAssertTrue(opened(scroll), "the transcript did not open at its end: \(scroll.contentOffset.y) of \(scroll.contentSize.height)")
         // With the padding under the newest turn there is room to scroll further down, so a
         // scroll the cue should not make — the block's top to the screen's — moves the transcript
-        // rather than being held at the end.
+        // rather than being held at the end. With the opening's check this holds the offset in a
+        // window as wide as the transcript's spacing, so a spacing under about 2 pt makes the two
+        // contradict.
         XCTAssertGreaterThan(end(scroll) - scroll.contentOffset.y, 1, "the transcript has no room left to scroll")
         if first {
             XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
