@@ -350,15 +350,21 @@ final class MarkdownRenderTests: XCTestCase {
         // Looked at every tenth of a second until the block has been seen and seen pulsing, for
         // up to ten seconds — the whole pulse — so a slow runner is waited for and a block never
         // scrolled to or never pulsed is still seen not to be.
-        var shown = 0, pulsed = 0
+        // How far the transcript moved is the most it was ever away from where it stood, read at
+        // every look and for a second after, so a scroll there and back again is a move.
+        var shown = 0, pulsed = 0, moved: CGFloat = 0
         try stage.poll { [self] in
+            moved = max(moved, abs(scroll.contentOffset.y - offset))
             let drawn = try Pixels(stage.image(), blank: true)
             shown = max(shown, drawn.count(outline))
             pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
             return shown > 20 && pulsed > 20
         }
-        stage.wait(0.5)
-        return (shown, pulsed, abs(scroll.contentOffset.y - offset))
+        stage.poll(for: 1) {
+            moved = max(moved, abs(scroll.contentOffset.y - offset))
+            return false
+        }
+        return (shown, pulsed, moved)
     }
 
     /// The transcript's scroll view, the first under `view`.

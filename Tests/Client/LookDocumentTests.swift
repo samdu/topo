@@ -190,6 +190,8 @@ final class LookDocumentTests: XCTestCase {
             let reading = LookDocument.read(#"{"markdown": {"codePulse": {"cycle": \#(cycle)}}}"#)
             XCTAssertEqual(reading.notes, [], "\(cycle)")
             XCTAssertEqual(reading.look.markdown.codePulse.cycle, cycle)
+            XCTAssertTrue(reading.fields.contains("markdown.codePulse.cycle"),
+                          "\(cycle) was taken and not named among the fields taken: \(reading.fields)")
         }
         for cycle in [0.1, 0.29, 5.1, 0, -1] {
             let reading = LookDocument.read(#"{"markdown": {"codePulse": {"cycle": \#(cycle), "width": 4}}}"#)

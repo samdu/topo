@@ -82,8 +82,9 @@ final class Speaker {
     /// Sentences of the current reply not yet made.
     private var making = 0
     /// A reply that landed while a microphone was open, to be read once it closes. Its wait stands
-    /// until then. One at most: each reply cuts off the one before it anyway.
-    private var deferred: (text: String, nonce: String?)?
+    /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
+    /// each reply cuts off the one before it anyway.
+    private var deferred: (text: String, nonce: String?, reply: TurnRef?)?
     #if DEBUG
     /// What the last reply was and whether it was heard to the end, for the UI test.
     private(set) var report = Report()
@@ -309,7 +310,7 @@ final class Speaker {
         // Taken, and read once the microphone closes (`microphoneClosed`), with nothing touched
         // before then: no session, no queue, and the turn's wait left standing.
         if microphoneBusy {
-            deferred = (text, nonce)
+            deferred = (text, nonce, reply)
             #if DEBUG
             DebugRun.say("speak: waiting for the microphone to close")
             #endif
@@ -429,7 +430,7 @@ final class Speaker {
         guard let waiting = deferred, !microphoneBusy else { return }
         deferred = nil
         AudioLog.say("the microphone closed; reading the reply that waited for it")
-        guard speak(waiting.text, answering: waiting.nonce) else {
+        guard speak(waiting.text, answering: waiting.nonce, reply: waiting.reply) else {
             deferred = waiting
             AudioLog.say("the reply that waited for the microphone was not taken; it waits on")
             return

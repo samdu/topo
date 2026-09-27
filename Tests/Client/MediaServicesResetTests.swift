@@ -873,6 +873,32 @@ final class MediaServicesResetTests: XCTestCase {
         speaker.stop()
     }
 
+    /// A reply with a code block that lands while the microphone is open waits for it to close,
+    /// and is read then as the turn it is: its block is cued under that turn, as it would have
+    /// been had it been read when it landed.
+    func testAReplyThatWaitedForTheMicrophoneCuesItsBlocksUnderItsTurn() async throws {
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = await self.speaker(seams, audio, center, heard: .dataRendered)
+        var open = true
+        speaker.microphoneOpen = { open }
+        let reply = TurnRef(device: DeviceID("phone"), sequence: 12)
+        XCTAssertTrue(speaker.speak("First.\n\n```\nlet a = 1\n```", answering: "asked", reply: reply))
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        await drain()
+        XCTAssertEqual(speaker.report.speaks, 0, "read into the open microphone")
+
+        open = false
+        speaker.microphoneClosed()
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        try await render(seams, until: "the block cued") { speaker.cue != nil }
+        XCTAssertEqual(speaker.cue?.reply, reply, "the block was cued under another turn")
+        XCTAssertEqual(speaker.cue?.number, 1)
+        XCTAssertEqual(speaker.report.blocks, [1])
+        speaker.stop()
+    }
+
     /// Only a code block's own line is a cue: prose that says "See code block 1." in so many words
     /// is read as prose, beside the block's line or with no block at all.
     func testProseThatSaysSeeCodeBlockIsNotACue() async throws {

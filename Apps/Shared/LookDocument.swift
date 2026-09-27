@@ -544,7 +544,7 @@ enum LookDocument {
         /// past which it is too slow to be seen as one.
         func breath(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0.3...5, "a time in seconds between 0.3 and 5") {
-                applied += 1
+                took(key)
                 value = number
             }
         }
