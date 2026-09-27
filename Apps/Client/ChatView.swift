@@ -567,6 +567,12 @@ enum ReadAloud {
     }
 }
 
+/// RED: not yet watching.
+@MainActor
+enum MicrophoneWatch {
+    static func start(_ voice: VoiceInput, _ speaker: Speaker) {}
+}
+
 /// A spoken turn's reply read aloud: the chat's `Harness.onReply`, answering whether the harness
 /// is done with the reply.
 @MainActor
@@ -645,7 +651,7 @@ final class MicPress {
         if stopping { return nil }
         return Task {
             let heard = await voice.pressDown(as: .chat)
-            speaker.microphoneClosed()
+            speaker.microphoneOpened()
             guard let heard else { return }
             await send(heard)
         }

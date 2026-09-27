@@ -298,9 +298,11 @@ final class StopWhileSpeakingTests: XCTestCase {
         let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
 
         await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(speaker.awaitReply("earlier", readAloud: true).held)
         XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "earlier"))
         XCTAssertTrue(speaker.waitingForMicrophone)
         XCTAssertEqual(settled.texts, [], "a reply still waiting settled its turn")
+        XCTAssertEqual(speaker.awaiting, ["earlier"])
 
         // The play queue's engine will not start when the release comes to read the reply.
         seams.playEngineRefusals = 1
@@ -311,12 +313,79 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertFalse(speaker.speaking, "nothing renders, so nothing is read")
         XCTAssertTrue(speaker.waitingForMicrophone, "the refused reply was dropped")
         XCTAssertEqual(settled.texts, [], "the refused reply settled its turn, so it is owed nothing")
+        XCTAssertEqual(speaker.awaiting, ["earlier"], "the refused reply's wait went")
 
-        // The next close reads it, and only then is its turn settled.
-        speaker.microphoneClosed()
+        // The next ordinary press keeps the reply and its wait; its release reads it, and only
+        // then is its turn settled and its wait let go.
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(speaker.waitingForMicrophone)
+        XCTAssertEqual(speaker.awaiting, ["earlier"], "the press ended the wait of a reply still owed")
+        utterance(into: voice.sink)
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         await settle("the reply to start") { speaker.report.started }
         XCTAssertFalse(speaker.waitingForMicrophone)
         XCTAssertEqual(settled.texts, ["earlier"])
+        XCTAssertEqual(speaker.awaiting, [])
+    }
+
+    /// Round five's blocker: two spoken replies land while the microphone is open. The second
+    /// replaces the first, and the first's wait goes with it, so no hold stands for a reply that
+    /// will never be read. (In the chat the press that opened the microphone has already ended
+    /// the waits; the waits here are taken after it, which the speaker allows.)
+    func testAWaitingReplyReplacedByANewerOneLetsGoOfItsWait() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        let press = MicPress()
+        let sent = Sent()
+        let settled = Sent()
+        speaker.settled = { settled.add($0) }
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(voice.listening)
+        XCTAssertTrue(speaker.awaitReply("one", readAloud: true).held)
+        XCTAssertTrue(speaker.awaitReply("two", readAloud: true).held)
+        XCTAssertEqual(speaker.awaiting, ["one", "two"])
+
+        XCTAssertTrue(speaker.speak("Paris.", answering: "one"))
+        XCTAssertEqual(speaker.awaiting, ["one", "two"], "a reply waiting for the microphone keeps its wait")
+        XCTAssertTrue(speaker.speak("Rome.", answering: "two"))
+        XCTAssertEqual(settled.texts, ["one"], "the replaced reply's turn is settled")
+        XCTAssertEqual(speaker.awaiting, ["two"], "the replaced reply's wait still holds the process")
+
+        try? await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+        utterance(into: voice.sink)
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await settle("the newer reply to start") { speaker.report.started }
+        XCTAssertEqual(speaker.report.text, "Rome.")
+        XCTAssertEqual(speaker.awaiting, [], "a wait outlived the reply it was for")
+    }
+
+    /// The keyboard closes a hands-free microphone with a reply waiting for it: nothing in the
+    /// press path runs, and the reply is read all the same, by the app's watch on
+    /// `VoiceInput.listening` (`MicrophoneWatch`), which is not a view and runs behind the lock.
+    func testAReplyWaitingForAHandsFreeMicrophoneIsReadWhenTheKeyboardClosesIt() async {
+        let (speaker, voice, held) = await chat(heard: "purple elephants")
+        defer { held.releaseTheHeldFrame(); speaker.stop(); voice.cancel() }
+        MicrophoneWatch.start(voice, speaker)
+        let press = MicPress()
+        let sent = Sent()
+        let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
+
+        await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        await press.gesture(false, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(voice.handsFree)
+        XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "earlier"))
+        XCTAssertTrue(speaker.waitingForMicrophone)
+
+        // What raising the keyboard does to a hands-free session (`ChatView`, `row.typing`).
+        voice.cancel(.chat)
+        XCTAssertFalse(voice.listening)
+        await settle("the reply to be read once the keyboard closed the microphone") { speaker.report.started }
+        XCTAssertFalse(speaker.waitingForMicrophone)
+        XCTAssertEqual(sent.texts, [], "the keyboard sends nothing")
+        XCTAssertEqual(showing().appearance, .stop)
     }
 
     /// A tap's two callbacks back to back, neither awaited before the other: the press reaches

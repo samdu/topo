@@ -373,6 +373,14 @@ final class Speaker {
     /// A reply is waiting for the microphone to close.
     var waitingForMicrophone: Bool { deferred != nil }
 
+    #if DEBUG
+    /// The spoken turns a wait is standing for, for a test.
+    var awaiting: [String] { waits.keys.sorted() }
+    #endif
+
+    /// RED: the press's call into `VoiceInput` returned; as `microphoneClosed` for now.
+    func microphoneOpened() { microphoneClosed() }
+
     private var microphoneBusy: Bool { opening || microphoneOpen() }
 
     /// A press is about to open the microphone. What is being read stops, so the microphone does
