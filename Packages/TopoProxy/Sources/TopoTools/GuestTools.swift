@@ -1,9 +1,10 @@
 import Foundation
 
-/// The guest's half of the tool service: the `topo` command and the skill that tells Claude Code
-/// it is there. Both are written into the guest's home by the app on every start
-/// (`install(home:)`), so they are always the ones this build of the app answers, and the command
-/// is linked onto the guest's path at `command`.
+/// The guest's half of the tool service: the `topo` command, the skill that tells Claude Code it
+/// is there, and the two shims that hand GitHub's token to `git` and `gh` for one command. All are
+/// written into the guest's home by the app on every start (`install(home:)`), so they are always
+/// the ones this build of the app answers, and the commands are linked onto the guest's path
+/// (`links`).
 public enum GuestTools {
     /// Where `topo` is on the guest's path.
     public static let command = "/usr/local/bin/topo"
@@ -12,18 +13,43 @@ public enum GuestTools {
     /// Where the skill is written, under the home: Claude Code reads a user's skills from
     /// `$HOME/.claude/skills/<name>/SKILL.md`.
     public static let skillPath = ".claude/skills/topo/SKILL.md"
+    /// git's credential helper for github.com, under the home and on the path.
+    public static let credentialHelperPath = ".topo/bin/git-credential-topo"
+    public static let credentialHelperCommand = "/usr/local/bin/git-credential-topo"
+    /// The `gh` wrapper, under the home and on the path ahead of `/usr/bin/gh`.
+    public static let ghPath = ".topo/bin/gh"
+    public static let ghCommand = "/usr/local/bin/gh"
 
-    /// Writes the script (executable: the guest sees the host's mode bits) and the skill under
+    /// Each script under the home, and where it is linked on the guest's path.
+    public static let links: [(script: String, command: String)] = [
+        (scriptPath, command),
+        (credentialHelperPath, credentialHelperCommand),
+        (ghPath, ghCommand),
+    ]
+
+    /// What the guest's environment gains beside the service's URL and token: git told to ask
+    /// `git-credential-topo` for github.com over https, through git's own environment
+    /// configuration, so nothing is written into the home's `.gitconfig`.
+    public static let environment: [String: String] = [
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
+        "GIT_CONFIG_VALUE_0": "topo",
+    ]
+
+    /// Writes the scripts (executable: the guest sees the host's mode bits) and the skill under
     /// `home`, replacing whatever is there.
     public static func install(home: URL) throws {
         let files = FileManager.default
-        let script = home.appendingPathComponent(scriptPath)
         let skill = home.appendingPathComponent(skillPath)
-        for url in [script, skill] {
+        let scripts = [(scriptPath, script), (credentialHelperPath, credentialHelper), (ghPath, gh)]
+        for url in [skill] + scripts.map({ home.appendingPathComponent($0.0) }) {
             try files.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         }
-        try Data(self.script.utf8).write(to: script, options: .atomic)
-        try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        for (path, text) in scripts {
+            let url = home.appendingPathComponent(path)
+            try Data(text.utf8).write(to: url, options: .atomic)
+            try files.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
+        }
         try Data(self.skill.utf8).write(to: skill, options: .atomic)
     }
 
@@ -69,13 +95,67 @@ public enum GuestTools {
     exit "$status"
     """#
 
+    /// git's credential helper: git runs it as `git credential-topo get` for an https URL on
+    /// github.com (`environment`), with the request's attributes on stdin. It answers with what
+    /// `topo github credential` says, and with nothing for any other host or when GitHub is not
+    /// connected, so git carries on as it would have; `store` and `erase` do nothing, since the
+    /// app holds the token.
+    public static let credentialHelper = #"""
+    #!/bin/bash
+    # git-credential-topo: GitHub's token from the Topo app, for one git command.
+    # Written by the app on every start; an edit here lasts until the next one.
+    if [ "${1:-}" != get ]; then
+        cat > /dev/null
+        exit 0
+    fi
+    protocol=
+    host=
+    while IFS= read -r line && [ -n "$line" ]; do
+        case "$line" in
+            protocol=*) protocol="${line#protocol=}" ;;
+            host=*) host="${line#host=}" ;;
+        esac
+    done
+    if [ "$protocol" != https ] || [ "$host" != github.com ]; then
+        exit 0
+    fi
+    if answer="$(topo github credential)"; then
+        printf '%s\n' "$answer"
+    else
+        echo "git-credential-topo: GitHub is not connected; the person connects it in the Topo app, Settings › Connections › GitHub" >&2
+    fi
+    exit 0
+    """#
+
+    /// `gh` with GitHub's token from the app in that one process's environment, never the
+    /// resident's. A `GH_TOKEN` or `GITHUB_TOKEN` already set is left to `gh`; with GitHub not
+    /// connected it says so and runs `gh` as it is.
+    public static let gh = #"""
+    #!/bin/bash
+    # gh: GitHub's CLI with the token from the Topo app, for this one command.
+    # Written by the app on every start; an edit here lasts until the next one.
+    real=/usr/bin/gh
+    if [ ! -x "$real" ]; then
+        echo "gh is not installed in the guest: apk add github-cli" >&2
+        exit 127
+    fi
+    if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+        exec "$real" "$@"
+    fi
+    if token="$(topo github token 2> /dev/null)"; then
+        GH_TOKEN="$token" exec "$real" "$@"
+    fi
+    echo "gh: GitHub is not connected; the person connects it in the Topo app, Settings › Connections › GitHub" >&2
+    exec "$real" "$@"
+    """#
+
     /// The skill: its description is the whole of what a turn pays for the tools until one is
     /// wanted, and its body points at `topo help`, which the app answers from the same table it
     /// dispatches through, so the two cannot drift.
     public static let skill = """
     ---
     name: topo
-    description: The phone's own tools, through the `topo` command in Bash. Use it for the person's reminders, calendar and contacts, where the phone is, a notification on the phone now or later, and how the Topo app looks on this phone (the transcript's margins and insets, Topo's size, speed and the room he keeps from the words) — whenever the person asks about their day, to be reminded, to add or check something, who someone is, where they are, or for the app to look or move differently ("tighten your margins").
+    description: The phone's own tools, through the `topo` command in Bash. Use it for the person's reminders, calendar and contacts, their GitHub connection, where the phone is, a notification on the phone now or later, and how the Topo app looks on this phone (the transcript's margins and insets, Topo's size, speed and the room he keeps from the words) — whenever the person asks about their day, to be reminded, to add or check something, who someone is, where they are, or for the app to look or move differently ("tighten your margins").
     ---
 
     # topo
@@ -89,6 +169,7 @@ public enum GuestTools {
     - Dates are ISO 8601 in the phone's time zone: 2026-09-27, 2026-09-27T14:30. Work out the date yourself from what the person said.
     - An option's value never starts with `--`; write one that does as `--notes=--like-this`.
     - Nothing here deletes anything. `topo reminders done` is the one change to something that already exists.
+    - GitHub: `topo github` says whether the person has connected it and as whom. Once they have, plain `git` over `https://github.com/…` and `gh` use it by themselves (`apk add git github-cli` if they are not installed), on the repositories the person chose for Topo's GitHub App. Never write the token into a file, a remote URL or a git config, and never set `GH_TOKEN` yourself. When it is not connected, tell the person to connect it in Settings › Connections.
     - `topo look` shows the look this phone is wearing: each field you can tune, its value, its range and where the value came from. `topo look set <part.field> <value>` changes it on this phone at once, and the person can undo it from Settings › Tuning › Reset; `topo look reset` undoes it yourself. After a change, say in a few words what you changed.
     """
 }

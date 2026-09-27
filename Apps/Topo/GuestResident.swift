@@ -141,8 +141,8 @@ final class GuestResident {
         }
     }
 
-    /// The home mounted, the tool service started, `topo` and its skill written into the home and
-    /// `topo` linked onto the guest's path; the answer is what the guest's environment gains to
+    /// The home mounted, the tool service started, `topo`, its skill and the GitHub shims written
+    /// into the home and the commands linked onto the guest's path; the answer is what the guest's environment gains to
     /// reach the service. Each step is done once per process and kept, so a start tried again after
     /// a failure picks up from the step that failed. Needs a booted guest.
     func prepareTools(log: @escaping @Sendable (String) -> Void) async throws -> [String: String] {
@@ -169,8 +169,11 @@ final class GuestResident {
             throw error
         }
         try GuestTools.install(home: home)
-        try Guest.shared.link(ClaudeLauncher.home + "/" + GuestTools.scriptPath, at: GuestTools.command)
+        for (script, command) in GuestTools.links {
+            try Guest.shared.link(ClaudeLauncher.home + "/" + script, at: command)
+        }
         let environment = ToolService.environment(port: port, token: await service.token)
+            .merging(GuestTools.environment) { own, _ in own }
         toolsEnvironment = environment
         return environment
     }
@@ -435,7 +438,7 @@ extension DebugRun {
     /// One tool result as the guest-turn run prints it: `tool result: <tool>: ok: <text>` or
     /// `…: error: <text>`, the text on one line (a newline written `\n`), a credential in it
     /// redacted — an `sk-ant-` key, a `Bearer` value, the guest's token variable, the tool
-    /// service's — and anything past
+    /// service's, a GitHub or 1Password token — and anything past
     /// 300 characters cut, since a result can be a whole file.
     static func toolResultLine(tool: String, isError: Bool, text: String) -> String {
         var shown = redacted(text.trimmingCharacters(in: .newlines))
@@ -445,7 +448,8 @@ extension DebugRun {
     }
 
     /// `text` with every credential a debug run could print hidden: an `sk-ant-` key, a `Bearer`
-    /// value, the guest's token variable and the tool service's. Everything the guest writes goes
+    /// value, the guest's token variable and the tool service's, a GitHub token and a 1Password
+    /// service-account token. Everything the guest writes goes
     /// through this before it is printed.
     static func redacted(_ text: String) -> String {
         var shown = text
@@ -454,6 +458,8 @@ extension DebugRun {
             (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
             (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
             (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
+            (#"\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"#, "$1[redacted]"),
+            (#"\bops_[A-Za-z0-9_\-.=]+"#, "ops_[redacted]"),
         ] {
             shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
         }

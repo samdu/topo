@@ -229,6 +229,7 @@ enum LookDocument {
 
     private static func settings(_ value: inout Look.Settings, _ r: Reader) {
         r.colour("tint", &value.tint)
+        r.font("codeFont", &value.codeFont)
     }
 
     private static func jewel(_ value: inout Look.Jewel, _ r: Reader) {

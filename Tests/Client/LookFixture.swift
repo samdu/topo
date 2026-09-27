@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 188
+    static let fields = 189
 
     static let full = """
     {
@@ -119,7 +119,7 @@ enum LookFixture {
         "markSize": 36,
         "jewel": \(jewel)
       },
-      "settings": { "tint": ["#336699", "#99CCFF"] },
+      "settings": { "tint": ["#336699", "#99CCFF"], "codeFont": { "style": "largeTitle", "weight": "black" } },
       "composer": {
         "widthFraction": 0.55,
         "bottomPadding": 22,

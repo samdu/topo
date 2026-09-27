@@ -2,9 +2,9 @@ import XCTest
 
 @testable import Topo
 
-/// Letting go of the login. Four things end, and which of them end, in what order, is what this
-/// covers: the reply in the ear, the transcript and its outbox, the folder on disk, and the
-/// tokens last. A call left out is a reply still being read, or a memory still on disk, for an
+/// Letting go of the login. Five things end, and which of them end, in what order, is what this
+/// covers: the reply in the ear, the transcript and its outbox, the folder on disk, the
+/// connections' tokens, and the login's tokens last. A call left out is a reply still being read, or a memory still on disk, for an
 /// account the app no longer has.
 @MainActor
 final class SignOutTests: XCTestCase {
@@ -18,6 +18,7 @@ final class SignOutTests: XCTestCase {
         let signOut = SignOut(stopSpeaking: { calls.ended.append("speaker") },
                               forgetHarness: { calls.ended.append("harness") },
                               forgetMemory: { calls.ended.append("memory") },
+                              forgetConnections: { calls.ended.append("connections") },
                               forgetLogin: { calls.ended.append("login") })
         return (signOut, calls)
     }
@@ -25,7 +26,7 @@ final class SignOutTests: XCTestCase {
     func testSigningOutEndsEveryOneOfThem() async {
         let (signOut, calls) = signOut()
         await signOut.act()
-        XCTAssertEqual(Set(calls.ended), ["speaker", "harness", "memory", "login"])
+        XCTAssertEqual(Set(calls.ended), ["speaker", "harness", "memory", "connections", "login"])
     }
 
     func testTheLoginGoesLast() async {
@@ -45,7 +46,7 @@ final class SignOutTests: XCTestCase {
     func testTheOrderIsTheWholeOrder() async {
         let (signOut, calls) = signOut()
         await signOut.act()
-        XCTAssertEqual(calls.ended, ["speaker", "harness", "memory", "login"])
+        XCTAssertEqual(calls.ended, ["speaker", "harness", "memory", "connections", "login"])
     }
 
     /// Nothing is ended by building the value: the button's press is what ends them.

@@ -3,10 +3,10 @@ import SwiftUI
 import TopoAuth
 import TopoTurn
 
-/// What the badge opens: the model, the voice, the vocabulary, the diagnostics, the
-/// acknowledgements, and the way out.
+/// What the badge opens: the model, the voice, the vocabulary, the connections, the
+/// diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
-    /// The way out, handed down from the chat because that is where the four things it ends are.
+    /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
     @Environment(Harness.self) private var harness
     @Environment(\.dismiss) private var dismiss
@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var showAbout = false
     @State private var showVocabulary = false
     @State private var showMemory = false
+    @State private var showConnections = false
 
     var body: some View {
         @Bindable var harness = harness
@@ -35,6 +36,10 @@ struct SettingsView: View {
                     // control that moves it, so the row names that rather than the section again.
                     Button("Where it lives") { showMemory = true }
                 }
+                Section("Connections") {
+                    // GitHub, and who it is connected as, on the screen behind it.
+                    Button("GitHub") { showConnections = true }
+                }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
                     Button("About Topo") { showAbout = true }
@@ -53,12 +58,13 @@ struct SettingsView: View {
             .sheet(isPresented: $showAbout) { AboutView() }
             .sheet(isPresented: $showVocabulary) { VocabularyView() }
             .sheet(isPresented: $showMemory) { MemoryView() }
+            .sheet(isPresented: $showConnections) { ConnectionsView() }
         }
         .tint(look.settings.tint)
     }
 }
 
-/// Letting go of the login, which is four things and not one. It is a value rather than a block
+/// Letting go of the login, which is five things and not one. It is a value rather than a block
 /// in the button so that what it ends, and the order it ends them in, is something a test can
 /// read: a call left out here is a reply still being read, or a memory still on disk, for an
 /// account the app has just let go of.
@@ -73,6 +79,9 @@ struct SignOut {
     /// The memory is the person's and stays in their iCloud; the copy of it on this phone goes
     /// with the login.
     var forgetMemory: @MainActor () -> Void = {}
+    /// The connections (GitHub): a phone with no login holds none of its person's tokens. Before
+    /// the login, so a connect still in flight is stopped while there is an account it was for.
+    var forgetConnections: @MainActor () -> Void = {}
     /// The tokens, last, so nothing above it runs without an account to run against.
     var forgetLogin: @MainActor () -> Void = {}
 
@@ -80,6 +89,7 @@ struct SignOut {
         stopSpeaking()
         await forgetHarness()
         forgetMemory()
+        forgetConnections()
         forgetLogin()
     }
 }

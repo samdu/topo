@@ -11,6 +11,7 @@ struct ChatView: View {
     @Environment(SignIn.self) private var signIn
     @Environment(RoleSelector.self) private var roleSelector
     @Environment(Memory.self) private var memory
+    @Environment(Connections.self) private var connections
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     @AppStorage("firstRunAnswered") private var answered = false
     @Environment(VoiceInput.self) private var voice
@@ -325,12 +326,13 @@ struct ChatView: View {
         }
     }
 
-    /// The way out, built here because this is where the four things it ends are in scope, and
+    /// The way out, built here because this is where the five things it ends are in scope, and
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
         SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
-                forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
+                forgetMemory: { memory.forget() }, forgetConnections: { connections.forget() },
+                forgetLogin: { signIn.signOut() })
     }
 
     private func sendSpoken(_ heard: String) async {
