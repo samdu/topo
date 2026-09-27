@@ -170,7 +170,7 @@ final class GuestResident {
         }
         try GuestTools.install(home: home)
         for (script, command) in GuestTools.links {
-            try Guest.shared.link(ClaudeLauncher.home + "/" + script, at: command)
+            try await Guest.shared.linkCommand(ClaudeLauncher.home + "/" + script, at: command)
         }
         let environment = ToolService.environment(port: port, token: await service.token)
             .merging(GuestTools.environment) { own, _ in own }

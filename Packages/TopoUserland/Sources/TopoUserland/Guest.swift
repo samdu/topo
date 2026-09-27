@@ -21,7 +21,7 @@ public final class Guest: Sendable {
         /// A host directory could not be mounted, with the guest errno.
         case mount(Int32)
         /// A link could not be made, with the guest errno.
-        case link(Int32)
+        case link(Int32, path: String)
         /// A mount could not be taken away, with the guest errno (`-16`, EBUSY, while anything in
         /// the guest holds it).
         case unmount(Int32)
@@ -37,7 +37,7 @@ public final class Guest: Sendable {
             case .spawn(let errno): "the program could not be started (\(errno))"
             case .wait(let errno): "the program could not be waited for (\(errno))"
             case .mount(let errno): "the directory could not be mounted (\(errno))"
-            case .link(let errno): "the link could not be made (\(errno))"
+            case .link(let errno, let path): "the link at \(path) could not be made (\(errno))"
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
             case .temporary(let said): "/tmp could not be emptied: \(said)"
@@ -138,7 +138,21 @@ public final class Guest: Sendable {
     /// elsewhere and leaving one that already points there untouched. Requires a booted kernel.
     public func link(_ target: String, at path: String) throws {
         let result = topo_ish_link(target, path)
-        if result != 0 { throw Failure.link(result) }
+        if result != 0 { throw Failure.link(result, path: path) }
+    }
+
+    /// `link` for a command the app puts on the guest's path (`topo`, the shims): the path is the
+    /// app's, so a regular file something in the guest left there — a script the mind wrote before
+    /// the app had one of its own there — is removed and the link made in its place. A directory
+    /// is never removed, and is still refused. Requires a booted kernel.
+    public func linkCommand(_ target: String, at path: String) async throws {
+        do {
+            try link(target, at: path)
+        } catch Failure.link(-17, _) {
+            let removed = try await run("/bin/sh", ["-c", #"[ -f "$1" ] && [ ! -L "$1" ] && rm -f "$1""#, "sh", path])
+            guard removed.status == 0 else { throw Failure.link(-17, path: path) }
+            try link(target, at: path)
+        }
     }
 
     /// Runs `path` with `arguments` to its end and returns what it left. The work is blocking —
