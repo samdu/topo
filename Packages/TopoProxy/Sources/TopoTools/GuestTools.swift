@@ -77,7 +77,7 @@ public enum GuestTools {
     public static let skill = """
     ---
     name: topo
-    description: The phone's own tools, through the `topo` command in Bash. Use it to see or change how the Topo app looks on this phone — the transcript's margins and insets, Topo's size, speed and the room he keeps from the words — whenever the person asks for the app to look or move differently ("tighten your margins", "make yourself bigger", "slow down").
+    description: The phone's own tools, through the `topo` command in Bash. Use it for the person's reminders, calendar and contacts, where the phone is, a notification on the phone now or later, and how the Topo app looks on this phone (the transcript's margins and insets, Topo's size, speed and the room he keeps from the words) — whenever the person asks about their day, to be reminded, to add or check something, who someone is, where they are, or for the app to look or move differently ("tighten your margins").
     ---
 
     # topo
@@ -86,7 +86,11 @@ public enum GuestTools {
 
     Start with `topo help`: it lists every tool the app has, and `topo help <tool>` says how to call one. The list comes from the app itself, so it is always the current one.
 
-    - Output is plain lines. Exit status 0 is done; 1 the tool could not do it and says why; 2 the call was not one the tool takes (read the usage it printed); 3 the app did not answer; 4 it took too long; 6 part of the call was refused, and the text says which part and why.
+    - Output is plain lines, one record a line with its id first, so a later call can name it. Exit status 0 is done; 1 the tool could not do it and says why; 2 the call was not one the tool takes (read the usage it printed); 3 the app did not answer; 4 it took too long (a permission prompt still waiting on the person, perhaps), and a call that was waiting on a prompt does nothing once it has, so run it again after they answer; 5 the person has not allowed it on this phone, and the text says where they can — tell them, rather than trying again; 6 part of the call was refused, and the text says which part and why.
+    - The first call that needs Reminders, Calendars, Contacts, Location or Notifications puts up the phone's own permission prompt, and waits for the person to answer it.
+    - Dates are ISO 8601 in the phone's time zone: 2026-09-27, 2026-09-27T14:30. Work out the date yourself from what the person said.
+    - An option's value never starts with `--`; write one that does as `--notes=--like-this`.
+    - Nothing here deletes anything. `topo reminders done` is the one change to something that already exists.
     - `topo look` shows the look this phone is wearing: each field you can tune, its value, its range and where the value came from. `topo look set <part.field> <value>` changes it on this phone at once, and the person can undo it from Settings › Tuning › Reset; `topo look reset` undoes it yourself. After a change, say in a few words what you changed.
     """
 }

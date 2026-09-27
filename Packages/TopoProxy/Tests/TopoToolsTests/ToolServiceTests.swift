@@ -114,6 +114,20 @@ import TopoProxy
         #expect(ContinuousClock.now - started < .seconds(5))
     }
 
+    /// Codex on #214: the call the bound answers for is cancelled, so a tool that finds out only
+    /// afterwards (a permission prompt answered late) can see it and do nothing.
+    @Test func theBoundCancelsTheCallItAnswersFor() async throws {
+        let held = HeldAnswer()
+        let tool = ScriptedTool(name: "held") { _ in
+            await held.wait()
+            return .ok("answered\n")
+        }
+        let reply = await ToolService.bounded(["held"], table: ToolTable([tool]), until: .now + .milliseconds(200),
+                                              bound: .milliseconds(200))
+        #expect(reply.status == ToolReply.timedOut)
+        #expect(await held.release() == ["cancelled\n"])
+    }
+
     /// Codex on #189: the bound runs from the connection's accept, so a client that sends a head
     /// promising a body and then one byte of it is answered or closed at the bound, not held.
     @Test func aClientThatNeverFinishesItsBodyIsLetGoAtTheBound() async throws {
@@ -232,5 +246,24 @@ import TopoProxy
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
         }
         return result == 0 ? 0 : errno
+    }
+}
+
+/// Calls held until the test lets them go, each saying afterwards whether its task was cancelled.
+private final class HeldAnswer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiting: [CheckedContinuation<Void, Never>] = []
+    private var answers: [String] = []
+
+    func wait() async {
+        await withCheckedContinuation { continuation in lock.withLock { waiting.append(continuation) } }
+        lock.withLock { answers.append(Task.isCancelled ? "cancelled\n" : "went ahead\n") }
+    }
+
+    /// Lets every held call go, and answers what each saw once let go.
+    func release() async -> [String] {
+        lock.withLock { let held = waiting; waiting = []; return held }.forEach { $0.resume() }
+        for _ in 0..<200 where lock.withLock({ answers.isEmpty }) { try? await Task.sleep(for: .milliseconds(10)) }
+        return lock.withLock { answers }
     }
 }
