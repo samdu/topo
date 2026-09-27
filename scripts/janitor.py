@@ -491,8 +491,8 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
     same id and the same text, never a bigger message under that id. A 200
     settles a message, a 400 is the bridge refusing it for good (dropped, and
     said to have been), and anything else keeps it and every message after it.
-    Of more than PENDING_MAX lines standing the oldest messages go, with a line
-    in the newest saying how many."""
+    Of more than PENDING_MAX lines standing the oldest messages go, with a
+    message of its own saying how many lines."""
     warn = warn or (lambda s: print(s, file=sys.stderr, flush=True))
     queue = list(state.get("undelivered", []))
     lines = list(state.get("pending", []))
@@ -506,7 +506,10 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
         dropped += len(queue[-1]["lines"]) - PENDING_MAX
         queue[-1]["lines"] = queue[-1]["lines"][-PENDING_MAX:]
     if dropped:
-        queue[-1]["lines"].insert(0, f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped.")
+        # Said in a message of its own: a message already sent once is never
+        # re-sent with different text under its id.
+        queue.append({"id": str(uuid.uuid4()), "at": now.strftime("%Y-%m-%dT%H:%MZ"),
+                      "lines": [f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped."]})
     state["undelivered"] = queue
     if not queue:
         return

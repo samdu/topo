@@ -127,6 +127,8 @@ class Decisions(unittest.TestCase):
         self.assertFalse(janitor.infra_red(job("topo_ui", "timed_out")))
         self.assertFalse(janitor.infra_red(job("topo_ui", "failure", TEST_STEP, step_conclusion="cancelled")),
                          "a test step cancelled by its timeout-minutes is not green")
+        self.assertTrue(janitor.infra_red(job("topo_ui", "failure", "Boot the simulator", step_conclusion="cancelled")),
+                        "a setup step cancelled by its timeout-minutes is the runner's, as its failure is")
         self.assertFalse(janitor.infra_red(job("topo_ui", "failure", "Run ./.github/actions/prepare")))
         self.assertTrue(janitor.infra_red(job("topo_ui", "failure", "Run actions/checkout@v4")))
 
@@ -292,22 +294,24 @@ class Decisions(unittest.TestCase):
             try:
                 state = {"pending": [f"line {i}" for i in range(janitor.PENDING_MAX + 30)]}
                 janitor.deliver(Sh(), state, NOW, log=lambda s: None, warn=lambda s: None)
-                self.assertEqual(len(sent), 1)
+                self.assertEqual(len(sent), 2, "the newest PENDING_MAX lines, then a message saying what was dropped")
                 lines = sent[0].splitlines()[1:]
-                self.assertEqual(len(lines), janitor.PENDING_MAX + 1, "the newest PENDING_MAX lines under one line saying what was dropped")
-                self.assertIn("30 older lines", lines[0])
-                self.assertNotIn("line 0", sent[0].splitlines()[1])
+                self.assertEqual(len(lines), janitor.PENDING_MAX)
+                self.assertNotIn("line 0\n", sent[0])
                 self.assertIn(f"line {janitor.PENDING_MAX + 29}", lines[-1])
+                self.assertIn("30 older lines", sent[1])
                 self.assertEqual(state["pending"], [])
                 self.assertEqual(state["undelivered"], [])
-                # Older messages go whole, oldest first, before the newest is cut.
+                # Older messages go whole, oldest first, before the newest is cut,
+                # and a message already sent is never re-sent with other text.
                 state = {"undelivered": [{"id": "a", "at": "t", "lines": ["old"] * 150}, {"id": "b", "at": "t", "lines": ["mid"] * 100}],
                          "pending": ["new"] * 10}
                 sent.clear()
                 janitor.deliver(Sh(), state, NOW, log=lambda s: None, warn=lambda s: None)
-                self.assertEqual([t.count("- old") for t in sent], [0, 0])
-                self.assertEqual([t.count("- mid") for t in sent], [100, 0])
-                self.assertIn("150 older lines", sent[1])
+                self.assertEqual([t.count("- old") for t in sent], [0, 0, 0])
+                self.assertEqual([t.count("- mid") for t in sent], [100, 0, 0])
+                self.assertEqual(sent[0].splitlines()[1:], ["- mid"] * 100, "message b is sent as it was")
+                self.assertIn("150 older lines", sent[2])
             finally:
                 janitor.MESH_ENV = old
 
