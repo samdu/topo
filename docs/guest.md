@@ -1,6 +1,6 @@
 # The guest
 
-Claude Code on the phone: the Alpine userland iSH runs inside the app, the loopback proxy that is its only way out, the tool service its `topo` command calls, the one resident process, and the bridge that makes it the chat's brain. What the guest may reach is decided at its holes (`docs/design.md`); the invariants are in CLAUDE.md's *Where the risk lives* (the resident process, the bridge, the holes, the token and the proxy, the tool service).
+Claude Code on the phone: the Alpine userland iSH runs inside the app, the loopback proxy its API calls go through, the internet it reaches directly, the tool service its `topo` command calls, the one resident process, and the bridge that makes it the chat's brain. What the guest may reach is decided at its holes (`docs/design.md`); the invariants are in CLAUDE.md's *Where the risk lives* (the resident process, the bridge, the holes, the token and the proxy, the tool service).
 
 ## The userland
 

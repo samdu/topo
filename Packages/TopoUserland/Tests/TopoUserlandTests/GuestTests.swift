@@ -20,14 +20,21 @@ final class GuestTests: XCTestCase {
     }
 
     /// The guest is written a resolver, which the minirootfs has none of, as a file the fakefs
-    /// knows; a second write leaves it as it is.
+    /// knows; one already there, the guest's own or the person's, is left as it is.
     func testTheGuestHasAResolver() async throws {
         _ = try SharedGuest.booted()
+        _ = try await Guest.shared.run("/bin/rm", ["-f", "/etc/resolv.conf"])
         try await Guest.shared.writeResolver()
+        let written = try await Guest.shared.run("/bin/sh", ["-c", "cat /etc/resolv.conf && [ -f /etc/resolv.conf ]"])
+        XCTAssertEqual(written.status, 0, written.errors)
+        XCTAssertEqual(written.output, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+
+        _ = try await Guest.shared.run("/bin/sh", ["-c", "echo 'nameserver 9.9.9.9' > /etc/resolv.conf"])
         try await Guest.shared.writeResolver()
-        let exit = try await Guest.shared.run("/bin/sh", ["-c", "cat /etc/resolv.conf && [ -f /etc/resolv.conf ]"])
-        XCTAssertEqual(exit.status, 0, exit.errors)
-        XCTAssertEqual(exit.output, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+        let kept = try await Guest.shared.run("/bin/cat", ["/etc/resolv.conf"])
+        XCTAssertEqual(kept.output, "nameserver 9.9.9.9\n")
+        _ = try await Guest.shared.run("/bin/rm", ["-f", "/etc/resolv.conf"])
+        try await Guest.shared.writeResolver()
     }
 
     /// The guest answers to its own name, whatever the host is called: busybox's shell asks at
