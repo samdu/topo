@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import TopoAuth
 import TopoProxy
+import TopoTools
 import TopoUserland
 
 /// A file of the manifest as the downloader hands it over: where it landed, verified, and the pin
@@ -388,14 +389,27 @@ extension DebugRun {
 
     /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs and Claude Code, boot
     /// the guest, verify Claude Code and mount it at `/usr/local/bin/claude`, start the API proxy on
-    /// loopback, run the command under `/bin/sh -c` in `Guest.environment` (the environment every
+    /// loopback, start the tool service with `topo` in the home the resident gets (mounted, as the
+    /// resident's is), run the command under `/bin/sh -c` in `Guest.environment` (the environment every
     /// launch path hands the guest, Claude Code's updater off in it) with `ANTHROPIC_BASE_URL`
-    /// pointing at the proxy and `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token, and print what
+    /// pointing at the proxy, `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token and the tool
+    /// service's two variables, and print what
     /// it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh --userland` to
     /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
     /// runs, with the base URL and no token. The only path in the app that boots the guest.
     /// Nothing at all when the variable is absent. `tokens` is the app's one provider over the
     /// ordinary tokens.
+    /// What the guest's command wrote and how it exited, as the userland run prints them, every
+    /// credential redacted: `env` there prints the guest's token and the tool service's.
+    static func guestLines(output: String, errors: String, status: Int32) -> [String] {
+        let output = redacted(output), errors = redacted(errors)
+        var lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.last == "" { lines.removeLast() }
+        return lines.map { "guest: \($0)" }
+            + errors.split(separator: "\n").map { "guest stderr: \($0)" }
+            + ["guest exit: \(status)"]
+    }
+
     @MainActor
     static func userland(_ userland: Userland = .shared, tokens: StoredTokenProvider,
                          environment: [String: String] = ProcessInfo.processInfo.environment) async {
@@ -422,19 +436,14 @@ extension DebugRun {
             defer { Task { await proxy.stop() } }
             var guestEnvironment = Guest.environment
             guestEnvironment["ANTHROPIC_BASE_URL"] = APIProxy.baseURL(port: port)
+            // The tool service and `topo`, as the resident has them, so a command can call a tool.
+            guestEnvironment.merge(try await GuestResident.shared.prepareTools { line in say(line) }) { _, new in new }
+            say("userland: tools on \(guestEnvironment[ToolService.urlVariable] ?? "nothing"), topo at \(GuestTools.command)")
             let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, provider: tokens)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)
             let exit = try await Guest.shared.run("/bin/sh", ["-c", command], environment: guestEnvironment)
-            var lines = exit.output.split(separator: "\n", omittingEmptySubsequences: false)
-            if lines.last == "" { lines.removeLast() }
-            for line in lines {
-                say("guest: \(line)")
-            }
-            for line in exit.errors.split(separator: "\n") {
-                say("guest stderr: \(line)")
-            }
-            say("guest exit: \(exit.status)")
+            guestLines(output: exit.output, errors: exit.errors, status: exit.status).forEach(say)
         } catch {
             say("userland error: \(error)")
         }

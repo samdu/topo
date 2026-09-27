@@ -391,7 +391,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow,
+                                  draft: draftRow, queued: row.queued(in: harness),
                                   cue: speaker.cue)
         if #available(iOS 18, *) {
             view

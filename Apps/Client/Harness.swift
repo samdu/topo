@@ -161,6 +161,31 @@ final class Harness {
         pending.map { ($0.text, $0.nonce) }
     }
 
+    /// The words on the line whose turn this device has not seen in the log, oldest first: each
+    /// is a turn on its way, drawn as one until the log has it, however long the line has been
+    /// stopped. The head can be missing from here while it is still on the line, when it landed
+    /// and lost its acknowledgement.
+    var unlanded: [(text: String, nonce: String)] {
+        owed.filter { !said($0.nonce) }
+    }
+
+    /// How many of the answering loop's intervals of time the stopped line waits, from a failed
+    /// attempt, before the loop sends it again, by how many of the loop's attempts in a row have
+    /// failed: one interval after the first, then two, four and eight, and twelve — a minute at
+    /// the chat's five seconds — from then on, until an attempt gets the line moving. Time and
+    /// not passes, because a push's `wake()` runs a pass early and must not bring an attempt
+    /// forward with it.
+    static let retryBackoff = [1, 2, 4, 8, 12]
+    /// The loop's attempts in a row that left the line stopped. Cleared when the line empties.
+    private var failedRetries = 0
+    /// The loop sends the stopped line again no sooner than this, in seconds on `now`. Nil when
+    /// nothing has failed.
+    private var retryNotBefore: TimeInterval?
+    /// Elapsed time, for the backoff: `PrimaryLease.continuousUptime` in the app, which counts
+    /// through sleep and is unmoved by a change to the phone's clock, so the wait is the time that
+    /// passed and not what the clock says; a clock the test moves in the suites.
+    private let now: @Sendable () -> TimeInterval
+
     /// `brain` is what answers, chosen here and nowhere else: never per turn, and never on a
     /// failure. `relay` is where the brain tells what the guest is doing, when it is the guest.
     init(database: any RecordDatabase, tokens: TokenProvider, device: DeviceID = DeviceIdentity.current,
@@ -168,7 +193,8 @@ final class Harness {
          defaults: UserDefaults = .standard,
          brain: any Brain, relay: GuestRelay = GuestRelay(),
          leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
-         pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }) {
+         pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
+         now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) {
         self.database = RecordingDatabase(database)
         self.tokens = tokens
         self.device = device
@@ -178,6 +204,7 @@ final class Harness {
         self.relay = relay
         self.leaseSleep = leaseSleep
         self.pause = pause
+        self.now = now
         log = TurnLog(database: self.database)
         spokenNonces = defaults.stringArray(forKey: Self.spokenKey) ?? []
         if let data = defaults.data(forKey: Self.outboxKey),
@@ -249,6 +276,8 @@ final class Harness {
         unfinished = nil
         pending = []
         spokenNonces = []
+        failedRetries = 0
+        retryNotBefore = nil
         UserDefaults.standard.removeObject(forKey: "firstRunAnswer")
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
         // What the guest kept of the last login's conversation goes with it.
@@ -308,16 +337,27 @@ final class Harness {
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
             hasRead = true
+            clearReadFailure()
             return true
         } catch {
             guard !TopoCloudKit.meansNoLogYet(error) else {
                 turns = []
                 hasRead = true
+                clearReadFailure()
                 return true
             }
-            self.error = "Couldn't read the transcript: \(TranscriptStore.message(for: error))"
+            self.error = Self.readFailure + TranscriptStore.message(for: error)
             return false
         }
+    }
+
+    /// What a failed read says, ahead of why.
+    private static let readFailure = "Couldn't read the transcript: "
+
+    /// A read got through, so a line saying the last one did not is no longer true. Any other
+    /// failure stands until what it was about is tried again.
+    private func clearReadFailure() {
+        if error?.hasPrefix(Self.readFailure) == true { error = nil }
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
@@ -423,6 +463,30 @@ final class Harness {
         }
         busy = false
         status = nil
+        if pending.isEmpty {
+            failedRetries = 0
+            retryNotBefore = nil
+        }
+    }
+
+    /// The answering loop's own attempt at a line that stopped on a failure. Nothing else sends a
+    /// stopped line — a send, the button under the transcript, a launch — so without this a turn
+    /// that failed on a bad minute waits for the person or the next launch, however soon iCloud
+    /// comes back. It sends the line from its head under the nonces it already carries, which is
+    /// the same retry the button makes, and backs off by `retryBackoff` intervals of time while it
+    /// keeps failing. The loop calls it only after a read that got through: a pass that could not
+    /// read the log is no attempt at sending, and does not count as a failed one.
+    private func retryStoppedLine(every interval: Duration) async {
+        guard hasWaiting else { return }
+        if let retryNotBefore, now() < retryNotBefore { return }
+        let login = self.login
+        await drain()
+        // A sign-out during the attempt emptied the line, and the counts went with it.
+        guard self.login == login, hasWaiting else { return }
+        let waits = Self.retryBackoff[min(failedRetries, Self.retryBackoff.count - 1)]
+        let seconds = Double(interval.components.seconds) + Double(interval.components.attoseconds) / 1e18
+        retryNotBefore = now() + seconds * Double(waits)
+        failedRetries += 1
     }
 
     /// True when the turn is settled: answered, or at least in the log with only the reply owed.
@@ -544,7 +608,9 @@ final class Harness {
     /// cancelled. The log's own path for a limb's words: a watch, a pad or a second phone appends
     /// the person's turn, and this device, as primary, answers it here. A reply that failed
     /// earlier, on this device or any other, is answered on the next pass too, so nothing said
-    /// stays unanswered while a primary is awake.
+    /// stays unanswered while a primary is awake. A line that stopped on a failure is sent again
+    /// from here too, backing off while it keeps failing (`retryBackoff`), so a turn that did not
+    /// go on a bad minute goes when the minute is over, with nobody pressing anything.
     ///
     /// `wake()` cuts the pause short: the next pass runs now rather than at the end of the
     /// interval. It never runs a pass of its own, so passes never overlap.
@@ -565,7 +631,11 @@ final class Harness {
             let served = wakers
             wakers = []
             await onPass?()
-            await refresh()
+            let read = await refresh()
+            // A line that stopped on a failure goes again from here, on the loop's own time, once
+            // the log can be read at all.
+            if read { await retryStoppedLine(every: interval) }
+            guard self.login == login else { return }
             // The guest is warmed as the chat runs, so it is up by the time the words are; this
             // waits for nothing.
             if let guest { Task { await guest.warm() } }

@@ -182,6 +182,72 @@ final class NextTurnTests: XCTestCase {
         XCTAssertNil(row.sent)
     }
 
+    // MARK: Every turn on its way is drawn as one
+
+    /// The row holds one turn, and the microphone can put another on the line while it does:
+    /// the heard words take the row, and the typed turn still owed is drawn nowhere but the line.
+    /// Everything on the line that the log does not have is a turn on its way, so the one the row
+    /// gave up is drawn as one above it — and stops being one only when the log has it, when it
+    /// is drawn as the landed turn it is.
+    func testATurnTheRowGaveUpIsDrawnOnItsWayUntilTheLogHasIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let reach = Reach()
+        let harness = harness(db, defaults: makeDefaults(),
+                              transport: ScriptedTransport((200, reply("Calling.")), (200, reply("Booked."))),
+                              ensureZone: { try await reach.check() })
+        let row = NextTurn()
+
+        row.text = "call Helen"
+        await send(row, via: harness)
+        XCTAssertTrue(row.sending(in: harness), "the typed turn went while iCloud was out of reach")
+        XCTAssertTrue(row.queued(in: harness).before.isEmpty, "the row's own turn is drawn twice")
+        XCTAssertTrue(row.queued(in: harness).after.isEmpty, "the row's own turn is drawn twice")
+
+        // What the chat does with a release of the microphone.
+        row.text = ""
+        row.send(heard: "and book the flights", via: harness)
+        await harness.retry()
+        XCTAssertEqual(row.text, "and book the flights")
+        let queued = row.queued(in: harness)
+        XCTAssertEqual(queued.before.map(\.text), ["call Helen"], "a turn still owed is drawn nowhere")
+        XCTAssertEqual(queued.before.map(\.nonce), [harness.owed[0].nonce])
+        XCTAssertTrue(queued.after.isEmpty)
+        XCTAssertFalse(harness.said(harness.owed[0].nonce), "the turn drawn on its way is in the log")
+
+        await reach.set(true)
+        await harness.retry()
+        row.clearIfLanded(in: harness)
+
+        XCTAssertTrue(row.queued(in: harness).before.isEmpty, "a landed turn is still drawn on its way")
+        XCTAssertFalse(row.sending(in: harness))
+        XCTAssertEqual(harness.turns.filter { $0.role == .person }.map(\.text), ["call Helen", "and book the flights"],
+                       "the landed turns are not in the transcript")
+        let turns = try await log(db).filter { $0.role == .person }.map(\.text)
+        XCTAssertEqual(turns, ["call Helen", "and book the flights"])
+    }
+
+    /// A relaunch over two turns that never landed: the row comes back holding the older, which is
+    /// where the way back is, and the newer is drawn on its way below it — in the order said.
+    func testARelaunchDrawsTheTurnsBehindTheRowsBelowIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let offline = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                              ensureZone: { throw Unexpected() })
+        let first = offline.willSend("call Helen")
+        let second = offline.willSend("and book the flights")
+
+        let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                                 ensureZone: { throw Unexpected() })
+        await relaunched.refresh()
+        let row = NextTurn()
+        XCTAssertTrue(row.resume(from: relaunched))
+        XCTAssertEqual(row.sent, first)
+
+        let queued = row.queued(in: relaunched)
+        XCTAssertTrue(queued.before.isEmpty, "a turn said after the row's is drawn above it")
+        XCTAssertEqual(queued.after.map(\.nonce), [second], "the turn behind the row's is drawn nowhere")
+    }
+
     // MARK: -
 
     private func send(_ row: NextTurn, via harness: Harness) async {
@@ -232,6 +298,15 @@ private struct FixedToken: TokenProvider {
 }
 
 private struct Unexpected: Error {}
+
+/// Whether iCloud can be reached, which the test turns on.
+private actor Reach {
+    private var online = false
+    func set(_ on: Bool) { online = on }
+    func check() throws {
+        guard online else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
+    }
+}
 
 /// A heartbeat loop that never beats inside a test: the lease is renewed by the turns themselves.
 private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The PM's ledger, read back after a compaction (docs/process.md).
+"""The coordinator's ledger, read back after a compaction (docs/process.md).
 
 A compacted coordinator's expensive failure is re-dispatching work that is
 already done, so on every session start that is not a fresh launch — a resume,

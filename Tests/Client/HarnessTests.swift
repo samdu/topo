@@ -75,10 +75,11 @@ final class HarnessIntegrationTests: XCTestCase {
     fileprivate func harness(_ database: any RecordDatabase, device: DeviceID? = nil, defaults: UserDefaults,
                              transport: ScriptedTransport,
                              ensureZone: @escaping @Sendable () async throws -> Void = {},
-                             pause: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() }) -> Harness {
+                             pause: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() },
+                             now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) -> Harness {
         Harness(database: database, tokens: FixedToken(), device: device ?? phone, ensureZone: ensureZone,
                 defaults: defaults, brain: brain(transport, device: device ?? phone, defaults: defaults),
-                leaseSleep: parked, pause: pause)
+                leaseSleep: parked, pause: pause, now: now)
     }
 
     fileprivate func log(_ database: any RecordDatabase) async throws -> [Turn] {
@@ -781,6 +782,282 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(transport.sent.count, 2)
     }
 
+    // MARK: The line that stopped, sent again by the loop
+
+    /// The phone on 2026-09-26: a typed turn stops the line because iCloud is out of reach —
+    /// reads refused, so the writer cannot be made and the transcript cannot be read — and the
+    /// chat says Topo will try again. For ten passes the log cannot be read, and a pass that
+    /// cannot read makes no attempt and counts for nothing. The first pass whose read gets
+    /// through sends the line, under the nonce it was first said with, with nobody pressing
+    /// anything and no relaunch, and the read failure it was showing goes.
+    func testTheLoopSendsAStoppedLineOnTheFirstPassThatCanRead() async throws {
+        let memory = InMemoryRecordDatabase()
+        let db = FailingDatabase(memory)
+        await db.refuseReads(true)
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Done."))),
+                            ensureZone: { await attempts.noteIfSending(seen, pass: await beats.passes + 1) },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn went while iCloud was out of reach")
+        XCTAssertTrue(phone.hasWaiting)
+        let nonce = try XCTUnwrap(phone.owed.first?.nonce)
+        await attempts.reset()
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...10 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            if pass < 10 {
+                clock.advance(5)
+                await beats.tick()
+            }
+        }
+        let whileUnread = await attempts.passes
+        XCTAssertEqual(whileUnread, [], "a pass that could not read the log tried to send the line")
+        XCTAssertEqual(phone.waiting, ["water the plants"])
+        XCTAssertNotNil(phone.error, "the chat does not say why the turn is waiting")
+
+        await db.refuseReads(false)
+        clock.advance(5)
+        await beats.tick()
+        try await eventually("pass 11") { await beats.passes >= 11 }
+        open.cancel()
+        await open.value
+
+        XCTAssertTrue(phone.waiting.isEmpty, "the first pass that could read did not send the line")
+        let sent = await attempts.passes
+        XCTAssertEqual(sent, [11])
+        let turns = try await log(memory)
+        XCTAssertEqual(turns.map(\.text), ["water the plants", "Done."], "the loop did not send the stopped line")
+        XCTAssertEqual(turns.first?.nonce, nonce, "the retry said the words under a second nonce")
+        XCTAssertNil(phone.error, "the chat still says the read failed")
+    }
+
+    /// The log can be read, the zone cannot be reached, and the loop keeps trying and backs off
+    /// in time as it fails: at five seconds a pass, the first attempt on the first pass, then one,
+    /// two, four and eight intervals after each failure, then twelve for good. An attempt is the
+    /// line being sent (the harness busy), counted by the pass it ran in; the answering pass's
+    /// own reach for the zone is not one.
+    func testTheLoopBacksOffWhileTheLineKeepsFailing() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                await attempts.noteIfSending(seen, pass: await beats.passes + 1)
+                                throw RecordDatabaseError.unavailable(underlying: Unexpected())
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...41 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            clock.advance(5)
+            await beats.tick()
+        }
+        open.cancel()
+        await open.value
+
+        let passes = await attempts.passes
+        XCTAssertEqual(passes, [1, 2, 4, 8, 16, 28, 40], "the loop's attempts are not backing off as they fail")
+        XCTAssertEqual(phone.waiting, ["water the plants"])
+    }
+
+    /// A push wakes the loop for a pass now, and pushes can come thick and fast. The backoff is
+    /// time from the failed attempt, so twelve wakes with no time passing send the line not once
+    /// more; the first wake after the interval has passed sends it.
+    func testWakesDoNotBringTheNextAttemptForward() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                await attempts.noteIfSending(seen, pass: await beats.passes + 1)
+                                throw RecordDatabaseError.unavailable(underlying: Unexpected())
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        let first = await attempts.passes.count
+        XCTAssertEqual(first, 1, "the first pass did not send the stopped line")
+
+        for _ in 1...12 { await phone.wake() }
+        let afterWakes = await attempts.passes.count
+        XCTAssertEqual(afterWakes, 1, "twelve wakes in no time sent the line \(afterWakes - 1) more times")
+
+        clock.advance(5)
+        await phone.wake()
+        let afterInterval = await attempts.passes.count
+        XCTAssertEqual(afterInterval, 2, "the wake after the interval did not send the line")
+        open.cancel()
+        await open.value
+    }
+
+    /// The backoff is elapsed time, not what the phone's clock says. After the first failure and
+    /// then a second, the line waits ten seconds; the person setting the clock a minute ahead and
+    /// a push waking the loop does not send it early, and setting it an hour back does not hold it
+    /// past the ten seconds that actually pass.
+    func testSettingThePhonesClockDoesNotMoveTheNextAttempt() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                await attempts.noteIfSending(seen, pass: await beats.passes + 1)
+                                throw RecordDatabaseError.unavailable(underlying: Unexpected())
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        clock.advance(5)
+        await phone.wake()
+        let second = await attempts.passes.count
+        XCTAssertEqual(second, 2, "the attempt one interval after the first failure did not go")
+
+        // The next attempt is due ten seconds from now.
+        let before = clock.wall
+        clock.setWall(by: 60)
+        XCTAssertEqual(clock.wall.timeIntervalSince(before), 60)
+        await phone.wake()
+        let afterForward = await attempts.passes.count
+        XCTAssertEqual(afterForward, 2, "setting the clock a minute ahead sent the line early")
+
+        clock.setWall(by: -3_600)
+        clock.advance(5)
+        await phone.wake()
+        let halfway = await attempts.passes.count
+        XCTAssertEqual(halfway, 2, "the line went five seconds into a ten-second wait")
+        clock.advance(5)
+        await phone.wake()
+        let due = await attempts.passes.count
+        XCTAssertEqual(due, 3, "setting the clock an hour back held the line past the ten seconds that passed")
+        open.cancel()
+        await open.value
+    }
+
+    /// Sign-out starts the backoff again: a line that has failed long enough to wait most of a
+    /// minute is gone with the login, and a turn said after it is sent on the next pass that can
+    /// read, with no time passing, rather than when the last login's backoff said.
+    func testSignOutStartsTheBackoffAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                await attempts.noteIfSending(seen, pass: await beats.passes + 1)
+                                throw RecordDatabaseError.unavailable(underlying: Unexpected())
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let first = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...3 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            clock.advance(5)
+            await beats.tick()
+        }
+        try await eventually("pass 4") { await beats.passes >= 4 }
+        // Attempts on passes 1, 2 and 4 have failed, the last at 15 s: the next is due at 35 s.
+        let before = await attempts.passes
+        XCTAssertEqual(before, [1, 2, 4])
+
+        await phone.forget()
+        await first.value
+        XCTAssertTrue(phone.waiting.isEmpty, "the line outlived the sign-out")
+
+        phone.willSend("and the ferns")
+        await attempts.reset()
+        let second = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass after sign-in") { await beats.passes >= 5 }
+        let after = await attempts.passes
+        XCTAssertEqual(after, [5], "the turn after sign-out waited out the last login's backoff")
+        second.cancel()
+        await second.value
+    }
+
+    /// A success clears the backoff: after a run of failures, a line that went and a new turn
+    /// that stops it again is sent on the very next pass, not when the old backoff said.
+    func testALineThatWentStartsItsBackoffAgain() async throws {
+        let memory = InMemoryRecordDatabase()
+        let db = FailingDatabase(memory)
+        let zone = Switch()
+        await zone.set(false)
+        let beats = Beats()
+        let clock = TestClock()
+        let phone = harness(db, defaults: makeDefaults(),
+                            transport: ScriptedTransport((200, reply("Done.")), (200, reply("Also done."))),
+                            ensureZone: {
+                                guard await zone.isOn else { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        await phone.send("water the plants")
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...7 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            clock.advance(5)
+            await beats.tick()
+        }
+        try await eventually("pass 8") { await beats.passes >= 8 }
+        // The loop is paused after pass 8, at 35 s. Its attempts on passes 1, 2, 4 and 8 have
+        // failed; its next would be no sooner than 75 s, pass 16.
+        await zone.set(true)
+        await phone.retry()
+        XCTAssertTrue(phone.waiting.isEmpty, "the button's retry did not send the line")
+
+        await db.refuseReads(true)
+        await phone.send("and the ferns")
+        XCTAssertEqual(phone.waiting, ["and the ferns"])
+        await db.refuseReads(false)
+        clock.advance(5)
+        await beats.tick()
+        try await eventually("pass 9") { await beats.passes >= 9 }
+        XCTAssertTrue(phone.waiting.isEmpty, "the backoff from before the line went was carried over")
+        open.cancel()
+        await open.value
+
+        let turns = try await log(memory).filter { $0.role == .person }.map(\.text)
+        XCTAssertEqual(turns, ["water the plants", "and the ferns"])
+    }
+
+    /// "Couldn't read the transcript" is about the last read, so the next read that gets through
+    /// takes it down, with nothing on the line to send.
+    func testAReadThatGetsThroughClearsTheReadFailure() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await db.refuseReads(true)
+        await phone.refresh()
+        XCTAssertEqual(phone.error, "Couldn't read the transcript: iCloud is out of reach. Topo will try again.")
+        await db.refuseReads(false)
+        await phone.refresh()
+        XCTAssertNil(phone.error, "a read got through and the chat still says it did not")
+    }
+
     // MARK: The reply that is read aloud
 
     /// A reply written by another primary — the hub, or a phone holding the lease.
@@ -1346,6 +1623,37 @@ private actor Answers {
 private actor Switch {
     private(set) var isOn = true
     func set(_ on: Bool) { isOn = on }
+}
+
+/// The passes of the answering loop in which the line was sent.
+private actor Attempts {
+    private(set) var passes: [Int] = []
+    func note(_ pass: Int) { passes.append(pass) }
+    func reset() { passes = [] }
+    /// Notes the pass if the harness is sending its line, which is when it is busy: the
+    /// answering pass reaches for the zone too, and is not an attempt.
+    func noteIfSending(_ seen: Seen, pass: Int) async {
+        guard await MainActor.run(body: { seen.harness?.busy ?? false }) else { return }
+        note(pass)
+    }
+}
+
+/// The phone's two clocks, moved by the test: `now` is the elapsed time the harness's backoff
+/// reads, and `wall` is what the phone's clock says, which the person can set anywhere. Time
+/// passing moves both; setting the clock moves the wall alone.
+private final class TestClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var elapsed: TimeInterval = 1_000
+    private var shown = Date(timeIntervalSince1970: 1_800_000_000)
+    var now: @Sendable () -> TimeInterval { { [self] in lock.withLock { elapsed } } }
+    var wall: Date { lock.withLock { shown } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { elapsed += seconds; shown += seconds } }
+    func setWall(by seconds: TimeInterval) { lock.withLock { shown += seconds } }
+}
+
+/// The harness a closure made before it needs to ask about it.
+@MainActor private final class Seen {
+    weak var harness: Harness?
 }
 
 /// The answering loop's pause, driven by the test: each pause counts a finished pass and waits

@@ -17,6 +17,9 @@ struct TranscriptView: View {
     /// about to become. Nil on a screen with nothing to write with — the watch, the television,
     /// a viewer — and the row is then never drawn.
     var draft: Draft?
+    /// Turns on their way that the row is not holding: said before its own, and said after it.
+    /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
+    var queued: (before: [QueuedTurn], after: [QueuedTurn]) = ([], [])
     /// The code block the voice has just reached (`Speaker.cue`): scrolled into view, and drawn
     /// pulsing by the reply it is in. Nil on a screen with no voice.
     var cue: CodeBlockCue?
@@ -52,9 +55,11 @@ struct TranscriptView: View {
                                 .onDisappear { made.turns.remove(turn.ref) }
                         }
                     }
+                    ForEach(queued.before) { QueuedTurnRow(turn: $0).id($0.id) }
                     if let draft, draft.state != .hidden {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
+                    ForEach(queued.after) { QueuedTurnRow(turn: $0).id($0.id) }
                 }
                 .padding(.horizontal, look.transcript.horizontalPadding)
                 .padding(.vertical, look.transcript.spacing)
@@ -68,6 +73,8 @@ struct TranscriptView: View {
             // The row appearing, and each line it grows by, keep it where the newest turn was.
             .onChange(of: draft?.state) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: queued.before.last?.id) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the
@@ -84,15 +91,21 @@ struct TranscriptView: View {
         }
     }
 
-    /// What the transcript scrolls to: the row being written, while there is one, and the newest
-    /// turn otherwise. The row is the end of the transcript while it is shown, so a caption
-    /// arriving with no keyboard is scrolled to like anything else.
+    /// The row being written, as the transcript scrolls to it.
     static let draftID = "draft"
 
+    /// What the transcript scrolls to: whatever is drawn last. That is a turn on its way said
+    /// after the row's, then the row while it is shown, then a turn on its way said before it,
+    /// then the newest turn — so a caption arriving with no keyboard is scrolled to like anything
+    /// else, and a turn still owed below the row is never left under the fold.
+    var end: AnyHashable? {
+        if let last = queued.after.last { return AnyHashable(last.id) }
+        if (draft?.state ?? .hidden) != .hidden { return AnyHashable(Self.draftID) }
+        if let last = queued.before.last { return AnyHashable(last.id) }
+        return turns.last.map { AnyHashable($0.ref) }
+    }
+
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {
-        let end: AnyHashable? = (draft?.state ?? .hidden) != .hidden
-            ? AnyHashable(Self.draftID)
-            : turns.last.map { AnyHashable($0.ref) }
         guard let end else { return }
         if animated {
             withAnimation { proxy.scrollTo(end, anchor: .bottom) }
@@ -176,6 +189,38 @@ struct TurnRow: View {
         } else {
             MarkdownText(source: turn.text, bare: bare, reply: turn.ref, cue: cue)
         }
+    }
+}
+
+/// Words on the line that are not in the log and not in the row: a turn on its way that nothing
+/// else draws.
+struct QueuedTurn: Identifiable, Equatable {
+    let text: String
+    let nonce: String
+    var id: String { nonce }
+}
+
+/// A turn on its way that the row is not holding, drawn where the person's turn will land and in
+/// the colour the row draws a turn on its way in (`look.draft.sending`): it is not a turn until the
+/// log has it, and then it is drawn as one, in the person's own bubble.
+struct QueuedTurnRow: View {
+    let turn: QueuedTurn
+    @Environment(\.look) private var look
+
+    var body: some View {
+        let enclosure = look.draft.sending
+        Text(turn.text)
+            .font(look.transcript.bodyFont)
+            .foregroundStyle(look.transcript.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, enclosure.horizontalPadding)
+            .padding(.vertical, enclosure.verticalPadding)
+            .background { TurnShape.fill(enclosure) }
+            .mascotObstacle()
+            .padding(.leading, look.transcript.personLeadingInset)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .accessibilityElement(children: .combine)
+            .accessibilityValue("Sending")
     }
 }
 
