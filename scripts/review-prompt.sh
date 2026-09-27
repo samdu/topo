@@ -92,9 +92,9 @@ debug path or one no user can produce. This holds for an earlier finding
 still open as much as for a new one, and it overrides any other bar in
 this prompt. The coordinator files the non-blocking findings as issues.
 
-Two more rules hold from round 3 on, and neither touches a blocking
-finding still open: that one blocks until the code it cites is fixed,
-whatever the description says about it. A finding an earlier verdict
+Two more rules hold from round 3 on, and neither lowers a finding the
+rule above still holds blocking: that one blocks until the code it cites
+is fixed, whatever the description says about it. A finding an earlier verdict
 reported as not blocking stays not blocking unless the change since
 touched the code it cites; its severity does not rise on a second
 reading of the same code. And a not-blocking finding the description
