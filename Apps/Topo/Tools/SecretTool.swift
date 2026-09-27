@@ -9,6 +9,9 @@ import TopoTools
 struct SecretTool: Tool {
     let store: any ConnectionStore
     let onePassword: any OnePasswordRunning
+    /// A clear refused at a sign-out, a takeover or a demotion: while it stands the token is an
+    /// earlier login's, and `op` is not run with it.
+    var leftBehind = ConnectionsLeftBehind()
 
     let name = "secret"
     let summary = "the person's secrets from their connected 1Password vaults: list them, read one"
@@ -56,6 +59,10 @@ struct SecretTool: Tool {
 
     func run(_ arguments: [String]) async -> ToolReply {
         guard let call = Self.parse(arguments) else { return .usage(usage) }
+        if let words = leftBehind.words {
+            return .failed("1Password is not used: at an earlier sign-out \(words). "
+                           + "The app tries again at each launch, and Disconnect in Settings › Connections tries now.\n")
+        }
         let connection: Connection?
         do {
             let store = store

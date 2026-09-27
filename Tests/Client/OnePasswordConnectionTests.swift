@@ -96,7 +96,7 @@ final class OnePasswordConnectionTests: XCTestCase {
     }
 
     private func connections() -> Connections {
-        Connections(store: store, flow: NoGitHub(), onePassword: op, pasteboard: pasteboard, copy: { _ in }, browser: NoBrowser())
+        Connections(store: store, flow: NoGitHub(), onePassword: op, pasteboard: pasteboard, copy: { _ in }, browser: NoBrowser(), leftBehind: .isolated())
     }
 
     private func settle() async {
@@ -238,7 +238,7 @@ final class SecretToolTests: XCTestCase {
         let op = HeldOnePassword()
         answers.forEach(op.answer)
         let store = InMemoryConnectionStore(connected ? [.onePassword: Connection(token: token, account: "Homelab")] : [:])
-        return (SecretTool(store: store, onePassword: op), op)
+        return (SecretTool(store: store, onePassword: op, leftBehind: .isolated()), op)
     }
 
     func testEachCallAsksOpForAReadAndNothingElse() {
@@ -249,6 +249,20 @@ final class SecretToolTests: XCTestCase {
                        ["read", "--no-newline", "--", "op://Homelab/Router/password"])
         XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Router/admin/password"])?.arguments.last,
                        "op://Homelab/Router/admin/password")
+    }
+
+    /// While a clear the keychain refused at an earlier sign-out stands, `op` is not run with the
+    /// token that login connected, whoever asks.
+    func testARefusedClearAtAnEarlierSignOutRunsNoOp() async {
+        let op = HeldOnePassword()
+        let leftBehind = ConnectionsLeftBehind.isolated()
+        leftBehind.words = "the connections' tokens could not be removed from this phone's keychain: -25308"
+        let store = InMemoryConnectionStore([.onePassword: Connection(token: token, account: "Homelab")])
+        let tool = SecretTool(store: store, onePassword: op, leftBehind: leftBehind)
+        let reply = await tool.run(["vaults"])
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertTrue(reply.text.contains("could not be removed"), reply.text)
+        XCTAssertTrue(op.calls.isEmpty, "op ran with an earlier login's token")
     }
 
     func testAnythingElseIsUsage() {
