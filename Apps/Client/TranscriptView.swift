@@ -21,6 +21,13 @@ struct TranscriptView: View {
     /// pulsing by the reply it is in. Nil on a screen with no voice.
     var cue: CodeBlockCue?
     @Environment(\.look) private var look
+    /// The turns whose rows the lazy stack has made, which a code block can be scrolled to by its
+    /// own place; a reference, so a row coming and going redraws nothing.
+    @State private var made = MadeRows()
+
+    final class MadeRows {
+        var turns: Set<TurnRef> = []
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -41,6 +48,8 @@ struct TranscriptView: View {
                         ForEach(turns) { turn in
                             TurnRow(turn: turn, replay: replay, actions: actions,
                                     cue: cue?.reply == turn.ref ? cue : nil).id(turn.ref)
+                                .onAppear { made.turns.insert(turn.ref) }
+                                .onDisappear { made.turns.remove(turn.ref) }
                         }
                     }
                     if let draft, draft.state != .hidden {
@@ -60,9 +69,16 @@ struct TranscriptView: View {
             .onChange(of: draft?.state) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
-            // already on the screen does not move.
+            // already on the screen does not move. A block inside a row the lazy stack has not
+            // made has no place to be scrolled to yet, so its row is brought in first, and the
+            // block after it on the next pass, once the row is made.
             .onChange(of: cue?.serial) { _, _ in
                 guard let cue else { return }
+                guard made.turns.contains(cue.reply) else {
+                    proxy.scrollTo(cue.reply, anchor: nil)
+                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(cue.place, anchor: nil) } }
+                    return
+                }
                 withAnimation { proxy.scrollTo(cue.place, anchor: nil) }
             }
         }

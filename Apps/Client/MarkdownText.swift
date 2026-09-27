@@ -227,8 +227,8 @@ struct CodeBlockCue: Equatable, Sendable {
 /// A code block's outline breathing when the voice reaches it: from nothing to the look's width
 /// and opacity in its accent and back, `Look.Markdown.Pulse.cycles` times, eased all the way
 /// (`Pulse.level`), over the enclosure's own shape. It plays each time `trigger` changes to a
-/// new serial — not when it goes back to nil — and draws nothing at rest; with `still` it draws
-/// that moment of the pulse and plays nothing.
+/// new serial — not when it goes back to nil — or appears with a serial it has not played, and
+/// draws nothing at rest; with `still` it draws that moment of the pulse and plays nothing.
 struct CodeBlockPulse: ViewModifier {
     let enclosure: Look.Enclosure
     let pulse: Look.Markdown.Pulse
@@ -257,6 +257,13 @@ struct CodeBlockPulse: ViewModifier {
             }
             .onChange(of: trigger) { _, cue in
                 if let cue { played = cue }
+            }
+            // A block first drawn with its cue already set — a row the lazy transcript makes as
+            // it scrolls to the block — has no change to see, so it plays as it appears: on the
+            // pass after, since a change in the pass that makes the animator is not one it plays.
+            .onAppear {
+                guard let trigger, played != trigger else { return }
+                DispatchQueue.main.async { played = trigger }
             }
         }
     }

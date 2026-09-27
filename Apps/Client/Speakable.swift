@@ -13,7 +13,9 @@ import Foundation
 ///   the caption the transcript draws over it (`Markdown.Block.codeNumber`): a voice reading
 ///   code out is noise, and the number is how the listener finds the block on the screen. It is
 ///   a line of its own, so it is a sentence of its own, and the speaker cues the block as it
-///   begins (`codeBlock(saidBy:)`, `Speaker.cue`).
+///   begins (`Line.codeBlock`, `Speaker.cue`). Which line stands for a block is carried with the
+///   line, never read back from its words: a paragraph that happens to say "See code block 1."
+///   is prose.
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
 /// - A rule is nothing.
@@ -32,13 +34,24 @@ import Foundation
 /// Pocket reads text as it is given, with no normalisation beyond quotes and whitespace, so none
 /// of this is done further down.
 enum Speakable {
+    /// One line of the spoken text, and the code block it stands for when it stands for one.
+    struct Line: Equatable, Sendable {
+        var text: String
+        var codeBlock: Int?
+    }
+
     static func text(from markdown: String) -> String {
-        var lines: [String] = []
+        lines(from: markdown).map(\.text).joined(separator: "\n")
+    }
+
+    /// The spoken text a line at a time, each code block's line carrying the block's number.
+    static func lines(from markdown: String) -> [Line] {
+        var lines: [Line] = []
         var table: (identity: Int, rows: Int)?
 
         func finishTable() {
             if let done = table {
-                lines.append("A table with \(done.rows) \(done.rows == 1 ? "row" : "rows").")
+                lines.append(Line(text: "A table with \(done.rows) \(done.rows == 1 ? "row" : "rows")."))
             }
             table = nil
         }
@@ -55,31 +68,20 @@ enum Speakable {
             finishTable()
             switch block.kind {
             case .code:
-                lines.append(block.codeNumber.map(line(forCodeBlock:)) ?? "See the code block.")
+                lines.append(Line(text: block.codeNumber.map(line(forCodeBlock:)) ?? "See the code block.",
+                                  codeBlock: block.codeNumber))
             case .rule:
                 continue
             case .paragraph, .heading, .item:
-                lines.append(words(block.text))
+                lines.append(Line(text: words(block.text)))
             }
         }
         finishTable()
-        return lines.filter { !$0.allSatisfy(\.isWhitespace) }.joined(separator: "\n")
+        return lines.filter { !$0.text.allSatisfy(\.isWhitespace) }
     }
 
     /// What the voice says in code block `number`'s place, a line of its own.
     static func line(forCodeBlock number: Int) -> String { "See code block \(number)." }
-
-    /// The code block a sentence of the spoken text stands for, when it is one: the line
-    /// `line(forCodeBlock:)` writes, which `Speaker.sentences` always cuts as a sentence of its own,
-    /// since it is a line of its own with one full stop at its end.
-    static func codeBlock(saidBy sentence: String) -> Int? {
-        let prefix = "See code block ", suffix = "."
-        guard sentence.hasPrefix(prefix), sentence.hasSuffix(suffix) else { return nil }
-        let digits = sentence.dropFirst(prefix.count).dropLast(suffix.count)
-        guard !digits.isEmpty, digits.allSatisfy(\.isASCII), let number = Int(digits), number > 0,
-              line(forCodeBlock: number) == sentence else { return nil }
-        return number
-    }
 
     /// A run of what could be a path or a file name: an optional leading `/` or `~/`, then names
     /// of word characters, dots and hyphens separated by slashes. Not where it would start inside

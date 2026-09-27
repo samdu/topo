@@ -21,7 +21,7 @@ import TopoCore
 /// Every `speak` is a generation. A frame that lands after a `stop` belongs to no reply and
 /// changes nothing.
 ///
-/// A sentence that stands for a code block ("See code block N.", `Speakable.codeBlock(saidBy:)`)
+/// A sentence that stands for a code block ("See code block N.", `Speakable.Line.codeBlock`)
 /// is a cue (`cue`) the moment it begins to be heard: its first frame is marked on the play queue,
 /// and the mark fires when everything scheduled before that frame has been heard, which is when
 /// the sentence starts. The transcript scrolls to the block, pulses its outline and sends Topo to
@@ -372,8 +372,12 @@ final class Speaker {
     /// The reply: its words as the voice reads them (`Speakable`), one sentence at a time, each
     /// synthesised behind the one before and its frames queued for playback as soon as they
     /// exist. A sentence the voice fails on is skipped rather than ending the reply.
+    /// A code block's line is one sentence, and it carries the block it stands for from
+    /// `Speakable`, so a sentence of prose with the same words is never a cue.
     private func speakLocally(_ text: String) {
-        let sentences = Self.sentences(of: Speakable.text(from: text))
+        let sentences = Speakable.lines(from: text).flatMap { line in
+            Self.sentences(of: line.text).map { (text: $0, block: line.codeBlock) }
+        }
         guard !sentences.isEmpty else { done(); return }
         let mine = generation
         making = sentences.count
@@ -383,20 +387,20 @@ final class Speaker {
                 await previous?.value
                 guard let self, self.generation == mine else { return }
                 defer { if self.generation == mine { self.made() } }
-                await self.say(sentence, generation: mine)
+                await self.say(sentence.text, block: sentence.block, generation: mine)
             }
         }
     }
 
-    /// One sentence, frame by frame. The console line is per sentence; the report is per reply,
-    /// and neither number in it is written by a sentence that scheduled no frame.
-    private func say(_ sentence: String, generation mine: Int) async {
+    /// One sentence, frame by frame; `block` is the code block it stands for, if it does. The
+    /// console line is per sentence; the report is per reply, and neither number in it is written
+    /// by a sentence that scheduled no frame.
+    private func say(_ sentence: String, block: Int?, generation mine: Int) async {
         let started = now()
         let idle = queue.isIdle
         var first: Double?
         // A sentence that stands for a code block marks its first frame: the cue fires when
         // everything before it has been heard, which is when the sentence begins.
-        let block = Speakable.codeBlock(saidBy: sentence)
         let begins: (@Sendable () -> Void)? = block.map { number in
             { @Sendable [weak self] in
                 Task { @MainActor in self?.reached(number, generation: mine) }
@@ -605,6 +609,9 @@ final class PlayQueue: @unchecked Sendable {
     /// What is scheduled and not yet heard, in the order it was scheduled, so a rebuild puts back
     /// what the dead engine forgot rather than only knowing how much there was.
     private var queued: [(era: Int, buffer: AVAudioPCMBuffer)] = []
+    /// The silence queued ahead of a marked frame with nothing before it, in samples: two
+    /// milliseconds at the voice's rate, too short to hear.
+    static let leadIn: AVAudioFrameCount = 48
     /// What fires once a buffer has been heard, by the buffer: the beginning of what was
     /// scheduled right behind it (`play`'s `begins`). Guarded by the lock, kept across a rebuild
     /// with the buffers it waits on, and dropped with them by `stop`.
@@ -638,10 +645,12 @@ final class PlayQueue: @unchecked Sendable {
     /// tasks inherit `Speaker`'s, and these three and the format are guarded by that and not by
     /// the lock, which counts what is scheduled for the audio thread.
     ///
-    /// `begins` fires once everything scheduled before this frame has been heard — at once when
-    /// nothing is — on the audio thread or the caller's: the moment the frame starts to be heard.
-    /// A frame that is not queued (a format the queue cannot build) fires nothing, and a `stop`
-    /// drops it with the frames it waited on.
+    /// `begins` fires once everything scheduled before this frame has been heard, on the audio
+    /// thread: the moment the frame starts to be heard. With nothing scheduled before it, a lead-in
+    /// of silence a few milliseconds long (`leadIn`) is queued ahead of it to carry the mark, so
+    /// the mark still waits on playback rather than firing as the frame is queued, and a queue
+    /// that never plays fires nothing. A frame that is not queued (a format the queue cannot
+    /// build) fires nothing, and a `stop` drops it with the frames it waited on.
     @MainActor
     func play(_ samples: [Float], rate: Int, begins: (@Sendable () -> Void)? = nil) throws {
         guard !samples.isEmpty else { return }
@@ -655,24 +664,29 @@ final class PlayQueue: @unchecked Sendable {
         else { throw VoiceError.noPlayer }
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
-        let (era, alreadyBegun): (Int, Bool) = lock.withLock {
-            var alreadyBegun = false
+        let silence = begins == nil ? nil : AVAudioPCMBuffer(pcmFormat: format, frameCapacity: Self.leadIn)
+        silence?.frameLength = Self.leadIn
+        let (era, lead): (Int, AVAudioPCMBuffer?) = lock.withLock {
+            var lead: AVAudioPCMBuffer?
             if let begins {
-                if let last = queued.last?.buffer {
-                    marks[ObjectIdentifier(last), default: []].append(begins)
-                } else {
-                    alreadyBegun = true
+                // What the mark waits on: the frame queued last, or the lead-in with none. Where
+                // no lead-in could be made, the frame itself, which is heard 80 ms into it.
+                let carrier = queued.last?.buffer ?? silence ?? buffer
+                if carrier === silence {
+                    queued.append((epoch, carrier))
+                    lead = silence
                 }
+                marks[ObjectIdentifier(carrier), default: []].append(begins)
             }
             queued.append((epoch, buffer))
-            return (epoch, alreadyBegun)
+            return (epoch, lead)
         }
-        if alreadyBegun { begins?() }
         guard !dead else { return }
         do {
             try start()
             guard let node else { throw VoiceError.noPlayer }
             if !node.isPlaying { node.play() }
+            if let lead { schedule(lead, era: era) }
             schedule(buffer, era: era)
         } catch {
             // The frame is already owed, so the reply is not lost with the engine: a refusal here
