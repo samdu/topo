@@ -264,6 +264,16 @@ final class MarkdownRenderTests: XCTestCase {
             while Date() < until { RunLoop.current.run(mode: .default, before: min(until, Date().addingTimeInterval(0.01))) }
         }
 
+        /// Turns the clock a tenth of a second at a time until `done`, asked after each, says so,
+        /// for up to `seconds`; what was not seen by then is the caller's to fail on.
+        func poll(for seconds: TimeInterval = 10, _ done: () throws -> Bool) rethrows {
+            let until = Date().addingTimeInterval(seconds)
+            while Date() < until {
+                wait(0.1)
+                if try done() { return }
+            }
+        }
+
         func image() -> UIImage {
             UIGraphicsImageRenderer(size: size).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -310,10 +320,9 @@ final class MarkdownRenderTests: XCTestCase {
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
         look.markdown.codePulse.width = 3
-        // Slow, so a picture taken of a transcript this long, which takes a good part of a
-        // second, still finds the breath under way.
-        look.markdown.codePulse.cycle = 3
-        let pulse = look.markdown.codePulse
+        // As slow as a breath can be, so a picture taken of a transcript this long — a good part
+        // of a second on a loaded runner — still finds the pulse under way.
+        look.markdown.codePulse.cycle = 5
         let device = DeviceID("phone")
         let at = Date(timeIntervalSince1970: 1_700_000_000)
         let filler = (2...40).map { n in
@@ -338,14 +347,17 @@ final class MarkdownRenderTests: XCTestCase {
         let offset = scroll.contentOffset.y
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
+        // Looked at every tenth of a second until the block has been seen and seen pulsing, for
+        // up to ten seconds — the whole pulse — so a slow runner is waited for and a block never
+        // scrolled to or never pulsed is still seen not to be.
         var shown = 0, pulsed = 0
-        let until = Date().addingTimeInterval(pulse.duration + 0.5)
-        while Date() < until {
-            stage.wait(0.05)
+        try stage.poll { [self] in
             let drawn = try Pixels(stage.image(), blank: true)
             shown = max(shown, drawn.count(outline))
             pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
+            return shown > 20 && pulsed > 20
         }
+        stage.wait(0.5)
         return (shown, pulsed, abs(scroll.contentOffset.y - offset))
     }
 
@@ -363,8 +375,8 @@ final class MarkdownRenderTests: XCTestCase {
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
         look.markdown.codePulse.width = 3
-        look.markdown.codePulse.cycle = 0.6
-        let pulse = look.markdown.codePulse
+        // As slow as a breath can be, so a runner slow to draw still finds the pulse under way.
+        look.markdown.codePulse.cycle = 5
         let reply = turn(.assistant, "Here:\n\n```\nlet x = 1\n```")
         let live = LiveCue()
         live.made = false
@@ -375,11 +387,10 @@ final class MarkdownRenderTests: XCTestCase {
         stage.wait(0.3)
         live.made = true
         var pulsed = 0
-        let until = Date().addingTimeInterval(pulse.duration + 0.3)
-        while Date() < until {
-            stage.wait(0.05)
+        try stage.poll { [self] in
             let drawn = try Pixels(stage.image())
             pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
+            return pulsed > 20
         }
         XCTAssertGreaterThan(pulsed, 20, "the block appeared under its cue and did not pulse")
     }
