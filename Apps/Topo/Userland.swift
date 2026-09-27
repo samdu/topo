@@ -301,6 +301,8 @@ final class Userland {
             // A guest with no resolver still runs, with no name resolving in it, so a failure here
             // is not the boot's: the boot's answer is kept for the life of the process.
             try? await Guest.shared.writeResolver()
+            // Nor is a /tmp left full: what it clears is what a killed process left behind.
+            try? await Guest.shared.clearTemporary()
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(with: Result { try claude.install(into: Guest.shared) })

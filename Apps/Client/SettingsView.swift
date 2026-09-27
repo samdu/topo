@@ -93,4 +93,30 @@ struct SignOut {
         forgetLogin()
     }
 }
+
+/// The far end of a takeover: another device wrote this one's role as viewer. A value for the same
+/// reason `SignOut` is one, since what it ends is the login and everything held under it.
+struct Takeover {
+    /// What was waiting goes into the log first, while the chat and its task still stand.
+    var demoteHarness: @MainActor () async -> Void = {}
+    /// Then the role flips.
+    var acceptDemotion: @MainActor () -> Void = {}
+    /// The login goes, so the reply being read goes with it, as at a sign-out.
+    var stopSpeaking: @MainActor () -> Void = {}
+    /// A viewer holds no login and keeps no memory.
+    var forgetMemory: @MainActor () -> Void = {}
+    /// Nor any of its person's connections, and a connect in flight saves nothing after this.
+    var forgetConnections: @MainActor () -> Void = {}
+    /// The tokens, last.
+    var forgetLogin: @MainActor () -> Void = {}
+
+    @MainActor func act() async {
+        await demoteHarness()
+        acceptDemotion()
+        stopSpeaking()
+        forgetMemory()
+        forgetConnections()
+        forgetLogin()
+    }
+}
 #endif

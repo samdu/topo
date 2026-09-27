@@ -44,9 +44,9 @@ final class Connections {
     private(set) var github: GitHub
     private(set) var onePassword: OnePassword
 
-    /// Where Topo's GitHub App is installed on repositories: a user token reaches only those.
-    static let githubInstall = URL(string: "https://github.com/apps/\(githubAppSlug)/installations/new")!
-    static let githubAppSlug = "topo-hexagon-zone"
+    /// Where the person revokes Topo's authorization, which a disconnect does not: GitHub's list
+    /// of the OAuth apps they have authorized.
+    static let githubAuthorizations = URL(string: "https://github.com/settings/applications")!
     /// Where a person makes a service account for the vault they choose.
     static let onePasswordServiceAccounts = URL(string: "https://my.1password.com/developer-tools/infrastructure-secrets/serviceaccount")!
 
@@ -72,8 +72,27 @@ final class Connections {
         self.op = onePassword
         self.copy = copy
         self.browser = browser
-        github = (try? store.load(.github)).flatMap { $0 }.map { .connected(login: $0.account) } ?? .disconnected
-        self.onePassword = (try? store.load(.onePassword)).flatMap { $0 }.map { .connected(vaults: $0.account) } ?? .disconnected
+        github = Self.standing(store)
+        self.onePassword = Self.standingOnePassword(store)
+    }
+
+    /// What the keychain holds for GitHub: connected, not, or unreadable — which is said, never
+    /// taken for not connected.
+    private static func standing(_ store: ConnectionStore) -> GitHub {
+        do {
+            return try store.load(.github).map { .connected(login: $0.account) } ?? .disconnected
+        } catch {
+            return .failed("The GitHub connection could not be read from this phone's keychain: \(error)")
+        }
+    }
+
+    /// The same for 1Password.
+    private static func standingOnePassword(_ store: ConnectionStore) -> OnePassword {
+        do {
+            return try store.load(.onePassword).map { .connected(vaults: $0.account) } ?? .disconnected
+        } catch {
+            return .failed("The 1Password connection could not be read from this phone's keychain: \(error)")
+        }
     }
 
     /// Takes a pasted service-account token, checks it with `op vault list` in the guest, and
@@ -114,7 +133,7 @@ final class Connections {
     /// Stops a check in flight; what was connected before stays.
     func cancelOnePassword() {
         supersedeOnePassword()
-        onePassword = (try? store.load(.onePassword)).flatMap { $0 }.map { .connected(vaults: $0.account) } ?? .disconnected
+        onePassword = Self.standingOnePassword(store)
     }
 
     /// Forgets the service-account token on this phone.
@@ -177,7 +196,7 @@ final class Connections {
     func cancelGitHub() {
         supersede()
         browser.close()
-        github = (try? store.load(.github)).flatMap { $0 }.map { .connected(login: $0.account) } ?? .disconnected
+        github = Self.standing(store)
     }
 
     /// Forgets the GitHub token on this phone.
@@ -191,15 +210,21 @@ final class Connections {
         }
     }
 
-    /// Every connection forgotten, for a sign-out or a demotion: the generation moves first, so
-    /// nothing in flight can save behind the clear.
+    /// Every connection forgotten, for a sign-out, a demotion or a takeover: the generation moves
+    /// first, so nothing in flight can save behind the clear. A keychain that refuses the clear is
+    /// said on the row rather than shown as disconnected.
     func forget() {
         supersede()
         supersedeOnePassword()
-        try? store.clearAll()
-        github = .disconnected
-        onePassword = .disconnected
         browser.close()
+        do {
+            try store.clearAll()
+            github = .disconnected
+            onePassword = .disconnected
+        } catch {
+            github = .failed("The tokens could not be removed from this phone's keychain: \(error)")
+            onePassword = .failed("The tokens could not be removed from this phone's keychain: \(error)")
+        }
     }
 
     /// Ends the flow in flight, if any, and answers the generation the next one runs under.
@@ -241,3 +266,33 @@ final class WebAuthBrowser: Browser {
         web.close()
     }
 }
+
+#if DEBUG
+extension DebugRun {
+    static let connectGitHubVariable = "TOPO_DEBUG_CONNECT_GITHUB"
+
+    /// `TOPO_DEBUG_CONNECT_GITHUB=1`: connects GitHub at launch as the screen's Connect does — a
+    /// real code from github.com, copied, and GitHub's page for it in the sheet — printing each
+    /// state the connection takes (never a token or the device code), so a simulator shows the
+    /// flow against GitHub itself. Approving it is a person's; with nobody there the code expires.
+    @MainActor static func connectGitHub(_ connections: Connections,
+                                         environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        guard environment[connectGitHubVariable] == "1" else { return }
+        // The sheet anchors on the key window, which the first frame makes.
+        while !UIApplication.shared.connectedScenes.contains(where: { ($0 as? UIWindowScene)?.keyWindow != nil }) {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        connections.connectGitHub()
+        var said = ""
+        while !Task.isCancelled {
+            let now = switch connections.github {
+            // The code the person types and where; never the device code, which polls for the token.
+            case let .waiting(code): "waiting for \(code.userCode) at \(code.verificationURL.absoluteString)"
+            case let state: "\(state)"
+            }
+            if now != said { print("[topo-debug] github: \(now)"); said = now }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
+}
+#endif

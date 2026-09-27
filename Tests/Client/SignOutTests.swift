@@ -54,4 +54,17 @@ final class SignOutTests: XCTestCase {
         let (_, calls) = signOut()
         XCTAssertTrue(calls.ended.isEmpty)
     }
+
+    /// The far end of a takeover ends the same things, the connections among them, the login last.
+    func testATakeoverForgetsTheConnectionsBeforeTheLogin() async {
+        let calls = Calls()
+        let takeover = Takeover(demoteHarness: { calls.ended.append("harness") },
+                                acceptDemotion: { calls.ended.append("role") },
+                                stopSpeaking: { calls.ended.append("speaker") },
+                                forgetMemory: { calls.ended.append("memory") },
+                                forgetConnections: { calls.ended.append("connections") },
+                                forgetLogin: { calls.ended.append("login") })
+        await takeover.act()
+        XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "connections", "login"])
+    }
 }

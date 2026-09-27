@@ -2,8 +2,10 @@ import Foundation
 import TopoAuth
 import TopoTools
 
-/// `topo github`: whether GitHub is connected, and the token for the guest's `git` credential
-/// helper and `gh` wrapper to use for one command. The token is read from the keychain on every
+/// `topo github`: whether GitHub is connected, and — as `token` and `credential`, the forms the
+/// guest's `gh` wrapper and `git` credential helper call and which the usage leaves out — the
+/// token for one command. Any guest process can call those forms too, since every one inherits the
+/// service's token; `docs/design.md` says what that means. The token is read from the keychain on every
 /// call and kept nowhere, so a disconnect reaches the guest at its next call.
 struct GitHubTool: Tool {
     let store: any ConnectionStore
@@ -12,8 +14,6 @@ struct GitHubTool: Tool {
     let summary = "whether GitHub is connected, and as whom; git and gh use it by themselves"
     let usage = """
     topo github                 connected as whom, or not connected
-    topo github token           the token, for one command (the gh wrapper's)
-    topo github credential      git's credential lines (the git credential helper's)
 
     git over https:// and gh use the connection without being told; nothing needs the token
     written into a file, a remote URL or a config.

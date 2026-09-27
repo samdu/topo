@@ -51,7 +51,7 @@ extension Stubbed {
             }
         }
 
-        @Test func startSendsOnlyTheClientID() async throws {
+        @Test func startSendsTheClientIDAndScopesAndNoSecret() async throws {
             StubURLProtocol.reset()
             StubURLProtocol.requestResponder = { _, _ in
                 (200, #"{"device_code":"dev","user_code":"5632-7741","verification_uri":"https://github.com/login/device","expires_in":899,"interval":5}"#)
@@ -62,14 +62,14 @@ extension Stubbed {
             #expect(code.deviceCode == "dev" && code.interval == 5 && code.expiresIn == 899)
             #expect(StubURLProtocol.lastRequest?.url?.absoluteString == "https://github.com/login/device/code")
             #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Accept") == "application/json")
-            #expect(form(StubURLProtocol.bodies[0]) == ["client_id": "Ov23liOQVQHli5vrchlv"])
+            #expect(form(StubURLProtocol.bodies[0]) == ["client_id": "Ov23liOQVQHli5vrchlv", "scope": "repo read:org workflow"])
         }
 
         @Test func pollSendsNoSecretAndReturnsTheToken() async throws {
             StubURLProtocol.reset()
-            poll([#"{"access_token":"ghu_x","token_type":"bearer","scope":""}"#])
+            poll([#"{"access_token":"gho_x","token_type":"bearer","scope":""}"#])
             let token = try await flow().token(for: code())
-            #expect(token == "ghu_x")
+            #expect(token == "gho_x")
             #expect(StubURLProtocol.lastRequest?.url?.absoluteString == "https://github.com/login/oauth/access_token")
             #expect(form(StubURLProtocol.bodies[0]) == [
                 "client_id": "Ov23liOQVQHli5vrchlv",
@@ -81,16 +81,35 @@ extension Stubbed {
 
         @Test func pendingPollsAgain() async throws {
             StubURLProtocol.reset()
-            poll([#"{"error":"authorization_pending"}"#, #"{"error":"authorization_pending"}"#, #"{"access_token":"ghu_y"}"#])
-            #expect(try await flow().token(for: code()) == "ghu_y")
+            poll([#"{"error":"authorization_pending"}"#, #"{"error":"authorization_pending"}"#, #"{"access_token":"gho_y"}"#])
+            #expect(try await flow().token(for: code()) == "gho_y")
             #expect(clock.sleeps == [.seconds(5), .seconds(5), .seconds(5)])
         }
 
         @Test func slowDownAddsFiveSeconds() async throws {
             StubURLProtocol.reset()
-            poll([#"{"error":"slow_down"}"#, #"{"error":"authorization_pending"}"#, #"{"error":"slow_down"}"#, #"{"access_token":"ghu_z"}"#])
-            #expect(try await flow().token(for: code()) == "ghu_z")
+            poll([#"{"error":"slow_down"}"#, #"{"error":"authorization_pending"}"#, #"{"error":"slow_down"}"#, #"{"access_token":"gho_z"}"#])
+            #expect(try await flow().token(for: code()) == "gho_z")
             #expect(clock.sleeps == [.seconds(5), .seconds(10), .seconds(10), .seconds(15)])
+        }
+
+        /// GitHub's own interval on a `slow_down` wins when it is longer than five seconds more.
+        @Test func slowDownTakesGitHubsLongerInterval() async throws {
+            StubURLProtocol.reset()
+            poll([#"{"error":"slow_down","interval":20}"#, #"{"error":"slow_down","interval":6}"#, #"{"access_token":"gho_w"}"#])
+            #expect(try await flow().token(for: code()) == "gho_w")
+            #expect(clock.sleeps == [.seconds(5), .seconds(20), .seconds(25)])
+        }
+
+        /// A poll the network failed is polled again at the next interval, not the end of it.
+        @Test func aNetworkFailurePollsAgain() async throws {
+            StubURLProtocol.reset()
+            let count = Counter()
+            StubURLProtocol.requestResponder = { _, _ in
+                count.next() == 0 ? (-1, "") : (200, #"{"access_token":"gho_n"}"#)
+            }
+            #expect(try await flow().token(for: code()) == "gho_n")
+            #expect(clock.sleeps == [.seconds(5), .seconds(5)])
         }
 
         @Test func expiredTokenEndsIt() async throws {
@@ -141,9 +160,9 @@ extension Stubbed {
         @Test func loginNamesTheUser() async throws {
             StubURLProtocol.reset()
             StubURLProtocol.requestResponder = { _, _ in (200, #"{"login":"samdu","id":1}"#) }
-            #expect(try await flow().login(token: "ghu_x") == "samdu")
+            #expect(try await flow().login(token: "gho_x") == "samdu")
             #expect(StubURLProtocol.lastRequest?.url?.absoluteString == "https://api.github.com/user")
-            #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer ghu_x")
+            #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer gho_x")
         }
 
         @Test func loginRefusedSaysSo() async throws {
@@ -170,15 +189,15 @@ final class Counter: @unchecked Sendable {
         #endif
         defer { try? store.clearAll() }
         #expect(try store.load(.github) == nil)
-        let connection = Connection(token: "ghu_a", account: "samdu")
+        let connection = Connection(token: "gho_a", account: "samdu")
         try store.save(connection, for: .github)
         #if os(macOS)
         #expect(keychain.holdsItem(service: KeychainConnectionStore.service, account: "github"),
                 "the store wrote outside the keychain it was pointed at")
         #endif
         #expect(try store.load(.github) == connection)
-        try store.save(Connection(token: "ghu_b", account: "samdu"), for: .github)
-        #expect(try store.load(.github)?.token == "ghu_b")
+        try store.save(Connection(token: "gho_b", account: "samdu"), for: .github)
+        #expect(try store.load(.github)?.token == "gho_b")
         try store.clear(.github)
         #expect(try store.load(.github) == nil)
     }

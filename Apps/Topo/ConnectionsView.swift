@@ -43,12 +43,12 @@ struct ConnectionsView: View {
                 Label("Approved; asking GitHub who you are…", systemImage: "hourglass")
             case let .connected(login):
                 LabeledContent("Connected as", value: "@\(login)")
-                Button("Choose repositories") { connections.open(Connections.githubInstall) }
+                Button("Revoke on GitHub") { connections.open(Connections.githubAuthorizations) }
                 Button("Disconnect", role: .destructive) { confirmingDisconnect = true }
                     .confirmationDialog("Disconnect GitHub?", isPresented: $confirmingDisconnect, titleVisibility: .visible) {
                         Button("Disconnect", role: .destructive) { connections.disconnectGitHub() }
                     } message: {
-                        Text("Topo forgets the token on this phone. GitHub keeps the authorization until you revoke it there.")
+                        Text("Topo forgets the token on this phone. GitHub keeps the authorization until you revoke it at github.com/settings/applications.")
                     }
             case let .failed(words):
                 Text(words)
@@ -100,9 +100,9 @@ struct ConnectionsView: View {
         case .waiting:
             Text("The code is copied. Paste it on GitHub's page and approve Topo; this screen finishes by itself.")
         case .connected:
-            Text("git and gh in Topo's Linux use this connection, on the repositories you chose for Topo's GitHub App. Disconnecting forgets the token here; revoke it on GitHub under Settings › Applications.")
+            Text("git and gh in Topo's Linux use this connection, with your access to every repository, your organizations' membership and workflow files. Disconnecting forgets the token here; revoke it at github.com/settings/applications.")
         default:
-            Text("Lets Topo clone, push and open pull requests as you, on the repositories you choose.")
+            Text("Lets Topo clone, push and open pull requests as you, on any repository you can reach.")
         }
     }
 }

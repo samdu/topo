@@ -181,15 +181,21 @@ final class GuestToolScriptTests: XCTestCase {
             XCTAssertEqual(exit.output, "#!/bin/bash\n", path)
         }
         XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand])
+        // An empty helper first, which clears every helper configured before it, then this one.
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "2")
         XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_0"], "credential.https://github.com.helper")
-        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_0"], "topo")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_0"], "")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_1"], "credential.https://github.com.helper")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_1"], "topo")
+        XCTAssertFalse(GuestTools.environment.keys.contains { $0.hasPrefix("GH_") || $0.hasPrefix("GITHUB_") },
+                       "no GitHub token rides the environment the resident is given")
     }
 
     /// The helper answers github.com over https with what `topo github credential` says, and
     /// nothing for any other host, for another action, or when GitHub is not connected; the token
     /// is in none of the service's log lines.
     func testTheCredentialHelperAnswersGitHubOnly() async throws {
-        let token = "ghu_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         let environment = try await startedGitHub(token: token)
         let helper = "git-credential-topo"
         let github = try await shell("printf 'protocol=https\\nhost=github.com\\n\\n' | \(helper) get", environment)
@@ -211,18 +217,67 @@ final class GuestToolScriptTests: XCTestCase {
         let exit = try await shell("printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get", environment)
         XCTAssertEqual(exit.status, 0)
         XCTAssertEqual(exit.output, "", "git gets no username or password")
-        XCTAssertTrue(exit.errors.contains("Settings › Connections › GitHub"), exit.errors)
+        XCTAssertTrue(exit.errors.contains("GitHub is not connected"), exit.errors)
+        XCTAssertTrue(exit.errors.contains("status 1"), exit.errors)
     }
 
-    /// The wrapper puts the token in `gh`'s own environment for the one command, leaves a token
-    /// the caller set alone, and says where to connect when there is none. A stand-in `gh` at
-    /// `/usr/bin/gh` prints what it was given.
+    /// An app that does not answer is said as that, not as GitHub not being connected.
+    func testTheShimsSayTheAppDidNotAnswer() async throws {
+        let environment = try await startedGitHub(token: "gho_x")
+        await service?.stop()
+        let helper = try await shell("printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get", environment)
+        XCTAssertEqual(helper.output, "")
+        XCTAssertTrue(helper.errors.contains("did not answer"), helper.errors)
+        XCTAssertTrue(helper.errors.contains("status 3"), helper.errors)
+        XCTAssertFalse(helper.errors.contains("not connected"), helper.errors)
+    }
+
+    /// What a tool answers never lands in a file: the request goes through a FIFO and the answer
+    /// comes back on wget's standard output, so neither a finished `topo` nor one killed mid-call
+    /// leaves GitHub's token, or the service's, in a file on the guest's disk.
+    func testNoAnswerIsEverWrittenToAFile() async throws {
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let environment = try await startedGitHub(token: token)
+        let exit = try await shell("""
+        topo github token > /dev/null; echo "status $?"
+        for delay in 0 0.01 0.05 0.1 0.2; do
+            topo github token > /dev/null & pid=$!
+            sleep $delay; kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
+        done
+        find /tmp /root -type f -exec grep -l -e \(token) -e "$TOPO_TOOLS_TOKEN" {} + 2>/dev/null; true
+        """, environment)
+        XCTAssertEqual(exit.output, "status 0\n", "the token is in a file: " + exit.output + exit.errors)
+    }
+
+    /// git with the environment the resident is given fills github.com's credential from the app,
+    /// and hands it to no helper the home configured: a `credential.helper store` in `.gitconfig`
+    /// writes no `.git-credentials` on approve.
+    func testGitAsksTheAppAloneAndStoresNothing() async throws {
+        let present = try await Guest.shared.run("/bin/sh", ["-c", "command -v git"])
+        try XCTSkipIf(present.status != 0, "this rootfs has no git")
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        var environment = try await startedGitHub(token: token)
+        environment.merge(GuestTools.environment) { _, new in new }
+        let exit = try await shell("""
+        export HOME="$(mktemp -d)"
+        git config --global credential.helper store
+        answer="$(printf 'protocol=https\\nhost=github.com\\n\\n' | git credential fill)" || exit 9
+        printf '%s\\n\\n' "$answer" | git credential approve
+        printf '%s\\n' "$answer"
+        [ -e "$HOME/.git-credentials" ] && echo stored
+        rm -rf "$HOME"
+        """, environment)
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        XCTAssertTrue(exit.output.contains("password=\(token)\n"), exit.output + exit.errors)
+        XCTAssertFalse(exit.output.contains("stored"), "a configured store helper was handed the token")
+    }
+
     func testTheGhWrapperHandsTheTokenToGhAlone() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
         let fake = try await Guest.shared.run("/bin/sh", ["-c", "printf '#!/bin/sh\\necho \"token=${GH_TOKEN:-none} args=$*\"\\n' > /usr/bin/gh && chmod +x /usr/bin/gh"])
         XCTAssertEqual(fake.status, 0, fake.errors)
-        let token = "ghu_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         let environment = try await startedGitHub(token: token)
         let wrapped = try await shell("gh api user; echo \"after=${GH_TOKEN:-unset}\"", environment)
         XCTAssertEqual(wrapped.output, "token=\(token) args=api user\nafter=unset\n", wrapped.errors)
@@ -240,7 +295,7 @@ final class GuestToolScriptTests: XCTestCase {
     func testTheGhWrapperWithNoGhSaysHowToInstallIt() async throws {
         let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
         try XCTSkipIf(present.status == 0, "this rootfs has gh")
-        let exit = try await shell("gh api user", try await startedGitHub(token: "ghu_x"))
+        let exit = try await shell("gh api user", try await startedGitHub(token: "gho_x"))
         XCTAssertEqual(exit.status, 127)
         XCTAssertTrue(exit.errors.contains("apk add github-cli"), exit.errors)
     }

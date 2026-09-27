@@ -26,7 +26,7 @@ private final class HeldGitHub: GitHubConnecting, @unchecked Sendable {
 
     func token(for code: GitHubDeviceFlow.Code) async throws -> String {
         await hold(.token)
-        return "ghu_token"
+        return "gho_token"
     }
 
     func login(token: String) async throws -> String {
@@ -106,7 +106,7 @@ final class ConnectionsTests: XCTestCase {
         github.release(.login)
         await settle()
         XCTAssertEqual(connections.github, .connected(login: "samdu"))
-        XCTAssertEqual(try store.load(.github), Connection(token: "ghu_token", account: "samdu"))
+        XCTAssertEqual(try store.load(.github), Connection(token: "gho_token", account: "samdu"))
         XCTAssertEqual(browser.closes, 1, "the sheet closes once GitHub has answered")
     }
 
@@ -205,6 +205,40 @@ final class ConnectionsTests: XCTestCase {
     }
 }
 
+/// A keychain that refuses every read, or every clear.
+private final class RefusingStore: ConnectionStore, @unchecked Sendable {
+    let refusesReads: Bool
+    init(refusesReads: Bool) { self.refusesReads = refusesReads }
+    struct Refused: Error {}
+    func load(_ service: ConnectionService) throws -> Connection? {
+        if refusesReads { throw Refused() }
+        return Connection(token: "t", account: "someone")
+    }
+    func save(_ connection: Connection, for service: ConnectionService) throws {}
+    func clear(_ service: ConnectionService) throws { throw Refused() }
+}
+
+@MainActor
+final class ConnectionsKeychainTests: XCTestCase {
+    /// A keychain that cannot be read is said, never shown as not connected.
+    func testAnUnreadableKeychainIsSaidAtLaunch() {
+        let connections = Connections(store: RefusingStore(refusesReads: true), flow: HeldGitHub(),
+                                      copy: { _ in }, browser: RecordingBrowser())
+        guard case let .failed(words) = connections.github else { return XCTFail("\(connections.github)") }
+        XCTAssertTrue(words.contains("could not be read"), words)
+    }
+
+    /// A clear the keychain refuses is said on the row, not shown as disconnected.
+    func testAForgetTheKeychainRefusesIsSaid() {
+        let connections = Connections(store: RefusingStore(refusesReads: false), flow: HeldGitHub(),
+                                      copy: { _ in }, browser: RecordingBrowser())
+        XCTAssertEqual(connections.github, .connected(login: "someone"))
+        connections.forget()
+        guard case let .failed(words) = connections.github else { return XCTFail("\(connections.github)") }
+        XCTAssertTrue(words.contains("could not be removed"), words)
+    }
+}
+
 final class GitHubToolTests: XCTestCase {
     func testNotConnectedSaysWhereToConnect() async {
         let tool = GitHubTool(store: InMemoryConnectionStore())
@@ -216,15 +250,15 @@ final class GitHubToolTests: XCTestCase {
     }
 
     func testConnectedAnswersEachForm() async {
-        let store = InMemoryConnectionStore([.github: Connection(token: "ghu_x", account: "samdu")])
+        let store = InMemoryConnectionStore([.github: Connection(token: "gho_x", account: "samdu")])
         let tool = GitHubTool(store: store)
         let status = await tool.run([])
         XCTAssertEqual(status, .ok("connected as samdu\n"))
-        XCTAssertFalse(status.text.contains("ghu_x"), "the status never carries the token")
+        XCTAssertFalse(status.text.contains("gho_x"), "the status never carries the token")
         let token = await tool.run(["token"])
-        XCTAssertEqual(token, .ok("ghu_x\n"))
+        XCTAssertEqual(token, .ok("gho_x\n"))
         let credential = await tool.run(["credential"])
-        XCTAssertEqual(credential, .ok("username=samdu\npassword=ghu_x\n"))
+        XCTAssertEqual(credential, .ok("username=samdu\npassword=gho_x\n"))
     }
 
     func testAnythingElseIsUsage() async {
@@ -237,14 +271,14 @@ final class GitHubToolTests: XCTestCase {
 
     /// The token is read on every call, so a disconnect reaches the guest at its next one.
     func testDisconnectIsHonouredAtTheNextCall() async throws {
-        let store = InMemoryConnectionStore([.github: Connection(token: "ghu_x", account: "samdu")])
+        let store = InMemoryConnectionStore([.github: Connection(token: "gho_x", account: "samdu")])
         let tool = GitHubTool(store: store)
         let before = await tool.run(["token"])
         XCTAssertEqual(before.status, ToolReply.ok)
         try store.clear(.github)
         let after = await tool.run(["token"])
         XCTAssertEqual(after.status, ToolReply.failed)
-        XCTAssertFalse(after.text.contains("ghu_x"))
+        XCTAssertFalse(after.text.contains("gho_x"))
     }
 }
 
@@ -265,7 +299,7 @@ final class ConnectionsScreenshots: XCTestCase {
         try attach(connections, "connections-waiting")
 
         connections.cancelGitHub()
-        try store.save(Connection(token: "ghu_x", account: "samdu"), for: .github)
+        try store.save(Connection(token: "gho_x", account: "samdu"), for: .github)
         try attach(Connections(store: store, flow: github, copy: { _ in }, browser: RecordingBrowser()), "connections-connected")
         github.release(.token)
     }

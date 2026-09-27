@@ -232,15 +232,7 @@ struct ChatView: View {
             // stops answering, forgets its login, and the root shows the viewer screen.
             while !Task.isCancelled {
                 if await roleSelector.demotionRecorded() {
-                    // What was waiting goes into the log first, while this screen and its task
-                    // still stand; the role flips after, and the login goes last.
-                    await harness.demote()
-                    roleSelector.acceptDemotion()
-                    // The login goes, so the reply being read goes with it, as at a sign-out,
-                    // and so does the folder: a viewer holds no login and keeps no memory.
-                    speaker.stop()
-                    memory.forget()
-                    signIn.signOut()
+                    await takeover.act()
                     return
                 }
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
@@ -324,6 +316,13 @@ struct ChatView: View {
                                                         contentBottom: contentBottomInTranscript))
                 #endif
         }
+    }
+
+    /// The far end of a takeover, built here for the same reason as the way out below.
+    private var takeover: Takeover {
+        Takeover(demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
+                 stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
+                 forgetConnections: { connections.forget() }, forgetLogin: { signIn.signOut() })
     }
 
     /// The way out, built here because this is where the five things it ends are in scope, and
