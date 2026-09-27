@@ -295,6 +295,25 @@ final class HomeToolTests: XCTestCase {
         XCTAssertEqual(again.status, ToolReply.denied, again.text)
     }
 
+    /// A restricted phone answers at once with where the restriction is lifted, rather than
+    /// waiting out the service's bound for an answer the person never gives.
+    func testRestrictedIsARefusalAtOnce() async {
+        let fake = FakeHome()
+        let access = HomeAccess {
+            Task { @MainActor in
+                fake.authorization = [.restricted]
+                fake.changed?(.authorization)
+            }
+            return fake
+        }
+        let tool = HomeTool(home: access, authorizer: HomeAuthorizer(home: access), broker: PermissionBroker())
+        let reply = await PhoneTool.within(.seconds(2)) { await tool.run([]) }
+        XCTAssertEqual(reply?.status, ToolReply.denied, reply?.text ?? "no answer within 2 s")
+        let again = await tool.run([])
+        XCTAssertTrue(again.text.contains("HomeKit is restricted on this phone"), again.text)
+        XCTAssertEqual(fake.homesRead, 0)
+    }
+
     // MARK: Reading
 
     func testTheListingIsByRoomAndAFailedReadIsAQuestionMark() async {

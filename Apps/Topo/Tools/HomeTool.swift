@@ -196,8 +196,9 @@ final class HomeAccess {
 
     private func passed(_ gate: Gate) -> Bool {
         switch gate {
+        // Restricted is an answer the person never gives, so it may come without `.determined`;
         // HomeKit loading the homes answers the question too, in case it never reports the status.
-        case .determined: made().authorization.contains(.determined) || homesLoaded
+        case .determined: !made().authorization.isDisjoint(with: [.determined, .restricted]) || homesLoaded
         case .loaded: homesLoaded
         }
     }
