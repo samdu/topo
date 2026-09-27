@@ -234,11 +234,16 @@ func okOrigin(_ text: String = "ok") throws -> StubOrigin {
         while let chunk = try await client.readChunk() { rest.append(chunk) }
         #expect(rest == Data("second".utf8))
     }
+}
 
+/// The two cases that move megabytes, in a suite of their own and one at a time, so they load
+/// the machine as little as they can while other suites' timed pins run beside them.
+@Suite(.serialized) struct EgressVolumeTests {
     @Test func largeBodyPassesWhole() async throws {
-        let size = 64 * 1024 * 1024
-        var generator = SystemRandomNumberGenerator()
-        let payload = Data((0..<size / 8).flatMap { _ in withUnsafeBytes(of: generator.next() as UInt64, Array.init) })
+        let size = 16 * 1024 * 1024
+        var random = Data(count: size)
+        random.withUnsafeMutableBytes { arc4random_buf($0.baseAddress, size) }
+        let payload = random
         let origin = try StubOrigin { _, inbound in
             try await inbound.send(Data("HTTP/1.1 200 OK\r\nContent-Length: \(payload.count)\r\n\r\n".utf8))
             var offset = 0
