@@ -101,7 +101,7 @@ final class Connections {
         if case let .waiting(code) = github { browser.open(code.verificationURL) }
     }
 
-    /// Opens a page in the in-app browser: where the App is installed, where a token is revoked.
+    /// Opens a page in the in-app browser: where the authorization is revoked.
     func open(_ url: URL) {
         browser.open(url)
     }
@@ -133,10 +133,17 @@ final class Connections {
         do {
             try store.clearAll()
             github = .disconnected
+            unforgotten = nil
         } catch {
-            github = .failed("The GitHub token could not be removed from this phone's keychain: \(error)")
+            let words = "the GitHub token could not be removed from this phone's keychain: \(error)"
+            github = .failed(words.prefix(1).uppercased() + words.dropFirst())
+            unforgotten = words
         }
     }
+
+    /// What the last `forget()` could not remove, in words the sign-in screen can say after a
+    /// sign-out; nil when it removed everything.
+    private(set) var unforgotten: String?
 
     /// Ends the flow in flight, if any, and answers the generation the next one runs under.
     @discardableResult

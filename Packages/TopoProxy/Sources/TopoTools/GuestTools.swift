@@ -77,14 +77,16 @@ public enum GuestTools {
     # so the body goes through a FIFO in a directory of its own: a FIFO holds nothing on the
     # disk, so neither the token nor an argument is ever written down, and the answer comes back
     # on wget's standard output. The writer is bounded, so one whose reader never came (a wget
-    # that failed first, a `topo` killed) is gone within the call's own bound. `wget -q` says
+    # that failed first, a `topo` killed) is gone within the call's own bound, and it writes
+    # nothing unless it opened the FIFO: a `topo` ended before then has removed the directory,
+    # and a writer that carried on would print the token on the standard output it inherited. `wget -q` says
     # nothing on success, so its standard error joins the answer only when it failed; the
     # trailing `.` keeps the answer's last newlines, which a command substitution would strip.
     fifo_dir="$(mktemp -d)" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
     trap 'rm -rf "$fifo_dir"' EXIT
     mkfifo -m 600 "$fifo_dir/request" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
     timeout 110 bash -c '
-        exec > "$1"; shift
+        exec > "$1" || exit 1; shift
         printf "%s\n" "$TOPO_TOOLS_TOKEN"
         for argument in "$@"; do
             printf "%s" "$argument" | base64 | tr -d "\n"
@@ -175,10 +177,11 @@ public enum GuestTools {
     if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
         exec "$real" "$@"
     fi
-    if token="$(topo github token)"; then
+    token="$(topo github token)"
+    status=$?
+    if [ "$status" = 0 ]; then
         GH_TOKEN="$token" exec "$real" "$@"
     fi
-    status=$?
     # Status 1 is the app's own sentence on stdout; any other, `topo` has said why on stderr.
     [ -n "$token" ] && printf 'gh: %s\n' "$token" >&2
     echo "gh: no GitHub token from the Topo app (topo github: status $status); running gh without one" >&2

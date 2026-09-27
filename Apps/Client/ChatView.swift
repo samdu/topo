@@ -322,7 +322,8 @@ struct ChatView: View {
     private var takeover: Takeover {
         Takeover(demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
                  stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
-                 forgetConnections: { connections.forget() }, forgetLogin: { signIn.signOut() })
+                 forgetConnections: { connections.forget() },
+                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 
     /// The way out, built here because this is where the five things it ends are in scope, and
@@ -331,7 +332,7 @@ struct ChatView: View {
     private var signOut: SignOut {
         SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
                 forgetMemory: { memory.forget() }, forgetConnections: { connections.forget() },
-                forgetLogin: { signIn.signOut() })
+                forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 
     private func sendSpoken(_ heard: String) async {

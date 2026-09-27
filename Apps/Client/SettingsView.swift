@@ -71,19 +71,19 @@ struct SettingsView: View {
 struct SignOut {
     /// The reply in the ear goes with the login: one still being read would otherwise carry on,
     /// holding the process open.
-    var stopSpeaking: @MainActor () -> Void = {}
+    var stopSpeaking: @MainActor () -> Void
     /// The transcript, the outbox and the spoken marks, the turn and the pass in flight, and what
     /// the guest kept of the conversation. Awaited, so the guest's session and the bridge's ledger
     /// are gone before the login is.
-    var forgetHarness: @MainActor () async -> Void = {}
+    var forgetHarness: @MainActor () async -> Void
     /// The memory is the person's and stays in their iCloud; the copy of it on this phone goes
     /// with the login.
-    var forgetMemory: @MainActor () -> Void = {}
+    var forgetMemory: @MainActor () -> Void
     /// The connections (GitHub): a phone with no login holds none of its person's tokens. Before
     /// the login, so a connect still in flight is stopped while there is an account it was for.
-    var forgetConnections: @MainActor () -> Void = {}
+    var forgetConnections: @MainActor () -> Void
     /// The tokens, last, so nothing above it runs without an account to run against.
-    var forgetLogin: @MainActor () -> Void = {}
+    var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
         stopSpeaking()
@@ -96,19 +96,21 @@ struct SignOut {
 
 /// The far end of a takeover: another device wrote this one's role as viewer. A value for the same
 /// reason `SignOut` is one, since what it ends is the login and everything held under it.
+///
+/// No step has a default, so a caller that leaves one out does not compile.
 struct Takeover {
     /// What was waiting goes into the log first, while the chat and its task still stand.
-    var demoteHarness: @MainActor () async -> Void = {}
+    var demoteHarness: @MainActor () async -> Void
     /// Then the role flips.
-    var acceptDemotion: @MainActor () -> Void = {}
+    var acceptDemotion: @MainActor () -> Void
     /// The login goes, so the reply being read goes with it, as at a sign-out.
-    var stopSpeaking: @MainActor () -> Void = {}
+    var stopSpeaking: @MainActor () -> Void
     /// A viewer holds no login and keeps no memory.
-    var forgetMemory: @MainActor () -> Void = {}
+    var forgetMemory: @MainActor () -> Void
     /// Nor any of its person's connections, and a connect in flight saves nothing after this.
-    var forgetConnections: @MainActor () -> Void = {}
+    var forgetConnections: @MainActor () -> Void
     /// The tokens, last.
-    var forgetLogin: @MainActor () -> Void = {}
+    var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
         await demoteHarness()
