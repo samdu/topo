@@ -45,8 +45,15 @@ final class FakeAuthorizer: Authorizer, @unchecked Sendable {
             #expect(reply.text.contains("Reminders"))
             #expect(fake.prompts == 0)
         }
-        let reply = try #require(await PermissionBroker().admit(FakeAuthorizer(.denied)))
-        #expect(reply.text.contains("Settings"))
+    }
+
+    /// Codex on #214: restricted says where it is lifted too, not only denied.
+    @Test func deniedAndRestrictedEachSayWhereInSettings() async throws {
+        let denied = try #require(await PermissionBroker().admit(FakeAuthorizer(.denied)))
+        #expect(denied.text.contains("Settings app, under Apps › Topo › Reminders"))
+        let restricted = try #require(await PermissionBroker().admit(FakeAuthorizer(.restricted)))
+        #expect(restricted.text.contains("Settings app, under Screen Time › Content & Privacy Restrictions › Reminders"))
+        #expect(restricted.text.contains("Settings › General › VPN & Device Management"))
     }
 
     @Test func undeterminedAsksOnceAndFollowsTheAnswer() async throws {
@@ -82,6 +89,29 @@ final class FakeAuthorizer: Authorizer, @unchecked Sendable {
         #expect(parsed.flags == ["done"])
         #expect(throws: Arguments.Refusal.unknown("--nope")) { try Arguments(["--nope"]) }
         #expect(throws: Arguments.Refusal.missingValue("--list")) { try Arguments(["--list"], options: ["list"]) }
+    }
+
+    /// Codex on #214: an option's value is never the next option. `--notes --done` is `--notes`
+    /// missing its value, not a note reading "--done"; `--notes=--done` says it on purpose.
+    @Test func theNextOptionIsNotAValue() throws {
+        #expect(throws: Arguments.Refusal.missingValue("--notes")) {
+            try Arguments(["add", "Milk", "--notes", "--done"], options: ["notes"], flags: ["done"])
+        }
+        #expect(throws: Arguments.Refusal.missingValue("--notes")) {
+            try Arguments(["add", "Milk", "--notes", "--list", "Home"], options: ["notes", "list"])
+        }
+        #expect(throws: Arguments.Refusal.missingValue("--notes")) { try Arguments(["--notes", "--", "x"], options: ["notes"]) }
+        let inline = try Arguments(["--notes=--done", "--list", "-5"], options: ["notes", "list"], flags: ["done"])
+        #expect(inline.options == ["notes": "--done", "list": "-5"])
+        #expect(inline.flags.isEmpty)
+    }
+
+    /// Codex on #214: an option one form takes, given to another, is refused rather than ignored.
+    @Test func onlyRefusesAnOptionTheFormDoesNotTake() throws {
+        let parsed = try Arguments(["add", "Milk", "--due-before", "2026-09-28", "--done"], options: ["due-before"], flags: ["done"])
+        #expect(throws: Arguments.Refusal.notTaken("--done", by: "reminders add")) { try parsed.only(["due-before"], for: "reminders add") }
+        #expect(throws: Arguments.Refusal.notTaken("--due-before", by: "reminders add")) { try parsed.only(["done"], for: "reminders add") }
+        try parsed.only(["due-before", "done"], for: "reminders")
     }
 }
 

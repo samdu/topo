@@ -2,6 +2,8 @@ import Foundation
 
 /// A tool's arguments split into the words and the options: `--name value` and `--flag`. An
 /// option the tool does not take, or one missing its value, is a usage error rather than a word.
+/// The value after an option never starts with two dashes: `--notes --done` is `--notes` missing
+/// its value, and a value that does start so is written `--notes=--done`.
 public struct Arguments: Sendable, Equatable {
     public var words: [String] = []
     public var options: [String: String] = [:]
@@ -10,11 +12,14 @@ public struct Arguments: Sendable, Equatable {
     public enum Refusal: Error, Equatable, CustomStringConvertible {
         case unknown(String)
         case missingValue(String)
+        /// An option the tool takes, given to a form of it that does not: the option, the form.
+        case notTaken(String, by: String)
 
         public var description: String {
             switch self {
             case .unknown(let option): "no option \(option)"
             case .missingValue(let option): "\(option) needs a value"
+            case .notTaken(let option, let form): "\(form) takes no \(option)"
             }
         }
     }
@@ -28,7 +33,7 @@ public struct Arguments: Sendable, Equatable {
                 words += rest
                 break
             }
-            guard argument.hasPrefix("--"), argument.count > 2 else {
+            guard Self.isOption(argument) else {
                 words.append(argument)
                 continue
             }
@@ -41,12 +46,30 @@ public struct Arguments: Sendable, Equatable {
             if flags.contains(name), inline == nil {
                 self.flags.insert(name)
             } else if options.contains(name) {
-                guard let value = inline ?? rest.popFirst() else { throw Refusal.missingValue(argument) }
-                self.options[name] = value
+                if let inline {
+                    self.options[name] = inline
+                } else if let value = rest.first, !value.hasPrefix("--") {
+                    self.options[name] = value
+                    rest = rest.dropFirst()
+                } else {
+                    throw Refusal.missingValue(argument)
+                }
             } else {
                 throw Refusal.unknown("--\(name)")
             }
         }
+    }
+
+    /// Refuses any option or flag given that `form` does not take: one tool's forms share a parse,
+    /// and an option meant for another form is a mistake to say, not one to ignore.
+    public func only(_ allowed: Set<String>, for form: String) throws {
+        let given = Set(options.keys).union(flags)
+        if let stray = given.subtracting(allowed).sorted().first { throw Refusal.notTaken("--\(stray)", by: form) }
+    }
+
+    /// `--` alone ends the options; anything else starting with two dashes is one.
+    static func isOption(_ argument: String) -> Bool {
+        argument.hasPrefix("--") && argument.count > 2
     }
 }
 

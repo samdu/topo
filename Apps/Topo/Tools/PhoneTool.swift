@@ -13,21 +13,47 @@ struct ToolFailure: Error, Equatable {
     }
 }
 
-/// The run every phone tool shares: the permission first (asked on this call if it never has
-/// been, `PermissionBroker`), then the arguments parsed, then the store; a failure of the store is
-/// the tool's own sentence, and anything else it throws is said as it is.
+/// A call that is not one the tool takes, said with the tool's usage after it.
+struct Misuse: Error {
+    let text: String
+    init(_ text: String) { self.text = text }
+}
+
+/// The run every phone tool shares: the arguments read into a call first, so a call the tool does
+/// not take is answered without asking anything; then the permission (asked on this call if it
+/// never has been, `PermissionBroker`); then the store. A failure of the store is the tool's own
+/// sentence, and anything else it throws is said as it is.
 enum PhoneTool {
-    static func run(_ authorizer: any Authorizer, broker: PermissionBroker, usage: String,
-                    _ body: () async throws -> ToolReply) async -> ToolReply {
-        if let refusal = await broker.admit(authorizer) { return refusal }
+    static func run<Call>(_ authorizer: any Authorizer, broker: PermissionBroker, usage: String,
+                          parse: () throws -> Call, perform: (Call) async throws -> ToolReply) async -> ToolReply {
+        let call: Call
         do {
-            return try await body()
-        } catch let refusal as Arguments.Refusal {
-            return .usage("topo: \(refusal)\n\n\(usage)\n")
-        } catch let failure as ToolFailure {
-            return ToolReply(status: failure.status, text: "topo: \(failure.text)\n")
+            call = try parse()
         } catch {
-            return .failed("topo: \(error.localizedDescription)\n")
+            return reply(to: error, usage: usage)
+        }
+        if let refusal = await broker.admit(authorizer) { return refusal }
+        // Cancelled is the service's bound passed while the prompt was up: the caller has been
+        // told the call timed out, so it does nothing now, whatever the person chose. The choice
+        // stands for the next call.
+        guard !Task.isCancelled else { return late }
+        do {
+            return try await perform(call)
+        } catch {
+            return reply(to: error, usage: usage)
+        }
+    }
+
+    /// What a cancelled call answers. Nobody reads it: the service answered status 4 at its bound.
+    static let late = ToolReply(status: ToolReply.timedOut, text: "topo: cancelled at the bound; nothing was done\n")
+
+    private static func reply(to error: any Error, usage: String) -> ToolReply {
+        switch error {
+        case let refusal as Arguments.Refusal: .usage("topo: \(refusal)\n\n\(usage)\n")
+        case let misuse as Misuse: .usage("topo: \(misuse.text)\n\n\(usage)\n")
+        case let failure as ToolFailure: ToolReply(status: failure.status, text: "topo: \(failure.text)\n")
+        case is CancellationError: late
+        default: .failed("topo: \(error.localizedDescription)\n")
         }
     }
 
@@ -67,5 +93,56 @@ enum PhoneTool {
 
     static func lines(_ lines: [String], none: String) -> String {
         lines.isEmpty ? none + "\n" : lines.joined(separator: "\n") + "\n"
+    }
+}
+
+/// A framework object whose calls block — EventKit's fetches and saves, Contacts' fetches —
+/// reachable only through this, whose closures run on a serial queue of its own and never on the
+/// cooperative pool.
+final class Confined<Value>: @unchecked Sendable {
+    let queue: DispatchQueue
+    private let value: Value
+
+    init(_ value: Value, label: String) {
+        self.value = value
+        queue = DispatchQueue(label: label)
+    }
+
+    /// `work` on the queue. A call cancelled before the queue reaches it never runs `work`;
+    /// `work` calls `cancellation.check()` right before it changes anything, so a call cancelled
+    /// while it waited changes nothing. A save already under way when the call is cancelled
+    /// finishes.
+    func run<T: Sendable>(_ work: @escaping @Sendable (Value, Cancellation) throws -> T) async throws -> T {
+        let cancellation = Cancellation()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    continuation.resume(with: Result {
+                        try cancellation.check()
+                        return try work(self.value, cancellation)
+                    })
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    /// `body` on the queue, for the framework's calls that answer on a block of their own (a
+    /// fetch, a permission prompt) rather than returning.
+    func async(_ body: @escaping @Sendable (Value) -> Void) {
+        queue.async { body(self.value) }
+    }
+}
+
+/// Whether the call a `Confined` closure runs for has been cancelled.
+final class Cancellation: Sendable {
+    private let cancelled = OSAllocatedUnfairLock(initialState: false)
+
+    func cancel() { cancelled.withLock { $0 = true } }
+
+    /// Throws `CancellationError` once the call is cancelled.
+    func check() throws {
+        if cancelled.withLock({ $0 }) { throw CancellationError() }
     }
 }

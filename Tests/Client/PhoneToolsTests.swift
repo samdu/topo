@@ -1,5 +1,7 @@
 import Foundation
+import os
 import TopoTools
+import UserNotifications
 import XCTest
 
 @testable import Topo
@@ -26,6 +28,29 @@ private final class Permission: Authorizer, @unchecked Sendable {
             standing = answer ? .granted : .denied
         }
         return answer
+    }
+}
+
+/// A permission never asked for, whose prompt stays up until the test answers it.
+private final class HeldPrompt: Authorizer, @unchecked Sendable {
+    let name = "Reminders"
+    private let lock = NSLock()
+    private var standing = Access.undetermined
+    private var answer: CheckedContinuation<Bool, Never>?
+
+    var isUp: Bool { lock.withLock { answer != nil } }
+    func access() async -> Access { lock.withLock { standing } }
+    func request() async -> Bool {
+        await withCheckedContinuation { continuation in lock.withLock { answer = continuation } }
+    }
+
+    func allow() {
+        let held = lock.withLock {
+            standing = .granted
+            defer { answer = nil }
+            return answer
+        }
+        held?.resume(returning: true)
     }
 }
 
@@ -145,6 +170,98 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(refused.prompts, 1)
     }
 
+    /// Codex on #214: a call no tool takes is refused before any prompt, so it never raises one.
+    func testACallTheToolDoesNotTakeAsksNothing() async {
+        let reminders = Permission("Reminders", .undetermined), calendars = Permission("Calendars", .undetermined)
+        let notifications = Permission("Notifications", .undetermined), contacts = Permission("Contacts", .undetermined)
+        let location = Permission("Location", .undetermined)
+        let broker = PermissionBroker()
+        let calls: [(any Tool, [String])] = [
+            (RemindersTool(store: Reminders(), authorizer: reminders, broker: broker), ["delete", "r1"]),
+            (RemindersTool(store: Reminders(), authorizer: reminders, broker: broker), ["add", "x", "--due", "tomorrow"]),
+            (CalendarTool(store: Events(), authorizer: calendars, broker: broker), ["--from", "2026-09-28", "--to", "2026-09-27"]),
+            (NotifyTool(scheduler: Scheduler(), authorizer: notifications, broker: broker), ["x", "--in", "soon"]),
+            (ContactsTool(directory: Directory(), authorizer: contacts, broker: broker), ["delete", "all"]),
+            (LocationTool(locator: Place(at: noon), authorizer: location, broker: broker), ["precise"]),
+        ]
+        for (tool, arguments) in calls {
+            let reply = await tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(tool.name) \(arguments): \(reply.text)")
+        }
+        XCTAssertEqual([reminders, calendars, notifications, contacts, location].map(\.prompts), [0, 0, 0, 0, 0])
+    }
+
+    /// Codex on #214: the service answers status 4 at its bound by cancelling the call. A prompt
+    /// allowed after that stands for the next call, and this one adds nothing, so a retry never
+    /// makes a second reminder.
+    func testACallCancelledWhileItsPromptIsUpDoesNothingWhenThePersonAllows() async throws {
+        let store = Reminders()
+        let prompt = HeldPrompt()
+        let tool = RemindersTool(store: store, authorizer: prompt, broker: PermissionBroker())
+        let call = Task { await tool.run(["add", "Milk"]) }
+        for _ in 0..<500 where !prompt.isUp { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(prompt.isUp)
+        call.cancel()
+        prompt.allow()
+        let reply = await call.value
+        XCTAssertEqual(reply.status, ToolReply.timedOut, reply.text)
+        XCTAssertTrue(store.records.isEmpty)
+        let retry = await tool.run(["add", "Milk"])
+        XCTAssertEqual(retry.status, ToolReply.ok, retry.text)
+        XCTAssertEqual(store.records.map(\.title), ["Milk"])
+    }
+
+    // MARK: Confined
+
+    func testConfinedWorkRunsOnItsOwnQueue() async throws {
+        let confined = Confined("the store", label: "test.confined")
+        let key = DispatchSpecificKey<Int>()
+        confined.queue.setSpecific(key: key, value: 1)
+        let seen = try await confined.run { value, _ in (value, DispatchQueue.getSpecific(key: key)) }
+        XCTAssertEqual(seen.0, "the store")
+        XCTAssertEqual(seen.1, 1)
+    }
+
+    /// A call cancelled at the bound before the queue reached it never runs.
+    func testConfinedWorkCancelledBeforeTheQueueReachesItNeverRuns() async throws {
+        let confined = Confined((), label: "test.confined")
+        let hold = DispatchSemaphore(value: 0)
+        confined.queue.async { hold.wait() }
+        let ran = OSAllocatedUnfairLock(initialState: false)
+        let call = Task { try await confined.run { _, _ in ran.withLock { $0 = true } } }
+        try await Task.sleep(for: .milliseconds(50))
+        call.cancel()
+        hold.signal()
+        do {
+            try await call.value
+            XCTFail("a cancelled call ran")
+        } catch is CancellationError {}
+        XCTAssertFalse(ran.withLock { $0 })
+    }
+
+    /// A call cancelled while its work was under way stops at the check before it saves.
+    func testConfinedWorkCancelledWhileItRunsSavesNothing() async throws {
+        let confined = Confined((), label: "test.confined")
+        let started = OSAllocatedUnfairLock(initialState: false), saved = OSAllocatedUnfairLock(initialState: false)
+        let proceed = DispatchSemaphore(value: 0)
+        let call = Task {
+            try await confined.run { _, cancellation in
+                started.withLock { $0 = true }
+                proceed.wait()
+                try cancellation.check()
+                saved.withLock { $0 = true }
+            }
+        }
+        for _ in 0..<500 where !started.withLock({ $0 }) { try await Task.sleep(for: .milliseconds(10)) }
+        call.cancel()
+        proceed.signal()
+        do {
+            try await call.value
+            XCTFail("a cancelled call saved")
+        } catch is CancellationError {}
+        XCTAssertFalse(saved.withLock { $0 })
+    }
+
     // MARK: Reminders
 
     func testRemindersAddListAndMarkDone() async {
@@ -180,6 +297,47 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(list.status, ToolReply.failed)
     }
 
+    /// Codex on #214: `--notes --done` is `--notes` missing its value, not a note reading "--done".
+    func testAnOptionIsNeverTheValueOfTheOneBeforeIt() async {
+        let store = Reminders()
+        let tool = RemindersTool(store: store, authorizer: Permission(), broker: PermissionBroker())
+        let reply = await tool.run(["add", "Milk", "--notes", "--done"])
+        XCTAssertEqual(reply.status, ToolReply.usage, reply.text)
+        XCTAssertTrue(reply.text.hasPrefix("topo: --notes needs a value\n"), reply.text)
+        XCTAssertFalse(store.touched)
+    }
+
+    /// Codex on #214: an option one form takes is refused by the others, not ignored.
+    func testAnOptionForAnotherFormIsRefusedNotIgnored() async {
+        let store = Reminders()
+        let reminders = RemindersTool(store: store, authorizer: Permission(), broker: PermissionBroker())
+        for arguments in [["add", "Milk", "--due-before", "2026-09-28"], ["add", "Milk", "--done"], ["--due", "2026-09-28"],
+                          ["--notes", "x"], ["lists", "--list", "Home"], ["done", "r1", "--notes", "x"], ["list", "extra"]] {
+            let reply = await reminders.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
+        }
+        XCTAssertFalse(store.touched)
+        let refused = await reminders.run(["add", "Milk", "--due-before", "2026-09-28"])
+        XCTAssertTrue(refused.text.hasPrefix("topo: reminders add takes no --due-before\n"), refused.text)
+
+        let events = Events()
+        let calendar = CalendarTool(store: events, authorizer: Permission("Calendars"), broker: PermissionBroker())
+        for arguments in [["--start", "2026-09-28"], ["--all-day"], ["calendars", "--from", "2026-09-28"],
+                          ["add", "x", "--start", "2026-09-28", "--end", "2026-09-28", "--from", "2026-09-28"]] {
+            let reply = await calendar.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
+        }
+        XCTAssertNil(events.asked)
+        XCTAssertTrue(events.records.isEmpty)
+
+        let scheduler = Scheduler()
+        let notify = NotifyTool(scheduler: scheduler, authorizer: Permission("Notifications"), broker: PermissionBroker())
+        for arguments in [["list", "--in", "5m"], ["cancel", "topo-abc", "--at", "2026-09-28T10:00"]] {
+            let reply = await notify.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
+        }
+    }
+
     // MARK: Calendar
 
     func testCalendarDefaultsToTheWeekAheadAndAdds() async {
@@ -194,20 +352,55 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(added.status, ToolReply.ok, added.text)
         XCTAssertTrue(added.text.hasPrefix("added: e1 | Dentist | "), added.text)
         XCTAssertTrue(added.text.hasSuffix("| Home | at Valencia St\n"), added.text)
-        let day = await tool.run(["add", "Helen visits", "--start", "2026-09-29", "--end", "2026-09-30"])
-        XCTAssertTrue(day.text.contains("all day 2026-09-29"), day.text)
+        let days = await tool.run(["add", "Helen visits", "--start", "2026-09-29", "--end", "2026-09-30"])
+        XCTAssertTrue(days.text.hasPrefix("added: e2 | Helen visits | all day 2026-09-29 to 2026-09-30 | "), days.text)
         XCTAssertTrue(store.records[1].allDay)
         let listed = await tool.run(["--from", "2026-09-28", "--to", "2026-10-01"])
         XCTAssertEqual(listed.text.split(separator: "\n").count, 2)
     }
 
     func testCalendarRefusesABackwardsOrEndlessSpan() async {
-        let tool = CalendarTool(store: Events(), authorizer: Permission("Calendars"), broker: PermissionBroker())
+        let store = Events()
+        let tool = CalendarTool(store: store, authorizer: Permission("Calendars"), broker: PermissionBroker())
         for arguments in [["--from", "2026-09-28", "--to", "2026-09-27"], ["--from", "2026-01-01", "--to", "2028-01-01"],
-                          ["add", "x", "--start", "2026-09-28T10:00"], ["add", "x", "--start", "2026-09-28T10:00", "--end", "2026-09-28T09:00"]] {
+                          ["add", "x", "--start", "2026-09-28T10:00"], ["add", "x", "--start", "2026-09-28T10:00", "--end", "2026-09-28T09:00"],
+                          ["add", "x", "--start", "2026-09-30", "--end", "2026-09-29"],
+                          ["add", "x", "--all-day", "--start", "2026-09-30T09:00", "--end", "2026-09-29T23:00"]] {
             let reply = await tool.run(arguments)
             XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments)")
         }
+        XCTAssertTrue(store.records.isEmpty)
+    }
+
+    /// Codex on #214: the most is a calendar year, not 366 days. 2026 is not a leap year, so 366
+    /// days from its first day is a day past a year.
+    func testCalendarsLongestSpanIsACalendarYear() async {
+        let store = Events()
+        let tool = CalendarTool(store: store, authorizer: Permission("Calendars"), broker: PermissionBroker())
+        let over = await tool.run(["--from", "2026-01-01", "--to", "2027-01-02"])
+        XCTAssertEqual(over.status, ToolReply.usage, over.text)
+        XCTAssertNil(store.asked)
+        let year = await tool.run(["--from", "2026-01-01", "--to", "2027-01-01"])
+        XCTAssertEqual(year.status, ToolReply.ok, year.text)
+        let leap = await tool.run(["--from", "2027-03-01", "--to", "2028-03-01"])
+        XCTAssertEqual(leap.status, ToolReply.ok, leap.text)
+    }
+
+    /// Codex on #214: an all-day --end names the last day, so one day is --start and --end the
+    /// same day, and the store is given midnight to the midnight after it — never a zero-length
+    /// event said as ending the day before it starts.
+    func testAnAllDayEventRunsThroughItsEndDay() async throws {
+        let store = Events()
+        let tool = CalendarTool(store: store, authorizer: Permission("Calendars"), broker: PermissionBroker())
+        let one = await tool.run(["add", "Holiday", "--start", "2026-09-29", "--end", "2026-09-29"])
+        XCTAssertEqual(one.status, ToolReply.ok, one.text)
+        XCTAssertEqual(one.text, "added: e1 | Holiday | all day 2026-09-29 | Home\n")
+        let record = try XCTUnwrap(store.records.first)
+        let days = Calendar.current
+        XCTAssertEqual(record.start, try XCTUnwrap(ToolDates.read("2026-09-29")).date)
+        XCTAssertEqual(record.end, days.date(byAdding: .day, value: 1, to: record.start))
+        let flagged = await tool.run(["add", "Trip", "--all-day", "--start", "2026-10-02T09:00", "--end", "2026-10-04T08:00"])
+        XCTAssertEqual(flagged.text, "added: e2 | Trip | all day 2026-10-02 to 2026-10-04 | Home\n")
     }
 
     // MARK: Notify
@@ -254,6 +447,21 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(reply14.status, ToolReply.usage)
     }
 
+    /// Codex on #214: the adapter sends a phone number to Contacts' phone matcher and an address
+    /// to its email matcher, not both to the name matcher the fake stands for. Whether Contacts
+    /// then finds the person is the device's to show.
+    func testContactsSearchSendsNumbersAndAddressesToTheirMatchers() {
+        for query in ["+44 7700 900123", "07700 900123", "(415) 555-0100", "415-555-0100", "+447700900123"] {
+            XCTAssertEqual(ContactStoreDirectory.match(for: query), .phone, query)
+        }
+        for query in ["helen@example.com", "Helen@Example.COM"] {
+            XCTAssertEqual(ContactStoreDirectory.match(for: query), .email, query)
+        }
+        for query in ["helen", "Helen du Rose", "Flat 4", "Apartment 12B"] {
+            XCTAssertEqual(ContactStoreDirectory.match(for: query), .name, query)
+        }
+    }
+
     func testLocationSaysHowGoodTheFixIs() async {
         let now = noon
         let tool = LocationTool(locator: Place(at: now.addingTimeInterval(-3)), authorizer: Permission("Location"),
@@ -278,5 +486,16 @@ final class PhoneToolsTests: XCTestCase {
         _ = ContactsTool(directory: Directory(), authorizer: permissions[3], broker: broker)
         _ = LocationTool(locator: Place(at: noon), authorizer: permissions[4], broker: broker)
         XCTAssertEqual(permissions.map(\.prompts), [0, 0, 0, 0, 0])
+    }
+
+    /// Codex on #214: a notification that comes due with the app in front is shown, which iOS does
+    /// only when the app's notification delegate says so. The host app's launch has run, so the
+    /// delegate is what the running app installed. That iOS then draws the banner is the device's
+    /// to show.
+    @MainActor
+    func testANotificationDueWithTheAppInFrontIsShown() throws {
+        let delegate = try XCTUnwrap(UNUserNotificationCenter.current().delegate as? TopoAppDelegate)
+        XCTAssertTrue(delegate.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:))))
+        XCTAssertEqual(TopoAppDelegate.inFront, [.banner, .list, .sound])
     }
 }

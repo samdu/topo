@@ -29,8 +29,9 @@ struct LocationTool: Tool {
     let usage = "topo location                       latitude, longitude, accuracy, the fix's age, and a place name"
 
     func run(_ arguments: [String]) async -> ToolReply {
-        await PhoneTool.run(authorizer, broker: broker, usage: usage) {
-            guard arguments.isEmpty else { return .usage("\(usage)\n") }
+        await PhoneTool.run(authorizer, broker: broker, usage: usage, parse: {
+            guard arguments.isEmpty else { throw Misuse("location takes no arguments") }
+        }) { _ in
             let fix = try await locator.fix()
             var lines = [
                 String(format: "latitude %.5f", fix.latitude),

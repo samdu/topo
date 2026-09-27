@@ -34,20 +34,24 @@ struct ContactsTool: Tool {
     topo contacts show ID               everything Topo can read of one: phones, emails, birthday, addresses
     """
 
+    enum Call: Equatable {
+        case search(String)
+        case show(id: String)
+    }
+
     func run(_ arguments: [String]) async -> ToolReply {
-        await PhoneTool.run(authorizer, broker: broker, usage: usage) {
-            let parsed = try Arguments(arguments)
-            switch (parsed.words.first, parsed.words.count) {
-            case ("search", 2) where !parsed.words[1].trimmingCharacters(in: .whitespaces).isEmpty:
-                let found = try await directory.search(parsed.words[1])
+        await PhoneTool.run(authorizer, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
+            switch call {
+            case let .search(query):
+                let found = try await directory.search(query)
                 var lines = found.prefix(Self.shown).map {
                     PhoneTool.line([$0.id, $0.name, $0.organization, $0.phones.first, $0.emails.first])
                 }
                 if found.count > Self.shown { lines.append("and \(found.count - Self.shown) more; search more narrowly") }
-                return .ok(PhoneTool.lines(lines, none: "nobody found for \(parsed.words[1])"))
-            case ("show", 2):
-                guard let record = try await directory.contact(id: parsed.words[1]) else {
-                    throw ToolFailure("no contact with the id \(parsed.words[1])")
+                return .ok(PhoneTool.lines(lines, none: "nobody found for \(query)"))
+            case let .show(id):
+                guard let record = try await directory.contact(id: id) else {
+                    throw ToolFailure("no contact with the id \(id)")
                 }
                 var lines = ["name: \(record.name)"]
                 if let organization = record.organization { lines.append("organization: \(organization)") }
@@ -56,9 +60,20 @@ struct ContactsTool: Tool {
                 if let birthday = record.birthday { lines.append("birthday: \(birthday)") }
                 lines += record.addresses.map { "address: \($0)" }
                 return .ok(lines.joined(separator: "\n") + "\n")
-            default:
-                return .usage("\(usage)\n")
             }
+        }
+    }
+
+    /// The call the arguments make, or why they make none: nothing here needs the permission.
+    func parse(_ arguments: [String]) throws -> Call {
+        let parsed = try Arguments(arguments)
+        switch (parsed.words.first, parsed.words.count) {
+        case ("search", 2) where !parsed.words[1].trimmingCharacters(in: .whitespaces).isEmpty:
+            return .search(parsed.words[1])
+        case ("show", 2):
+            return .show(id: parsed.words[1])
+        default:
+            throw Misuse("contacts takes search QUERY or show ID")
         }
     }
 }
@@ -81,11 +96,10 @@ struct ContactsAuthorizer: Authorizer {
     }
 }
 
-/// `CNContactStore`'s fetches are synchronous, so they run on a queue of their own. No note is
-/// read: the note key needs an entitlement.
-final class ContactStoreDirectory: ContactDirectory, @unchecked Sendable {
-    private let store = CNContactStore()
-    private let queue = DispatchQueue(label: "zone.hexagon.topo.contacts")
+/// `CNContactStore`'s fetches are synchronous, so the store is reachable only through `Confined`,
+/// on a queue of its own. No note is read: the note key needs an entitlement.
+final class ContactStoreDirectory: ContactDirectory, Sendable {
+    private let confined = Confined(CNContactStore(), label: "zone.hexagon.topo.contacts")
 
     private static var keys: [CNKeyDescriptor] { [
         CNContactFormatter.descriptorForRequiredKeys(for: .fullName),
@@ -94,31 +108,38 @@ final class ContactStoreDirectory: ContactDirectory, @unchecked Sendable {
         CNContactPostalAddressesKey as CNKeyDescriptor,
     ] }
 
-    private func off<T: Sendable>(_ work: @escaping @Sendable () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async { continuation.resume(with: Result { try work() }) }
+    /// What a search query is read as, and so which of Contacts' matchers it goes to.
+    enum Match: Equatable {
+        case email, phone, name
+    }
+
+    /// An email address has an `@`; a phone number is mostly digits, at least four of them, with
+    /// its spaces, `+`, dashes and brackets as written; anything else is a name.
+    static func match(for query: String) -> Match {
+        let digits = query.filter(\.isNumber)
+        if query.contains("@") { return .email }
+        if digits.count >= 4, digits.count * 2 >= query.filter({ !$0.isWhitespace }).count { return .phone }
+        return .name
+    }
+
+    static func predicate(for query: String) -> NSPredicate {
+        switch match(for: query) {
+        case .email: CNContact.predicateForContacts(matchingEmailAddress: query)
+        case .phone: CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: query))
+        case .name: CNContact.predicateForContacts(matchingName: query)
         }
     }
 
     func search(_ query: String) async throws -> [ContactRecord] {
-        try await off {
-            let predicate: NSPredicate
-            let digits = query.filter(\.isNumber)
-            if query.contains("@") {
-                predicate = CNContact.predicateForContacts(matchingEmailAddress: query)
-            } else if digits.count >= 4, digits.count * 2 >= query.filter({ !$0.isWhitespace }).count {
-                predicate = CNContact.predicateForContacts(matching: CNPhoneNumber(stringValue: query))
-            } else {
-                predicate = CNContact.predicateForContacts(matchingName: query)
-            }
-            return try self.store.unifiedContacts(matching: predicate, keysToFetch: Self.keys).map(Self.record)
+        try await confined.run { store, _ in
+            try store.unifiedContacts(matching: Self.predicate(for: query), keysToFetch: Self.keys).map(Self.record)
         }
     }
 
     func contact(id: String) async throws -> ContactRecord? {
-        try await off {
-            let found = try self.store.unifiedContacts(matching: CNContact.predicateForContacts(withIdentifiers: [id]),
-                                                       keysToFetch: Self.keys)
+        try await confined.run { store, _ in
+            let found = try store.unifiedContacts(matching: CNContact.predicateForContacts(withIdentifiers: [id]),
+                                                  keysToFetch: Self.keys)
             return found.first.map(Self.record)
         }
     }

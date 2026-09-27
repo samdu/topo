@@ -23,8 +23,11 @@ final class TopoAppDelegate: NSObject, UIApplicationDelegate, UNUserNotification
     /// come here.
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification)
         async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+        Self.inFront
     }
+
+    /// How a notification that comes due with the app in front is shown.
+    nonisolated static let inFront: UNNotificationPresentationOptions = [.banner, .list, .sound]
 
     /// Touching `ModelDownloads.shared` recreates the session under its identifier, which is what
     /// reconnects the delegate; the finished files are then delivered to it and admitted, and the

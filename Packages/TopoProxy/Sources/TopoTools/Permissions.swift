@@ -39,8 +39,7 @@ public actor PermissionBroker {
         case .denied:
             return Self.refusal(authorizer.name)
         case .restricted:
-            return ToolReply(status: ToolReply.denied, text:
-                "topo: \(authorizer.name) is restricted on this phone (Screen Time or a device profile), so Topo cannot use it.\n")
+            return Self.restricted(authorizer.name)
         case .undetermined:
             let prompt: Task<Bool, Never>
             if let pending = asking[authorizer.name] {
@@ -53,6 +52,13 @@ public actor PermissionBroker {
             asking[authorizer.name] = nil
             return granted ? nil : Self.refusal(authorizer.name)
         }
+    }
+
+    /// Restricted is lifted where it was set, not under Topo's own settings.
+    static func restricted(_ name: String) -> ToolReply {
+        let item = name == "Location" ? "Location Services" : name
+        return ToolReply(status: ToolReply.denied, text:
+            "topo: \(name) is restricted on this phone, so Topo cannot use it. A Screen Time restriction is lifted in the Settings app, under Screen Time › Content & Privacy Restrictions › \(item), by whoever holds the Screen Time passcode; a device profile's, by whoever manages the phone (Settings › General › VPN & Device Management). Ask the person, rather than trying again.\n")
     }
 
     static func refusal(_ name: String) -> ToolReply {

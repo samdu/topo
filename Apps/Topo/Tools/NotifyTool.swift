@@ -39,41 +39,62 @@ struct NotifyTool: Tool {
     DATE is 2026-09-27T14:30 (the phone's time zone) or 2026-09-27T14:30:00-07:00.
     """
 
+    enum Call: Equatable {
+        case list
+        case cancel(id: String)
+        /// Due at `at`, or `after` seconds from when it is scheduled, or now when neither.
+        case schedule(title: String, body: String?, at: Date?, after: TimeInterval?)
+    }
+
     func run(_ arguments: [String]) async -> ToolReply {
-        await PhoneTool.run(authorizer, broker: broker, usage: usage) {
-            let parsed = try Arguments(arguments, options: ["at", "in"])
-            switch parsed.words.first {
-            case "list" where parsed.words.count == 1:
+        await PhoneTool.run(authorizer, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
+            switch call {
+            case .list:
                 let lines = await scheduler.pending().filter { $0.id.hasPrefix(Self.prefix) }
                     .sorted { ($0.due ?? .distantFuture) < ($1.due ?? .distantFuture) }
                     .map { PhoneTool.line([$0.id, $0.title, $0.due.map { "at " + ToolDates.write($0) }]) }
                 return .ok(PhoneTool.lines(lines, none: "nothing pending"))
-            case "cancel" where parsed.words.count == 2:
-                let id = parsed.words[1]
+            case let .cancel(id):
                 guard id.hasPrefix(Self.prefix), await scheduler.cancel(id: id) else {
                     throw ToolFailure("no pending notification of Topo's with the id \(id)")
                 }
                 return .ok("cancelled: \(id)\n")
-            case let title? where (1...2).contains(parsed.words.count) && !title.isEmpty:
-                guard parsed.options["at"] == nil || parsed.options["in"] == nil else {
-                    return .usage("topo notify takes --at or --in, not both\n\n\(usage)\n")
-                }
-                var due = now().addingTimeInterval(1)
-                if let at = try PhoneTool.date(parsed.options["at"], "--at") {
-                    guard at.date > now() else { throw ToolFailure("--at \(parsed.options["at"]!) has passed", status: ToolReply.usage) }
-                    due = at.date
-                } else if let span = parsed.options["in"] {
-                    guard let seconds = ToolDates.duration(span) else {
-                        throw ToolFailure("--in \(span) is not a span; write it as 90s, 15m, 2h or 1d", status: ToolReply.usage)
-                    }
-                    due = now().addingTimeInterval(seconds)
-                }
+            case let .schedule(title, body, at, after):
+                let due = at ?? now().addingTimeInterval(after ?? 1)
                 let id = makeID()
-                try await scheduler.schedule(id: id, title: title, body: parsed.words.count == 2 ? parsed.words[1] : nil, at: due)
+                try Task.checkCancellation()
+                try await scheduler.schedule(id: id, title: title, body: body, at: due)
                 return .ok("scheduled: " + PhoneTool.line([id, title, "at " + ToolDates.write(due)]) + "\n")
-            default:
-                return .usage("\(usage)\n")
             }
+        }
+    }
+
+    /// The call the arguments make, or why they make none: nothing here needs the permission.
+    func parse(_ arguments: [String]) throws -> Call {
+        let parsed = try Arguments(arguments, options: ["at", "in"])
+        switch parsed.words.first {
+        case "list" where parsed.words.count == 1:
+            try parsed.only([], for: "notify list")
+            return .list
+        case "cancel" where parsed.words.count == 2:
+            try parsed.only([], for: "notify cancel")
+            return .cancel(id: parsed.words[1])
+        case let title? where (1...2).contains(parsed.words.count) && !title.isEmpty:
+            guard parsed.options["at"] == nil || parsed.options["in"] == nil else { throw Misuse("notify takes --at or --in, not both") }
+            let body = parsed.words.count == 2 ? parsed.words[1] : nil
+            if let at = try PhoneTool.date(parsed.options["at"], "--at") {
+                guard at.date > now() else { throw ToolFailure("--at \(parsed.options["at"]!) has passed", status: ToolReply.usage) }
+                return .schedule(title: title, body: body, at: at.date, after: nil)
+            }
+            if let span = parsed.options["in"] {
+                guard let seconds = ToolDates.duration(span) else {
+                    throw ToolFailure("--in \(span) is not a span; write it as 90s, 15m, 2h or 1d", status: ToolReply.usage)
+                }
+                return .schedule(title: title, body: body, at: nil, after: seconds)
+            }
+            return .schedule(title: title, body: body, at: nil, after: nil)
+        default:
+            throw Misuse("notify takes a title, list or cancel")
         }
     }
 }
