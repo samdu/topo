@@ -27,20 +27,23 @@ struct HomeCharacteristic: Sendable, Equatable {
     var format: String
     var readable: Bool
     var writable: Bool
-    var minimum: Double?
-    var maximum: Double?
-    var step: Double?
-    /// The only values it takes, when HomeKit names them.
-    var validValues: [Int]?
+    /// The bounds, step and valid values are `Decimal`, which holds a whole number of any format
+    /// exactly: a `Double` would take 2^53 + 1 for 2^53.
+    var minimum: Decimal?
+    var maximum: Decimal?
+    var step: Decimal?
+    /// The only values it takes, when HomeKit names them: a condition on top of the range and step.
+    var validValues: [Decimal]?
     var maxLength: Int?
     var units: String?
     /// HomeKit's cached value, nil when it holds none.
     var value: HomeValue?
 
-    /// Integer formats, and the bounds of each where the metadata names none.
-    static let integerBounds: [String: ClosedRange<Double>] = [
-        "int": Double(Int32.min)...Double(Int32.max), "uint8": 0...Double(UInt8.max),
-        "uint16": 0...Double(UInt16.max), "uint32": 0...Double(UInt32.max), "uint64": 0...Double(Int.max),
+    /// Integer formats, and the bounds of each: a `uint64` past `Int.max` is one `topo home` neither
+    /// reads nor writes.
+    static let integerBounds: [String: ClosedRange<Decimal>] = [
+        "int": Decimal(Int32.min)...Decimal(Int32.max), "uint8": 0...Decimal(UInt8.max),
+        "uint16": 0...Decimal(UInt16.max), "uint32": 0...Decimal(UInt32.max), "uint64": 0...Decimal(Int.max),
     ]
 
     var isInteger: Bool { Self.integerBounds[format] != nil }
@@ -48,21 +51,54 @@ struct HomeCharacteristic: Sendable, Equatable {
     var settable: Bool { writable && !HomeNames.names.contains(name) }
     /// A format `topo home` reads and writes; the others (data, TLV8) are shown by their format alone.
     var isPlain: Bool { isInteger || ["bool", "float", "string"].contains(format) }
-    var lower: Double? { minimum ?? Self.integerBounds[format]?.lowerBound }
-    var upper: Double? { maximum ?? Self.integerBounds[format]?.upperBound }
+    /// The tighter of the metadata's bound and the format's.
+    var lower: Decimal? {
+        let bound = Self.integerBounds[format]?.lowerBound
+        guard let minimum else { return bound }
+        return bound.map { Swift.max($0, minimum) } ?? minimum
+    }
+    var upper: Decimal? {
+        let bound = Self.integerBounds[format]?.upperBound
+        guard let maximum else { return bound }
+        return bound.map { Swift.min($0, maximum) } ?? maximum
+    }
 
-    /// What it takes, in words: "an integer from 0 to 100 in steps of 1 (%)".
+    /// Whether `number` is one it takes: within the bounds, on the step counted from the lower
+    /// bound, and among the valid values when HomeKit names some. A switch is judged as 0 and 1.
+    func takes(_ number: Decimal) -> Bool {
+        if let lower, number < lower { return false }
+        if let upper, number > upper { return false }
+        if let step, step > 0 {
+            var steps = (number - (lower ?? 0)) / step, whole = Decimal()
+            NSDecimalRound(&whole, &steps, 0, .plain)
+            if whole != steps { return false }
+        }
+        if let validValues, !validValues.contains(number) { return false }
+        return true
+    }
+
+    /// What it takes, in words: "a whole number from 0 to 100 in steps of 1 (%)". Where HomeKit
+    /// names valid values it says them too, and only those the range and step also allow, so a
+    /// refusal never names the value it refused as one it takes.
     var range: String {
         var text: String
         switch format {
-        case "bool": return "on or off (true or false)"
+        case "bool":
+            let allowed = [(Decimal(0), "off"), (Decimal(1), "on")].filter { takes($0.0) }.map(\.1)
+            return allowed.count == 2 ? "on or off (true or false)"
+                : allowed.isEmpty ? "on or off, though HomeKit allows neither here" : "only \(allowed[0]) here"
         case "string": return "text" + (maxLength.map { " of at most \($0) characters" } ?? "")
         case "float": text = "a number"
         default: text = isInteger ? "a whole number" : "a \(format) value"
         }
-        if let validValues { return text + " of " + validValues.map(String.init).joined(separator: ", ") + unitsNote }
-        if let lower, let upper { text += " from \(Self.number(lower)) to \(Self.number(upper))" }
-        if let step, step > 0 { text += " in steps of \(Self.number(step))" }
+        if let lower, let upper { text += " from \(lower) to \(upper)" }
+        if let step, step > 0 { text += " in steps of \(step)" }
+        if let validValues {
+            let allowed = validValues.filter(takes).map { "\($0)" }
+            text += allowed.isEmpty ? ", though none of the values HomeKit names for it fits that"
+                : ", and of those only " + (allowed.count == 1 ? allowed[0]
+                    : allowed.dropLast().joined(separator: ", ") + " or " + allowed.last!)
+        }
         return text + unitsNote
     }
 
@@ -436,37 +472,30 @@ struct HomeTool: Tool {
         let takes = "takes \(characteristic.range), not \(text)"
         switch characteristic.format {
         case "bool":
+            let value: Bool
             switch text.lowercased() {
-            case "on", "true", "1": return .bool(true)
-            case "off", "false", "0": return .bool(false)
+            case "on", "true", "1": value = true
+            case "off", "false", "0": value = false
             default: throw refuse(takes)
             }
+            guard characteristic.takes(value ? 1 : 0) else { throw refuse(takes) }
+            return .bool(value)
         case "string":
+            // Length is the only bound HomeKit's metadata gives a string.
             if let maxLength = characteristic.maxLength, text.count > maxLength { throw refuse(takes) }
             return .text(text)
         case "float":
-            guard let number = Double(text), number.isFinite else { throw refuse(takes) }
-            guard fits(number, characteristic) else { throw refuse(takes) }
+            guard let number = Double(text), number.isFinite, let exact = Decimal(string: text),
+                  characteristic.takes(exact) else { throw refuse(takes) }
             return .number(number)
         default:
             guard characteristic.isInteger else { throw refuse("is a \(characteristic.format) value, which topo home does not write") }
             if Int(text) == nil, UInt64(text) != nil {
                 throw refuse("takes a value above \(Int.max), which topo home does not write")
             }
-            guard let number = Int(text), fits(Double(number), characteristic) else { throw refuse(takes) }
+            guard let number = Int(text), characteristic.takes(Decimal(number)) else { throw refuse(takes) }
             return .int(number)
         }
-    }
-
-    private static func fits(_ number: Double, _ characteristic: HomeCharacteristic) -> Bool {
-        if let validValues = characteristic.validValues, !validValues.contains(where: { Double($0) == number }) { return false }
-        if let lower = characteristic.lower, number < lower { return false }
-        if let upper = characteristic.upper, number > upper { return false }
-        if let step = characteristic.step, step > 0 {
-            let steps = (number - (characteristic.lower ?? 0)) / step
-            if abs(steps - steps.rounded()) > 1e-6 { return false }
-        }
-        return true
     }
 }
 
@@ -579,8 +608,8 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
             format: format,
             readable: characteristic.properties.contains(HMCharacteristicPropertyReadable),
             writable: characteristic.properties.contains(HMCharacteristicPropertyWritable),
-            minimum: metadata?.minimumValue?.doubleValue, maximum: metadata?.maximumValue?.doubleValue,
-            step: metadata?.stepValue?.doubleValue, validValues: metadata?.validValues?.map(\.intValue),
+            minimum: metadata?.minimumValue?.decimalValue, maximum: metadata?.maximumValue?.decimalValue,
+            step: metadata?.stepValue?.decimalValue, validValues: metadata?.validValues?.map(\.decimalValue),
             maxLength: metadata?.maxLength?.intValue, units: metadata?.units.map(HomeNames.units),
             value: value(characteristic.value, format: format))
     }

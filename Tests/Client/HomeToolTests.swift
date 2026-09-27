@@ -62,8 +62,8 @@ final class HomeToolTests: XCTestCase {
     private static let lockID = "9B7E3D10-0000-4000-8000-000000000003"
 
     private static func characteristic(_ id: String, _ name: String, _ format: String = "int", writable: Bool = true,
-                                       min: Double? = nil, max: Double? = nil, step: Double? = nil,
-                                       valid: [Int]? = nil, units: String? = nil) -> HomeCharacteristic {
+                                       min: Decimal? = nil, max: Decimal? = nil, step: Decimal? = nil,
+                                       valid: [Decimal]? = nil, units: String? = nil) -> HomeCharacteristic {
         HomeCharacteristic(id: id, name: name, format: format, readable: true, writable: writable, minimum: min,
                            maximum: max, step: step, validValues: valid, maxLength: nil, units: units, value: nil)
     }
@@ -203,7 +203,7 @@ final class HomeToolTests: XCTestCase {
                       reply.text)
         let lock = await tool.run(["set", Self.lockID, "lock", "2"])
         XCTAssertEqual(lock.status, ToolReply.usage, lock.text)
-        XCTAssertTrue(lock.text.contains("of 0, 1"), lock.text)
+        XCTAssertTrue(lock.text.contains("from 0 to 255, and of those only 0 or 1"), lock.text)
         XCTAssertTrue(fake.writes.isEmpty)
     }
 
@@ -384,6 +384,40 @@ final class HomeToolTests: XCTestCase {
         XCTAssertEqual(fake.writes.map(\.1), [.int(10)])
     }
 
+    /// A switch is held to its metadata like any number, as 0 and 1.
+    func testASwitchIsHeldToItsValidValues() throws {
+        let accessory = HomeAccessory(id: "A", name: "Fan", room: "", category: "", reachable: true, services: [])
+        let offOnly = HomeCharacteristic(id: "F", name: "power", format: "bool", readable: true, writable: true, minimum: nil,
+                                         maximum: nil, step: nil, validValues: [0], maxLength: nil, units: nil, value: nil)
+        XCTAssertThrowsError(try HomeTool.judge("on", for: offOnly, of: accessory)) { error in
+            XCTAssertTrue((error as? ToolFailure)?.text.contains("takes only off here, not on") == true, "\(error)")
+        }
+        XCTAssertEqual(try HomeTool.judge("off", for: offOnly, of: accessory), .bool(false))
+    }
+
+    /// Whole numbers are compared exactly: 2^53 + 1 is not 2^53, which a `Double` would say it is.
+    func testWholeNumbersAreComparedExactly() throws {
+        let accessory = HomeAccessory(id: "A", name: "Meter", room: "", category: "", reachable: true, services: [])
+        let big = Decimal(string: "9007199254740992")!
+        var counter = HomeCharacteristic(id: "C", name: "counter", format: "uint64", readable: true, writable: true, minimum: nil,
+                                         maximum: nil, step: nil, validValues: [big], maxLength: nil, units: nil, value: nil)
+        XCTAssertThrowsError(try HomeTool.judge("9007199254740993", for: counter, of: accessory))
+        XCTAssertEqual(try HomeTool.judge("9007199254740992", for: counter, of: accessory), .int(9_007_199_254_740_992))
+        counter.validValues = nil
+        counter.maximum = big
+        XCTAssertThrowsError(try HomeTool.judge("9007199254740993", for: counter, of: accessory))
+    }
+
+    /// A refusal says the range, the step and the valid values together, and never names the
+    /// value it refused as one it takes.
+    func testARefusalNeverNamesTheRefusedValueAsTaken() async {
+        let (tool, _) = tool()
+        let reply = await tool.run(["set", Self.lampID, "level", "105"])
+        XCTAssertEqual(reply.status, ToolReply.usage, reply.text)
+        XCTAssertTrue(reply.text.contains("takes a whole number from 0 to 100 in steps of 10, and of those only 0 or 10, not 105"),
+                      reply.text)
+    }
+
     /// A uint64 past `Int.max` reads as `?` and is not written, rather than being a wrong number.
     func testAUInt64PastIntMaxIsNeitherMisreadNorWritten() async {
         XCTAssertNil(HomeKitStore.value(NSNumber(value: UInt64(Int.max) + 1), format: "uint64"))
@@ -394,7 +428,7 @@ final class HomeToolTests: XCTestCase {
         XCTAssertThrowsError(try HomeTool.judge("9223372036854775808", for: counter, of: accessory)) { error in
             XCTAssertTrue((error as? ToolFailure)?.text.contains("which topo home does not write") == true, "\(error)")
         }
-        counter.maximum = Double(UInt64.max)
+        counter.maximum = Decimal(string: "18446744073709551615")
         XCTAssertThrowsError(try HomeTool.judge("18446744073709551615", for: counter, of: accessory))
     }
 
