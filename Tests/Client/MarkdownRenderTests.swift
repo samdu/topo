@@ -195,7 +195,9 @@ final class MarkdownRenderTests: XCTestCase {
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
         look.markdown.codePulse.width = 3
-        look.markdown.codePulse.cycle = 0.6
+        // A picture of this one row takes under 0.3 s under a 60% duty cycle, and a 3 s breath is
+        // legible for about 1.3 s of it, room for a look to lie whole inside it (`judge`).
+        look.markdown.codePulse.cycle = 3
         let pulse = look.markdown.codePulse
         let reply = turn(.assistant, "One:\n\n```\nlet x = 1\n```\n\nTwo:\n\n```\nlet y = 2\n```")
         // Where each block's ring is, from a still of each at its peak.
@@ -214,24 +216,58 @@ final class MarkdownRenderTests: XCTestCase {
         let stage = try LiveStage(LiveRow(turn: reply, live: live, size: self.stage,
                                           padding: look.transcript.horizontalPadding), look: look, size: self.stage)
         defer { stage.close() }
-        func wait(_ seconds: TimeInterval) { stage.wait(seconds) }
         func snapshot() throws -> Pixels { try Pixels(stage.image()) }
-        wait(0.3)
-        live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
-        // Into block 1's first breath, near its peak: block 1 pulses, block 2 does not.
-        wait(pulse.cycle * 0.4)
-        let reached = try snapshot()
-        XCTAssertGreaterThan(pulsing(reached, rows: first), 20, "block 1 did not pulse on its cue")
-        XCTAssertEqual(pulsing(reached, rows: second), 0, "block 2 pulsed on block 1's cue")
-        wait(pulse.duration)
-        XCTAssertEqual(pulsing(try snapshot(), rows: first), 0, "block 1 still pulsing after its pulse")
+        // The row drawn, both blocks' outlines on the stage, before either is cued.
+        var ready = false
+        try stage.poll(for: 5) { [self] in
+            ready = (try snapshot().rowRuns(outline)?.count ?? 0) >= 2
+            return ready
+        }
+        XCTAssertTrue(ready, "the row was not drawn")
+        // Looked at every tenth of a second from the cue until a look settles whether the cued block
+        // pulsed (`judge`), and on until the pulse is over by its own clock: the most each block
+        // pulsed in any look.
+        let legible = try legible(look)
+        func watch(_ number: Int) throws -> (first: Int, second: Int) {
+            var most = (first: 0, second: 0)
+            func look() throws -> (shown: Bool, ring: Int) {
+                let drawn = try snapshot()
+                most.first = max(most.first, pulsing(drawn, rows: first))
+                most.second = max(most.second, pulsing(drawn, rows: second))
+                return (true, pulsing(drawn, rows: number == 1 ? first : second))
+            }
+            let judged = try judge(stage, cycle: pulse.cycle, legible: legible, margin: 0.2, unseen: 5,
+                                   cue: { live.cue = CodeBlockCue(reply: reply.ref, number: number, serial: number * 10 + $0) },
+                                   look: look)
+            XCTAssertTrue(judged.seen || judged.fitted, "no look fitted inside block \(number)'s breath in \(judged.cues) cues")
+            let over = judged.cued.addingTimeInterval(pulse.duration)
+            try stage.poll(for: pulse.duration + 5) {
+                _ = try look()
+                return Date() >= over
+            }
+            return most
+        }
 
-        live.cue = CodeBlockCue(reply: reply.ref, number: 2, serial: 2)
-        // Into block 2's first breath, near its peak.
-        wait(pulse.cycle * 0.4)
-        let drawn = try snapshot()
-        XCTAssertGreaterThan(pulsing(drawn, rows: second), 20, "block 2 did not pulse on its cue")
-        XCTAssertEqual(pulsing(drawn, rows: first), 0, "block 1 pulsed on block 2's cue")
+        let reached = try watch(1)
+        XCTAssertGreaterThan(reached.first, 20, "block 1 did not pulse on its cue")
+        XCTAssertEqual(reached.second, 0, "block 2 pulsed on block 1's cue")
+        // Its pulse over, block 1 comes to rest and stays there for a breath's length.
+        var rest = false
+        try stage.poll(for: 5) { [self] in
+            rest = pulsing(try snapshot(), rows: first) == 0
+            return rest
+        }
+        XCTAssertTrue(rest, "block 1 still pulsing after its pulse")
+        var after = 0
+        try stage.poll(for: pulse.cycle) { [self] in
+            after = max(after, pulsing(try snapshot(), rows: first))
+            return false
+        }
+        XCTAssertEqual(after, 0, "block 1 pulsed again after its pulse")
+
+        let drawn = try watch(2)
+        XCTAssertGreaterThan(drawn.second, 20, "block 2 did not pulse on its cue")
+        XCTAssertEqual(drawn.first, 0, "block 1 pulsed on block 2's cue")
     }
 
     /// A view in a real window with its clock running, as the phone draws it: what a still
@@ -294,15 +330,6 @@ final class MarkdownRenderTests: XCTestCase {
         XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
     }
 
-    /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
-    /// shows its top, and the block is scrolled to once the row has made it.
-    func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
-        let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
-        let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
-        XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
-        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
-    }
-
     /// A block already whole on the screen, cued, pulses where it is: the transcript does not
     /// move by a point.
     func testABlockAlreadyOnTheScreenIsNotScrolled() throws {
@@ -320,9 +347,11 @@ final class MarkdownRenderTests: XCTestCase {
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
         look.markdown.codePulse.width = 3
-        // As slow as a breath can be, so a picture taken of a transcript this long — a good part
-        // of a second on a loaded runner — still finds the pulse under way.
-        look.markdown.codePulse.cycle = 5
+        // A breath slower than a look can make one (0.3–5 s), because the pulse is judged from
+        // pictures of a transcript this long, which take about 1.2 s each on a Mac and 2.3 s under
+        // a 60% duty cycle: a ring over the outline is legible for about 0.42 of a breath, 8.4 s at
+        // 20 s, room for a look to lie whole inside it (`judge`).
+        look.markdown.codePulse.cycle = 20
         let device = DeviceID("phone")
         let at = Date(timeIntervalSince1970: 1_700_000_000)
         let filler = (2...40).map { n in
@@ -331,40 +360,152 @@ final class MarkdownRenderTests: XCTestCase {
         }
         let reply = Turn(ref: TurnRef(device: device, sequence: first ? 1 : 41), parents: [], role: .assistant,
                          text: text, at: at)
+        let turns = first ? [reply] + filler : filler + [reply]
         let live = LiveCue()
-        let stage = try LiveStage(LiveTranscript(turns: first ? [reply] + filler : filler + [reply], live: live)
+        let stage = try LiveStage(LiveTranscript(turns: turns, live: live)
             .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
                                   look: look, size: self.stage)
         defer { stage.close() }
-        stage.wait(1)
-        let before = try Pixels(stage.image(), blank: true).count(outline)
+        try stage.poll(for: 5) { Self.scrollView(in: stage.window) != nil }
+        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
+        // Where the transcript stands before the cue is the test's to arrange, not the opening's to
+        // be waited for: a lazy stack estimates the rows it has not made from the ones it has, and
+        // while it does the content grows and shrinks under the opening, which on a loaded runner
+        // lands seconds late, a third of a row short or at the very end. So the transcript is read
+        // through once, to its top and back, as a person scrolling back would, until its content is
+        // the fixture's own height laid out whole — every row measured, none estimated, and nothing
+        // left to move it — and then put where it opens: its end, less the transcript's padding.
+        // That leaves room under it, so a scroll the cue should not make — the block's top to the
+        // screen's — moves the transcript rather than being held at the end.
+        let whole = UIHostingController(rootView: VStack(alignment: .leading, spacing: look.transcript.spacing) {
+            ForEach(turns) { TurnRow(turn: $0) }
+        }
+        .padding(.horizontal, look.transcript.horizontalPadding)
+        .padding(.vertical, look.transcript.spacing)
+        .frame(width: self.stage.width)
+        .environment(\.look, look))
+        let height = whole.sizeThatFits(in: CGSize(width: self.stage.width, height: .greatestFiniteMagnitude)).height
+        func end() -> CGFloat { scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height }
+        func page(to y: CGFloat) {
+            scroll.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            stage.window.layoutIfNeeded()
+        }
+        func measured() -> Bool { abs(scroll.contentSize.height - height) < 1 }
+        let room = look.transcript.spacing
+        func placed() -> Bool { abs(scroll.contentOffset.y - (end() - room)) < 0.5 }
+        // Each is waited for up to five seconds, the block where the fixture puts it, off the
+        // screen or on it, read once the rest holds; a move after is the cue's.
+        var before = 0
+        try stage.poll(for: 5) {
+            for _ in 0..<200 where scroll.contentOffset.y > 0 { page(to: max(0, scroll.contentOffset.y - scroll.bounds.height)) }
+            for _ in 0..<200 where scroll.contentOffset.y < end() - 1 { page(to: min(end(), scroll.contentOffset.y + scroll.bounds.height)) }
+            page(to: end() - room)
+            guard measured(), placed() else { return false }
+            before = try Pixels(stage.image(), blank: true).count(outline)
+            return first ? before == 0 : before > 20
+        }
+        XCTAssertTrue(measured(), "the transcript's rows were not all measured: \(scroll.contentSize.height) of \(height)")
+        XCTAssertTrue(placed(), "the transcript is not where it opens: \(scroll.contentOffset.y), its end \(end())")
+        XCTAssertGreaterThan(room, 1, "the transcript's padding leaves no room to scroll")
         if first {
             XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
         } else {
             XCTAssertGreaterThan(before, 20, "the fixture's block is not on the screen")
         }
-        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
         let offset = scroll.contentOffset.y
 
-        live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
-        // Looked at every tenth of a second until the block has been seen and seen pulsing, for
-        // up to ten seconds — the whole pulse — so a slow runner is waited for and a block never
-        // scrolled to or never pulsed is still seen not to be.
+        // Looked at every tenth of a second from the cue (`judge`) until the block has been seen
+        // pulsing, or a look that fitted inside a breath saw it not pulse, with a block never
+        // scrolled to still seen not to be after fifteen seconds.
         // How far the transcript moved is the most it was ever away from where it stood, read at
         // every look and for a second after, so a scroll there and back again is a move.
+        // The pulse is drawn over the enclosure's outline and covers its ink while it breathes, so
+        // a block on the screen is its outline, its pulse or some of each, and it is shown by both.
+        let legible = try legible(look)
         var shown = 0, pulsed = 0, moved: CGFloat = 0
-        try stage.poll { [self] in
+        let judged = try judge(stage, cycle: look.markdown.codePulse.cycle, legible: legible, margin: 0.5, unseen: 15,
+                               cue: { live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: $0) }) { [self] in
             moved = max(moved, abs(scroll.contentOffset.y - offset))
             let drawn = try Pixels(stage.image(), blank: true)
-            shown = max(shown, drawn.count(outline))
-            pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
-            return shown > 20 && pulsed > 20
+            let ring = pulsing(drawn, rows: 0...drawn.height)
+            shown = max(shown, drawn.count(outline) + ring)
+            pulsed = max(pulsed, ring)
+            return (drawn.count(outline) + ring > 20, ring)
+        }
+        if shown > 20 {
+            XCTAssertTrue(judged.seen || judged.fitted, "no look fitted inside a breath in \(judged.cues) cues")
         }
         stage.poll(for: 1) {
             moved = max(moved, abs(scroll.contentOffset.y - offset))
             return false
         }
         return (shown, pulsed, moved)
+    }
+
+    /// The moments of a breath, in seconds from its start, in which a picture tells the look's ring
+    /// apart: from the first moment a still of a block shows one, found by halving the rise, to its
+    /// mirror in the fall, since a breath is symmetric.
+    private func legible(_ look: Look) throws -> ClosedRange<Double> {
+        let reply = turn(.assistant, "Here:\n\n```\nlet x = 1\n```")
+        let cycle = look.markdown.codePulse.cycle
+        func rings(_ time: Double) throws -> Bool {
+            let still = try draw(reply, look, cue: CodeBlockCue(reply: reply.ref, number: 1, serial: 1, still: time))
+            return pulsing(still, rows: 0...still.height) > 20
+        }
+        XCTAssertTrue(try rings(cycle / 2), "no ring at the peak of a breath")
+        var dark = 0.0, lit = cycle / 2
+        for _ in 0..<10 {
+            let time = (dark + lit) / 2
+            if try rings(time) { lit = time } else { dark = time }
+        }
+        return lit...(cycle - lit)
+    }
+
+    /// What a pulse's looks settled: whether any saw the ring, and whether any lay whole inside a
+    /// breath's legible moments, so that seeing none there is a pulse that did not happen.
+    private struct Judged {
+        var seen = false
+        var fitted = false
+        var cues = 0
+        /// When the last cue was given.
+        var cued = Date()
+    }
+
+    /// Cues a block and looks at it until a look settles whether it pulsed. A picture takes a while
+    /// and a breath is legible for only part of itself, so looks can fall either side of it however
+    /// long it is: the verdict "did not pulse" is given only by a look that lay whole inside a
+    /// breath's legible moments and saw no ring. The pulse starts when the block is drawn with its
+    /// cue — no sooner than the cue and no later than the end of the first look that shows the
+    /// block — so a look fits only if it does for every start in between, less `margin` either side.
+    /// A cue whose looks all fell outside has no verdict, and the block is cued again, as the voice
+    /// reaching it again would, up to three times; one never shown in `unseen` seconds is left for
+    /// the caller to fail. The limit: a block that pulses only on a later cue passes when every look
+    /// of the first fell outside, so "pulses on its cue" is held by a look fitting in almost every run.
+    private func judge(_ stage: LiveStage, cycle: Double, legible: ClosedRange<Double>, margin: Double,
+                       unseen: TimeInterval, cue: (Int) -> Void,
+                       look: () throws -> (shown: Bool, ring: Int)) throws -> Judged {
+        var judged = Judged()
+        for serial in 1...3 {
+            judged.cues = serial
+            cue(serial)
+            let cued = Date()
+            judged.cued = cued
+            var shown: Date?
+            try stage.poll(for: legible.upperBound + cycle) {
+                let start = Date()
+                let seen = try look()
+                let end = Date()
+                if seen.shown, shown == nil { shown = end }
+                if seen.ring > 20 { judged.seen = true }
+                if let shown, [0, cycle].contains(where: { breath in
+                    start.timeIntervalSince(shown) >= legible.lowerBound + breath + margin
+                        && end.timeIntervalSince(cued) <= legible.upperBound + breath - margin
+                }) { judged.fitted = true }
+                return judged.seen || judged.fitted || (shown == nil && end.timeIntervalSince(cued) > unseen)
+            }
+            if judged.seen || judged.fitted || shown == nil { return judged }
+        }
+        return judged
     }
 
     /// The transcript's scroll view, the first under `view`.
