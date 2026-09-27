@@ -229,7 +229,9 @@ round_is() {
       "a defect in CI, the scripts or the test harness" \
       "a sequence reachable only through a debug path or one no user can produce" \
       "This holds for an earlier finding still open as much as for a new one" \
-      "it overrides any other bar in this prompt"; do
+      "it overrides any other bar in this prompt" \
+      "stays not blocking unless the change since touched the code it cites" \
+      "is acknowledged in one line of \`summary\` and not raised again as a finding"; do
       grep -qF -- "$clause" <<<"$rule" || missing="$missing [$clause]"
     done
     if [ -n "$missing" ]; then

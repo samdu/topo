@@ -91,6 +91,14 @@ CI, the scripts or the test harness, a sequence reachable only through a
 debug path or one no user can produce. This holds for an earlier finding
 still open as much as for a new one, and it overrides any other bar in
 this prompt. The coordinator files the non-blocking findings as issues.
+
+Two more rules hold from round 3 on. A finding an earlier verdict
+reported as not blocking stays not blocking unless the change since
+touched the code it cites; a verdict does not raise its own earlier
+finding on a second reading of the same code. And a finding the
+description answers — filed to an issue by number, or explained as
+something no test on this runner can show — is acknowledged in one line
+of \`summary\` and not raised again as a finding.
 EOF
 }
 
