@@ -81,7 +81,7 @@ struct ConnectionsView: View {
                                         titleVisibility: .visible) {
                         Button("Disconnect", role: .destructive) { connections.disconnectOnePassword() }
                     } message: {
-                        Text("Topo forgets the service-account token on this phone. The service account stays in 1Password until you delete it there.")
+                        Text("Topo forgets the service-account token on this phone. Revoke the service account in 1Password too: a copy of its token taken while it was connected keeps working until you do.")
                     }
             }
         } header: {
