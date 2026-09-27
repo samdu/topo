@@ -145,7 +145,7 @@ final class Userland {
     /// and extracts, verifies and mounts `op` off the main thread. A failure is not kept, so the
     /// next call tries again.
     func onePassword() async throws -> OnePasswordInstaller {
-        if let onePasswordInstall { return try await onePasswordInstall.value }
+        if let onePasswordInstall { return try await Self.value(of: onePasswordInstall) }
         let task = Task { @MainActor in
             let files = try await withCheckedThrowingContinuation { continuation in
                 self.onePasswordSource.fetch { continuation.resume(with: $0) }
@@ -167,11 +167,24 @@ final class Userland {
             return installer
         }
         onePasswordInstall = task
-        do {
-            return try await task.value
-        } catch {
-            onePasswordInstall = nil
-            throw error
+        Task { @MainActor in
+            if case .failure = await task.result, self.onePasswordInstall == task { self.onePasswordInstall = nil }
+        }
+        return try await Self.value(of: task)
+    }
+
+    /// The install's answer, or `CancellationError` as soon as the caller is cancelled: a check
+    /// walked away from stops waiting for the download at once, while the install goes on for the
+    /// next connect, which would fetch the same zip.
+    private static func value<T: Sendable>(of task: Task<T, Error>) async throws -> T {
+        let once = Once<T>()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                once.wait(continuation)
+                Task { once.resume(await task.result) }
+            }
+        } onCancel: {
+            once.resume(.failure(CancellationError()))
         }
     }
 
@@ -509,3 +522,30 @@ extension DebugRun {
     }
 }
 #endif
+
+/// A continuation resumed by whichever answer comes first, the first answer kept when it comes
+/// before the continuation does.
+private final class Once<T: Sendable>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T, Error>?
+    private var answer: Result<T, Error>?
+
+    func wait(_ continuation: CheckedContinuation<T, Error>) {
+        let answer = lock.withLock { () -> Result<T, Error>? in
+            if let answer = self.answer { return answer }
+            self.continuation = continuation
+            return nil
+        }
+        if let answer { continuation.resume(with: answer) }
+    }
+
+    func resume(_ result: Result<T, Error>) {
+        let waiting = lock.withLock { () -> CheckedContinuation<T, Error>? in
+            if answer != nil { return nil }
+            answer = result
+            defer { continuation = nil }
+            return continuation
+        }
+        waiting?.resume(with: result)
+    }
+}

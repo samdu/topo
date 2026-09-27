@@ -106,20 +106,27 @@ public struct OnePasswordInstaller: Sendable {
     }
 }
 
-/// One run of `op` with the service-account token, in the guest: the token only in that process's
-/// environment (never an argument, so no `/proc/<pid>/cmdline` holds it), `OP_CACHE=false`, and
-/// `OP_CONFIG_DIR` and `TMPDIR` a directory made for the call and removed after it. `op` starts a
-/// daemon of its own whether or not caching is off — `op daemon`, in a session of its own,
-/// reparented to init, carrying the token in its environment — and writes its pid under
-/// `TMPDIR`, so when `op` returns the script ends that pid, its session and its children, then
-/// every other process of its own process group: the watcher that bounds `op` at 60 s, and anything `op`
-/// started without leaving it. A cancelled run does the same from outside, through the file the
-/// script wrote its group id to, watches the directory kept beside that file for a daemon that
-/// was still starting, and removes it. Nothing is
+/// One run of `op` with the service-account token, in the guest. The token is never an argument,
+/// so no `/proc/<pid>/cmdline` holds it, but it is in the environment of every process of the
+/// call — the shell, `op`, the helpers the shell runs and whatever `op` starts — and a guest
+/// process can read any of them (`docs/guest.md`). `OP_CACHE=false`, and `OP_CONFIG_DIR` and
+/// `TMPDIR` are a directory made for the call and removed after it. `op` starts a daemon of its
+/// own whether or not caching is off — `op daemon`, in a session of its own, reparented to init,
+/// carrying the token — and writes its pid under `TMPDIR`, sometimes after `op` has returned, so
+/// when `op` returns the script waits up to 5 s for that pid and ends it with its session and its
+/// children, then every other process of its own process group: the watcher that bounds `op` at
+/// 60 s and leaves with the shell, and anything `op` started without leaving it. Nothing is
 /// matched by name.
+///
+/// A cancelled run does the same from outside through the file the script wrote its group id to;
+/// one cancelled before that file exists leaves a mark the script reads once it has written the
+/// file, so either the script sees the mark and runs nothing or the cancel sees the group. After
+/// every call the app ends what a shell that did not reach its own end (a SIGKILL from another
+/// guest process) left behind, and removes the call's files.
 public enum OnePasswordRun {
     /// The whole of what the guest runs: `$@` is `op`'s arguments, `$TOPO_OP_GROUP` the file the
-    /// group id is written to, and `$TOPO_OP_GROUP.d` the call's directory.
+    /// group id is written to, `$TOPO_OP_GROUP.cancelled` a cancel's mark, and `$TOPO_OP_GROUP.d`
+    /// the call's directory.
     public static func script(command: String) -> String {
         #"""
         stat="$(cat /proc/$$/stat)" || exit 70
@@ -127,11 +134,19 @@ public enum OnePasswordRun {
         group="$(echo $rest | cut -d ' ' -f 3)"
         [ -n "$group" ] || exit 70
         printf '%s\n' "$group" > "$TOPO_OP_GROUP" || exit 70
+        if [ -e "$TOPO_OP_GROUP.cancelled" ]; then
+            rm -f "$TOPO_OP_GROUP" "$TOPO_OP_GROUP.cancelled"
+            exit 130
+        fi
         d="$TOPO_OP_GROUP.d"
         mkdir -m 700 "$d" || exit 70
         OP_CONFIG_DIR="$d" TMPDIR="$d" \#(command) "$@" &
         op=$!
-        ( sleep 60; kill -KILL "$op" ) 2>/dev/null &
+        (
+            i=0
+            while [ $i -lt 60 ] && kill -0 $$ 2>/dev/null; do sleep 1; i=$((i + 1)); done
+            kill -KILL "$op"
+        ) </dev/null >/dev/null 2>&1 &
         wait "$op"
         s=$?
         \#(end)
@@ -140,17 +155,20 @@ public enum OnePasswordRun {
         """#
     }
 
-    /// Ends the daemon whose pid `op` writes under `$d` — waiting up to 5 s for the file once its
-    /// directory is there, since `op` can return before the daemon has written it — with every
-    /// process in the daemon's session and each one it is the parent of, then every process in
-    /// process group `$group` but the shell running this: a sweep of `/proc` by each task's `stat`.
+    /// Ends the daemon whose pid `op` writes under `$d` — polling up to 5 s for a pid in that
+    /// file, since `op` can return before the daemon has made its directory or written it, and an
+    /// empty file is one not yet written — with every process in the daemon's session and each
+    /// one it is the parent of, then every process in process group `$group` but the shell
+    /// running this: a sweep of `/proc` by each task's `stat`, the daemon last.
     static let end = #"""
-    for f in "$d"/com.agilebits.op.*/op-daemon.pid; do
-        [ -e "$f" ] || break
-        i=0
-        while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    daemon=""
+    i=0
+    while [ $i -lt 50 ]; do
+        daemon="$(cat "$d"/com.agilebits.op.*/op-daemon.pid 2>/dev/null)"
+        [ -n "$daemon" ] && break
+        sleep 0.1
+        i=$((i + 1))
     done
-    daemon="$(cat "$d"/com.agilebits.op.*/op-daemon.pid 2>/dev/null)"
     session=""
     if [ -n "$daemon" ] && stat="$(cat "/proc/$daemon/stat" 2>/dev/null)"; then
         session="$(echo ${stat##*) } | cut -d ' ' -f 4)"
@@ -172,26 +190,20 @@ public enum OnePasswordRun {
     [ -n "$daemon" ] && kill -KILL "$daemon" 2>/dev/null
     """#
 
-    /// What a cancelled run runs beside it: the group id the run wrote, the same ending, and the
-    /// run's directory removed. `op` may have forked the daemon's launcher into a session of its
-    /// own before the cancel and not yet made the daemon's directory, so the cancel watches for
-    /// that directory for 5 s and ends what it finds there before removing it.
-    static let cancel = #"""
-    group="$(cat "$1" 2>/dev/null)" || exit 0
+    /// A run's ending from outside, given the group file as `$1`: nothing when there is no group
+    /// yet, otherwise the same ending, then the call's files removed.
+    static let endFromOutside = #"""
+    group="$(cat "$1" 2>/dev/null)"
     [ -n "$group" ] || exit 0
     d="$1.d"
-    """# + "\n" + end + "\n" + #"""
-    i=0
-    while [ $i -lt 50 ]; do
-        if ls -d "$d"/com.agilebits.op.* >/dev/null 2>&1; then
-    """# + "\n" + end + "\n" + #"""
-            break
-        fi
-        sleep 0.1
-        i=$((i + 1))
-    done
-    rm -rf "$1" "$d"
-    """#
+    """# + "\n" + end + "\n" + #"rm -rf "$1" "$d" "$1.cancelled""#
+
+    /// What a cancel runs beside the run: its mark first, then the ending from outside.
+    static let cancel = #": > "$1.cancelled""# + "\n" + endFromOutside
+
+    /// What the app runs after every call: the ending, when the shell did not reach its own and
+    /// left its group file behind.
+    static let leftover = #"[ -e "$1" ] || { rm -f "$1.cancelled"; exit 0; }"# + "\n" + endFromOutside
 
     public static func run(_ arguments: [String], token: String, command: String = OnePasswordInstaller.command,
                            guest: Guest = .shared) async throws -> Guest.Exit {
@@ -200,10 +212,13 @@ public enum OnePasswordRun {
         environment["OP_SERVICE_ACCOUNT_TOKEN"] = token
         environment["OP_CACHE"] = "false"
         environment["TOPO_OP_GROUP"] = groupFile
-        return try await withTaskCancellationHandler {
+        try Task.checkCancellation()
+        let exit = try await withTaskCancellationHandler {
             try await guest.run("/bin/sh", ["-c", script(command: command), "op"] + arguments, environment: environment)
         } onCancel: {
             Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile]) }
         }
+        _ = try? await guest.run("/bin/sh", ["-c", leftover, "leftover", groupFile])
+        return exit
     }
 }

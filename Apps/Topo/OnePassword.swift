@@ -14,15 +14,17 @@ protocol OnePasswordRunning: Sendable {
 }
 
 /// `op` in the guest, started by the app: installed at its pin first, then run as
-/// `OnePasswordRun` runs it — the token in that one process's environment, never an argument and
-/// never the resident's, the call's config directory removed and the daemon `op` leaves ended
-/// after it — with the token taken out of what `op` said on stderr.
+/// `OnePasswordRun` runs it — the token in the environment of that call's processes, never an
+/// argument and never the resident's, the call's config directory removed and the daemon `op`
+/// leaves ended after it — with the token taken out of what `op` said on stderr.
 struct GuestOnePassword: OnePasswordRunning {
     var install: @Sendable () async throws -> Void = { _ = try await Userland.shared.onePassword() }
     var runner: @Sendable ([String], String) async throws -> Guest.Exit = { try await OnePasswordRun.run($0, token: $1) }
 
+    /// A run cancelled while `op` is installing — the first connect downloads it — runs nothing.
     func run(_ arguments: [String], token: String) async throws -> OnePasswordExit {
         try await install()
+        try Task.checkCancellation()
         let exit = try await runner(arguments, token)
         return OnePasswordExit(status: exit.status, output: exit.output,
                                errors: exit.errors.replacingOccurrences(of: token, with: "[token]"))

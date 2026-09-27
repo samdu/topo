@@ -116,4 +116,76 @@ final class OnePasswordRunTests: XCTestCase {
         XCTAssertEqual(config, "gone\n", "a cancelled run left its config directory")
         _ = try await sh("rm -f /tmp/\(marker)* \(op)")
     }
+
+    /// A run cancelled before it starts runs nothing in the guest.
+    func testARunCancelledBeforeItStartsRunsNoOp() async throws {
+        let marker = "early-\(UUID().uuidString.prefix(8))"
+        let op = try await standIn("echo $$ > /tmp/\(marker)-op")
+        let token = token
+        let run = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await OnePasswordRun.run(["vault", "list"], token: token, command: op)
+        }
+        do {
+            _ = try await run.value
+            XCTFail("a cancelled run answered")
+        } catch is CancellationError {}
+        let ran = try await sh("[ -e /tmp/\(marker)-op ] && echo ran || echo not").output
+        XCTAssertEqual(ran, "not\n")
+        _ = try await sh("rm -f /tmp/\(marker)* \(op)")
+    }
+
+    /// A cancel that lands before the script has written its group file leaves its mark, which the
+    /// script reads once it has: it runs nothing and leaves nothing.
+    func testACancelMarkLeftBeforeTheGroupFileStopsTheScript() async throws {
+        let marker = "mark-\(UUID().uuidString.prefix(8))"
+        let op = try await standIn("echo $$ > /tmp/\(marker)-op")
+        let group = "/tmp/\(marker).group"
+        _ = try await sh(": > \(group).cancelled")
+        var environment = Guest.environment
+        environment["TOPO_OP_GROUP"] = group
+        let exit = try await Guest.shared.run("/bin/sh", ["-c", OnePasswordRun.script(command: op), "op", "vault", "list"],
+                                              environment: environment)
+        XCTAssertEqual(exit.status, 130, exit.errors)
+        let left = try await sh("ls -d /tmp/\(marker)* 2>/dev/null; true").output
+        XCTAssertEqual(left, "", "the stand-in ran or the call's files stayed: \(left)")
+        _ = try await sh("rm -f \(op)")
+    }
+
+    /// A daemon whose launcher makes its directory only after `op` has returned, and writes its pid
+    /// a second after that, is still ended with the call, and its directory does not come back.
+    func testADaemonStartedAfterOpReturnedGoesWithTheCall() async throws {
+        let marker = "after-\(UUID().uuidString.prefix(8))"
+        let op = try await standIn("""
+        \(daemon(marker, late: true)); echo "$OP_CONFIG_DIR" > /tmp/\(marker).config; exit 0
+        """)
+        let exit = try await OnePasswordRun.run(["vault", "list"], token: token, command: op)
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        let left = try await survivors(marker)
+        XCTAssertEqual(left, "", "a daemon started after op returned outlived the call: \(left)")
+        try await Task.sleep(for: .seconds(2))
+        let config = try await sh("d=$(cat /tmp/\(marker).config); [ -e \"$d\" ] && echo left || echo gone").output
+        XCTAssertEqual(config, "gone\n", "the call's directory came back")
+        _ = try await sh("rm -f /tmp/\(marker)* \(op)")
+    }
+
+    /// A shell SIGKILLed by another guest process before its own end: the app ends what it left —
+    /// `op` and the daemon — and removes the call's files, and the call answers well inside the
+    /// watcher's bound, which no longer holds its output.
+    func testAShellKilledFromOutsideLeavesNothing() async throws {
+        let marker = "killed-\(UUID().uuidString.prefix(8))"
+        let op = try await standIn("""
+        \(daemon(marker)); echo "$OP_CONFIG_DIR" > /tmp/\(marker).config; echo $$ > /tmp/\(marker)-op; \
+        kill -KILL $PPID; exec sleep 300
+        """)
+        let clock = ContinuousClock.now
+        let exit = try await OnePasswordRun.run(["vault", "list"], token: token, command: op)
+        XCTAssertLessThan(ContinuousClock.now - clock, .seconds(20), "the call waited on what the shell left")
+        XCTAssertEqual(exit.status, 137, exit.errors)
+        let left = try await survivors(marker)
+        XCTAssertEqual(left, "", "a killed shell left op or its daemon running: \(left)")
+        let files = try await sh("d=$(cat /tmp/\(marker).config); ls -d \"$d\" \"${d%.d}\" \"${d%.d}.cancelled\" 2>/dev/null; true").output
+        XCTAssertEqual(files, "", "a killed shell left the call's files: \(files)")
+        _ = try await sh("rm -f /tmp/\(marker)* \(op)")
+    }
 }

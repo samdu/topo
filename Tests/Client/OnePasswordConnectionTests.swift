@@ -339,4 +339,54 @@ final class GuestOnePasswordTests: XCTestCase {
         } catch {}
         XCTAssertTrue(steps.steps.isEmpty)
     }
+
+    /// A check cancelled while `op` is installing (the first connect downloads it) runs no `op`,
+    /// even when the install itself goes on to finish.
+    func testACancelDuringTheInstallRunsNoOp() async throws {
+        let steps = Steps()
+        let gate = Gate()
+        let runner = GuestOnePassword(install: { steps.add("install"); await gate.wait() }, runner: { _, _ in
+            steps.add("run")
+            return Guest.Exit(status: 0, output: "[]", errors: "")
+        })
+        let token = token
+        let check = Task { try await runner.run(["vault", "list"], token: token) }
+        for _ in 0..<200 where steps.lock.withLock({ steps.steps.isEmpty }) {
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        check.cancel()
+        gate.open()
+        do {
+            _ = try await check.value
+            XCTFail("a check cancelled during the install answered")
+        } catch is CancellationError {}
+        XCTAssertEqual(steps.steps, ["install"], "a check cancelled during the install ran op")
+    }
+
+    /// A wait the test opens, which cancellation does not end: the shared install goes on.
+    private final class Gate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var opened = false
+        private var waiting: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            await withCheckedContinuation { continuation in
+                let now = lock.withLock { () -> Bool in
+                    if opened { return true }
+                    waiting = continuation
+                    return false
+                }
+                if now { continuation.resume() }
+            }
+        }
+
+        func open() {
+            let continuation = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                opened = true
+                defer { waiting = nil }
+                return waiting
+            }
+            continuation?.resume()
+        }
+    }
 }
