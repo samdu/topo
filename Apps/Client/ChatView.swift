@@ -229,19 +229,7 @@ struct ChatView: View {
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
-            harness.onReply = { reply in
-                // The mark is the decision, made at the release: a reply whose turn is marked is
-                // read whatever the setting says now, since the setting governs what the next
-                // release decides and not what a turn already released is owed.
-                guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
-                // Only a reply the speaker took is read: one it refused is still owed, so the
-                // turn stays marked spoken and the next pass offers the reply again.
-                guard speaker.speak(reply.text, answering: asked) else { return false }
-                // A reply waiting for the microphone keeps its turn marked until it is read
-                // (`Speaker.settled`), so one the session refuses at the release is still owed.
-                if !speaker.waitingForMicrophone { harness.answeredAloud(asked) }
-                return true
-            }
+            harness.onReply = { reply in SpokenReply.read(reply, harness: harness, speaker: speaker) }
             speaker.settled = { nonce in harness.answeredAloud(nonce) }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
@@ -576,6 +564,25 @@ enum ReadAloud {
             .compactMap { ref in turns.first { $0.ref == ref } }
             .first { $0.role == .person && spoken.contains($0.nonce) }?
             .nonce
+    }
+}
+
+/// A spoken turn's reply read aloud: the chat's `Harness.onReply`, answering whether the harness
+/// is done with the reply.
+@MainActor
+enum SpokenReply {
+    static func read(_ reply: Turn, harness: Harness, speaker: Speaker) -> Bool {
+        // The mark is the decision, made at the release: a reply whose turn is marked is read
+        // whatever the setting says now, since the setting governs what the next release decides
+        // and not what a turn already released is owed.
+        guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+        // Only a reply the speaker took is read: one it refused is still owed, so the turn stays
+        // marked spoken and the next pass offers the reply again.
+        guard speaker.speak(reply.text, answering: asked) else { return false }
+        // A reply waiting for the microphone keeps its turn marked until it is read
+        // (`Speaker.settled`), so one the session refuses when the microphone closes is still owed.
+        if !speaker.waitingForMicrophone { harness.answeredAloud(asked) }
+        return true
     }
 }
 

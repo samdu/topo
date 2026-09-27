@@ -1012,6 +1012,81 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(speaker.report.text, "Rome.", "and it is the one being read, not one cut off")
     }
 
+    /// A spoken reply that lands while the microphone is held waits for it, and its turn stays
+    /// owed until it is heard: through a release whose reading the session refuses, and through
+    /// the next ordinary press on the microphone, whose own release reads it at last. The chat's
+    /// read-aloud (`SpokenReply`) and the speaker's `settled` are wired as the chat wires them,
+    /// and the owed mark is the harness's own, on disk.
+    func testAReplyRefusedWhenTheMicrophoneClosesIsReadAfterTheNextPress() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults, transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        let ear = Ear(vocabulary: Vocabulary(defaults: makeDefaults()),
+                      engine: ScriptedEngine(bare: "and of Italy", boosted: "and of Italy"))
+        ear.load(parakeet: URL(fileURLWithPath: "/dev/null"), ctc: URL(fileURLWithPath: "/dev/null"))
+        try await eventually("the ear to load") { ear.ready }
+        let voice = VoiceInput(audio: audio, ear: ear, center: center, makeEngine: { seams.makeEngine() },
+                               formats: { seams.readFormats($0) }, permission: { true })
+        defer { speaker.stop(); voice.cancel() }
+        speaker.microphoneOpen = { voice.listening }
+        harness.onReply = { SpokenReply.read($0, harness: harness, speaker: speaker) }
+        speaker.settled = { harness.answeredAloud($0) }
+        let press = MicPress()
+        let sent = Said()
+        let drawn = { Composer.MicState(voice, speaking: speaker.speaking) }
+        let owed = { defaults.stringArray(forKey: "topo.harness.spoken") ?? [] }
+        func hold() async throws {
+            try await Task.sleep(for: .seconds(VoiceInput.tapLimit + 0.1))
+            let format = voice.sink.format
+            let frames = AVAudioFrameCount(format.sampleRate)
+            let buffer = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames))
+            buffer.frameLength = frames
+            for frame in 0..<Int(frames) { buffer.floatChannelData![0][frame] = 0.1 * sin(Float(frame) * 0.05) }
+            voice.sink.append(buffer)
+        }
+
+        // A question said aloud; its turn is marked spoken.
+        let asked = harness.willSend("what is the capital of France")
+        harness.markSpoken(asked)
+        XCTAssertEqual(owed(), [asked])
+
+        // The microphone is held when the reply lands: it waits, and the turn stays owed.
+        await press.gesture(true, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(voice.listening)
+        await harness.retry()
+        XCTAssertTrue(speaker.waitingForMicrophone, "the reply did not wait for the held microphone")
+        XCTAssertEqual(speaker.report.speaks, 0)
+        XCTAssertEqual(owed(), [asked], "the turn was settled while its reply waited")
+
+        // The release sends what was held; the session refuses the reading.
+        seams.playEngineRefusals = 1
+        try await hold()
+        await press.gesture(false, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertEqual(sent.texts, ["and of Italy"])
+        XCTAssertFalse(speaker.speaking)
+        XCTAssertTrue(speaker.waitingForMicrophone, "the refused reply was dropped")
+        XCTAssertEqual(owed(), [asked], "the turn is no longer owed a reading after the refusal")
+
+        // The next ordinary press and release: the reply is still owed through the press, and the
+        // release reads it and settles the turn.
+        XCTAssertEqual(drawn().appearance, .idle)
+        await press.gesture(true, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertTrue(voice.listening)
+        XCTAssertTrue(speaker.waitingForMicrophone, "the press on the idle microphone dropped the unheard reply")
+        XCTAssertEqual(owed(), [asked], "the press settled the turn with its reply unheard")
+        try await hold()
+        await press.gesture(false, drawn: drawn(), speaker: speaker, voice: voice) { sent.add($0) }?.value
+        XCTAssertEqual(sent.texts, ["and of Italy", "and of Italy"])
+        try await eventually("the reply to be read") { speaker.report.started }
+        XCTAssertEqual(speaker.report.text, "Paris.")
+        XCTAssertEqual(owed(), [], "the reply was read, so the turn is owed nothing")
+        XCTAssertEqual(drawn().appearance, .stop)
+    }
+
     /// The keeper refusing on a fresh queue is the same refusal as a rebuild that will not come
     /// back: nothing renders, so nothing is read, and the reply is still owed.
     func testAReplyWhoseHoldCannotStartIsOfferedAgainAndSpokenOnce() async throws {
