@@ -143,6 +143,9 @@ final class Memory {
     /// either between the copy and the commit is a move committing a home the sign-out has just
     /// dropped.
     private var moveWaiters: [CheckedContinuation<Void, Never>] = []
+    /// The other writer into the folder, the guest's turns, which a move holds off while it
+    /// carries the folder (`MemoryTurns`, which `TopoApp` sets).
+    weak var writer: (any VaultWriter)?
     private var zoneReady = false
     private var running: Task<Void, Never>?
     /// A pass a sign-out cancelled, still winding down. Nothing new touches the folder until
@@ -588,8 +591,9 @@ final class Memory {
     }
 
     /// The move, either way. The mirror is stopped and every cue answers with no pass until it is
-    /// over, the folders are carried under one coordinated write, and the commit is `commit` —
-    /// the one write that says where the vault is.
+    /// over, the writer is held off from before the first file is read until the home has moved or
+    /// the move has failed, the folders are carried under one coordinated write, and the commit is
+    /// `commit` — the one write that says where the vault is.
     private func move(from source: URL, to destination: URL, scope: URL?, wasLocal: Bool,
                       removingSourceFolder: Bool,
                       commit: @escaping @Sendable () throws -> Void) async -> String? {
@@ -604,6 +608,11 @@ final class Memory {
             moveWaiters = []
             for waiter in waiting { waiter.resume() }
         }
+        // A guest turn writes through a mount of the folder the home names when the turn is sent,
+        // so one still running when the copy began would write into a folder the move is leaving
+        // behind: it is waited out, and none is sent until the home has moved.
+        let writer = self.writer
+        await writer?.pause()
         // The pass in flight is waited out rather than cancelled: it is halfway through writing
         // the folder this move is about to carry, and a cancelled one leaves the baseline saying
         // less than the folder holds.
@@ -621,6 +630,7 @@ final class Memory {
                                                         removingSourceFolder: removingSourceFolder,
                                                         commit: commit)
             home = readHome()
+            writer?.resume()
             stranded = outcome.left.isEmpty ? nil
                 : Stranded(folder: source, scope: scope, names: outcome.left, isLocal: wasLocal)
             // The folder has moved, so what the last pass said about the old one is not about
@@ -634,6 +644,7 @@ final class Memory {
             // destination holds whatever partial copy was made, which the next attempt writes
             // over file by file.
             home = readHome()
+            writer?.resume()
             moveError = Self.describeMove(error)
             return moveError
         }
@@ -792,5 +803,14 @@ enum MemoryWake {
             remove()
         }
     }
+}
+
+/// Something besides the mirror that writes into the memory's folder: the guest's turns. A move
+/// holds it off for as long as it carries the folder.
+@MainActor
+protocol VaultWriter: AnyObject {
+    /// Returns once nothing it began can still write, and begins nothing more until `resume()`.
+    func pause() async
+    func resume()
 }
 #endif

@@ -42,6 +42,9 @@ struct TopoApp: App {
         _mascot = State(initialValue: mascot)
         let memory = Memory.standard()
         _memory = State(initialValue: memory)
+        // The guest's mount of the memory follows the same home the mirror runs against.
+        GuestResident.shared.memory = memory
+        memory.writer = GuestResident.shared.turns
         // The phone's own tools, which the guest's `topo` reaches through the tool service. Making
         // them asks for nothing: each permission is asked for by the first call that needs it.
         let broker = PermissionBroker()
@@ -76,8 +79,14 @@ struct TopoApp: App {
         let (ear, spoken) = ModelHousekeeping.launch(clear: ModelHousekeeping.clearCompileCache,
                                                      ear: { Ear() }, voice: { Voice() })
         #endif
-        _voice = State(initialValue: VoiceInput(audio: audio, ear: ear))
-        _speaker = State(initialValue: Speaker(audio: audio, voice: spoken))
+        let voice = VoiceInput(audio: audio, ear: ear)
+        let speaker = Speaker(audio: audio, voice: spoken)
+        // A reply is not read into an open microphone: one that lands while it is open waits for
+        // it to close (`Speaker.speak`).
+        speaker.microphoneOpen = { voice.listening }
+        MicrophoneWatch.start(voice, speaker)
+        _voice = State(initialValue: voice)
+        _speaker = State(initialValue: speaker)
         // What says, on a device run with no debugger attached, when iOS suspended the process.
         #if DEBUG
         AudioLog.startHeartbeat()

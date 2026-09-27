@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Plan review: Codex (Astra) answers "should it be built this way?" over a
-# plan the Topo PM wrote, before any code exists. docs/process.md, step 2.
+# plan the coordinator wrote, before any code exists. docs/process.md, step 2.
 #
 #   scripts/plan-review.sh <plan.md> [context-dir]
 #
@@ -9,8 +9,8 @@
 # (the curated memory-wiki slice lives at ~/topo-plan-context on buddybox —
 # design pages, not people pages; grow it when a review asks for something it
 # did not have). Output is JSON on stdout: {red_lines, suggestions, summary}.
-# Red lines are "do not build it this way" and go to Sam if the PM disagrees;
-# suggestions the PM takes or leaves.
+# Red lines are "do not build it this way" and go to Sam if the coordinator
+# disagrees; suggestions the coordinator takes or leaves.
 set -euo pipefail
 
 plan="${1:?plan file}"

@@ -9,8 +9,10 @@
 # rule is one `gh variable set AUTOMERGE_REQUIRE_LABEL --body true` away.
 #
 # Two entry points:
-#   - pull_request (labeled/opened/reopened/synchronize/ready_for_review):
-#     merges immediately if validation is already green.
+#   - pull_request (labeled/opened/reopened/synchronize/ready_for_review/edited):
+#     merges immediately if validation is already green. `edited` is the
+#     description changing, which is how a Proof box gets ticked after the
+#     run went green.
 #   - workflow_run (PR validate completed): merges the PR that just went green.
 # Both paths funnel through the same idempotent script, which no-ops unless
 # every condition holds.
@@ -18,7 +20,7 @@ name: Auto-merge
 
 on:
   pull_request:
-    types: [labeled, opened, reopened, synchronize, ready_for_review]
+    types: [labeled, opened, reopened, synchronize, ready_for_review, edited]
   workflow_run:
     workflows: ["PR validate"]
     types: [completed]
@@ -72,7 +74,7 @@ jobs:
               echo "::endgroup::"; continue
             fi
             # An unchecked box in the description is a claim not yet proved —
-            # by convention a device test the PM runs with Sam before ticking
+            # by convention a device test the coordinator runs with Sam before ticking
             # it (docs/process.md, step 4). Nothing unproved merges unattended.
             if jq -r .body <<<"$info" | grep -qE '^\s*[-*] \[ \]'; then
               echo "skip: the description has an unchecked box; a claim is still unproved"

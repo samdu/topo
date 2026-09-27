@@ -107,6 +107,10 @@ final class SpokenTurnTests: XCTestCase {
         XCTAssertTrue(spoken.speaker.started, "the speaker started the reply: \(spoken.raw)")
         XCTAssertTrue(spoken.speaker.finished, "the speaker finished the reply: \(spoken.raw)")
         XCTAssertEqual(spoken.speaker.engine, .pocket, "the reply was read by Pocket: \(spoken.raw)")
+        // Stop while the reply was read, the microphone again once it came to its end.
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 10),
+                      "the button is the microphone again once the reply has finished")
+        XCTAssertFalse(app.images["Stop speaking"].exists, "the button is still Stop after the reply finished")
         // The measurements the device run is read on: made, not merely reported as absent.
         let first = try XCTUnwrap(spoken.speaker.first, "the reply's first frame was timed: \(spoken.raw)")
         let rtf = try XCTUnwrap(spoken.speaker.rtf, "the reply's real-time factor was measured: \(spoken.raw)")
