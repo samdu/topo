@@ -4,14 +4,15 @@ import Testing
 
 /// A permission whose standing and prompt the test sets, counting the prompts.
 final class FakeAuthorizer: Authorizer, @unchecked Sendable {
-    let name = "Reminders"
+    let name: String
     private let lock = NSLock()
     private var standing: Access
     private let answer: Bool
     private let delay: Duration
     private var _prompts = 0
 
-    init(_ standing: Access, answer: Bool = true, delay: Duration = .zero) {
+    init(_ standing: Access, answer: Bool = true, delay: Duration = .zero, name: String = "Reminders") {
+        self.name = name
         self.standing = standing
         self.answer = answer
         self.delay = delay
@@ -54,6 +55,27 @@ final class FakeAuthorizer: Authorizer, @unchecked Sendable {
         let restricted = try #require(await PermissionBroker().admit(FakeAuthorizer(.restricted)))
         #expect(restricted.text.contains("Settings app, under Screen Time › Content & Privacy Restrictions › Reminders"))
         #expect(restricted.text.contains("Settings › General › VPN & Device Management"))
+    }
+
+    /// P7c review focus 6: HomeKit's switch is under Privacy & Security, and a refusal says so
+    /// rather than pointing at the app's own settings, where it is not.
+    @Test func homeDeniedNamesSettings() async throws {
+        let denied = try #require(await PermissionBroker().admit(FakeAuthorizer(.denied, name: "HomeKit")))
+        #expect(denied.status == ToolReply.denied)
+        #expect(denied.text.contains("Settings app, under Privacy & Security › HomeKit › Topo"))
+        #expect(!denied.text.contains("Apps › Topo"))
+        let refused = try #require(await PermissionBroker().admit(FakeAuthorizer(.undetermined, answer: false, name: "HomeKit")))
+        #expect(refused.status == ToolReply.denied)
+        #expect(refused.text.contains("Privacy & Security › HomeKit › Topo"))
+    }
+
+    @Test func homeRestrictedNamesSettings() async throws {
+        let restricted = try #require(await PermissionBroker().admit(FakeAuthorizer(.restricted, name: "HomeKit")))
+        #expect(restricted.status == ToolReply.denied)
+        #expect(restricted.text.contains("HomeKit is restricted on this phone"))
+        #expect(restricted.text.contains("Settings › General › VPN & Device Management"))
+        #expect(restricted.text.contains("Privacy & Security › HomeKit › Topo"))
+        #expect(!restricted.text.contains("Content & Privacy Restrictions"))
     }
 
     @Test func undeterminedAsksOnceAndFollowsTheAnswer() async throws {
