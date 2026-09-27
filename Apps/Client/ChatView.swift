@@ -95,27 +95,6 @@ struct ChatView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 transcript
-                if harness.busy {
-                    // A turn in flight always says where it is; a spinner alone reads as nothing.
-                    HStack(spacing: 8) {
-                        ProgressView()
-                        Text(harness.status ?? "Working…")
-                        if harness.waiting.count > 1 {
-                            Text("· \(harness.waiting.count - 1) waiting").foregroundStyle(.secondary)
-                        }
-                    }
-                    .font(.footnote)
-                    .mascotObstacle()
-                    .padding(.bottom, 8)
-                }
-                if let error = harness.error {
-                    Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal).mascotObstacle()
-                        .padding(.bottom, 8)
-                }
-                if let info = harness.info {
-                    Text(info).font(.footnote).foregroundStyle(.secondary).padding(.horizontal).mascotObstacle()
-                        .padding(.bottom, 8)
-                }
                 if harness.hasWaiting {
                     // The line stopped on a failure; what was said is kept and goes again from here.
                     lineButton(harness.waiting.count == 1 ? "Send \"\(harness.waiting[0])\" again"
@@ -166,6 +145,7 @@ struct ChatView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                notices
                 // The jewel is the glass here, so from iOS 26 on the bar puts none of its own
                 // behind it. That is a shape the bar draws rather than a value the badge does,
                 // so it is an availability branch and not a `Look` field.
@@ -303,6 +283,24 @@ struct ChatView: View {
         .font(.footnote)
         .mascotObstacle()
         .padding(.bottom, 8)
+    }
+
+    /// What the chat says it is doing, in the navigation bar beside the badge (`ChatNotices`).
+    /// The item is there only while there is something to say: an item the bar first laid out
+    /// empty is one it never draws, whatever it later holds.
+    @ToolbarContentBuilder private var notices: some ToolbarContent {
+        let said = shownNotices
+        if said.any {
+            ToolbarItem(placement: .principal) { ChatNotices(notices: said) }
+        }
+    }
+
+    /// The harness's notices, or in a debug build the fixture `TOPO_DEBUG_NOTICES` names.
+    private var shownNotices: ChatNotices.Said {
+        #if DEBUG
+        if let fixture = DebugRun.notices { return fixture }
+        #endif
+        return ChatNotices.Said(harness)
     }
 
     /// The mark at the trailing edge, and what the spoken-turn test reads off it.
@@ -535,6 +533,99 @@ struct ChatView: View {
                 speaker.endAwaiting(taken, "the turn was taken back")
             }
         }
+    }
+}
+
+/// What the chat says it is doing, in the navigation bar beside the badge rather than over the
+/// composer: the turn in flight and where it is, the last failure, and something that went right
+/// but not the usual way. They are there to be read when something is slow or wrong, and the
+/// glass under the transcript is the controls'. The bar is above the transcript's frame, which is
+/// where Topo's room starts, so none of them is his obstacle.
+struct ChatNotices: View {
+    /// What there is to say, read off the harness.
+    struct Said: Equatable {
+        var busy = false
+        var status: String?
+        /// How many turns are on the line, the one in flight included.
+        var waiting = 0
+        var error: String?
+        var info: String?
+
+        /// The one notice the bar shows. The bar holds one, so they take turns: a failure first,
+        /// since it is what needs doing something about; then the turn in flight; then a turn
+        /// that went right another way, which a later turn's progress replaces.
+        var notice: Notice? {
+            if let error { return .trouble(error) }
+            if busy { return .progress(status ?? "Working…", queued: waiting > 1 ? "· \(waiting - 1) waiting" : nil) }
+            if let info { return .info(info) }
+            return nil
+        }
+
+        /// Whether there is anything to say.
+        var any: Bool { notice != nil }
+    }
+
+    enum Notice: Equatable {
+        /// The last failure, in the look's trouble colour.
+        case trouble(String)
+        /// Where the turn in flight is — a spinner alone reads as nothing — and the turns behind it.
+        case progress(String, queued: String?)
+        /// Something that went right but not the usual way.
+        case info(String)
+    }
+
+    let notices: Said
+    /// The most lines the notice takes; nil only where a test lays it out unbounded, to hold that
+    /// the bound cut nothing.
+    var lineLimit: Int? = ChatNotices.lines
+    @Environment(\.look) private var look
+
+    /// What the UI suite finds the notices by.
+    static let identifier = "topo-notices"
+
+    /// The most lines the notice takes: the bar holds two beside the badge, and every notice the
+    /// harness writes fits two at the largest `noticeFont` on the narrowest phone.
+    static let lines = 2
+
+    /// The largest text setting the notices follow. The bar is a fixed height, so past this the
+    /// words would reach down over the transcript; the system's own bar titles stop growing too.
+    static let largestType = DynamicTypeSize.xLarge
+
+    var body: some View {
+        Group {
+            switch notices.notice {
+            case .trouble(let error):
+                Text(error).foregroundStyle(look.transcript.trouble)
+            case .progress(let where_, let queued):
+                HStack {
+                    ProgressView()
+                    Text(where_)
+                    if let queued {
+                        Text(queued).foregroundStyle(look.transcript.caption)
+                    }
+                }
+            case .info(let info):
+                Text(info).foregroundStyle(look.transcript.caption)
+            case nil:
+                EmptyView()
+            }
+        }
+        .font(look.transcript.noticeFont)
+        .lineLimit(lineLimit)
+        .truncationMode(.tail)
+        .dynamicTypeSize(...Self.largestType)
+        .multilineTextAlignment(.center)
+        // The bar offers its item one line; a notice is read whole, wrapping below it.
+        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(Self.identifier)
+    }
+}
+
+extension ChatNotices.Said {
+    @MainActor init(_ harness: Harness) {
+        self.init(busy: harness.busy, status: harness.status, waiting: harness.waiting.count,
+                  error: harness.error, info: harness.info)
     }
 }
 

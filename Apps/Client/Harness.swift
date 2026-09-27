@@ -20,7 +20,17 @@ final class Harness {
     private(set) var hasRead = false
     private(set) var notice: String?
     private(set) var busy = false
-    private(set) var error: String?
+    /// The last failure, in words: what the chat's notice says.
+    var error: String? { failure?.words }
+    /// The last failure and what it came from, so a read that gets through takes down a read's
+    /// failure and no other, whatever the words.
+    private(set) var failure: Failure?
+
+    struct Failure: Equatable {
+        enum Source { case read, other }
+        var words: String
+        var source: Source = .other
+    }
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
     /// The person's turn the guest was cut off answering, which is not asked again unless the
@@ -269,7 +279,7 @@ final class Harness {
         turns = []
         hasRead = false
         notice = nil
-        error = nil
+        failure = nil
         status = nil
         busy = false
         context = nil
@@ -317,7 +327,7 @@ final class Harness {
                 if pending.first == next { pending.removeFirst() }
             }
         } catch {
-            self.error = "Not everything said has reached the log yet: \(Self.describe(error))"
+            failure = Failure(words: "Not everything said has reached the log yet: \(Self.describe(error))")
         }
         runner = nil
         lease = nil
@@ -346,18 +356,17 @@ final class Harness {
                 clearReadFailure()
                 return true
             }
-            self.error = Self.readFailure + TranscriptStore.message(for: error)
+            // The notice says what went wrong in the log's own words, which fit the two lines
+            // the navigation bar holds (`ChatNotices.lines`); a prefix naming the read does not.
+            failure = Failure(words: TranscriptStore.message(for: error), source: .read)
             return false
         }
     }
 
-    /// What a failed read says, ahead of why.
-    private static let readFailure = "Couldn't read the transcript: "
-
     /// A read got through, so a line saying the last one did not is no longer true. Any other
     /// failure stands until what it was about is tried again.
     private func clearReadFailure() {
-        if error?.hasPrefix(Self.readFailure) == true { error = nil }
+        if failure?.source == .read { failure = nil }
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
@@ -449,7 +458,7 @@ final class Harness {
     private func drain() async {
         guard !busy else { return }
         busy = true
-        error = nil
+        failure = nil
         info = nil
         while let next = pending.first {
             let task = Task { await run(next) }
@@ -525,7 +534,7 @@ final class Harness {
             // The person's turn is in the log; only the reply is owed, and nothing is going to
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
-            error = Self.describe(underlying)
+            failure = Failure(words: Self.describe(underlying))
             onTurnFailed?(attempt.nonce)
             await refresh()
             await refreshUnfinished()
@@ -542,21 +551,21 @@ final class Harness {
                 guard inFlight == generation, !Task.isCancelled, let writer else { return false }
                 let person = try await writer.append(.person, text, continuing: transcript, nonce: attempt.nonce)
                 show(person)
-                info = Self.describe(outcome) + " What you said is in the log; the reply will appear here."
+                info = Self.limbInfo(outcome)
                 status = nil
                 return true
             } catch {
                 guard inFlight == generation else { return false }
-                self.error = Self.describe(error)
+                failure = Failure(words: Self.describe(error))
                 onTurnFailed?(attempt.nonce)
             }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
-            error = "Signed out. Sign in again to continue."
+            failure = Failure(words: "Signed out. Sign in again to continue.")
             onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
-            self.error = Self.describe(error)
+            failure = Failure(words: Self.describe(error))
             onTurnFailed?(attempt.nonce)
             await refresh()
         }
@@ -594,7 +603,7 @@ final class Harness {
     static func describe(_ error: any Error) -> String {
         switch error {
         case TurnRunnerError.displaced:
-            "Another device became primary while Claude was answering. What you said is in the log; the reply will appear here."
+            "Another device took over mid-reply. Your words are in the log."
         case let error as GuestBridgeError:
             error.description
         case TokenProviderError.signedOut:
@@ -685,7 +694,7 @@ final class Harness {
             guard self.login == login else { return }
             if let reply = answered {
                 show(reply)
-                error = nil
+                failure = nil
                 await refresh()
                 // The reply is in the log, so anything the turn left in the memory goes out now.
                 await onPass?()
@@ -699,7 +708,7 @@ final class Harness {
             return
         } catch {
             guard self.login == login else { return }
-            self.error = Self.describe(error)
+            failure = Failure(words: Self.describe(error))
             await refreshUnfinished()
         }
     }
@@ -716,7 +725,7 @@ final class Harness {
         guard unfinished != nil, let guest else { return }
         await guest.askAgain()
         unfinished = nil
-        error = nil
+        failure = nil
         if answeringLoop { await wake() } else { await answerPending() }
     }
 
@@ -789,12 +798,15 @@ final class Harness {
         date.formatted(date: .omitted, time: .standard)
     }
 
-    static func describe(_ outcome: LeaseOutcome) -> String {
+    /// What the chat says when a turn went into the log for another device's primary to answer:
+    /// the words are saved, who answers them, and that the reply comes here. It is a notice in the
+    /// navigation bar, so it is short enough for two lines beside the badge on the narrowest phone.
+    static func limbInfo(_ outcome: LeaseOutcome) -> String {
         switch outcome {
-        case .primary: "This device is primary."
-        case .held(let by): "\(by.holder.rawValue) is primary right now."
-        case .unreachable(let lease): "\(lease.holder.rawValue) took over and can't be reached from here."
-        case .contended: "Another device is claiming primary."
+        case .primary: "Saved. The reply will appear here."
+        case .held(let by): "Saved. \(by.holder.rawValue) will answer here."
+        case .unreachable(let lease): "Saved. \(lease.holder.rawValue) will answer; it's out of reach now."
+        case .contended: "Saved. Another device will answer here."
         }
     }
 }

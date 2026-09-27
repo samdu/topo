@@ -96,12 +96,20 @@ struct Look: Equatable, Sendable {
         var bodyFont: Font
         /// A time.
         var labelFont: Font
-        /// The line at the head of the transcript saying this screen is only watching.
+        /// The line at the head of the transcript saying this screen is only watching, and the
+        /// chat's notices in the navigation bar (`ChatNotices`). `look.json` sets it no larger
+        /// than `largestNotice`.
         var noticeFont: Font
+        /// The largest `noticeFont` a document sets, in points: two lines of it fit the navigation
+        /// bar beside the badge, so a notice there never reaches down over the transcript.
+        static let largestNotice: Double = 15
         /// A turn's words.
         var text: Color = Theme.text
         /// A time, and the notice.
         var caption: Color = Theme.textMuted
+        /// A failure the chat reports in the navigation bar: the one line of the chat whose
+        /// colour says state, since it is the one that must not read as a caption.
+        var trouble: Color = .red
 
         init(_ screen: Screen = .current) {
             switch screen {
