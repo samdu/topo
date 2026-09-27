@@ -83,6 +83,25 @@ int topo_ish_describe(int pid, char *out, int length);
 /// otherwise. Requires a booted kernel.
 int topo_ish_mount(const char *host_dir, const char *point);
 
+/// `topo_ish_mount`'s contract for the memory's folder, through the vault's own filesystem: realfs
+/// with the open of every regular file coordinated (`NSFileCoordinator`) — a read open waits for
+/// any writer and has iCloud Drive bring an evicted file down first, a write open holds its
+/// coordination until the file is closed — and every rename, removal and creation coordinated
+/// as a write, each wait bounded (`TOPO_ISH_VAULT_WAIT_SECONDS`, then `_EIO`) and ended by a
+/// SIGKILL to the task that waits (`_EINTR`). The mirror's own `.topo` folder at the mount's root
+/// is refused `_EACCES` to every operation. 0, or a negative guest errno. Requires a booted
+/// kernel.
+int topo_ish_mount_vault(const char *host_dir, const char *point);
+
+/// How long the vault's filesystem waits for a coordination before the guest's call fails: the
+/// mirror's own bound on a download.
+#define TOPO_ISH_VAULT_WAIT_SECONDS 20
+
+/// Takes away the mount at `point`. `_EBUSY` while anything in the guest holds it — an open file,
+/// a working directory — and `_EINVAL` when nothing is mounted there. 0 on success. Requires a
+/// booted kernel.
+int topo_ish_unmount(const char *point);
+
 /// Makes `path` in the guest a symbolic link to `target`, its parents made where they are not. A
 /// link already pointing at `target` is left untouched; one pointing elsewhere is replaced; a path
 /// that is something other than a link is refused with `_EEXIST`. 0 on success, a negative guest

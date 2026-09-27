@@ -22,6 +22,9 @@ public final class Guest: Sendable {
         case mount(Int32)
         /// A link could not be made, with the guest errno.
         case link(Int32)
+        /// A mount could not be taken away, with the guest errno (`-16`, EBUSY, while anything in
+        /// the guest holds it).
+        case unmount(Int32)
 
         public var description: String {
             switch self {
@@ -31,6 +34,7 @@ public final class Guest: Sendable {
             case .wait(let errno): "the program could not be waited for (\(errno))"
             case .mount(let errno): "the directory could not be mounted (\(errno))"
             case .link(let errno): "the link could not be made (\(errno))"
+            case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             }
         }
     }
@@ -77,6 +81,27 @@ public final class Guest: Sendable {
     public func mount(_ host: URL, at point: String) throws {
         let result = host.withUnsafeFileSystemRepresentation { topo_ish_mount($0, point) }
         if result != 0 { throw Failure.mount(result) }
+    }
+
+    /// How long an open or a change in the memory's folder waits for its coordination before
+    /// the guest's call fails: the mirror's own bound on a download.
+    public static let vaultWait: Duration = .seconds(Int(TOPO_ISH_VAULT_WAIT_SECONDS))
+
+    /// Mounts the memory's folder `host` at `point` through the vault's own filesystem
+    /// (`topo_ish_mount_vault`): realfs with every open of a regular file and every change made
+    /// under file coordination, each wait bounded, and the mirror's `.topo` at its root refused.
+    /// The same folder at the same point again changes nothing; anything else there is refused.
+    /// Requires a booted kernel.
+    public func mountVault(_ host: URL, at point: String) throws {
+        let result = host.withUnsafeFileSystemRepresentation { topo_ish_mount_vault($0, point) }
+        if result != 0 { throw Failure.mount(result) }
+    }
+
+    /// Takes away the mount at `point`: refused while anything in the guest holds it, and when
+    /// nothing is mounted there. Requires a booted kernel.
+    public func unmount(_ point: String) throws {
+        let result = topo_ish_unmount(point)
+        if result != 0 { throw Failure.unmount(result) }
     }
 
     /// Makes `path` in the guest a symbolic link to `target`, replacing a link that points

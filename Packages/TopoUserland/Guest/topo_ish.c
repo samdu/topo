@@ -282,6 +282,28 @@ static ssize_t pack(const char *const *strings, char *out, size_t size, size_t *
     return (ssize_t) at;
 }
 
+// A task made for a program that could not be started ends as any task does, rather than being
+// left to init as one that never ran: a task like that takes no signal, so every termination after
+// it counts it as still running and none is ever confirmed. `do_exit` ends the thread it runs on,
+// so it runs on one of its own, as the task; the zombie it leaves is then reaped as init.
+static void *exit_unstarted(void *task) {
+    current = task;
+    do_exit(127 << 8);
+}
+
+static void end_unstarted(struct task *task) {
+    pid_t_ pid = task->pid;
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, exit_unstarted, task) != 0)
+        return;
+    pthread_join(thread, NULL);
+    struct task *previous = current;
+    current = pid_get_task(1);
+    struct siginfo_ info = {0};
+    do_wait(TOPO_P_PID, pid, &info, NULL, TOPO_WEXITED);
+    current = previous;
+}
+
 int topo_ish_spawn(const char *path, const char *const *argv, const char *const *envp,
                    int *stdin_fd, int *stdout_fd, int *stderr_fd) {
     if (!booted)
@@ -341,8 +363,8 @@ int topo_ish_spawn(const char *path, const char *const *argv, const char *const 
 
     result = do_execve(path, argc, args, env);
     if (result < 0) {
-        // The task never ran; it is left to init as a child that never started, which is what the
-        // fork's own launcher does with one.
+        // The task never ran: it exits, closing the guest's ends of the pipes, and is reaped.
+        end_unstarted(task);
         goto fail;
     }
     int pid = task->pid;
@@ -564,7 +586,13 @@ static void stop_speaking_as_init(struct task *previous) {
     pthread_mutex_unlock(&spawn_lock);
 }
 
-int topo_ish_mount(const char *host_dir, const char *point_raw) {
+// The vault's filesystem: realfs with every open of a regular file and every mutation made under
+// file coordination (topo_vaultfs.m).
+extern const struct fs_ops topo_vaultfs;
+
+// A mount of `fs` from `host_dir` at `point`, the contract `topo_ish_mount` states: a standing mount
+// of the same source by the same filesystem is left alone, anything else there is refused EBUSY.
+static int mount_with(const struct fs_ops *fs, const char *host_dir, const char *point_raw) {
     if (!booted)
         return _ENODEV;
     // realfs keeps the source by its real path, so that is what an existing mount is compared by.
@@ -589,13 +617,36 @@ int topo_ish_mount(const char *host_dir, const char *point_raw) {
         }
     }
     if (standing)
-        err = strcmp(mount->source, source) == 0 ? 0 : _EBUSY;
+        err = strcmp(mount->source, source) == 0 && mount->fs == fs ? 0 : _EBUSY;
     else
-        err = do_mount(&realfs, source, point, "", 0);
+        err = do_mount(fs, source, point, "", 0);
     unlock(&mounts_lock);
 out:
     stop_speaking_as_init(previous);
     free(source);
+    return err;
+}
+
+int topo_ish_mount(const char *host_dir, const char *point) {
+    return mount_with(&realfs, host_dir, point);
+}
+
+int topo_ish_mount_vault(const char *host_dir, const char *point) {
+    return mount_with(&topo_vaultfs, host_dir, point);
+}
+
+int topo_ish_unmount(const char *point_raw) {
+    if (!booted)
+        return _ENODEV;
+    struct task *previous = speak_as_init();
+    char point[MAX_PATH];
+    int err = path_normalize(AT_PWD, point_raw, point, N_SYMLINK_NOFOLLOW);
+    if (err >= 0) {
+        lock(&mounts_lock);
+        err = do_umount(point);
+        unlock(&mounts_lock);
+    }
+    stop_speaking_as_init(previous);
     return err;
 }
 

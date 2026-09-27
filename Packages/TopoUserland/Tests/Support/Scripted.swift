@@ -139,6 +139,7 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     private var made: [ScriptedProcess] = []
     private var resumes: [String?] = []
     private var asked: [String?] = []
+    private var told: [Bool?] = []
     private var holdNext = false
     private var gate: CheckedContinuation<Void, Never>?
 
@@ -146,6 +147,8 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
     var resumed: [String?] { lock.withLock { resumes } }
     /// The model each launch was asked for, in order.
     var models: [String?] { lock.withLock { asked } }
+    /// What each launch was told of the memory, in order.
+    var memories: [Bool?] { lock.withLock { told } }
     var last: ScriptedProcess? { processes.last }
 
     func holdNextLaunch() { lock.withLock { holdNext = true } }
@@ -161,10 +164,11 @@ final class ScriptedLauncher: ResidentLauncher, @unchecked Sendable {
         waiting?.resume()
     }
 
-    func launch(resume session: String?, model: String?) async throws -> any ResidentProcess {
+    func launch(resume session: String?, model: String?, memory: Bool?) async throws -> any ResidentProcess {
         let hold = lock.withLock { () -> Bool in
             resumes.append(session)
             asked.append(model)
+            told.append(memory)
             return holdNext
         }
         if hold {
