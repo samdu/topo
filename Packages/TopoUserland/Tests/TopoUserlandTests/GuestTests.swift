@@ -19,6 +19,17 @@ final class GuestTests: XCTestCase {
         XCTAssertEqual(exit.errors, "err\n")
     }
 
+    /// The guest is written a resolver, which the minirootfs has none of, as a file the fakefs
+    /// knows; a second write leaves it as it is.
+    func testTheGuestHasAResolver() async throws {
+        _ = try SharedGuest.booted()
+        try await Guest.shared.writeResolver()
+        try await Guest.shared.writeResolver()
+        let exit = try await Guest.shared.run("/bin/sh", ["-c", "cat /etc/resolv.conf && [ -f /etc/resolv.conf ]"])
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        XCTAssertEqual(exit.output, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    }
+
     /// The guest answers to its own name, whatever the host is called: busybox's shell asks at
     /// start, and a host name longer than the kernel's 65-byte field is a crash rather than a name.
     func testTheGuestHasItsOwnHostname() async throws {
