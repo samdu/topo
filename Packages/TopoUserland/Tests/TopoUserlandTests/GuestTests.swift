@@ -50,9 +50,12 @@ final class GuestTests: XCTestCase {
                        "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
     }
 
-    /// The phone's resolver answers numeric addresses, the simulator's being its Mac's.
+    /// The phone's resolver answers numeric addresses, the simulator's being its Mac's, which
+    /// lists at least one.
     func testThePhonesNameserversAreAddresses() {
-        for server in Guest.systemNameservers() {
+        let servers = Guest.systemNameservers()
+        XCTAssertFalse(servers.isEmpty, "res_ninit listed no server, or failed")
+        for server in servers {
             XCTAssertNotEqual(Guest.resolverFile(for: [server]), Guest.resolverFile(for: []), server)
         }
     }

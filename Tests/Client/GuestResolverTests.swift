@@ -6,9 +6,16 @@ import XCTest
 private final class FakePathChanges: PathChanges, @unchecked Sendable {
     private let lock = NSLock()
     private var changed: (@Sendable () -> Void)?
+    private var starts = 0
     private(set) var cancelled = false
 
-    func start(_ changed: @escaping @Sendable () -> Void) { lock.withLock { self.changed = changed } }
+    var started: Int { lock.withLock { starts } }
+    func start(_ changed: @escaping @Sendable () -> Void) {
+        lock.withLock {
+            self.changed = changed
+            starts += 1
+        }
+    }
     func cancel() { lock.withLock { cancelled = true } }
     func change() { lock.withLock { changed }?() }
 }
@@ -62,5 +69,17 @@ final class GuestResolverTests: XCTestCase {
         await resolver.start()
         await resolver.start()
         XCTAssertEqual(servers.written.count, 1)
+        XCTAssertEqual(changes.started, 1, "a second start listened to the path again")
+    }
+
+    /// The phone's own path monitor calls back once started, which is the resolver's first cue
+    /// after the boot's write and its only one until the network changes.
+    func testThePhonesPathMonitorCallsBack() async {
+        let changes = NetworkPathChanges()
+        let called = expectation(description: "the path monitor called back")
+        called.assertForOverFulfill = false
+        changes.start { called.fulfill() }
+        await fulfillment(of: [called], timeout: 5)
+        changes.cancel()
     }
 }

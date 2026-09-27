@@ -78,7 +78,7 @@ public final class Guest: Sendable {
         MemorySampler.shared.start()
     }
 
-    /// The name servers the guest falls back to when the phone lists none of its own.
+    /// The name servers the guest falls back to when the phone lists none the guest can use.
     public static let fallbackNameservers = ["1.1.1.1", "8.8.8.8"]
 
     /// The name servers the phone's resolver is using now — its network's, or a VPN's while one is
