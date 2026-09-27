@@ -33,6 +33,17 @@ struct GuestOnePassword: OnePasswordRunning {
     }
 }
 
+extension OnePasswordExit {
+    /// What `op` said went wrong: its `[ERROR]` lines when it wrote any, without the notes it
+    /// writes on every run in the guest (the daemon it may not start, the config directory the
+    /// call made), otherwise all of its standard error; empty when it said nothing.
+    var said: String {
+        let lines = errors.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
+        let errorLines = lines.filter { $0.hasPrefix("[ERROR]") }
+        return (errorLines.isEmpty ? lines.filter { !$0.isEmpty } : errorLines).joined(separator: "\n")
+    }
+}
+
 /// The vaults `op vault list --format json` names, or nil when what it printed is not that list.
 enum OnePasswordVaults {
     static let arguments = ["vault", "list", "--format", "json"]

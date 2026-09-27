@@ -121,10 +121,13 @@ struct TopoApp: App {
         #endif
     }
 
-    /// The connect `TOPO_DEBUG_CONNECT_GITHUB` asks for, in a debug build. Nothing in a release one.
-    private func debugConnectGitHub() async {
+    /// The connects `TOPO_DEBUG_CONNECT_GITHUB` and `TOPO_DEBUG_ONEPASSWORD_TOKEN` ask for, in a
+    /// debug build. Nothing in a release one.
+    private func debugConnections() async {
         #if DEBUG
-        await DebugRun.connectGitHub(connections)
+        async let github: Void = DebugRun.connectGitHub(connections)
+        async let onePassword: Void = DebugRun.connectOnePassword(connections)
+        _ = await (github, onePassword)
         #endif
     }
 
@@ -173,7 +176,7 @@ struct TopoApp: App {
                 .task { await debugTurn() }
                 .task { await debugUserland() }
                 .task { await debugGuestTurn() }
-                .task { await debugConnectGitHub() }
+                .task { await debugConnections() }
         }
     }
 }

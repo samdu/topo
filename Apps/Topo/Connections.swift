@@ -112,8 +112,7 @@ final class Connections {
                 let exit = try await op.run(OnePasswordVaults.arguments, token: token)
                 guard generation == self.onePasswordGeneration else { return }
                 guard exit.status == 0, let vaults = OnePasswordVaults.read(exit.output) else {
-                    let said = exit.errors.trimmingCharacters(in: .whitespacesAndNewlines)
-                    onePassword = .failed("1Password refused the token: \(said.isEmpty ? "status \(exit.status)" : said)")
+                    onePassword = .failed("1Password refused the token: \(exit.said.isEmpty ? "status \(exit.status)" : exit.said)")
                     return
                 }
                 guard !vaults.isEmpty else {
@@ -270,6 +269,25 @@ final class WebAuthBrowser: Browser {
 #if DEBUG
 extension DebugRun {
     static let connectGitHubVariable = "TOPO_DEBUG_CONNECT_GITHUB"
+    static let onePasswordTokenVariable = "TOPO_DEBUG_ONEPASSWORD_TOKEN"
+
+    /// `TOPO_DEBUG_ONEPASSWORD_TOKEN=<ops_…>`: connects 1Password at launch as a paste does — the
+    /// token checked with `op vault list` in the guest and saved with the vaults it reaches — and
+    /// prints each state the row takes (the vaults' names or 1Password's refusal, never the token),
+    /// so a simulator run can then call `topo secret` against a real vault. The token arrives as
+    /// the launch's environment and nowhere else, as the setup token does.
+    @MainActor static func connectOnePassword(_ connections: Connections,
+                                              environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        guard let token = environment[onePasswordTokenVariable], !token.isEmpty else { return }
+        connections.connectOnePassword(pasted: token)
+        var said = ""
+        while !Task.isCancelled {
+            let now = "\(connections.onePassword)".replacingOccurrences(of: token, with: "[token]")
+            if now != said { print("[topo-debug] 1password: \(now)"); said = now }
+            if case .verifying = connections.onePassword {} else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
 
     /// `TOPO_DEBUG_CONNECT_GITHUB=1`: connects GitHub at launch as the screen's Connect does — a
     /// real code from github.com, copied, and GitHub's page for it in the sheet — printing each

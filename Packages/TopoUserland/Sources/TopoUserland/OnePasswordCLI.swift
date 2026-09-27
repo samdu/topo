@@ -5,9 +5,10 @@ import Foundation
 /// manifest home at the zip's pin; the guest's own BusyBox `unzip` extracts `op` from it into a
 /// directory of its own outside the downloader's homes (whose sweep removes anything that is not a
 /// manifest file), and the binary is checked against its own pin — size, then digest — on every
-/// install before it is made executable and mounted. One that does not match is made not
-/// executable and nothing is mounted, so no token is ever handed to a binary nobody pinned. It is
-/// not linked onto the guest's path: the mind can see the file, and without the token it is inert.
+/// install before it is made executable and mounted, and again before every run (`check`), since
+/// the guest can write the directory it is mounted from. One that does not match is made not
+/// executable, so no token is handed to a binary nobody pinned. It is not linked onto the guest's
+/// path: the mind can see the file, and without the token it is inert.
 public struct OnePasswordInstaller: Sendable {
     public enum Failure: Error, Equatable, CustomStringConvertible {
         case wrongSize(expected: Int64, got: Int64)
@@ -83,6 +84,17 @@ public struct OnePasswordInstaller: Sendable {
             throw error
         }
         try allowExecution()
+    }
+
+    /// The binary checked against its pin before a run: one that does not match is made not
+    /// executable, so it is never run with the token. Blocking, as `mount` is.
+    public func check() throws {
+        do {
+            try verify()
+        } catch {
+            forbidExecution()
+            throw error
+        }
     }
 
     func verify() throws {

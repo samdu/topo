@@ -75,8 +75,7 @@ struct SecretTool: Tool {
             return .failed("1Password's op could not be run in the guest: \(error)\n")
         }
         guard exit.status == 0 else {
-            let said = exit.errors.trimmingCharacters(in: .whitespacesAndNewlines)
-            return .failed("op: \(said.isEmpty ? "status \(exit.status)" : said)\n")
+            return .failed("op: \(exit.said.isEmpty ? "status \(exit.status)" : exit.said)\n")
         }
         switch call {
         case .vaults:
