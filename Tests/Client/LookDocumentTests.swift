@@ -503,6 +503,29 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertFalse(reading.summary.contains("bubble.f"), reading.summary)
         XCTAssertTrue(reading.summary.contains("and 2 more"), reading.summary)
     }
+
+    /// What a path names, as the reader knows it: a part holds fields, top-level or nested; a
+    /// field is one, a compound included; a key inside a compound is inside it.
+    func testThePlaceOfAPathIsTheReaders() {
+        for part in ["transcript", "mascot", "composer.well", "mascot.debug"] {
+            XCTAssertEqual(LookDocument.place(of: part.split(separator: ".").map(String.init)), .part, part)
+        }
+        for field in ["mascot.scale", "mascot.pin", "composer.glow"] {
+            XCTAssertEqual(LookDocument.place(of: field.split(separator: ".").map(String.init)), .field, field)
+        }
+        XCTAssertEqual(LookDocument.place(of: ["composer", "glow", "radius"]), .inside("composer.glow"))
+        XCTAssertEqual(LookDocument.place(of: ["mascot", "wings"]), .unknown)
+        XCTAssertEqual(LookDocument.place(of: ["nothing"]), .unknown)
+    }
+
+    /// Which compound fields read an object onto what they hold, as the reader says: a shadow
+    /// and a point do; a font and a pin are replaced whole; a scalar and a part are not compounds.
+    func testTheReaderSaysWhichCompoundsMerge() {
+        XCTAssertTrue(LookDocument.merges(["composer", "glow"]))
+        for path in [["transcript", "bodyFont"], ["mascot", "pin"], ["mascot", "scale"], ["mascot"], ["nothing"]] {
+            XCTAssertFalse(LookDocument.merges(path), path.joined(separator: "."))
+        }
+    }
 }
 
 /// The look walked by reflection, leaf by leaf, so a claim about "every field" is about the type
