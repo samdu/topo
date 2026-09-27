@@ -349,11 +349,11 @@ final class Speaker {
         done()
     }
 
-    /// The reply: one sentence at a time, each synthesised behind the one before and its frames
-    /// queued for playback as soon as they exist. A sentence the voice fails on is skipped rather
-    /// than ending the reply.
+    /// The reply: its words as the voice reads them (`Speakable`), one sentence at a time, each
+    /// synthesised behind the one before and its frames queued for playback as soon as they
+    /// exist. A sentence the voice fails on is skipped rather than ending the reply.
     private func speakLocally(_ text: String) {
-        let sentences = Self.sentences(of: text)
+        let sentences = Self.sentences(of: Speakable.text(from: text))
         guard !sentences.isEmpty else { done(); return }
         let mine = generation
         making = sentences.count
