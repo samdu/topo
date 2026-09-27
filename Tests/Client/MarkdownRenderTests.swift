@@ -274,6 +274,17 @@ final class MarkdownRenderTests: XCTestCase {
             }
         }
 
+        /// Turns the clock until `value` reads the same twice running a tenth of a second apart,
+        /// for up to `seconds`: a layout has settled when what it lays out has stopped changing.
+        func settle<Value: Equatable>(for seconds: TimeInterval = 5, _ value: () -> Value) {
+            var last = value()
+            poll(for: seconds) {
+                let now = value()
+                defer { last = now }
+                return now == last
+            }
+        }
+
         func image() -> UIImage {
             UIGraphicsImageRenderer(size: size).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -320,9 +331,12 @@ final class MarkdownRenderTests: XCTestCase {
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
         look.markdown.codePulse.width = 3
-        // As slow as a breath can be, so a picture taken of a transcript this long — a good part
-        // of a second on a loaded runner — still finds the pulse under way.
-        look.markdown.codePulse.cycle = 5
+        // A breath slower than a look can make one (0.3–5 s), because the pulse is judged from
+        // pictures of a transcript this long, which take seconds each on a loaded runner: at 5 s a
+        // picture every 5 s lands on the rest between the breaths and on the end, and sees none of
+        // it. At 12 s the first breath is past a quarter of its peak from 2 s to 10 s, the whole of
+        // the look after the cue from its third second, so any picture taken then finds it.
+        look.markdown.codePulse.cycle = 12
         let device = DeviceID("phone")
         let at = Date(timeIntervalSince1970: 1_700_000_000)
         let filler = (2...40).map { n in
@@ -336,28 +350,35 @@ final class MarkdownRenderTests: XCTestCase {
             .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
                                   look: look, size: self.stage)
         defer { stage.close() }
-        stage.wait(1)
+        stage.poll(for: 5) { Self.scrollView(in: stage.window) != nil }
+        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
+        // The transcript opens at its end and goes on settling there as the lazy stack measures
+        // the rows it has made — on a loaded runner by a third of a row, a second after it opened —
+        // so where it stands is read once it has stopped moving, and a move after is the cue's.
+        stage.settle { [scroll.contentOffset.y, scroll.contentSize.height] }
         let before = try Pixels(stage.image(), blank: true).count(outline)
         if first {
             XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
         } else {
             XCTAssertGreaterThan(before, 20, "the fixture's block is not on the screen")
         }
-        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
         let offset = scroll.contentOffset.y
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
         // Looked at every tenth of a second until the block has been seen and seen pulsing, for
-        // up to ten seconds — the whole pulse — so a slow runner is waited for and a block never
-        // scrolled to or never pulsed is still seen not to be.
+        // up to ten seconds — the whole of the first breath's peak — so a slow runner is waited for
+        // and a block never scrolled to or never pulsed is still seen not to be.
         // How far the transcript moved is the most it was ever away from where it stood, read at
         // every look and for a second after, so a scroll there and back again is a move.
+        // The pulse is drawn over the enclosure's outline and covers its ink while it breathes, so
+        // a block on the screen is its outline, its pulse or some of each, and it is shown by both.
         var shown = 0, pulsed = 0, moved: CGFloat = 0
         try stage.poll { [self] in
             moved = max(moved, abs(scroll.contentOffset.y - offset))
             let drawn = try Pixels(stage.image(), blank: true)
-            shown = max(shown, drawn.count(outline))
-            pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
+            let ring = pulsing(drawn, rows: 0...drawn.height)
+            shown = max(shown, drawn.count(outline) + ring)
+            pulsed = max(pulsed, ring)
             return shown > 20 && pulsed > 20
         }
         stage.poll(for: 1) {

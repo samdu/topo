@@ -669,6 +669,17 @@ final class MascotGeometryTests: XCTestCase {
             window.layoutIfNeeded()
         }
         let canvas = find(MascotCanvas.self, in: window)
+        // The field as the chat reports it once it has stopped changing, read twice running a tenth
+        // of a second apart: a text's lines are reported after it is drawn (`MascotLines`), so on a
+        // loaded runner a field read at a fixed time still has a paragraph's whole frame in it.
+        var field = canvas?.roam?.field
+        for _ in 0..<50 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            window.layoutIfNeeded()
+            let now = canvas?.roam?.field
+            if now == field { break }
+            field = now
+        }
         // The roam settled and a frame of him drawn, on the canvas's own clock.
         if let canvas { for _ in 0..<60 { canvas.step(1.0 / 30) } }
         CATransaction.flush()
