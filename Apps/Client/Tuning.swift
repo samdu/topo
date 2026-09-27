@@ -170,9 +170,9 @@ final class Tuning {
     /// first by the document's own reader, read alone onto `look`: kept only when the reader took it
     /// whole, with no note; otherwise that field is unchanged and the reader's note says why, and
     /// the others still apply. Kept, a field is worn at once and replaces whatever a slider, the
-    /// placement or a drag had set for it; a compound field's object (`composer.glow`) is merged
-    /// into what was set for it before, as the reader wears it, so `{"x": 2}` after `{"radius":
-    /// 9}` keeps the radius.
+    /// placement or a drag had set for it. A compound field the reader merges onto what it holds
+    /// (`LookDocument.merges`: `composer.glow`) is merged into what was set for it before, so
+    /// `{"x": 2}` after `{"radius": 9}` keeps the radius; one it replaces whole, a font, is replaced.
     func set(_ path: [String], to value: Any, over look: Look) -> (kept: [String], refused: [String]) {
         let name = path.joined(separator: ".")
         guard !path.isEmpty, path.allSatisfy({ !$0.isEmpty }) else { return ([], ["\(name) is not a field of the look"]) }
@@ -192,8 +192,8 @@ final class Tuning {
             if let note = reading.notes.first { refused.append(note); continue }
             guard case .read(let count) = reading.state, count > 0 else { refused.append("\(fieldName) sets nothing"); continue }
             var merged = value
-            if let object = value as? [String: Any], let before = stored(field) as? [String: Any] {
-                merged = Self.merge(object, under: before)
+            if let object = value as? [String: Any], LookDocument.merges(field), let before = stored(field) as? [String: Any] {
+                merged = before.merging(object) { $1 }
             }
             mind = Self.setting(field, to: merged, in: mind)
             clearSlid(field)
