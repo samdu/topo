@@ -212,7 +212,7 @@ round_is() {
       pass "$name: no round section before round 3"
     fi
   elif ! grep -qx -- "----- REVIEW ROUND $want -----" "$work/$name.out" \
-    || [ "$(tail -n 1 "$work/$name.out")" != "this prompt. The coordinator files the non-blocking findings as issues." ]; then
+    || [ "$(tail -n 1 "$work/$name.out")" != "of \`summary\` and not raised again as a finding." ]; then
     fail "$name: does not end with the round $want convergence rule"
   else
     # Each clause of the rule, matched across its line breaks: a clause dropped from it is a class of
