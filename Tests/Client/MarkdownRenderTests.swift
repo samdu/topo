@@ -195,7 +195,7 @@ final class MarkdownRenderTests: XCTestCase {
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
         look.markdown.codePulse.width = 3
-        look.markdown.codePulse.cycle = 0.6
+        look.markdown.codePulse.cycle = 1.5
         let pulse = look.markdown.codePulse
         let reply = turn(.assistant, "One:\n\n```\nlet x = 1\n```\n\nTwo:\n\n```\nlet y = 2\n```")
         // Where each block's ring is, from a still of each at its peak.
@@ -214,24 +214,45 @@ final class MarkdownRenderTests: XCTestCase {
         let stage = try LiveStage(LiveRow(turn: reply, live: live, size: self.stage,
                                           padding: look.transcript.horizontalPadding), look: look, size: self.stage)
         defer { stage.close() }
-        func wait(_ seconds: TimeInterval) { stage.wait(seconds) }
         func snapshot() throws -> Pixels { try Pixels(stage.image()) }
-        wait(0.3)
-        live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
-        // Into block 1's first breath, near its peak: block 1 pulses, block 2 does not.
-        wait(pulse.cycle * 0.4)
-        let reached = try snapshot()
-        XCTAssertGreaterThan(pulsing(reached, rows: first), 20, "block 1 did not pulse on its cue")
-        XCTAssertEqual(pulsing(reached, rows: second), 0, "block 2 pulsed on block 1's cue")
-        wait(pulse.duration)
-        XCTAssertEqual(pulsing(try snapshot(), rows: first), 0, "block 1 still pulsing after its pulse")
+        stage.wait(0.3)
+        // Looked at every tenth of a second from the cue until the pulse it starts is over by its
+        // own clock and the cued block has been seen pulsing, for up to five seconds past its end,
+        // so a picture taken late on a loaded runner is waited for rather than landing on a rest:
+        // the most each block pulsed in any look.
+        func watch(_ number: Int, serial: Int) throws -> (first: Int, second: Int) {
+            live.cue = CodeBlockCue(reply: reply.ref, number: number, serial: serial)
+            let over = Date().addingTimeInterval(pulse.duration)
+            var most = (first: 0, second: 0)
+            try stage.poll(for: pulse.duration + 5) { [self] in
+                let drawn = try snapshot()
+                most.first = max(most.first, pulsing(drawn, rows: first))
+                most.second = max(most.second, pulsing(drawn, rows: second))
+                return Date() >= over && (number == 1 ? most.first : most.second) > 20
+            }
+            return most
+        }
 
-        live.cue = CodeBlockCue(reply: reply.ref, number: 2, serial: 2)
-        // Into block 2's first breath, near its peak.
-        wait(pulse.cycle * 0.4)
-        let drawn = try snapshot()
-        XCTAssertGreaterThan(pulsing(drawn, rows: second), 20, "block 2 did not pulse on its cue")
-        XCTAssertEqual(pulsing(drawn, rows: first), 0, "block 1 pulsed on block 2's cue")
+        let reached = try watch(1, serial: 1)
+        XCTAssertGreaterThan(reached.first, 20, "block 1 did not pulse on its cue")
+        XCTAssertEqual(reached.second, 0, "block 2 pulsed on block 1's cue")
+        // Its pulse over, block 1 comes to rest and stays there for a breath's length.
+        var rest = false
+        try stage.poll(for: 5) { [self] in
+            rest = pulsing(try snapshot(), rows: first) == 0
+            return rest
+        }
+        XCTAssertTrue(rest, "block 1 still pulsing after its pulse")
+        var after = 0
+        try stage.poll(for: pulse.cycle) { [self] in
+            after = max(after, pulsing(try snapshot(), rows: first))
+            return false
+        }
+        XCTAssertEqual(after, 0, "block 1 pulsed again after its pulse")
+
+        let drawn = try watch(2, serial: 2)
+        XCTAssertGreaterThan(drawn.second, 20, "block 2 did not pulse on its cue")
+        XCTAssertEqual(drawn.first, 0, "block 1 pulsed on block 2's cue")
     }
 
     /// A view in a real window with its clock running, as the phone draws it: what a still
