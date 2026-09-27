@@ -298,11 +298,9 @@ final class StopWhileSpeakingTests: XCTestCase {
         let showing = { Composer.MicState(voice, speaking: speaker.speaking) }
 
         await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
-        XCTAssertTrue(speaker.awaitReply("earlier", readAloud: true).held)
         XCTAssertTrue(speaker.speak("Paris is the capital. It is on the Seine.", answering: "earlier"))
         XCTAssertTrue(speaker.waitingForMicrophone)
         XCTAssertEqual(settled.texts, [], "a reply still waiting settled its turn")
-        XCTAssertEqual(speaker.awaiting, ["earlier"])
 
         // The play queue's engine will not start when the release comes to read the reply.
         seams.playEngineRefusals = 1
@@ -313,10 +311,12 @@ final class StopWhileSpeakingTests: XCTestCase {
         XCTAssertFalse(speaker.speaking, "nothing renders, so nothing is read")
         XCTAssertTrue(speaker.waitingForMicrophone, "the refused reply was dropped")
         XCTAssertEqual(settled.texts, [], "the refused reply settled its turn, so it is owed nothing")
-        XCTAssertEqual(speaker.awaiting, ["earlier"], "the refused reply's wait went")
 
-        // The next ordinary press keeps the reply and its wait; its release reads it, and only
+        // A wait stands for it now (the refusal's own engine is gone and the next one starts). The
+        // next ordinary press keeps the reply and its wait; its release reads it, and only
         // then is its turn settled and its wait let go.
+        XCTAssertTrue(speaker.awaitReply("earlier", readAloud: true).held)
+        XCTAssertEqual(speaker.awaiting, ["earlier"])
         await press.gesture(true, drawn: showing(), speaker: speaker, voice: voice) { sent.add($0) }?.value
         XCTAssertTrue(speaker.waitingForMicrophone)
         XCTAssertEqual(speaker.awaiting, ["earlier"], "the press ended the wait of a reply still owed")
