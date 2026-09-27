@@ -106,11 +106,15 @@ final class CapturingPlayerNode: AVAudioPlayerNode {
     /// The frame count of every buffer scheduled, anywhere, in order. The suite is serial on the
     /// main actor; a test that reads it clears it first.
     nonisolated(unsafe) static var scheduled: [AVAudioFrameCount] = []
+    /// The loudest sample of each, in the same order: what a buffer that should be silence holds.
+    nonisolated(unsafe) static var peaks: [Float] = []
 
     override func scheduleBuffer(_ buffer: AVAudioPCMBuffer,
                                  completionCallbackType: AVAudioPlayerNodeCompletionCallbackType,
                                  completionHandler: AVAudioPlayerNodeCompletionHandler?) {
         CapturingPlayerNode.scheduled.append(buffer.frameLength)
+        let samples = UnsafeBufferPointer(start: buffer.floatChannelData?[0], count: Int(buffer.frameLength))
+        CapturingPlayerNode.peaks.append(samples.reduce(0) { max($0, abs($1)) })
         super.scheduleBuffer(buffer, completionCallbackType: completionCallbackType,
                              completionHandler: completionHandler)
     }
@@ -850,8 +854,16 @@ final class MediaServicesResetTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = await self.speaker(seams, audio, center, heard: .dataRendered)
         CapturingPlayerNode.scheduled = []
+        CapturingPlayerNode.peaks = []
         speaker.speak("```\nlet a = 1\n```\n\nAfter.", reply: TurnRef(device: DeviceID("phone"), sequence: 9))
         await settle("both sentences queued") { CapturingPlayerNode.scheduled.filter { $0 == 1_920 }.count == 2 }
+        // What carries the block's mark is a lead-in of silence ahead of its first frame: queued
+        // first, its length, and every sample of it zero.
+        let lead = try XCTUnwrap(CapturingPlayerNode.scheduled.firstIndex(of: PlayQueue.leadIn), "no lead-in")
+        let frame = try XCTUnwrap(CapturingPlayerNode.scheduled.firstIndex(of: 1_920))
+        XCTAssertLessThan(lead, frame, "the lead-in is not ahead of the block's frame")
+        XCTAssertEqual(CapturingPlayerNode.peaks[lead], 0, "the lead-in is not silence")
+        XCTAssertGreaterThan(CapturingPlayerNode.peaks[frame], 0, "the block's frame is silence")
         await drain()
         XCTAssertNil(speaker.cue, "the block was cued as it was queued, before a frame was heard")
         XCTAssertEqual(speaker.report.blocks, [])

@@ -25,11 +25,13 @@ struct TranscriptView: View {
     var cue: CodeBlockCue?
     @Environment(\.look) private var look
     /// The turns whose rows the lazy stack has made, which a code block can be scrolled to by its
-    /// own place; a reference, so a row coming and going redraws nothing.
+    /// own place, and the block waiting on its row to be made; a reference, so a row coming and
+    /// going redraws nothing.
     @State private var made = MadeRows()
 
     final class MadeRows {
         var turns: Set<TurnRef> = []
+        var pending: CodeBlockCue.Place?
     }
 
     var body: some View {
@@ -78,15 +80,22 @@ struct TranscriptView: View {
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the
-            // block after it on the next pass, once the row is made.
+            // block once it says it has been made — however tall the row, and wherever in it.
             .onChange(of: cue?.serial) { _, _ in
                 guard let cue else { return }
                 guard made.turns.contains(cue.reply) else {
+                    made.pending = cue.place
                     proxy.scrollTo(cue.reply, anchor: nil)
-                    DispatchQueue.main.async { withAnimation { proxy.scrollTo(cue.place, anchor: nil) } }
                     return
                 }
+                made.pending = nil
                 withAnimation { proxy.scrollTo(cue.place, anchor: nil) }
+            }
+            .environment(\.codeBlockAppeared) { place in
+                guard made.pending == place else { return }
+                made.pending = nil
+                // Made in this pass, laid out by the next.
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(place, anchor: nil) } }
             }
         }
     }

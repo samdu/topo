@@ -665,7 +665,11 @@ final class PlayQueue: @unchecked Sendable {
         buffer.frameLength = AVAudioFrameCount(samples.count)
         samples.withUnsafeBufferPointer { buffer.floatChannelData![0].update(from: $0.baseAddress!, count: samples.count) }
         let silence = begins == nil ? nil : AVAudioPCMBuffer(pcmFormat: format, frameCapacity: Self.leadIn)
-        silence?.frameLength = Self.leadIn
+        if let silence {
+            // A buffer's memory is not cleared when it is made: silence is written, not assumed.
+            silence.frameLength = Self.leadIn
+            silence.floatChannelData![0].update(repeating: 0, count: Int(Self.leadIn))
+        }
         let (era, lead): (Int, AVAudioPCMBuffer?) = lock.withLock {
             var lead: AVAudioPCMBuffer?
             if let begins {

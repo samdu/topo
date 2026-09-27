@@ -218,7 +218,12 @@ final class MarkdownRenderTests: XCTestCase {
         func snapshot() throws -> Pixels { try Pixels(stage.image()) }
         wait(0.3)
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
-        wait(pulse.duration + 0.4)
+        // Into block 1's first breath, near its peak: block 1 pulses, block 2 does not.
+        wait(pulse.cycle * 0.4)
+        let reached = try snapshot()
+        XCTAssertGreaterThan(pulsing(reached, rows: first), 20, "block 1 did not pulse on its cue")
+        XCTAssertEqual(pulsing(reached, rows: second), 0, "block 2 pulsed on block 1's cue")
+        wait(pulse.duration)
         XCTAssertEqual(pulsing(try snapshot(), rows: first), 0, "block 1 still pulsing after its pulse")
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 2, serial: 2)
@@ -274,6 +279,33 @@ final class MarkdownRenderTests: XCTestCase {
     /// A block the voice reaches in a reply the lazy transcript has not made yet — far above,
     /// scrolled away from — is scrolled to and pulses: its row is made with the cue already set.
     func testABlockInARowNotYetMadeIsScrolledToAndPulses() throws {
+        let reached = try reach("Here:\n\n```\nlet x = 1\n```", first: true)
+        XCTAssertGreaterThan(reached.shown, 20, "the block was not scrolled into view")
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+    }
+
+    /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
+    /// shows its top, and the block is scrolled to once the row has made it.
+    func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
+        let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
+        let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
+        XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+    }
+
+    /// A block already whole on the screen, cued, pulses where it is: the transcript does not
+    /// move by a point.
+    func testABlockAlreadyOnTheScreenIsNotScrolled() throws {
+        let reached = try reach("Here:\n\n```\nlet x = 1\n```", first: false)
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block did not pulse")
+        XCTAssertEqual(reached.moved, 0, "the transcript scrolled for a block already on the screen")
+    }
+
+    /// A live transcript of 40 turns with `text` as its first reply (off the screen, its row not
+    /// made, the transcript opening at its end) or its last (on the screen), and that reply's
+    /// first block cued: the most of the block's enclosure and of the pulse any picture showed
+    /// while the pulse ran, and how far the transcript scrolled.
+    private func reach(_ text: String, first: Bool) throws -> (shown: Int, pulsed: Int, moved: CGFloat) {
         var look = look(.phone)
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
@@ -284,31 +316,44 @@ final class MarkdownRenderTests: XCTestCase {
         let pulse = look.markdown.codePulse
         let device = DeviceID("phone")
         let at = Date(timeIntervalSince1970: 1_700_000_000)
-        let reply = Turn(ref: TurnRef(device: device, sequence: 1), parents: [], role: .assistant,
-                         text: "Here:\n\n```\nlet x = 1\n```", at: at)
         let filler = (2...40).map { n in
             Turn(ref: TurnRef(device: device, sequence: n), parents: [], role: n.isMultiple(of: 2) ? .person : .assistant,
                  text: "Turn \(n), long enough to take a line or two of the transcript's column.", at: at)
         }
+        let reply = Turn(ref: TurnRef(device: device, sequence: first ? 1 : 41), parents: [], role: .assistant,
+                         text: text, at: at)
         let live = LiveCue()
-        let stage = try LiveStage(LiveTranscript(turns: [reply] + filler, live: live)
+        let stage = try LiveStage(LiveTranscript(turns: first ? [reply] + filler : filler + [reply], live: live)
             .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
                                   look: look, size: self.stage)
         defer { stage.close() }
-        stage.wait(0.5)
-        XCTAssertEqual(try Pixels(stage.image()).count(outline), 0, "the fixture's block is on the screen already")
+        stage.wait(1)
+        let before = try Pixels(stage.image(), blank: true).count(outline)
+        if first {
+            XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
+        } else {
+            XCTAssertGreaterThan(before, 20, "the fixture's block is not on the screen")
+        }
+        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
+        let offset = scroll.contentOffset.y
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
         var shown = 0, pulsed = 0
         let until = Date().addingTimeInterval(pulse.duration + 0.5)
         while Date() < until {
             stage.wait(0.05)
-            let drawn = try Pixels(stage.image())
+            let drawn = try Pixels(stage.image(), blank: true)
             shown = max(shown, drawn.count(outline))
             pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
         }
-        XCTAssertGreaterThan(shown, 20, "the block was not scrolled into view")
-        XCTAssertGreaterThan(pulsed, 20, "the block was scrolled to and did not pulse")
+        return (shown, pulsed, abs(scroll.contentOffset.y - offset))
+    }
+
+    /// The transcript's scroll view, the first under `view`.
+    private static func scrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView { return scroll }
+        for child in view.subviews { if let found = scrollView(in: child) { return found } }
+        return nil
     }
 
     /// A row first made with its block's cue already set — as a lazy stack makes the row it is
@@ -553,8 +598,8 @@ final class MarkdownRenderTests: XCTestCase {
         let height: Int
         let scale: CGFloat
 
-        @MainActor init(_ image: UIImage) throws {
-            bytes = try LookStage.bytes(image)
+        @MainActor init(_ image: UIImage, blank: Bool = false) throws {
+            bytes = try LookStage.bytes(image, blank: blank)
             let cgImage = try XCTUnwrap(image.cgImage)
             width = cgImage.width
             height = cgImage.height

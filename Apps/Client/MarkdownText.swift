@@ -22,6 +22,7 @@ struct MarkdownText: View {
     /// is what Topo stands beside.
     var cue: CodeBlockCue?
     @Environment(\.look) private var look
+    @Environment(\.codeBlockAppeared) private var appeared
 
     var body: some View {
         VStack(alignment: .leading, spacing: look.markdown.blockSpacing) {
@@ -146,6 +147,7 @@ struct MarkdownText: View {
                 .mascotBeside(reached?.serial)
         }
         .id(CodeBlockCue.Place(reply: reply, number: number))
+        .onAppear { appeared(CodeBlockCue.Place(reply: reply, number: number)) }
     }
 
     /// The block's enclosure. It is drawn, so it is what Topo stands clear of, whole.
@@ -196,6 +198,19 @@ struct MarkdownText: View {
             text[range].swiftUI.foregroundColor = look.codeInk
         }
         return text
+    }
+}
+
+private struct CodeBlockAppearedKey: EnvironmentKey {
+    static let defaultValue: @MainActor (CodeBlockCue.Place) -> Void = { _ in }
+}
+
+extension EnvironmentValues {
+    /// Told each code block's place as the block is made, which the transcript scrolls to once a
+    /// row it asked for has been made (`TranscriptView`).
+    var codeBlockAppeared: @MainActor (CodeBlockCue.Place) -> Void {
+        get { self[CodeBlockAppearedKey.self] }
+        set { self[CodeBlockAppearedKey.self] = newValue }
     }
 }
 
