@@ -246,6 +246,13 @@ final class RootfsInstallerTests: XCTestCase {
         XCTAssertEqual(sh.mode & UInt32(S_IFMT), UInt32(S_IFLNK), "/bin/sh is not a symlink")
         // A fakefs keeps a symlink's target as the contents of the file under `data/`.
         XCTAssertEqual(try String(contentsOf: data.appendingPathComponent("bin/sh"), encoding: .utf8), "/bin/busybox")
+
+        // apk's repositories are over http://, for the egress proxy to carry, and still the file
+        // meta.db names.
+        let repositories = try String(contentsOf: data.appendingPathComponent("etc/apk/repositories"), encoding: .utf8)
+        XCTAssertEqual(repositories, "http://dl-cdn.alpinelinux.org/alpine/v3.22/main\nhttp://dl-cdn.alpinelinux.org/alpine/v3.22/community\n")
+        let listed = try XCTUnwrap(try Self.stat("/etc/apk/repositories", in: installer.fakefs), "the repositories are not in meta.db")
+        XCTAssertEqual(listed.mode & UInt32(S_IFMT), UInt32(S_IFREG))
     }
 
     /// A path's `struct ish_stat` (mode, uid, gid, rdev, four little-endian 32-bit words) from a

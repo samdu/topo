@@ -205,9 +205,12 @@ targets:
       - Packages/TopoUserland/Tests/Support
     dependencies:
       - package: TopoUserland
-      # The `topo` script run in the booted guest against the tool service it calls.
+      # The `topo` script run in the booted guest against the tool service it calls, and `apk`
+      # and `git` against the egress proxy.
       - package: TopoProxy
         product: TopoTools
+      - package: TopoProxy
+        product: TopoProxy
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.userlandtests

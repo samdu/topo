@@ -40,18 +40,33 @@ final class ModelDownloadsTests: XCTestCase {
                        "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/alpine-minirootfs-3.22.6-aarch64.tar.gz")
         XCTAssertEqual(rootfs.files[0].sha256.count, 64)
         XCTAssertGreaterThan(rootfs.files[0].size, 0)
-        // bash for the guest: Alpine's own packages for the same branch and architecture, exactly
-        // bash and what it depends on at their pinned versions, in the order they are laid in, each
-        // from the branch's repository and checked by digest like the rootfs.
-        let shell = try XCTUnwrap(manifest.model(ModelManifest.shell))
+        // The guest's packages: Alpine's own for the same branch and architecture, exactly bash,
+        // git and github-cli and what they depend on at their pinned versions, in the order they
+        // are laid in, each from its repository on the branch and checked by digest like the rootfs.
+        let shell = try XCTUnwrap(manifest.model(ModelManifest.packages))
         XCTAssertNil(shell.repo)
-        XCTAssertEqual(shell.url, "https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/")
+        XCTAssertEqual(shell.url, "https://dl-cdn.alpinelinux.org/alpine/v3.22/")
         XCTAssertEqual(shell.files.map(\.path), [
-            "bash-5.2.37-r0.apk",
-            "readline-8.2.13-r1.apk",
-            "libncursesw-6.5_p20250503-r0.apk",
-            "ncurses-terminfo-base-6.5_p20250503-r0.apk",
+            "main/aarch64/bash-5.2.37-r0.apk",
+            "main/aarch64/readline-8.2.13-r1.apk",
+            "main/aarch64/libncursesw-6.5_p20250503-r0.apk",
+            "main/aarch64/ncurses-terminfo-base-6.5_p20250503-r0.apk",
+            "main/aarch64/brotli-libs-1.1.0-r2.apk",
+            "main/aarch64/c-ares-1.34.8-r0.apk",
+            "main/aarch64/libunistring-1.3-r0.apk",
+            "main/aarch64/libidn2-2.3.7-r0.apk",
+            "main/aarch64/nghttp2-libs-1.69.0-r0.apk",
+            "main/aarch64/libpsl-0.21.5-r3.apk",
+            "main/aarch64/zstd-libs-1.5.7-r0.apk",
+            "main/aarch64/libcurl-8.14.1-r3.apk",
+            "main/aarch64/libexpat-2.8.5-r0.apk",
+            "main/aarch64/pcre2-10.46-r0.apk",
+            "main/aarch64/git-init-template-2.49.1-r0.apk",
+            "main/aarch64/git-2.49.1-r0.apk",
+            "community/aarch64/github-cli-2.72.0-r6.apk",
         ])
+        XCTAssertEqual(shell.url(for: shell.files.last!).absoluteString,
+                       "https://dl-cdn.alpinelinux.org/alpine/v3.22/community/aarch64/github-cli-2.72.0-r6.apk")
         for file in shell.files {
             XCTAssertEqual(file.sha256.count, 64, file.path)
             XCTAssertTrue(file.sha256.allSatisfy(\.isHexDigit), file.path)

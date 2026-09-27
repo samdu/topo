@@ -41,6 +41,9 @@ final class GuestResident {
     private var proxyPort: UInt16?
     private var lifecycle: GuestLifecycle?
     private var proxy: APIProxy?
+    /// The egress proxy the guest's `apk`, `git` and `gh` go out through, and its port, once started.
+    private var egress: EgressProxy?
+    private var egressPort: UInt16?
     /// The tool service and what the guest is handed to reach it, once started.
     private var tools: ToolService?
     private var toolsEnvironment: [String: String]?
@@ -124,11 +127,23 @@ final class GuestResident {
                 self.proxy = proxy
                 self.proxyPort = port
             }
-            let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
-            let launcher = ClaudeLauncher {
-                try await APIProxy.guestEnvironment(port: port, credential: credential).environment
-                    .merging(toolsEnvironment) { own, _ in own }
+            let egressPort: UInt16
+            if let running = self.egressPort {
+                egressPort = running
+            } else {
+                let egress = try EgressProxy(log: { log("egress: \($0)") })
+                do {
+                    egressPort = try await egress.start()
+                } catch {
+                    await egress.stop()
+                    throw error
+                }
+                self.egress = egress
+                self.egressPort = egressPort
             }
+            let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
+            let launcher = Self.launcher(apiPort: port, egressPort: egressPort, credential: credential,
+                                         tools: toolsEnvironment)
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,
                                        memory: self.memoryAtStart(log: log), log: log)
             self.session = session
@@ -138,6 +153,17 @@ final class GuestResident {
             self.follow(lifecycle)
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
+        }
+    }
+
+    /// The resident's launcher: at each launch the API proxy's base URL and the guest's token read
+    /// fresh, the egress proxy's variables (`EgressProxy.guestEnvironment`), and the tool service's.
+    nonisolated static func launcher(guest: Guest = .shared, apiPort: UInt16, egressPort: UInt16,
+                                     credential: GuestCredential, tools: [String: String]) -> ClaudeLauncher {
+        ClaudeLauncher(guest: guest) {
+            try await APIProxy.guestEnvironment(port: apiPort, credential: credential).environment
+                .merging(EgressProxy.guestEnvironment(port: egressPort)) { own, _ in own }
+                .merging(tools) { own, _ in own }
         }
     }
 

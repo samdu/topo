@@ -40,7 +40,8 @@ public protocol FakefsImporter: Sendable {
 /// the rootfs and the packages are first written as one (`topo_ish_combine`: the rootfs whole,
 /// then each package's files less its control entries, headers as the archives carry them) and
 /// that one archive is imported; a later entry for a path an earlier one made replaces it, as an
-/// install over it would.
+/// install over it would. Then `apk`'s repositories are pointed at `http://`
+/// (`repositoriesOverHTTP`).
 public struct ForkImporter: FakefsImporter {
     public struct Failure: Error, CustomStringConvertible {
         public let description: String
@@ -49,12 +50,38 @@ public struct ForkImporter: FakefsImporter {
     public init() {}
 
     public func makeFakefs(from rootfs: URL, packages: [URL], at directory: URL) throws {
-        guard !packages.isEmpty else { return try Self.importArchive(rootfs, at: directory) }
-        let combined = URL(fileURLWithPath: directory.path + ".tar")
-        try? FileManager.default.removeItem(at: combined)
-        defer { try? FileManager.default.removeItem(at: combined) }
-        try Self.combine(rootfs, packages, into: combined)
-        try Self.importArchive(combined, at: directory)
+        if packages.isEmpty {
+            try Self.importArchive(rootfs, at: directory)
+        } else {
+            let combined = URL(fileURLWithPath: directory.path + ".tar")
+            try? FileManager.default.removeItem(at: combined)
+            defer { try? FileManager.default.removeItem(at: combined) }
+            try Self.combine(rootfs, packages, into: combined)
+            try Self.importArchive(combined, at: directory)
+        }
+        try Self.repositoriesOverHTTP(in: directory)
+    }
+
+    /// The guest's `/etc/apk/repositories`, as the minirootfs has it.
+    static let repositories = "etc/apk/repositories"
+
+    /// Points `apk` at its repositories over `http://`, which the egress proxy carries and speaks
+    /// TLS for, since TLS in the guest does not complete: every `https://` in the file becomes
+    /// `http://`. A package's trust is its signature, which `apk` checks against the keys in the
+    /// rootfs whatever the transport. Rewritten in place, so the file under `data/` is the one
+    /// `meta.db` already names.
+    static func repositoriesOverHTTP(in fakefs: URL) throws {
+        let file = fakefs.appendingPathComponent("data").appendingPathComponent(repositories)
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forUpdating: file)
+        } catch {
+            throw Failure(description: "the rootfs has no /\(repositories): \(error.localizedDescription)")
+        }
+        defer { try? handle.close() }
+        let text = String(decoding: try handle.readToEnd() ?? Data(), as: UTF8.self)
+        try handle.truncate(atOffset: 0)
+        try handle.write(contentsOf: Data(text.replacingOccurrences(of: "https://", with: "http://").utf8))
     }
 
     static func combine(_ rootfs: URL, _ packages: [URL], into out: URL) throws {

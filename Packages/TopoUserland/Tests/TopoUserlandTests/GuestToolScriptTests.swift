@@ -1,4 +1,5 @@
 import Foundation
+import TopoProxy
 import TopoTools
 import TopoUserland
 import XCTest
@@ -107,6 +108,16 @@ final class GuestToolScriptTests: XCTestCase {
         XCTAssertTrue(exit.output.hasPrefix("[a]\nstatus 0\n"), exit.output + exit.errors + " service: " + lines.text)
         XCTAssertTrue(exit.output.contains("\nwget "), "the wrapper never ran: " + exit.output)
         XCTAssertFalse(exit.output.contains(token), "a command was given the token: " + exit.output)
+    }
+
+    /// The guest's environment carries the egress proxy's `http_proxy`, which BusyBox `wget` reads
+    /// and whose `no_proxy` it does not: the call still goes straight to the service.
+    func testACallIsNotSentThroughTheEgressProxy() async throws {
+        var environment = try await started()
+        environment.merge(EgressProxy.guestEnvironment(port: 9)) { _, new in new }
+        let exit = try await topo("echo 0 direct", environment)
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        XCTAssertEqual(exit.output, "[direct]\n")
     }
 
     func testNoArgumentsIsHelp() async throws {

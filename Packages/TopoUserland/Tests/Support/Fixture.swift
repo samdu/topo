@@ -23,15 +23,16 @@ enum Fixture {
 
     static let shellVariable = "TOPO_USERLAND_SHELL"
 
-    /// bash and the packages it depends on, the pinned `.apk` files, in a directory handed to the
-    /// test runner as `TEST_RUNNER_TOPO_USERLAND_SHELL` (`scripts/fetch-pinned.sh alpine-bash`
-    /// fetches and verifies them into it), each with the manifest's pin, in the manifest's order.
+    /// The guest's packages (bash, git, github-cli and what they depend on), the pinned `.apk`
+    /// files, in a directory handed to the test runner as `TEST_RUNNER_TOPO_USERLAND_SHELL`
+    /// (`scripts/fetch-pinned.sh alpine-packages` fetches and verifies them into it, under each
+    /// file's path), each with the manifest's pin, in the manifest's order.
     static func shell() throws -> [RootfsLayer] {
         guard let path = ProcessInfo.processInfo.environment[shellVariable], !path.isEmpty else {
-            throw XCTSkip("missing coverage: no shell packages; set TEST_RUNNER_\(shellVariable) (scripts/fetch-pinned.sh alpine-bash)")
+            throw XCTSkip("missing coverage: no shell packages; set TEST_RUNNER_\(shellVariable) (scripts/fetch-pinned.sh alpine-packages)")
         }
         let directory = URL(fileURLWithPath: path, isDirectory: true)
-        return try entry("alpine-bash").files.map {
+        return try entry("alpine-packages").files.map {
             RootfsLayer(file: directory.appendingPathComponent($0.path), pin: RootfsPin(size: $0.size, sha256: $0.sha256))
         }
     }

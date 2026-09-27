@@ -49,7 +49,9 @@ public enum GuestTools {
         printf '%s' "$argument" | base64 | tr -d '\n' >> "$request"
         printf '\n' >> "$request"
     done
-    if ! failure="$(wget -q -T 100 -O "$response" \
+    # -Y off: the service is on loopback, and BusyBox wget reads http_proxy (the egress proxy's)
+    # but not no_proxy, so without it the call would go to the egress proxy and be refused.
+    if ! failure="$(wget -q -Y off -T 100 -O "$response" \
             --header "Content-Type: text/plain" \
             --post-file "$request" "$TOPO_TOOLS_URL/run" 2>&1)"; then
         case "$failure" in

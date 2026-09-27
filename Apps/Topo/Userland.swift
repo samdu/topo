@@ -30,8 +30,8 @@ protocol DownloadSource: AnyObject {
     func fetch(_ done: @escaping @MainActor (Result<[Fetched], Error>) -> Void)
 }
 
-/// One entry of the model manifest, fetched by `ModelDownloads`: the rootfs tarball, bash and the
-/// packages it depends on, or Claude Code.
+/// One entry of the model manifest, fetched by `ModelDownloads`: the rootfs tarball, the guest's
+/// Alpine packages, or Claude Code.
 @MainActor
 final class DownloadedEntry: DownloadSource {
     private let id: String
@@ -65,9 +65,9 @@ final class DownloadedEntry: DownloadSource {
     }
 }
 
-/// The guest on this phone, as three downloads. Its root: Alpine's minirootfs and bash with the
-/// packages it depends on, fetched by `ModelDownloads` as two more pinned entries of the manifest
-/// and verified there, then made into one fakefs by the fork's own importer (`RootfsInstaller`)
+/// The guest on this phone, as three downloads. Its root: Alpine's minirootfs and the packages
+/// laid into it (bash, git, github-cli and what they depend on), fetched by `ModelDownloads` as
+/// two more pinned entries of the manifest and verified there, then made into one fakefs by the fork's own importer (`RootfsInstaller`)
 /// under Application Support; once the fakefs is whole nothing is fetched or imported again. And
 /// Claude Code: Anthropic's binary,
 /// another pinned entry, which stays in its manifest home and is handed out as the installer that
@@ -125,7 +125,7 @@ final class Userland {
          shellSource: (any DownloadSource)? = nil, claudeSource: (any DownloadSource)? = nil) {
         self.installer = installer
         self.source = source ?? DownloadedEntry(ModelManifest.rootfs)
-        self.shellSource = shellSource ?? DownloadedEntry(ModelManifest.shell)
+        self.shellSource = shellSource ?? DownloadedEntry(ModelManifest.packages)
         self.claudeSource = claudeSource ?? DownloadedEntry(ModelManifest.claudeCode)
     }
 
@@ -178,7 +178,7 @@ final class Userland {
             }
             let packages = try shell.get()
             guard !packages.isEmpty else {
-                throw ModelDownloadFailure(id: ModelManifest.shell, why: "the entry names no package")
+                throw ModelDownloadFailure(id: ModelManifest.packages, why: "the entry names no package")
             }
             install(tarball.layer, packages.map(\.layer))
         } catch {
@@ -291,7 +291,7 @@ final class Userland {
         }
     }
 
-    /// Whether every download is on the phone: the fakefs whole, bash in it, and Claude Code
+    /// Whether every download is on the phone: the fakefs whole, the packages in it, and Claude Code
     /// fetched at its pin. Until they are, the phone does not answer.
     var isReady: Bool {
         guard case .ready = phase, case .fetched = claude else { return false }
@@ -299,16 +299,16 @@ final class Userland {
     }
 
     /// The diagnostics screen's `userland` row, a clause per download, so it says which of the
-    /// three a guest is waiting on: the rootfs and bash each waiting, downloading or verifying,
+    /// three a guest is waiting on: the rootfs and the packages each waiting, downloading or verifying,
     /// then the two importing together and ready, and Claude Code waiting, downloading, verifying
     /// or downloaded at its version.
     var summary: String {
         let rootfs: String
         switch phase {
-        case .fetching: rootfs = "rootfs \(source.status); bash \(shellSource.status)"
-        case .importing: rootfs = "rootfs and bash importing"
-        case .ready: rootfs = "rootfs and bash ready"
-        case .failed(let why): rootfs = "rootfs and bash failed: \(why)"
+        case .fetching: rootfs = "rootfs \(source.status); packages \(shellSource.status)"
+        case .importing: rootfs = "rootfs and packages importing"
+        case .ready: rootfs = "rootfs and packages ready"
+        case .failed(let why): rootfs = "rootfs and packages failed: \(why)"
         }
         let claudeCode: String
         switch claude {
@@ -389,16 +389,16 @@ extension DebugRun {
 
     /// `TOPO_DEBUG_USERLAND=<command>`: on launch, fetch or reuse the rootfs and Claude Code, boot
     /// the guest, verify Claude Code and mount it at `/usr/local/bin/claude`, start the API proxy on
-    /// loopback, start the tool service with `topo` in the home the resident gets (mounted, as the
-    /// resident's is), run the command under `/bin/sh -c` in `Guest.environment` (the environment every
-    /// launch path hands the guest, Claude Code's updater off in it) with `ANTHROPIC_BASE_URL`
-    /// pointing at the proxy, `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token and the tool
-    /// service's two variables, and print what
-    /// it wrote and how it exited, each line prefixed, for `scripts/simulator-run.sh --userland` to
-    /// assert on. The proxy's own lines are printed as `proxy:`. With no login the command still
-    /// runs, with the base URL and no token. The only path in the app that boots the guest.
-    /// Nothing at all when the variable is absent. `tokens` is the app's one provider over the
-    /// ordinary tokens.
+    /// loopback and the egress proxy beside it, start the tool service with `topo` in the home the
+    /// resident gets (mounted, as the resident's is), run the command under `/bin/sh -c` in
+    /// `Guest.environment` (the environment every launch path hands the guest, Claude Code's
+    /// updater off in it) with `ANTHROPIC_BASE_URL` pointing at the proxy,
+    /// `CLAUDE_CODE_OAUTH_TOKEN` set to the guest's token, the egress proxy's variables and the tool
+    /// service's two, and print what it wrote and how it exited, each line prefixed, for
+    /// `scripts/simulator-run.sh --userland` to assert on. The proxies' own lines are printed as
+    /// `proxy:` and `egress:`. With no login the command still runs, with the base URL and no
+    /// token. The only path in the app that boots the guest. Nothing at all when the variable is
+    /// absent. `tokens` is the app's one provider over the ordinary tokens.
     /// What the guest's command wrote and how it exited, as the userland run prints them, every
     /// credential redacted: `env` there prints the guest's token and the tool service's.
     static func guestLines(output: String, errors: String, status: Int32) -> [String] {
@@ -439,6 +439,11 @@ extension DebugRun {
             // The tool service and `topo`, as the resident has them, so a command can call a tool.
             guestEnvironment.merge(try await GuestResident.shared.prepareTools { line in say(line) }) { _, new in new }
             say("userland: tools on \(guestEnvironment[ToolService.urlVariable] ?? "nothing"), topo at \(GuestTools.command)")
+            let egress = try EgressProxy(log: { line in say("egress: \(line)") })
+            let egressPort = try await egress.start()
+            defer { Task { await egress.stop() } }
+            guestEnvironment.merge(EgressProxy.guestEnvironment(port: egressPort)) { _, new in new }
+            say("userland: egress proxy on \(EgressProxy.proxyURL(port: egressPort))")
             let handed = await handOver(port: port, guestStore: KeychainTokenStore.guest, provider: tokens)
             guestEnvironment.merge(handed.environment) { _, new in new }
             handed.lines.forEach(say)

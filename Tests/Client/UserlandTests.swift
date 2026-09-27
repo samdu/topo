@@ -124,21 +124,21 @@ final class UserlandTests: XCTestCase {
         shell.status = "waiting for a network the data settings allow"
         claude.status = "downloading 20 MB of 227 MB"
         userland.prepare()
-        XCTAssertEqual(userland.summary, "rootfs downloading 1 MB of 4 MB; bash waiting for a network the data settings allow; "
+        XCTAssertEqual(userland.summary, "rootfs downloading 1 MB of 4 MB; packages waiting for a network the data settings allow; "
                        + "claude code downloading 20 MB of 227 MB")
 
         let (tarball, pin) = try tarballAndPin()
         rootfs.settle(.success([Fetched(file: tarball, size: pin.size, sha256: pin.sha256, version: nil)]))
         rootfs.status = "downloaded"
         shell.status = "downloading 100 KB of 800 KB"
-        XCTAssertEqual(userland.summary, "rootfs downloaded; bash downloading 100 KB of 800 KB; claude code downloading 20 MB of 227 MB")
+        XCTAssertEqual(userland.summary, "rootfs downloaded; packages downloading 100 KB of 800 KB; claude code downloading 20 MB of 227 MB")
         shell.settle(.success(try packages()))
         _ = try await userland.ready()
-        XCTAssertEqual(userland.summary, "rootfs and bash ready; claude code downloading 20 MB of 227 MB")
+        XCTAssertEqual(userland.summary, "rootfs and packages ready; claude code downloading 20 MB of 227 MB")
 
         claude.settle(.success([Fetched(file: base.appendingPathComponent("claude"), size: 1,
                                        sha256: String(repeating: "c", count: 64), version: "2.1.278")]))
-        XCTAssertEqual(userland.summary, "rootfs and bash ready; claude code 2.1.278 downloaded")
+        XCTAssertEqual(userland.summary, "rootfs and packages ready; claude code 2.1.278 downloaded")
     }
 
     /// The import waits for the rootfs and the packages both, and hands the importer the tarball
@@ -155,7 +155,7 @@ final class UserlandTests: XCTestCase {
         let (tarball, pin) = try tarballAndPin()
         rootfs.settle(.success([Fetched(file: tarball, size: pin.size, sha256: pin.sha256, version: nil)]))
         XCTAssertEqual(userland.phase, .fetching, "the import began before the packages were here")
-        let failure = ModelDownloadFailure(id: ModelManifest.shell, why: "404")
+        let failure = ModelDownloadFailure(id: ModelManifest.packages, why: "404")
         shell.settle(.failure(failure))
         try await until(seconds: 5) { first.result != nil }
         guard case .failure(let error)? = first.result else {

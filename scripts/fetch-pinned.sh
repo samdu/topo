@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fetches one entry of Apps/Topo/Resources/models.json that carries its own `url` — the guest's
-# rootfs (`alpine-minirootfs`), bash and its packages (`alpine-bash`) or Claude Code
+# rootfs (`alpine-minirootfs`), the guest's packages (`alpine-packages`) or Claude Code
 # (`claude-code`) — into a directory from the entry's `url`, and admits each file only when its
 # size and sha256 match the manifest. A file already there and matching is kept, so a restored
 # cache or a runner's home costs only the hashing. Prints the file's path for a single-file entry
@@ -26,6 +26,7 @@ file=""
 while IFS=$'\t' read -r base path size sha; do
   count=$((count + 1))
   file="$dest/$path"
+  mkdir -p "$(dirname "$file")"
   if [ -f "$file" ] && [ "$(stat -f %z "$file")" = "$size" ] && [ "$(shasum -a 256 "$file" | cut -d' ' -f1)" = "$sha" ]; then
     continue
   fi
