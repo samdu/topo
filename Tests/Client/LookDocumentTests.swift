@@ -183,6 +183,24 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(wrong.notes.count, 1, "\(wrong.notes)")
     }
 
+    /// A code block's pulse breathes from a third of a second to five a breath: both ends taken,
+    /// and past either refused alone, leaving the pulse's width as the document said.
+    func testACodeBlockPulsesBreathIsReadInItsOwnRange() {
+        for cycle in [0.3, 5] {
+            let reading = LookDocument.read(#"{"markdown": {"codePulse": {"cycle": \#(cycle)}}}"#)
+            XCTAssertEqual(reading.notes, [], "\(cycle)")
+            XCTAssertEqual(reading.look.markdown.codePulse.cycle, cycle)
+            XCTAssertTrue(reading.fields.contains("markdown.codePulse.cycle"),
+                          "\(cycle) was taken and not named among the fields taken: \(reading.fields)")
+        }
+        for cycle in [0.1, 0.29, 5.1, 0, -1] {
+            let reading = LookDocument.read(#"{"markdown": {"codePulse": {"cycle": \#(cycle), "width": 4}}}"#)
+            XCTAssertEqual(reading.look.markdown.codePulse.cycle, Look.Markdown.Pulse().cycle, "\(cycle) was taken")
+            XCTAssertEqual(reading.look.markdown.codePulse.width, 4, "\(cycle) took the width down with it")
+            XCTAssertEqual(reading.notes.count, 1, "\(cycle): \(reading.notes)")
+        }
+    }
+
     /// Where Topo sits is one of three names, and anything else is refused with the names listed,
     /// leaving every other field of his as the document said.
     func testThePlacementIsOneOfThreeNames() {
@@ -472,6 +490,35 @@ final class LookDocumentTests: XCTestCase {
         """)
         XCTAssertEqual(sized.look.transcript.bodyFont, Font.system(size: 22).weight(.semibold))
         XCTAssertEqual(sized.state, .read(fields: 1), "a font counts as the one field it is")
+    }
+
+    /// The notice's font is drawn in the navigation bar beside the badge, which holds two lines of
+    /// no more than `largestNotice` points: a larger size is drawn at that, and a larger style is
+    /// refused, so no document puts a notice down over the transcript.
+    func testTheNoticeFontIsNoLargerThanTheBarHolds() {
+        let huge = LookDocument.read("{ \"transcript\": { \"noticeFont\": { \"size\": 400, \"weight\": \"heavy\" } } }")
+        XCTAssertEqual(huge.look.transcript.noticeFont,
+                       Font.system(size: CGFloat(Look.Transcript.largestNotice)).weight(.heavy))
+        XCTAssertEqual(huge.state, .read(fields: 1), "the size is drawn at the most, not refused")
+        XCTAssertEqual(huge.notes.count, 1, "and the document is told so: \(huge.notes)")
+
+        let title = LookDocument.read("{ \"transcript\": { \"noticeFont\": \"largeTitle\" } }")
+        XCTAssertEqual(title.look.transcript.noticeFont, Look().transcript.noticeFont)
+        XCTAssertEqual(title.notes.count, 1, "\(title.notes)")
+        let styledTitle = LookDocument.read("{ \"transcript\": { \"noticeFont\": { \"style\": \"title\" } } }")
+        XCTAssertEqual(styledTitle.look.transcript.noticeFont, Look().transcript.noticeFont)
+        XCTAssertEqual(styledTitle.notes.count, 1, "\(styledTitle.notes)")
+
+        let titleAndSize = LookDocument.read("{ \"transcript\": { \"noticeFont\": { \"style\": \"title\", \"size\": 14 } } }")
+        XCTAssertEqual(titleAndSize.look.transcript.noticeFont, Font.system(size: 14), "the size beside the style still sets")
+        XCTAssertEqual(titleAndSize.notes.count, 1, "and the style is refused with a note: \(titleAndSize.notes)")
+
+        let small = LookDocument.read("{ \"transcript\": { \"noticeFont\": \"footnote\" } }")
+        XCTAssertEqual(small.look.transcript.noticeFont, .system(.footnote))
+        XCTAssertEqual(small.notes, [])
+
+        let body = LookDocument.read("{ \"transcript\": { \"bodyFont\": { \"size\": 400 } } }")
+        XCTAssertEqual(body.look.transcript.bodyFont, Font.system(size: 400), "only the notice is held to the bar")
     }
 
     /// The cut edge of the well is a gradient, so its colours are a list — and a list holding

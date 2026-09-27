@@ -165,8 +165,9 @@ enum LookStage {
     }
 
     /// One picture's pixels, four bytes to each. A picture with nothing in it is a failure of
-    /// its own: a stage that drew nothing would make every look look alike.
-    static func bytes(_ image: UIImage) throws -> [UInt8] {
+    /// its own: a stage that drew nothing would make every look look alike. A live stage taking
+    /// many pictures of a scroll under way passes `blank`, since a frame of it can be empty page.
+    static func bytes(_ image: UIImage, blank: Bool = false) throws -> [UInt8] {
         let cgImage = try XCTUnwrap(image.cgImage, "no bitmap behind the render")
         var bytes = [UInt8](repeating: 0, count: cgImage.width * cgImage.height * 4)
         let context = try XCTUnwrap(CGContext(
@@ -174,7 +175,9 @@ enum LookStage {
             bytesPerRow: cgImage.width * 4, space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(cgImage, in: CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
-        XCTAssertGreaterThan(distinct(bytes, upTo: 9), 8, "the stage drew a blank picture, so it says nothing")
+        if !blank {
+            XCTAssertGreaterThan(distinct(bytes, upTo: 9), 8, "the stage drew a blank picture, so it says nothing")
+        }
         return bytes
     }
 

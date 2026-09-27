@@ -20,7 +20,7 @@ final class HarnessTests: XCTestCase {
 
     func testNoLeaseOutcomeAsksThePersonToSayItAgain() {
         for outcome in outcomes {
-            let line = Harness.describe(outcome)
+            let line = Harness.limbInfo(outcome)
             XCTAssertFalse(line.lowercased().contains("try again"), "\(outcome): \(line)")
             XCTAssertTrue(line.hasSuffix("."), "\(outcome): \(line)")
         }
@@ -136,7 +136,8 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertFalse(first)
         XCTAssertFalse(harness.hasRead, "a read that threw was taken for the log")
         XCTAssertTrue(harness.turns.isEmpty)
-        XCTAssertNotNil(harness.error)
+        // The bar's notice, in the log's own words: the two lines `ChatNotices` holds them to.
+        XCTAssertEqual(harness.error, "iCloud is out of reach. Topo will try again.")
         await harness.refresh()
         XCTAssertFalse(harness.hasRead, "a second failure marked it")
         await flaky.setFailing(false)
@@ -592,8 +593,8 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(phone.waiting.isEmpty)
         XCTAssertNil(phone.error)
         let info = try XCTUnwrap(phone.info)
-        XCTAssertTrue(info.hasPrefix("hub "), info)
-        XCTAssertTrue(info.contains("What you said is in the log"), info)
+        XCTAssertTrue(info.hasPrefix("Saved. hub will answer"), info)
+        XCTAssertEqual(ChatNotices.Said(phone).notice, .info(info), "the harness's info is not the bar's notice")
 
         // The phone's own pass leaves the answer to the primary.
         await phone.answerPending()
@@ -1045,17 +1046,38 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(turns, ["water the plants", "and the ferns"])
     }
 
-    /// "Couldn't read the transcript" is about the last read, so the next read that gets through
-    /// takes it down, with nothing on the line to send.
+    /// A failed read's notice is about the last read, so the next read that gets through takes it
+    /// down, with nothing on the line to send.
     func testAReadThatGetsThroughClearsTheReadFailure() async throws {
         let db = FailingDatabase(InMemoryRecordDatabase())
         let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         await db.refuseReads(true)
         await phone.refresh()
-        XCTAssertEqual(phone.error, "Couldn't read the transcript: iCloud is out of reach. Topo will try again.")
+        XCTAssertEqual(phone.error, "iCloud is out of reach. Topo will try again.")
         await db.refuseReads(false)
         await phone.refresh()
         XCTAssertNil(phone.error, "a read got through and the chat still says it did not")
+    }
+
+    /// A read that gets through takes down the read's failure and no other, however alike their
+    /// words: a turn that could not be written says "iCloud is out of reach" in the same words a
+    /// failed read did, and it stands, with the turn still on the line, until the turn goes.
+    func testAReadThatGetsThroughLeavesATurnsFailureInTheSameWords() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await db.refuseReads(true)
+        await phone.refresh()
+        XCTAssertEqual(phone.failure, Harness.Failure(words: "iCloud is out of reach. Topo will try again.", source: .read))
+        await db.refuseReads(false)
+        await db.refuseWrites(true)
+        await phone.send("water the plants")
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn was not written, so it is still owed")
+        XCTAssertEqual(phone.failure, Harness.Failure(words: "iCloud is out of reach. Topo will try again.", source: .other),
+                       "the turn's failure is not the read's")
+        let read = await phone.refresh()
+        XCTAssertTrue(read)
+        XCTAssertEqual(phone.error, "iCloud is out of reach. Topo will try again.",
+                       "a read that got through took down the failure of a turn it was not about")
     }
 
     // MARK: The reply that is read aloud
@@ -1638,12 +1660,14 @@ private actor FailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
     private var loseNextTurnAcknowledgement = false
     private var refusingReads = false
+    private var refusingWrites = false
     private var darkAfterLostAcknowledgement = false
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
     func loseAcknowledgementOfNextTurn() { loseNextTurnAcknowledgement = true }
     func refuseReads(_ on: Bool) { refusingReads = on }
+    func refuseWrites(_ on: Bool) { refusingWrites = on }
     /// The device that went off the network in the middle of the write: the turn is committed,
     /// the acknowledgement is lost, and nothing after it can read the log to find out.
     func goDarkAfterTheNextTurn() {
@@ -1652,6 +1676,7 @@ private actor FailingDatabase: RecordDatabase {
     }
 
     func save(_ records: [Record]) async throws -> [Record] {
+        if refusingWrites { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
         let saved = try await wrapped.save(records)
         if loseNextTurnAcknowledgement, records.contains(where: { $0.type == Turn.recordType }) {
             loseNextTurnAcknowledgement = false

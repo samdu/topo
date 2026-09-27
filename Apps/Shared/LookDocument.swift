@@ -159,9 +159,10 @@ enum LookDocument {
         r.inset("personLeadingInset", &value.personLeadingInset)
         r.font("bodyFont", &value.bodyFont)
         r.font("labelFont", &value.labelFont)
-        r.font("noticeFont", &value.noticeFont)
+        r.font("noticeFont", &value.noticeFont, largest: Look.Transcript.largestNotice)
         r.colour("text", &value.text)
         r.colour("caption", &value.caption)
+        r.colour("trouble", &value.trouble)
     }
 
     private static func markdown(_ value: inout Look.Markdown, _ r: Reader) {
@@ -181,6 +182,14 @@ enum LookDocument {
         r.colour("quoteText", &value.quoteText)
         r.colour("marker", &value.marker)
         r.indent("ruleWidth", &value.ruleWidth)
+        r.object("codePulse") { pulse(&value.codePulse, $0) }
+    }
+
+    private static func pulse(_ value: inout Look.Markdown.Pulse, _ r: Reader) {
+        r.colour("accent", &value.accent)
+        r.outline("width", &value.width)
+        r.alpha("opacity", &value.opacity)
+        r.breath("cycle", &value.cycle)
     }
 
     private static func enclosure(_ value: inout Look.Enclosure, _ r: Reader) {
@@ -532,6 +541,15 @@ enum LookDocument {
             }
         }
 
+        /// One breath of a pulse: from a third of a second, under which a breath is a flash, to 5,
+        /// past which it is too slow to be seen as one.
+        func breath(_ key: String, _ value: inout Double) {
+            if let number = amount(key, in: 0.3...5, "a time in seconds between 0.3 and 5") {
+                took(key)
+                value = number
+            }
+        }
+
         func seconds(_ key: String, _ value: inout Double) {
             if let number = amount(key, in: 0...10, "a time in seconds, up to 10") {
                 took(key)
@@ -754,6 +772,17 @@ enum LookDocument {
             "callout": .callout, "footnote": .footnote, "caption": .caption, "caption2": .caption2,
         ]
 
+        /// Each style's size in points at the default text setting, which is what a field's
+        /// `largest` is held against: the person's own setting scales every style alike.
+        static let styleSizes: [Font.TextStyle: Double] = [
+            .largeTitle: 34, .title: 28, .title2: 22, .title3: 20, .headline: 17, .body: 17,
+            .callout: 16, .subheadline: 15, .footnote: 13, .caption: 12, .caption2: 11,
+        ]
+
+        private func fits(_ style: Font.TextStyle, _ largest: Double) -> Bool {
+            (Self.styleSizes[style] ?? 0) <= largest
+        }
+
         private static func listed(_ keys: some Collection<String>) -> String {
             keys.sorted().map { "\"\($0)\"" }.joined(separator: ", ")
         }
@@ -767,11 +796,19 @@ enum LookDocument {
         /// A font cannot be read back out of SwiftUI, so this one is replaced rather than merged:
         /// an object naming a weight and neither a style nor a size is a note and the compiled
         /// font, since a weight alone has nothing to weigh.
-        func font(_ key: String, _ value: inout Font) {
+        ///
+        /// `largest` is the biggest the field's place can draw, in points: a fixed size above it
+        /// is drawn at it, and a style whose size at the default text setting is above it is a
+        /// note and the compiled font, since a style's size cannot be pinned without losing what
+        /// makes it a style.
+        func font(_ key: String, _ value: inout Font, largest: Double = 400) {
             guard let raw = take(key) else { return }
             if let text = raw as? String {
                 guard let style = Self.styles[text] else {
                     return note(key, "is not one of \(Self.listed(Self.styles.keys))")
+                }
+                guard fits(style, largest) else {
+                    return note(key, "is \(text), larger than the \(Int(largest)) points it is drawn at most")
                 }
                 took(key)
                 value = .system(style)
@@ -782,12 +819,25 @@ enum LookDocument {
             }
             var made: Font?
             var weight: Font.Weight?
+            var tooLarge: Font.TextStyle?
+            var clamped: Double?
             into(object, name(key)) { r in
-                if let style = r.styled("style") { made = .system(style) }
+                if let style = r.styled("style") {
+                    if r.fits(style, largest) { made = .system(style) } else { tooLarge = style }
+                }
                 if let size = r.amount("size", in: 4...400, "a size in points") {
-                    made = .system(size: CGFloat(size))
+                    if size > largest { clamped = size }
+                    made = .system(size: CGFloat(min(size, largest)))
                 }
                 weight = r.weighed("weight")
+            }
+            if let clamped {
+                note(key, "is \(clamped) points, drawn at \(Int(largest)), the most its place holds")
+            }
+            if let tooLarge {
+                // The style is refused whatever else the object says; a size beside it still sets.
+                note(key, "is \(tooLarge), larger than the \(Int(largest)) points it is drawn at most")
+                if made == nil { return }
             }
             guard var font = made else {
                 if object["style"] == nil, object["size"] == nil {

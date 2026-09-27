@@ -20,7 +20,19 @@ struct TranscriptView: View {
     /// Turns on their way that the row is not holding: said before its own, and said after it.
     /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
     var queued: (before: [QueuedTurn], after: [QueuedTurn]) = ([], [])
+    /// The code block the voice has just reached (`Speaker.cue`): scrolled into view, and drawn
+    /// pulsing by the reply it is in. Nil on a screen with no voice.
+    var cue: CodeBlockCue?
     @Environment(\.look) private var look
+    /// The turns whose rows the lazy stack has made, which a code block can be scrolled to by its
+    /// own place, and the block waiting on its row to be made; a reference, so a row coming and
+    /// going redraws nothing.
+    @State private var made = MadeRows()
+
+    final class MadeRows {
+        var turns: Set<TurnRef> = []
+        var pending: CodeBlockCue.Place?
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -39,7 +51,10 @@ struct TranscriptView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         ForEach(turns) { turn in
-                            TurnRow(turn: turn, replay: replay, actions: actions).id(turn.ref)
+                            TurnRow(turn: turn, replay: replay, actions: actions,
+                                    cue: cue?.reply == turn.ref ? cue : nil).id(turn.ref)
+                                .onAppear { made.turns.insert(turn.ref) }
+                                .onDisappear { made.turns.remove(turn.ref) }
                         }
                     }
                     ForEach(queued.before) { QueuedTurnRow(turn: $0).id($0.id) }
@@ -62,6 +77,26 @@ struct TranscriptView: View {
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.before.last?.id) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
+            // A block the voice reaches is brought into view, by as little as shows it whole: one
+            // already on the screen does not move. A block inside a row the lazy stack has not
+            // made has no place to be scrolled to yet, so its row is brought in first, and the
+            // block once it says it has been made — however tall the row, and wherever in it.
+            .onChange(of: cue?.serial) { _, _ in
+                guard let cue else { return }
+                guard made.turns.contains(cue.reply) else {
+                    made.pending = cue.place
+                    proxy.scrollTo(cue.reply, anchor: nil)
+                    return
+                }
+                made.pending = nil
+                withAnimation { proxy.scrollTo(cue.place, anchor: nil) }
+            }
+            .environment(\.codeBlockAppeared) { place in
+                guard made.pending == place else { return }
+                made.pending = nil
+                // Made in this pass, laid out by the next.
+                DispatchQueue.main.async { withAnimation { proxy.scrollTo(place, anchor: nil) } }
+            }
         }
     }
 
@@ -96,6 +131,8 @@ struct TurnRow: View {
     let turn: Turn
     var replay = Replay()
     var actions = TurnActions()
+    /// The code block of this turn the voice has reached, if any.
+    var cue: CodeBlockCue?
     @Environment(\.look) private var look
 
     private var mine: Bool { turn.role == .person }
@@ -159,7 +196,7 @@ struct TurnRow: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .mascotLines(bare)
         } else {
-            MarkdownText(source: turn.text, bare: bare)
+            MarkdownText(source: turn.text, bare: bare, reply: turn.ref, cue: cue)
         }
     }
 }
@@ -466,7 +503,9 @@ struct Replay {
     /// downloading Pocket is offered nothing rather than offered an item it would hear nothing
     /// from, and the diagnostics `voice` row says how far along it is.
     var canSpeak = false
-    var say: @MainActor (String) -> Void = { _ in }
+    /// Says a turn again; the turn rather than its words, so what the voice reaches in it is
+    /// shown on it (`CodeBlockCue`).
+    var say: @MainActor (Turn) -> Void = { _ in }
     var stopSpeaking: @MainActor () -> Void = {}
 
     /// What holding `turn` offers, or nothing at all. A person's own turn offers nothing: their
@@ -476,7 +515,7 @@ struct Replay {
         if speaking {
             return Offer(title: "Stop", systemImage: "stop.fill", act: stopSpeaking)
         }
-        return Offer(title: "Say again", systemImage: "speaker.wave.2", act: { say(turn.text) })
+        return Offer(title: "Say again", systemImage: "speaker.wave.2", act: { say(turn) })
     }
 
     /// One menu item: what it reads and what it does.

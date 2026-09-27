@@ -17,6 +17,9 @@ struct MascotScene: PreferenceKey {
         var well: Anchor<CGRect>?
         /// Each view's frames: one for most, a line each for words with nothing drawn round them.
         var obstacles: [Anchor<[CGRect]>] = []
+        /// The code block the voice has reached, which he goes to stand beside, and the cue's
+        /// serial (`CodeBlockCue.serial`); nil while no block is reached.
+        var beside: (frame: Anchor<CGRect>, serial: Int)?
     }
 
     static let defaultValue = Value()
@@ -26,6 +29,7 @@ struct MascotScene: PreferenceKey {
         value.visible = value.visible ?? next.visible
         value.pane = value.pane ?? next.pane
         value.well = value.well ?? next.well
+        value.beside = value.beside ?? next.beside
         value.obstacles += next.obstacles
     }
 }
@@ -59,6 +63,14 @@ extension View {
     /// The composer's well, which he is never drawn over.
     func mascotWell() -> some View {
         transformAnchorPreference(key: MascotScene.self, value: .bounds) { $0.well = $1 }
+    }
+
+    /// The code block the voice has reached, under the cue's `serial`: the frame he goes to stand
+    /// on the other side of the transcript from. Nil reports nothing.
+    func mascotBeside(_ serial: Int?) -> some View {
+        transformAnchorPreference(key: MascotScene.self, value: .bounds) { value, frame in
+            if let serial { value.beside = (frame, serial) }
+        }
     }
 }
 
@@ -183,6 +195,16 @@ struct MascotField: Equatable, Sendable, Codable {
     var well: CGRect?
     /// The keyboard, while it is up.
     var keyboard: CGRect?
+    /// The code block the voice has reached, which he stands beside (`MascotRoost.beside`); nil
+    /// while none is.
+    var beside: Beside?
+
+    /// A code block's frame, and the serial of the cue that reached it: a new serial is a new
+    /// visit, the same one moved by a scroll is not.
+    struct Beside: Equatable, Sendable, Codable {
+        var frame: CGRect
+        var serial: Int
+    }
 
     /// What a pin is a fraction of: the transcript's frame, carried down to the pane's foot where
     /// the pane is below it, since the lines under the transcript and the glass are part of the
@@ -538,6 +560,47 @@ enum MascotRoost: Equatable, Sendable {
         return reached
     }
 
+    /// Where he stands beside a code block the voice has reached (`MascotField.beside`): on the
+    /// other side of the transcript from it, which is the side of the transcript's vertical
+    /// midline away from the block's centre — right of a block whose centre is on the midline or
+    /// left of it, left of one right of it — so the block is the thing he stands beside and the
+    /// one thing he is not over.
+    ///
+    /// The place is `decide`'s, over the transcript cut at the block's centre line to that side
+    /// and to the rows level with the block — its own, or his height either side of its middle
+    /// where that is taller:
+    /// the nearest place clearing the words to the aim, the side's outer edge level with the
+    /// block's middle, and where none clears the least covered, the block counted among the words
+    /// whether or not a view reported it. Where the side holds no place at all — the block's
+    /// centre too near the far edge for his reach, or its rows cut short by the transcript's top
+    /// or the glass — it is `decide` over the whole transcript from
+    /// the same aim, which still never undraws him.
+    static func beside(_ block: CGRect, in field: MascotField, size: CGSize, clearance: CGFloat,
+                       reach: MascotSprite.Reach = .none) -> Decision {
+        let visible = field.visible
+        let right = block.midX <= visible.midX
+        // The rows level with the block: its own, or his height either side of its middle where
+        // that is taller, so any place of his box in them is beside it. A gap that clears above
+        // or below is beside nothing, and the one gap between two blocks would be where he stood
+        // for both. His reach is kept inside the transcript as ever.
+        let top = max(min(block.minY, block.midY - size.height) - max(reach.top, 0), visible.minY)
+        let bottom = min(max(block.maxY, block.midY + size.height) + max(reach.bottom, 0), visible.maxY)
+        var side = field
+        side.visible = right
+            ? CGRect(x: block.midX, y: top, width: max(visible.maxX - block.midX, 0), height: max(bottom - top, 0))
+            : CGRect(x: visible.minX, y: top, width: max(block.midX - visible.minX, 0), height: max(bottom - top, 0))
+        if !field.obstacles.contains(where: { $0.insetBy(dx: -epsilon, dy: -epsilon).contains(block) }) {
+            side.obstacles.append(block)
+        }
+        let room = side.room(reach)
+        let aim = CGPoint(x: right ? room.maxX - size.width : room.minX, y: block.midY - size.height / 2)
+        let there = decide(side, size: size, clearance: clearance, reach: reach, from: aim)
+        guard there.choice == nil else { return there }
+        var whole = field
+        whole.obstacles = side.obstacles
+        return decide(whole, size: size, clearance: clearance, reach: reach, from: aim)
+    }
+
     /// The area of `frame` over `words`.
     static func cost(of frame: CGRect, words: [CGRect]) -> CGFloat {
         words.reduce(CGFloat(0)) { sum, word in
@@ -827,6 +890,9 @@ struct MascotRoam: Equatable, Sendable {
     /// The transcript has not been read yet: the page is about to fill, so he stands nowhere and
     /// is not drawn until it has.
     private(set) var waiting = false
+    /// The serial of the last code block he went to stand beside (`MascotField.beside`), so a
+    /// block reported again as it scrolls is not visited twice.
+    private(set) var visited: Int?
 
     /// `standing` is where his picture's origin is to begin with, which a replay of a recorded run
     /// starts from; nil, as the app has it, is nowhere.
@@ -846,7 +912,13 @@ struct MascotRoam: Equatable, Sendable {
     /// He is gliding, which is when he wears the walk.
     var walking: Bool { move != nil }
     /// There is something the clock has to move on: a glide, or a decision waiting on the quiet.
-    var needsTime: Bool { move != nil || unsettled }
+    var needsTime: Bool { move != nil || unsettled || visitDue }
+    /// A code block the voice has reached that he has not gone to stand beside yet: roaming, the
+    /// transcript read and no finger on him.
+    var visitDue: Bool {
+        guard settings.placement == .roam, !dragging, !waiting, let beside = field?.beside else { return false }
+        return beside.serial != visited
+    }
 
     /// The chat's geometry, as drawn now. Where he stands nowhere yet, the geometry that holds
     /// still for a settle places him with no glide, since there is nowhere to glide from: a chat
@@ -1043,6 +1115,13 @@ struct MascotRoam: Equatable, Sendable {
             if now - changed >= settings.settle { perch(.atOnce) }
             return
         }
+        // A code block the voice has reached, once the geometry has held still for a settle — the
+        // scroll that brought it into view over — is where he goes, whatever he was doing.
+        if visitDue, now - changed >= settings.settle, let beside = field?.beside {
+            visit(beside)
+            covered = isCovered
+            return
+        }
         guard unsettled, move == nil else { return }
         let quiet = now - changed
         // A frame's quiet is a tick with no geometry since the one before, which the display
@@ -1166,6 +1245,34 @@ struct MascotRoam: Equatable, Sendable {
         let speed = max(settings.speed, 1)
         move = Move(from: from, to: to, duration: Double(distance / speed))
         moves += 1
+    }
+
+    /// Goes to stand beside a code block the voice has reached (`MascotRoost.beside`): one glide
+    /// from where he is, turning any glide under way, or a placement under Reduce Motion or from
+    /// nowhere. With no place at all he stays where he is and the last decision stands. The decision is the roam's last, as any
+    /// other is, and the settle after the next geometry change decides from where it left him.
+    private mutating func visit(_ beside: MascotField.Beside) {
+        visited = beside.serial
+        unsettled = false
+        riding = false
+        heading = 0
+        guard let field else { return }
+        let made = MascotRoost.beside(beside.frame, in: field, size: settings.size, clearance: settings.clearance,
+                                      reach: settings.reach)
+        guard let to = made.roost.frame?.origin else { return }
+        decision = made
+        decisions += 1
+        #if DEBUG
+        MascotTrace.shared?.decided(made, at: now)
+        #endif
+        roost = made.roost
+        face(field)
+        guard let from = position else {
+            position = to
+            move = nil
+            return
+        }
+        glide(from: from, to: to, pace: 1)
     }
 
     /// Why a placed Topo is being put somewhere: his first place, or a new size or clearance, is a
