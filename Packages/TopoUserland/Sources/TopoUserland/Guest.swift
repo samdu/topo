@@ -1,6 +1,7 @@
 import Dispatch
 import Foundation
 import TopoIsh
+import TopoResolv
 
 /// The guest: one iSH kernel per process, booted on a fakefs, running programs as children of an
 /// init that never runs one of its own. The kernel is process-global state, so there is one
@@ -77,17 +78,39 @@ public final class Guest: Sendable {
         MemorySampler.shared.start()
     }
 
-    /// The name servers in the guest's `/etc/resolv.conf`, which the minirootfs has none of: with
-    /// them the guest's clients resolve names and reach the network directly, TLS included,
-    /// through the app's own sockets.
-    public static let nameservers = ["1.1.1.1", "8.8.8.8"]
+    /// The name servers the guest falls back to when the phone lists none of its own.
+    public static let fallbackNameservers = ["1.1.1.1", "8.8.8.8"]
 
-    /// Writes `/etc/resolv.conf` where there is none, through the guest so the fakefs records it
-    /// (a file laid into `data/` from the host has no metadata, and the guest does not see it):
-    /// an existing fakefs gets it at its next boot. Requires a booted kernel.
-    public func writeResolver() async throws {
-        let script = "[ -e /etc/resolv.conf ] || printf 'nameserver %s\\n' \(Self.nameservers.joined(separator: " ")) > /etc/resolv.conf"
-        let exit = try await run("/bin/sh", ["-c", script])
+    /// The name servers the phone's resolver is using now — its network's, or a VPN's while one is
+    /// up — as numeric addresses; empty when it lists none or its configuration cannot be read.
+    public static func systemNameservers() -> [String] {
+        var buffer = [CChar](repeating: 0, count: 1024)
+        guard topo_system_nameservers(&buffer, buffer.count) > 0 else { return [] }
+        return String(cString: buffer).split(separator: "\n").map(String.init)
+    }
+
+    /// The guest's `/etc/resolv.conf` for `servers`: each one that is a numeric IPv4 or IPv6 address
+    /// with no scope (a link-local scope names an interface the guest does not have), IPv4 first,
+    /// at most three (musl reads no more), or the fallback when none is left.
+    public static func resolverFile(for servers: [String]) -> String {
+        func isAddress(_ text: String, _ family: Int32) -> Bool {
+            var storage = in6_addr()
+            return !text.contains("%") && inet_pton(family, text, &storage) == 1
+        }
+        var seen = Set<String>()
+        let usable = servers.filter { seen.insert($0).inserted }
+        let chosen = Array((usable.filter { isAddress($0, AF_INET) } + usable.filter { isAddress($0, AF_INET6) })
+            .prefix(3))
+        return (chosen.isEmpty ? fallbackNameservers : chosen).map { "nameserver \($0)\n" }.joined()
+    }
+
+    /// Writes `/etc/resolv.conf` for `servers` (`resolverFile(for:)`), replacing whatever is there,
+    /// through the guest so the fakefs records it (a file laid into `data/` from the host has no
+    /// metadata, and the guest does not see it). The file is written beside and moved over, so a
+    /// lookup never reads half of one. Requires a booted kernel.
+    public func writeResolver(servers: [String]) async throws {
+        let script = #"printf '%s' "$1" > /etc/resolv.conf.topo && mv -f /etc/resolv.conf.topo /etc/resolv.conf"#
+        let exit = try await run("/bin/sh", ["-c", script, "resolver", Self.resolverFile(for: servers)])
         if exit.status != 0 { throw Failure.resolver(exit.errors) }
     }
 
