@@ -91,7 +91,12 @@ struct HomeCharacteristic: Sendable, Equatable {
         case "float": text = "a number"
         default: text = isInteger ? "a whole number" : "a \(format) value"
         }
-        if let lower, let upper { text += " from \(lower) to \(upper)" }
+        switch (lower, upper) {
+        case let (lower?, upper?): text += " from \(lower) to \(upper)"
+        case let (lower?, nil): text += " of at least \(lower)"
+        case let (nil, upper?): text += " of at most \(upper)"
+        case (nil, nil): break
+        }
         if let step, step > 0 { text += " in steps of \(step)" }
         if let validValues {
             let allowed = validValues.filter(takes).map { "\($0)" }
@@ -401,6 +406,7 @@ struct HomeTool: Tool {
                 }
                 let access = !characteristic.writable ? "read only"
                     : !characteristic.settable ? "a name, which topo home does not change"
+                    : !characteristic.isPlain ? "a \(characteristic.format) value, which topo home does not set"
                     : characteristic.readable ? "can be set" : "can be set, not read"
                 lines.append("  " + PhoneTool.line([characteristic.id, characteristic.name, value, characteristic.range, access]))
             }
