@@ -286,7 +286,7 @@ func okOrigin(_ text: String = "ok") throws -> StubOrigin {
         reader.write("GET http://release-assets.githubusercontent.com/big HTTP/1.1\r\nHost: release-assets.githubusercontent.com\r\n\r\n")
         var read = 0
         for _ in 0..<8 {
-            read += reader.read(upTo: 1024)
+            read += await reader.read(upTo: 1024)
             try await Task.sleep(for: .seconds(1))
         }
         #expect(read > 0, "the slow reader got nothing")
@@ -295,9 +295,12 @@ func okOrigin(_ text: String = "ok") throws -> StubOrigin {
     }
 }
 
-/// A client on a plain socket with a small receive buffer, which reads only when told to.
-final class SlowReader {
+/// A client on a plain socket with a small receive buffer, which reads only when told to. Its
+/// reads block, so they run on a queue of its own and never hold a thread of the cooperative
+/// pool, which the other suites' timed pins share.
+final class SlowReader: @unchecked Sendable {
     private let fd: Int32
+    private let queue = DispatchQueue(label: "SlowReader")
     let connected: Bool
 
     init(port: UInt16) {
@@ -322,9 +325,13 @@ final class SlowReader {
     }
 
     /// Reads at most `count` bytes, answering how many.
-    func read(upTo count: Int) -> Int {
-        var buffer = [UInt8](repeating: 0, count: count)
-        return max(0, Darwin.read(fd, &buffer, count))
+    func read(upTo count: Int) async -> Int {
+        await withCheckedContinuation { continuation in
+            queue.async { [fd] in
+                var buffer = [UInt8](repeating: 0, count: count)
+                continuation.resume(returning: max(0, Darwin.read(fd, &buffer, count)))
+            }
+        }
     }
 
     func close() { Darwin.close(fd) }
