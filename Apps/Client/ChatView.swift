@@ -389,7 +389,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow)
+                                  draft: draftRow, queued: row.queued(in: harness))
         if #available(iOS 18, *) {
             view
                 // Where the transcript stops drawing, measured down from the transcript's own

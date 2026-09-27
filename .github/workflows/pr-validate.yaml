@@ -580,6 +580,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/review-prompt-test.sh
 
+      # scripts/janitor.py's decisions over scripted readings and one whole
+      # pass against a fake gh, git, tmux and curl: a merge pinned to the head
+      # the green run was read for, one rerun per head, the install page from
+      # origin/main, a merged branch's worktree swept, a report kept when
+      # undeliverable.
+      - name: The janitor merges, reruns, publishes and sweeps as docs/janitor.md says
+        if: ${{ !cancelled() }}
+        run: scripts/tests/janitor-test.sh
+
       # Named, not globbed: a package that disappears fails here instead of
       # leaving the loop with one fewer iteration. Every package runs even
       # after one fails, so the log shows them all.
