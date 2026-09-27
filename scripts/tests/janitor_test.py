@@ -720,7 +720,7 @@ class WholePass(unittest.TestCase):
         p, _ = self.run_pass(self.scripted())
         self.assertIn("kept for the next pass", p.stderr)
         self.assertTrue(any("merged #7" in l for l in self.undelivered()))
-        self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
+        self.assertEqual(self.state_file()["pending"], [], "the lines moved from pending to the undelivered message")
         Bridge.status = 200
         p, _ = self.run_pass(self.scripted(prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
         self.assertTrue(any("merged #7" in l for l in Bridge.received[-1]["body"]["text"].splitlines()))
