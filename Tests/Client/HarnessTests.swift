@@ -76,7 +76,7 @@ final class HarnessIntegrationTests: XCTestCase {
                              transport: ScriptedTransport,
                              ensureZone: @escaping @Sendable () async throws -> Void = {},
                              pause: @escaping @Sendable (Duration) async throws -> Void = { _ in throw CancellationError() },
-                             now: @escaping @Sendable () -> Date = { Date() }) -> Harness {
+                             now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) -> Harness {
         Harness(database: database, tokens: FixedToken(), device: device ?? phone, ensureZone: ensureZone,
                 defaults: defaults, brain: brain(transport, device: device ?? phone, defaults: defaults),
                 leaseSleep: parked, pause: pause, now: now)
@@ -908,6 +908,98 @@ final class HarnessIntegrationTests: XCTestCase {
         await open.value
     }
 
+    /// The backoff is elapsed time, not what the phone's clock says. After the first failure and
+    /// then a second, the line waits ten seconds; the person setting the clock a minute ahead and
+    /// a push waking the loop does not send it early, and setting it an hour back does not hold it
+    /// past the ten seconds that actually pass.
+    func testSettingThePhonesClockDoesNotMoveTheNextAttempt() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                await attempts.noteIfSending(seen, pass: await beats.passes + 1)
+                                throw RecordDatabaseError.unavailable(underlying: Unexpected())
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let open = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass") { await beats.passes >= 1 }
+        clock.advance(5)
+        await phone.wake()
+        let second = await attempts.passes.count
+        XCTAssertEqual(second, 2, "the attempt one interval after the first failure did not go")
+
+        // The next attempt is due ten seconds from now.
+        let before = clock.wall
+        clock.setWall(by: 60)
+        XCTAssertEqual(clock.wall.timeIntervalSince(before), 60)
+        await phone.wake()
+        let afterForward = await attempts.passes.count
+        XCTAssertEqual(afterForward, 2, "setting the clock a minute ahead sent the line early")
+
+        clock.setWall(by: -3_600)
+        clock.advance(5)
+        await phone.wake()
+        let halfway = await attempts.passes.count
+        XCTAssertEqual(halfway, 2, "the line went five seconds into a ten-second wait")
+        clock.advance(5)
+        await phone.wake()
+        let due = await attempts.passes.count
+        XCTAssertEqual(due, 3, "setting the clock an hour back held the line past the ten seconds that passed")
+        open.cancel()
+        await open.value
+    }
+
+    /// Sign-out starts the backoff again: a line that has failed long enough to wait most of a
+    /// minute is gone with the login, and a turn said after it is sent on the next pass that can
+    /// read, with no time passing, rather than when the last login's backoff said.
+    func testSignOutStartsTheBackoffAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let beats = Beats()
+        let clock = TestClock()
+        let attempts = Attempts()
+        let seen = Seen()
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(),
+                            ensureZone: {
+                                await attempts.noteIfSending(seen, pass: await beats.passes + 1)
+                                throw RecordDatabaseError.unavailable(underlying: Unexpected())
+                            },
+                            pause: { try await beats.pause($0) }, now: clock.now)
+        seen.harness = phone
+        await phone.send("water the plants")
+        await attempts.reset()
+
+        let first = Task { await phone.answering(every: .seconds(5)) }
+        for pass in 1...3 {
+            try await eventually("pass \(pass)") { await beats.passes >= pass }
+            clock.advance(5)
+            await beats.tick()
+        }
+        try await eventually("pass 4") { await beats.passes >= 4 }
+        // Attempts on passes 1, 2 and 4 have failed, the last at 15 s: the next is due at 35 s.
+        let before = await attempts.passes
+        XCTAssertEqual(before, [1, 2, 4])
+
+        await phone.forget()
+        await first.value
+        XCTAssertTrue(phone.waiting.isEmpty, "the line outlived the sign-out")
+
+        phone.willSend("and the ferns")
+        await attempts.reset()
+        let second = Task { await phone.answering(every: .seconds(5)) }
+        try await eventually("the first pass after sign-in") { await beats.passes >= 5 }
+        let after = await attempts.passes
+        XCTAssertEqual(after, [5], "the turn after sign-out waited out the last login's backoff")
+        second.cancel()
+        await second.value
+    }
+
     /// A success clears the backoff: after a run of failures, a line that went and a new turn
     /// that stops it again is sent on the very next pass, not when the old backoff said.
     func testALineThatWentStartsItsBackoffAgain() async throws {
@@ -1546,12 +1638,17 @@ private actor Attempts {
     }
 }
 
-/// The time the harness's backoff reads, moved by the test.
+/// The phone's two clocks, moved by the test: `now` is the elapsed time the harness's backoff
+/// reads, and `wall` is what the phone's clock says, which the person can set anywhere. Time
+/// passing moves both; setting the clock moves the wall alone.
 private final class TestClock: @unchecked Sendable {
     private let lock = NSLock()
-    private var current = Date(timeIntervalSince1970: 1_800_000_000)
-    var now: @Sendable () -> Date { { [self] in lock.withLock { current } } }
-    func advance(_ seconds: TimeInterval) { lock.withLock { current += seconds } }
+    private var elapsed: TimeInterval = 1_000
+    private var shown = Date(timeIntervalSince1970: 1_800_000_000)
+    var now: @Sendable () -> TimeInterval { { [self] in lock.withLock { elapsed } } }
+    var wall: Date { lock.withLock { shown } }
+    func advance(_ seconds: TimeInterval) { lock.withLock { elapsed += seconds; shown += seconds } }
+    func setWall(by seconds: TimeInterval) { lock.withLock { shown += seconds } }
 }
 
 /// The harness a closure made before it needs to ask about it.

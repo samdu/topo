@@ -178,10 +178,13 @@ final class Harness {
     static let retryBackoff = [1, 2, 4, 8, 12]
     /// The loop's attempts in a row that left the line stopped. Cleared when the line empties.
     private var failedRetries = 0
-    /// The loop sends the stopped line again no sooner than this. Nil when nothing has failed.
-    private var retryNotBefore: Date?
-    /// The time, for the backoff: the clock in the app, a clock the test moves in the suites.
-    private let now: @Sendable () -> Date
+    /// The loop sends the stopped line again no sooner than this, in seconds on `now`. Nil when
+    /// nothing has failed.
+    private var retryNotBefore: TimeInterval?
+    /// Elapsed time, for the backoff: `PrimaryLease.continuousUptime` in the app, which counts
+    /// through sleep and is unmoved by a change to the phone's clock, so the wait is the time that
+    /// passed and not what the clock says; a clock the test moves in the suites.
+    private let now: @Sendable () -> TimeInterval
 
     /// `brain` is what answers, chosen here and nowhere else: never per turn, and never on a
     /// failure. `relay` is where the brain tells what the guest is doing, when it is the guest.
@@ -191,7 +194,7 @@ final class Harness {
          brain: any Brain, relay: GuestRelay = GuestRelay(),
          leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
          pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-         now: @escaping @Sendable () -> Date = { Date() }) {
+         now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) {
         self.database = RecordingDatabase(database)
         self.tokens = tokens
         self.device = device
@@ -482,7 +485,7 @@ final class Harness {
         guard self.login == login, hasWaiting else { return }
         let waits = Self.retryBackoff[min(failedRetries, Self.retryBackoff.count - 1)]
         let seconds = Double(interval.components.seconds) + Double(interval.components.attoseconds) / 1e18
-        retryNotBefore = now().addingTimeInterval(seconds * Double(waits))
+        retryNotBefore = now() + seconds * Double(waits)
         failedRetries += 1
     }
 
