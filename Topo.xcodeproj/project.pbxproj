@@ -219,6 +219,7 @@
 		A8807AF0D00F928C12D256FA /* Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */; };
 		A95359D2B28EF0C108A6537D /* TopoTools in Frameworks */ = {isa = PBXBuildFile; productRef = 7C767439B30ED0E6848AC6D4 /* TopoTools */; };
 		A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91354032F5443E868316550B /* MicrophonePressTests.swift */; };
+		A976187A8375E84B67FD0E1E /* StopWhileSpeakingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88BFBBC5F6FD505DCD58B15 /* StopWhileSpeakingTests.swift */; };
 		AAE4C1BAB7A289077470D9BC /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		AB0C7C4754391EDC4D4A7E0B /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
 		AD4F9E8277006852F3904EED /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
@@ -456,6 +457,7 @@
 		B2F92FDD0A90790863EA800E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceTokens.swift; sourceTree = "<group>"; };
 		B82E94F64E76CD6727BEB803 /* index.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = index.html; sourceTree = "<group>"; };
+		B88BFBBC5F6FD505DCD58B15 /* StopWhileSpeakingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StopWhileSpeakingTests.swift; sourceTree = "<group>"; };
 		BCD2D48725224C0E601F432D /* MemoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryTests.swift; sourceTree = "<group>"; };
 		BD2BEF1581B6D3DF49DF650C /* TopoOnTheGlassTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoOnTheGlassTests.swift; sourceTree = "<group>"; };
 		BD6A5FA002CAE78588A94E39 /* GuestLifecycleTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestLifecycleTests.swift; sourceTree = "<group>"; };
@@ -840,6 +842,7 @@
 				1AF008F3C113182739CEB6D7 /* SignOutTests.swift */,
 				DE6988A9926AEFE077104598 /* SpeakableTests.swift */,
 				629737688F7BECCE20D49992 /* StoneRenderTests.swift */,
+				B88BFBBC5F6FD505DCD58B15 /* StopWhileSpeakingTests.swift */,
 				8B7F8C14868F6151C38208F7 /* ThemeTests.swift */,
 				F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */,
 				37C72071D6B88AB32EF3BBFD /* TuningTests.swift */,
@@ -1561,6 +1564,7 @@
 				2DEF9C81428F08E13848D373 /* SignOutTests.swift in Sources */,
 				E842D90B19FB83DA9860E903 /* SpeakableTests.swift in Sources */,
 				2FBBC319A56891113C7BB372 /* StoneRenderTests.swift in Sources */,
+				A976187A8375E84B67FD0E1E /* StopWhileSpeakingTests.swift in Sources */,
 				F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */,
 				246189E54D0EF499C6E0B93C /* TranscriptStoreTests.swift in Sources */,
 				E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */,

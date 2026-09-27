@@ -318,8 +318,8 @@ final class TopoOnTheGlassTests: XCTestCase {
                                  file: file, line: line)
     }
 
-    /// The button's three labels, `VoiceInput`'s state in words.
-    static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send"]
+    /// The button's labels: `VoiceInput`'s state in words, or Stop while Topo is speaking.
+    static let labels = ["Hold to talk", "Listening; release to send", "Listening; press to send", "Stop speaking"]
 
     /// `softwareKeyboard` asks for the keyboard a phone has (`TOPO_DEBUG_SOFTWARE_KEYBOARD`): a
     /// simulator starts with the Mac's keyboard connected, under which nothing rises and the
