@@ -14,7 +14,7 @@ Tapping the same link again installs the newer build over the old one; the page 
 
 ## Cutting a build
 
-`publish-topo.sh` in the `ota` experiment of samdu/experiments does it end to end on buddybox: archive and export the `Topo` scheme dev-signed from a detached checkout of the given ref (default `origin/main`), commit the ipa and `version.json` under the slug, and bounce the `ota` deployment. It needs the login keychain, so run it from a GUI-session shell as buddy, not a bare ssh shell.
+`publish-topo.sh` in the `ota` experiment of samdu/experiments does it end to end on buddybox: archive and export the `Topo` scheme dev-signed from a detached checkout of the given ref (default `origin/main`), copy the ipa and `version.json` onto the `ota` pod's PVC under the slug, where they are served at once (no commit, no restart), and check the ipa URL answers 200. It needs the login keychain, so run it from a GUI-session shell as buddy, not a bare ssh shell.
 
 Signing is automatic with the team set in `project.yml`. The iCloud container and the App ID's capabilities are registered by Xcode from the entitlements when a project with a team is opened in it, which is how the container came to exist; `xcodebuild -allowProvisioningUpdates` alone creates the App ID and profile but not a container.
 
