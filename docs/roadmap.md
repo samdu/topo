@@ -19,7 +19,7 @@ What is built, what comes next and in what order, what is parked, and the thread
 - Markdown in Topo's replies: fenced and inline code, emphasis, headings, lists, quotes and rules from Foundation's parser, styled by `Look.Markdown` (#173).
 - Womble for iOS 12 devices, viewer only.
 - The hub app skeleton (`TopoHub`), holding the lease and showing the pairing code.
-- CI: the three-job PR check with the audio lane, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`.
+- CI: the three-job PR check with the audio lane, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns an infrastructure red, republishes the install page and sweeps merged worktrees.
 
 ## Next, in order
 

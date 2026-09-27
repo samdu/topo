@@ -45,6 +45,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 | Running signed in on a simulator | `docs/simulator.md` |
 | Pairing, LAN surfaces, the house board | `docs/pairing.md`, `docs/surfaces.md`, `docs/board.md` |
 | Installing on Sam's phone, republishing the install page on merge, TestFlight | `docs/install.md`, `docs/testflight.md` |
+| The janitor: merges automerge missed, reruns, the install page, worktrees, what it reports | `docs/janitor.md` |
 | Icons and the stone | `Design/README.md` |
 | Womble | `Womble/README.md` |
 
@@ -58,7 +59,7 @@ The process — who plans, who builds, who reviews, and in what order — is `do
 - Docs describe what **is**, never what was or what is planned. When you change behaviour, change the doc to match; do not narrate the change.
 - **Ask the advisor at three moments.** Engineer sessions carry a Fable advisor beside the Opus model that does the work. Consult it once a plan is drafted and before anyone else reads it, and fix what it catches first; the second time a CI job fails the same way or a reviewer raises the same finding again, before pushing a third attempt; and at a task boundary, before reporting, to ask what was missed, with the answer in the report. The advisor advises and you still write the code; a consult is not an escalation, so nothing waits on anyone after it.
 - Between task boundaries, keep going: a step that needs nobody's input is taken, with status in the same message as the next action. Stop only at the boundaries `docs/process.md` names.
-- An engineer reports to the Topo PM at every task boundary (PR opened, blocked, finished) with `SendMessage`: what, where (branch, commit, PR), what it waits on. It never merges, never reads or answers a review, and never polls with background shells — the PM does all three.
+- An engineer reports to buddy-prime, the coordinator, at every task boundary (PR opened, blocked, finished) with `SendMessage`: what, where (branch, commit, PR), what it waits on. It never merges, never reads or answers a review, and never polls with background shells — the coordinator does all three, and the janitor (`docs/janitor.md`) does the mechanical part of the first.
 
 ## Where the risk lives
 
