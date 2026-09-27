@@ -96,6 +96,17 @@ final class DraftRowRenderTests: XCTestCase {
         return try Raster(try XCTUnwrap(renderer.uiImage, "the turn rendered to nothing"))
     }
 
+    /// A turn on its way that the row is not holding.
+    private func renderQueued(_ text: String, look: Look = Look()) throws -> Raster {
+        let view = QueuedTurnRow(turn: QueuedTurn(text: text, nonce: "n"))
+            .environment(\.look, look)
+            .frame(width: width)
+            .background(Color.white)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 3
+        return try Raster(try XCTUnwrap(renderer.uiImage, "the queued turn rendered to nothing"))
+    }
+
     private func draft(_ text: String, typing: Bool = true, sending: Bool = false) -> Draft {
         Draft(text: .constant(text), typing: .constant(typing), sending: sending)
     }
@@ -251,6 +262,39 @@ final class DraftRowRenderTests: XCTestCase {
                        "the row in flight is not drawn in the theme's signal")
     }
 
+    /// A turn on its way that the row is not holding is drawn in the sending colour and not the
+    /// landed one, and the same words once in the log in the landed one and not the sending one:
+    /// the bubble flips when the log has the turn, and only then. Asserted against `Theme`.
+    func testATurnOnItsWayOutsideTheRowIsSignalUntilItLands() throws {
+        let queued = try renderQueued("bins?")
+        XCTAssertFalse(outline(queued, Theme.signal).isEmpty,
+                       "a turn on its way outside the row is not drawn in the theme's signal")
+        XCTAssertTrue(outline(queued, Theme.primary).isEmpty,
+                      "a turn on its way outside the row is drawn in the landed turn's colour")
+
+        let landed = try renderTurn("bins?")
+        XCTAssertFalse(outline(landed, Theme.primary).isEmpty, "the landed turn is not in the theme's primary")
+        XCTAssertTrue(outline(landed, Theme.signal).isEmpty, "the landed turn is still drawn as on its way")
+    }
+
+    /// It is the landed bubble in another colour, where the landed bubble will be: nothing moves
+    /// when it lands. And its colour is the look's, so a look that changes the sending colour
+    /// changes it.
+    func testATurnOnItsWayOutsideTheRowIsWhereAndWhatSizeItWillLand() throws {
+        let words = "Remind me to water"
+        let queued = try box(try renderQueued(words), Look().draft.sending.accent)
+        let landed = try box(try renderTurn(words), Look().bubble.accent)
+        XCTAssertEqual(queued.left, landed.left, accuracy: 6, "the bubble moves as it lands")
+        XCTAssertEqual(queued.right, landed.right, accuracy: 6, "the bubble moves as it lands")
+        XCTAssertEqual(queued.bottom - queued.top, landed.bottom - landed.top, accuracy: 6,
+                       "the bubble changes height as it lands")
+
+        var look = Look()
+        look.draft.sending.accent = Color(red: 0, green: 0, blue: 1)
+        XCTAssertFalse(try renderQueued(words, look: look).pixels(matching: .blue).isEmpty,
+                       "the look's sending accent does not reach a turn on its way outside the row")
+    }
+
     /// The landed turn's own colour is in neither state of the row. The draft becomes a turn of
     /// the person's by landing, so a row drawn in `primary` before it lands says it already has.
     func testThePersonsLandedColourIsInNeitherStateOfTheRow() throws {
@@ -398,4 +442,60 @@ final class DraftRowRenderTests: XCTestCase {
 private func XCTAssertEqual(_ a: Int, _ b: Int, accuracy: Int, _ message: String,
                             file: StaticString = #filePath, line: UInt = #line) {
     XCTAssertLessThanOrEqual(abs(a - b), accuracy, "\(message) (\(a) vs \(b))", file: file, line: line)
+}
+
+/// Where the transcript comes to rest when the row is not the last thing it draws. A relaunch
+/// over two owed turns draws the row holding the older and the newer below it; on a transcript
+/// taller than the screen, the newer has to be on the screen, not under the fold. Drawn through a
+/// real window (`LookStage`), since `ImageRenderer` lays out nothing inside a `ScrollView`.
+@MainActor
+final class TranscriptEndTests: XCTestCase {
+    /// The draft's sending colour in a blue nothing else on the stage is drawn in, so every blue
+    /// band down the picture is one bubble of a turn on its way.
+    private static func look() -> Look {
+        var look = Look()
+        look.draft.sending.accent = Color(red: 0, green: 0, blue: 1)
+        return look
+    }
+
+    private func turns(_ count: Int) -> [Turn] {
+        (1...count).map { n in
+            Turn(ref: TurnRef(device: DeviceID("phone"), sequence: Int64(n)), parents: [],
+                 role: n.isMultiple(of: 2) ? .assistant : .person,
+                 text: "Turn \(n), long enough to take a line or two of the transcript's width on a phone.",
+                 at: Date(timeIntervalSince1970: 1_700_000_000 + Double(n)))
+        }
+    }
+
+    /// The runs of picture rows with blue in them, top to bottom, as (first row, last row).
+    private func blueBands(_ image: UIImage) throws -> [(Int, Int)] {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let width = cgImage.width, height = cgImage.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(
+            data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var bands: [(Int, Int)] = []
+        for y in 0..<height {
+            var blue = false
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                if bytes[i] < 30, bytes[i + 1] < 30, bytes[i + 2] > 220 { blue = true; break }
+            }
+            guard blue else { continue }
+            if let last = bands.last, last.1 >= y - 2 { bands[bands.count - 1].1 = y } else { bands.append((y, y)) }
+        }
+        return bands
+    }
+
+    func testANewerTurnOnItsWayBelowTheRowIsOnTheScreen() throws {
+        let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+        let view = TranscriptView(turns: turns(30), draft: draft,
+                                  queued: ([], [QueuedTurn(text: "and book the flights", nonce: "newer")]))
+            .background(Color.white)
+        let bands = try blueBands(try LookStage.image(view, look: Self.look()))
+        XCTAssertEqual(bands.count, 2,
+                       "expected the row and the turn below it on the screen, found \(bands.count) bubble(s) of a turn on its way")
+    }
 }
