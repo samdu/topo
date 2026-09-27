@@ -59,6 +59,7 @@ struct TopoApp: App {
         // A reply is not read into an open microphone: one that lands while it is open waits for
         // it to close (`Speaker.speak`).
         speaker.microphoneOpen = { voice.listening }
+        MicrophoneWatch.start(voice, speaker)
         _voice = State(initialValue: voice)
         _speaker = State(initialValue: speaker)
         // What says, on a device run with no debugger attached, when iOS suspended the process.

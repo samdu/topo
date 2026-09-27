@@ -362,7 +362,7 @@ final class Speaker {
 
     /// A press is opening a microphone: set at the press, before `VoiceInput` has awaited the
     /// permission prompt or started anything, so a reply landing in between waits as it would for
-    /// one already open. `microphoneClosed` clears it.
+    /// one already open. `microphoneOpened` clears it.
     private var opening = false
 
     /// Told the nonce of a spoken turn whose reply waited for the microphone, once that reply has
@@ -378,19 +378,26 @@ final class Speaker {
     var awaiting: [String] { waits.keys.sorted() }
     #endif
 
-    /// RED: the press's call into `VoiceInput` returned; as `microphoneClosed` for now.
-    func microphoneOpened() { microphoneClosed() }
+    /// The press's call into `VoiceInput` has returned: the microphone is listening, or the
+    /// press opened nothing, or it closed a hands-free session. It is no longer opening, and a
+    /// reply that waited is read if no microphone is open.
+    func microphoneOpened() {
+        opening = false
+        microphoneClosed()
+    }
 
     private var microphoneBusy: Bool { opening || microphoneOpen() }
 
     /// A press is about to open the microphone. What is being read stops, so the microphone does
-    /// not hear it, and every wait goes, as at any press; a reply waiting for the microphone waits
-    /// on, since opening it again is no reason to lose it — it is read when this one closes.
+    /// not hear it, and every other wait goes, as at any press; a reply waiting for the microphone
+    /// waits on with its wait, since opening it again is no reason to lose it — it is read when
+    /// this one closes.
     func microphoneOpening() {
         let waiting = deferred
         deferred = nil
-        stop()
+        cancel()
         deferred = waiting
+        waits.keys.filter { $0 != waiting?.nonce }.forEach { endAwaiting($0, "stopped") }
         opening = true
     }
 
@@ -400,8 +407,7 @@ final class Speaker {
     /// session refuses here keeps waiting, its turn still marked, for the next close or the next
     /// pass that offers it after a relaunch.
     func microphoneClosed() {
-        opening = false
-        guard let waiting = deferred, !microphoneOpen() else { return }
+        guard let waiting = deferred, !microphoneBusy else { return }
         deferred = nil
         AudioLog.say("the microphone closed; reading the reply that waited for it")
         guard speak(waiting.text, answering: waiting.nonce) else {
@@ -414,9 +420,12 @@ final class Speaker {
 
     /// Ends the reply in flight and leaves any wait standing, which is what `speak` needs: the
     /// reply about to be read replaces the one before it without the keeper stopping between them.
-    /// A reply waiting for the microphone goes too, and its turn is settled unread.
+    /// A reply waiting for the microphone goes too: its turn is settled unread and its wait let go.
     private func cancel() {
-        if let dropped = deferred?.nonce { settled?(dropped) }
+        if let dropped = deferred?.nonce {
+            settled?(dropped)
+            endAwaiting(dropped, "its reply will not be read")
+        }
         deferred = nil
         generation += 1
         chain = nil

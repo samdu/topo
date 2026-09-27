@@ -281,10 +281,6 @@ struct ChatView: View {
         // The keyboard coming up ends a hands-free session: a person who has started typing is
         // not still talking. What was heard stays in the row, to be finished by hand.
         .onChange(of: row.typing) { _, up in if up { voice.cancel(.chat) } }
-        // A reply that landed while the microphone was open is read once it closes, however it
-        // closed: a release, the keyboard, the scene going. A press closes it too and says so
-        // itself (`MicPress`), so the reply does not wait on this screen's next update.
-        .onChange(of: voice.listening) { _, open in if !open { speaker.microphoneClosed() } }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
             // it, so nothing said into it was meant. A reply plays on — that is what the hold is
@@ -567,10 +563,25 @@ enum ReadAloud {
     }
 }
 
-/// RED: not yet watching.
+/// Reads a reply that waited for the microphone once the microphone closes, however it closed —
+/// a release, the keyboard, the scene going, a reset — by watching `VoiceInput.listening`. Not a
+/// view, so it runs behind the lock and whether or not the chat is drawn; the app starts it once.
+/// A press closes the microphone too and says so itself (`MicPress`), so the reply does not wait
+/// on the watch's hop.
 @MainActor
 enum MicrophoneWatch {
-    static func start(_ voice: VoiceInput, _ speaker: Speaker) {}
+    static func start(_ voice: VoiceInput, _ speaker: Speaker) {
+        withObservationTracking {
+            _ = voice.listening
+        } onChange: { [weak voice, weak speaker] in
+            // Called as the value is about to change, so the answer is read on the next turn.
+            Task { @MainActor in
+                guard let voice, let speaker else { return }
+                if !voice.listening { speaker.microphoneClosed() }
+                start(voice, speaker)
+            }
+        }
+    }
 }
 
 /// A spoken turn's reply read aloud: the chat's `Harness.onReply`, answering whether the harness
