@@ -14,17 +14,26 @@ private final class FakeHome: HomeStore {
     var values: [String: HomeValue] = [:]
     /// Characteristics whose read fails.
     var unreadable: Set<String> = []
+    /// Characteristics whose read answers only after ten seconds.
+    var slow: Set<String> = []
+    /// Run each time the homes are read, before they are answered.
+    var onHomes: (@MainActor () -> Void)?
     private(set) var writes: [(String, HomeValue)] = []
     private(set) var scenesRun: [String] = []
     private(set) var homesRead = 0
 
     func homes() -> [HomeRecord] {
         homesRead += 1
+        onHomes?()
         return records
     }
 
     func read(_ characteristic: String) async throws -> HomeValue? {
         if unreadable.contains(characteristic) { throw ToolFailure("no answer") }
+        if slow.contains(characteristic) {
+            try await Task.sleep(for: .seconds(10))
+            return .int(99)
+        }
         return values[characteristic]
     }
 
@@ -72,6 +81,9 @@ final class HomeToolTests: XCTestCase {
                     characteristic("L-bright", "brightness", min: 0, max: 100, step: 1, units: "%"),
                     characteristic("L-temp", "color-temperature", "uint32", min: 140, max: 500, step: 10),
                     characteristic("L-watts", "power-draw", "float", writable: false),
+                    characteristic("L-name", "name", "string"),
+                    characteristic("L-label", "configured-name", "string"),
+                    characteristic("L-level", "level", min: 0, max: 100, step: 10, valid: [0, 10, 105]),
                 ]),
             ]),
             HomeAccessory(id: stripID, name: "Strip", room: "Office", category: "Outlet", reachable: true, services: [
@@ -234,7 +246,7 @@ final class HomeToolTests: XCTestCase {
         let reply = await tool.run([])
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
         XCTAssertTrue(reply.text.hasPrefix("home: The flat (primary)\n"), reply.text)
-        XCTAssertTrue(reply.text.contains("Desk lamp: power ?, brightness 40, color-temperature"), reply.text)
+        XCTAssertTrue(reply.text.contains("Desk lamp: power ?, brightness 40, color-temperature, level"), reply.text)
     }
 
     /// The authorization answered, the homes not yet: the call waits for them rather than saying
@@ -264,9 +276,11 @@ final class HomeToolTests: XCTestCase {
         }
     }
 
-    /// The service's bound cancels a call; one waiting on HomeKit then writes nothing, even once
-    /// HomeKit answers.
-    func testASetCancelledWhileHomeKitLoadsWritesNothing() async throws {
+    /// The service's bound cancels a call; one waiting for HomeKit to load the homes ends at once,
+    /// though HomeKit never says another word. (A call waiting on the person's answer waits in the
+    /// broker's one prompt, shared by every call, and is answered by the service at its bound;
+    /// `PhoneTool.run` then does nothing, which `PhoneToolsTests` holds.)
+    func testACallCancelledWhileHomeKitLoadsAnswersAtOnce() async throws {
         let fake = FakeHome()
         let access = HomeAccess { fake }
         let tool = HomeTool(home: access, authorizer: HomeAuthorizer(home: access), broker: PermissionBroker())
@@ -276,11 +290,41 @@ final class HomeToolTests: XCTestCase {
         fake.changed?(.authorization)
         try await Task.sleep(for: .milliseconds(50))
         call.cancel()
-        try await Task.sleep(for: .milliseconds(50))
-        fake.answer(homes: [Self.house])
-        let reply = await call.value
-        XCTAssertEqual(reply.status, ToolReply.timedOut, reply.text)
+        let reply = await PhoneTool.within(.seconds(1)) { await call.value }
+        XCTAssertEqual(reply?.status, ToolReply.timedOut, reply?.text ?? "no answer within 1 s")
         XCTAssertTrue(fake.writes.isEmpty)
+    }
+
+    /// A call cancelled after the homes are read and before its write or scene does neither.
+    func testAWriteOrSceneCancelledAfterTheHomesAreReadIsNotMade() async throws {
+        for arguments in [["set", Self.lampID, "brightness", "10"], ["scene", "SC-1111"]] {
+            let (tool, fake) = tool()
+            _ = await tool.run(["scenes"])
+            var call: Task<ToolReply, Never>?
+            fake.onHomes = { call?.cancel() }
+            call = Task { await tool.run(arguments) }
+            let reply = await call!.value
+            XCTAssertEqual(reply.status, ToolReply.timedOut, "\(arguments): \(reply.text)")
+            XCTAssertTrue(fake.writes.isEmpty, "\(arguments)")
+            XCTAssertTrue(fake.scenesRun.isEmpty, "\(arguments)")
+        }
+    }
+
+    /// HomeKit may say the homes loaded before it says what the person chose; that is no answer.
+    func testHomesLoadedBeforeTheAnswerAreNotARefusal() async throws {
+        let fake = FakeHome()
+        let access = HomeAccess { fake }
+        let tool = HomeTool(home: access, authorizer: HomeAuthorizer(home: access), broker: PermissionBroker())
+        let call = Task { await tool.run(["scenes"]) }
+        for _ in 0..<200 where fake.changed == nil { try await Task.sleep(for: .milliseconds(5)) }
+        fake.records = [Self.house]
+        fake.changed?(.homes)
+        try await Task.sleep(for: .milliseconds(100))
+        fake.authorization = [.determined, .authorized]
+        fake.changed?(.authorization)
+        let reply = await call.value
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertEqual(reply.text, "SC-1111 | Good night\nSC-2222 | Movie\n")
     }
 
     // MARK: Review focus 6: a refusal, never an empty home
@@ -314,6 +358,58 @@ final class HomeToolTests: XCTestCase {
         XCTAssertEqual(fake.homesRead, 0)
     }
 
+    /// Review focus 2: HomeKit may let a name be written; `topo home` renames nothing.
+    func testRefusesAName() async {
+        let (tool, fake) = tool()
+        for (name, id) in [("name", "name"), ("configured-name", "configured-name"), ("L-name", "L-name")] {
+            let reply = await tool.run(["set", Self.lampID, id, "Bedside"])
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(name): \(reply.text)")
+            XCTAssertTrue(reply.text.contains("renames nothing; nothing was written"), reply.text)
+        }
+        XCTAssertTrue(fake.writes.isEmpty)
+        let list = await tool.run([])
+        XCTAssertFalse(list.text.contains("name"), list.text)
+    }
+
+    /// A valid value is also held to the range and the step.
+    func testAValidValueOutsideTheRangeIsRefused() async {
+        let (tool, fake) = tool()
+        let outside = await tool.run(["set", Self.lampID, "level", "105"])
+        XCTAssertEqual(outside.status, ToolReply.usage, outside.text)
+        let offList = await tool.run(["set", Self.lampID, "level", "20"])
+        XCTAssertEqual(offList.status, ToolReply.usage, offList.text)
+        XCTAssertTrue(fake.writes.isEmpty)
+        let fine = await tool.run(["set", Self.lampID, "level", "10"])
+        XCTAssertEqual(fine.status, ToolReply.ok, fine.text)
+        XCTAssertEqual(fake.writes.map(\.1), [.int(10)])
+    }
+
+    /// A uint64 past `Int.max` reads as `?` and is not written, rather than being a wrong number.
+    func testAUInt64PastIntMaxIsNeitherMisreadNorWritten() async {
+        XCTAssertNil(HomeKitStore.value(NSNumber(value: UInt64(Int.max) + 1), format: "uint64"))
+        XCTAssertEqual(HomeKitStore.value(NSNumber(value: UInt64(7)), format: "uint64"), .int(7))
+        var counter = HomeCharacteristic(id: "C", name: "counter", format: "uint64", readable: true, writable: true, minimum: nil,
+                                         maximum: nil, step: nil, validValues: nil, maxLength: nil, units: nil, value: nil)
+        let accessory = HomeAccessory(id: "A", name: "Meter", room: "", category: "", reachable: true, services: [])
+        XCTAssertThrowsError(try HomeTool.judge("9223372036854775808", for: counter, of: accessory)) { error in
+            XCTAssertTrue((error as? ToolFailure)?.text.contains("which topo home does not write") == true, "\(error)")
+        }
+        counter.maximum = Double(UInt64.max)
+        XCTAssertThrowsError(try HomeTool.judge("18446744073709551615", for: counter, of: accessory))
+    }
+
+    /// A read HomeKit does not answer within the bound is `?`, and the listing does not wait on it.
+    func testAReadPastTheBoundIsAQuestionMark() async {
+        let (base, fake) = tool()
+        var tool = base
+        tool.readBound = .milliseconds(50)
+        fake.slow = ["L-bright"]
+        let bounded = tool
+        let reply = await PhoneTool.within(.seconds(2)) { await bounded.run([]) }
+        XCTAssertNotNil(reply, "the listing waited on a read past its bound")
+        XCTAssertTrue(reply?.text.contains("Desk lamp: power true, brightness ?, color-temperature, level") == true, reply?.text ?? "")
+    }
+
     // MARK: Reading
 
     func testTheListingIsByRoomAndAFailedReadIsAQuestionMark() async {
@@ -324,7 +420,7 @@ final class HomeToolTests: XCTestCase {
         XCTAssertEqual(reply.text, """
         home: The flat (primary)
         \(Self.lockID) | Hall | Front door | Door Lock | not reachable | Front door: lock ?
-        \(Self.lampID) | Office | Desk lamp | Lightbulb | reachable | Desk lamp: power ?, brightness 40, color-temperature
+        \(Self.lampID) | Office | Desk lamp | Lightbulb | reachable | Desk lamp: power ?, brightness 40, color-temperature, level
         \(Self.stripID) | Office | Strip | Outlet | reachable | Left: power false | Right: power true
 
         """)

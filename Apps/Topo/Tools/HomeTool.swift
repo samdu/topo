@@ -44,6 +44,8 @@ struct HomeCharacteristic: Sendable, Equatable {
     ]
 
     var isInteger: Bool { Self.integerBounds[format] != nil }
+    /// Writable and not a name: `topo home` renames nothing, whatever HomeKit would allow.
+    var settable: Bool { writable && !HomeNames.names.contains(name) }
     /// A format `topo home` reads and writes; the others (data, TLV8) are shown by their format alone.
     var isPlain: Bool { isInteger || ["bool", "float", "string"].contains(format) }
     var lower: Double? { minimum ?? Self.integerBounds[format]?.lowerBound }
@@ -196,9 +198,10 @@ final class HomeAccess {
 
     private func passed(_ gate: Gate) -> Bool {
         switch gate {
-        // Restricted is an answer the person never gives, so it may come without `.determined`;
-        // HomeKit loading the homes answers the question too, in case it never reports the status.
-        case .determined: !made().authorization.isDisjoint(with: [.determined, .restricted]) || homesLoaded
+        // Restricted is an answer the person never gives, so it may come without `.determined`.
+        // Only the status answers: homes loaded while it is still undetermined say nothing of
+        // what the person will choose, so the call waits on, to the service's bound.
+        case .determined: !made().authorization.isDisjoint(with: [.determined, .restricted])
         case .loaded: homesLoaded
         }
     }
@@ -328,7 +331,7 @@ struct HomeTool: Tool {
             if accessories.isEmpty { lines.append("no accessories") }
             for accessory in accessories {
                 let services = accessory.services.filter { !$0.isInformation }.compactMap { service -> String? in
-                    let settable = service.characteristics.filter { $0.writable && $0.name != "identify" }
+                    let settable = service.characteristics.filter { $0.settable && $0.name != "identify" }
                     guard !settable.isEmpty else { return nil }
                     let parts = settable.map { characteristic in
                         guard Self.summarised.contains(characteristic.name), characteristic.readable else { return characteristic.name }
@@ -360,7 +363,9 @@ struct HomeTool: Tool {
                 } else {
                     value = values[characteristic.id]?.description ?? "?"
                 }
-                let access = characteristic.writable ? (characteristic.readable ? "can be set" : "can be set, not read") : "read only"
+                let access = !characteristic.writable ? "read only"
+                    : !characteristic.settable ? "a name, which topo home does not change"
+                    : characteristic.readable ? "can be set" : "can be set, not read"
                 lines.append("  " + PhoneTool.line([characteristic.id, characteristic.name, value, characteristic.range, access]))
             }
         }
@@ -427,6 +432,7 @@ struct HomeTool: Tool {
             ToolFailure("\(what) \(why); nothing was written", status: ToolReply.usage)
         }
         guard characteristic.writable else { throw refuse("is read only") }
+        guard characteristic.settable else { throw refuse("is a name, and topo home renames nothing") }
         let takes = "takes \(characteristic.range), not \(text)"
         switch characteristic.format {
         case "bool":
@@ -444,13 +450,16 @@ struct HomeTool: Tool {
             return .number(number)
         default:
             guard characteristic.isInteger else { throw refuse("is a \(characteristic.format) value, which topo home does not write") }
+            if Int(text) == nil, UInt64(text) != nil {
+                throw refuse("takes a value above \(Int.max), which topo home does not write")
+            }
             guard let number = Int(text), fits(Double(number), characteristic) else { throw refuse(takes) }
             return .int(number)
         }
     }
 
     private static func fits(_ number: Double, _ characteristic: HomeCharacteristic) -> Bool {
-        if let validValues = characteristic.validValues { return validValues.contains { Double($0) == number } }
+        if let validValues = characteristic.validValues, !validValues.contains(where: { Double($0) == number }) { return false }
         if let lower = characteristic.lower, number < lower { return false }
         if let upper = characteristic.upper, number > upper { return false }
         if let step = characteristic.step, step > 0 {
@@ -576,8 +585,10 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
             value: value(characteristic.value, format: format))
     }
 
-    private static func value(_ value: Any?, format: String?) -> HomeValue? {
+    /// A `uint64` above `Int.max` has no `HomeValue`, so it reads as `?` rather than as a wrong number.
+    static func value(_ value: Any?, format: String?) -> HomeValue? {
         switch (format, value) {
+        case let ("uint64", number as NSNumber) where number.uint64Value > UInt64(Int.max): nil
         case let ("bool", number as NSNumber): .bool(number.boolValue)
         case let ("float", number as NSNumber): .number(number.doubleValue)
         case let ("string", text as String): .text(text)
@@ -610,7 +621,12 @@ enum HomeNames {
         HMCharacteristicTypeOutletInUse: "in-use",
         HMCharacteristicTypeIdentify: "identify",
         HMCharacteristicTypeName: "name",
+        // HMCharacteristicTypeConfiguredName, which the SDK names only from iOS 18: HAP's own type.
+        "000000E3-0000-1000-8000-0026BB765291": "configured-name",
     ]
+
+    /// The names `set` refuses, whatever the characteristic's metadata says.
+    static let names: Set<String> = ["name", "configured-name"]
 
     static func name(type: String, description: String) -> String {
         known[type] ?? description.lowercased().split(whereSeparator: { !$0.isLetter && !$0.isNumber }).joined(separator: "-")
