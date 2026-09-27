@@ -344,8 +344,8 @@ final class MarkdownRenderTests: XCTestCase {
         // A breath slower than a look can make one (0.3–5 s), because the pulse is judged from
         // pictures of a transcript this long, which take seconds each on a loaded runner: at 5 s a
         // picture every 5 s lands on the rest between the breaths and on the end, and sees none of
-        // it. At 12 s the first breath is past a quarter of its peak from 2 s to 10 s, the whole of
-        // the look after the cue from its third second, so any picture taken then finds it.
+        // it. At 12 s the first breath is past a quarter of its peak from 2 s to 10 s after it
+        // starts, so any picture taken then finds it.
         look.markdown.codePulse.cycle = 12
         let device = DeviceID("phone")
         let at = Date(timeIntervalSince1970: 1_700_000_000)
@@ -386,14 +386,17 @@ final class MarkdownRenderTests: XCTestCase {
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
         // Looked at every tenth of a second until the block has been seen and seen pulsing, for
-        // up to ten seconds — the whole of the first breath's peak — so a slow runner is waited for
-        // and a block never scrolled to or never pulsed is still seen not to be.
+        // up to twenty seconds, so a slow runner is waited for and a block never scrolled to or
+        // never pulsed is still seen not to be. A picture of the tall transcript holds the main
+        // thread for seconds on a loaded host, and the scroll to a block its row has just made
+        // waits behind it, so that block can reach the screen after the first breath is over: the
+        // second is past a quarter of its peak from 14 s to 22 s.
         // How far the transcript moved is the most it was ever away from where it stood, read at
         // every look and for a second after, so a scroll there and back again is a move.
         // The pulse is drawn over the enclosure's outline and covers its ink while it breathes, so
         // a block on the screen is its outline, its pulse or some of each, and it is shown by both.
         var shown = 0, pulsed = 0, moved: CGFloat = 0
-        try stage.poll { [self] in
+        try stage.poll(for: 20) { [self] in
             moved = max(moved, abs(scroll.contentOffset.y - offset))
             let drawn = try Pixels(stage.image(), blank: true)
             let ring = pulsing(drawn, rows: 0...drawn.height)
