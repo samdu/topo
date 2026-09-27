@@ -237,8 +237,10 @@ package enum RequestReader {
     }
 
     /// The request line and headers, parsed by `CFHTTPMessage`. Only origin-form targets (a path)
-    /// are accepted: an absolute URL would name a host, and there is one upstream.
-    static func parseHead(_ raw: Data) throws -> InboundRequest {
+    /// are accepted unless `originFormOnly` is false: for the API proxy an absolute URL would name
+    /// a host, and there is one upstream; the egress proxy takes any printable target and judges it
+    /// itself (`EgressProxy.judge`).
+    static func parseHead(_ raw: Data, originFormOnly: Bool = true) throws -> InboundRequest {
         let message = CFHTTPMessageCreateEmpty(kCFAllocatorDefault, true).takeRetainedValue()
         let appended = raw.withUnsafeBytes { bytes in
             CFHTTPMessageAppendBytes(message, bytes.bindMemory(to: UInt8.self).baseAddress!, raw.count)
@@ -256,8 +258,8 @@ package enum RequestReader {
         guard parts.count == 3, parts[0] == method else { throw WireError.malformed("unreadable request line") }
         let target = String(parts[1])
         // Origin-form is a path and a query: a fragment is never part of a request-target.
-        guard target.hasPrefix("/"), !target.contains("#"),
-              target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7F }) else {
+        guard target.unicodeScalars.allSatisfy({ $0.value > 0x20 && $0.value < 0x7F }),
+              !originFormOnly || (target.hasPrefix("/") && !target.contains("#")) else {
             throw WireError.malformed("the request-target has to be a path")
         }
         let fields = (CFHTTPMessageCopyAllHeaderFields(message)?.takeRetainedValue() as? [String: String]) ?? [:]
