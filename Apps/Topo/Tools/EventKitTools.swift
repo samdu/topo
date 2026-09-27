@@ -17,21 +17,19 @@ struct CalendarRecord: Sendable, Equatable {
     /// The line `topo reminders lists` and `topo calendar calendars` give it.
     var line: String { PhoneTool.line([id, qualified]) }
 
-    /// The one `name` means: its id, its title with its account (`Work (iCloud)`), or its title
-    /// alone when no other has that title. A title two share is a usage error naming both, so a
-    /// record is never saved into whichever one comes first.
+    /// The one `name` means, read every way it can be: an id, a title with its account
+    /// (`Work (iCloud)`), or a title. Only one record matching saves; a name that fits more than
+    /// one — two share a title, or one's title is another's `Title (account)` — is a usage error
+    /// listing each with its id, so a record is never saved into whichever one comes first.
     static func pick(_ name: String, from records: [CalendarRecord], kind: String) throws -> CalendarRecord {
-        if let byID = records.first(where: { $0.id == name }) { return byID }
         let same = { (a: String, b: String) in a.compare(b, options: [.caseInsensitive]) == .orderedSame }
-        let qualified = records.filter { same($0.qualified, name) }
-        if qualified.count == 1 { return qualified[0] }
-        let titled = records.filter { same($0.title, name) }
-        if titled.count == 1 { return titled[0] }
-        if titled.isEmpty {
+        let matches = records.filter { $0.id == name || same($0.qualified, name) || same($0.title, name) }
+        if matches.count == 1 { return matches[0] }
+        if matches.isEmpty {
             throw ToolFailure("no \(kind) called \(name); there are \(records.map(\.qualified).joined(separator: ", "))")
         }
-        throw ToolFailure("\(titled.count) \(kind)s are called \(name): \(titled.map(\.qualified).joined(separator: ", ")); "
-            + "name one as it is written there, or by its id (topo reminders lists, topo calendar calendars)", status: ToolReply.usage)
+        throw ToolFailure("\(matches.count) \(kind)s match \(name): \(matches.map { "\($0.qualified), id \($0.id)" }.joined(separator: "; ")). "
+            + "Name one by its id", status: ToolReply.usage)
     }
 }
 
@@ -70,7 +68,7 @@ struct RemindersTool: Tool {
     topo reminders [--list NAME] [--due-before DATE] [--done]
                                         the reminders not yet done (with --done, the ones done), one a line, id first
     topo reminders lists                the lists, id first, each with its account: --list takes the id,
-                                        Work (iCloud), or Work when only one list is called that
+                                        or Work (iCloud) or Work when that names only one
     topo reminders add TITLE [--list NAME] [--due DATE] [--notes TEXT]
                                         add one (to the default list unless --list names one)
     topo reminders done ID              mark one done
@@ -177,7 +175,7 @@ struct CalendarTool: Tool {
     topo calendar [--from DATE] [--to DATE] [--calendar NAME]
                                         the events from --from (now) to --to (a week later, a year at most), one a line, id first
     topo calendar calendars             the calendars, id first, each with its account: --calendar takes the id,
-                                        Work (iCloud), or Work when only one calendar is called that
+                                        or Work (iCloud) or Work when that names only one
     topo calendar add TITLE --start DATE --end DATE [--all-day] [--calendar NAME] [--location TEXT] [--notes TEXT]
                                         add one (to the default calendar unless --calendar names one)
 

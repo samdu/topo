@@ -544,7 +544,7 @@ final class PhoneToolsTests: XCTestCase {
         let meeting = ["add", "Meeting", "--start", "2026-09-29T09:00", "--end", "2026-09-29T10:00", "--calendar"]
         let bare = await tool.run(meeting + ["Work"])
         XCTAssertEqual(bare.status, ToolReply.usage, bare.text)
-        XCTAssertEqual(bare.text, "topo: 2 calendars are called Work: Work (iCloud), Work (Google); name one as it is written there, or by its id (topo reminders lists, topo calendar calendars)\n")
+        XCTAssertEqual(bare.text, "topo: 2 calendars match Work: Work (iCloud), id k2; Work (Google), id k3. Name one by its id\n")
         XCTAssertTrue(store.records.isEmpty)
         let qualified = await tool.run(meeting + ["work (google)"])
         XCTAssertEqual(qualified.status, ToolReply.ok, qualified.text)
@@ -556,6 +556,26 @@ final class PhoneToolsTests: XCTestCase {
         let none = await tool.run(meeting + ["Gym"])
         XCTAssertEqual(none.status, ToolReply.failed, none.text)
         XCTAssertEqual(none.text, "topo: no calendar called Gym; there are Home (iCloud), Work (iCloud), Work (Google)\n")
+    }
+
+    /// Codex on #214: one calendar titled Work in iCloud and one titled `Work (iCloud)` in Google:
+    /// `Work (iCloud)` is the first's qualified name and the second's title, so it saves to
+    /// neither and lists both with their ids. Each is still reached by its id, and a reminder
+    /// list is chosen by the same rule.
+    func testANameThatReadsTwoWaysIsNeverGuessed() throws {
+        let pair = [CalendarRecord(id: "c1", title: "Work", account: "iCloud"),
+                    CalendarRecord(id: "c2", title: "Work (iCloud)", account: "Google")]
+        for kind in ["calendar", "list"] {
+            XCTAssertThrowsError(try CalendarRecord.pick("Work (iCloud)", from: pair, kind: kind)) { error in
+                XCTAssertEqual(error as? ToolFailure, ToolFailure(
+                    "2 \(kind)s match Work (iCloud): Work (iCloud), id c1; Work (iCloud) (Google), id c2. Name one by its id",
+                    status: ToolReply.usage))
+            }
+            XCTAssertEqual(try CalendarRecord.pick("c1", from: pair, kind: kind).id, "c1")
+            XCTAssertEqual(try CalendarRecord.pick("c2", from: pair, kind: kind).id, "c2")
+            XCTAssertEqual(try CalendarRecord.pick("work (icloud) (google)", from: pair, kind: kind).id, "c2")
+            XCTAssertEqual(try CalendarRecord.pick("Work", from: pair, kind: kind).id, "c1")
+        }
     }
 
     /// Codex on #214: a record's line breaks never split its line.
@@ -617,9 +637,9 @@ final class PhoneToolsTests: XCTestCase {
     /// address. The contact is written by the test itself (the tool writes nothing) into the
     /// store's default container, confirmed by id through `show`, and removed after. Access is
     /// granted as for the calendar (`xcrun simctl privacy <udid> grant contacts zone.hexagon.topo`).
-    /// No name search here: Contacts matches names through an index it updates after the save, on
-    /// its own time, and on the PR check's runner a name written moments before was not yet
-    /// found; numbers and addresses are matched at once.
+    /// The name search comes last and is retried for up to five seconds: Contacts matches names
+    /// through an index it updates after the save, and on the PR check's runner a name written
+    /// moments before was not yet found. Numbers and addresses are matched at once.
     func testContactsFindsAPersonByNumberAndByAddress() async throws {
         XCTAssertEqual(CNContactStore.authorizationStatus(for: .contacts), .authorized,
                        "grant the simulator's contacts access first: xcrun simctl privacy <udid> grant contacts zone.hexagon.topo")
@@ -654,5 +674,12 @@ final class PhoneToolsTests: XCTestCase {
             XCTAssertEqual(reply.status, ToolReply.ok, "\(query): \(reply.text)")
             XCTAssertTrue(reply.text.contains("\(id) | Topotest Person\(tag) | "), "\(query): \(reply.text)")
         }
+        var byName = await tool.run(["search", "Person\(tag)"])
+        for _ in 0..<25 where !byName.text.contains(id) {
+            try await Task.sleep(for: .milliseconds(200))
+            byName = await tool.run(["search", "Person\(tag)"])
+        }
+        XCTAssertEqual(byName.status, ToolReply.ok, byName.text)
+        XCTAssertTrue(byName.text.contains("\(id) | Topotest Person\(tag) | "), "Person\(tag), after five seconds: \(byName.text)")
     }
 }
