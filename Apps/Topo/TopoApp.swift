@@ -120,6 +120,13 @@ struct TopoApp: App {
         #endif
     }
 
+    /// The connect `TOPO_DEBUG_CONNECT_GITHUB` asks for, in a debug build. Nothing in a release one.
+    private func debugConnectGitHub() async {
+        #if DEBUG
+        await DebugRun.connectGitHub(connections)
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
@@ -165,6 +172,7 @@ struct TopoApp: App {
                 .task { await debugTurn() }
                 .task { await debugUserland() }
                 .task { await debugGuestTurn() }
+                .task { await debugConnectGitHub() }
         }
     }
 }

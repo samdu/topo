@@ -1,30 +1,36 @@
 import Foundation
 
-/// Connecting GitHub: the OAuth device flow against Topo's GitHub App. The person approves on
-/// github.com with a code the app shows; the app polls until GitHub hands over a user token. No
-/// client secret and no redirect are involved, which is why this flow and not the web one: the app
-/// ships to phones and a secret in it would be no secret. The App's user tokens do not expire
-/// (token expiry is off in its settings), so there is nothing to refresh.
+/// Connecting GitHub: the OAuth device flow against Topo's OAuth App. The person approves on
+/// github.com with a code the app shows; the app polls until GitHub hands over a token. No client
+/// secret and no redirect are involved, which is why this flow and not the web one: the app ships
+/// to phones and a secret in it would be no secret. An OAuth App's tokens (`gho_`) do not expire,
+/// so there is nothing to refresh; they last until the person revokes them on GitHub.
 public struct GitHubDeviceFlow: Sendable {
     public struct Configuration: Sendable {
         public var codeURL: URL
         public var tokenURL: URL
         public var userURL: URL
         public var clientID: String
+        /// What the token may do, as GitHub's OAuth scopes.
+        public var scopes: [String]
 
-        /// Topo's GitHub App, registered by Sam (samdu/topo#235).
+        /// Topo's OAuth App, registered by Sam (samdu/topo#235): `repo` to clone and push private
+        /// repositories and open pull requests, `read:org` for `gh` to list organizations' repositories
+        /// and teams, `workflow` to push a change under `.github/workflows`, which `repo` alone refuses.
         public static let topo = Configuration(
             codeURL: URL(string: "https://github.com/login/device/code")!,
             tokenURL: URL(string: "https://github.com/login/oauth/access_token")!,
             userURL: URL(string: "https://api.github.com/user")!,
-            clientID: "Ov23liOQVQHli5vrchlv"
+            clientID: "Ov23liOQVQHli5vrchlv",
+            scopes: ["repo", "read:org", "workflow"]
         )
 
-        public init(codeURL: URL, tokenURL: URL, userURL: URL, clientID: String) {
+        public init(codeURL: URL, tokenURL: URL, userURL: URL, clientID: String, scopes: [String]) {
             self.codeURL = codeURL
             self.tokenURL = tokenURL
             self.userURL = userURL
             self.clientID = clientID
+            self.scopes = scopes
         }
     }
 
@@ -82,10 +88,12 @@ public struct GitHubDeviceFlow: Sendable {
         self.sleep = sleep
     }
 
-    /// Asks GitHub for a code. The body is the client ID and nothing else: a GitHub App's
-    /// permissions are its own, so no scope is asked for.
+    /// Asks GitHub for a code: the client ID and the scopes, space-separated.
     public func start() async throws -> Code {
-        let json = try await post(configuration.codeURL, ["client_id": configuration.clientID])
+        let json = try await post(configuration.codeURL, [
+            "client_id": configuration.clientID,
+            "scope": configuration.scopes.joined(separator: " "),
+        ])
         guard let userCode = json["user_code"] as? String,
               let deviceCode = json["device_code"] as? String,
               let verification = (json["verification_uri"] as? String).flatMap(URL.init(string:)) else {
@@ -97,8 +105,11 @@ public struct GitHubDeviceFlow: Sendable {
     }
 
     /// Polls until GitHub hands over the token, the person declines, or the code expires. Waits
-    /// `interval` before each poll, and five seconds longer from every `slow_down` on, as GitHub
-    /// asks; cancelling the task ends it at its next wait.
+    /// `interval` before each poll, and from every `slow_down` on the interval GitHub names or five
+    /// seconds more, whichever is longer, as GitHub asks. A poll the network failed is polled again
+    /// at the next interval — a phone moving between networks while the person approves is the
+    /// ordinary case — so only the code's expiry ends it on the network's account. Cancelling the
+    /// task ends it at its next wait.
     public func token(for code: Code) async throws -> String {
         let deadline = code.issued.addingTimeInterval(TimeInterval(code.expiresIn))
         var interval = code.interval
@@ -106,11 +117,16 @@ public struct GitHubDeviceFlow: Sendable {
             try await sleep(.seconds(interval))
             try Task.checkCancellation()
             guard now() < deadline else { throw Failure.expired }
-            let json = try await post(configuration.tokenURL, [
-                "client_id": configuration.clientID,
-                "device_code": code.deviceCode,
-                "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-            ])
+            let json: [String: Any]
+            do {
+                json = try await post(configuration.tokenURL, [
+                    "client_id": configuration.clientID,
+                    "device_code": code.deviceCode,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                ])
+            } catch is URLError {
+                continue
+            }
             if let token = json["access_token"] as? String, !token.isEmpty { return token }
             switch json["error"] as? String {
             case "authorization_pending": continue

@@ -44,7 +44,7 @@ final class DebugRunTests: XCTestCase {
     /// A connection's token printed by a tool — `topo github token`, a `gh auth status` — is
     /// redacted too: GitHub's prefixes and 1Password's service-account one.
     func testAConnectionTokenInAToolResultIsRedacted() {
-        let github = "ghu_" + String(repeating: "A1", count: 18)
+        let github = "gho_" + String(repeating: "A1", count: 18)
         let pat = "github_pat_" + String(repeating: "b2", count: 20)
         let onePassword = "ops_eyJzaWduSW5BZGRyZXNzIjoibXkuMXBhc3N3b3JkLmNvbSJ9" + String(repeating: "Z", count: 30)
         let line = DebugRun.toolResultLine(tool: "Bash", isError: false,
@@ -52,7 +52,7 @@ final class DebugRunTests: XCTestCase {
         XCTAssertFalse(line.contains(String(github.dropFirst(4))), line)
         XCTAssertFalse(line.contains(String(pat.dropFirst(11))), line)
         XCTAssertFalse(line.contains(String(onePassword.dropFirst(4))), line)
-        XCTAssertTrue(line.contains("ghu_[redacted]"), line)
+        XCTAssertTrue(line.contains("gho_[redacted]"), line)
     }
 
     /// The device run's evidence of the guest's authorization: its scope and the days its token

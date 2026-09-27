@@ -27,6 +27,8 @@ public final class Guest: Sendable {
         case unmount(Int32)
         /// `/etc/resolv.conf` could not be written, with what the guest said.
         case resolver(String)
+        /// `/tmp` could not be emptied, with what the guest said.
+        case temporary(String)
 
         public var description: String {
             switch self {
@@ -38,6 +40,7 @@ public final class Guest: Sendable {
             case .link(let errno): "the link could not be made (\(errno))"
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
+            case .temporary(let said): "/tmp could not be emptied: \(said)"
             }
         }
     }
@@ -89,6 +92,16 @@ public final class Guest: Sendable {
         let script = "[ -e /etc/resolv.conf ] || printf 'nameserver %s\\n' \(Self.nameservers.joined(separator: " ")) > /etc/resolv.conf"
         let exit = try await run("/bin/sh", ["-c", script])
         if exit.status != 0 { throw Failure.resolver(exit.errors) }
+    }
+
+    /// Empties `/tmp`, as a Linux boot with a tmpfs there would: the guest's `/tmp` is on the
+    /// persistent fakefs, so whatever a process killed mid-call left in it — a temporary file its
+    /// exit trap never removed — would otherwise outlive the process, the launch and a disconnect.
+    /// Run once per process, after the boot and before anything else starts. Requires a booted
+    /// kernel.
+    public func clearTemporary() async throws {
+        let exit = try await run("/bin/sh", ["-c", "find /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} +"])
+        if exit.status != 0 { throw Failure.temporary(exit.errors) }
     }
 
     /// Bind-mounts the host directory `host` at `point` in the guest (the fork's realfs), making

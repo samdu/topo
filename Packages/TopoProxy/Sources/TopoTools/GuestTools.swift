@@ -28,12 +28,18 @@ public enum GuestTools {
     ]
 
     /// What the guest's environment gains beside the service's URL and token: git told to ask
-    /// `git-credential-topo` for github.com over https, through git's own environment
-    /// configuration, so nothing is written into the home's `.gitconfig`.
+    /// `git-credential-topo`, and only it, for github.com over https, through git's own
+    /// environment configuration, so nothing is written into the home's `.gitconfig`. The empty
+    /// value first clears every helper configured before it (a `credential.helper store` in the
+    /// home's config included), since git hands an answer to every helper on its list to keep,
+    /// and a `store` would write the token to `~/.git-credentials` and answer from it after a
+    /// disconnect.
     public static let environment: [String: String] = [
-        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_COUNT": "2",
         "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-        "GIT_CONFIG_VALUE_0": "topo",
+        "GIT_CONFIG_VALUE_0": "",
+        "GIT_CONFIG_KEY_1": "credential.https://github.com.helper",
+        "GIT_CONFIG_VALUE_1": "topo",
     ]
 
     /// Writes the scripts (executable: the guest sees the host's mode bits) and the skill under
@@ -64,21 +70,41 @@ public enum GuestTools {
         echo "topo: the phone's tool service is not in this environment" >&2
         exit 3
     fi
-    request="$(mktemp)" || exit 3
-    response="$(mktemp)" || { rm -f "$request"; exit 3; }
-    trap 'rm -f "$request" "$response"' EXIT
-    # The token first, in the body: printf is bash's own, so the token is in no process's
-    # arguments, where every process in the guest could read it. Then one argument a line, each
-    # in base64, so whatever it holds arrives whole.
-    printf '%s\n' "$TOPO_TOOLS_TOKEN" > "$request"
-    for argument in "$@"; do
-        printf '%s' "$argument" | base64 | tr -d '\n' >> "$request"
-        printf '\n' >> "$request"
-    done
-    if ! failure="$(wget -q -T 100 -O "$response" \
-            --header "Content-Type: text/plain" \
-            --post-file "$request" "$TOPO_TOOLS_URL/run" 2>&1)"; then
-        case "$failure" in
+    # The body: the token first (printf is bash's own, so the token is in no process's
+    # arguments, where every process in the guest could read it), then one argument a line, each
+    # in base64, so whatever it holds arrives whole. `wget` posts from a file it opens by name,
+    # and iSH cannot open a pipe by path (no `/dev/stdin`, and `/proc/self/fd` does not reopen),
+    # so the body goes through a FIFO in a directory of its own: a FIFO holds nothing on the
+    # disk, so neither the token nor an argument is ever written down, and the answer comes back
+    # on wget's standard output. The writer is bounded, so one whose reader never came (a wget
+    # that failed first, a `topo` killed) is gone within the call's own bound. `wget -q` says
+    # nothing on success, so its standard error joins the answer only when it failed; the
+    # trailing `.` keeps the answer's last newlines, which a command substitution would strip.
+    fifo_dir="$(mktemp -d)" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
+    trap 'rm -rf "$fifo_dir"' EXIT
+    mkfifo -m 600 "$fifo_dir/request" || { echo "topo: no room in /tmp for the call" >&2; exit 3; }
+    timeout 110 bash -c '
+        exec > "$1"; shift
+        printf "%s\n" "$TOPO_TOOLS_TOKEN"
+        for argument in "$@"; do
+            printf "%s" "$argument" | base64 | tr -d "\n"
+            printf "\n"
+        done
+    ' topo-request "$fifo_dir/request" "$@" &
+    writer=$!
+    answer="$(
+        wget -q -T 100 -O - --header "Content-Type: text/plain" \
+            --post-file "$fifo_dir/request" "$TOPO_TOOLS_URL/run" 2>&1
+        fetched=$?
+        printf .
+        exit "$fetched"
+    )"
+    fetched=$?
+    answer="${answer%.}"
+    kill "$writer" 2>/dev/null
+    wait "$writer" 2>/dev/null
+    if [ "$fetched" != 0 ]; then
+        case "$answer" in
             *" 401"*|*" 403"*|*" 404"*|*" 405"*|*" 400"*)
                 echo "topo: the phone's tool service refused the call" >&2 ;;
             *)
@@ -86,20 +112,23 @@ public enum GuestTools {
         esac
         exit 3
     fi
-    IFS= read -r first < "$response"
+    first="${answer%%$'\n'*}"
     case "$first" in
         "exit: "*) status="${first#exit: }" ;;
         *) echo "topo: the phone's tool service answered something unreadable" >&2; exit 3 ;;
     esac
-    tail -n +2 "$response"
+    if [ "$first" != "$answer" ]; then
+        printf '%s' "${answer#*$'\n'}"
+    fi
     exit "$status"
     """#
 
     /// git's credential helper: git runs it as `git credential-topo get` for an https URL on
     /// github.com (`environment`), with the request's attributes on stdin. It answers with what
-    /// `topo github credential` says, and with nothing for any other host or when GitHub is not
-    /// connected, so git carries on as it would have; `store` and `erase` do nothing, since the
-    /// app holds the token.
+    /// `topo github credential` says, and with nothing for any other host, so git carries on as it
+    /// would have; when the app has no token to give it says why on stderr — not connected, the
+    /// keychain unreadable, or the app not answering, as `topo` said — which git relays. `store`
+    /// and `erase` do nothing, since the app holds the token.
     public static let credentialHelper = #"""
     #!/bin/bash
     # git-credential-topo: GitHub's token from the Topo app, for one git command.
@@ -122,14 +151,18 @@ public enum GuestTools {
     if answer="$(topo github credential)"; then
         printf '%s\n' "$answer"
     else
-        echo "git-credential-topo: GitHub is not connected; the person connects it in the Topo app, Settings › Connections › GitHub" >&2
+        status=$?
+        # Status 1 is the app's own sentence (not connected, or the keychain unreadable) on
+        # stdout; any other status, `topo` has already said why on stderr.
+        [ -n "$answer" ] && printf 'git-credential-topo: %s\n' "$answer" >&2
+        echo "git-credential-topo: no GitHub token from the Topo app (topo github: status $status)" >&2
     fi
     exit 0
     """#
 
     /// `gh` with GitHub's token from the app in that one process's environment, never the
-    /// resident's. A `GH_TOKEN` or `GITHUB_TOKEN` already set is left to `gh`; with GitHub not
-    /// connected it says so and runs `gh` as it is.
+    /// resident's. A `GH_TOKEN` or `GITHUB_TOKEN` already set is left to `gh`; when the app has no
+    /// token to give it says why, as `topo` said, and runs `gh` as it is.
     public static let gh = #"""
     #!/bin/bash
     # gh: GitHub's CLI with the token from the Topo app, for this one command.
@@ -142,10 +175,13 @@ public enum GuestTools {
     if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
         exec "$real" "$@"
     fi
-    if token="$(topo github token 2> /dev/null)"; then
+    if token="$(topo github token)"; then
         GH_TOKEN="$token" exec "$real" "$@"
     fi
-    echo "gh: GitHub is not connected; the person connects it in the Topo app, Settings › Connections › GitHub" >&2
+    status=$?
+    # Status 1 is the app's own sentence on stdout; any other, `topo` has said why on stderr.
+    [ -n "$token" ] && printf 'gh: %s\n' "$token" >&2
+    echo "gh: no GitHub token from the Topo app (topo github: status $status); running gh without one" >&2
     exec "$real" "$@"
     """#
 
@@ -169,7 +205,7 @@ public enum GuestTools {
     - Dates are ISO 8601 in the phone's time zone: 2026-09-27, 2026-09-27T14:30. Work out the date yourself from what the person said.
     - An option's value never starts with `--`; write one that does as `--notes=--like-this`.
     - Nothing here deletes anything. `topo reminders done` is the one change to something that already exists.
-    - GitHub: `topo github` says whether the person has connected it and as whom. Once they have, plain `git` over `https://github.com/…` and `gh` use it by themselves (`apk add git github-cli` if they are not installed), on the repositories the person chose for Topo's GitHub App. Never write the token into a file, a remote URL or a git config, and never set `GH_TOKEN` yourself. When it is not connected, tell the person to connect it in Settings › Connections.
+    - GitHub: `topo github` says whether the person has connected it and as whom. Once they have, plain `git` over `https://github.com/…` and `gh` use it by themselves (`apk add git github-cli` if they are not installed), as the person, on any repository they can reach. Never write the token into a file, a remote URL or a git config, and never set `GH_TOKEN` yourself. When it is not connected, tell the person to connect it in Settings › Connections.
     - `topo look` shows the look this phone is wearing: each field you can tune, its value, its range and where the value came from. `topo look set <part.field> <value>` changes it on this phone at once, and the person can undo it from Settings › Tuning › Reset; `topo look reset` undoes it yourself. After a change, say in a few words what you changed.
     """
 }

@@ -71,6 +71,11 @@ final class StubURLProtocol: URLProtocol {
             status = answer.status
             body = Data(answer.json.utf8)
         }
+        // A status below zero stands for the network failing: the request ends in a URLError.
+        if status < 0 {
+            client?.urlProtocol(self, didFailWithError: URLError(.networkConnectionLost))
+            return
+        }
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: body)
