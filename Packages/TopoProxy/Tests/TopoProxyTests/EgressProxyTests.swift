@@ -112,9 +112,12 @@ func okOrigin(_ text: String = "ok") throws -> StubOrigin {
         #expect(text.contains("an IP literal"), "\(host): \(text)")
     }
 
-    @Test func refusesUserinfo() async throws {
-        #expect(try await refusal("GET http://user:secret@github.com/ HTTP/1.1\r\nHost: github.com\r\n\r\n") == 403)
-        #expect(try await refusal("GET http://github.com@example.com/ HTTP/1.1\r\nHost: github.com\r\n\r\n") == 403)
+    /// A userinfo part is refused as one, before its colon is read as a port or its host judged.
+    @Test(arguments: ["user:secret@github.com", "github.com@example.com", "token@github.com"])
+    func refusesUserinfo(_ authority: String) async throws {
+        let (status, text) = try await refused("GET http://\(authority)/ HTTP/1.1\r\nHost: github.com\r\n\r\n")
+        #expect(status == 403)
+        #expect(text.contains("a userinfo part"), "\(authority): \(text)")
     }
 
     /// The debug pin's only wire is the API proxy: `api.anthropic.com` is not on this list, so a
