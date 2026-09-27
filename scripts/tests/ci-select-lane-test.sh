@@ -74,11 +74,13 @@ select_lane() {
   fi
 }
 
+# Here-strings, not a pipe: under pipefail, grep -q closing the pipe on its first match makes the
+# printf's write error the pipeline's status, and a list that holds the entry reads as one that does not.
 for entry in "${expected[@]}"; do
-  printf '%s\n' "${patterns[@]}" | grep -qxF -- "$entry" || fail "the workflow's VOICE_PATHS has no entry $entry"
+  grep -qxF -- "$entry" <<<"$(printf '%s\n' "${patterns[@]}")" || fail "the workflow's VOICE_PATHS has no entry $entry"
 done
 for pattern in "${patterns[@]}"; do
-  printf '%s\n' "${expected[@]}" | grep -qxF -- "$pattern" || fail "the workflow's VOICE_PATHS has $pattern, which this test does not expect"
+  grep -qxF -- "$pattern" <<<"$(printf '%s\n' "${expected[@]}")" || fail "the workflow's VOICE_PATHS has $pattern, which this test does not expect"
 done
 
 # A diff outside the list.
