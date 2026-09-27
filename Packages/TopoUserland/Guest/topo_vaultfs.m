@@ -7,7 +7,9 @@
 //
 // What is coordinated, and why, differs from `iosfs` in four places:
 //   - A read open is coordinated and released once the file is open; a write open holds its
-//     coordination until the file is closed. Holding every reader for its fd's life parks a
+//     coordination until the file is closed. Whether a read is of a regular file is judged on
+//     what the open returned, not only on a stat before it, so a file made between the two is
+//     read coordinated. Holding every reader for its fd's life parks a
 //     dispatch thread per open file and holds off the mirror's pass for as long as any reader in
 //     the guest lives; holding writers means the mirror never reads half a note the guest is
 //     writing.
@@ -272,6 +274,19 @@ static int vault_close(struct fd *fd) {
     return err;
 }
 
+// The open of `path`'s last name in its place, with realfs's fd ops but for the close.
+static struct fd *open_in_place(struct mount *mount, const char *path, int host_flags, int mode) {
+    __block struct fd *fd = NULL;
+    int err = in_place(mount, path, ^int(struct mount *at, const char *name) {
+        fd = realfs_open(at, name, host_flags, mode);
+        return IS_ERR(fd) ? (int) PTR_ERR(fd) : 0;
+    });
+    if (err < 0)
+        return ERR_PTR(err);
+    fd->ops = &vault_fdops;
+    return fd;
+}
+
 static struct fd *vault_open(struct mount *mount, const char *path, int flags, int mode) {
     if (is_mirrors(path))
         return ERR_PTR(_EACCES);
@@ -279,37 +294,39 @@ static struct fd *vault_open(struct mount *mount, const char *path, int flags, i
     // The guest followed the last name's link, if it was one, before the path got here: the
     // host follows none.
     int host_flags = flags | O_NOFOLLOW_;
-    __block struct statbuf stat;
-    int found = in_place(mount, path, ^int(struct mount *at, const char *name) { return realfs_stat(at, name, &stat); });
     bool writing = (flags & O_ACCMODE_) != O_RDONLY_ || (flags & (O_CREAT_ | O_TRUNC_));
-    bool regular = found == 0 && S_ISREG(stat.mode);
-    bool creating = found == _ENOENT && (flags & O_CREAT_);
-    if (!regular && !creating) {
-        // A directory (a listing), or a name that is not there and is not being made.
-        __block struct fd *fd = NULL;
-        int err = in_place(mount, path, ^int(struct mount *at, const char *name) {
-            fd = realfs_open(at, name, host_flags, mode);
-            return IS_ERR(fd) ? (int) PTR_ERR(fd) : 0;
-        });
-        if (err < 0)
-            return ERR_PTR(err);
-        fd->ops = &vault_fdops;
-        return fd;
+    if (!writing) {
+        // A read of a regular file is coordinated. A stat that finds one goes straight to the
+        // coordination, since an evicted file is opened only under it (the coordination is what
+        // brings it down). Anything else is opened as it is and judged again on the descriptor:
+        // a file made between the stat and the open would otherwise be read uncoordinated while
+        // its writer holds it, so a regular file found there is let go and opened again under the
+        // coordination, as is a name whose open failed on anything but its absence.
+        __block struct statbuf stat;
+        int found = in_place(mount, path, ^int(struct mount *at, const char *name) { return realfs_stat(at, name, &stat); });
+        if (!(found == 0 && S_ISREG(stat.mode))) {
+            struct fd *fd = open_in_place(mount, path, host_flags, mode);
+            if (IS_ERR(fd) && PTR_ERR(fd) == _ENOENT)
+                return fd;
+            if (!IS_ERR(fd)) {
+                struct stat opened;
+                if (fstat(fd->real_fd, &opened) == 0 && !S_ISREG(opened.st_mode))
+                    return fd;
+                fd_close(fd);
+            }
+        }
     }
 
+    // Every write open is coordinated whatever is at the name, since an open for writing changes
+    // the file (`O_TRUNC`) before anything could look at what it opened.
     __block struct fd *opened = NULL;
     dispatch_semaphore_t hold = writing ? dispatch_semaphore_create(0) : NULL;
     NSUInteger options = !writing ? 0
         : (flags & O_TRUNC_) ? NSFileCoordinatorWritingForReplacing : NSFileCoordinatorWritingForMerging;
     int err = coordinated(url_in(mount, path), nil, writing, options, ^int(NSURL *url, TopoVaultWait *wait) {
-        __block struct fd *fd = NULL;
-        int failed = in_place(mount, path, ^int(struct mount *at, const char *name) {
-            fd = realfs_open(at, name, host_flags, mode);
-            return IS_ERR(fd) ? (int) PTR_ERR(fd) : 0;
-        });
-        if (failed < 0)
-            return failed;
-        fd->ops = &vault_fdops;
+        struct fd *fd = open_in_place(mount, path, host_flags, mode);
+        if (IS_ERR(fd))
+            return (int) PTR_ERR(fd);
         if (hold != NULL)
             fd->fs_data = (__bridge_retained void *) hold;
         opened = fd;

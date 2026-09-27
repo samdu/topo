@@ -90,6 +90,45 @@ final class GuestVaultMountTests: XCTestCase {
         XCTAssertEqual(cat.exitStatus, 0)
     }
 
+    /// A read is coordinated by what the open found, not by a stat before it: a note made under a
+    /// coordinated write after the guest's stat found nothing, and before its open, is still read
+    /// under the coordination. A loop of builtins in the guest reads the name while the host, over
+    /// and over, makes the note under a held write, leaves it half written, finishes it and removes
+    /// it; a read that was let in uncoordinated reads the half.
+    func testANoteMadeBetweenTheStatAndTheOpenIsReadWhole() async throws {
+        let (host, point) = try vault()
+        let note = host.appendingPathComponent("made.md")
+        let stop = host.appendingPathComponent("stop").path
+        let made = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            for _ in 0..<150 {
+                var error: NSError?
+                NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: note, options: [], error: &error) { url in
+                    let fd = open(url.path, O_CREAT | O_WRONLY | O_TRUNC, 0o644)
+                    _ = "half".withCString { write(fd, $0, 4) }
+                    usleep(10_000)
+                    _ = " whole\n".withCString { write(fd, $0, 7) }
+                    close(fd)
+                }
+                NSFileCoordinator(filePresenter: nil).coordinate(writingItemAt: note, options: .forDeleting, error: &error) { url in
+                    unlink(url.path)
+                }
+                usleep(3_000)
+            }
+            close(open(stop, O_CREAT | O_WRONLY, 0o644))
+            made.signal()
+        }
+        let loop = try await sh("cd \(point) && { i=0; n=0; while [ ! -e stop ] && [ $i -lt 200000 ]; do "
+            + "if { l=; read -r l || true; } < made.md; then n=$((n+1)); [ \"$l\" = 'half whole' ] || echo \"HALF [$l]\"; fi; "
+            + "i=$((i+1)); done; echo \"loops $i reads $n\"; } 2>/dev/null")
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { made.wait(); continuation.resume() }
+        }
+        XCTAssertTrue(loop.output.contains("loops "), loop.output)
+        XCTAssertFalse(loop.output.contains("reads 0\n"), "the guest never read the note: \(loop.output)")
+        XCTAssertFalse(loop.output.contains("HALF"), "a read was let in while the note's writer held it: \(loop.output.prefix(300))")
+    }
+
     /// Half a note the guest is writing is never read by the mirror: a write open holds its
     /// coordination until the file closes.
     func testAGuestWriteHoldsItsCoordinationUntilClose() async throws {
