@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Anti-pre-judging on a review dispatch (docs/process.md).
 
-The PM says what changed and what to read, and nothing about what to conclude.
+The coordinator says what changed and what to read, and nothing about what to conclude.
 A dispatch that tells a reviewer what not to flag, or how far to downgrade a
 finding it does find, is refused: pre-judging a review has cost us findings we
 then paid for in a later round. A defect the plan mandated is still reported —

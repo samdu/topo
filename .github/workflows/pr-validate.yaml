@@ -265,7 +265,8 @@ jobs:
           # may be skipped. The app target compiles Apps/Client, Apps/Shared,
           # Apps/Topo and every package but TopoLink (project.yml), so those
           # stay `all`; the hub, watch and TV targets, Womble and TopoLink are
-          # built and tested only in `others`.
+          # built and tested only in `others`, as is the janitor, whose test
+          # runs there.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
             .github/actions/* all
@@ -284,6 +285,9 @@ jobs:
             Distribution/* none
             scripts/archive-upload.sh none
             scripts/plan-review.sh none
+            .gitignore none
+            scripts/janitor.py others
+            scripts/tests/janitor* others
         run: |
           set -euo pipefail
           case "$EVENT" in
@@ -661,6 +665,15 @@ jobs:
       - name: The review prompt carries the previous verdict and the diff since
         if: ${{ !cancelled() }}
         run: scripts/tests/review-prompt-test.sh
+
+      # scripts/janitor.py's decisions over scripted readings and one whole
+      # pass against a fake gh, git, tmux and curl: a merge pinned to the head
+      # the green run was read for, one rerun per head, the install page from
+      # origin/main, a merged branch's worktree swept, a report kept when
+      # undeliverable.
+      - name: The janitor merges, reruns, publishes and sweeps as docs/janitor.md says
+        if: ${{ !cancelled() }}
+        run: scripts/tests/janitor-test.sh
 
       # Named, not globbed: a package that disappears fails here instead of
       # leaving the loop with one fewer iteration. Every package runs even

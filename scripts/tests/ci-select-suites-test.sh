@@ -4,8 +4,8 @@
 # this test writes out for itself: the two lists are equal line for line and in order, since the
 # first match wins, so a rule deleted, added or moved in the workflow fails here rather than
 # silently changing what runs. Then each rule is exercised with a path under it, and the cases
-# that matter by name — a documentation change runs nothing, a hub, watch, TV, Womble or TopoLink
-# change runs `others` alone, a change to the app, a package the app links, the tests, the
+# that matter by name — a documentation change runs nothing, a hub, watch, TV, Womble, TopoLink
+# or janitor change runs `others` alone, a change to the app, a package the app links, the tests, the
 # project, a guest patch, the workflow or its scripts runs all three, a path no rule names runs all
 # three — and every way the inputs can be missing runs all three or fails, never fewer. Then it
 # runs the select step itself out of the workflow on a pull_request event in scratch repositories,
@@ -47,6 +47,9 @@ expected=(
   'Distribution/* none'
   'scripts/archive-upload.sh none'
   'scripts/plan-review.sh none'
+  '.gitignore none'
+  'scripts/janitor.py others'
+  'scripts/tests/janitor* others'
 )
 
 failures=0
@@ -98,6 +101,7 @@ selects false false false "agent hooks and TestFlight tooling" $'.claude/hooks/p
 # `others` alone: what only the hub, watch, TV, Womble and TopoLink compile.
 selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.swift\ndocs/pairing.md\n'
 selects false false true "the hub, the watch and the TV" $'Apps/TopoHub/HubApp.swift\nApps/TopoWatch/WatchApp.swift\nApps/TopoTV/TVApp.swift\n'
+selects false false true "the janitor and its test" $'scripts/janitor.py\nscripts/tests/janitor_test.py\nscripts/tests/janitor-test.sh\ndocs/janitor.md\n'
 selects false false true "Womble, its README and its web page included" $'Womble/Sources/App/AppDelegate.swift\nWomble/README.md\nWomble/Web/index.html\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
