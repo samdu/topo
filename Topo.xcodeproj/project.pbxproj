@@ -99,6 +99,7 @@
 		40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */; };
 		4149E2850FF4A49832575A2D /* VaultDownloadsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06052E671D055E9B658BCFAE /* VaultDownloadsTests.swift */; };
 		422EFA35BED87AC91682AF97 /* StreamJSONTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3103735350B8C5C4A6CE6F11 /* StreamJSONTests.swift */; };
+		425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */; };
 		442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D946D8851F96D23296B16179 /* RoleSelectorTests.swift */; };
 		443639D8481C026336CB1598 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		447E5988846796C166E2407C /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
@@ -255,6 +256,7 @@
 		BE2E77872613825E0A6215B5 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
 		BE5D03B4667AA4BD89FBD2AB /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402EB6E7D75092F33B78F15B /* GuestBridge.swift */; };
+		C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB40574A451BCD56247E1E50 /* HomeTool.swift */; };
 		C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
 		C1901D08A64A897C972B76E2 /* ConnectionsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53EE28CCE270949153C3E0BE /* ConnectionsTests.swift */; };
 		C3B19170CE0BE99580978B92 /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
@@ -532,8 +534,10 @@
 		E657338C47DD5C2996280F04 /* TurnPushTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPushTests.swift; sourceTree = "<group>"; };
 		E7466F6405C441DA4BCC1538 /* ModelDownloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloads.swift; sourceTree = "<group>"; };
 		E8BC4617024AD72D114DF8C7 /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatView.swift; sourceTree = "<group>"; };
+		E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeToolTests.swift; sourceTree = "<group>"; };
 		E99C1823AE0D4FCE76F86A8D /* MascotStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotStateTests.swift; sourceTree = "<group>"; };
 		EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatPreviews.swift; sourceTree = "<group>"; };
+		EB40574A451BCD56247E1E50 /* HomeTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeTool.swift; sourceTree = "<group>"; };
 		EC5C273524C6EE9CB5783D8E /* GuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTests.swift; sourceTree = "<group>"; };
 		EFC4DEFA1DE3ED504C31746F /* LookStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookStage.swift; sourceTree = "<group>"; };
 		F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsTests.swift; sourceTree = "<group>"; };
@@ -844,6 +848,7 @@
 				13B1C43B8F1C775A87CD4F70 /* ContactsTool.swift */,
 				93B5621388A948B9C5F0BD7B /* EventKitTools.swift */,
 				9FFBCB76953EE398AF63FB9D /* GitHubTool.swift */,
+				EB40574A451BCD56247E1E50 /* HomeTool.swift */,
 				84E8FFDC241EE10C721569CE /* LocationTool.swift */,
 				D237ABF387E8A76064A494FA /* LookTool.swift */,
 				5AEBDE5DBDF558DA07A77435 /* NotifyTool.swift */,
@@ -867,6 +872,7 @@
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
+				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
 				834457A014E7809E1A052937 /* LicenceTests.swift */,
 				3B4AAF2BA51E20FAEF2AB1FA /* LookDocumentTests.swift */,
 				0364BEBF4B83A52C1E950A08 /* LookFixture.swift */,
@@ -1599,6 +1605,7 @@
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
+				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
 				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
 				2F2C24F4D930E90272D6ED1D /* LookDocumentTests.swift in Sources */,
 				D2F8B1E1223894485901C980 /* LookFixture.swift in Sources */,
@@ -1671,6 +1678,7 @@
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
 				DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
+				C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */,
 				DBF301F96AA4B4AB1BD70913 /* LocationTool.swift in Sources */,
 				3823B3829FF33312ACBCE0B1 /* Look.swift in Sources */,
 				9107FEAD3FE82BD92D841883 /* LookDocument.swift in Sources */,
@@ -1816,6 +1824,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Topo reads your calendar and adds events when you ask it to.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Topo looks people up in your contacts when you ask about them.";
+				INFOPLIST_KEY_NSHomeKitUsageDescription = "Topo reads and controls your home's accessories when you ask it to.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Topo checks where you are when you ask something that depends on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Topo reads and adds your reminders when you ask it to.";
@@ -1996,6 +2005,7 @@
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Topo reads your calendar and adds events when you ask it to.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Topo looks people up in your contacts when you ask about them.";
+				INFOPLIST_KEY_NSHomeKitUsageDescription = "Topo reads and controls your home's accessories when you ask it to.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Topo checks where you are when you ask something that depends on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Topo reads and adds your reminders when you ask it to.";

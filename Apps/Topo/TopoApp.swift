@@ -53,6 +53,7 @@ struct TopoApp: App {
         let broker = PermissionBroker()
         let eventKit = EventKitStore()
         let location = LocationPermission()
+        let home = HomeAccess { HomeKitStore() }
         GuestResident.shared.toolTable = [
             LookTool(vault: {
                 #if DEBUG
@@ -68,6 +69,7 @@ struct TopoApp: App {
             GitHubTool(store: connections.store),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
                          broker: broker),
+            HomeTool(home: home, authorizer: HomeAuthorizer(home: home), broker: broker),
         ]
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
