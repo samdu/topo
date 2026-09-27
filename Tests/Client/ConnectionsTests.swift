@@ -1,6 +1,7 @@
 import Foundation
 import TopoAuth
 import TopoTools
+import UIKit
 import XCTest
 
 @testable import Topo
@@ -286,31 +287,57 @@ final class GitHubToolTests: XCTestCase {
 
 /// The Connections screen in its three standing states, drawn under the compiled look and kept as
 /// attachments: what the screen says is read off the pictures, since `simctl` cannot tap through
-/// Settings to it.
+/// Settings to it. Each state is checked to be the one drawn, and the three pictures to be drawn
+/// (more than a background's worth of colours) and to differ from one another.
 @MainActor
 final class ConnectionsScreenshots: XCTestCase {
     func testTheScreenInEachState() async throws {
         let store = InMemoryConnectionStore()
         let github = HeldGitHub()
         let connections = Connections(store: store, flow: github, copy: { _ in }, browser: RecordingBrowser())
-        try attach(connections, "connections-disconnected")
+        XCTAssertEqual(connections.github, .disconnected)
+        let disconnected = try attach(connections, "connections-disconnected")
 
         connections.connectGitHub()
         await github.reach(.token)
         for _ in 0..<20 { await Task.yield() }
-        try attach(connections, "connections-waiting")
+        guard case .waiting = connections.github else { return XCTFail("not waiting: \(connections.github)") }
+        let waiting = try attach(connections, "connections-waiting")
 
         connections.cancelGitHub()
         try store.save(Connection(token: "gho_x", account: "samdu"), for: .github)
-        try attach(Connections(store: store, flow: github, copy: { _ in }, browser: RecordingBrowser()), "connections-connected")
+        let reopened = Connections(store: store, flow: github, copy: { _ in }, browser: RecordingBrowser())
+        guard case .connected = reopened.github else { return XCTFail("not connected: \(reopened.github)") }
+        let connected = try attach(reopened, "connections-connected")
         github.release(.token)
+
+        for (name, image) in [("disconnected", disconnected), ("waiting", waiting), ("connected", connected)] {
+            XCTAssertGreaterThan(try colours(image), 8, "\(name) is drawn as a blank screen")
+        }
+        let pictures = try [disconnected, waiting, connected].map { try XCTUnwrap($0.pngData()) }
+        XCTAssertEqual(Set(pictures).count, 3, "two states are drawn the same")
     }
 
-    private func attach(_ connections: Connections, _ name: String) throws {
+    private func attach(_ connections: Connections, _ name: String) throws -> UIImage {
         let image = try LookStage.image(ConnectionsView().environment(connections), look: Look())
         let attachment = XCTAttachment(image: image)
         attachment.name = name
         attachment.lifetime = .keepAlways
         add(attachment)
+        return image
+    }
+
+    /// How many distinct colours the picture has, up to a few hundred.
+    private func colours(_ image: UIImage) throws -> Int {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let width = cgImage.width, height = cgImage.height
+        var pixels = [UInt32](repeating: 0, count: width * height)
+        let context = try XCTUnwrap(CGContext(data: &pixels, width: width, height: height, bitsPerComponent: 8,
+                                              bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var seen = Set<UInt32>()
+        for pixel in pixels where seen.count < 300 { seen.insert(pixel) }
+        return seen.count
     }
 }

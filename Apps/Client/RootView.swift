@@ -29,14 +29,11 @@ struct RootView: View {
             // launch leaves an outbox on disk) puts what was waiting into the log as a limb's
             // turns and drops the login.
             ViewerRootView().task {
-                if signIn.phase == .signedIn || harness.hasWaiting {
-                    await harness.demote()
-                    // A viewer holds no login, and with no login it keeps no copy of the memory.
-                    memory.forget()
-                    // Nor any of its person's connections.
-                    connections.forget()
-                    signIn.signOut(unfinished: connections.unforgotten)
-                }
+                await ViewerArrival(holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
+                                    demoteHarness: { await harness.demote() },
+                                    forgetMemory: { memory.forget() },
+                                    forgetConnections: { connections.forget() },
+                                    forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) }).act()
             }
         case .primary:
             if signIn.phase != .signedIn {

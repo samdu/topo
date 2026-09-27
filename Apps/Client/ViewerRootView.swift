@@ -9,6 +9,7 @@ struct ViewerRootView: View {
 
     @Environment(RoleSelector.self) private var roleSelector
     @Environment(Harness.self) private var harness
+    @Environment(Connections.self) private var connections
     @State private var store = TranscriptStore(database: TopoCloudKit.database())
     @State private var primary = PrimaryReader(database: TopoCloudKit.database())
     @State private var showAbout = false
@@ -25,6 +26,12 @@ struct ViewerRootView: View {
                         .font(.footnote).padding(.bottom, 8)
                 } else if let trouble = roleSelector.trouble {
                     Text(trouble).font(.footnote).foregroundStyle(.red).padding(.horizontal).padding(.bottom, 8)
+                }
+                // A viewer holds none of its person's tokens; one the keychain would not give up
+                // is said here, since a viewer never shows the sign-in screen that would say it.
+                if let left = connections.unforgotten {
+                    Text("Signed out, but \(left)").font(.footnote).foregroundStyle(.red)
+                        .padding(.horizontal).padding(.bottom, 8)
                 }
             }
             .navigationTitle("Topo")
