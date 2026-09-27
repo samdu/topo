@@ -135,7 +135,8 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertFalse(first)
         XCTAssertFalse(harness.hasRead, "a read that threw was taken for the log")
         XCTAssertTrue(harness.turns.isEmpty)
-        XCTAssertNotNil(harness.error)
+        // The bar's notice, in the log's own words: the two lines `ChatNotices` holds them to.
+        XCTAssertEqual(harness.error, "iCloud is out of reach. Topo will try again.")
         await harness.refresh()
         XCTAssertFalse(harness.hasRead, "a second failure marked it")
         await flaky.setFailing(false)

@@ -315,7 +315,9 @@ final class Harness {
                 hasRead = true
                 return true
             }
-            self.error = "Couldn't read the transcript: \(TranscriptStore.message(for: error))"
+            // The notice says what went wrong in the log's own words, which fit the two lines
+            // the navigation bar holds (`ChatNotices.lines`); a prefix naming the read does not.
+            self.error = TranscriptStore.message(for: error)
             return false
         }
     }
