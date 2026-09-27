@@ -236,6 +236,8 @@ final class ConnectionsKeychainTests: XCTestCase {
         connections.forget()
         guard case let .failed(words) = connections.github else { return XCTFail("\(connections.github)") }
         XCTAssertTrue(words.contains("could not be removed"), words)
+        XCTAssertEqual(connections.unforgotten.map { $0.hasPrefix("the connections' tokens could not be removed") }, true,
+                       "what the sign-in screen says after the sign-out")
     }
 }
 

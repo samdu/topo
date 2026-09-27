@@ -124,11 +124,14 @@ public final class SignIn {
         }
     }
 
-    public func signOut() {
+    /// Lets go of the login. `unfinished` is what the rest of the sign-out could not do (a
+    /// connection's token the keychain would not remove), which the sign-in screen then says
+    /// rather than coming back as if nothing were left behind.
+    public func signOut(unfinished: String? = nil) {
         try? store.clear()
         try? guestStore?.clear()
         reset()
-        phase = .idle
+        phase = unfinished.map { .failed("Signed out, but \($0)") } ?? .idle
     }
 
     private func exchange(code: String, state: String?) async {

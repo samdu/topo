@@ -35,7 +35,7 @@ struct RootView: View {
                     memory.forget()
                     // Nor any of its person's connections.
                     connections.forget()
-                    signIn.signOut()
+                    signIn.signOut(unfinished: connections.unforgotten)
                 }
             }
         case .primary:
