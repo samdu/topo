@@ -53,6 +53,8 @@ final class Connections {
     let store: ConnectionStore
     private let flow: GitHubConnecting
     private let op: OnePasswordRunning
+    /// The pasteboard a token was pasted from, cleared once the token is saved.
+    private let pasteboard: Pasteboard
     /// Puts the code on the pasteboard, which is a write and asks nothing of the person.
     private let copy: @MainActor (String) -> Void
     /// The in-app browser: the system's web-authentication sheet (`WebAuth`), which is Safari,
@@ -64,12 +66,13 @@ final class Connections {
     private var onePasswordTask: Task<Void, Never>?
 
     init(store: ConnectionStore = KeychainConnectionStore(), flow: GitHubConnecting = GitHubDeviceFlow(),
-         onePassword: OnePasswordRunning = GuestOnePassword(),
+         onePassword: OnePasswordRunning = GuestOnePassword(), pasteboard: Pasteboard = SystemPasteboard(),
          copy: @escaping @MainActor (String) -> Void = { UIPasteboard.general.string = $0 },
          browser: Browser = WebAuthBrowser()) {
         self.store = store
         self.flow = flow
         self.op = onePassword
+        self.pasteboard = pasteboard
         self.copy = copy
         self.browser = browser
         github = Self.standing(store)
@@ -107,7 +110,8 @@ final class Connections {
             return
         }
         onePassword = .verifying
-        onePasswordTask = Task { [op, store] in
+        let pasted = pasteboard.changeCount
+        onePasswordTask = Task { [op, store, pasteboard] in
             do {
                 let exit = try await op.run(OnePasswordVaults.arguments, token: token)
                 guard generation == self.onePasswordGeneration else { return }
@@ -122,6 +126,9 @@ final class Connections {
                 let names = vaults.map(\.name).joined(separator: ", ")
                 try store.save(Connection(token: token, account: names), for: .onePassword)
                 onePassword = .connected(vaults: names)
+                // The token was on the pasteboard, where any app the person opens next can read
+                // it; it goes once it is kept, unless something else has been copied since.
+                if pasteboard.changeCount == pasted { pasteboard.clear() }
             } catch {
                 guard generation == self.onePasswordGeneration else { return }
                 onePassword = .failed("The token could not be checked: \(error)")
@@ -248,6 +255,19 @@ final class Connections {
         if let url = error as? URLError { return "GitHub could not be reached: \(url.localizedDescription)" }
         return "\(error)"
     }
+}
+
+/// The pasteboard as `Connections` needs it: whether it changed, and emptying it. Neither reads
+/// its contents, so neither puts up the paste prompt.
+@MainActor
+protocol Pasteboard {
+    var changeCount: Int { get }
+    func clear()
+}
+
+struct SystemPasteboard: Pasteboard {
+    var changeCount: Int { UIPasteboard.general.changeCount }
+    func clear() { UIPasteboard.general.items = [] }
 }
 
 /// The in-app browser, as `Connections` uses it.

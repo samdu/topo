@@ -1,5 +1,6 @@
 import TopoAuth
 import TopoTools
+import TopoUserland
 import XCTest
 @testable import Topo
 
@@ -12,6 +13,7 @@ private final class HeldOnePassword: OnePasswordRunning, @unchecked Sendable {
     private var holding = false
     private var reached: CheckedContinuation<Void, Never>?
     private(set) var calls: [(arguments: [String], token: String)] = []
+    private(set) var cancelled = 0
 
     func answer(_ exit: OnePasswordExit) { lock.withLock { answers.append(exit) } }
     func hold() { lock.withLock { holding = true } }
@@ -43,13 +45,17 @@ private final class HeldOnePassword: OnePasswordRunning, @unchecked Sendable {
             return holding
         }
         if wait {
-            await withCheckedContinuation { continuation in
-                let arrived = lock.withLock { () -> CheckedContinuation<Void, Never>? in
-                    held = continuation
-                    defer { reached = nil }
-                    return reached
+            await withTaskCancellationHandler {
+                await withCheckedContinuation { continuation in
+                    let arrived = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                        held = continuation
+                        defer { reached = nil }
+                        return reached
+                    }
+                    arrived?.resume()
                 }
-                arrived?.resume()
+            } onCancel: {
+                self.lock.withLock { self.cancelled += 1 }
             }
         }
         return lock.withLock { answers.isEmpty ? OnePasswordExit(status: 1, output: "", errors: "no answer set") : answers.removeFirst() }
@@ -60,6 +66,13 @@ private final class NoGitHub: GitHubConnecting, @unchecked Sendable {
     func start() async throws -> GitHubDeviceFlow.Code { throw CancellationError() }
     func token(for code: GitHubDeviceFlow.Code) async throws -> String { throw CancellationError() }
     func login(token: String) async throws -> String { throw CancellationError() }
+}
+
+@MainActor
+private final class FakePasteboard: Pasteboard {
+    var changeCount = 7
+    var clears = 0
+    func clear() { clears += 1; changeCount += 1 }
 }
 
 private final class NoBrowser: Browser {
@@ -74,14 +87,16 @@ private let twoVaults = #"[{"id":"v1","name":"Homelab"},{"id":"v2","name":"Share
 final class OnePasswordConnectionTests: XCTestCase {
     private var store: InMemoryConnectionStore!
     private var op: HeldOnePassword!
+    private var pasteboard: FakePasteboard!
 
     override func setUp() async throws {
         store = InMemoryConnectionStore()
         op = HeldOnePassword()
+        pasteboard = FakePasteboard()
     }
 
     private func connections() -> Connections {
-        Connections(store: store, flow: NoGitHub(), onePassword: op, copy: { _ in }, browser: NoBrowser())
+        Connections(store: store, flow: NoGitHub(), onePassword: op, pasteboard: pasteboard, copy: { _ in }, browser: NoBrowser())
     }
 
     private func settle() async {
@@ -99,6 +114,55 @@ final class OnePasswordConnectionTests: XCTestCase {
         XCTAssertEqual(op.calls.map(\.token), [token], "the token is trimmed and handed over as it was pasted")
         XCTAssertEqual(try store.load(.onePassword), Connection(token: token, account: "Homelab, Shared"))
         XCTAssertEqual(self.connections().onePassword, .connected(vaults: "Homelab, Shared"), "a relaunch reads it back")
+    }
+
+    /// The pasted token leaves the pasteboard once it is kept, and not before: a refused one stays
+    /// for the person to see, and something copied since is not theirs to lose.
+    func testThePasteboardIsClearedOnceTheTokenIsKept() async throws {
+        op.answer(OnePasswordExit(status: 0, output: twoVaults, errors: ""))
+        let connections = connections()
+        connections.connectOnePassword(pasted: token)
+        await settle()
+        XCTAssertEqual(connections.onePassword, .connected(vaults: "Homelab, Shared"))
+        XCTAssertEqual(pasteboard.clears, 1)
+
+        op.answer(OnePasswordExit(status: 1, output: "", errors: "[ERROR] no\n"))
+        connections.connectOnePassword(pasted: token)
+        await settle()
+        XCTAssertEqual(pasteboard.clears, 1, "a refused token is not cleared")
+
+        op.hold()
+        op.answer(OnePasswordExit(status: 0, output: twoVaults, errors: ""))
+        connections.connectOnePassword(pasted: token)
+        await op.reach()
+        pasteboard.changeCount += 1
+        op.release()
+        await settle()
+        XCTAssertEqual(pasteboard.clears, 1, "something copied since the paste is left alone")
+    }
+
+    /// Cancel, Disconnect and a sign-out end an `op` still running, not only its answer.
+    func testLeavingACheckEndsTheRunningOp() async throws {
+        for leave in ["cancel", "disconnect", "forget"] {
+            store = InMemoryConnectionStore()
+            op = HeldOnePassword()
+            op.hold()
+            op.answer(OnePasswordExit(status: 0, output: twoVaults, errors: ""))
+            let connections = connections()
+            connections.connectOnePassword(pasted: token)
+            await op.reach()
+            switch leave {
+            case "cancel": connections.cancelOnePassword()
+            case "disconnect": connections.disconnectOnePassword()
+            default: connections.forget()
+            }
+            await settle()
+            XCTAssertEqual(op.cancelled, 1, leave)
+            op.release()
+            await settle()
+            XCTAssertEqual(connections.onePassword, .disconnected, leave)
+            XCTAssertNil(try store.load(.onePassword), leave)
+        }
     }
 
     func testTextThatIsNotAServiceAccountTokenIsRefusedWithoutRunningOp() async {
@@ -234,5 +298,45 @@ final class SecretToolTests: XCTestCase {
         let reply = await tool.run(["get", "op://Homelab/Nope/password"])
         XCTAssertEqual(reply.status, ToolReply.failed)
         XCTAssertEqual(reply.text, "op: [ERROR] \"Nope\" isn't an item\n")
+    }
+}
+
+/// `GuestOnePassword`: `op` installed before every run, the token handed to the run and never an
+/// argument, and never in what comes back.
+final class GuestOnePasswordTests: XCTestCase {
+    private final class Steps: @unchecked Sendable {
+        let lock = NSLock()
+        var steps: [String] = []
+        var arguments: [[String]] = []
+        func add(_ step: String) { lock.withLock { steps.append(step) } }
+    }
+
+    func testOpIsInstalledFirstAndTheTokenIsNeverAnArgumentOrAnAnswer() async throws {
+        let steps = Steps()
+        let runner = GuestOnePassword(install: { steps.add("install") }, runner: { arguments, handed in
+            steps.add("run")
+            steps.lock.withLock { steps.arguments.append(arguments) }
+            XCTAssertEqual(handed, token)
+            return Guest.Exit(status: 1, output: "", errors: "[ERROR] \(handed) is not valid\n")
+        })
+        let exit = try await runner.run(["vault", "list", "--format", "json"], token: token)
+        XCTAssertEqual(steps.steps, ["install", "run"], "op is installed at its pin before it runs")
+        XCTAssertEqual(steps.arguments, [["vault", "list", "--format", "json"]])
+        XCTAssertFalse(steps.arguments.joined().contains(token))
+        XCTAssertEqual(exit.errors, "[ERROR] [token] is not valid\n")
+    }
+
+    func testAFailedInstallRunsNothing() async {
+        let steps = Steps()
+        struct Refused: Error {}
+        let runner = GuestOnePassword(install: { throw Refused() }, runner: { _, _ in
+            steps.add("run")
+            return Guest.Exit(status: 0, output: "", errors: "")
+        })
+        do {
+            _ = try await runner.run(["vault", "list"], token: token)
+            XCTFail("a failed install ran op")
+        } catch {}
+        XCTAssertTrue(steps.steps.isEmpty)
     }
 }

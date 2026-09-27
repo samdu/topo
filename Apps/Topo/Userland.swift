@@ -140,24 +140,11 @@ final class Userland {
     static let onePasswordDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Userland/op-cli", isDirectory: true)
 
-    /// `op` mounted into the booted guest and checked against its pin, for one run: fetches
-    /// 1Password's zip on first asking (never on a foreground, since most people never connect
-    /// 1Password), boots the guest, and extracts, verifies and mounts `op` off the main thread once
-    /// per process; then, on every call, checks the binary again — size, then digest — since the
-    /// guest can write the directory it is mounted from, and a binary it replaced would be handed
-    /// the token. A failure of either is not kept, so the next call installs again.
+    /// `op` mounted into the booted guest, once per process: fetches 1Password's zip on first
+    /// asking (never on a foreground, since most people never connect 1Password), boots the guest,
+    /// and extracts, verifies and mounts `op` off the main thread. A failure is not kept, so the
+    /// next call tries again.
     func onePassword() async throws -> OnePasswordInstaller {
-        let installer = try await installedOnePassword()
-        do {
-            try await Self.offThePool { try installer.check() }
-        } catch {
-            onePasswordInstall = nil
-            throw error
-        }
-        return installer
-    }
-
-    private func installedOnePassword() async throws -> OnePasswordInstaller {
         if let onePasswordInstall { return try await onePasswordInstall.value }
         let task = Task { @MainActor in
             let files = try await withCheckedThrowingContinuation { continuation in

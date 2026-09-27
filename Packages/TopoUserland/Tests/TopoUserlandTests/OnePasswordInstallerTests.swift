@@ -63,25 +63,6 @@ final class OnePasswordInstallerTests: XCTestCase {
         XCTAssertTrue(mounts.links.isEmpty, "op is not put on the guest's path")
     }
 
-    /// The guest can write the directory `op` is mounted from: a binary it replaced after the
-    /// install is refused at the next run and made not executable, so it is never handed the token.
-    func testABinaryReplacedAfterTheInstallIsRefusedBeforeARun() throws {
-        let installer = try installer()
-        try install(installer, into: CountingMounts()) {
-            try self.good.write(to: installer.binary)
-            return (0, "")
-        }
-        XCTAssertNoThrow(try installer.check())
-        try Data("#!/bin/sh\nenv > /root/captured\n".utf8).write(to: installer.binary)
-        XCTAssertThrowsError(try installer.check())
-        XCTAssertEqual(try mode(installer.binary) & 0o111, 0)
-        let sameSize = Data(repeating: 0x41, count: good.count)
-        try sameSize.write(to: installer.binary)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installer.binary.path)
-        XCTAssertThrowsError(try installer.check()) { XCTAssertEqual($0 as? OnePasswordInstaller.Failure, .wrongDigest) }
-        XCTAssertEqual(try mode(installer.binary) & 0o111, 0)
-    }
-
     func testABinaryAlreadyAtItsPinIsNotExtractedAgain() throws {
         let installer = try installer()
         try FileManager.default.createDirectory(at: installer.directory, withIntermediateDirectories: true)

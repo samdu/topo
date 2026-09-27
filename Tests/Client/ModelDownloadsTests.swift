@@ -68,6 +68,19 @@ final class ModelDownloadsTests: XCTestCase {
                        "https://downloads.claude.ai/claude-code-releases/\(version)/linux-arm64-musl/claude")
         XCTAssertEqual(claude.files[0].sha256.count, 64)
         XCTAssertGreaterThan(claude.files[0].size, 100_000_000)
+        // 1Password's CLI is its own zip from its own CDN, pinned whole, with the `op` inside it
+        // pinned as the entry's binary: what the guest extracts is checked, not only what came.
+        let op = try XCTUnwrap(manifest.model(ModelManifest.onePassword))
+        XCTAssertNil(op.repo)
+        let opVersion = try XCTUnwrap(op.version)
+        XCTAssertEqual(op.files.map(\.path), ["op_linux_arm64_v\(opVersion).zip"])
+        XCTAssertEqual(op.url(for: op.files[0]).absoluteString,
+                       "https://cache.agilebits.com/dist/1P/op2/pkg/v\(opVersion)/op_linux_arm64_v\(opVersion).zip")
+        XCTAssertEqual(op.files[0].sha256.count, 64)
+        let binary = try XCTUnwrap(op.binary, "the op inside the zip is pinned")
+        XCTAssertEqual(binary.path, "op")
+        XCTAssertEqual(binary.sha256.count, 64)
+        XCTAssertGreaterThan(binary.size, op.files[0].size)
         // The CoreML bundles arrive flattened: a bundle is several files on the Hub.
         let parakeet = try XCTUnwrap(manifest.model(ModelManifest.parakeet))
         XCTAssertTrue(parakeet.files.contains { $0.path == "Encoder.mlmodelc/weights/weight.bin" })

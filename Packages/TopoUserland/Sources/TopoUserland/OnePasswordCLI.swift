@@ -5,10 +5,10 @@ import Foundation
 /// manifest home at the zip's pin; the guest's own BusyBox `unzip` extracts `op` from it into a
 /// directory of its own outside the downloader's homes (whose sweep removes anything that is not a
 /// manifest file), and the binary is checked against its own pin — size, then digest — on every
-/// install before it is made executable and mounted, and again before every run (`check`), since
-/// the guest can write the directory it is mounted from. One that does not match is made not
-/// executable, so no token is handed to a binary nobody pinned. It is not linked onto the guest's
-/// path: the mind can see the file, and without the token it is inert.
+/// install before it is made executable and mounted, so what the app downloaded is the build it
+/// pinned. That is a check of the download and not a bound on the guest: the guest can write the
+/// directory `op` is mounted from, unmount it, or replace what `op`'s script runs, and so can obtain
+/// the token (`docs/guest.md`). It is not linked onto the guest's path.
 public struct OnePasswordInstaller: Sendable {
     public enum Failure: Error, Equatable, CustomStringConvertible {
         case wrongSize(expected: Int64, got: Int64)
@@ -86,17 +86,6 @@ public struct OnePasswordInstaller: Sendable {
         try allowExecution()
     }
 
-    /// The binary checked against its pin before a run: one that does not match is made not
-    /// executable, so it is never run with the token. Blocking, as `mount` is.
-    public func check() throws {
-        do {
-            try verify()
-        } catch {
-            forbidExecution()
-            throw error
-        }
-    }
-
     func verify() throws {
         let size: Int64
         do {
@@ -114,5 +103,93 @@ public struct OnePasswordInstaller: Sendable {
 
     private func forbidExecution() {
         try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: binary.path)
+    }
+}
+
+/// One run of `op` with the service-account token, in the guest: the token only in that process's
+/// environment (never an argument, so no `/proc/<pid>/cmdline` holds it), `OP_CACHE=false`, and
+/// `OP_CONFIG_DIR` and `TMPDIR` a directory made for the call and removed after it. `op` starts a
+/// daemon of its own whether or not caching is off — `op daemon`, in a session of its own,
+/// reparented to init, carrying the token in its environment — and writes its pid under
+/// `TMPDIR`, so when `op` returns the script ends that pid, its session and its children, then
+/// every other process of its own process group: the watcher that bounds `op` at 60 s, and anything `op`
+/// started without leaving it. A cancelled run does the same from outside, through the file the
+/// script wrote its group id to, and removes the directory kept beside that file. Nothing is
+/// matched by name.
+public enum OnePasswordRun {
+    /// The whole of what the guest runs: `$@` is `op`'s arguments, `$TOPO_OP_GROUP` the file the
+    /// group id is written to, and `$TOPO_OP_GROUP.d` the call's directory.
+    public static func script(command: String) -> String {
+        #"""
+        stat="$(cat /proc/$$/stat)" || exit 70
+        rest="${stat##*) }"
+        group="$(echo $rest | cut -d ' ' -f 3)"
+        [ -n "$group" ] || exit 70
+        printf '%s\n' "$group" > "$TOPO_OP_GROUP" || exit 70
+        d="$TOPO_OP_GROUP.d"
+        mkdir -m 700 "$d" || exit 70
+        OP_CONFIG_DIR="$d" TMPDIR="$d" \#(command) "$@" &
+        op=$!
+        ( sleep 60; kill -KILL "$op" ) 2>/dev/null &
+        wait "$op"
+        s=$?
+        \#(end)
+        rm -rf "$d" "$TOPO_OP_GROUP"
+        exit $s
+        """#
+    }
+
+    /// Ends the daemon whose pid `op` writes under `$d` — waiting up to 5 s for the file once its
+    /// directory is there, since `op` can return before the daemon has written it — with every
+    /// process in the daemon's session and each one it is the parent of, then every process in
+    /// process group `$group` but the shell running this: a sweep of `/proc` by each task's `stat`.
+    static let end = #"""
+    for f in "$d"/com.agilebits.op.*/op-daemon.pid; do
+        [ -e "$f" ] || break
+        i=0
+        while [ ! -s "$f" ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+    done
+    daemon="$(cat "$d"/com.agilebits.op.*/op-daemon.pid 2>/dev/null)"
+    session=""
+    if [ -n "$daemon" ] && stat="$(cat "/proc/$daemon/stat" 2>/dev/null)"; then
+        session="$(echo ${stat##*) } | cut -d ' ' -f 4)"
+    fi
+    for task in /proc/[0-9]*; do
+        pid=${task#/proc/}
+        [ "$pid" = "$$" ] || [ "$pid" = 1 ] && continue
+        stat="$(cat "$task/stat" 2>/dev/null)" || continue
+        rest="$(echo ${stat##*) } | cut -d ' ' -f 2-4)"
+        parent=${rest%% *}
+        taskSession=${rest##* }
+        taskGroup=${rest#* }
+        taskGroup=${taskGroup% *}
+        if [ "$taskGroup" = "$group" ] || [ -n "$session" -a "$taskSession" = "$session" ] \
+            || [ -n "$daemon" -a "$parent" = "$daemon" ]; then
+            kill -KILL "$pid" 2>/dev/null
+        fi
+    done
+    [ -n "$daemon" ] && kill -KILL "$daemon" 2>/dev/null
+    """#
+
+    /// What a cancelled run runs beside it: the group id the run wrote, the same ending, and the
+    /// run's directory removed.
+    static let cancel = #"""
+    group="$(cat "$1" 2>/dev/null)" || exit 0
+    [ -n "$group" ] || exit 0
+    d="$1.d"
+    """# + "\n" + end + "\n" + #"rm -rf "$1" "$d""#
+
+    public static func run(_ arguments: [String], token: String, command: String = OnePasswordInstaller.command,
+                           guest: Guest = .shared) async throws -> Guest.Exit {
+        let groupFile = "/tmp/topo-op-\(UUID().uuidString).group"
+        var environment = Guest.environment
+        environment["OP_SERVICE_ACCOUNT_TOKEN"] = token
+        environment["OP_CACHE"] = "false"
+        environment["TOPO_OP_GROUP"] = groupFile
+        return try await withTaskCancellationHandler {
+            try await guest.run("/bin/sh", ["-c", script(command: command), "op"] + arguments, environment: environment)
+        } onCancel: {
+            Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile]) }
+        }
     }
 }

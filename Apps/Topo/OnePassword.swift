@@ -13,21 +13,17 @@ protocol OnePasswordRunning: Sendable {
     func run(_ arguments: [String], token: String) async throws -> OnePasswordExit
 }
 
-/// `op` in the guest, started by the app: the token is in that one process's environment, never
-/// an argument and never the resident's; `op`'s own config directory is made for the call and
-/// removed after it, so nothing of the account is left in the guest; and the call is bounded at
-/// 60 s, under the tool service's 90.
+/// `op` in the guest, started by the app: installed at its pin first, then run as
+/// `OnePasswordRun` runs it — the token in that one process's environment, never an argument and
+/// never the resident's, the call's config directory removed and the daemon `op` leaves ended
+/// after it — with the token taken out of what `op` said on stderr.
 struct GuestOnePassword: OnePasswordRunning {
-    /// The whole of what the guest runs: `$@` is `op`'s arguments.
-    static let script = #"d="$(mktemp -d)" || exit 70; OP_CONFIG_DIR="$d" timeout 60 "#
-        + OnePasswordInstaller.command + #" "$@"; s=$?; rm -rf "$d"; exit $s"#
+    var install: @Sendable () async throws -> Void = { _ = try await Userland.shared.onePassword() }
+    var runner: @Sendable ([String], String) async throws -> Guest.Exit = { try await OnePasswordRun.run($0, token: $1) }
 
     func run(_ arguments: [String], token: String) async throws -> OnePasswordExit {
-        _ = try await Userland.shared.onePassword()
-        var environment = Guest.environment
-        environment["OP_SERVICE_ACCOUNT_TOKEN"] = token
-        environment["OP_CACHE"] = "false"
-        let exit = try await Guest.shared.run("/bin/sh", ["-c", Self.script, "op"] + arguments, environment: environment)
+        try await install()
+        let exit = try await runner(arguments, token)
         return OnePasswordExit(status: exit.status, output: exit.output,
                                errors: exit.errors.replacingOccurrences(of: token, with: "[token]"))
     }
