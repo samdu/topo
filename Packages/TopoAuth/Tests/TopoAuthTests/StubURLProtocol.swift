@@ -19,11 +19,15 @@ final class StubURLProtocol: URLProtocol {
     /// Answers each request from its body instead of the last `respond(...)`, when set: for a flow
     /// that makes more than one request and needs a different answer to each.
     nonisolated(unsafe) static var responder: (@Sendable (_ body: [String: Any]) -> (status: Int, json: String))?
+    /// Answers each request from its URL and body, when set: for a flow that posts forms to more
+    /// than one endpoint. Wins over `responder`.
+    nonisolated(unsafe) static var requestResponder: (@Sendable (_ request: URLRequest, _ body: Data) -> (status: Int, json: String))?
     /// Every request body since the last `reset()`, in order.
     nonisolated(unsafe) static var bodies: [Data] = []
 
     static func reset() {
         responder = nil
+        requestResponder = nil
         bodies = []
         beforeResponse = nil
     }
@@ -58,7 +62,11 @@ final class StubURLProtocol: URLProtocol {
         let sent = Self.lastBody ?? Data()
         Self.bodies.append(sent)
         var status = Self.status, body = Self.body
-        if let responder = Self.responder {
+        if let requestResponder = Self.requestResponder {
+            let answer = requestResponder(request, sent)
+            status = answer.status
+            body = Data(answer.json.utf8)
+        } else if let responder = Self.responder {
             let answer = responder((try? JSONSerialization.jsonObject(with: sent) as? [String: Any]) ?? [:])
             status = answer.status
             body = Data(answer.json.utf8)
