@@ -637,14 +637,17 @@ final class PhoneToolsTests: XCTestCase {
     /// address. The contact is written by the test itself (the tool writes nothing) into the
     /// store's default container, confirmed by id through `show`, and removed after. Access is
     /// granted as for the calendar (`xcrun simctl privacy <udid> grant contacts zone.hexagon.topo`).
-    /// The name search comes last and is retried for up to five seconds: Contacts matches names
-    /// through an index it updates after the save, and on the PR check's runner a name written
-    /// moments before was not yet found. Numbers and addresses are matched at once.
+    /// The name is letters alone, so its search goes to Contacts' name matcher: a hex tag with seven
+    /// digits made `Person<tag>` a phone number to `ContactStoreDirectory.match(for:)`, and it was
+    /// never found. The name search comes last and is retried for up to five seconds, in case
+    /// Contacts' name index lags the save.
     func testContactsFindsAPersonByNumberAndByAddress() async throws {
         XCTAssertEqual(CNContactStore.authorizationStatus(for: .contacts), .authorized,
                        "grant the simulator's contacts access first: xcrun simctl privacy <udid> grant contacts zone.hexagon.topo")
         guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return }
-        let tag = UUID().uuidString.prefix(8).lowercased()
+        let tag = String((0..<8).map { _ in "abcdefghijklmnopqrstuvwxyz".randomElement()! })
+        XCTAssertEqual(ContactStoreDirectory.match(for: "Person\(tag)"), .name, "Person\(tag) is not searched for as a name")
+        guard ContactStoreDirectory.match(for: "Person\(tag)") == .name else { return }
         let person = CNMutableContact()
         person.givenName = "Topotest"
         person.familyName = "Person\(tag)"
