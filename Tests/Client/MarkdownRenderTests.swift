@@ -274,17 +274,6 @@ final class MarkdownRenderTests: XCTestCase {
             }
         }
 
-        /// Turns the clock until `value` reads the same twice running a tenth of a second apart,
-        /// for up to `seconds`: a layout has settled when what it lays out has stopped changing.
-        func settle<Value: Equatable>(for seconds: TimeInterval = 5, _ value: () -> Value) {
-            var last = value()
-            poll(for: seconds) {
-                let now = value()
-                defer { last = now }
-                return now == last
-            }
-        }
-
         func image() -> UIImage {
             UIGraphicsImageRenderer(size: size).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
@@ -350,13 +339,23 @@ final class MarkdownRenderTests: XCTestCase {
             .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
                                   look: look, size: self.stage)
         defer { stage.close() }
-        stage.poll(for: 5) { Self.scrollView(in: stage.window) != nil }
+        // The transcript opens at its end, the newest turn's foot at the screen's with no more than
+        // the transcript's padding under it, and on a loaded runner is still getting there a second
+        // after it appeared, a third of a row short. Where it stands is read once it is there and
+        // the block is where the fixture puts it, off the screen or on it, waited for up to five
+        // seconds; a move after that is the cue's.
+        func opened(_ scroll: UIScrollView) -> Bool {
+            let end = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
+            return scroll.contentOffset.y >= end - look.transcript.spacing - 1
+        }
+        var before = 0
+        try stage.poll(for: 5) {
+            guard let scroll = Self.scrollView(in: stage.window), opened(scroll) else { return false }
+            before = try Pixels(stage.image(), blank: true).count(outline)
+            return first ? before == 0 : before > 20
+        }
         let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
-        // The transcript opens at its end and goes on settling there as the lazy stack measures
-        // the rows it has made — on a loaded runner by a third of a row, a second after it opened —
-        // so where it stands is read once it has stopped moving, and a move after is the cue's.
-        stage.settle { [scroll.contentOffset.y, scroll.contentSize.height] }
-        let before = try Pixels(stage.image(), blank: true).count(outline)
+        XCTAssertTrue(opened(scroll), "the transcript did not open at its end: \(scroll.contentOffset.y) of \(scroll.contentSize.height)")
         if first {
             XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
         } else {
