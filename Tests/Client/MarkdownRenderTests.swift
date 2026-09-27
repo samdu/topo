@@ -223,9 +223,10 @@ final class MarkdownRenderTests: XCTestCase {
         }
         XCTAssertTrue(ready, "the row was not drawn")
         // Looked at every tenth of a second from the cue until the pulse it starts is over by its
-        // own clock and the cued block has been seen pulsing, for up to five seconds past its end,
-        // so a picture taken late on a loaded runner is waited for rather than landing on a rest:
-        // the most each block pulsed in any look.
+        // own clock and the cued block has been seen pulsing, for up to five seconds past its end:
+        // the most each block pulsed in any look. A picture of this one row takes under 0.3 s under
+        // a 60% duty cycle, and each 1.5 s breath is told apart for about 0.6 s of it, so looks
+        // that close cannot miss both breaths. Nothing past the pulse's end can recover one they did.
         func watch(_ number: Int, serial: Int) throws -> (first: Int, second: Int) {
             live.cue = CodeBlockCue(reply: reply.ref, number: number, serial: serial)
             let over = Date().addingTimeInterval(pulse.duration)
@@ -341,9 +342,11 @@ final class MarkdownRenderTests: XCTestCase {
         // A breath slower than a look can make one (0.3–5 s), because the pulse is judged from
         // pictures of a transcript this long, which take seconds each on a loaded runner: at 5 s a
         // picture every 5 s lands on the rest between the breaths and on the end, and sees none of
-        // it. At 12 s the first breath is past the 0.62 of its peak a ring over the outline is
-        // told apart at from about 3.5 s to 8.5 s after it starts, so any picture taken then finds it.
-        look.markdown.codePulse.cycle = 12
+        // it. A ring over the outline is told apart from about 0.29 to 0.71 of a breath, which at
+        // 20 s is from about 5.8 s to 14.2 s after the pulse starts: 8.4 s, so looks less than that
+        // apart — a picture here takes about 1.2 s on a Mac and 2.3 s under a 60% duty cycle —
+        // cannot all miss it. The poll's bound is past its end.
+        look.markdown.codePulse.cycle = 20
         let device = DeviceID("phone")
         let at = Date(timeIntervalSince1970: 1_700_000_000)
         let filler = (2...40).map { n in
@@ -408,14 +411,14 @@ final class MarkdownRenderTests: XCTestCase {
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
         // Looked at every tenth of a second until the block has been seen and seen pulsing, for
-        // up to ten seconds, so a slow runner is waited for and a block never scrolled to or never
-        // pulsed is still seen not to be.
+        // up to fifteen seconds, the first breath's span and a look past it, so a slow runner is
+        // waited for and a block never scrolled to or never pulsed is still seen not to be.
         // How far the transcript moved is the most it was ever away from where it stood, read at
         // every look and for a second after, so a scroll there and back again is a move.
         // The pulse is drawn over the enclosure's outline and covers its ink while it breathes, so
         // a block on the screen is its outline, its pulse or some of each, and it is shown by both.
         var shown = 0, pulsed = 0, moved: CGFloat = 0
-        try stage.poll { [self] in
+        try stage.poll(for: 15) { [self] in
             moved = max(moved, abs(scroll.contentOffset.y - offset))
             let drawn = try Pixels(stage.image(), blank: true)
             let ring = pulsing(drawn, rows: 0...drawn.height)
