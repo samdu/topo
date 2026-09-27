@@ -1,5 +1,8 @@
 import SwiftUI
 import UIKit
+import TopoAuth
+import TopoCore
+import TopoTurn
 import XCTest
 
 @testable import Topo
@@ -10,26 +13,68 @@ import XCTest
 @MainActor
 final class ChatNoticesRenderTests: XCTestCase {
     func testTheBusyLineSaysWhereTheTurnIsAndHowManyWaitBehindIt() {
-        let busy = ChatNotices.Said(busy: true, status: "Asking Sonnet…", waiting: 3)
-        XCTAssertEqual(busy.progress, "Asking Sonnet…")
-        XCTAssertEqual(busy.queued, "· 2 waiting")
-        let alone = ChatNotices.Said(busy: true, waiting: 1)
-        XCTAssertEqual(alone.progress, "Working…", "a turn with no step yet still says it is going")
-        XCTAssertNil(alone.queued, "the turn in flight is not one waiting")
-        XCTAssertNil(ChatNotices.Said(waiting: 3).progress, "nothing in flight, no busy line")
-        XCTAssertNil(ChatNotices.Said(waiting: 3).queued)
+        XCTAssertEqual(ChatNotices.Said(busy: true, status: "Asking Sonnet…", waiting: 3).notice,
+                       .progress("Asking Sonnet…", queued: "· 2 waiting"))
+        XCTAssertEqual(ChatNotices.Said(busy: true, waiting: 1).notice, .progress("Working…", queued: nil),
+                       "a turn with no step yet still says it is going, and is not one waiting")
+        XCTAssertNil(ChatNotices.Said(waiting: 3).notice, "nothing in flight, nothing to say")
+    }
+
+    /// The bar holds one notice: a failure over the turn in flight, and the turn in flight over a
+    /// turn another primary took — which is what the bar shows when a second turn goes while the
+    /// first went to the log for another device.
+    func testTheBarSaysOneNoticeTheMostPressing() {
+        let all = ChatNotices.Said(busy: true, status: "Asking Sonnet…", waiting: 2,
+                                   error: "The log moved under us. Try again.", info: "Saved. hub will answer here.")
+        XCTAssertEqual(all.notice, .trouble("The log moved under us. Try again."))
+        var noError = all
+        noError.error = nil
+        XCTAssertEqual(noError.notice, .progress("Asking Sonnet…", queued: "· 1 waiting"))
+        var infoOnly = noError
+        infoOnly.busy = false
+        XCTAssertEqual(infoOnly.notice, .info("Saved. hub will answer here."))
     }
 
     /// The fixtures the UI suite holds in the bar are the harness's own words.
     func testTheFixturesSayWhatTheHarnessSays() {
-        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "error"])?.error,
-                       "iCloud refused the read. Check you're signed in on this device.")
-        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "info"])?.info,
-                       "Another device is claiming primary. What you said is in the log; the reply will appear here.")
-        let busy = DebugRun.notices(["TOPO_DEBUG_NOTICES": "busy"])
-        XCTAssertEqual(busy?.progress, "Reaching iCloud…")
-        XCTAssertEqual(busy?.queued, "· 2 waiting")
+        let refused = ChatNotices.Notice.trouble("iCloud refused the read. Check you're signed in on this device.")
+        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "error"])?.notice, refused)
+        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "error-busy"])?.notice, refused)
+        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "info"])?.notice,
+                       .info("Saved. Another device will answer here."))
+        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "busy"])?.notice,
+                       .progress("Reaching iCloud…", queued: "· 2 waiting"))
+        let both = DebugRun.notices(["TOPO_DEBUG_NOTICES": "busy-info"])
+        XCTAssertEqual(both?.info, Harness.limbInfo(.contended), "the fixture holds both")
+        XCTAssertEqual(both?.notice, .progress("Reaching iCloud…", queued: "· 1 waiting"))
         XCTAssertNil(DebugRun.notices([:]))
+    }
+
+    /// Every notice the harness writes in its own words fits the two lines the bar holds at the
+    /// largest `noticeFont`, on the narrowest phone: the bar's middle there is 272 points wide,
+    /// measured on an iPhone 17e with the badge beside it. A failure carrying the system's own
+    /// words (a guest's reason, a localized error) is not the harness's to shorten, and past two
+    /// lines it is cut at the tail.
+    func testEveryNoticeTheHarnessWritesFitsTwoLinesOfTheBar() {
+        let hub = Lease(holder: DeviceID("phone-1A2B3C4D"), endpoint: nil, epoch: 2, expiresAt: Date())
+        let outcomes: [LeaseOutcome] = [.primary(hub), .held(by: hub), .unreachable(hub), .contended]
+        let lines = outcomes.map(Harness.limbInfo) + [
+            Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission))),
+            Harness.describe(RecordDatabaseError.unavailable(underlying: CocoaError(.fileReadNoPermission))),
+            Harness.describe(TurnLogError.sequenceContended(DeviceID("phone-1A2B3C4D"))),
+            Harness.describe(TurnRunnerError.displaced),
+            Harness.describe(TokenProviderError.signedOut),
+            Harness.describe(GuestBridgeError.unresolved),
+            "Saving what you said…", "Reaching iCloud…",
+        ]
+        let font = UIFont.systemFont(ofSize: CGFloat(Look.Transcript.largestNotice))
+        for line in lines {
+            let needed = (line as NSString).boundingRect(
+                with: CGSize(width: 272, height: CGFloat.greatestFiniteMagnitude),
+                options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
+            XCTAssertLessThanOrEqual((needed.height / font.lineHeight).rounded(), CGFloat(ChatNotices.lines),
+                                     "\"\(line)\" is more than two lines of the bar")
+        }
     }
 
     func testTheFailureIsDrawnInTheLooksTrouble() throws {
@@ -45,7 +90,7 @@ final class ChatNoticesRenderTests: XCTestCase {
     func testTheInfoLineAndTheQueueAreDrawnInTheLooksCaption() throws {
         var look = Look()
         look.transcript.caption = Self.probe
-        let info = ChatNotices.Said(info: "Another device is claiming primary.")
+        let info = ChatNotices.Said(info: "Saved. Another device will answer here.")
         XCTAssertGreaterThan(try count(Self.probe, in: ChatNotices(notices: info), look: look), 20,
                              "the look's caption colour never reached the info line")
         let busy = ChatNotices.Said(busy: true, status: "Asking Sonnet…", waiting: 3)

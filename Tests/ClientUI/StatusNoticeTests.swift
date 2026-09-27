@@ -54,13 +54,15 @@ final class StatusNoticeTests: XCTestCase {
 
     /// Each of the three things the notices say, in the harness's words, in the bar: level with
     /// the badge, clear of it to its leading side, and above the transcript's frame, where Topo's
-    /// room starts. The failure is read whole, wrapped onto a second line rather than cut short.
+    /// room starts, drawn whole. The failure is wrapped onto a second line rather than cut short.
+    /// With two to say at once the bar says one, the more pressing.
     func testEachNoticeSaysItsWordsInTheBarBesideTheBadge() throws {
         for (fixture, said) in Self.fixtures {
             let app = launch(fixture)
             let texts = try words(app, fixture)
             XCTAssertEqual(texts.map(\.label), said, "\(fixture): the notice's words")
             try holdInTheBar(app, texts, fixture)
+            whole(texts, in: UIFont.preferredFont(forTextStyle: .caption1), fixture)
             if fixture == "error" {
                 let line = UIFont.preferredFont(forTextStyle: .caption1).lineHeight
                 XCTAssertGreaterThan(texts[0].frame.height, line * 1.5,
@@ -84,11 +86,26 @@ final class StatusNoticeTests: XCTestCase {
                                          "\(fixture): \"\(text.label)\" at \(text.frame) is more than two lines of the bar's largest")
             }
             try holdInTheBar(app, texts, fixture)
+            whole(texts, in: UIFont.systemFont(ofSize: 15), fixture)
             app.terminate()
         }
     }
 
     // MARK: -
+
+    /// Each text drawn whole: as many lines tall as its words take at its width in `font`. The
+    /// accessibility label is the whole string whatever the bar drew, so what is measured is the
+    /// drawing — a notice cut short by the line limit is drawn fewer lines tall than its words need.
+    private func whole(_ texts: [XCUIElement], in font: UIFont, _ fixture: String) {
+        for text in texts {
+            let needed = (text.label as NSString).boundingRect(
+                with: CGSize(width: text.frame.width + 1, height: .greatestFiniteMagnitude),
+                options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
+            let lines = (needed.height / font.lineHeight).rounded(), drawn = (text.frame.height / font.lineHeight).rounded()
+            XCTAssertLessThanOrEqual(lines, drawn,
+                                     "\(fixture): \"\(text.label)\" takes \(lines) lines at \(text.frame.width) pt wide and was drawn \(drawn) lines tall (\(text.frame)), cut short")
+        }
+    }
 
     /// What a turn held before the model call can say: where it is, or iCloud's refusal on a
     /// simulator whose iCloud read is refused.
@@ -102,7 +119,12 @@ final class StatusNoticeTests: XCTestCase {
     private static let fixtures: [(String, [String])] = [
         ("busy", ["Reaching iCloud…", "· 2 waiting"]),
         ("error", ["iCloud refused the read. Check you're signed in on this device."]),
-        ("info", ["Another device is claiming primary. What you said is in the log; the reply will appear here."]),
+        ("info", ["Saved. Another device will answer here."]),
+        // A turn left for another primary while the next is on its way: the bar holds one notice,
+        // and the turn in flight is it.
+        ("busy-info", ["Reaching iCloud…", "· 1 waiting"]),
+        // A failure while a turn is on its way is the one notice.
+        ("error-busy", ["iCloud refused the read. Check you're signed in on this device."]),
     ]
 
     private func launch(_ fixture: String, look: String = "{}") -> XCUIApplication {

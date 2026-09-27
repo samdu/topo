@@ -530,7 +530,7 @@ final class Harness {
     static func describe(_ error: any Error) -> String {
         switch error {
         case TurnRunnerError.displaced:
-            "Another device became primary while Claude was answering. What you said is in the log; the reply will appear here."
+            "Another device took over mid-reply. Your words are in the log."
         case let error as GuestBridgeError:
             error.description
         case TokenProviderError.signedOut:
@@ -719,17 +719,15 @@ final class Harness {
         date.formatted(date: .omitted, time: .standard)
     }
 
-    /// What the chat says when a turn went into the log for another device's primary to answer.
+    /// What the chat says when a turn went into the log for another device's primary to answer:
+    /// the words are saved, who answers them, and that the reply comes here. It is a notice in the
+    /// navigation bar, so it is short enough for two lines beside the badge on the narrowest phone.
     static func limbInfo(_ outcome: LeaseOutcome) -> String {
-        describe(outcome) + " What you said is in the log; the reply will appear here."
-    }
-
-    static func describe(_ outcome: LeaseOutcome) -> String {
         switch outcome {
-        case .primary: "This device is primary."
-        case .held(let by): "\(by.holder.rawValue) is primary right now."
-        case .unreachable(let lease): "\(lease.holder.rawValue) took over and can't be reached from here."
-        case .contended: "Another device is claiming primary."
+        case .primary: "Saved. The reply will appear here."
+        case .held(let by): "Saved. \(by.holder.rawValue) will answer here."
+        case .unreachable(let lease): "Saved. \(lease.holder.rawValue) will answer; it's out of reach now."
+        case .contended: "Saved. Another device will answer here."
         }
     }
 }

@@ -20,7 +20,7 @@ final class HarnessTests: XCTestCase {
 
     func testNoLeaseOutcomeAsksThePersonToSayItAgain() {
         for outcome in outcomes {
-            let line = Harness.describe(outcome)
+            let line = Harness.limbInfo(outcome)
             XCTAssertFalse(line.lowercased().contains("try again"), "\(outcome): \(line)")
             XCTAssertTrue(line.hasSuffix("."), "\(outcome): \(line)")
         }
@@ -591,8 +591,8 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(phone.waiting.isEmpty)
         XCTAssertNil(phone.error)
         let info = try XCTUnwrap(phone.info)
-        XCTAssertTrue(info.hasPrefix("hub "), info)
-        XCTAssertTrue(info.contains("What you said is in the log"), info)
+        XCTAssertTrue(info.hasPrefix("Saved. hub will answer"), info)
+        XCTAssertEqual(ChatNotices.Said(phone).notice, .info(info), "the harness's info is not the bar's notice")
 
         // The phone's own pass leaves the answer to the primary.
         await phone.answerPending()

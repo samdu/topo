@@ -560,14 +560,27 @@ struct ChatNotices: View {
         var error: String?
         var info: String?
 
+        /// The one notice the bar shows. The bar holds one, so they take turns: a failure first,
+        /// since it is what needs doing something about; then the turn in flight; then a turn
+        /// that went right another way, which a later turn's progress replaces.
+        var notice: Notice? {
+            if let error { return .trouble(error) }
+            if busy { return .progress(status ?? "Working…", queued: waiting > 1 ? "· \(waiting - 1) waiting" : nil) }
+            if let info { return .info(info) }
+            return nil
+        }
+
         /// Whether there is anything to say.
-        var any: Bool { busy || error != nil || info != nil }
+        var any: Bool { notice != nil }
+    }
 
-        /// Where the turn in flight is: a spinner alone reads as nothing.
-        var progress: String? { busy ? status ?? "Working…" : nil }
-
-        /// The turns behind the one in flight.
-        var queued: String? { busy && waiting > 1 ? "· \(waiting - 1) waiting" : nil }
+    enum Notice: Equatable {
+        /// The last failure, in the look's trouble colour.
+        case trouble(String)
+        /// Where the turn in flight is — a spinner alone reads as nothing — and the turns behind it.
+        case progress(String, queued: String?)
+        /// Something that went right but not the usual way.
+        case info(String)
     }
 
     let notices: Said
@@ -576,7 +589,8 @@ struct ChatNotices: View {
     /// What the UI suite finds the notices by.
     static let identifier = "topo-notices"
 
-    /// The most lines one notice takes: the bar holds two beside the badge.
+    /// The most lines the notice takes: the bar holds two beside the badge, and every notice the
+    /// harness writes fits two at the largest `noticeFont` on the narrowest phone.
     static let lines = 2
 
     /// The largest text setting the notices follow. The bar is a fixed height, so past this the
@@ -584,21 +598,22 @@ struct ChatNotices: View {
     static let largestType = DynamicTypeSize.xLarge
 
     var body: some View {
-        VStack {
-            if let progress = notices.progress {
+        Group {
+            switch notices.notice {
+            case .trouble(let error):
+                Text(error).foregroundStyle(look.transcript.trouble)
+            case .progress(let where_, let queued):
                 HStack {
                     ProgressView()
-                    Text(progress)
-                    if let queued = notices.queued {
+                    Text(where_)
+                    if let queued {
                         Text(queued).foregroundStyle(look.transcript.caption)
                     }
                 }
-            }
-            if let error = notices.error {
-                Text(error).foregroundStyle(look.transcript.trouble)
-            }
-            if let info = notices.info {
+            case .info(let info):
                 Text(info).foregroundStyle(look.transcript.caption)
+            case nil:
+                EmptyView()
             }
         }
         .font(look.transcript.noticeFont)

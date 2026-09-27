@@ -54,18 +54,23 @@ enum DebugRun {
     static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
 
     #if os(iOS)
-    /// `TOPO_DEBUG_NOTICES=<busy|error|info>`: the chat's notices (`ChatNotices`) say one of their
-    /// three things whatever the harness is doing, so a UI suite can hold each in the bar on any
-    /// host: a turn in flight with two behind it, iCloud refusing the read, and a turn left in the
-    /// log for another device's primary. The words are the harness's own. Nil when the variable is
-    /// absent or names none of them.
+    /// `TOPO_DEBUG_NOTICES=<busy|error|info|busy-info|error-busy>`: the chat's notices
+    /// (`ChatNotices`) say one of their three things whatever the harness is doing, so a UI suite
+    /// can hold each in the bar on any host: a turn in flight with two behind it, iCloud refusing
+    /// the read, a turn left in the log for another device's primary, and two of them at once,
+    /// which the bar says one of. The words are the harness's own. Nil when the variable is absent
+    /// or names none of them.
     @MainActor static var notices: ChatNotices.Said? { notices(ProcessInfo.processInfo.environment) }
 
     @MainActor static func notices(_ environment: [String: String]) -> ChatNotices.Said? {
-        switch environment[noticesVariable] {
+        let refused = Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission)))
+        return switch environment[noticesVariable] {
         case "busy": ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 3)
-        case "error": ChatNotices.Said(error: Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission))))
+        case "error": ChatNotices.Said(error: refused)
         case "info": ChatNotices.Said(info: Harness.limbInfo(.contended))
+        case "busy-info":
+            ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 2, info: Harness.limbInfo(.contended))
+        case "error-busy": ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 2, error: refused)
         default: nil
         }
     }
