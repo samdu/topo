@@ -114,7 +114,8 @@ public struct OnePasswordInstaller: Sendable {
 /// `TMPDIR`, so when `op` returns the script ends that pid, its session and its children, then
 /// every other process of its own process group: the watcher that bounds `op` at 60 s, and anything `op`
 /// started without leaving it. A cancelled run does the same from outside, through the file the
-/// script wrote its group id to, and removes the directory kept beside that file. Nothing is
+/// script wrote its group id to, watches the directory kept beside that file for a daemon that
+/// was still starting, and removes it. Nothing is
 /// matched by name.
 public enum OnePasswordRun {
     /// The whole of what the guest runs: `$@` is `op`'s arguments, `$TOPO_OP_GROUP` the file the
@@ -172,12 +173,25 @@ public enum OnePasswordRun {
     """#
 
     /// What a cancelled run runs beside it: the group id the run wrote, the same ending, and the
-    /// run's directory removed.
+    /// run's directory removed. `op` may have forked the daemon's launcher into a session of its
+    /// own before the cancel and not yet made the daemon's directory, so the cancel watches for
+    /// that directory for 5 s and ends what it finds there before removing it.
     static let cancel = #"""
     group="$(cat "$1" 2>/dev/null)" || exit 0
     [ -n "$group" ] || exit 0
     d="$1.d"
-    """# + "\n" + end + "\n" + #"rm -rf "$1" "$d""#
+    """# + "\n" + end + "\n" + #"""
+    i=0
+    while [ $i -lt 50 ]; do
+        if ls -d "$d"/com.agilebits.op.* >/dev/null 2>&1; then
+    """# + "\n" + end + "\n" + #"""
+            break
+        fi
+        sleep 0.1
+        i=$((i + 1))
+    done
+    rm -rf "$1" "$d"
+    """#
 
     public static func run(_ arguments: [String], token: String, command: String = OnePasswordInstaller.command,
                            guest: Guest = .shared) async throws -> Guest.Exit {

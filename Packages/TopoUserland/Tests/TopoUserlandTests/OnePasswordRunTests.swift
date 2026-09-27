@@ -33,14 +33,16 @@ final class OnePasswordRunTests: XCTestCase {
     /// to init, whose child is the daemon; the daemon has a child of its own and writes its pid
     /// under `TMPDIR` a second after `op` has returned, into a file that is there, empty, before.
     /// Every pid is written to `/tmp/<marker>-*` for `survivors` to find.
-    private func daemon(_ marker: String) -> String {
+    /// With `late`, the launcher waits a second before it makes the daemon's directory, and `op`
+    /// does not wait for the daemon.
+    private func daemon(_ marker: String, late: Bool = false) -> String {
         """
-        setsid sh -c 'p="$TMPDIR/com.agilebits.op.0"; mkdir -p "$p"; : > "$p/op-daemon.pid"; \\
-        echo $$ > /tmp/\(marker)-launcher; \\
+        setsid sh -c 'echo $$ > /tmp/\(marker)-launcher; \(late ? "sleep 1; " : "")\\
+        p="$TMPDIR/com.agilebits.op.0"; mkdir -p "$p"; : > "$p/op-daemon.pid"; \\
         sh -c "sleep 300 & echo \\$! > /tmp/\(marker)-child; (sleep 1; echo \\$\\$ > $p/op-daemon.pid) & \\
         echo \\$\\$ > /tmp/\(marker)-daemon; exec sleep 300" & exec sleep 300' \\
         </dev/null >/dev/null 2>&1 & \\
-        while [ ! -s /tmp/\(marker)-daemon ] || [ ! -s /tmp/\(marker)-child ]; do sleep 0.1; done
+        while [ ! -s /tmp/\(marker)-\(late ? "launcher" : "daemon") ] || [ ! -s /tmp/\(marker)-\(late ? "launcher" : "child") ]; do sleep 0.1; done
         """
     }
 
@@ -74,19 +76,20 @@ final class OnePasswordRunTests: XCTestCase {
         _ = try await sh("rm -f /tmp/\(marker)* \(op)")
     }
 
-    /// A run cancelled while `op` is still working ends it, its daemon and the daemon's child, not only its answer, and
-    /// removes its config directory.
+    /// A run cancelled while `op` is still working — the daemon's launcher forked, the daemon not
+    /// yet started — ends `op`, and the daemon and its child once they start, not only its answer,
+    /// and removes its config directory.
     func testACancelledRunEndsOpAndItsDaemon() async throws {
         let marker = "cancel-\(UUID().uuidString.prefix(8))"
         let op = try await standIn("""
-        \(daemon(marker)); echo "$OP_CONFIG_DIR" > /tmp/\(marker).config; \
+        \(daemon(marker, late: true)); echo "$OP_CONFIG_DIR" > /tmp/\(marker).config; \
         echo $$ > /tmp/\(marker)-op; sleep 300
         """)
         let token = token
         let run = Task { try await OnePasswordRun.run(["read", "op://a/b/c"], token: token, command: op) }
         var started = false
         for _ in 0..<100 {
-            if try await sh("[ -e /tmp/\(marker)-op ] && [ -e /tmp/\(marker)-daemon ]").status == 0 { started = true; break }
+            if try await sh("[ -s /tmp/\(marker)-op ] && [ -s /tmp/\(marker)-launcher ]").status == 0 { started = true; break }
             try await Task.sleep(for: .milliseconds(50))
         }
         XCTAssertTrue(started, "the stand-in never started")
@@ -95,8 +98,15 @@ final class OnePasswordRunTests: XCTestCase {
         let ended = try await run.value
         XCTAssertLessThan(ContinuousClock.now - clock, .seconds(20), "a cancelled run went on until its bound")
         XCTAssertNotEqual(ended.status, 0)
+        // The daemon starts a second after its launcher, after the cancel; the cancel has to end it then.
+        var daemonStarted = false
+        for _ in 0..<100 {
+            if try await sh("[ -s /tmp/\(marker)-daemon ]").status == 0 { daemonStarted = true; break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(daemonStarted, "the stand-in's daemon never started")
         var left = "unchecked"
-        for _ in 0..<40 {
+        for _ in 0..<80 {
             left = try await survivors(marker)
             if left.isEmpty { break }
             try await Task.sleep(for: .milliseconds(50))
