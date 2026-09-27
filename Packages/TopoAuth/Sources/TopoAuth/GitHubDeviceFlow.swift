@@ -64,12 +64,17 @@ public struct GitHubDeviceFlow: Sendable {
         case denied
         /// GitHub answered something else; its own words where it gave any.
         case github(String)
+        /// The token GitHub gave does not carry every scope asked for: what it does carry.
+        case scopes(granted: String)
 
         public var description: String {
             switch self {
             case .expired: "The code expired before it was approved. Connect again for a new one."
             case .denied: "GitHub says the request was declined."
             case .github(let words): "GitHub: \(words)"
+            case .scopes(let granted):
+                "GitHub gave a token without everything Topo asks for (repo, read:org, workflow): "
+                    + (granted.isEmpty ? "it carries no scope" : "it carries \(granted)") + ". Connect again."
             }
         }
     }
@@ -127,7 +132,14 @@ public struct GitHubDeviceFlow: Sendable {
             } catch is URLError {
                 continue
             }
-            if let token = json["access_token"] as? String, !token.isEmpty { return token }
+            if let token = json["access_token"] as? String, !token.isEmpty {
+                // What the token may do is what GitHub says it granted, not what was asked for:
+                // one without a scope asked for would say connected and fail at the first use.
+                let granted = (json["scope"] as? String) ?? ""
+                let scopes = Set(granted.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init))
+                guard Set(configuration.scopes).isSubset(of: scopes) else { throw Failure.scopes(granted: granted) }
+                return token
+            }
             switch json["error"] as? String {
             case "authorization_pending": continue
             case "slow_down": interval = (json["interval"] as? Int).map { max($0, interval + 5) } ?? interval + 5

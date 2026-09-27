@@ -9,6 +9,9 @@ import TopoTools
 /// call and kept nowhere, so a disconnect reaches the guest at its next call.
 struct GitHubTool: Tool {
     let store: any ConnectionStore
+    /// A clear refused at a sign-out, a takeover or a demotion: while it stands the token is an
+    /// earlier login's, and nothing is handed out.
+    var leftBehind = ConnectionsLeftBehind()
 
     let name = "github"
     let summary = "whether GitHub is connected, and as whom; git and gh use it by themselves"
@@ -25,6 +28,10 @@ struct GitHubTool: Tool {
         guard arguments.count <= 1 else { return .usage(usage) }
         let form = arguments.first
         guard form == nil || form == "token" || form == "credential" else { return .usage(usage) }
+        if let words = leftBehind.words {
+            return .failed("GitHub is not handed out: at an earlier sign-out \(words). "
+                           + "The app tries again at each launch, and Disconnect in Settings › Connections tries now.\n")
+        }
         let connection: Connection?
         do {
             connection = try await load()

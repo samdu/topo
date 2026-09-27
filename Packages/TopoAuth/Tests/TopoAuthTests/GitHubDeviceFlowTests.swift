@@ -67,7 +67,7 @@ extension Stubbed {
 
         @Test func pollSendsNoSecretAndReturnsTheToken() async throws {
             StubURLProtocol.reset()
-            poll([#"{"access_token":"gho_x","token_type":"bearer","scope":""}"#])
+            poll([#"{"access_token":"gho_x","token_type":"bearer","scope":"repo,read:org,workflow"}"#])
             let token = try await flow().token(for: code())
             #expect(token == "gho_x")
             #expect(StubURLProtocol.lastRequest?.url?.absoluteString == "https://github.com/login/oauth/access_token")
@@ -79,16 +79,30 @@ extension Stubbed {
             #expect(clock.sleeps == [.seconds(5)], "the first poll waits the interval")
         }
 
+        /// A token that does not carry every scope asked for is refused with what it does carry,
+        /// rather than saved as a connection that fails at its first private repository.
+        @Test func aTokenMissingAScopeIsRefused() async throws {
+            for (granted, words) in [("", "it carries no scope"), ("repo,read:org", "it carries repo,read:org")] {
+                StubURLProtocol.reset()
+                poll([#"{"access_token":"gho_x","token_type":"bearer","scope":"\#(granted)"}"#])
+                await #expect(throws: GitHubDeviceFlow.Failure.scopes(granted: granted)) { try await flow().token(for: code()) }
+                #expect(GitHubDeviceFlow.Failure.scopes(granted: granted).description.contains(words))
+            }
+            StubURLProtocol.reset()
+            poll([#"{"access_token":"gho_x"}"#])
+            await #expect(throws: GitHubDeviceFlow.Failure.scopes(granted: "")) { try await flow().token(for: code()) }
+        }
+
         @Test func pendingPollsAgain() async throws {
             StubURLProtocol.reset()
-            poll([#"{"error":"authorization_pending"}"#, #"{"error":"authorization_pending"}"#, #"{"access_token":"gho_y"}"#])
+            poll([#"{"error":"authorization_pending"}"#, #"{"error":"authorization_pending"}"#, #"{"access_token":"gho_y","scope":"repo,read:org,workflow"}"#])
             #expect(try await flow().token(for: code()) == "gho_y")
             #expect(clock.sleeps == [.seconds(5), .seconds(5), .seconds(5)])
         }
 
         @Test func slowDownAddsFiveSeconds() async throws {
             StubURLProtocol.reset()
-            poll([#"{"error":"slow_down"}"#, #"{"error":"authorization_pending"}"#, #"{"error":"slow_down"}"#, #"{"access_token":"gho_z"}"#])
+            poll([#"{"error":"slow_down"}"#, #"{"error":"authorization_pending"}"#, #"{"error":"slow_down"}"#, #"{"access_token":"gho_z","scope":"repo,read:org,workflow"}"#])
             #expect(try await flow().token(for: code()) == "gho_z")
             #expect(clock.sleeps == [.seconds(5), .seconds(10), .seconds(10), .seconds(15)])
         }
@@ -96,7 +110,7 @@ extension Stubbed {
         /// GitHub's own interval on a `slow_down` wins when it is longer than five seconds more.
         @Test func slowDownTakesGitHubsLongerInterval() async throws {
             StubURLProtocol.reset()
-            poll([#"{"error":"slow_down","interval":20}"#, #"{"error":"slow_down","interval":6}"#, #"{"access_token":"gho_w"}"#])
+            poll([#"{"error":"slow_down","interval":20}"#, #"{"error":"slow_down","interval":6}"#, #"{"access_token":"gho_w","scope":"repo,read:org,workflow"}"#])
             #expect(try await flow().token(for: code()) == "gho_w")
             #expect(clock.sleeps == [.seconds(5), .seconds(20), .seconds(25)])
         }
@@ -106,7 +120,7 @@ extension Stubbed {
             StubURLProtocol.reset()
             let count = Counter()
             StubURLProtocol.requestResponder = { _, _ in
-                count.next() == 0 ? (-1, "") : (200, #"{"access_token":"gho_n"}"#)
+                count.next() == 0 ? (-1, "") : (200, #"{"access_token":"gho_n","scope":"repo,read:org,workflow"}"#)
             }
             #expect(try await flow().token(for: code()) == "gho_n")
             #expect(clock.sleeps == [.seconds(5), .seconds(5)])

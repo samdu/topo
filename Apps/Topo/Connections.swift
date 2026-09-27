@@ -46,17 +46,24 @@ final class Connections {
     /// The in-app browser: the system's web-authentication sheet (`WebAuth`), which is Safari,
     /// so Password AutoFill fills a login there and a GitHub session already in Safari is used.
     private let browser: Browser
+    /// A `forget()` the keychain refused, kept across launches, so no later login is handed what
+    /// an earlier one connected.
+    let leftBehind: ConnectionsLeftBehind
     private var generation = 0
     private var task: Task<Void, Never>?
 
     init(store: ConnectionStore = KeychainConnectionStore(), flow: GitHubConnecting = GitHubDeviceFlow(),
          copy: @escaping @MainActor (String) -> Void = { UIPasteboard.general.string = $0 },
-         browser: Browser = WebAuthBrowser()) {
+         browser: Browser = WebAuthBrowser(), leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind()) {
         self.store = store
         self.flow = flow
         self.copy = copy
         self.browser = browser
+        self.leftBehind = leftBehind
         github = Self.standing(store)
+        // A clear refused before, at a sign-out, a takeover or a demotion: tried again at each
+        // launch, since until it succeeds the tokens there are a login's that is gone.
+        if leftBehind.words != nil { forget() }
     }
 
     /// What the keychain holds for GitHub: connected, not, or unreadable — which is said, never
@@ -72,6 +79,11 @@ final class Connections {
     /// Starts connecting GitHub: a code from GitHub, copied and shown, and GitHub's page for it
     /// opened in the in-app browser; then the poll, the login and the save.
     func connectGitHub() {
+        if leftBehind.words != nil { forget() }
+        if let words = leftBehind.words {
+            github = .failed(Self.sentence(words))
+            return
+        }
         let generation = supersede()
         github = .starting
         task = Task { [flow, store] in
@@ -113,8 +125,9 @@ final class Connections {
         github = Self.standing(store)
     }
 
-    /// Forgets the GitHub token on this phone.
+    /// Forgets the GitHub token on this phone; with a clear refused before, every connection.
     func disconnectGitHub() {
+        if leftBehind.words != nil { return forget() }
         supersede()
         do {
             try store.clear(.github)
@@ -134,11 +147,17 @@ final class Connections {
             try store.clearAll()
             github = .disconnected
             unforgotten = nil
+            leftBehind.words = nil
         } catch {
             let words = "the GitHub token could not be removed from this phone's keychain: \(error)"
-            github = .failed(words.prefix(1).uppercased() + words.dropFirst())
+            github = .failed(Self.sentence(words))
             unforgotten = words
+            leftBehind.words = words
         }
+    }
+
+    private static func sentence(_ words: String) -> String {
+        words.prefix(1).uppercased() + words.dropFirst()
     }
 
     /// What the last `forget()` could not remove, in words the sign-in screen can say after a
@@ -158,6 +177,23 @@ final class Connections {
         if let failure = error as? GitHubDeviceFlow.Failure { return failure.description }
         if let url = error as? URLError { return "GitHub could not be reached: \(url.localizedDescription)" }
         return "\(error)"
+    }
+}
+
+/// A `forget()` the keychain refused: its words, kept in the app's defaults until a clear of every
+/// connection succeeds, so the tools hand out nothing a login that is gone connected — whoever
+/// signs in next — and each launch tries the clear again.
+final class ConnectionsLeftBehind: @unchecked Sendable {
+    private let defaults: UserDefaults
+    private let key = "zone.hexagon.topo.connections.left-behind"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    var words: String? {
+        get { defaults.string(forKey: key) }
+        set { defaults.set(newValue, forKey: key) }
     }
 }
 
