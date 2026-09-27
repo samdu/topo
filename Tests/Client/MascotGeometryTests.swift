@@ -1083,6 +1083,68 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertNil(pinned.visited)
     }
 
+    /// A reply with two blocks across the column and prose between them, as the phone draws one:
+    /// a line over the first block, two short lines between them that leave a gap on the right
+    /// exactly his height and clearance tall, and the reply running on under the second block to
+    /// the glass.
+    static let firstBlock = CGRect(x: 16, y: 50, width: 370, height: 100)
+    static let secondBlock = CGRect(x: 16, y: 255, width: 370, height: 120)
+    static let twoBlockReply = [CGRect(x: 16, y: 20, width: 284, height: 20), firstBlock,
+                                CGRect(x: 16, y: 160, width: 134, height: 20),
+                                CGRect(x: 16, y: 184, width: 124, height: 20), secondBlock,
+                                CGRect(x: 16, y: 385, width: 370, height: 155)]
+
+    /// Beside each block of a reply he stands level with that block, whatever gap the prose
+    /// between them leaves: a gap that clears but is level with neither is not beside either,
+    /// and the one gap nearest both would have him stand in the same place for each.
+    func testBesideEachOfTwoBlocksHeStandsLevelWithThatBlock() throws {
+        let field = Self.field(Self.twoBlockReply)
+        var chosen: [CGRect] = []
+        for (name, block) in [("first", Self.firstBlock), ("second", Self.secondBlock)] {
+            let frame = try XCTUnwrap(beside(block, in: field).choice, "\(name): nowhere to stand").frame
+            XCTAssertTrue(frame.maxY > block.minY && frame.minY < block.maxY,
+                          "\(name): \(frame) is not level with \(block)")
+            XCTAssertGreaterThanOrEqual(frame.minX, block.midX, "\(name): \(frame) reaches the block's own side")
+            chosen.append(frame)
+        }
+        XCTAssertNotEqual(chosen[0], chosen[1], "the same place beside both blocks")
+    }
+
+    /// Through the roam, the voice reaching the first block of a reply and then the second: he
+    /// goes beside the first, then on to the second, one glide each.
+    func testTheRoamGoesOnFromTheFirstBlockToTheSecond() throws {
+        let settings = MascotRoam.Settings(Look.Mascot(), reduceMotion: false)
+        var roam = MascotRoam(settings)
+        var time = 0.0
+        func run(_ field: MascotField) {
+            roam.observe(field, at: time)
+            let until = time + 30
+            while roam.needsTime, time < until {
+                time += 1.0 / 30
+                roam.advance(to: time)
+            }
+        }
+        var field = Self.field(Self.twoBlockReply)
+        run(field)
+
+        field.beside = MascotField.Beside(frame: Self.firstBlock, serial: 1)
+        run(field)
+        let first = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(roam.visited, 1)
+        XCTAssertTrue(first.maxY > Self.firstBlock.minY && first.minY < Self.firstBlock.maxY,
+                      "\(first) is not level with the first block")
+        let moves = roam.moves
+
+        field.beside = MascotField.Beside(frame: Self.secondBlock, serial: 2)
+        run(field)
+        let second = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(roam.visited, 2)
+        XCTAssertTrue(second.maxY > Self.secondBlock.minY && second.minY < Self.secondBlock.maxY,
+                      "\(second) is not level with the second block: he stayed at \(first)")
+        XCTAssertEqual(roam.moves, moves + 1, "not one glide to the second block")
+        XCTAssertEqual(roam.roost.frame, second, "the glide did not end where it was going")
+    }
+
     // MARK: Facing
 
     /// The facing is which half of the transcript his centre is in: right of the midline faces
