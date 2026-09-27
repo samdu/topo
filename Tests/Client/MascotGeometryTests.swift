@@ -249,6 +249,32 @@ final class MascotGeometryTests: XCTestCase {
         }
     }
 
+    /// Where a decision found no place that clears, `frame` is the one it chose and covers words
+    /// — by area, not only within his clearance of them — and no less than the least covered
+    /// place weighed, nor than any admitted place at a whole point of the room.
+    static func assertTrappedAtTheLeastCost(_ decision: MascotRoost.Decision, frame: CGRect, _ label: String,
+                                            file: StaticString = #filePath, line: UInt = #line) throws {
+        let field = decision.field
+        let choice = try XCTUnwrap(decision.choice, "\(label): he stands nowhere", file: file, line: line)
+        XCTAssertFalse(choice.clears, "\(label): a place cleared the words", file: file, line: line)
+        XCTAssertEqual(frame, choice.frame, "\(label): he stands other than where the decision chose", file: file, line: line)
+        let covered = area(over: field.words, of: frame)
+        XCTAssertGreaterThan(covered, 0, "\(label): \(frame) is beside the words and over none", file: file, line: line)
+        let weighed = try XCTUnwrap(decision.candidates.map(\.cost).min(), label, file: file, line: line)
+        XCTAssertLessThanOrEqual(covered, weighed + 0.001, "\(label): a place \(weighed) covered was weighed", file: file, line: line)
+        let room = field.room(decision.reach)
+        let clearance = decision.relaxed ? 0 : decision.clearance
+        var least = CGFloat.infinity
+        for y in stride(from: room.minY.rounded(.up), through: room.maxY - decision.size.height, by: 1) {
+            for x in stride(from: room.minX.rounded(.up), through: room.maxX - decision.size.width, by: 1) {
+                let place = CGRect(origin: CGPoint(x: x, y: y), size: decision.size)
+                guard MascotRoost.admits(field, frame: place, clearance: clearance, reach: decision.reach) else { continue }
+                least = min(least, area(over: field.words, of: place))
+            }
+        }
+        XCTAssertLessThanOrEqual(covered, least + 0.001, "\(label): a place \(least) covered was missed", file: file, line: line)
+    }
+
     /// The area of `frame` over `words`.
     static func area(over words: [CGRect], of frame: CGRect) -> CGFloat {
         words.reduce(0) { sum, word in
@@ -699,7 +725,7 @@ final class MascotGeometryTests: XCTestCase {
                 let expected = decision.roost
                 XCTAssertEqual(roam.roost, expected, label)
                 if name == "full", mascot == Look.Mascot() {
-                    XCTAssertEqual(decision.choice?.clears, false, "\(label): the reply margin did not trap him")
+                    try Self.assertTrappedAtTheLeastCost(decision, frame: canvas.spriteFrame, label)
                 }
                 XCTAssertEqual(canvas.showing, expected != .none,
                                "\(label): drawn \(canvas.showing), where a roost \(expected.name == "none" ? "holds nothing" : "holds him")")
@@ -806,8 +832,8 @@ final class MascotGeometryTests: XCTestCase {
     /// column's padding, 86 points on the 393-point phone, too narrow for his picture at a scale
     /// of 1 with its clearance and his reach, so a reply whose lines run to the column's edge
     /// traps him, and the ends of short lines add to it. `PreviewTurns.continuity` scrolled to its
-    /// end, as the phone Sam's screenshot came from rests, has him trapped: he stands on the right
-    /// beside the reply, over the least of its words. `PreviewTurns.ragged`, whose last reply ends
+    /// end, as the phone Sam's screenshot came from rests, has him trapped: once any glide has ended he is
+    /// drawn on the right beside the reply, over the least of its words. `PreviewTurns.ragged`, whose last reply ends
     /// in two short paragraphs, frees him beside them, clear of every line.
     func testTheMarginBesideAReplyTrapsHimUnlessItsLinesEndShort() throws {
         let phone = CGSize(width: 393, height: 852)
@@ -826,15 +852,24 @@ final class MascotGeometryTests: XCTestCase {
             XCTAssertLessThanOrEqual(lines.map(\.maxX).max() ?? 0, edge + 0.5, "\(name): a line ran into the margin")
             XCTAssertGreaterThan(size.width + MascotSprite.reach(scale: 1).right + clearance, field.visible.maxX - edge,
                                  "\(name): the margin alone holds him")
-            let spot = try XCTUnwrap(chat.canvas?.roam?.roost.frame, "\(name): he stands nowhere")
-            XCTAssertEqual(chat.canvas?.roam?.roost.name, "gap", name)
-            XCTAssertTrue(chat.canvas?.showing ?? false, name)
+            // The scroll may have sent him gliding: let him arrive, then measure where he is drawn.
+            let canvas = try XCTUnwrap(chat.canvas, name)
+            var frames = 0
+            while canvas.roam?.needsTime == true, frames < 900 { canvas.step(1.0 / 30); frames += 1 }
+            XCTAssertEqual(canvas.roam?.needsTime, false, "\(name): still moving after 30 seconds")
+            let roost = try XCTUnwrap(canvas.roam?.roost.frame, "\(name): he stands nowhere")
+            let spot = canvas.spriteFrame
+            XCTAssertEqual(spot, roost, "\(name): drawn at \(spot), not where he stands, \(roost)")
+            XCTAssertEqual(canvas.roam?.roost.name, "gap", name)
+            XCTAssertTrue(canvas.showing, name)
             XCTAssertGreaterThan(spot.midX, field.visible.midX, "\(name): not on the right: \(spot)")
             let alongside = lines.filter { $0.minY < spot.maxY + clearance && $0.maxY > spot.minY - clearance }
             XCTAssertFalse(alongside.isEmpty, "\(name): not beside the reply: \(spot)")
-            let clears = try XCTUnwrap(chat.canvas?.roam?.decision?.choice, "\(name): no choice").clears
-            XCTAssertEqual(clears, name == "ragged", "\(name): \(spot)")
-            if name == "ragged" {
+            let decision = try XCTUnwrap(canvas.roam?.decision, "\(name): no decision")
+            if name == "continuity" {
+                try Self.assertTrappedAtTheLeastCost(decision, frame: spot, name)
+            } else {
+                XCTAssertEqual(decision.choice?.clears, true, "\(name): \(spot)")
                 for line in alongside {
                     XCTAssertGreaterThanOrEqual(spot.minX, line.maxX + clearance - 0.001, "\(name): over \(line): \(spot)")
                 }
