@@ -41,6 +41,9 @@ struct TopoApp: App {
         _mascot = State(initialValue: mascot)
         let memory = Memory.standard()
         _memory = State(initialValue: memory)
+        // The guest's mount of the memory follows the same home the mirror runs against.
+        GuestResident.shared.memory = memory
+        memory.writer = GuestResident.shared.turns
         // The phone's own tools, which the guest's `topo` reaches through the tool service.
         GuestResident.shared.toolTable = [
             LookTool(vault: {

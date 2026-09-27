@@ -46,7 +46,7 @@ enum GuestBridgeError: Error, Equatable, CustomStringConvertible {
     var description: String {
         switch self {
         case .notReady(let why): "Topo is not ready to answer yet: \(why)"
-        case .unresolved: "Topo was cut off before answering that. It is not asked again by itself; ask again when you want the answer."
+        case .unresolved: "Topo was cut off before answering. Ask again when you want the answer."
         case .failed(let why): "The reply failed: \(why)"
         }
     }

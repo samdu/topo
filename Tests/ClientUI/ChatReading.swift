@@ -116,10 +116,11 @@ enum ChatReading {
 
     /// Launches the chat over a fixture transcript with the ear and the voice held loading, the
     /// override (`TOPO_DEBUG_TUNING`) set to `tuning` — empty removes it, nil leaves what the last
-    /// launch kept — and the look `look` in place of the vault's.
+    /// launch kept — the look `look` in place of the vault's, and anything in `environment` besides.
     static func launch(transcript: String, tuning: String?, look: String = "{}",
-                       softwareKeyboard: Bool = false) -> XCUIApplication {
+                       softwareKeyboard: Bool = false, environment: [String: String] = [:]) -> XCUIApplication {
         let app = XCUIApplication()
+        app.launchEnvironment.merge(environment) { _, given in given }
         if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
         app.launchEnvironment["TOPO_DEBUG_KEEP_SPOKEN"] = "1"
