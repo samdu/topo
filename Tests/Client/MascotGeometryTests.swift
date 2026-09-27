@@ -644,7 +644,8 @@ final class MascotGeometryTests: XCTestCase {
 
     /// `atEnd` scrolls the transcript to its end, where the chat rests; a hosted window does not
     /// run the chat's own scroll to the newest turn.
-    private func stage(_ turns: [Turn], mascot: Look.Mascot?, size: CGSize? = nil, atEnd: Bool = false) throws -> Stage {
+    private func stage(_ turns: [Turn], mascot: Look.Mascot?, size: CGSize? = nil, atEnd: Bool = false,
+                       until ready: ((MascotField) -> Bool)? = nil) throws -> Stage {
         let screen = size ?? screen
         var look = Look()
         look.composer.surface = .flat
@@ -669,6 +670,16 @@ final class MascotGeometryTests: XCTestCase {
             window.layoutIfNeeded()
         }
         let canvas = find(MascotCanvas.self, in: window)
+        // The field the caller waits for, up to five seconds: a text's lines are reported after it
+        // is drawn (`MascotLines`), so on a loaded runner a field read at a fixed time can still
+        // hold a paragraph's whole frame where its lines will be.
+        if let ready, let canvas {
+            let until = Date().addingTimeInterval(5)
+            while Date() < until, !(canvas.roam?.field.map(ready) ?? false) {
+                RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+                window.layoutIfNeeded()
+            }
+        }
         // The roam settled and a frame of him drawn, on the canvas's own clock.
         if let canvas { for _ in 0..<60 { canvas.step(1.0 / 30) } }
         CATransaction.flush()
@@ -917,11 +928,18 @@ final class MascotGeometryTests: XCTestCase {
     func testAMarkdownReplyReportsItsBlocks() throws {
         let phone = CGSize(width: 393, height: 852)
         let look = Look()
-        let chat = try stage(PreviewTurns.markdown, mascot: Look.Mascot(), size: phone)
+        func reply(_ field: MascotField) -> [CGRect] {
+            field.covering.filter { $0.minX < 100 && $0 != field.pane && $0 != field.well }
+        }
+        // Read once the reply has reported what it holds with every text's lines read: 18 rects —
+        // the heading's line, the paragraph's four, each list item's marker and words, the quote's
+        // bar and its two lines, the fence's enclosure, and the turn's time.
+        let chat = try stage(PreviewTurns.markdown, mascot: Look.Mascot(), size: phone,
+                             until: { reply($0).count >= 18 })
         defer { chat.window.isHidden = true }
         let field = try XCTUnwrap(chat.canvas?.roam?.field)
         let edge = field.visible.maxX - look.transcript.horizontalPadding - look.transcript.replyTrailingInset
-        let reply = field.covering.filter { $0.minX < 100 && $0 != field.pane && $0 != field.well }
+        let reply = reply(field)
         let fence = reply.filter { $0.height > 30 && $0.width > edge - 16 - 2 }
         XCTAssertEqual(fence.count, 1, "the fence's enclosure was not reported whole: \(reply)")
         let lines = reply.filter { $0.height < 30 }
