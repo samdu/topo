@@ -375,8 +375,14 @@ final class Speaker {
 
     private var microphoneBusy: Bool { opening || microphoneOpen() }
 
-    /// A press is about to open the microphone.
+    /// A press is about to open the microphone. What is being read stops, so the microphone does
+    /// not hear it, and every wait goes, as at any press; a reply waiting for the microphone waits
+    /// on, since opening it again is no reason to lose it — it is read when this one closes.
     func microphoneOpening() {
+        let waiting = deferred
+        deferred = nil
+        stop()
+        deferred = waiting
         opening = true
     }
 
