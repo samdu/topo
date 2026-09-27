@@ -183,6 +183,24 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(wrong.notes.count, 1, "\(wrong.notes)")
     }
 
+    /// A code block's pulse breathes from a third of a second to five a breath: both ends taken,
+    /// and past either refused alone, leaving the pulse's width as the document said.
+    func testACodeBlockPulsesBreathIsReadInItsOwnRange() {
+        for cycle in [0.3, 5] {
+            let reading = LookDocument.read(#"{"markdown": {"codePulse": {"cycle": \#(cycle)}}}"#)
+            XCTAssertEqual(reading.notes, [], "\(cycle)")
+            XCTAssertEqual(reading.look.markdown.codePulse.cycle, cycle)
+            XCTAssertTrue(reading.fields.contains("markdown.codePulse.cycle"),
+                          "\(cycle) was taken and not named among the fields taken: \(reading.fields)")
+        }
+        for cycle in [0.1, 0.29, 5.1, 0, -1] {
+            let reading = LookDocument.read(#"{"markdown": {"codePulse": {"cycle": \#(cycle), "width": 4}}}"#)
+            XCTAssertEqual(reading.look.markdown.codePulse.cycle, Look.Markdown.Pulse().cycle, "\(cycle) was taken")
+            XCTAssertEqual(reading.look.markdown.codePulse.width, 4, "\(cycle) took the width down with it")
+            XCTAssertEqual(reading.notes.count, 1, "\(cycle): \(reading.notes)")
+        }
+    }
+
     /// Where Topo sits is one of three names, and anything else is refused with the names listed,
     /// leaving every other field of his as the document said.
     func testThePlacementIsOneOfThreeNames() {

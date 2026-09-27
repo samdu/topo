@@ -184,6 +184,37 @@ struct Look: Equatable, Sendable {
         var marker: Color = Theme.textMuted
         /// A rule's thickness.
         var ruleWidth: CGFloat
+        /// A code block's outline breathing as the voice reaches it.
+        var codePulse = Pulse()
+
+        /// What a code block's outline does when the voice reaches it ("See code block N."): it
+        /// breathes — from nothing to `width` points at `opacity` in `accent` and back to nothing,
+        /// `cycle` seconds a breath, `cycles` breaths — eased the whole way (`level`), so it is a
+        /// pulse and never a flash.
+        struct Pulse: Equatable, Sendable {
+            /// The outline's colour: the mind's own, which is Topo's voice.
+            var accent: Color = Theme.primary
+            /// The outline's width at the peak of a breath.
+            var width: CGFloat = 2.5
+            /// The outline's opacity at the peak of a breath.
+            var opacity: Double = 0.8
+            /// One breath, in seconds: slow enough to read as breathing and not as a flash.
+            var cycle: Double = 1.5
+
+            /// Two breaths: the spec's, and not the document's to change.
+            static let cycles = 2
+
+            /// The whole pulse, in seconds.
+            var duration: Double { cycle * Double(Self.cycles) }
+
+            /// How far into a breath the outline is `time` seconds into the pulse: 0 at rest — before
+            /// it, at its end and after — and 1 at the peak of each breath, on a raised cosine, so it
+            /// leaves nothing and comes back to nothing at no speed.
+            func level(at time: Double) -> Double {
+                guard cycle > 0, time.isFinite, time > 0, time < duration else { return 0 }
+                return (1 - cos(2 * .pi * time / cycle)) / 2
+            }
+        }
 
         enum CodeOverflow: String, Equatable, Sendable, CaseIterable {
             case scroll, wrap

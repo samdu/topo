@@ -41,9 +41,9 @@ final class MarkdownRenderTests: XCTestCase {
         return look
     }
 
-    private func draw(_ turn: Turn, _ look: Look) throws -> Pixels {
+    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil) throws -> Pixels {
         let row = VStack(spacing: 0) {
-            TurnRow(turn: turn)
+            TurnRow(turn: turn, cue: cue)
                 .padding(.horizontal, look.transcript.horizontalPadding)
             Spacer(minLength: 0)
         }
@@ -97,6 +97,330 @@ final class MarkdownRenderTests: XCTestCase {
                                      "\(screen): block \(index + 1)'s caption reads more like \(2 - index) (\(own) vs \(other))")
             }
         }
+    }
+
+    /// The pulse's ink, a colour nothing else on the stage is.
+    private let pulseInk = UIColor(red: 0.5, green: 0, blue: 1, alpha: 1)
+
+    /// The outline a reached code block breathes with, in its two states: at rest it draws
+    /// nothing — before the pulse, between its two breaths and at its end — and at the peak of
+    /// each breath it rings the block's enclosure in the look's accent, inside the enclosure's own
+    /// edge, at the look's width. A block the voice has not reached draws nothing either.
+    func testAReachedBlocksOutlineBreathesInTheAccentAndRestsAtNothing() throws {
+        var look = look(.phone)
+        look.markdown.codePulse.accent = Color(pulseInk)
+        // Opaque, so the peak is the ink itself rather than a blend of it a match cannot name.
+        look.markdown.codePulse.opacity = 1
+        look.markdown.codePulse.width = 3
+        let pulse = look.markdown.codePulse
+        let reply = turn(.assistant, "Here:\n\n```\nlet x = 1\n```")
+        func at(_ time: Double?, number: Int = 1) throws -> Pixels {
+            try draw(reply, look, cue: time.map { CodeBlockCue(reply: reply.ref, number: number, serial: 1, still: $0) })
+        }
+        let unreached = try at(nil)
+        let enclosure = try XCTUnwrap(unreached.columns(outline))
+        let enclosureRows = try XCTUnwrap(unreached.rows(outline))
+        XCTAssertEqual(unreached.count(pulseInk), 0, "an unreached block pulses")
+        for rest in [0, pulse.cycle, pulse.duration, pulse.duration + 1] {
+            XCTAssertEqual(try at(rest).count(pulseInk), 0, "at \(rest)s the outline is drawn")
+        }
+        XCTAssertEqual(try at(pulse.cycle / 2, number: 2).count(pulseInk), 0, "another block's cue pulsed this one")
+        for peak in [pulse.cycle / 2, pulse.cycle * 1.5] {
+            let drawn = try at(peak)
+            let columns = try XCTUnwrap(drawn.columns(pulseInk), "nothing drawn at the peak, \(peak)s")
+            let rows = try XCTUnwrap(drawn.rows(pulseInk))
+            // Round the enclosure and inside it, to a pixel of antialiasing.
+            XCTAssertEqual(columns.lowerBound, enclosure.lowerBound, accuracy: 2)
+            XCTAssertEqual(columns.upperBound, enclosure.upperBound, accuracy: 2)
+            XCTAssertEqual(rows.lowerBound, enclosureRows.lowerBound, accuracy: 2)
+            XCTAssertEqual(rows.upperBound, enclosureRows.upperBound, accuracy: 2)
+            // A ring, the width of the look's: its left edge is that many points of the ink.
+            let middle = (rows.lowerBound + rows.upperBound) / 2
+            let thick = drawn.run(pulseInk, row: middle, from: columns.lowerBound)
+            XCTAssertEqual(CGFloat(thick) / drawn.scale, pulse.width, accuracy: 1, "the ring is \(thick) pixels at the peak")
+            XCTAssertLessThan(drawn.count(pulseInk), (columns.count * rows.count) / 3, "the block is filled, not outlined")
+        }
+    }
+
+    /// What the pulse ink blends to over anything at a part of its opacity: far bluer than it is
+    /// green or red, which neither the page, the enclosure, its outline nor the code's ink is.
+    private func pulsing(_ pixels: Pixels, rows: ClosedRange<Int>) -> Int {
+        var n = 0
+        for y in rows where y >= 0 && y < pixels.height {
+            for x in 0..<pixels.width {
+                let i = (y * pixels.width + x) * 4
+                let r = Int(pixels.bytes[i]), g = Int(pixels.bytes[i + 1]), b = Int(pixels.bytes[i + 2])
+                if b - g > 60 && b - r > 30 { n += 1 }
+            }
+        }
+        return n
+    }
+
+    /// The cue a live transcript is handed, which the test moves on as the speaker does.
+    @Observable fileprivate final class LiveCue {
+        var cue: CodeBlockCue?
+        /// Whether the row is made at all: a lazy stack's row, before it is scrolled to.
+        var made = true
+    }
+
+    fileprivate struct LiveRow: View {
+        let turn: Turn
+        let live: LiveCue
+        let size: CGSize
+        let padding: CGFloat
+        var body: some View {
+            VStack(spacing: 0) {
+                if live.made {
+                    TurnRow(turn: turn, cue: live.cue)
+                        .padding(.horizontal, padding)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(width: size.width, height: size.height, alignment: .top)
+            .background(Color.white)
+        }
+    }
+
+    fileprivate struct LiveTranscript: View {
+        let turns: [Turn]
+        let live: LiveCue
+        var body: some View { TranscriptView(turns: turns, cue: live.cue) }
+    }
+
+    /// Played live, as the phone plays it: the voice reaching block 1 pulses block 1, and then
+    /// moving on to block 2 pulses block 2 alone — block 1's outline stays at rest, though its
+    /// cue has just gone.
+    func testOnlyTheBlockTheCueNamesPulses() throws {
+        var look = look(.phone)
+        look.markdown.codePulse.accent = Color(pulseInk)
+        look.markdown.codePulse.opacity = 1
+        look.markdown.codePulse.width = 3
+        look.markdown.codePulse.cycle = 0.6
+        let pulse = look.markdown.codePulse
+        let reply = turn(.assistant, "One:\n\n```\nlet x = 1\n```\n\nTwo:\n\n```\nlet y = 2\n```")
+        // Where each block's ring is, from a still of each at its peak.
+        func ring(_ number: Int) throws -> ClosedRange<Int> {
+            let still = try draw(reply, look, cue: CodeBlockCue(reply: reply.ref, number: number, serial: 1,
+                                                               still: pulse.cycle / 2))
+            let rows = try XCTUnwrap(still.rows(pulseInk), "block \(number) drew no ring at its peak")
+            return (rows.lowerBound - 2)...(rows.upperBound + 2)
+        }
+        let first = try ring(1), second = try ring(2)
+        XCTAssertLessThan(first.upperBound, second.lowerBound, "the fixture's blocks overlap")
+        XCTAssertEqual(pulsing(try draw(reply, look), rows: 0...Int(self.stage.height * 4)), 0,
+                       "the page pulses with no cue")
+
+        let live = LiveCue()
+        let stage = try LiveStage(LiveRow(turn: reply, live: live, size: self.stage,
+                                          padding: look.transcript.horizontalPadding), look: look, size: self.stage)
+        defer { stage.close() }
+        func wait(_ seconds: TimeInterval) { stage.wait(seconds) }
+        func snapshot() throws -> Pixels { try Pixels(stage.image()) }
+        wait(0.3)
+        live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
+        // Into block 1's first breath, near its peak: block 1 pulses, block 2 does not.
+        wait(pulse.cycle * 0.4)
+        let reached = try snapshot()
+        XCTAssertGreaterThan(pulsing(reached, rows: first), 20, "block 1 did not pulse on its cue")
+        XCTAssertEqual(pulsing(reached, rows: second), 0, "block 2 pulsed on block 1's cue")
+        wait(pulse.duration)
+        XCTAssertEqual(pulsing(try snapshot(), rows: first), 0, "block 1 still pulsing after its pulse")
+
+        live.cue = CodeBlockCue(reply: reply.ref, number: 2, serial: 2)
+        // Into block 2's first breath, near its peak.
+        wait(pulse.cycle * 0.4)
+        let drawn = try snapshot()
+        XCTAssertGreaterThan(pulsing(drawn, rows: second), 20, "block 2 did not pulse on its cue")
+        XCTAssertEqual(pulsing(drawn, rows: first), 0, "block 1 pulsed on block 2's cue")
+    }
+
+    /// A view in a real window with its clock running, as the phone draws it: what a still
+    /// cannot show, an animation under way and a lazy row made as it is scrolled to.
+    @MainActor private final class LiveStage {
+        let window: UIWindow
+        let size: CGSize
+
+        init(_ view: some View, look: Look, size: CGSize) throws {
+            self.size = size
+            let host = UIHostingController(rootView: view.environment(\.look, look))
+            // Laid out from the window's top edge as the stills are, not under the status bar.
+            host.safeAreaRegions = []
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            window = UIWindow(windowScene: scene)
+            window.frame = CGRect(origin: .zero, size: scene.screen.bounds.size)
+            // The view on a stage at the window's top left, as `LookStage` draws the stills.
+            let holder = UIViewController()
+            holder.addChild(host)
+            holder.view.addSubview(host.view)
+            host.view.frame = CGRect(origin: .zero, size: size)
+            host.didMove(toParent: holder)
+            window.rootViewController = holder
+            window.isHidden = false
+            window.makeKeyAndVisible()
+        }
+
+        func wait(_ seconds: TimeInterval) {
+            let until = Date().addingTimeInterval(seconds)
+            while Date() < until { RunLoop.current.run(mode: .default, before: min(until, Date().addingTimeInterval(0.01))) }
+        }
+
+        /// Turns the clock a tenth of a second at a time until `done`, asked after each, says so,
+        /// for up to `seconds`; what was not seen by then is the caller's to fail on.
+        func poll(for seconds: TimeInterval = 10, _ done: () throws -> Bool) rethrows {
+            let until = Date().addingTimeInterval(seconds)
+            while Date() < until {
+                wait(0.1)
+                if try done() { return }
+            }
+        }
+
+        func image() -> UIImage {
+            UIGraphicsImageRenderer(size: size).image { _ in
+                window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)
+            }
+        }
+
+        func close() {
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+    }
+
+    /// A block the voice reaches in a reply the lazy transcript has not made yet — far above,
+    /// scrolled away from — is scrolled to and pulses: its row is made with the cue already set.
+    func testABlockInARowNotYetMadeIsScrolledToAndPulses() throws {
+        let reached = try reach("Here:\n\n```\nlet x = 1\n```", first: true)
+        XCTAssertGreaterThan(reached.shown, 20, "the block was not scrolled into view")
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+    }
+
+    /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
+    /// shows its top, and the block is scrolled to once the row has made it.
+    func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
+        let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
+        let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
+        XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+    }
+
+    /// A block already whole on the screen, cued, pulses where it is: the transcript does not
+    /// move by a point.
+    func testABlockAlreadyOnTheScreenIsNotScrolled() throws {
+        let reached = try reach("Here:\n\n```\nlet x = 1\n```", first: false)
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block did not pulse")
+        XCTAssertEqual(reached.moved, 0, "the transcript scrolled for a block already on the screen")
+    }
+
+    /// A live transcript of 40 turns with `text` as its first reply (off the screen, its row not
+    /// made, the transcript opening at its end) or its last (on the screen), and that reply's
+    /// first block cued: the most of the block's enclosure and of the pulse any picture showed
+    /// while the pulse ran, and how far the transcript scrolled.
+    private func reach(_ text: String, first: Bool) throws -> (shown: Int, pulsed: Int, moved: CGFloat) {
+        var look = look(.phone)
+        look.markdown.codePulse.accent = Color(pulseInk)
+        look.markdown.codePulse.opacity = 1
+        look.markdown.codePulse.width = 3
+        // As slow as a breath can be, so a picture taken of a transcript this long — a good part
+        // of a second on a loaded runner — still finds the pulse under way.
+        look.markdown.codePulse.cycle = 5
+        let device = DeviceID("phone")
+        let at = Date(timeIntervalSince1970: 1_700_000_000)
+        let filler = (2...40).map { n in
+            Turn(ref: TurnRef(device: device, sequence: n), parents: [], role: n.isMultiple(of: 2) ? .person : .assistant,
+                 text: "Turn \(n), long enough to take a line or two of the transcript's column.", at: at)
+        }
+        let reply = Turn(ref: TurnRef(device: device, sequence: first ? 1 : 41), parents: [], role: .assistant,
+                         text: text, at: at)
+        let live = LiveCue()
+        let stage = try LiveStage(LiveTranscript(turns: first ? [reply] + filler : filler + [reply], live: live)
+            .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
+                                  look: look, size: self.stage)
+        defer { stage.close() }
+        stage.wait(1)
+        let before = try Pixels(stage.image(), blank: true).count(outline)
+        if first {
+            XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
+        } else {
+            XCTAssertGreaterThan(before, 20, "the fixture's block is not on the screen")
+        }
+        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
+        let offset = scroll.contentOffset.y
+
+        live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
+        // Looked at every tenth of a second until the block has been seen and seen pulsing, for
+        // up to ten seconds — the whole pulse — so a slow runner is waited for and a block never
+        // scrolled to or never pulsed is still seen not to be.
+        // How far the transcript moved is the most it was ever away from where it stood, read at
+        // every look and for a second after, so a scroll there and back again is a move.
+        var shown = 0, pulsed = 0, moved: CGFloat = 0
+        try stage.poll { [self] in
+            moved = max(moved, abs(scroll.contentOffset.y - offset))
+            let drawn = try Pixels(stage.image(), blank: true)
+            shown = max(shown, drawn.count(outline))
+            pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
+            return shown > 20 && pulsed > 20
+        }
+        stage.poll(for: 1) {
+            moved = max(moved, abs(scroll.contentOffset.y - offset))
+            return false
+        }
+        return (shown, pulsed, moved)
+    }
+
+    /// The transcript's scroll view, the first under `view`.
+    private static func scrollView(in view: UIView) -> UIScrollView? {
+        if let scroll = view as? UIScrollView { return scroll }
+        for child in view.subviews { if let found = scrollView(in: child) { return found } }
+        return nil
+    }
+
+    /// A row first made with its block's cue already set — as a lazy stack makes the row it is
+    /// scrolled to — pulses the block as it appears, though its cue never changed under it.
+    func testABlockMadeWithItsCueAlreadySetPulsesAsItAppears() throws {
+        var look = look(.phone)
+        look.markdown.codePulse.accent = Color(pulseInk)
+        look.markdown.codePulse.opacity = 1
+        look.markdown.codePulse.width = 3
+        // As slow as a breath can be, so a runner slow to draw still finds the pulse under way.
+        look.markdown.codePulse.cycle = 5
+        let reply = turn(.assistant, "Here:\n\n```\nlet x = 1\n```")
+        let live = LiveCue()
+        live.made = false
+        live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
+        let stage = try LiveStage(LiveRow(turn: reply, live: live, size: self.stage,
+                                          padding: look.transcript.horizontalPadding), look: look, size: self.stage)
+        defer { stage.close() }
+        stage.wait(0.3)
+        live.made = true
+        var pulsed = 0
+        try stage.poll { [self] in
+            let drawn = try Pixels(stage.image())
+            pulsed = max(pulsed, pulsing(drawn, rows: 0...drawn.height))
+            return pulsed > 20
+        }
+        XCTAssertGreaterThan(pulsed, 20, "the block appeared under its cue and did not pulse")
+    }
+
+    /// The breath is eased the whole way and happens twice: it starts and ends at nothing, peaks
+    /// at the middle of each breath, and never jumps — a pulse, not a flash.
+    func testThePulseBreathesTwiceWithNoJump() {
+        let pulse = Look.Markdown.Pulse()
+        XCTAssertEqual(Look.Markdown.Pulse.cycles, 2)
+        XCTAssertLessThan(pulse.opacity, 1, "the peak is opaque, which is a flash")
+        XCTAssertGreaterThanOrEqual(pulse.cycle, 1.2, "a breath this quick reads as a flash")
+        let step = 0.001
+        var levels: [Double] = []
+        var time = -0.1
+        while time <= pulse.duration + 0.1 { levels.append(pulse.level(at: time)); time += step }
+        XCTAssertEqual(levels.first, 0)
+        XCTAssertEqual(levels.last, 0)
+        let jump = zip(levels, levels.dropFirst()).map { abs($1 - $0) }.max() ?? 0
+        XCTAssertLessThanOrEqual(jump, .pi * step / pulse.cycle + 1e-9, "the outline jumps \(jump) in a millisecond")
+        let peaks = (1..<(levels.count - 1)).filter { i in
+            levels[i - 1] < levels[i] && levels[i] >= levels[i + 1] && levels[i] > 0.99
+        }
+        XCTAssertEqual(peaks.count, 2, "not two breaths")
+        XCTAssertEqual(pulse.level(at: pulse.cycle / 2), 1, accuracy: 1e-9)
     }
 
     /// How alike two masks are, their top-left corners aligned: the pixels inked in both over
@@ -291,8 +615,8 @@ final class MarkdownRenderTests: XCTestCase {
         let height: Int
         let scale: CGFloat
 
-        @MainActor init(_ image: UIImage) throws {
-            bytes = try LookStage.bytes(image)
+        @MainActor init(_ image: UIImage, blank: Bool = false) throws {
+            bytes = try LookStage.bytes(image, blank: blank)
             let cgImage = try XCTUnwrap(image.cgImage)
             width = cgImage.width
             height = cgImage.height
@@ -358,6 +682,13 @@ final class MarkdownRenderTests: XCTestCase {
                 return nil
             }
             return (top...bottom).map { y in (left...right).map { inked($0, y) } }
+        }
+
+        /// How many pixels of a colour run from `x` rightward along row `y`.
+        func run(_ colour: UIColor, row y: Int, from x: Int) -> Int {
+            var n = 0
+            while x + n < width, matches(colour, (y * width + x + n) * 4) { n += 1 }
+            return n
         }
 
         /// The rows a colour is found in, first to last.
