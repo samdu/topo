@@ -82,6 +82,7 @@ final class HomeToolTests: XCTestCase {
                     characteristic("L-temp", "color-temperature", "uint32", min: 140, max: 500, step: 10),
                     characteristic("L-watts", "power-draw", "float", writable: false),
                     characteristic("L-name", "name", "string"),
+                    characteristic("L-tlv", "transition-control", "tlv8"),
                     characteristic("L-label", "configured-name", "string"),
                     characteristic("L-level", "level", min: 0, max: 100, step: 10, valid: [0, 10, 105]),
                 ]),
@@ -104,7 +105,8 @@ final class HomeToolTests: XCTestCase {
     /// A tool over a fake home that answers at once: allowed, and `homes` loaded.
     private func tool(_ homes: [HomeRecord] = [house], allowed: Bool = true) -> (HomeTool, FakeHome) {
         let fake = FakeHome()
-        fake.values = ["L-power": .bool(true), "L-bright": .int(40), "S-left": .bool(false), "S-right": .bool(true)]
+        fake.values = ["L-power": .bool(true), "L-bright": .int(40), "L-watts": .number(5.5), "S-left": .bool(false),
+                       "S-right": .bool(true)]
         let access = HomeAccess { [unowned self] in
             made += 1
             Task { @MainActor in fake.answer(allowed: allowed, homes: homes) }
@@ -327,6 +329,25 @@ final class HomeToolTests: XCTestCase {
         XCTAssertEqual(reply.text, "SC-1111 | Good night\nSC-2222 | Movie\n")
     }
 
+    /// Access revoked and given back while the app lives: the homes HomeKit reported before are
+    /// not taken for the ones it has now, and an empty list before its fresh update is no answer.
+    func testAccessRevokedAndGivenBackWaitsForFreshHomes() async throws {
+        let (tool, fake) = tool()
+        let first = await tool.run(["scenes"])
+        XCTAssertEqual(first.status, ToolReply.ok, first.text)
+        fake.records = []
+        fake.authorization = [.determined]
+        fake.changed?(.authorization)
+        fake.authorization = [.determined, .authorized]
+        fake.changed?(.authorization)
+        let call = Task { await tool.run(["scenes"]) }
+        try await Task.sleep(for: .milliseconds(100))
+        fake.records = [Self.house]
+        fake.changed?(.homes)
+        let reply = await call.value
+        XCTAssertEqual(reply.text, "SC-1111 | Good night\nSC-2222 | Movie\n")
+    }
+
     // MARK: Review focus 6: a refusal, never an empty home
 
     func testDeniedIsARefusalAndNoHomeIsRead() async {
@@ -447,6 +468,7 @@ final class HomeToolTests: XCTestCase {
     // MARK: Reading
 
     func testTheListingIsByRoomAndAFailedReadIsAQuestionMark() async {
+        // The listing names as settable only what `set` writes: the lamp's TLV8 is not in it.
         let (tool, fake) = tool()
         fake.unreadable = ["L-power"]
         let reply = await tool.run([])
@@ -467,7 +489,9 @@ final class HomeToolTests: XCTestCase {
         XCTAssertTrue(reply.text.contains("  L-bright | brightness | 40 | a whole number from 0 to 100 in steps of 1 (%) | can be set\n"),
                       reply.text)
         XCTAssertTrue(reply.text.contains("  L-power | power | true | on or off (true or false) | can be set\n"), reply.text)
-        XCTAssertTrue(reply.text.contains("  L-watts | power-draw | ? | a number | read only\n"), reply.text)
+        XCTAssertTrue(reply.text.contains("  L-watts | power-draw | 5.5 | a number | read only\n"), reply.text)
+        XCTAssertTrue(reply.text.contains("  L-tlv | transition-control | (tlv8) | a tlv8 value | a tlv8 value, which topo home does not set\n"),
+                      reply.text)
         XCTAssertTrue(reply.text.contains("service: Desk lamp | Lightbulb\n"), reply.text)
     }
 

@@ -249,6 +249,13 @@ final class HomeAccess {
 
     private func update(_ change: HomeChange) {
         if change == .homes { homesLoaded = true }
+        // Access taken away: whatever homes HomeKit reported before are not the ones it will
+        // report once access is back, so the next call waits for a fresh update. A status still
+        // undetermined has taken nothing away.
+        let status = made().authorization
+        if change == .authorization, !status.contains(.authorized), !status.isDisjoint(with: [.determined, .restricted]) {
+            homesLoaded = false
+        }
         for (id, waiter) in waiting where passed(waiter.gate) {
             waiting[id] = nil
             waiter.continuation.resume()
