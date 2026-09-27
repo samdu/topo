@@ -212,7 +212,7 @@ round_is() {
       pass "$name: no round section before round 3"
     fi
   elif ! grep -qx -- "----- REVIEW ROUND $want -----" "$work/$name.out" \
-    || [ "$(tail -n 1 "$work/$name.out")" != "this prompt. The coordinator files the non-blocking findings as issues." ]; then
+    || [ "$(tail -n 1 "$work/$name.out")" != "\`summary\` and not raised again as a finding." ]; then
     fail "$name: does not end with the round $want convergence rule"
   else
     # Each clause of the rule, matched across its line breaks: a clause dropped from it is a class of
@@ -229,7 +229,16 @@ round_is() {
       "a defect in CI, the scripts or the test harness" \
       "a sequence reachable only through a debug path or one no user can produce" \
       "This holds for an earlier finding still open as much as for a new one" \
-      "it overrides any other bar in this prompt"; do
+      "it overrides any other bar in this prompt" \
+      "neither lowers a finding the" \
+      "rule above still holds blocking" \
+      "or explained as something no" \
+      "test on this runner can show" \
+      "stays not blocking unless the change since touched the code it cites" \
+      "its severity does not rise on a second reading of the same code" \
+      "a not-blocking finding the description answers" \
+      "filed to an issue by number" \
+      "is acknowledged in one line of \`summary\` and not raised again as a finding"; do
       grep -qF -- "$clause" <<<"$rule" || missing="$missing [$clause]"
     done
     if [ -n "$missing" ]; then
