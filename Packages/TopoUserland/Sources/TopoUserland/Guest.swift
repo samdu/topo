@@ -25,6 +25,8 @@ public final class Guest: Sendable {
         /// A mount could not be taken away, with the guest errno (`-16`, EBUSY, while anything in
         /// the guest holds it).
         case unmount(Int32)
+        /// `/etc/resolv.conf` could not be written, with what the guest said.
+        case resolver(String)
 
         public var description: String {
             switch self {
@@ -35,6 +37,7 @@ public final class Guest: Sendable {
             case .mount(let errno): "the directory could not be mounted (\(errno))"
             case .link(let errno): "the link could not be made (\(errno))"
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
+            case .resolver(let why): "the guest's resolver could not be written: \(why)"
             }
         }
     }
@@ -72,6 +75,20 @@ public final class Guest: Sendable {
         if result == TOPO_ISH_ALREADY_BOOTED { throw Failure.alreadyBooted }
         if result != 0 { throw Failure.boot(result) }
         MemorySampler.shared.start()
+    }
+
+    /// The name servers in the guest's `/etc/resolv.conf`, which the minirootfs has none of: with
+    /// them the guest's clients resolve names and reach the network directly, TLS included,
+    /// through the app's own sockets.
+    public static let nameservers = ["1.1.1.1", "8.8.8.8"]
+
+    /// Writes `/etc/resolv.conf` where there is none, through the guest so the fakefs records it
+    /// (a file laid into `data/` from the host has no metadata, and the guest does not see it):
+    /// an existing fakefs gets it at its next boot. Requires a booted kernel.
+    public func writeResolver() async throws {
+        let script = "[ -e /etc/resolv.conf ] || printf 'nameserver %s\\n' \(Self.nameservers.joined(separator: " ")) > /etc/resolv.conf"
+        let exit = try await run("/bin/sh", ["-c", script])
+        if exit.status != 0 { throw Failure.resolver(exit.errors) }
     }
 
     /// Bind-mounts the host directory `host` at `point` in the guest (the fork's realfs), making
