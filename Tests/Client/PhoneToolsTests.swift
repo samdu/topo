@@ -1,3 +1,5 @@
+import Contacts
+import EventKit
 import Foundation
 import os
 import TopoTools
@@ -60,7 +62,10 @@ private final class Reminders: ReminderStore, @unchecked Sendable {
     private var _touched = false
     var touched: Bool { lock.withLock { _touched } }
 
-    func lists() async throws -> [String] { lock.withLock { _touched = true }; return ["Home", "Work"] }
+    func lists() async throws -> [CalendarRecord] {
+        lock.withLock { _touched = true }
+        return [CalendarRecord(id: "l1", title: "Home", account: "iCloud"), CalendarRecord(id: "l2", title: "Work", account: "iCloud")]
+    }
     func reminders(list: String?, done: Bool) async throws -> [ReminderRecord] {
         lock.withLock {
             _touched = true
@@ -90,7 +95,11 @@ private final class Events: EventStore, @unchecked Sendable {
     var records: [EventRecord] = []
     var asked: (Date, Date)?
 
-    func calendars() async throws -> [String] { ["Home"] }
+    /// Two accounts, each with a Work.
+    let calendarRecords = [CalendarRecord(id: "k1", title: "Home", account: "iCloud"), CalendarRecord(id: "k2", title: "Work", account: "iCloud"),
+                           CalendarRecord(id: "k3", title: "Work", account: "Google")]
+
+    func calendars() async throws -> [CalendarRecord] { calendarRecords }
     func events(from: Date, to: Date, calendar: String?) async throws -> [EventRecord] {
         lock.withLock {
             asked = (from, to)
@@ -99,8 +108,9 @@ private final class Events: EventStore, @unchecked Sendable {
     }
     func add(title: String, start: ToolDates.Reading, end: ToolDates.Reading, allDay: Bool, calendar: String?,
              location: String?, notes: String?) async throws -> EventRecord {
-        lock.withLock {
-            let record = EventRecord(id: "e\(records.count + 1)", title: title, calendar: calendar ?? "Home",
+        let chosen = try calendar.map { try CalendarRecord.pick($0, from: calendarRecords, kind: "calendar") }
+        return lock.withLock {
+            let record = EventRecord(id: "e\(records.count + 1)", title: title, calendar: chosen?.qualified ?? "Home",
                                      start: start.date, end: end.date, allDay: allDay, location: location)
             records.append(record)
             return record
@@ -490,12 +500,152 @@ final class PhoneToolsTests: XCTestCase {
 
     /// Codex on #214: a notification that comes due with the app in front is shown, which iOS does
     /// only when the app's notification delegate says so. The host app's launch has run, so the
-    /// delegate is what the running app installed. That iOS then draws the banner is the device's
-    /// to show.
+    /// delegate is the one the running app installed, and it is called as iOS calls it: through
+    /// its Objective-C selector, with a completion handler. No `UNNotification` can be made
+    /// outside iOS, so it is given none; the delegate does not read it. That iOS then draws the
+    /// banner is the device's to show.
     @MainActor
-    func testANotificationDueWithTheAppInFrontIsShown() throws {
+    func testANotificationDueWithTheAppInFrontIsShown() async throws {
         let delegate = try XCTUnwrap(UNUserNotificationCenter.current().delegate as? TopoAppDelegate)
-        XCTAssertTrue(delegate.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:))))
-        XCTAssertEqual(TopoAppDelegate.inFront, [.banner, .list, .sound])
+        let selector = #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:willPresent:withCompletionHandler:))
+        XCTAssertTrue(delegate.responds(to: selector))
+        typealias WillPresent = @convention(c) (AnyObject, Selector, UNUserNotificationCenter, UNNotification?,
+                                                @escaping @convention(block) (UNNotificationPresentationOptions) -> Void) -> Void
+        let willPresent = unsafeBitCast(delegate.method(for: selector), to: WillPresent.self)
+        let options = await withCheckedContinuation { (continuation: CheckedContinuation<UNNotificationPresentationOptions, Never>) in
+            willPresent(delegate, selector, .current(), nil) { continuation.resume(returning: $0) }
+        }
+        XCTAssertEqual(options, [.banner, .list, .sound])
+    }
+
+    // MARK: Round 2
+
+    /// Codex on #214: `topo notify cancel` and `topo notify list extra` are malformed forms, not
+    /// notifications titled cancel and list, and ask nothing.
+    func testNotifysOwnWordsAreNeverTitles() async {
+        let scheduler = Scheduler()
+        let permission = Permission("Notifications", .undetermined)
+        let tool = NotifyTool(scheduler: scheduler, authorizer: permission, broker: PermissionBroker())
+        for arguments in [["cancel"], ["list", "extra"], ["cancel", "topo-a", "topo-b"], ["cancel", "--in", "5m"], ["list", "Stretch", "--in", "5m"]] {
+            let reply = await tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.usage, "\(arguments): \(reply.text)")
+        }
+        XCTAssertTrue(scheduler.scheduled.isEmpty)
+        XCTAssertEqual(permission.prompts, 0)
+    }
+
+    /// Codex on #214: two accounts each with a Work: the bare name is a usage error naming both,
+    /// and either is reached by its title with its account or by its id.
+    func testACalendarNameTwoAccountsShareIsNeverGuessed() async {
+        let store = Events()
+        let tool = CalendarTool(store: store, authorizer: Permission("Calendars"), broker: PermissionBroker())
+        let listed = await tool.run(["calendars"])
+        XCTAssertEqual(listed.text, "k1 | Home (iCloud)\nk2 | Work (iCloud)\nk3 | Work (Google)\n")
+        let meeting = ["add", "Meeting", "--start", "2026-09-29T09:00", "--end", "2026-09-29T10:00", "--calendar"]
+        let bare = await tool.run(meeting + ["Work"])
+        XCTAssertEqual(bare.status, ToolReply.usage, bare.text)
+        XCTAssertEqual(bare.text, "topo: 2 calendars are called Work: Work (iCloud), Work (Google); name one as it is written there, or by its id (topo reminders lists, topo calendar calendars)\n")
+        XCTAssertTrue(store.records.isEmpty)
+        let qualified = await tool.run(meeting + ["work (google)"])
+        XCTAssertEqual(qualified.status, ToolReply.ok, qualified.text)
+        XCTAssertTrue(qualified.text.hasSuffix("| Work (Google)\n"), qualified.text)
+        let byID = await tool.run(meeting + ["k2"])
+        XCTAssertTrue(byID.text.hasSuffix("| Work (iCloud)\n"), byID.text)
+        let only = await tool.run(meeting + ["home"])
+        XCTAssertTrue(only.text.hasSuffix("| Home (iCloud)\n"), only.text)
+        let none = await tool.run(meeting + ["Gym"])
+        XCTAssertEqual(none.status, ToolReply.failed, none.text)
+        XCTAssertEqual(none.text, "topo: no calendar called Gym; there are Home (iCloud), Work (iCloud), Work (Google)\n")
+    }
+
+    /// Codex on #214: a record's line breaks never split its line.
+    func testARecordWithLineBreaksIsStillOneLine() async {
+        let store = Reminders()
+        let reminders = RemindersTool(store: store, authorizer: Permission(), broker: PermissionBroker())
+        let added = await reminders.run(["add", "Milk\nEggs\r\nBread", "--notes", "two\nlines"])
+        XCTAssertEqual(added.text, "added: r1 | Milk Eggs Bread | Home | no due date | notes: two lines\n")
+        let listed = await reminders.run([])
+        XCTAssertEqual(listed.text, "r1 | Milk Eggs Bread | Home | no due date | notes: two lines\n")
+        let events = Events()
+        let calendar = CalendarTool(store: events, authorizer: Permission("Calendars"), broker: PermissionBroker())
+        let event = await calendar.run(["add", "Dinner\nat Helen's", "--start", "2026-09-29", "--end", "2026-09-29", "--location", "12 High St\nLondon"])
+        XCTAssertEqual(event.text, "added: e1 | Dinner at Helen's | all day 2026-09-29 | Home | at 12 High St London\n")
+    }
+
+    // MARK: The real stores, on the simulator
+
+    /// Codex on #214: EventKit's own store, not a fake. An all-day event given one day is saved as
+    /// that one day (EventKit ends it on the day's last second), is said as that day, and comes
+    /// back as midnight to the midnight after — the interval the tool gave it — both from `add`
+    /// and from `events`. The simulator's calendar access is granted before the suite
+    /// (`xcrun simctl privacy <udid> grant calendar zone.hexagon.topo`, as the PR check does).
+    func testEventKitKeepsAnAllDayEventToItsDays() async throws {
+        XCTAssertEqual(EKEventStore.authorizationStatus(for: .event), .fullAccess,
+                       "grant the simulator's calendar access first: xcrun simctl privacy <udid> grant calendar zone.hexagon.topo")
+        guard EKEventStore.authorizationStatus(for: .event) == .fullAccess else { return }
+        let raw = EKEventStore()
+        let store = EventKitStore()
+        let tool = CalendarTool(store: store, authorizer: Permission("Calendars"), broker: PermissionBroker())
+        let calendars = try await store.calendars()
+        let target = try XCTUnwrap(calendars.first { $0.id == raw.defaultCalendarForNewEvents?.calendarIdentifier })
+        let title = "Topo test \(UUID().uuidString.prefix(8))"
+        let added = await tool.run(["add", title, "--start", "2026-09-29", "--end", "2026-09-29", "--calendar", target.id])
+        XCTAssertEqual(added.status, ToolReply.ok, added.text)
+        XCTAssertTrue(added.text.contains("| \(title) | all day 2026-09-29 | \(target.title)"), added.text)
+        let days = Calendar.current
+        let first = try XCTUnwrap(ToolDates.read("2026-09-29")).date
+        let after = try XCTUnwrap(days.date(byAdding: .day, value: 1, to: first))
+        let found = try await store.events(from: first.addingTimeInterval(-86400), to: after.addingTimeInterval(86400), calendar: target.id)
+            .filter { $0.title == title }
+        let record = try XCTUnwrap(found.first)
+        addTeardownBlock {
+            let cleanup = EKEventStore()
+            if let event = cleanup.calendarItem(withIdentifier: record.id) as? EKEvent { try? cleanup.remove(event, span: .thisEvent, commit: true) }
+        }
+        XCTAssertEqual(found.count, 1)
+        XCTAssertTrue(record.allDay)
+        XCTAssertEqual(record.start, first)
+        XCTAssertEqual(record.end, after)
+        let saved = try XCTUnwrap(EKEventStore().calendarItem(withIdentifier: record.id) as? EKEvent)
+        XCTAssertTrue(days.isDate(saved.endDate, inSameDayAs: first), "EventKit holds it as ending \(saved.endDate!)")
+        let listed = await tool.run(["--from", "2026-09-28", "--to", "2026-10-01", "--calendar", target.id])
+        let line = try XCTUnwrap(listed.text.split(separator: "\n").first { $0.contains(title) })
+        XCTAssertTrue(line.hasSuffix("| \(title) | all day 2026-09-29 | \(target.title)"), String(line))
+    }
+
+    /// Codex on #214: Contacts' own store finds a person by a phone number and by an email
+    /// address, not only by name. The contact is written by the test itself (the tool writes
+    /// nothing) and removed after. Access is granted as for the calendar
+    /// (`xcrun simctl privacy <udid> grant contacts zone.hexagon.topo`).
+    func testContactsFindsAPersonByNumberAndByAddress() async throws {
+        XCTAssertEqual(CNContactStore.authorizationStatus(for: .contacts), .authorized,
+                       "grant the simulator's contacts access first: xcrun simctl privacy <udid> grant contacts zone.hexagon.topo")
+        guard CNContactStore.authorizationStatus(for: .contacts) == .authorized else { return }
+        let tag = UUID().uuidString.prefix(8).lowercased()
+        let person = CNMutableContact()
+        person.givenName = "Topotest"
+        person.familyName = "Person\(tag)"
+        person.phoneNumbers = [CNLabeledValue(label: CNLabelPhoneNumberMobile, value: CNPhoneNumber(stringValue: "+44 7700 900123"))]
+        person.emailAddresses = [CNLabeledValue(label: CNLabelHome, value: "topotest-\(tag)@example.com" as NSString)]
+        let save = CNSaveRequest()
+        save.add(person, toContainerWithIdentifier: nil)
+        try CNContactStore().execute(save)
+        let id = person.identifier
+        addTeardownBlock {
+            let contacts = CNContactStore()
+            guard let saved = try? contacts.unifiedContact(withIdentifier: id, keysToFetch: []).mutableCopy() as? CNMutableContact else { return }
+            let remove = CNSaveRequest()
+            remove.delete(saved)
+            try? contacts.execute(remove)
+        }
+        let tool = ContactsTool(directory: ContactStoreDirectory(), authorizer: Permission("Contacts"), broker: PermissionBroker())
+        for query in ["+44 7700 900123", "+447700900123", "topotest-\(tag)@example.com", "Person\(tag)"] {
+            let reply = await tool.run(["search", query])
+            XCTAssertEqual(reply.status, ToolReply.ok, "\(query): \(reply.text)")
+            XCTAssertTrue(reply.text.contains("\(id) | Topotest Person\(tag) | "), "\(query): \(reply.text)")
+        }
+        let shown = await tool.run(["show", id])
+        XCTAssertTrue(shown.text.contains("email: "), shown.text)
+        XCTAssertTrue(shown.text.contains("topotest-\(tag)@example.com"), shown.text)
     }
 }

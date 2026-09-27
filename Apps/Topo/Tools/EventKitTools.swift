@@ -2,6 +2,39 @@ import EventKit
 import Foundation
 import TopoTools
 
+// MARK: - Calendars and lists
+
+/// A calendar or a reminder list, and the account it is in. Two accounts can each have one called
+/// Work, so a name alone does not always say which.
+struct CalendarRecord: Sendable, Equatable {
+    var id: String
+    var title: String
+    var account: String
+
+    /// How a person names it when its title alone is not enough: `Work (iCloud)`.
+    var qualified: String { "\(title) (\(account))" }
+
+    /// The line `topo reminders lists` and `topo calendar calendars` give it.
+    var line: String { PhoneTool.line([id, qualified]) }
+
+    /// The one `name` means: its id, its title with its account (`Work (iCloud)`), or its title
+    /// alone when no other has that title. A title two share is a usage error naming both, so a
+    /// record is never saved into whichever one comes first.
+    static func pick(_ name: String, from records: [CalendarRecord], kind: String) throws -> CalendarRecord {
+        if let byID = records.first(where: { $0.id == name }) { return byID }
+        let same = { (a: String, b: String) in a.compare(b, options: [.caseInsensitive]) == .orderedSame }
+        let qualified = records.filter { same($0.qualified, name) }
+        if qualified.count == 1 { return qualified[0] }
+        let titled = records.filter { same($0.title, name) }
+        if titled.count == 1 { return titled[0] }
+        if titled.isEmpty {
+            throw ToolFailure("no \(kind) called \(name); there are \(records.map(\.qualified).joined(separator: ", "))")
+        }
+        throw ToolFailure("\(titled.count) \(kind)s are called \(name): \(titled.map(\.qualified).joined(separator: ", ")); "
+            + "name one as it is written there, or by its id (topo reminders lists, topo calendar calendars)", status: ToolReply.usage)
+    }
+}
+
 // MARK: - Reminders
 
 struct ReminderRecord: Sendable, Equatable {
@@ -16,7 +49,7 @@ struct ReminderRecord: Sendable, Equatable {
 /// The person's reminders, as `topo reminders` reaches them: EventKit on the phone
 /// (`EventKitStore`), a fake in the suites.
 protocol ReminderStore: Sendable {
-    func lists() async throws -> [String]
+    func lists() async throws -> [CalendarRecord]
     /// Incomplete ones unless `done`, then completed ones; in one list when named.
     func reminders(list: String?, done: Bool) async throws -> [ReminderRecord]
     func add(title: String, list: String?, due: ToolDates.Reading?, notes: String?) async throws -> ReminderRecord
@@ -36,7 +69,8 @@ struct RemindersTool: Tool {
     let usage = """
     topo reminders [--list NAME] [--due-before DATE] [--done]
                                         the reminders not yet done (with --done, the ones done), one a line, id first
-    topo reminders lists                the lists
+    topo reminders lists                the lists, id first, each with its account: --list takes the id,
+                                        Work (iCloud), or Work when only one list is called that
     topo reminders add TITLE [--list NAME] [--due DATE] [--notes TEXT]
                                         add one (to the default list unless --list names one)
     topo reminders done ID              mark one done
@@ -62,7 +96,7 @@ struct RemindersTool: Tool {
                 records.sort { ($0.due?.date ?? .distantFuture, $0.title) < ($1.due?.date ?? .distantFuture, $1.title) }
                 return .ok(PhoneTool.lines(records.map(Self.line), none: "no reminders"))
             case .lists:
-                return .ok(PhoneTool.lines(try await store.lists(), none: "no lists"))
+                return .ok(PhoneTool.lines(try await store.lists().map(\.line), none: "no lists"))
             case let .add(title, list, due, notes):
                 return .ok("added: " + Self.line(try await store.add(title: title, list: list, due: due, notes: notes)) + "\n")
             case let .done(id):
@@ -122,7 +156,7 @@ struct EventRecord: Sendable, Equatable {
 }
 
 protocol EventStore: Sendable {
-    func calendars() async throws -> [String]
+    func calendars() async throws -> [CalendarRecord]
     func events(from: Date, to: Date, calendar: String?) async throws -> [EventRecord]
     /// An all-day event's `start` is its first day's midnight and its `end` the midnight after its
     /// last day.
@@ -142,7 +176,8 @@ struct CalendarTool: Tool {
     let usage = """
     topo calendar [--from DATE] [--to DATE] [--calendar NAME]
                                         the events from --from (now) to --to (a week later, a year at most), one a line, id first
-    topo calendar calendars             the calendars
+    topo calendar calendars             the calendars, id first, each with its account: --calendar takes the id,
+                                        Work (iCloud), or Work when only one calendar is called that
     topo calendar add TITLE --start DATE --end DATE [--all-day] [--calendar NAME] [--location TEXT] [--notes TEXT]
                                         add one (to the default calendar unless --calendar names one)
 
@@ -168,7 +203,7 @@ struct CalendarTool: Tool {
                     .sorted { ($0.start, $0.title) < ($1.start, $1.title) }
                 return .ok(PhoneTool.lines(events.map(Self.line), none: "no events"))
             case .calendars:
-                return .ok(PhoneTool.lines(try await store.calendars(), none: "no calendars"))
+                return .ok(PhoneTool.lines(try await store.calendars().map(\.line), none: "no calendars"))
             case let .add(title, start, end, allDay, calendar, location, notes):
                 let record = try await store.add(title: title, start: start, end: end, allDay: allDay, calendar: calendar,
                                                  location: location, notes: notes)
@@ -284,8 +319,9 @@ final class EventKitStore: ReminderStore, EventStore, Sendable {
     private static func calendar(named name: String?, for entity: EKEntityType, in store: EKEventStore) throws -> EKCalendar {
         let calendars = store.calendars(for: entity)
         if let name {
-            guard let found = calendars.first(where: { $0.title.caseInsensitiveCompare(name) == .orderedSame }) else {
-                throw ToolFailure("no \(entity == .reminder ? "list" : "calendar") called \(name); there are \(calendars.map(\.title).joined(separator: ", "))")
+            let chosen = try CalendarRecord.pick(name, from: calendars.map { (calendar: EKCalendar) in Self.record(calendar) }, kind: entity == .reminder ? "list" : "calendar")
+            guard let found = calendars.first(where: { $0.calendarIdentifier == chosen.id }) else {
+                throw ToolFailure("no \(entity == .reminder ? "list" : "calendar") with the id \(chosen.id)")
             }
             return found
         }
@@ -294,10 +330,18 @@ final class EventKitStore: ReminderStore, EventStore, Sendable {
         return fallback
     }
 
+    static func record(_ calendar: EKCalendar) -> CalendarRecord {
+        CalendarRecord(id: calendar.calendarIdentifier, title: calendar.title, account: calendar.source?.title ?? "")
+    }
+
+    private static func records(_ calendars: [EKCalendar]) -> [CalendarRecord] {
+        calendars.map { (calendar: EKCalendar) in Self.record(calendar) }.sorted { ($0.title, $0.account) < ($1.title, $1.account) }
+    }
+
     // Reminders
 
-    func lists() async throws -> [String] {
-        try await confined.run { store, _ in store.calendars(for: .reminder).map(\.title).sorted() }
+    func lists() async throws -> [CalendarRecord] {
+        try await confined.run { store, _ in Self.records(store.calendars(for: .reminder)) }
     }
 
     func reminders(list: String?, done: Bool) async throws -> [ReminderRecord] {
@@ -357,8 +401,8 @@ final class EventKitStore: ReminderStore, EventStore, Sendable {
 
     // Calendar
 
-    func calendars() async throws -> [String] {
-        try await confined.run { store, _ in store.calendars(for: .event).map(\.title).sorted() }
+    func calendars() async throws -> [CalendarRecord] {
+        try await confined.run { store, _ in Self.records(store.calendars(for: .event)) }
     }
 
     func events(from: Date, to: Date, calendar: String?) async throws -> [EventRecord] {
@@ -376,7 +420,8 @@ final class EventKitStore: ReminderStore, EventStore, Sendable {
             event.title = title
             event.calendar = try Self.calendar(named: calendar, for: .event, in: store)
             event.startDate = start.date
-            // EventKit ends an all-day event on the last second of its last day.
+            // EventKit ends an all-day event on the last second of its last day: given the
+            // midnight after, it would run a day longer.
             event.endDate = allDay ? end.date.addingTimeInterval(-1) : end.date
             event.isAllDay = allDay
             event.location = location
@@ -387,8 +432,16 @@ final class EventKitStore: ReminderStore, EventStore, Sendable {
         }
     }
 
+    /// EventKit ends an all-day event on the last second of its last day; the record ends it at
+    /// the midnight after, as `EventStore.add` was given it.
     static func record(_ event: EKEvent) -> EventRecord {
-        EventRecord(id: event.calendarItemIdentifier, title: event.title ?? "", calendar: event.calendar?.title ?? "",
-                    start: event.startDate, end: event.endDate, allDay: event.isAllDay, location: event.location)
+        var end: Date = event.endDate
+        if event.isAllDay {
+            let days = Calendar.current
+            let last = days.startOfDay(for: end.addingTimeInterval(-1))
+            end = days.date(byAdding: .day, value: 1, to: last) ?? end
+        }
+        return EventRecord(id: event.calendarItemIdentifier, title: event.title ?? "", calendar: event.calendar?.title ?? "",
+                           start: event.startDate, end: end, allDay: event.isAllDay, location: event.location)
     }
 }

@@ -59,6 +59,7 @@ struct ContactsTool: Tool {
                 lines += record.emails.map { "email: \($0)" }
                 if let birthday = record.birthday { lines.append("birthday: \(birthday)") }
                 lines += record.addresses.map { "address: \($0)" }
+                lines = lines.map(PhoneTool.flat)
                 return .ok(lines.joined(separator: "\n") + "\n")
             }
         }

@@ -66,9 +66,15 @@ enum PhoneTool {
         return reading
     }
 
-    /// One record a line, fields apart by ` | `, nothing where a field is empty.
+    /// One record a line, fields apart by ` | `, nothing where a field is empty. A field's own
+    /// line breaks become spaces (`flat`), so a title of two lines is still one record's line.
     static func line(_ fields: [String?]) -> String {
-        fields.compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " | ")
+        fields.compactMap { $0 }.map(flat).filter { !$0.isEmpty }.joined(separator: " | ")
+    }
+
+    /// `text` on one line: each run of line breaks a space.
+    static func flat(_ text: String) -> String {
+        text.split(whereSeparator: \.isNewline).joined(separator: " ")
     }
 
     /// What `work` answers if it answers within `bound`, and nil at the bound otherwise, without

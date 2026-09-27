@@ -39,7 +39,7 @@ struct LocationTool: Tool {
                 String(format: "accuracy %.0f m", fix.accuracy) + (fix.precise ? "" : " (approximate: the person allows only an approximate location)"),
                 "at \(ToolDates.write(fix.at)) (\(max(0, Int(now().timeIntervalSince(fix.at)))) s ago)",
             ]
-            if let place = fix.place { lines.append("place \(place)") }
+            if let place = fix.place { lines.append("place " + PhoneTool.flat(place)) }
             return .ok(lines.joined(separator: "\n") + "\n")
         }
     }

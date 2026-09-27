@@ -44,15 +44,18 @@ for key in "${keys[@]}"; do
         fail "the refusal of a product without $key does not name it: $errors"
     fi
 
-    make_app "$work/empty-$key/Topo.app"
-    plutil -replace "$key" -string " " "$work/empty-$key/Topo.app/Info.plist"
-    if "$check" "$work/empty-$key/Topo.app" >/dev/null 2>&1; then
-        fail "a product with an empty $key passed"
-    fi
+    for blank in "" " " $'\t' $' \n\t'; do
+        make_app "$work/blank-$key/Topo.app"
+        plutil -replace "$key" -string "$blank" "$work/blank-$key/Topo.app/Info.plist"
+        if "$check" "$work/blank-$key/Topo.app" >/dev/null 2>&1; then
+            fail "a product with $key of only whitespace ($(printf %q "$blank")) passed"
+        fi
+        rm -rf "$work/blank-$key"
+    done
 done
 
 if [ "$failures" -gt 0 ]; then
     echo "$failures failure(s)" >&2
     exit 1
 fi
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing or empty fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails"

@@ -36,6 +36,8 @@ struct NotifyTool: Tool {
     topo notify list                    the ones pending, id first
     topo notify cancel ID               cancel one
 
+    A notification is not titled list or cancel: those words are the forms above.
+
     DATE is 2026-09-27T14:30 (the phone's time zone) or 2026-09-27T14:30:00-07:00.
     """
 
@@ -79,6 +81,10 @@ struct NotifyTool: Tool {
         case "cancel" where parsed.words.count == 2:
             try parsed.only([], for: "notify cancel")
             return .cancel(id: parsed.words[1])
+        case "list":
+            throw Misuse("notify list takes nothing more")
+        case "cancel":
+            throw Misuse("notify cancel takes one id")
         case let title? where (1...2).contains(parsed.words.count) && !title.isEmpty:
             guard parsed.options["at"] == nil || parsed.options["in"] == nil else { throw Misuse("notify takes --at or --in, not both") }
             let body = parsed.words.count == 2 ? parsed.words[1] : nil
