@@ -933,7 +933,7 @@ final class MascotGeometryTests: XCTestCase {
         }
         // Read once the reply has reported what it holds with every text's lines read: 18 rects —
         // the heading's line, the paragraph's four, each list item's marker and words, the quote's
-        // bar and its two lines, and the fence's enclosure and its number.
+        // bar and its two lines, the fence's enclosure, and the turn's time.
         let chat = try stage(PreviewTurns.markdown, mascot: Look.Mascot(), size: phone,
                              until: { reply($0).count >= 18 })
         defer { chat.window.isHidden = true }
