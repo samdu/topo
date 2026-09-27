@@ -94,8 +94,10 @@ struct TranscriptView: View {
             .environment(\.codeBlockAppeared) { place in
                 guard made.pending == place else { return }
                 made.pending = nil
-                // Made in this pass, laid out by the next.
-                DispatchQueue.main.async { withAnimation { proxy.scrollTo(place, anchor: nil) } }
+                // Made in this pass, laid out by the next. Not animated: the stack is still measuring
+                // the rows around it, and a re-layout during an animated scroll puts the transcript
+                // back where the scroll to the row left it, with the block off the screen again.
+                DispatchQueue.main.async { proxy.scrollTo(place, anchor: nil) }
             }
         }
     }

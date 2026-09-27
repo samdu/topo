@@ -321,6 +321,15 @@ final class MarkdownRenderTests: XCTestCase {
         XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
     }
 
+    /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
+    /// shows its top, and the block is scrolled to once the row has made it.
+    func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
+        let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
+        let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
+        XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+    }
+
     /// A block already whole on the screen, cued, pulses where it is: the transcript does not
     /// move by a point.
     func testABlockAlreadyOnTheScreenIsNotScrolled() throws {
@@ -353,7 +362,8 @@ final class MarkdownRenderTests: XCTestCase {
         let reply = Turn(ref: TurnRef(device: device, sequence: first ? 1 : 41), parents: [], role: .assistant,
                          text: text, at: at)
         let live = LiveCue()
-        let stage = try LiveStage(LiveTranscript(turns: first ? [reply] + filler : filler + [reply], live: live)
+        let turns = first ? [reply] + filler : filler + [reply]
+        let stage = try LiveStage(LiveTranscript(turns: turns, live: live)
             .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
                                   look: look, size: self.stage)
         defer { stage.close() }
@@ -374,6 +384,39 @@ final class MarkdownRenderTests: XCTestCase {
         }
         let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
         XCTAssertTrue(opened(scroll), "the transcript did not open at its end: \(scroll.contentOffset.y) of \(scroll.contentSize.height)")
+        // A lazy stack estimates the rows it has not made from the ones it has, and beside a tall
+        // row those estimates are tens of thousands of points out, which is where a scroll to a row
+        // lands: straight on the block rather than on the row's top, with nothing left for the
+        // scroll after the row is made to do. So the transcript is read through once, to its top and
+        // back, as a person scrolling back would, and put back where it opens; the cue waits until
+        // its content is the fixture's own height laid out whole — every row measured, none estimated.
+        let whole = UIHostingController(rootView: VStack(alignment: .leading, spacing: look.transcript.spacing) {
+            ForEach(turns) { TurnRow(turn: $0) }
+        }
+        .padding(.horizontal, look.transcript.horizontalPadding)
+        .padding(.vertical, look.transcript.spacing)
+        .frame(width: self.stage.width)
+        .environment(\.look, look))
+        let height = whole.sizeThatFits(in: CGSize(width: self.stage.width, height: .greatestFiniteMagnitude)).height
+        func page(to y: CGFloat) {
+            scroll.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            stage.window.layoutIfNeeded()
+        }
+        for _ in 0..<200 where scroll.contentOffset.y > 0 { page(to: max(0, scroll.contentOffset.y - scroll.bounds.height)) }
+        for _ in 0..<200 where scroll.contentOffset.y < end(scroll) - 1 {
+            page(to: min(end(scroll), scroll.contentOffset.y + scroll.bounds.height))
+        }
+        func measured() -> Bool { abs(scroll.contentSize.height - height) < 1 }
+        var settled = false
+        try stage.poll(for: 5) {
+            page(to: end(scroll) - look.transcript.spacing)
+            guard measured(), opened(scroll) else { return false }
+            before = try Pixels(stage.image(), blank: true).count(outline)
+            settled = first ? before == 0 : before > 20
+            return settled
+        }
+        XCTAssertTrue(measured(), "the transcript's rows were not all measured: \(scroll.contentSize.height) of \(height)")
+        XCTAssertTrue(opened(scroll), "the transcript is not back where it opens: \(scroll.contentOffset.y) of \(scroll.contentSize.height)")
         // With the padding under the newest turn there is room to scroll further down, so a
         // scroll the cue should not make — the block's top to the screen's — moves the transcript
         // rather than being held at the end. With the opening's check this holds the offset in a
