@@ -215,7 +215,13 @@ final class MarkdownRenderTests: XCTestCase {
                                           padding: look.transcript.horizontalPadding), look: look, size: self.stage)
         defer { stage.close() }
         func snapshot() throws -> Pixels { try Pixels(stage.image()) }
-        stage.wait(0.3)
+        // The row drawn, both blocks' outlines on the stage, before either is cued.
+        var ready = false
+        try stage.poll(for: 5) { [self] in
+            ready = (try snapshot().rowRuns(outline)?.count ?? 0) >= 2
+            return ready
+        }
+        XCTAssertTrue(ready, "the row was not drawn")
         // Looked at every tenth of a second from the cue until the pulse it starts is over by its
         // own clock and the cued block has been seen pulsing, for up to five seconds past its end,
         // so a picture taken late on a loaded runner is waited for rather than landing on a rest:
@@ -355,28 +361,48 @@ final class MarkdownRenderTests: XCTestCase {
         }
         let reply = Turn(ref: TurnRef(device: device, sequence: first ? 1 : 41), parents: [], role: .assistant,
                          text: text, at: at)
+        let turns = first ? [reply] + filler : filler + [reply]
         let live = LiveCue()
-        let stage = try LiveStage(LiveTranscript(turns: first ? [reply] + filler : filler + [reply], live: live)
+        let stage = try LiveStage(LiveTranscript(turns: turns, live: live)
             .frame(width: self.stage.width, height: self.stage.height).background(Color.white),
                                   look: look, size: self.stage)
         defer { stage.close() }
-        // The transcript opens at its end, the newest turn's foot at the screen's with no more than
-        // the transcript's padding under it, and on a loaded runner is still getting there a second
-        // after it appeared, a third of a row short. Where it stands is read once it is there and
-        // the block is where the fixture puts it, off the screen or on it, waited for up to five
-        // seconds; a move after that is the cue's.
-        func opened(_ scroll: UIScrollView) -> Bool {
-            let end = scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height
-            return scroll.contentOffset.y >= end - look.transcript.spacing - 1
+        try stage.poll(for: 5) { Self.scrollView(in: stage.window) != nil }
+        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
+        // A lazy stack estimates the rows it has not made from the ones it has, and beside a tall
+        // row those estimates are tens of thousands of points out, which is where a scroll to a row
+        // lands: straight on the block rather than on the row's top, with nothing left for the
+        // scroll after the row is made to do. So the transcript is read through once, to its top and
+        // back, as a person scrolling back would, and the cue waits until its content is the
+        // fixture's own height laid out whole — every row measured, none estimated.
+        let whole = UIHostingController(rootView: VStack(alignment: .leading, spacing: look.transcript.spacing) {
+            ForEach(turns) { TurnRow(turn: $0) }
         }
+        .padding(.horizontal, look.transcript.horizontalPadding)
+        .padding(.vertical, look.transcript.spacing)
+        .frame(width: self.stage.width)
+        .environment(\.look, look))
+        let height = whole.sizeThatFits(in: CGSize(width: self.stage.width, height: .greatestFiniteMagnitude)).height
+        func end() -> CGFloat { scroll.contentSize.height + scroll.adjustedContentInset.bottom - scroll.bounds.height }
+        func page(to y: CGFloat) {
+            scroll.setContentOffset(CGPoint(x: 0, y: y), animated: false)
+            stage.window.layoutIfNeeded()
+        }
+        for _ in 0..<200 where scroll.contentOffset.y > 0 { page(to: max(0, scroll.contentOffset.y - scroll.bounds.height)) }
+        for _ in 0..<200 where scroll.contentOffset.y < end() - 1 { page(to: min(end(), scroll.contentOffset.y + scroll.bounds.height)) }
+        // Then it is where it opens, at its end, the newest turn's foot at the screen's with no more
+        // than the transcript's padding under it, and the block is where the fixture puts it, off
+        // the screen or on it. Each is waited for up to five seconds; a move after is the cue's.
+        func opened() -> Bool { scroll.contentOffset.y >= end() - look.transcript.spacing - 1 }
+        func measured() -> Bool { abs(scroll.contentSize.height - height) < 1 }
         var before = 0
         try stage.poll(for: 5) {
-            guard let scroll = Self.scrollView(in: stage.window), opened(scroll) else { return false }
+            guard measured(), opened() else { return false }
             before = try Pixels(stage.image(), blank: true).count(outline)
             return first ? before == 0 : before > 20
         }
-        let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
-        XCTAssertTrue(opened(scroll), "the transcript did not open at its end: \(scroll.contentOffset.y) of \(scroll.contentSize.height)")
+        XCTAssertTrue(measured(), "the transcript's rows were not all measured: \(scroll.contentSize.height) of \(height)")
+        XCTAssertTrue(opened(), "the transcript is not at its end: \(scroll.contentOffset.y) of \(scroll.contentSize.height)")
         if first {
             XCTAssertEqual(before, 0, "the fixture's block is on the screen already")
         } else {
