@@ -292,15 +292,24 @@ class Decisions(unittest.TestCase):
             try:
                 state = {"pending": [f"line {i}" for i in range(janitor.PENDING_MAX + 30)]}
                 janitor.deliver(Sh(), state, NOW, log=lambda s: None, warn=lambda s: None)
+                self.assertEqual(len(sent), 1)
+                lines = sent[0].splitlines()[1:]
+                self.assertEqual(len(lines), janitor.PENDING_MAX + 1, "the newest PENDING_MAX lines under one line saying what was dropped")
+                self.assertIn("30 older lines", lines[0])
+                self.assertNotIn("line 0", sent[0].splitlines()[1])
+                self.assertIn(f"line {janitor.PENDING_MAX + 29}", lines[-1])
+                self.assertEqual(state["pending"], [])
+                self.assertEqual(state["undelivered"], [])
+                # Older messages go whole, oldest first, before the newest is cut.
+                state = {"undelivered": [{"id": "a", "at": "t", "lines": ["old"] * 150}, {"id": "b", "at": "t", "lines": ["mid"] * 100}],
+                         "pending": ["new"] * 10}
+                sent.clear()
+                janitor.deliver(Sh(), state, NOW, log=lambda s: None, warn=lambda s: None)
+                self.assertEqual([t.count("- old") for t in sent], [0, 0])
+                self.assertEqual([t.count("- mid") for t in sent], [100, 0])
+                self.assertIn("150 older lines", sent[1])
             finally:
                 janitor.MESH_ENV = old
-        self.assertEqual(len(sent), 1)
-        lines = sent[0].splitlines()[1:]
-        self.assertEqual(len(lines), janitor.PENDING_MAX + 1, "the newest PENDING_MAX lines under one line saying what was dropped")
-        self.assertIn("30 older lines", lines[0])
-        self.assertNotIn("line 0", sent[0].splitlines()[1])
-        self.assertIn(f"line {janitor.PENDING_MAX + 29}", lines[-1])
-        self.assertEqual(state["pending"], [])
 
     def test_the_peer_token_is_read_off_the_bridges_env_file(self):
         with tempfile.TemporaryDirectory() as d:
@@ -435,6 +444,9 @@ class WholePass(unittest.TestCase):
         with open(self.state) as f:
             return json.load(f)
 
+    def undelivered(self):
+        return [l for m in self.state_file().get("undelivered", []) for l in m["lines"]]
+
     def calls(self):
         if not os.path.exists(self.log):
             return ""
@@ -476,7 +488,7 @@ class WholePass(unittest.TestCase):
         self.assertIn("merged #7", got["body"]["text"])
         self.assertIn("swept worktree topo-old", got["body"]["text"])
         self.assertIn("killed tmux topo-old", got["body"]["text"])
-        self.assertEqual(self.state_file()["pending"], [])
+        self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
 
     def test_a_worktree_with_uncommitted_changes_is_left_with_its_sessions_and_said_once(self):
         s = self.scripted(status={self.wt: " M file.swift"})
@@ -529,7 +541,8 @@ class WholePass(unittest.TestCase):
                                {"number": 9, "state": "OPEN", "mergedAt": None, "headRefOid": "2222"}]}
         p, calls = self.run_pass(self.scripted(history_later=later))
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(calls.count("--head buddy/old"), 2, "asked once to decide and once before the remove")
+        self.assertEqual(calls.count("--head buddy/old"), 2, "asked once to decide and once before the kills")
+        self.assertNotIn("kill-session", calls, "nothing of the PR's is killed")
         self.assertNotIn("worktree remove", calls)
         self.assertNotIn("update-ref", calls)
         self.assertIn("got an open PR while the sweep looked; left", Bridge.received[-1]["body"]["text"])
@@ -625,7 +638,7 @@ class WholePass(unittest.TestCase):
         out, err = proc.communicate(timeout=20)
         self.assertNotEqual(proc.returncode, -15, "SIGTERM was not turned into an ordinary exit")
         state = self.state_file()
-        self.assertEqual(state["pending"], [], "the report was delivered before the process ended: " + err)
+        self.assertEqual((state["pending"], state["undelivered"]), ([], []), "the report was delivered before the process ended: " + err)
         self.assertTrue(any("merged #7" in l for l in Bridge.received[-1]["body"]["text"].splitlines()))
         self.assertIn("stopped early: SystemExit", Bridge.received[-1]["body"]["text"])
         self.assertIsNone(state["publish"][LONG_MAIN]["ok"])
@@ -658,7 +671,7 @@ class WholePass(unittest.TestCase):
         text = Bridge.received[-1]["body"]["text"]
         self.assertIn("merged #7", text)
         self.assertIn("the pass stopped early: KeyError", text)
-        self.assertEqual(self.state_file()["pending"], [])
+        self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
 
     def test_no_verdict_is_rerun_once_and_the_second_red_names_the_failing_tests(self):
         j = jobs(test="failure", topo_unit=("failure", "Boot the simulator"), reviewer_ran="failure")
@@ -706,16 +719,16 @@ class WholePass(unittest.TestCase):
         Bridge.status = 503
         p, _ = self.run_pass(self.scripted())
         self.assertIn("kept for the next pass", p.stderr)
-        pending = self.state_file()["pending"]
-        self.assertTrue(any("merged #7" in l for l in pending))
+        self.assertTrue(any("merged #7" in l for l in self.undelivered()))
+        self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
         Bridge.status = 200
         p, _ = self.run_pass(self.scripted(prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
         self.assertTrue(any("merged #7" in l for l in Bridge.received[-1]["body"]["text"].splitlines()))
-        self.assertEqual(self.state_file()["pending"], [])
+        self.assertEqual(self.undelivered(), [])
         Bridge.status = 400
         p, _ = self.run_pass(self.scripted())
         self.assertIn("dropped", p.stderr)
-        self.assertEqual(self.state_file()["pending"], [])
+        self.assertEqual(self.undelivered(), [])
 
     def test_a_bridge_that_answers_badly_keeps_the_report_and_the_state(self):
         Bridge.short_body = True
@@ -724,25 +737,29 @@ class WholePass(unittest.TestCase):
         self.assertIn("kept for the next pass", p.stderr)
         self.assertIn("IncompleteRead", p.stderr)
         state = self.state_file()
-        self.assertTrue(any("merged #7" in l for l in state["pending"]))
+        self.assertTrue(any("merged #7" in l for l in self.undelivered()))
         self.assertEqual(len(Bridge.received), 1, "the bridge took the message before answering badly")
-        first_id = Bridge.received[0]["body"]["id"]
-        self.assertEqual(state["pending_id"], first_id)
+        first = Bridge.received[0]["body"]
+        self.assertEqual(state["undelivered"][0]["id"], first["id"])
         Bridge.short_body = False
-        p, calls = self.run_pass(self.scripted(prs=[], worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
+        # The next pass has something new to say: it is a second message, and
+        # the first is sent again exactly as it was, so a receiver keying on
+        # the id sees the first once and the second as new.
+        p, calls = self.run_pass(self.scripted(prs=[pr(body="- [ ] device: phone")],
+                                               worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"))
         self.assertNotIn("pr merge", calls)
-        self.assertIn("merged #7", Bridge.received[-1]["body"]["text"])
-        self.assertEqual(Bridge.received[-1]["body"]["id"], first_id, "the retry is the same message, by id")
-        self.assertEqual(self.state_file()["pending"], [])
-        self.assertNotIn("pending_id", self.state_file())
-        p, calls = self.run_pass(self.scripted())
-        self.assertNotEqual(Bridge.received[-1]["body"]["id"], first_id, "a report the bridge answered gets a new id")
+        self.assertEqual(len(Bridge.received), 3)
+        self.assertEqual(Bridge.received[1]["body"], first, "the retry is the same message, id and text")
+        self.assertIn("Proof box", Bridge.received[2]["body"]["text"])
+        self.assertNotIn("merged #7", Bridge.received[2]["body"]["text"])
+        self.assertNotEqual(Bridge.received[2]["body"]["id"], first["id"])
+        self.assertEqual(self.undelivered(), [])
 
     def test_no_peer_token_keeps_the_report(self):
         os.remove(self.mesh_env)
         p, _ = self.run_pass(self.scripted())
         self.assertIn("no BRIDGE_PEER_TOKEN", p.stderr)
-        self.assertTrue(self.state_file()["pending"])
+        self.assertTrue(self.undelivered())
         self.assertEqual(Bridge.received, [])
 
 

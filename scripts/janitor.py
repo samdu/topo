@@ -482,51 +482,60 @@ def peer_token(path=MESH_ENV):
 
 
 def deliver(sh, state, now, dry=False, log=print, warn=None):
-    """One message to buddy-prime through its bridge's /deliver, as the fleet's
+    """The reports to buddy-prime, through its bridge's /deliver as the fleet's
     bridges forward to each other: this host's verified name as `from`, the
-    janitor as `sender`. What is sent is the state's pending lines, which every
-    pass appends to as it goes. A 400 is the far bridge refusing the message
-    for good, so the lines are dropped and said to have been; anything else
-    keeps them."""
+    janitor as `sender`. This pass's lines become one message under a new id;
+    messages the bridge has not answered for good stand in `undelivered` under
+    the ids they were first sent with, and go first, oldest first, each as the
+    message it was — a bridge that took one and then answered badly is sent the
+    same id and the same text, never a bigger message under that id. A 200
+    settles a message, a 400 is the bridge refusing it for good (dropped, and
+    said to have been), and anything else keeps it and every message after it.
+    Of more than PENDING_MAX lines standing the oldest messages go, with a line
+    in the newest saying how many."""
     warn = warn or (lambda s: print(s, file=sys.stderr, flush=True))
+    queue = list(state.get("undelivered", []))
     lines = list(state.get("pending", []))
-    if len(lines) > PENDING_MAX:
-        dropped = len(lines) - PENDING_MAX
-        lines = [f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped."] + lines[-PENDING_MAX:]
-    if not lines:
+    state["pending"] = []
+    if lines:
+        queue.append({"id": str(uuid.uuid4()), "at": now.strftime("%Y-%m-%dT%H:%MZ"), "lines": lines})
+    dropped = 0
+    while queue and sum(len(m["lines"]) for m in queue) > PENDING_MAX and len(queue) > 1:
+        dropped += len(queue.pop(0)["lines"])
+    if queue and len(queue[-1]["lines"]) > PENDING_MAX:
+        dropped += len(queue[-1]["lines"]) - PENDING_MAX
+        queue[-1]["lines"] = queue[-1]["lines"][-PENDING_MAX:]
+    if dropped:
+        queue[-1]["lines"].insert(0, f"{dropped} older line{'s' if dropped > 1 else ''} not delivered in time were dropped.")
+    state["undelivered"] = queue
+    if not queue:
         return
-    text = f"[{FROM}] pass at {now.strftime('%Y-%m-%dT%H:%MZ')}\n" + "\n".join(f"- {l}" for l in lines)
-    if dry:
-        log(text)
-        state["pending"] = []
-        return
-    token = peer_token(MESH_ENV)
-    if not token:
+    token = None if dry else peer_token(MESH_ENV)
+    if not dry and not token:
         warn(f"report not delivered (no BRIDGE_PEER_TOKEN in {MESH_ENV}); kept for the next pass")
-        state["pending"] = lines
         return
-    # The id is kept with the lines: a bridge that took the message and then
-    # answered badly is sent the same id again, so a receiver keying on it sees
-    # one report, not two. A new id only once the bridge has answered for good.
-    message_id = state.get("pending_id") or str(uuid.uuid4())
-    state["pending_id"] = message_id
-    body = {"id": message_id, "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text}
-    try:
-        status, answer = sh.post(MESH_DELIVER_URL, body, token)
-    except RuntimeError as ex:
-        warn(f"report not delivered ({ex}); kept for the next pass")
-        state["pending"] = lines
-        return
-    if status == 200:
-        state["pending"] = []
-        state.pop("pending_id", None)
-    elif status == 400:
-        warn(f"report refused for good by {REPORT_TO}'s bridge ({answer}); {len(lines)} line(s) dropped")
-        state["pending"] = []
-        state.pop("pending_id", None)
-    else:
-        warn(f"report not delivered ({status} {answer}); kept for the next pass")
-        state["pending"] = lines
+    while queue:
+        m = queue[0]
+        text = f"[{FROM}] pass at {m['at']}\n" + "\n".join(f"- {l}" for l in m["lines"])
+        if dry:
+            log(text)
+            queue.pop(0)
+            continue
+        body = {"id": m["id"], "from": MESH_SELF, "sender": FROM, "to": REPORT_TO, "text": text}
+        try:
+            status, answer = sh.post(MESH_DELIVER_URL, body, token)
+        except RuntimeError as ex:
+            warn(f"report not delivered ({ex}); kept for the next pass")
+            break
+        if status == 200:
+            queue.pop(0)
+        elif status == 400:
+            warn(f"report refused for good by {REPORT_TO}'s bridge ({answer}); {len(m['lines'])} line(s) dropped")
+            queue.pop(0)
+        else:
+            warn(f"report not delivered ({status} {answer}); kept for the next pass")
+            break
+    state["undelivered"] = queue
 
 
 # --- one pass --------------------------------------------------------------
@@ -670,6 +679,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
                 if not sh.worktree_clean(wt["path"]):
                     say(key, f"worktree {name} ({wt['branch']}, #{wt['number']} merged {minutes(wt['age'])} ago) has uncommitted changes; left, with its sessions.")
                     continue
+                # The branch is asked again before anything is killed: a PR
+                # opened from it since the history was read makes this its
+                # worktree, and its sessions, not a leftover.
+                if any(p.get("state") == "OPEN" for p in sh.pr_history(wt["branch"])):
+                    say(key, f"worktree {name} ({wt['branch']}) got an open PR while the sweep looked; left.")
+                    continue
                 root = wt["path"].rstrip("/")
                 killed = sorted({s for s, cwd in sh.tmux_panes() if cwd == root or cwd.startswith(root + "/")})
                 for s in killed:
@@ -681,10 +696,10 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
                 if tip != wt["head"]:
                     say(key, f"worktree {name} ({wt['branch']}) moved to {tip[:7]} while the sweep looked; left.")
                     continue
-                # And the branch is asked again: a PR opened from it since the
-                # history was read makes this its worktree, not a leftover.
+                # And once more, right before the remove, for a PR opened while
+                # the kills and the tip read took their time.
                 if any(p.get("state") == "OPEN" for p in sh.pr_history(wt["branch"])):
-                    say(key, f"worktree {name} ({wt['branch']}) got an open PR while the sweep looked; left.")
+                    say(key, f"worktree {name} ({wt['branch']}) got an open PR while the sweep looked; left, its sessions killed.")
                     continue
                 sh.remove_worktree(checkout, wt["path"])
                 try:
