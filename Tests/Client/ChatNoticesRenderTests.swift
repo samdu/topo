@@ -77,6 +77,32 @@ final class ChatNoticesRenderTests: XCTestCase {
         }
     }
 
+    /// The busy notice is the spinner, where the turn is and the count behind it on one row, so
+    /// what has to fit is the row, not the words alone: every status the harness sets, with each
+    /// model's name, and nothing, one or many waiting, laid out at the largest `noticeFont` in the
+    /// 17e's 272 points is the same size bounded to two lines as unbounded — the bound cut nothing.
+    func testEveryBusyNoticeFitsTwoLinesOfTheBarWithTheSpinnerAndTheCount() {
+        let statuses = ["Reaching iCloud…", "Checking this device is primary…", "Saving what you said…",
+                        "Saving the reply…", "Working…"] + ClaudeModel.allCases.map { "Asking \($0.displayName)…" }
+        var look = Look()
+        look.transcript.noticeFont = .system(size: CGFloat(Look.Transcript.largestNotice))
+        for status in statuses {
+            for waiting in [1, 2, 12] {
+                let said = ChatNotices.Said(busy: true, status: status, waiting: waiting)
+                let bounded = size(ChatNotices(notices: said), look: look)
+                let whole = size(ChatNotices(notices: said, lineLimit: nil), look: look)
+                XCTAssertEqual(bounded, whole, "\"\(status)\" with \(waiting) on the line is cut short in the bar")
+                XCTAssertLessThanOrEqual(whole.height, 2 * UIFont.systemFont(ofSize: 15).lineHeight + 1,
+                                         "\"\(status)\" with \(waiting) on the line is more than two lines of the bar")
+            }
+        }
+    }
+
+    private func size(_ view: ChatNotices, look: Look) -> CGSize {
+        UIHostingController(rootView: view.environment(\.look, look))
+            .sizeThatFits(in: CGSize(width: 272, height: CGFloat.greatestFiniteMagnitude))
+    }
+
     func testTheFailureIsDrawnInTheLooksTrouble() throws {
         let failure = ChatNotices.Said(error: "iCloud refused the read. Check you're signed in on this device.")
         var look = Look()

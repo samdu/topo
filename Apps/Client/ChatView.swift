@@ -584,6 +584,9 @@ struct ChatNotices: View {
     }
 
     let notices: Said
+    /// The most lines the notice takes; nil only where a test lays it out unbounded, to hold that
+    /// the bound cut nothing.
+    var lineLimit: Int? = ChatNotices.lines
     @Environment(\.look) private var look
 
     /// What the UI suite finds the notices by.
@@ -617,7 +620,7 @@ struct ChatNotices: View {
             }
         }
         .font(look.transcript.noticeFont)
-        .lineLimit(Self.lines)
+        .lineLimit(lineLimit)
         .truncationMode(.tail)
         .dynamicTypeSize(...Self.largestType)
         .multilineTextAlignment(.center)
