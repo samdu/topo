@@ -244,15 +244,16 @@ struct ResidentConversation: GuestConversation {
     }
 
     func forget() async {
-        // The resident is ended first, and waited for; then the mount goes, and then the grant on
-        // the person's iCloud Drive folder: the memory is not reachable from a signed-out guest,
-        // and the grant is not held past the login.
-        await GuestResident.shared.vault.forget { @MainActor in
-            if let session = GuestResident.shared.session {
-                await session.forgetSession()
-            } else {
-                GuestResident.sessionFile.clear()
-            }
+        // The resident is ended with no replacement, and waited for; then the mount goes, and then
+        // the grant on the person's iCloud Drive folder, before any process starts again: the
+        // memory is not reachable from a signed-out guest, and the grant is not held past the login.
+        guard let session = await GuestResident.shared.session else {
+            GuestResident.sessionFile.clear()
+            await GuestResident.shared.vault.forget()
+            return
+        }
+        await session.forgetSession { @MainActor in
+            GuestResident.shared.vault.forget()
         }
     }
 

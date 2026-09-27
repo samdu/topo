@@ -65,7 +65,7 @@ public typealias Sleep = @Sendable (Duration) async throws -> Void
 ///
 /// The model the process asks is the session's (`use(model:)`), and so is what it is told of its
 /// memory (`use(memory:)`) and whether the next process resumes the kept conversation
-/// (`forgetSession()`). Any of them changing makes the resident process stale. A change of model
+/// (`forgetSession(then:)`). Any of them changing makes the resident process stale. A change of model
 /// or of the memory replaces it at the next idle moment: at once when no turn is in flight, and
 /// otherwise once the turn has ended, never in the middle of one. A forgotten conversation — a
 /// sign-out — ends it at once, abandoning a turn in flight.
@@ -163,11 +163,13 @@ public actor GuestSession {
     private var model: String?
     /// What every process is told of its memory: mounted, not, or nothing.
     private var memory: Bool?
-    /// Counts `forgetSession()`: a process started under an older count holds a conversation
+    /// Counts `forgetSession(then:)`: a process started under an older count holds a conversation
     /// that has been forgotten.
     private var conversation = 0
     /// The next process starts a fresh session rather than resuming the kept one.
     private var freshNext = false
+    /// Sign-outs under way: while any is, no process starts (`forgetSession(then:)`).
+    private var signingOut = 0
     private let sleep: Sleep
     private let turnBound: Duration
     private let log: @Sendable (String) -> Void
@@ -311,19 +313,31 @@ public actor GuestSession {
     /// starts a fresh session, and a resident process holding the old one is ended now, a turn in
     /// flight abandoned — unlike a change of model, which waits for the turn. What it holds is the
     /// login that went: its token is in its environment, and a turn left running would run its
-    /// tools and go on writing that session's transcript for nobody. The replacement, started in
-    /// the foreground, reads its environment afresh, the guest's token included.
+    /// tools and go on writing that session's transcript for nobody.
     ///
-    /// Returns once the process that held the old conversation has been ended — one resident, one
-    /// being ended, or one still starting, which is ended as it lands — with how its end went; nil
-    /// when there was none. What it held (a file in the vault, its working directory) is let go by
-    /// then, so a sign-out can take the mount away after it.
+    /// No process starts from the call until `takeAway` has returned: the one that held the old
+    /// conversation — resident, being ended, or still starting, which is ended as it lands — is
+    /// ended with no replacement, its end is awaited, and then `takeAway` runs, so what it held (a
+    /// file in the vault, its working directory) is let go and nothing new holds it when the mount
+    /// is taken away. A `ready()` meanwhile waits, and its process starts once `takeAway` is done;
+    /// with nobody waiting none starts, and the next `ready()` starts one, reading its environment
+    /// afresh. Returns how the old process's end went; nil when there was none.
     @discardableResult
-    public func forgetSession() async -> GuestProcess.Termination? {
+    public func forgetSession(then takeAway: @Sendable () async -> Void = {}) async -> GuestProcess.Termination? {
         store.clear()
         freshNext = true
         conversation += 1
-        log("the conversation is forgotten; the next process starts a fresh session")
+        signingOut += 1
+        log("the conversation is forgotten; nothing starts until the sign-out has taken away what it held")
+        let termination = await endForgotten()
+        await takeAway()
+        signingOut -= 1
+        if !readiness.isEmpty { startResident() }
+        return termination
+    }
+
+    /// Ends the process holding a forgotten conversation, with no replacement, and waits for it.
+    private func endForgotten() async -> GuestProcess.Termination? {
         if let startTask {
             // It lands stale (`launched`), and is ended there.
             await startTask.value
@@ -331,13 +345,14 @@ public actor GuestSession {
         switch phase {
         case .resident(let resident) where resident.conversation != conversation:
             if let turn = resident.turn { finish(turn, of: resident, with: .abandoned) }
-            return await end(resident, reason: "a forgotten conversation", restart: true).value
+            return await end(resident, reason: "a forgotten conversation", restart: false).value
         case .stopping:
             return await teardown?.value
         case .idle, .starting, .resident:
             return nil
         }
     }
+
     // MARK: - The lifecycle
 
     /// The app came to the foreground: the resident process starts, or — when the app is back
@@ -481,7 +496,7 @@ public actor GuestSession {
     }
 
     private func startResident() {
-        guard case .idle = phase, inForeground else { return }
+        guard case .idle = phase, inForeground, signingOut == 0 else { return }
         if freshNext {
             store.clear()
             freshNext = false

@@ -121,17 +121,13 @@ final class VaultMount {
         }
     }
 
-    /// Sign-out: `end` ends the resident, and once it has answered the mount goes and then the
-    /// grant it held — never before, since a mount the resident still holds cannot be taken away
-    /// and a grant stopped under it is access pulled from a process still running. A mount still
-    /// held after the end (a teardown that did not confirm) is left marked stale, so the next
-    /// reconcile takes it away before anything else; the grant goes either way.
-    func forget(after end: @MainActor () async -> Void) async {
-        await end()
-        forget()
-    }
-
-    private func forget() {
+    /// Sign-out: the mount goes and then the grant it held. The caller has ended the resident
+    /// first, and starts none until this returns (`GuestSession.forgetSession(then:)`): a mount the
+    /// resident still holds cannot be taken away, and a grant stopped under it is access pulled
+    /// from a process still running. A mount still held (a teardown that did not confirm) is left
+    /// marked stale, so the next reconcile takes it away before anything else; the grant goes
+    /// either way.
+    func forget() {
         guard var standing else { return }
         do {
             try seam.unmount()

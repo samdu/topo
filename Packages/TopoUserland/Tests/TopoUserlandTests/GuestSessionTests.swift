@@ -494,7 +494,7 @@ final class GuestSessionTests: XCTestCase {
         XCTAssertEqual(model, "claude-fable-5-1")
     }
 
-    /// Forgetting the conversation clears the kept id, and the replacement starts fresh.
+    /// Forgetting the conversation clears the kept id, and the next process starts fresh.
     func testForgettingTheConversationStartsAFreshSession() async throws {
         store.save("OLD")
         let session = session()
@@ -502,8 +502,54 @@ final class GuestSessionTests: XCTestCase {
         try await session.ready()
         await session.forgetSession()
         XCTAssertNil(store.load())
-        await eventually("replaced") { launcher.processes.count == 2 }
+        try await session.ready()
         XCTAssertEqual(launcher.resumed, ["OLD", nil])
+    }
+
+    /// A sign-out in the foreground starts no replacement until what it takes away has gone: the
+    /// old process is ended with none started after it, a `ready()` arriving while it is being
+    /// ended waits, and only once `takeAway` has returned does a process start — for that waiter.
+    /// A replacement started as the old one's end answered could open a file in the vault before
+    /// the mount is taken away, and the unmount would be refused as busy.
+    func testASignOutStartsNoReplacementUntilWhatItHeldIsTakenAway() async throws {
+        let (session, old) = try await resident()
+        let launcher = launcher!
+        old.holdNextTermination()
+        let launchesAtTakeAway = Launches()
+        let forgetting = Task {
+            await session.forgetSession {
+                for _ in 0..<50 { await Task.yield() }
+                launchesAtTakeAway.set(launcher.processes.count)
+            }
+        }
+        await eventually("the old process is being ended") { old.terminationHeld }
+        let waiting = Task { try await session.ready() }
+        for _ in 0..<50 { await Task.yield() }
+        old.release()
+        let termination = await forgetting.value
+        XCTAssertEqual(termination?.status, 137)
+        XCTAssertEqual(launchesAtTakeAway.value, 1, "a replacement was launched before the sign-out took the vault away")
+        try await waiting.value
+        XCTAssertEqual(launcher.processes.count, 2, "the ready() that waited through the sign-out got no process")
+        XCTAssertEqual(launcher.resumed.last, .some(nil))
+    }
+
+    /// With nobody waiting, a sign-out in the foreground leaves nothing resident: the next
+    /// `ready()` starts the process.
+    func testASignOutWithNobodyWaitingStartsNothing() async throws {
+        let (session, _) = try await resident()
+        await session.forgetSession()
+        for _ in 0..<50 { await Task.yield() }
+        XCTAssertEqual(launcher.processes.count, 1, "a sign-out started a process nobody asked for")
+        try await session.ready()
+        XCTAssertEqual(launcher.processes.count, 2)
+    }
+
+    private final class Launches: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count: Int?
+        var value: Int? { lock.withLock { count } }
+        func set(_ value: Int) { lock.withLock { count = value } }
     }
 
     /// A sign-out waits for the old process's end, so what it held is let go before anything
@@ -617,9 +663,8 @@ final class GuestSessionTests: XCTestCase {
 
         old.release()
         _ = await forgetting.value
-        await eventually("replaced") { launcher.processes.count == 2 }
-        XCTAssertEqual(launcher.resumed, ["OLD", nil], "the replacement resumed the forgotten session")
         try await session.ready()
+        XCTAssertEqual(launcher.resumed, ["OLD", nil], "the replacement resumed the forgotten session")
         let fresh = try XCTUnwrap(launcher.last)
         let (_, freshDone) = collect(try await session.send("hello"))
         await eventually("written") { fresh.turns.count == 1 }

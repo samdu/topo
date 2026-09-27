@@ -274,15 +274,11 @@ final class GuestVaultMountTests: XCTestCase {
     /// taken away before its end has answered is refused as busy.
     func testASignOutEndsTheResidentBeforeTheVaultIsTakenAway() async throws {
         let (host, point) = try vault()
-        let directory = fm.temporaryDirectory.appendingPathComponent("session-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        hosts.append(directory)
-        let launcher = HoldingLauncher(point: point)
-        let session = GuestSession(launcher: launcher, store: SessionFile(url: directory.appendingPathComponent(".guest-session")))
+        let session = try holdingSession(HoldingLauncher(point: point))
         await session.foreground()
         try await session.ready()
         await eventually("the resident holds a file in the vault") {
-            fm.fileExists(atPath: host.appendingPathComponent("holding").path)
+            fm.fileExists(atPath: host.appendingPathComponent("holding-1").path)
         }
         XCTAssertThrowsError(try Guest.shared.unmount(point), "the resident did not hold the vault")
 
@@ -292,6 +288,41 @@ final class GuestVaultMountTests: XCTestCase {
 
         let outcome = await session.background(budget: .zero)
         if case .ended(_, let termination) = outcome { XCTAssertTrue(termination.confirmed, "\(termination)") }
+    }
+
+    /// A sign-out in the foreground starts no replacement before the vault is taken away. Every
+    /// process this launcher starts opens a file in the vault, as Claude Code does as soon as it
+    /// reads its memory, so a replacement started as the old process's end answered would hold the
+    /// mount and the unmount after the sign-out would be refused as busy. The replacement is given
+    /// time to have opened its file before the unmount; a `ready()` after the take-away starts one.
+    func testASignOutInTheForegroundStartsNoReplacementThatHoldsTheVault() async throws {
+        let (host, point) = try vault()
+        let launcher = HoldingLauncher(point: point)
+        let session = try holdingSession(launcher)
+        await session.foreground()
+        try await session.ready()
+        await eventually("the resident holds a file in the vault") {
+            fm.fileExists(atPath: host.appendingPathComponent("holding-1").path)
+        }
+
+        await session.forgetSession()
+        let replacement = host.appendingPathComponent("holding-2").path
+        for _ in 0..<30 where !fm.fileExists(atPath: replacement) {
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        XCTAssertEqual(launcher.count, 1, "the sign-out launched a replacement before the vault was taken away")
+        XCTAssertNoThrow(try Guest.shared.unmount(point), "a replacement held the vault when the sign-out took it away")
+        points.removeAll { $0 == point }
+
+        let outcome = await session.background(budget: .zero)
+        if case .ended(_, let termination) = outcome { XCTAssertTrue(termination.confirmed, "\(termination)") }
+    }
+
+    private func holdingSession(_ launcher: HoldingLauncher) throws -> GuestSession {
+        let directory = fm.temporaryDirectory.appendingPathComponent("session-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
+        hosts.append(directory)
+        return GuestSession(launcher: launcher, store: SessionFile(url: directory.appendingPathComponent(".guest-session")))
     }
 
     /// A folder made again is reached through a mount made again.
@@ -347,7 +378,7 @@ final class GuestVaultMountTests: XCTestCase {
 }
 
 /// A resident that holds a file of the vault open, as Claude Code does in the middle of a Read, and
-/// says so with a file beside it; every launch after the first holds nothing.
+/// says so with a file beside it named for its launch: `holding-1`, `holding-2`, and on.
 private final class HoldingLauncher: ResidentLauncher, @unchecked Sendable {
     let point: String
     private let lock = NSLock()
@@ -355,9 +386,10 @@ private final class HoldingLauncher: ResidentLauncher, @unchecked Sendable {
 
     init(point: String) { self.point = point }
 
+    var count: Int { lock.withLock { launches } }
+
     func launch(resume session: String?, model: String?, memory: Bool?) async throws -> any ResidentProcess {
-        let first = lock.withLock { () -> Bool in launches += 1; return launches == 1 }
-        let script = first ? "exec 3<\(point)/note.md; : > \(point)/holding; exec sleep 300" : "cd / && exec sleep 300"
-        return try await Guest.shared.spawn("/bin/sh", ["-c", script])
+        let n = lock.withLock { () -> Int in launches += 1; return launches }
+        return try await Guest.shared.spawn("/bin/sh", ["-c", "exec 3<\(point)/note.md; : > \(point)/holding-\(n); exec sleep 300"])
     }
 }

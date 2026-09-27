@@ -143,50 +143,27 @@ final class VaultMountTests: XCTestCase {
         XCTAssertNil(mount.standing)
     }
 
-    func testForgetUnmountsAndStopsAccess() async throws {
+    func testForgetUnmountsAndStopsAccess() throws {
         let recorder = Recorder()
         recorder.identities[vault] = .init(device: 2, inode: 7)
         let mount = VaultMount(seam: recorder.seam)
         _ = try mount.reconcile(home: .iCloudDrive(picked: root, folder: vault), local: local)
         recorder.calls = []
-        await mount.forget { recorder.calls.append("end") }
-        XCTAssertEqual(recorder.calls, ["end", "unmount", "stop com~apple~CloudDocs"])
+        mount.forget()
+        XCTAssertEqual(recorder.calls, ["unmount", "stop com~apple~CloudDocs"])
         XCTAssertNil(mount.standing)
-    }
-
-    /// The end is awaited, not started: while the resident's teardown is still running, nothing
-    /// is unmounted and no access is stopped.
-    func testForgetWaitsForTheResidentsEndBeforeTakingAnythingAway() async throws {
-        let recorder = Recorder()
-        recorder.identities[vault] = .init(device: 2, inode: 7)
-        let mount = VaultMount(seam: recorder.seam)
-        _ = try mount.reconcile(home: .iCloudDrive(picked: root, folder: vault), local: local)
-        recorder.calls = []
-        let (ended, finish) = AsyncStream<Void>.makeStream()
-        let forgetting = Task { @MainActor in
-            await mount.forget {
-                recorder.calls.append("ending")
-                for await _ in ended { break }
-                recorder.calls.append("ended")
-            }
-        }
-        for _ in 0..<50 { await Task.yield() }
-        XCTAssertEqual(recorder.calls, ["ending"], "the mount or its grant went while the resident was still ending")
-        finish.yield()
-        await forgetting.value
-        XCTAssertEqual(recorder.calls, ["ending", "ended", "unmount", "stop com~apple~CloudDocs"])
     }
 
     /// A mount a teardown that did not confirm still holds: the grant goes anyway, and the next
     /// reconcile takes the mount away before anything else, even for the same folder.
-    func testAForgetThatCannotUnmountStopsTheGrantAndLeavesTheMountStale() async throws {
+    func testAForgetThatCannotUnmountStopsTheGrantAndLeavesTheMountStale() throws {
         let recorder = Recorder()
         recorder.identities[vault] = .init(device: 2, inode: 7)
         let mount = VaultMount(seam: recorder.seam)
         _ = try mount.reconcile(home: .iCloudDrive(picked: root, folder: vault), local: local)
         recorder.unmountFails = true
         recorder.calls = []
-        await mount.forget {}
+        mount.forget()
         XCTAssertEqual(recorder.calls, ["stop com~apple~CloudDocs"])
         recorder.unmountFails = false
         recorder.calls = []
