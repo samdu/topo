@@ -55,18 +55,19 @@ enum DebugRun {
     static let look: Look? = lookReading?.look
 
     #if os(iOS)
-    /// `TOPO_DEBUG_NOTICES=<busy|error|info|busy-info|error-busy>`: the chat's notices
+    /// `TOPO_DEBUG_NOTICES=<busy|busy-long|error|info|busy-info|error-busy>`: the chat's notices
     /// (`ChatNotices`) say one of their three things whatever the harness is doing, so a UI suite
-    /// can hold each in the bar on any host: a turn in flight with two behind it, iCloud refusing
-    /// the read, a turn left in the log for another device's primary, and two of them at once,
-    /// which the bar says one of. The words are the harness's own. Nil when the variable is absent
-    /// or names none of them.
+    /// can hold each in the bar on any host: a turn in flight with two behind it, the longest
+    /// status the harness sets with eleven behind it, iCloud refusing the read, a turn left in the
+    /// log for another device's primary, and two of them at once, which the bar says one of. The
+    /// words are the harness's own. Nil when the variable is absent or names none of them.
     @MainActor static var notices: ChatNotices.Said? { notices(ProcessInfo.processInfo.environment) }
 
     @MainActor static func notices(_ environment: [String: String]) -> ChatNotices.Said? {
         let refused = Harness.describe(RecordDatabaseError.rejected(underlying: CocoaError(.fileReadNoPermission)))
         return switch environment[noticesVariable] {
         case "busy": ChatNotices.Said(busy: true, status: "Reaching iCloud…", waiting: 3)
+        case "busy-long": ChatNotices.Said(busy: true, status: "Checking this device is primary…", waiting: 12)
         case "error": ChatNotices.Said(error: refused)
         case "info": ChatNotices.Said(info: Harness.limbInfo(.contended))
         case "busy-info":

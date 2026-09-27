@@ -44,6 +44,8 @@ final class ChatNoticesRenderTests: XCTestCase {
                        .info("Saved. Another device will answer here."))
         XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "busy"])?.notice,
                        .progress("Reaching iCloud…", queued: "· 2 waiting"))
+        XCTAssertEqual(DebugRun.notices(["TOPO_DEBUG_NOTICES": "busy-long"])?.notice,
+                       .progress("Checking this device is primary…", queued: "· 11 waiting"))
         let both = DebugRun.notices(["TOPO_DEBUG_NOTICES": "busy-info"])
         XCTAssertEqual(both?.info, Harness.limbInfo(.contended), "the fixture holds both")
         XCTAssertEqual(both?.notice, .progress("Reaching iCloud…", queued: "· 1 waiting"))

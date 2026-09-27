@@ -491,6 +491,10 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(styledTitle.look.transcript.noticeFont, Look().transcript.noticeFont)
         XCTAssertEqual(styledTitle.notes.count, 1, "\(styledTitle.notes)")
 
+        let titleAndSize = LookDocument.read("{ \"transcript\": { \"noticeFont\": { \"style\": \"title\", \"size\": 14 } } }")
+        XCTAssertEqual(titleAndSize.look.transcript.noticeFont, Font.system(size: 14), "the size beside the style still sets")
+        XCTAssertEqual(titleAndSize.notes.count, 1, "and the style is refused with a note: \(titleAndSize.notes)")
+
         let small = LookDocument.read("{ \"transcript\": { \"noticeFont\": \"footnote\" } }")
         XCTAssertEqual(small.look.transcript.noticeFont, .system(.footnote))
         XCTAssertEqual(small.notes, [])

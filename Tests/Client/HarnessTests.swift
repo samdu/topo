@@ -1059,6 +1059,27 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNil(phone.error, "a read got through and the chat still says it did not")
     }
 
+    /// A read that gets through takes down the read's failure and no other, however alike their
+    /// words: a turn that could not be written says "iCloud is out of reach" in the same words a
+    /// failed read did, and it stands, with the turn still on the line, until the turn goes.
+    func testAReadThatGetsThroughLeavesATurnsFailureInTheSameWords() async throws {
+        let db = FailingDatabase(InMemoryRecordDatabase())
+        let phone = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await db.refuseReads(true)
+        await phone.refresh()
+        XCTAssertEqual(phone.failure, Harness.Failure(words: "iCloud is out of reach. Topo will try again.", source: .read))
+        await db.refuseReads(false)
+        await db.refuseWrites(true)
+        await phone.send("water the plants")
+        XCTAssertEqual(phone.waiting, ["water the plants"], "the turn was not written, so it is still owed")
+        XCTAssertEqual(phone.failure, Harness.Failure(words: "iCloud is out of reach. Topo will try again.", source: .other),
+                       "the turn's failure is not the read's")
+        let read = await phone.refresh()
+        XCTAssertTrue(read)
+        XCTAssertEqual(phone.error, "iCloud is out of reach. Topo will try again.",
+                       "a read that got through took down the failure of a turn it was not about")
+    }
+
     // MARK: The reply that is read aloud
 
     /// A reply written by another primary — the hub, or a phone holding the lease.
@@ -1564,12 +1585,14 @@ private actor FailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
     private var loseNextTurnAcknowledgement = false
     private var refusingReads = false
+    private var refusingWrites = false
     private var darkAfterLostAcknowledgement = false
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
     func loseAcknowledgementOfNextTurn() { loseNextTurnAcknowledgement = true }
     func refuseReads(_ on: Bool) { refusingReads = on }
+    func refuseWrites(_ on: Bool) { refusingWrites = on }
     /// The device that went off the network in the middle of the write: the turn is committed,
     /// the acknowledgement is lost, and nothing after it can read the log to find out.
     func goDarkAfterTheNextTurn() {
@@ -1578,6 +1601,7 @@ private actor FailingDatabase: RecordDatabase {
     }
 
     func save(_ records: [Record]) async throws -> [Record] {
+        if refusingWrites { throw RecordDatabaseError.unavailable(underlying: Unexpected()) }
         let saved = try await wrapped.save(records)
         if loseNextTurnAcknowledgement, records.contains(where: { $0.type == Turn.recordType }) {
             loseNextTurnAcknowledgement = false

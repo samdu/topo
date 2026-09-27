@@ -817,8 +817,10 @@ enum LookDocument {
             if let clamped {
                 note(key, "is \(clamped) points, drawn at \(Int(largest)), the most its place holds")
             }
-            if let tooLarge, made == nil {
-                return note(key, "is \(tooLarge), larger than the \(Int(largest)) points it is drawn at most")
+            if let tooLarge {
+                // The style is refused whatever else the object says; a size beside it still sets.
+                note(key, "is \(tooLarge), larger than the \(Int(largest)) points it is drawn at most")
+                if made == nil { return }
             }
             guard var font = made else {
                 if object["style"] == nil, object["size"] == nil {

@@ -20,7 +20,17 @@ final class Harness {
     private(set) var hasRead = false
     private(set) var notice: String?
     private(set) var busy = false
-    private(set) var error: String?
+    /// The last failure, in words: what the chat's notice says.
+    var error: String? { failure?.words }
+    /// The last failure and what it came from, so a read that gets through takes down a read's
+    /// failure and no other, whatever the words.
+    private(set) var failure: Failure?
+
+    struct Failure: Equatable {
+        enum Source { case read, other }
+        var words: String
+        var source: Source = .other
+    }
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
     /// The person's turn the guest was cut off answering, which is not asked again unless the
@@ -269,7 +279,7 @@ final class Harness {
         turns = []
         hasRead = false
         notice = nil
-        error = nil
+        failure = nil
         status = nil
         busy = false
         context = nil
@@ -317,7 +327,7 @@ final class Harness {
                 if pending.first == next { pending.removeFirst() }
             }
         } catch {
-            self.error = "Not everything said has reached the log yet: \(Self.describe(error))"
+            failure = Failure(words: "Not everything said has reached the log yet: \(Self.describe(error))")
         }
         runner = nil
         lease = nil
@@ -348,22 +358,15 @@ final class Harness {
             }
             // The notice says what went wrong in the log's own words, which fit the two lines
             // the navigation bar holds (`ChatNotices.lines`); a prefix naming the read does not.
-            let failure = TranscriptStore.message(for: error)
-            self.error = failure
-            readFailure = failure
+            failure = Failure(words: TranscriptStore.message(for: error), source: .read)
             return false
         }
     }
 
-    /// The failure the last failed read put up, while it is the one shown. The notice carries no
-    /// mark of its own, so this is what tells a read's failure from a turn's.
-    private var readFailure: String?
-
     /// A read got through, so a line saying the last one did not is no longer true. Any other
     /// failure stands until what it was about is tried again.
     private func clearReadFailure() {
-        if let readFailure, error == readFailure { error = nil }
-        readFailure = nil
+        if failure?.source == .read { failure = nil }
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
@@ -455,7 +458,7 @@ final class Harness {
     private func drain() async {
         guard !busy else { return }
         busy = true
-        error = nil
+        failure = nil
         info = nil
         while let next = pending.first {
             let task = Task { await run(next) }
@@ -531,7 +534,7 @@ final class Harness {
             // The person's turn is in the log; only the reply is owed, and nothing is going to
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
-            error = Self.describe(underlying)
+            failure = Failure(words: Self.describe(underlying))
             onTurnFailed?(attempt.nonce)
             await refresh()
             await refreshUnfinished()
@@ -553,16 +556,16 @@ final class Harness {
                 return true
             } catch {
                 guard inFlight == generation else { return false }
-                self.error = Self.describe(error)
+                failure = Failure(words: Self.describe(error))
                 onTurnFailed?(attempt.nonce)
             }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
-            error = "Signed out. Sign in again to continue."
+            failure = Failure(words: "Signed out. Sign in again to continue.")
             onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
-            self.error = Self.describe(error)
+            failure = Failure(words: Self.describe(error))
             onTurnFailed?(attempt.nonce)
             await refresh()
         }
@@ -691,7 +694,7 @@ final class Harness {
             guard self.login == login else { return }
             if let reply = answered {
                 show(reply)
-                error = nil
+                failure = nil
                 await refresh()
                 // The reply is in the log, so anything the turn left in the memory goes out now.
                 await onPass?()
@@ -705,7 +708,7 @@ final class Harness {
             return
         } catch {
             guard self.login == login else { return }
-            self.error = Self.describe(error)
+            failure = Failure(words: Self.describe(error))
             await refreshUnfinished()
         }
     }
@@ -722,7 +725,7 @@ final class Harness {
         guard unfinished != nil, let guest else { return }
         await guest.askAgain()
         unfinished = nil
-        error = nil
+        failure = nil
         if answeringLoop { await wake() } else { await answerPending() }
     }
 

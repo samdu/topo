@@ -118,6 +118,8 @@ final class StatusNoticeTests: XCTestCase {
     /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
     private static let fixtures: [(String, [String])] = [
         ("busy", ["Reaching iCloud…", "· 2 waiting"]),
+        // The longest status the harness sets, beside the spinner and a two-digit count.
+        ("busy-long", ["Checking this device is primary…", "· 11 waiting"]),
         ("error", ["iCloud refused the read. Check you're signed in on this device."]),
         ("info", ["Saved. Another device will answer here."]),
         // A turn left for another primary while the next is on its way: the bar holds one notice,
