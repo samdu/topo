@@ -16,8 +16,12 @@
 # Info.plist would beat it silently, so every build would carry the same number.
 #
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
-# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts or Location with
-# no string saying why, and nothing shows it until the first call that asks.
+# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location or
+# HomeKit with no string saying why, and nothing shows it until the first call that asks.
+#
+# HomeKit needs the `com.apple.developer.homekit` entitlement besides, which is read off the
+# signature of a signed product. An unsigned product (the PR check's device build) carries no
+# entitlements to read, and the script says so rather than passing it as checked.
 #
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
@@ -55,13 +59,26 @@ for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
 done
 
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
-           NSContactsUsageDescription NSLocationWhenInUseUsageDescription; do
+           NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
         echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
         status=1
     fi
 done
+
+entitlements="entitlements not read: the product is unsigned"
+if codesign -d "$app" >/dev/null 2>&1; then
+    signed="$(mktemp)"
+    codesign -d --entitlements - --xml "$app" > "$signed" 2>/dev/null || true
+    # PlistBuddy, since plutil reads the dots of an entitlement's name as a key path.
+    if [ "$(/usr/libexec/PlistBuddy -c "Print :com.apple.developer.homekit" "$signed" 2>/dev/null || true)" != "true" ]; then
+        echo "$app is signed without the com.apple.developer.homekit entitlement; the first topo home call would fail" >&2
+        status=1
+    fi
+    rm -f "$signed"
+    entitlements="the HomeKit entitlement"
+fi
 
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
@@ -77,5 +94,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' four usage strings, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' five usage strings, $entitlements, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"
