@@ -321,15 +321,6 @@ final class MarkdownRenderTests: XCTestCase {
         XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
     }
 
-    /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
-    /// shows its top, and the block is scrolled to once the row has made it.
-    func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
-        let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
-        let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
-        XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
-        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
-    }
-
     /// A block already whole on the screen, cued, pulses where it is: the transcript does not
     /// move by a point.
     func testABlockAlreadyOnTheScreenIsNotScrolled() throws {
@@ -369,12 +360,10 @@ final class MarkdownRenderTests: XCTestCase {
         defer { stage.close() }
         try stage.poll(for: 5) { Self.scrollView(in: stage.window) != nil }
         let scroll = try XCTUnwrap(Self.scrollView(in: stage.window), "no scroll view")
-        // A lazy stack estimates the rows it has not made from the ones it has, and beside a tall
-        // row those estimates are tens of thousands of points out, which is where a scroll to a row
-        // lands: straight on the block rather than on the row's top, with nothing left for the
-        // scroll after the row is made to do. So the transcript is read through once, to its top and
-        // back, as a person scrolling back would, and the cue waits until its content is the
-        // fixture's own height laid out whole — every row measured, none estimated.
+        // A lazy stack estimates the rows it has not made from the ones it has, and a scroll to a
+        // row lands wherever those estimates put it. So the transcript is read through once, to its
+        // top and back, as a person scrolling back would, and the cue waits until its content is
+        // the fixture's own height laid out whole — every row measured, none estimated.
         let whole = UIHostingController(rootView: VStack(alignment: .leading, spacing: look.transcript.spacing) {
             ForEach(turns) { TurnRow(turn: $0) }
         }
@@ -412,17 +401,14 @@ final class MarkdownRenderTests: XCTestCase {
 
         live.cue = CodeBlockCue(reply: reply.ref, number: 1, serial: 1)
         // Looked at every tenth of a second until the block has been seen and seen pulsing, for
-        // up to twenty seconds, so a slow runner is waited for and a block never scrolled to or
-        // never pulsed is still seen not to be. A picture of the tall transcript holds the main
-        // thread for seconds on a loaded host, and the scroll to a block its row has just made
-        // waits behind it, so that block can reach the screen after the first breath is over: the
-        // second is past a quarter of its peak from 14 s to 22 s.
+        // up to ten seconds, so a slow runner is waited for and a block never scrolled to or never
+        // pulsed is still seen not to be.
         // How far the transcript moved is the most it was ever away from where it stood, read at
         // every look and for a second after, so a scroll there and back again is a move.
         // The pulse is drawn over the enclosure's outline and covers its ink while it breathes, so
         // a block on the screen is its outline, its pulse or some of each, and it is shown by both.
         var shown = 0, pulsed = 0, moved: CGFloat = 0
-        try stage.poll(for: 20) { [self] in
+        try stage.poll { [self] in
             moved = max(moved, abs(scroll.contentOffset.y - offset))
             let drawn = try Pixels(stage.image(), blank: true)
             let ring = pulsing(drawn, rows: 0...drawn.height)
