@@ -70,10 +70,13 @@ final class GuestResident {
     var memory: Memory?
     /// The memory's folder in the guest.
     let vault = VaultMount(seam: .guest)
+    /// Turns sent into that folder, and the memory's moves held apart from them (`TopoApp` hands
+    /// it to the memory as its writer).
+    private(set) lazy var turns = MemoryTurns { [unowned self] in self.session }
 
     /// Brings the guest's mount of the memory into line with the home, and answers whether it is
-    /// mounted. Asked when the session is made and before every turn; never by a launch, so a
-    /// process started after a sign-out mounts nothing.
+    /// mounted. Asked when the session is made, when a turn is readied and when it is sent; never
+    /// by a launch, so a process started after a sign-out mounts nothing.
     func reconcileMemory() throws -> Bool {
         let home = memory?.home ?? .local
         let local = memory?.localDirectory ?? Memory.standardDirectory
@@ -272,7 +275,15 @@ struct ResidentConversation: GuestConversation {
 
     func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
         let session = try await session()
-        return try await session.send(text, id: id)
+        // A move of the memory may have come since `ready()`: the turn waits for one running, and
+        // goes into a mount of the home as it is once none is (`MemoryTurns`).
+        return try await GuestResident.shared.turns.send(text, id: id, to: session) {
+            do {
+                return try GuestResident.shared.reconcileMemory()
+            } catch {
+                throw GuestBridgeError.notReady("\(error)")
+            }
+        }
     }
 
     func settle() async -> Bool {
