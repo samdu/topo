@@ -292,7 +292,7 @@ struct HomeTool: Tool {
     let usage = """
     topo home                           every accessory, by room: id first, then room, name, kind, whether it answers,
                                         and what can be set on it with the values worth knowing
-    topo home get ID                    one accessory: every characteristic, its value, what it takes, whether it can be set
+    topo home get ID                    one accessory: every characteristic, what it takes, whether it can be set, and every plain one's value
     topo home set ID CHARACTERISTIC VALUE
                                         write one characteristic of one accessory (brightness, power, target-temperature…,
                                         or the characteristic's id); answers the value read back
@@ -372,7 +372,7 @@ struct HomeTool: Tool {
             if accessories.isEmpty { lines.append("no accessories") }
             for accessory in accessories {
                 let services = accessory.services.filter { !$0.isInformation }.compactMap { service -> String? in
-                    let settable = service.characteristics.filter { $0.settable && $0.name != "identify" }
+                    let settable = service.characteristics.filter { $0.settable && $0.isPlain && $0.name != "identify" }
                     guard !settable.isEmpty else { return nil }
                     let parts = settable.map { characteristic in
                         guard Self.summarised.contains(characteristic.name), characteristic.readable else { return characteristic.name }
