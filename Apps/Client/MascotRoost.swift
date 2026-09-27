@@ -566,20 +566,29 @@ enum MascotRoost: Equatable, Sendable {
     /// left of it, left of one right of it — so the block is the thing he stands beside and the
     /// one thing he is not over.
     ///
-    /// The place is `decide`'s, over the transcript cut at the block's centre line to that side:
+    /// The place is `decide`'s, over the transcript cut at the block's centre line to that side
+    /// and to the rows level with the block — its own, or his height either side of its middle
+    /// where that is taller:
     /// the nearest place clearing the words to the aim, the side's outer edge level with the
     /// block's middle, and where none clears the least covered, the block counted among the words
     /// whether or not a view reported it. Where the side holds no place at all — the block's
-    /// centre too near the far edge for his reach — it is `decide` over the whole transcript from
+    /// centre too near the far edge for his reach, or its rows cut short by the transcript's top
+    /// or the glass — it is `decide` over the whole transcript from
     /// the same aim, which still never undraws him.
     static func beside(_ block: CGRect, in field: MascotField, size: CGSize, clearance: CGFloat,
                        reach: MascotSprite.Reach = .none) -> Decision {
         let visible = field.visible
         let right = block.midX <= visible.midX
+        // The rows level with the block: its own, or his height either side of its middle where
+        // that is taller, so any place of his box in them is beside it. A gap that clears above
+        // or below is beside nothing, and the one gap between two blocks would be where he stood
+        // for both. His reach is kept inside the transcript as ever.
+        let top = max(min(block.minY, block.midY - size.height) - max(reach.top, 0), visible.minY)
+        let bottom = min(max(block.maxY, block.midY + size.height) + max(reach.bottom, 0), visible.maxY)
         var side = field
         side.visible = right
-            ? CGRect(x: block.midX, y: visible.minY, width: max(visible.maxX - block.midX, 0), height: visible.height)
-            : CGRect(x: visible.minX, y: visible.minY, width: max(block.midX - visible.minX, 0), height: visible.height)
+            ? CGRect(x: block.midX, y: top, width: max(visible.maxX - block.midX, 0), height: max(bottom - top, 0))
+            : CGRect(x: visible.minX, y: top, width: max(block.midX - visible.minX, 0), height: max(bottom - top, 0))
         if !field.obstacles.contains(where: { $0.insetBy(dx: -epsilon, dy: -epsilon).contains(block) }) {
             side.obstacles.append(block)
         }
