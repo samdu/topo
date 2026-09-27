@@ -67,4 +67,28 @@ final class SignOutTests: XCTestCase {
         await takeover.act()
         XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "connections", "login"])
     }
+
+    /// A phone found a viewer at launch with a login or something waiting demotes, forgets the
+    /// memory and the connections, and the login last.
+    func testAViewerWithALoginEndsItAllTheLoginLast() async {
+        let calls = Calls()
+        await arrival(calls, holdsLogin: true).act()
+        XCTAssertEqual(calls.ended, ["harness", "memory", "connections", "login"])
+    }
+
+    /// One with no login and nothing waiting still forgets a connection's token, whose keychain
+    /// item outlives the login's.
+    func testAViewerWithNoLoginStillForgetsItsConnections() async {
+        let calls = Calls()
+        await arrival(calls, holdsLogin: false).act()
+        XCTAssertEqual(calls.ended, ["connections"])
+    }
+
+    private func arrival(_ calls: Calls, holdsLogin: Bool) -> ViewerArrival {
+        ViewerArrival(holdsLogin: { holdsLogin },
+                      demoteHarness: { calls.ended.append("harness") },
+                      forgetMemory: { calls.ended.append("memory") },
+                      forgetConnections: { calls.ended.append("connections") },
+                      forgetLogin: { calls.ended.append("login") })
+    }
 }

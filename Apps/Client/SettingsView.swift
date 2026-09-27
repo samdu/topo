@@ -121,4 +121,26 @@ struct Takeover {
         forgetLogin()
     }
 }
+
+/// A phone that finds itself a viewer at launch — a reinstall keeps the keychain while the role
+/// record says viewer, and a demotion decided at launch leaves an outbox on disk. What was waiting
+/// goes into the log as a limb's turns and the login and the memory go; a connection's token goes
+/// whether or not there was a login, since its keychain item is its own and outlives one.
+struct ViewerArrival {
+    var holdsLogin: @MainActor () -> Bool
+    var demoteHarness: @MainActor () async -> Void
+    var forgetMemory: @MainActor () -> Void
+    var forgetConnections: @MainActor () -> Void
+    var forgetLogin: @MainActor () -> Void
+
+    @MainActor func act() async {
+        let held = holdsLogin()
+        if held {
+            await demoteHarness()
+            forgetMemory()
+        }
+        forgetConnections()
+        if held { forgetLogin() }
+    }
+}
 #endif

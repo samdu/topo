@@ -265,8 +265,9 @@ final class GuestToolScriptTests: XCTestCase {
 
         await service?.stop()
         let none = try await startedGitHub(token: nil)
-        let unconnected = try await shell("gh api user", none)
-        XCTAssertEqual(unconnected.output, "token=none args=api user\n")
+        // A login of the guest's own (`gh auth login`, `hosts.yml`) is never reached: gh is not run.
+        let unconnected = try await shell("gh api user; echo \"status=$?\"", none)
+        XCTAssertEqual(unconnected.output, "status=1\n", "gh ran without the app's token")
         XCTAssertTrue(unconnected.errors.contains("not connected"), unconnected.errors)
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
     }
@@ -288,7 +289,7 @@ final class GuestToolScriptTests: XCTestCase {
         for (name, unconnected, said) in cases {
             let environment = try await startedGitHub(token: nil, unconnected: unconnected)
             let gh = try await shell("gh api user", environment)
-            XCTAssertEqual(gh.output, "ran\n", name)
+            XCTAssertEqual(gh.output, "", "\(name): gh ran without the app's token")
             let credential = try await shell(helper, environment)
             XCTAssertEqual(credential.output, "", name)
             for words in said {
@@ -300,8 +301,8 @@ final class GuestToolScriptTests: XCTestCase {
         }
         let gone = try await startedGitHub(token: "gho_x")
         await service?.stop()
-        let gh = try await shell("gh api user", gone)
-        XCTAssertEqual(gh.output, "ran\n")
+        let gh = try await shell("gh api user; echo \"status=$?\"", gone)
+        XCTAssertEqual(gh.output, "status=3\n", "gh ran without the app's token")
         XCTAssertTrue(gh.errors.contains("did not answer") && gh.errors.contains("status 3"), gh.errors)
         XCTAssertFalse(gh.errors.contains("not connected"), gh.errors)
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])

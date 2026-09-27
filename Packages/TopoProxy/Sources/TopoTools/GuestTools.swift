@@ -184,8 +184,10 @@ public enum GuestTools {
     fi
     # Status 1 is the app's own sentence on stdout; any other, `topo` has said why on stderr.
     [ -n "$token" ] && printf 'gh: %s\n' "$token" >&2
-    echo "gh: no GitHub token from the Topo app (topo github: status $status); running gh without one" >&2
-    exec "$real" "$@"
+    # gh is not run without the app's token: it would use a login of the guest's own, which can be
+    # another account's and outlives a disconnect.
+    echo "gh: no GitHub token from the Topo app (topo github: status $status); gh not run (set GH_TOKEN to run it with a token of your own)" >&2
+    exit "$status"
     """#
 
     /// The skill: its description is the whole of what a turn pays for the tools until one is
