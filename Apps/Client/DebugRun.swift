@@ -50,17 +50,20 @@ enum DebugRun {
     /// `LookDocument` field by field, so a UI suite can put the screen at the ends of the ranges
     /// the document accepts with no vault behind it. Nil when the variable is absent, which is
     /// every ordinary run.
-    static let look: Look? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0).look }
+    static let lookReading: LookDocument.Reading? = ProcessInfo.processInfo.environment[lookVariable].map { LookDocument.read($0) }
+    static let look: Look? = lookReading?.look
 
     #if os(iOS)
     /// `TOPO_DEBUG_TUNING=<look.json>`: this device's override (`Tuning`) set to that document at
-    /// launch, before anything reads it, and kept, as a drag or the settings sheet keeps it; empty
-    /// removes it. So a UI suite starts from a known override and a relaunch without the variable
+    /// launch, before anything reads it, and kept, as a drag or the settings sheet keeps it, with
+    /// any fields the mind had set taken away; empty removes it. So a UI suite starts from a known override and a relaunch without the variable
     /// is a relaunch that finds what the last one kept. Absent, which is every ordinary run, the
     /// override is left as it is.
     static func tuning(_ environment: [String: String] = ProcessInfo.processInfo.environment,
                        defaults: UserDefaults = .standard) {
         guard let document = environment[tuningVariable] else { return }
+        // The mind's fields go too, so the launch starts from exactly the override it names.
+        defaults.removeObject(forKey: Tuning.mindKey)
         if document.isEmpty { defaults.removeObject(forKey: Tuning.key) } else { defaults.set(document, forKey: Tuning.key) }
     }
     #endif

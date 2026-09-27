@@ -43,6 +43,16 @@ struct TopoApp: App {
         _memory = State(initialValue: memory)
         // The guest's mount of the memory follows the same home the mirror runs against.
         GuestResident.shared.memory = memory
+        // The phone's own tools, which the guest's `topo` reaches through the tool service.
+        GuestResident.shared.toolTable = [
+            LookTool(vault: {
+                #if DEBUG
+                DebugRun.lookReading.map { ($0.look, $0) } ?? (memory.look, memory.lookReading)
+                #else
+                (memory.look, memory.lookReading)
+                #endif
+            }),
+        ]
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
