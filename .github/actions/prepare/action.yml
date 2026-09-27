@@ -1,6 +1,7 @@
 # What every macOS job in pr-validate.yaml does before its own work: the pinned toolchain, one
 # iPhone simulator from the pinned runtime (its UDID in SIMULATOR_UDID), the XcodeGen projects
-# generated from project.yml, and with `guest: true` the guest's framework every Topo scheme
+# generated from project.yml, with `build-cache: <name>` the build restored from the last run
+# that saved one under that name, and with `guest: true` the guest's framework every Topo scheme
 # resolves. The versions and hashes are the workflow's env (DEVELOPER_DIR,
 # IOS_SIMULATOR_RUNTIME, XCODEGEN_VERSION, XCODEGEN_SHA256, RESULTS).
 #
@@ -11,6 +12,12 @@
 name: Prepare a macOS runner
 description: The pinned toolchain, a simulator, the XcodeGen projects and optionally the guest's framework.
 inputs:
+  build-cache:
+    description: >-
+      The name of the build cache this job restores and saves (DerivedData's build products and
+      Swift package checkouts, SwiftPM's own cache); jobs that build the same products share one.
+      Empty for none.
+    default: ""
   guest:
     description: Restore or build Packages/TopoUserland/Frameworks/TopoIsh.xcframework.
     default: "false"
@@ -18,6 +25,7 @@ runs:
   using: composite
   steps:
     - name: Toolchain
+      id: toolchain
       shell: bash
       run: |
         set -euo pipefail
@@ -26,6 +34,8 @@ runs:
         [ -d "$DEVELOPER_DIR" ] || { echo "::error::$DEVELOPER_DIR is not on this runner image; pick the Xcode it has on purpose."; exit 1; }
         sw_vers
         xcodebuild -version
+        # The build cache's key: a cache from another Xcode is never restored.
+        echo "xcode=$(xcodebuild -version | tr -s ' \n' '-' | sed 's/-$//')" >> "$GITHUB_OUTPUT"
         swift --version
         # One iPhone from the pinned runtime, the first by name, so every run
         # on an image uses the same device.
@@ -35,6 +45,32 @@ runs:
         [ -n "$udid" ] || { echo "::error::No iPhone simulator for $IOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
         echo "Simulator: $udid ($IOS_SIMULATOR_RUNTIME)"
         echo "SIMULATOR_UDID=${udid%% *}" >> "$GITHUB_ENV"
+
+    # The build between runs, so a package whose resolved version has not
+    # changed (FluidAudio, the one remote package) is neither fetched nor, where
+    # its products are still current, compiled again. Keyed on the Xcode build
+    # and the resolved package file; a new resolved file restores the newest
+    # cache from the same Xcode by prefix and saves a new one at the job's end.
+    # A PR restores what main's runs saved (the nightly) and its own earlier
+    # runs; nothing a run saves reaches another PR. Build products and package
+    # checkouts only: DerivedData's Logs, where test results would land, and its
+    # index are left out. Whether a restored product is current is Xcode's
+    # call, as on a laptop: a source file the checkout has just written reads
+    # as changed and is compiled again.
+    - name: Cache the build
+      if: inputs.build-cache != ''
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/Library/Developer/Xcode/DerivedData/*/Build
+          ~/Library/Developer/Xcode/DerivedData/*/SourcePackages
+          ~/Library/Developer/Xcode/DerivedData/*/info.plist
+          ~/Library/Caches/org.swift.swiftpm
+          build/device/Build
+          build/device/SourcePackages
+        key: build-${{ inputs.build-cache }}-${{ steps.toolchain.outputs.xcode }}-${{ hashFiles('Topo.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+        restore-keys: |
+          build-${{ inputs.build-cache }}-${{ steps.toolchain.outputs.xcode }}-
 
     # The projects are generated from project.yml before anything builds, so a
     # file on disk that the committed project does not list is still compiled.

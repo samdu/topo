@@ -15,6 +15,10 @@
 # passed on the command line for a TestFlight upload (docs/testflight.md), and a literal in the
 # Info.plist would beat it silently, so every build would carry the same number.
 #
+# The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
+# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts or Location with
+# no string saying why, and nothing shows it until the first call that asks.
+#
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
 #
@@ -50,6 +54,15 @@ for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
     fi
 done
 
+for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
+           NSContactsUsageDescription NSLocationWhenInUseUsageDescription; do
+    value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+    if [ -z "${value//[[:space:]]/}" ]; then
+        echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
+        status=1
+    fi
+done
+
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2
@@ -64,5 +77,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' four usage strings, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

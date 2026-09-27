@@ -112,6 +112,18 @@ final class SpeakableTests: XCTestCase {
         ])
     }
 
+    /// Which line stands for which block is carried with the line, not read back from its words:
+    /// prose saying "See code block 1." stands for no block, and each block's own line for its own.
+    func testOnlyABlocksOwnLineStandsForIt() {
+        let lines = Speakable.lines(from: "See code block 1.\n\n```\na\n```\n\nSee code block 3.\n\n```\nb\n```")
+        XCTAssertEqual(lines, [
+            Speakable.Line(text: "See code block 1.", codeBlock: nil),
+            Speakable.Line(text: "See code block 1.", codeBlock: 1),
+            Speakable.Line(text: "See code block 3.", codeBlock: nil),
+            Speakable.Line(text: "See code block 2.", codeBlock: 2),
+        ])
+    }
+
     func testATableIsCountedNotRead() {
         check([
             ("| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |", "A table with 2 rows."),

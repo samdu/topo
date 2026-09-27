@@ -1,7 +1,8 @@
-# The merge gate. The suite runs as parallel jobs gated by `test`; Codex
-# reviews every non-draft PR whose fast jobs (`select`, `topo_unit`, `others`)
-# are green, alongside the UI tests in `topo_ui`, and its verdict is what
-# gates. `review_gate` and `test` are the required status checks on main, and
+# The merge gate. The suite runs as parallel jobs gated by `test`, each suite
+# job only when the PR's paths need it (the `select` job); Codex reviews every
+# non-draft PR whose fast jobs (`select`, `topo_unit`, `others`) are green or
+# were left out by selection, alongside the UI tests in `topo_ui`, and its
+# verdict is what gates. `review_gate` and `test` are the required status checks on main, and
 # automerge.yaml merges on this workflow's latest pull_request run concluding
 # green — so a red suite job holds the merge by both routes, and a red fast
 # job costs no reviewer round.
@@ -146,7 +147,8 @@ env:
   REAL_EAR_TEST: TopoUITests/MicrophonePressTests/testParakeetHearsTheFixtureThroughTheMicrophone
 
 jobs:
-  # Which lane this run takes, and why, said in its log and its summary.
+  # Which lane this run takes and which suite jobs it runs, and why, said in
+  # its log and its summary.
   #
   #   pull_request       the paths the PR changes against main: `full` when any
   #                      is on the voice path below or when the diff cannot be
@@ -163,6 +165,17 @@ jobs:
   # name. Everything else — the audio loopback, the press tests over the stub
   # and loading ears, every other suite — runs in both.
   #
+  # The suites, on a pull_request, are the ones the changed paths need
+  # (scripts/ci-select-suites.sh against SUITE_RULES below, whose test reads
+  # the rules and runs that step): documentation and tooling no suite covers
+  # run none of the three macOS jobs, a change only the hub, watch, TV,
+  # Womble or TopoLink compile runs `others` alone, and anything else — the
+  # app, a package the app links, the tests, the project, this workflow and
+  # its scripts, a path no rule names, or a diff that cannot be read — runs
+  # all three. Every other event runs all three. A job left out is skipped by
+  # its `if:`, and the gates below read `skipped` as a pass only for a job
+  # this said `false` for.
+  #
   # The PR's own changes are `HEAD^1..HEAD` of GitHub's test merge commit,
   # whose first parent is main: what merging the PR would change on main.
   select:
@@ -171,6 +184,10 @@ jobs:
     outputs:
       lane: ${{ steps.lane.outputs.lane }}
       reason: ${{ steps.lane.outputs.reason }}
+      topo_unit: ${{ steps.suites.outputs.topo_unit }}
+      topo_ui: ${{ steps.suites.outputs.topo_ui }}
+      others: ${{ steps.suites.outputs.others }}
+      suites_reason: ${{ steps.suites.outputs.reason }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -238,6 +255,56 @@ jobs:
           reason="$(sed -n 's/^reason=//p' "$RUNNER_TEMP/lane.txt")"
           echo "::notice title=Lane: $lane::$reason"
           echo "**Lane: $lane** — $reason" >> "$GITHUB_STEP_SUMMARY"
+      - name: Choose the suites
+        id: suites
+        env:
+          EVENT: ${{ github.event_name }}
+          # A glob (`*` crosses `/`) and the suite jobs a path matching it
+          # needs: job names, `all` or `none`. First match wins; a path no rule
+          # matches needs all three, so the list only ever has to name what
+          # may be skipped. The app target compiles Apps/Client, Apps/Shared,
+          # Apps/Topo and every package but TopoLink (project.yml), so those
+          # stay `all`; the hub, watch and TV targets, Womble and TopoLink are
+          # built and tested only in `others`, as is the janitor, whose test
+          # runs there.
+          SUITE_RULES: |
+            .github/workflows/pr-validate.yaml all
+            .github/actions/* all
+            .github/* none
+            Apps/TopoHub/* others
+            Apps/TopoTV/* others
+            Apps/TopoWatch/* others
+            Apps/* all
+            Packages/TopoLink/* others
+            Packages/* all
+            Tests/* all
+            Womble/* others
+            docs/* none
+            *.md none
+            .claude/* none
+            Distribution/* none
+            scripts/archive-upload.sh none
+            scripts/plan-review.sh none
+            .gitignore none
+            scripts/janitor.py others
+            scripts/tests/janitor* others
+        run: |
+          set -euo pipefail
+          case "$EVENT" in
+            pull_request)
+              # A diff that cannot be read selects every suite, inside the script.
+              scripts/ci-select-suites.sh --git HEAD^1 HEAD > "$RUNNER_TEMP/suites.txt"
+              ;;
+            *)
+              printf 'topo_unit=true\ntopo_ui=true\nothers=true\nreason=every suite runs outside a pull request (%s)\n' "$EVENT" > "$RUNNER_TEMP/suites.txt"
+              ;;
+          esac
+          cat "$RUNNER_TEMP/suites.txt" >> "$GITHUB_OUTPUT"
+          run="$(grep -E '^(topo_unit|topo_ui|others)=true$' "$RUNNER_TEMP/suites.txt" | cut -d= -f1 | tr '\n' ' ' || true)"
+          run="${run% }"
+          reason="$(sed -n 's/^reason=//p' "$RUNNER_TEMP/suites.txt")"
+          echo "::notice title=Suites: ${run:-none}::$reason"
+          echo "**Suites: ${run:-none}** — $reason" >> "$GITHUB_STEP_SUMMARY"
 
   # The suite is three macOS jobs that run at once — `topo_unit`, `topo_ui`
   # and `others` — and `test` below is the gate over them and the select job.
@@ -249,6 +316,9 @@ jobs:
   # over simulator clones starves a runner of this size (three clones never
   # launched; two ran past the fast lane's budget). What can run on
   # ubuntu-latest (the lane choice, the gate) runs there and does not count.
+  #
+  # Each of the three runs only when select says the PR needs it; see the
+  # select job for the rules.
   #
   # Green means the named suites ran, not that nothing complained: every
   # package and project is named and a missing one fails, and
@@ -271,6 +341,8 @@ jobs:
   # the code the watch and TV builds share with the phone, and the userland
   # package's two bundles.
   topo_unit:
+    needs: select
+    if: needs.select.outputs.topo_unit == 'true'
     runs-on: macos-26
     timeout-minutes: 40
     defaults:
@@ -281,6 +353,7 @@ jobs:
       - uses: ./.github/actions/prepare
         with:
           guest: "true"
+          build-cache: topo-simulator
 
       # Alpine's minirootfs, bash and its packages, and Claude Code, fetched from
       # the manifest's entries and verified by digest, for the userland suites to
@@ -308,6 +381,18 @@ jobs:
       # compile after it, which costs more than the boot.
       - name: Boot the simulator
         run: xcrun simctl boot "$SIMULATOR_UDID"
+
+      # PhoneToolsTests runs the phone tools against the simulator's own EventKit
+      # and Contacts stores, which answer only with access granted. Granted here,
+      # not by a prompt, since nobody is there to answer one; this job's
+      # simulator is not the UI job's, whose prompt count starts from a reset.
+      - name: Grant the unit suite calendar, reminders and contacts access
+        run: |
+          set -euo pipefail
+          xcrun simctl bootstatus "$SIMULATOR_UDID" -b >/dev/null
+          for service in calendar reminders contacts; do
+            xcrun simctl privacy "$SIMULATOR_UDID" grant "$service" zone.hexagon.topo
+          done
 
       - name: xcodebuild test (Topo, unit and userland)
         # The cooperative pool pinned to one thread in the test runner, as for
@@ -354,6 +439,7 @@ jobs:
   # skips.
   topo_ui:
     needs: select
+    if: needs.select.outputs.topo_ui == 'true'
     runs-on: macos-26
     timeout-minutes: 40
     defaults:
@@ -376,6 +462,7 @@ jobs:
       - uses: ./.github/actions/prepare
         with:
           guest: "true"
+          build-cache: topo-simulator
 
       # The microphone test's input-capable lane: BlackHole as the runner
       # Mac's default input and output, and the fixture looping into it from
@@ -500,6 +587,8 @@ jobs:
   # the Swift packages, Womble, and the builds no suite hosts — the watch and
   # TV for their own simulators, a Release build for iOS devices, and the hub.
   others:
+    needs: select
+    if: needs.select.outputs.others == 'true'
     runs-on: macos-26
     timeout-minutes: 40
     defaults:
@@ -510,6 +599,7 @@ jobs:
       - uses: ./.github/actions/prepare
         with:
           guest: "true"
+          build-cache: others
 
       # scripts/simulator-run.sh against a fake xcrun: every failed run exits non-zero.
       - name: simulator-run.sh fails closed
@@ -529,9 +619,17 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/ci-select-lane-test.sh
 
+      # The suite selection against this workflow's own rules: documentation
+      # runs nothing, what only `others` builds runs `others`, and the app,
+      # its packages, the tests and the CI itself run all three.
+      - name: The suite selection reads the rules
+        if: ${{ !cancelled() }}
+        run: scripts/tests/ci-select-suites-test.sh
+
       # This workflow's gate against its own job list: every suite job is a
       # prerequisite of `test` and `codex` and is read by `reviewer_ran` and
-      # `review_gate`, and a red one fails the gate snippets.
+      # `review_gate`, a red one fails the gate snippets, and a skipped one
+      # passes them only where select left it out.
       - name: Every suite job gates the reviewer and the merge
         if: ${{ !cancelled() }}
         run: scripts/tests/suite-gate-test.sh
@@ -542,6 +640,12 @@ jobs:
       - name: ci-require-tests.sh fails a skip and a test that did not run
         if: ${{ !cancelled() }}
         run: scripts/tests/ci-require-tests-test.sh
+
+      # check-built-plist.sh against hand-made products: each usage string the
+      # phone's tools ask under, missing or empty, fails.
+      - name: check-built-plist.sh refuses a product missing a usage string
+        if: ${{ !cancelled() }}
+        run: scripts/tests/check-built-plist-test.sh
 
       # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
       # patch that does not apply, a populated deps/linux, and options that are
@@ -703,7 +807,9 @@ jobs:
 
   # The gate over the suite, and the required status check on main that holds
   # a red suite out. On a completed run it is green only when every suite job
-  # concluded `success`, and it names each that did not. A cancelled run skips
+  # concluded `success`, or `skipped` where select output `false` for it, and
+  # it names each that did not. A skip select did not ask for — select
+  # failing, or an output that is not `false` — is red. A cancelled run skips
   # it (`!cancelled()`) and concludes cancelled, and automerge merges only on
   # the latest pull_request run concluding `completed success`.
   # A macOS runner that never picks a job up therefore holds the merge —
@@ -723,6 +829,11 @@ jobs:
             topo_unit=${{ needs.topo_unit.result }}
             topo_ui=${{ needs.topo_ui.result }}
             others=${{ needs.others.result }}
+          SELECTED: >-
+            topo_unit=${{ needs.select.outputs.topo_unit }}
+            topo_ui=${{ needs.select.outputs.topo_ui }}
+            others=${{ needs.select.outputs.others }}
+          SUITES_REASON: ${{ needs.select.outputs.suites_reason }}
         run: |
           set -euo pipefail
           status=0
@@ -730,6 +841,9 @@ jobs:
             job="${pair%%=*}"; result="${pair#*=}"
             if [ "$result" = success ]; then
               echo "$job: success"
+            elif [ "$result" = skipped ] && [[ " topo_unit topo_ui others " == *" $job "* ]] \
+                && [[ " $SELECTED " == *" $job=false "* ]]; then
+              echo "$job: skipped by selection ($SUITES_REASON)"
             else
               echo "::error::$job did not pass (result: ${result:-none})."
               status=1
@@ -765,9 +879,10 @@ jobs:
   codex_wait:
     needs: [select, topo_unit, others]
     if: >-
+      !cancelled() &&
       needs.select.result == 'success' &&
-      needs.topo_unit.result == 'success' &&
-      needs.others.result == 'success' &&
+      (needs.topo_unit.result == 'success' || (needs.topo_unit.result == 'skipped' && needs.select.outputs.topo_unit == 'false')) &&
+      (needs.others.result == 'success' || (needs.others.result == 'skipped' && needs.select.outputs.others == 'false')) &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -830,13 +945,17 @@ jobs:
     # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
     # red, and it stays a human merge.)
     #
-    # Every `needs.<job>.result` is spelled out because a job with its own
-    # `if:` drops the implicit `success()` over its `needs` — without them, a
-    # red fast job would still spend a reviewer round.
+    # A fast job counts as passed when it succeeded or when select left it
+    # out, so a PR whose paths need no suite is still reviewed. That needs
+    # `!cancelled()` in place of the implicit `success()`, which is false
+    # beside a skipped prerequisite and would skip this job with it; and so
+    # every `needs.<job>.result` is spelled out — without them, a red fast job
+    # would still spend a reviewer round.
     if: >-
+      !cancelled() &&
       needs.select.result == 'success' &&
-      needs.topo_unit.result == 'success' &&
-      needs.others.result == 'success' &&
+      (needs.topo_unit.result == 'success' || (needs.topo_unit.result == 'skipped' && needs.select.outputs.topo_unit == 'false')) &&
+      (needs.others.result == 'success' || (needs.others.result == 'skipped' && needs.select.outputs.others == 'false')) &&
       needs.codex_wait.result == 'success' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
@@ -1334,6 +1453,10 @@ jobs:
             topo_ui=${{ needs.topo_ui.result }}
             others=${{ needs.others.result }}
             test=${{ needs.test.result }}
+          SELECTED: >-
+            topo_unit=${{ needs.select.outputs.topo_unit }}
+            topo_ui=${{ needs.select.outputs.topo_ui }}
+            others=${{ needs.select.outputs.others }}
           CODEX_RESULT: ${{ needs.codex.result }}
           FEEDBACK_RESULT: ${{ needs.post_feedback.result }}
         run: |
@@ -1348,9 +1471,14 @@ jobs:
           # complete" would send a reader to the wrong log, and a red
           # `topo_ui` holds the merge whatever the verdict. Every suite job
           # that did not pass is named.
+          # A suite job skipped because select said it was not needed passed.
           red=""
           for pair in $SUITE_RESULTS; do
-            [ "${pair#*=}" = success ] || red="$red ${pair%%=*} (${pair#*=})"
+            job="${pair%%=*}"; result="${pair#*=}"
+            [ "$result" = success ] && continue
+            [ "$result" = skipped ] && [[ " topo_unit topo_ui others " == *" $job "* ]] \
+              && [[ " $SELECTED " == *" $job=false "* ]] && continue
+            red="$red $job ($result)"
           done
           # topo_ui runs beside the reviewer, so a red suite can still come
           # with a verdict on the PR; the message says which, so a reader

@@ -6,11 +6,16 @@
 # `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others) and
 # `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; and `reviewer_ran` and
 # `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
-# reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. Then
+# reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. The three selectable
+# jobs (topo_unit, topo_ui, others) each need select and run only on its `true` for them; `test`
+# and reviewer_ran read select's three outputs in SELECTED; and `codex` and `codex_wait` open with
+# `!cancelled()` and take a fast job's `skipped` only beside select's `false` for it. Then
 # it runs the two snippets that read those results — `test`'s `Require every suite job passed` and
 # reviewer_ran's `Assert a verdict was produced and delivered` — with each job's result set in turn
 # to every value other than `success` (failure, cancelled, skipped, and empty for `test`), and holds
-# that each goes red naming the job, and that both pass only when every job succeeded. That is the
+# that each goes red naming the job, and that both pass only when every job succeeded or was
+# skipped with select's `false` for it: a skip beside `true`, an empty output or no output at all
+# (select failed), and a failure beside `false`, each stay red. That is the
 # snippets' reading of a result string, not a cancelled run: a run that is cancelled skips `test`
 # (`!cancelled()`) and concludes cancelled, and automerge merges only on the latest pull_request
 # run concluding `completed success` (.github/workflows/automerge.yaml). So a suite job added without being wired into the gate, or a gate snippet
@@ -40,6 +45,8 @@ suite = %w[select topo_unit topo_ui others]
 review = %w[test codex_wait codex post_feedback reviewer_ran review_gate]
 # What the reviewer waits on: the suite less the UI tests, which it runs beside.
 fast = suite - %w[topo_ui]
+# The jobs select may leave out.
+selectable = suite - %w[select]
 bad = 0
 check = lambda do |ok, msg|
   if ok then puts "ok   #{msg}" else puts "FAIL #{msg}"; bad += 1 end
@@ -62,6 +69,30 @@ check.(needs.("codex").sort == (fast + %w[codex_wait]).sort, "codex needs exactl
 check.(needs.("codex_wait").sort == fast.sort, "codex_wait needs exactly the fast jobs #{fast.join(', ')} (#{needs.('codex_wait').join(', ')})")
 check.(needs.("reviewer_ran").sort == (suite + %w[test codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
 check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, codex and post_feedback (#{needs.('review_gate').join(', ')})")
+
+selectable.each do |job|
+  check.(needs.(job) == %w[select], "#{job} needs select (#{needs.(job).join(', ')})")
+  check.(jobs.fetch(job)["if"] == "needs.select.outputs.#{job} == 'true'", "#{job} runs only on select's true for it (#{jobs.fetch(job)['if'].inspect})")
+end
+check.(jobs.fetch("select").fetch("outputs").values_at(*selectable) == selectable.map { |j| "${{ steps.suites.outputs.#{j} }}" }, "select outputs each selectable job from its suites step")
+# SELECTED is `job=${{ needs.select.outputs.job }}` for exactly the selectable jobs.
+selected_ok = lambda do |job, name|
+  sel = step.(job, name).fetch("env").fetch("SELECTED", "")
+  want = selectable.map { |j| "#{j}=${{ needs.select.outputs.#{j} }}" }
+  check.(sel.split.join(" ") == want.join(" "), "#{job}'s SELECTED reads select's output for exactly #{selectable.join(', ')} (#{sel.strip})")
+end
+selected_ok.("test", "Require every suite job passed")
+selected_ok.("reviewer_ran", "Assert a verdict was produced and delivered")
+%w[codex codex_wait].each do |job|
+  cif = jobs.fetch(job).fetch("if")
+  (fast - %w[select]).each do |f|
+    alt = "(needs.#{f}.result == 'success' || (needs.#{f}.result == 'skipped' && needs.select.outputs.#{f} == 'false'))"
+    check.(cif.include?(alt), "#{job}'s if takes #{f} skipped only beside select's false for it")
+  end
+  check.(cif.scan(/'skipped'/).size == (fast - %w[select]).size, "#{job}'s if reads skipped for nothing else")
+  # Without a status function the implicit success() skips the job beside a skipped prerequisite.
+  check.(cif.start_with?("!cancelled() &&"), "#{job}'s if opens with !cancelled(), so a skipped fast job does not skip it")
+end
 
 gate = step.("test", "Require every suite job passed")
 pairs = names_in.(gate.fetch("env").fetch("SUITE_RESULTS"))
@@ -114,6 +145,8 @@ expect() {
   echo "ok   $name"
 }
 
+# Every suite selected unless a case says otherwise.
+export SELECTED="topo_unit=true topo_ui=true others=true" SUITES_REASON="the reason"
 SUITE_RESULTS="$(results none success)" expect pass "test: every suite job succeeded" "" "$work/gate.sh"
 for job in "${suite[@]}"; do
   for result in failure cancelled skipped ""; do
@@ -137,6 +170,39 @@ for feedback in skipped failure cancelled; do
   SUITE_RESULTS="$(results topo_ui failure test)" FEEDBACK_RESULT="$feedback" \
     expect fail "reviewer_ran: red suite, post_feedback $feedback" "no review verdict was posted.*post_feedback: $feedback" "$work/ran.sh"
 done
+
+# Left out by select: a skip beside `false` passes both snippets, and nothing else does.
+for job in topo_unit topo_ui others; do
+  off="${SELECTED/$job=true/$job=false}"
+  SELECTED="$off" SUITE_RESULTS="$(results "$job" skipped)" \
+    expect pass "test: $job skipped beside select's false" "$job: skipped by selection (the reason)" "$work/gate.sh"
+  SELECTED="$off" SUITE_RESULTS="$(results "$job" skipped test)" \
+    expect pass "reviewer_ran: $job skipped beside select's false" "The reviewer ran" "$work/ran.sh"
+  for result in failure cancelled ""; do
+    SELECTED="$off" SUITE_RESULTS="$(results "$job" "$result")" \
+      expect fail "test: $job result=${result:-empty} beside select's false" "$job did not pass" "$work/gate.sh"
+  done
+  SELECTED="$off" SUITE_RESULTS="$(results "$job" failure test)" \
+    expect fail "reviewer_ran: $job failure beside select's false" "the suite did not pass.* $job (failure)" "$work/ran.sh"
+  for sel in "${SELECTED/$job=true/$job=}" "" "${SELECTED/$job=true/$job=False}"; do
+    SELECTED="$sel" SUITE_RESULTS="$(results "$job" skipped)" \
+      expect fail "test: $job skipped with SELECTED='$sel'" "$job did not pass" "$work/gate.sh"
+    SELECTED="$sel" SUITE_RESULTS="$(results "$job" skipped test)" \
+      expect fail "reviewer_ran: $job skipped with SELECTED='$sel'" "the suite did not pass.* $job (skipped)" "$work/ran.sh"
+  done
+done
+# Every suite left out, as for a documentation change: both pass.
+SELECTED="topo_unit=false topo_ui=false others=false" \
+  SUITE_RESULTS="select=success topo_unit=skipped topo_ui=skipped others=skipped" \
+  expect pass "test: every suite skipped beside select's false" "" "$work/gate.sh"
+SELECTED="topo_unit=false topo_ui=false others=false" \
+  SUITE_RESULTS="select=success topo_unit=skipped topo_ui=skipped others=skipped test=success" \
+  expect pass "reviewer_ran: every suite skipped beside select's false" "" "$work/ran.sh"
+# select's own skip is never read as a selection, whatever SELECTED says.
+SELECTED="select=false topo_unit=false topo_ui=false others=false" SUITE_RESULTS="$(results select skipped test)" \
+  expect fail "reviewer_ran: select skipped" "the suite did not pass.* select (skipped)" "$work/ran.sh"
+SELECTED="select=false topo_unit=false topo_ui=false others=false" SUITE_RESULTS="$(results select skipped)" \
+  expect fail "test: select skipped" "select did not pass" "$work/gate.sh"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
