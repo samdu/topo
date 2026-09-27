@@ -227,13 +227,17 @@ struct CodeBlockCue: Equatable, Sendable {
 /// A code block's outline breathing when the voice reaches it: from nothing to the look's width
 /// and opacity in its accent and back, `Look.Markdown.Pulse.cycles` times, eased all the way
 /// (`Pulse.level`), over the enclosure's own shape. It plays each time `trigger` changes to a
-/// new value and draws nothing at rest; with `still` it draws that moment of the pulse and plays
-/// nothing.
+/// new serial — not when it goes back to nil — and draws nothing at rest; with `still` it draws
+/// that moment of the pulse and plays nothing.
 struct CodeBlockPulse: ViewModifier {
     let enclosure: Look.Enclosure
     let pulse: Look.Markdown.Pulse
     let trigger: Int?
     var still: Double?
+    /// The last cue this block played. The animator plays on every change of its trigger, and the
+    /// voice moving on to another block turns this one's `trigger` back to nil, which is not a
+    /// cue of this block: only a new serial is.
+    @State private var played: Int?
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -241,7 +245,7 @@ struct CodeBlockPulse: ViewModifier {
         if let still {
             content.overlay { Self.outline(pulse.level(at: still), enclosure: enclosure, pulse: pulse) }
         } else {
-            content.keyframeAnimator(initialValue: pulse.duration, trigger: trigger) { content, time in
+            content.keyframeAnimator(initialValue: pulse.duration, trigger: played) { content, time in
                 content.overlay { Self.outline(pulse.level(at: time), enclosure: enclosure, pulse: pulse) }
             } keyframes: { _ in
                 // The clock of the pulse, run from its start to its end; what it draws at each
@@ -250,6 +254,9 @@ struct CodeBlockPulse: ViewModifier {
                     MoveKeyframe(0)
                     LinearKeyframe(pulse.duration, duration: pulse.duration)
                 }
+            }
+            .onChange(of: trigger) { _, cue in
+                if let cue { played = cue }
             }
         }
     }

@@ -190,8 +190,8 @@ struct Look: Equatable, Sendable {
             var width: CGFloat = 2.5
             /// The outline's opacity at the peak of a breath.
             var opacity: Double = 0.8
-            /// One breath, in seconds.
-            var cycle: Double = 1.1
+            /// One breath, in seconds: slow enough to read as breathing and not as a flash.
+            var cycle: Double = 1.5
 
             /// Two breaths: the spec's, and not the document's to change.
             static let cycles = 2
