@@ -88,6 +88,20 @@ final class NextTurn {
         return true
     }
 
+    /// The turns on their way that the row is not holding, oldest first, split by where they
+    /// stand against the one it is: those said before it, drawn above the row, and those said
+    /// after it, drawn below. Each is words on the line whose turn is not in the log, so each is
+    /// drawn as a turn on its way until the log has it — the row holds one turn, and the
+    /// microphone can put another on the line while it does, or a relaunch can find more than one
+    /// owed. With nothing on its way in the row, every one is before it.
+    func queued(in harness: Harness) -> (before: [QueuedTurn], after: [QueuedTurn]) {
+        let unlanded = harness.unlanded.map { QueuedTurn(text: $0.text, nonce: $0.nonce) }
+        guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {
+            return (unlanded, [])
+        }
+        return (Array(unlanded[..<held]), Array(unlanded[unlanded.index(after: held)...]))
+    }
+
     /// Holding one of the person's own landed turns puts its words back in the row, to be changed
     /// and said again; the log is append-only, so this edits what is said next and never the turn
     /// that was said. Refused while the row is holding a turn on its way: those words are the

@@ -20,7 +20,7 @@
 #
 # The round is one more than the codex verdicts already on the PR. From round 3 on the prompt ends
 # with the convergence rule (docs/process.md, *The fix loop*): only a bug a real user would hit
-# blocks, and everything else is reported non-blocking for the PM to file as an issue. That holds on
+# blocks, and everything else is reported non-blocking for the coordinator to file as an issue. That holds on
 # every path below, a first review included. The count comes from `gh`, tried REVIEW_GH_ATTEMPTS
 # times (4) with a linear backoff of REVIEW_GH_BACKOFF seconds (5, then 10, then 15); a `gh` that
 # still fails exits 1 with an `::error::`, because a guessed round is a review under the wrong rule.
@@ -90,7 +90,7 @@ than the code, a test or Proof entry that could be stronger, a defect in
 CI, the scripts or the test harness, a sequence reachable only through a
 debug path or one no user can produce. This holds for an earlier finding
 still open as much as for a new one, and it overrides any other bar in
-this prompt. The PM files the non-blocking findings as issues.
+this prompt. The coordinator files the non-blocking findings as issues.
 EOF
 }
 

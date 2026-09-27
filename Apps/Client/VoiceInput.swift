@@ -71,6 +71,9 @@ final class VoiceInput {
     /// input node in production and injected by the suite, which has no audio device to read one
     /// from.
     private let formats: (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
+    /// The microphone prompt's answer: the system's in production, injected by the suite so a
+    /// press can be driven through `pressDown` and `pressUp` without TCC.
+    private let permission: @MainActor () async -> Bool
     /// True while a tap is on the input node, so a teardown that installed none never reads
     /// `inputNode`, which creates the hardware input on its first read.
     private(set) var tapped = false
@@ -99,11 +102,13 @@ final class VoiceInput {
     init(audio: AudioSession, ear: Ear = Ear(), center: NotificationCenter = .default,
          makeEngine: @escaping () -> AVAudioEngine = { AVAudioEngine() },
          formats: @escaping (AVAudioEngine) -> (client: AVAudioFormat, hardware: AVAudioFormat)
-             = VoiceInput.readFormats) {
+             = VoiceInput.readFormats,
+         permission: @escaping @MainActor () async -> Bool = { await AVAudioApplication.requestRecordPermission() }) {
         self.audio = audio
         self.ear = ear
         self.makeEngine = makeEngine
         self.formats = formats
+        self.permission = permission
         interruptionObserver = center.addObserver(
             forName: AVAudioSession.interruptionNotification, object: nil, queue: .main
         ) { [weak self] note in
@@ -191,7 +196,7 @@ final class VoiceInput {
         handsFree = false
         defer { if generation == mine { starting = false } }
         // The microphone, and nothing else: the words are turned into text on this phone.
-        guard await AVAudioApplication.requestRecordPermission() else {
+        guard await permission() else {
             microphoneDenied()
             return
         }
