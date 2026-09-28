@@ -306,22 +306,29 @@ enum Carry: Equatable {
     /// tolerance from either end, so a Topo left at his start and one put at his end both fail it.
     static func informs(_ along: Double) -> Bool { along > tolerance && along < 1 - tolerance }
 
-    /// The run drawn since the clock read `since` — the trail's last sample before the move, so
-    /// a run from an earlier move is never judged as this one's.
+    /// Every run drawn since the clock read `since` — the trail's last sample before the move, so
+    /// a run from an earlier move is never judged as this one's. One run off fails the move
+    /// whatever the others did, and a ride needs every run ridden: each with a sample that informs.
     static func judge(_ trail: [ChatReading.Topo.Drawn], since: Double, rising: Bool) -> Carry {
-        guard let run = carried(trail.filter { $0.t >= since }, rising: rising), let first = run.first, let last = run.last else { return .incomplete }
-        let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
-        guard abs(him) > 20 else { return .off("he did not move with the pane: \(run)") }
-        var told = false
-        for sample in run.dropFirst().dropLast() {
-            let along = (sample.keyboard - first.keyboard) / keyboard
-            let his = (sample.top - first.top) / him
-            guard abs(his - along) <= tolerance else {
-                return .off("at \(sample) he is \(Int(his * 100))% of his way and the keyboard \(Int(along * 100))%: \(run)")
+        let runs = carried(trail.filter { $0.t >= since }, rising: rising)
+        guard !runs.isEmpty else { return .incomplete }
+        var told = true
+        for run in runs {
+            guard let first = run.first, let last = run.last else { continue }
+            let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
+            guard abs(him) > 20 else { return .off("he did not move with the pane: \(run)") }
+            var this = false
+            for sample in run.dropFirst().dropLast() {
+                let along = (sample.keyboard - first.keyboard) / keyboard
+                let his = (sample.top - first.top) / him
+                guard abs(his - along) <= tolerance else {
+                    return .off("at \(sample) he is \(Int(his * 100))% of his way and the keyboard \(Int(along * 100))%: \(run)")
+                }
+                if informs(along) { this = true }
             }
-            if informs(along) { told = true }
+            told = told && this
         }
-        return told ? .rode(run) : .noVerdict
+        return told ? .rode(runs.flatMap { $0 }) : .noVerdict
     }
 
     /// What a move drew of the keyboard's way, for a failure to show: each moving frame since
@@ -329,20 +336,23 @@ enum Carry: Equatable {
     /// reads as few frames or none mid-slide; drift, as the two apart.
     static func sampled(_ trail: [ChatReading.Topo.Drawn], since: Double, rising: Bool) -> String {
         let trail = trail.filter { $0.t >= since }
-        guard let run = carried(trail, rising: rising), let first = run.first, let last = run.last else {
-            return "incomplete, \(trail.filter(\.moving).count) moving frames"
-        }
-        let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
-        let shares = run.filter(\.moving).map { sample in
-            "\(Int(((sample.top - first.top) / him * 100).rounded()))/\(Int(((sample.keyboard - first.keyboard) / keyboard * 100).rounded()))"
+        let runs = carried(trail, rising: rising)
+        guard !runs.isEmpty else { return "incomplete, \(trail.filter(\.moving).count) moving frames" }
+        // Only a run `judge` has not already failed reaches here, so he moved more than 20 points.
+        let shares = runs.flatMap { run -> [String] in
+            guard let first = run.first, let last = run.last else { return [] }
+            let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
+            return run.filter(\.moving).map { sample in
+                "\(Int(((sample.top - first.top) / him * 100).rounded()))/\(Int(((sample.keyboard - first.keyboard) / keyboard * 100).rounded()))"
+            }
         }
         let more = shares.count > 20 ? " and \(shares.count - 20) more" : ""
         return "[\(shares.prefix(20).joined(separator: " "))\(more)]"
     }
 
-    /// The last run of frames the keyboard carried up (`rising`) or down: the still frame before
-    /// it, every moving frame, and the still frame after. Nil until such a run is complete.
-    static func carried(_ trail: [ChatReading.Topo.Drawn], rising: Bool) -> [ChatReading.Topo.Drawn]? {
+    /// Every run of frames the keyboard carried up (`rising`) or down: the still frame before it,
+    /// every moving frame, and the still frame after. Empty until one such run is complete.
+    static func carried(_ trail: [ChatReading.Topo.Drawn], rising: Bool) -> [[ChatReading.Topo.Drawn]] {
         var runs: [[ChatReading.Topo.Drawn]] = []
         var run: [ChatReading.Topo.Drawn] = []
         for sample in trail {
@@ -356,7 +366,7 @@ enum Carry: Equatable {
                 run = [sample]
             }
         }
-        return runs.last { run in
+        return runs.filter { run in
             guard let first = run.first, let last = run.last, !first.moving, !last.moving, run.count >= 3 else { return false }
             return rising ? last.keyboard < first.keyboard - 100 : last.keyboard > first.keyboard + 100
         }
@@ -437,6 +447,15 @@ final class CarryJudgeTests: XCTestCase {
         XCTAssertEqual(Carry.sampled(rise(Array(repeating: (0.5, 0.5), count: 25)), since: 0, rising: true),
                        "[" + Array(repeating: "50/50", count: 20).joined(separator: " ") + " and 5 more]")
         XCTAssertEqual(Carry.sampled(Array(rise([(0.5, 0.5)]).dropLast()), since: 0, rising: true), "incomplete, 1 moving frames")
+    }
+
+    /// Two runs in one move: the first off, the second ridden. The move fails on the first.
+    func testARunOffFailsTheMoveWhateverRunsAfterIt() {
+        let off = rise([(0.5, 1)], from: 1), ridden = rise([(0.5, 0.5)], from: 2)
+        guard case .off = Carry.judge(off + ridden, since: 0, rising: true) else { return XCTFail("a run off was passed over") }
+        guard case .off = Carry.judge(ridden + off, since: 0, rising: true) else { return XCTFail("a run off was passed over") }
+        XCTAssertEqual(Carry.judge(rise([(0.98, 1)], from: 1) + ridden, since: 0, rising: true), .noVerdict, "a run not ridden was passed over")
+        guard case .rode = Carry.judge(rise([(0.4, 0.4)], from: 1) + ridden, since: 0, rising: true) else { return XCTFail("two runs ridden are not a ride") }
     }
 
     /// Any sample that disagrees fails, however many agree.
