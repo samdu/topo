@@ -1,0 +1,4 @@
+{"version": 1, "families": {"accessoryCircular": {"kind": "zstack", "children": [
+  {"kind": "gauge", "value": 0.6, "style": "circularCapacity"},
+  {"kind": "glyph", "symbol": "bolt.fill", "size": 12}
+]}}}

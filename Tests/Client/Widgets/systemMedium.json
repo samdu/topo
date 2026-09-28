@@ -1,0 +1,25 @@
+{"version": 1, "families": {"systemMedium": {"kind": "hstack", "spacing": 12, "children": [
+  {"kind": "vstack", "spacing": 4, "children": [
+    {"kind": "topo", "pose": "writing"},
+    {"kind": "gauge", "value": 0.3, "style": "circularCapacity", "colour": "signal"}
+  ]},
+  {"kind": "vstack", "alignment": "leading", "spacing": 4, "children": [
+    {"kind": "text", "text": "Evening, Sam", "style": "headline", "weight": "bold", "design": "rounded"},
+    {"kind": "text", "text": "Bins go out tonight", "style": "subheadline", "colour": "textMuted", "lines": 1},
+    {"kind": "text", "text": "Due", "style": "caption", "date": "2030-06-15T12:00:00Z", "dateStyle": "date"},
+    {"kind": "progress", "value": 0.7},
+    {"kind": "divider"},
+    {"kind": "hstack", "spacing": 6, "children": [
+      {"kind": "glyph", "symbol": "trash", "colour": "primary", "size": 16},
+      {"kind": "image", "name": "photo", "fit": "fit", "corner": 6},
+      {"kind": "spacer", "min": 8},
+      {"kind": "zstack", "alignment": "topTrailing", "children": [{"kind": "glyph", "symbol": "bell", "size": 16}, {"kind": "glyph", "symbol": "circle.fill", "size": 10, "colour": "signal"}]}
+    ]}
+  ]},
+  {"kind": "vstack", "spacing": 6, "children": [
+    {"kind": "button", "id": "done", "label": [{"kind": "glyph", "symbol": "checkmark"}, "Done"], "action": {"kind": "run", "topo": ["reminders", "done", "R1"]}},
+    {"kind": "button", "id": "ask", "label": "Ask", "action": {"kind": "turn"}},
+    {"kind": "toggle", "id": "porch", "label": "Porch", "on": false, "action": {"kind": "run", "topo": ["home", "set", "7C1D", "power"]}},
+    {"kind": "link", "id": "later", "label": "Later", "action": {"kind": "turn", "say": "remind me later"}}
+  ]}
+]}}}

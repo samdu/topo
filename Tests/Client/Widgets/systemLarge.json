@@ -1,0 +1,30 @@
+{"version": 1, "families": {"systemLarge": {"kind": "vstack", "alignment": "leading", "spacing": 8, "children": [
+  {"kind": "hstack", "spacing": 10, "children": [
+    {"kind": "topo", "pose": "calendar"},
+    {"kind": "vstack", "alignment": "leading", "spacing": 2, "children": [
+      {"kind": "text", "text": "Sunday", "style": "title2", "weight": "semibold", "design": "serif"},
+      {"kind": "text", "text": "Three things today", "style": "footnote", "colour": ["#8D5B86", "#CD96C4"], "design": "monospaced"}
+    ]},
+    {"kind": "spacer", "min": 4},
+    {"kind": "gauge", "value": 64, "min": 40, "max": 90, "style": "circular", "label": "°F", "colour": "signal"}
+  ]},
+  {"kind": "divider"},
+  {"kind": "hstack", "spacing": 8, "children": [
+    {"kind": "glyph", "symbol": "cart", "colour": "highlight", "size": 20},
+    {"kind": "text", "text": "Groceries after work", "style": "body", "lines": 2},
+    {"kind": "spacer"},
+    {"kind": "image", "name": "photo", "fit": "fill", "corner": 12}
+  ]},
+  {"kind": "gauge", "value": 0.55, "style": "linear", "label": "Week", "colour": "primary"},
+  {"kind": "progress", "value": 0.2, "colour": "signal"},
+  {"kind": "zstack", "alignment": "bottomTrailing", "children": [
+    {"kind": "text", "text": "Walk Daphne at six", "style": "callout", "weight": "medium"},
+    {"kind": "glyph", "symbol": "pawprint.fill", "size": 18, "colour": "secondary"}
+  ]},
+  {"kind": "hstack", "spacing": 8, "children": [
+    {"kind": "button", "id": "scene", "label": [{"kind": "glyph", "symbol": "moon"}, "Night"], "action": {"kind": "run", "topo": ["home", "scene", "9A0B"]}},
+    {"kind": "button", "id": "note", "label": "Note", "action": {"kind": "run", "topo": ["notify", "Stretch", "--in", "20m"]}},
+    {"kind": "toggle", "id": "fan", "label": "Fan", "on": true, "action": {"kind": "turn", "say": "the fan"}},
+    {"kind": "link", "id": "app", "label": "Open", "action": {"kind": "open"}}
+  ]}
+]}}}

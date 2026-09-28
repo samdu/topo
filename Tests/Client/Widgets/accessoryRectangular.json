@@ -1,0 +1,8 @@
+{"version": 1, "families": {"accessoryRectangular": {"kind": "hstack", "spacing": 6, "children": [
+  {"kind": "topo", "pose": "idle"},
+  {"kind": "vstack", "alignment": "leading", "spacing": 2, "children": [
+    {"kind": "text", "text": "Topo", "style": "headline"},
+    {"kind": "text", "text": "", "style": "caption", "date": "2030-06-15T12:00:00Z", "dateStyle": "date"},
+    {"kind": "progress", "value": 0.5}
+  ]}
+]}}}

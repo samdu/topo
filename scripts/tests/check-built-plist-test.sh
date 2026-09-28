@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme or the widget extension. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -28,6 +28,9 @@ make_app() {
     for usage in "${keys[@]}"; do
         plutil -insert "$usage" -string "Topo uses this when you ask it to." "$app/Info.plist"
     done
+    plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo","CFBundleURLSchemes":["topo"]}]' "$app/Info.plist"
+    mkdir -p "$app/PlugIns/TopoWidgets.appex"
+    plutil -create xml1 "$app/PlugIns/TopoWidgets.appex/Info.plist"
     printf '                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n' > "$app/LICENSE"
 }
 
@@ -55,6 +58,22 @@ for key in "${keys[@]}"; do
         rm -rf "$work/blank-$key"
     done
 done
+
+make_app "$work/no-scheme/Topo.app"
+plutil -remove CFBundleURLTypes "$work/no-scheme/Topo.app/Info.plist"
+if errors="$("$check" "$work/no-scheme/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product without the topo URL scheme passed"
+elif [[ "$errors" != *"CFBundleURLTypes"* ]]; then
+    fail "the refusal of a product without the topo URL scheme does not name it: $errors"
+fi
+
+make_app "$work/no-widgets/Topo.app"
+rm -rf "$work/no-widgets/Topo.app/PlugIns"
+if errors="$("$check" "$work/no-widgets/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product without TopoWidgets.appex passed"
+elif [[ "$errors" != *"TopoWidgets.appex"* ]]; then
+    fail "the refusal of a product without TopoWidgets.appex does not name it: $errors"
+fi
 
 # Signed ad hoc, with and without the entitlement: codesign wants an executable to sign.
 sign() {
@@ -95,4 +114,4 @@ if [ "$failures" -gt 0 ]; then
     echo "$failures failure(s)" >&2
     exit 1
 fi
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme or without TopoWidgets.appex fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read"

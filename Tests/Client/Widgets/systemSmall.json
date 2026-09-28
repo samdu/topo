@@ -1,0 +1,20 @@
+{"version": 1, "families": {"systemSmall": {"kind": "vstack", "alignment": "leading", "spacing": 4, "children": [
+  {"kind": "hstack", "spacing": 6, "children": [
+    {"kind": "topo", "pose": "thinking"},
+    {"kind": "gauge", "value": 7, "min": 0, "max": 10, "style": "circular", "label": "km", "colour": "highlight"}
+  ]},
+  {"kind": "text", "text": "Hello, Sam", "style": "headline", "colour": "primary", "lines": 1},
+  {"kind": "hstack", "spacing": 6, "children": [
+    {"kind": "glyph", "symbol": "star.fill", "colour": "signal", "size": 14},
+    {"kind": "image", "name": "photo", "fit": "fill", "corner": 4},
+    {"kind": "zstack", "children": [{"kind": "glyph", "symbol": "circle", "size": 18}, {"kind": "text", "text": "3", "style": "caption", "weight": "bold"}]}
+  ]},
+  {"kind": "progress", "value": 0.4, "colour": "secondary"},
+  {"kind": "divider"},
+  {"kind": "hstack", "spacing": 2, "children": [
+    {"kind": "button", "id": "hi", "label": [{"kind": "glyph", "symbol": "hand.wave"}], "action": {"kind": "turn", "say": "hello"}},
+    {"kind": "spacer", "min": 4},
+    {"kind": "toggle", "id": "lamp", "label": [{"kind": "glyph", "symbol": "lightbulb"}], "on": true, "action": {"kind": "run", "topo": ["home", "set", "4F2A", "power"]}},
+    {"kind": "link", "id": "open", "label": [{"kind": "glyph", "symbol": "arrow.up.forward.app"}], "action": {"kind": "open"}}
+  ]}
+]}}}

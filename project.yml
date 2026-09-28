@@ -63,6 +63,8 @@ targets:
       - Apps/Shared
       - Apps/Client
       - Apps/Topo
+      # The widgets' two intents, which the app runs and the extension names.
+      - Apps/Widgets/WidgetIntents.swift
       # What the About screen reads, rather than a copy of it in Swift.
       - path: THIRD-PARTY
         buildPhase: resources
@@ -86,6 +88,8 @@ targets:
       - package: TopoProxy
         product: TopoTools
       - package: TopoMascot
+      # The home-screen and lock-screen widgets, embedded in the app.
+      - target: TopoWidgets
     # Everything else in this target's Info.plist is generated from the INFOPLIST_KEY settings
     # below, which Xcode merges into this file. `UIBackgroundModes` is not one of the keys Xcode
     # generates — an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built
@@ -115,6 +119,11 @@ targets:
         # The commit this build's source is, which the About screen names as the corresponding
         # source the GPL asks for; `scripts/archive-upload.sh` passes it, and it is empty elsewhere.
         TopoSourceCommit: $(TOPO_SOURCE_COMMIT)
+        # `topo://open` and `topo://cue?…`, which the widgets open (Apps/Widgets/WidgetIntents.swift).
+        # No setting generates this key, so it is here, and `scripts/check-built-plist.sh` reads it.
+        CFBundleURLTypes:
+          - CFBundleURLName: zone.hexagon.topo
+            CFBundleURLSchemes: [topo]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo
@@ -137,6 +146,40 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: true
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
         INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+  # The mind's widgets on the home screen and the lock screen (docs/widgets.md): one kind that
+  # draws a slot's document out of the app group, and nothing else — no tool service, no guest,
+  # no network. Topo himself is drawn by the same engine the chat draws him with.
+  TopoWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - Apps/Widgets
+      - Apps/Shared/WidgetDocument.swift
+      - Apps/Shared/WidgetNodeView.swift
+      - Apps/Shared/SurfaceStore.swift
+      - Apps/Shared/Theme.swift
+      - Apps/Shared/OctopusMark.swift
+      - path: Design/topo-mark.svg
+        buildPhase: resources
+    dependencies:
+      - package: TopoMascot
+    info:
+      path: Apps/Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: Topo
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Apps/Widgets/TopoWidgets.entitlements
+      properties:
+        com.apple.security.application-groups: [group.zone.hexagon.topo]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.widgets
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
   TopoWatch:
     type: application
     platform: watchOS
@@ -245,6 +288,10 @@ targets:
       # The phrase the microphone test plays into the host's output and expects Parakeet to hear.
       - path: Tests/Fixtures
         buildPhase: resources
+      # The widget documents the widget suite draws in the app's debug host.
+      - path: Tests/Client/Widgets
+        buildPhase: resources
+        excludes: ["References/**"]
     dependencies:
       - target: Topo
     settings:

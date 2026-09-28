@@ -1,0 +1,4 @@
+{"version": 1, "families": {"accessoryInline": {"kind": "hstack", "children": [
+  {"kind": "glyph", "symbol": "sparkles"},
+  {"kind": "text", "text": "Topo says hi"}
+]}}}

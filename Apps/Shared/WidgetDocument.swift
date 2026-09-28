@@ -35,7 +35,8 @@ struct WidgetDocument: Equatable, Sendable {
     var tint: WidgetColour?
     /// Past this the slot draws the app's default rather than a stale day.
     var until: Date?
-    /// What a tap anywhere on the widget does, where no control takes it.
+    /// What a tap anywhere on the widget does, where no control takes it: a turn or opening
+    /// Topo, since the whole widget's tap is a URL and hands on no intent.
     var tap: WidgetAction?
     /// How relevant the Smart Stack should take it to be, 0 to 1.
     var relevance: Double?
@@ -506,7 +507,8 @@ final class WidgetReader {
             if let date = date(until) { document.until = date } else { note("until", Self.notADate) }
         }
         if let tap = root["tap"] {
-            document.tap = action(tap, "tap", allowing: ["turn", "open", "run"])
+            // The whole widget's tap is a URL the system opens, which carries no intent.
+            document.tap = action(tap, "tap", allowing: ["turn", "open"])
         }
         if let relevance = root["relevance"] {
             if let number = finite(relevance), (0...1).contains(number) { document.relevance = number }
