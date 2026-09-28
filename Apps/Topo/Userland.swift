@@ -122,6 +122,8 @@ final class Userland {
     private var booting: Task<ClaudeCodeInstaller.Installed, Error>?
     /// The guest's resolver, kept to the phone's name servers from the boot on.
     private let resolver = GuestResolver()
+    /// The guest's `/etc/localtime`, kept to the phone's zone from the boot on.
+    private let clock = GuestClock()
 
     init(installer: RootfsInstaller = .standard(), source: (any DownloadSource)? = nil,
          shellSource: (any DownloadSource)? = nil, claudeSource: (any DownloadSource)? = nil) {
@@ -226,6 +228,13 @@ final class Userland {
         }
     }
 
+    /// Brings the guest's `/etc/localtime` to the phone's zone now, after any write already under
+    /// way (`GuestClock.refresh`). The resident's launch waits on it. Needs a booted guest; a write
+    /// that fails leaves the zone as it was.
+    func bringZoneUpToDate() async {
+        await clock.refresh().value
+    }
+
     /// The installer for Claude Code once the downloader has it: now if it does, otherwise after
     /// `prepare` has fetched it. Throws what the fetch failed with. Installing it into a booted
     /// guest is the caller's, off the main thread, since the digest reads the whole binary.
@@ -252,6 +261,10 @@ final class Userland {
             await self.resolver.start()
             // Nor is a /tmp left full: what it clears is what a killed process left behind.
             try? await Guest.shared.clearTemporary()
+            // The same for the zone: the phone's zoneinfo mounted, then the link kept to its zone. With
+            // the mount refused the guest is on UTC; with a write refused, on whatever link stood.
+            try? Guest.shared.mountZoneinfo()
+            await self.clock.start()
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(with: Result { try claude.install(into: Guest.shared) })

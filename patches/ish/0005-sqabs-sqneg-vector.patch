@@ -1,0 +1,58 @@
+diff --git a/asbestos/guest-arm64/gadgets-aarch64/math.S b/asbestos/guest-arm64/gadgets-aarch64/math.S
+index f39a1a3..4d05aac 100644
+--- a/asbestos/guest-arm64/gadgets-aarch64/math.S
++++ b/asbestos/guest-arm64/gadgets-aarch64/math.S
+@@ -15154,6 +15154,8 @@ make_threesame_accum mls, mls
+ 
+ make_twomis_native abs, abs, 1
+ make_twomis_native neg, neg, 1
++make_twomis_native sqabs, sqabs, 1
++make_twomis_native sqneg, sqneg, 1
+ make_twomis_native clz, clz, 0
+ make_twomis_native cls, cls, 0
+ 
+diff --git a/asbestos/guest-arm64/gen.c b/asbestos/guest-arm64/gen.c
+index 3d44fce..0c59147 100644
+--- a/asbestos/guest-arm64/gen.c
++++ b/asbestos/guest-arm64/gen.c
+@@ -413,6 +413,8 @@ extern void gadget_sqdmulh_vec(void);      // SQDMULH Vd, Vn, Vm (signed sat dou
+ extern void gadget_sqrdmulh_vec(void);     // SQRDMULH Vd, Vn, Vm (signed sat rounding doubling mul high)
+ extern void gadget_abs_vec(void);          // ABS Vd, Vn (absolute value)
+ extern void gadget_neg_vec(void);          // NEG Vd, Vn (negate)
++extern void gadget_sqabs_vec(void);        // SQABS Vd, Vn (signed saturating absolute)
++extern void gadget_sqneg_vec(void);        // SQNEG Vd, Vn (signed saturating negate)
+ extern void gadget_clz_vec(void);          // CLZ Vd, Vn (count leading zeros)
+ extern void gadget_cls_vec(void);          // CLS Vd, Vn (count leading sign bits)
+ extern void gadget_not_vec(void);          // NOT Vd, Vn (bitwise NOT, bytes only)
+@@ -5479,6 +5481,31 @@ skip_three_different:
+         return 1;
+     }
+ 
++    // SQABS/SQNEG (vector) - AdvSIMD two-register misc
++    // SQABS: 0 Q 0 01110 size 10000 00111 10 Rn Rd  (U=0, opcode=0x07)
++    // SQNEG: 0 Q 1 01110 size 10000 00111 10 Rn Rd  (U=1, opcode=0x07)
++    // Autovectorised byte counts reach SQABS to turn a CMEQ mask's -1 lanes
++    // into 1s (ugrep's line numbering does). FPSR.QC is not modelled, as for
++    // the other saturating gadgets.
++    if ((insn & 0xbf3ffc00) == 0x0e207800 ||   // SQABS
++        (insn & 0xbf3ffc00) == 0x2e207800) {   // SQNEG
++        uint32_t Q = (insn >> 30) & 1;
++        uint32_t U = (insn >> 29) & 1;
++        uint32_t size = (insn >> 22) & 0x3;
++        uint32_t rn = (insn >> 5) & 0x1f;
++        uint32_t rd = insn & 0x1f;
++
++        if (size == 3 && Q == 0) {
++            gen_interrupt(state, INT_UNDEFINED);
++            return 0;
++        }
++
++        void *gadget = (U == 0) ? gadget_sqabs_vec : gadget_sqneg_vec;
++        gen(state, (unsigned long) gadget);
++        gen(state, rd | (rn << 8) | (size << 16) | (Q << 24));
++        return 1;
++    }
++
+     // CLZ/CLS (vector) - AdvSIMD two-register misc
+     // CLS: 0 Q 0 01110 size 10000 00100 10 Rn Rd  (U=0, opcode=0x04)
+     // CLZ: 0 Q 1 01110 size 10000 00100 10 Rn Rd  (U=1, opcode=0x04)

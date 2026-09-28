@@ -126,7 +126,11 @@ final class GuestResident {
             }
             let credential = GuestCredential(store: KeychainTokenStore.guest, fallback: tokens)
             let launcher = ClaudeLauncher {
-                try await APIProxy.guestEnvironment(port: port, credential: credential).environment
+                // The zone written before every launch, so a process started on the foreground
+                // after the phone changed zones starts in the new one: its runtime keeps the zone it
+                // first reads for its life.
+                await userland.bringZoneUpToDate()
+                return try await APIProxy.guestEnvironment(port: port, credential: credential).environment
                     .merging(toolsEnvironment) { own, _ in own }
             }
             let session = GuestSession(launcher: launcher, store: Self.sessionFile, model: Self.model,

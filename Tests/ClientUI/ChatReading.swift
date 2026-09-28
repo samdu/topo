@@ -53,7 +53,7 @@ enum ChatReading {
             var hidden: Bool
         }
 
-        struct Drawn: Decodable, CustomStringConvertible {
+        struct Drawn: Decodable, Equatable, CustomStringConvertible {
             var t: Double
             var top: Double
             var keyboard: Double
@@ -158,20 +158,32 @@ enum ChatReading {
     static func wait(_ app: XCUIApplication, _ what: String, timeout: TimeInterval = 20,
                      file: StaticString = #filePath, line: UInt = #line,
                      _ wanted: (Chat, Topo) -> Bool) throws -> (Chat, Topo) {
+        var seen: Chat?
+        if let found = poll(app, timeout: timeout, seen: &seen, wanted) { return found }
+        let message = "Topo was not \(what) in \(timeout) s: \(seen?.mascot.map(String.init(describing:)) ?? "never reported")"
+        XCTFail(message, file: file, line: line)
+        throw NotThere(description: message)
+    }
+
+    /// The chat's report once it is as `wanted` says, or nil when `timeout` runs out first, with
+    /// the last report read in `seen`.
+    static func poll(_ app: XCUIApplication, timeout: TimeInterval, seen: inout Chat?,
+                     _ wanted: (Chat, Topo) -> Bool) -> (Chat, Topo)? {
         let deadline = Date().addingTimeInterval(timeout)
         let account = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts["Apple Account Verification"]
-        var seen = chat(app)
+        seen = chat(app)
         while !(seen.flatMap { chat in chat.mascot.map { wanted(chat, $0) } } ?? false), Date() < deadline {
             if account.exists { account.buttons["Not Now"].tap() }
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
             seen = chat(app)
         }
-        guard let seen, let topo = seen.mascot, wanted(seen, topo) else {
-            let message = "Topo was not \(what) in \(timeout) s: \(seen?.mascot.map(String.init(describing:)) ?? "never reported")"
-            XCTFail(message, file: file, line: line)
-            throw NotThere(description: message)
-        }
+        guard let seen, let topo = seen.mascot, wanted(seen, topo) else { return nil }
         return (seen, topo)
+    }
+
+    static func poll(_ app: XCUIApplication, timeout: TimeInterval, _ wanted: (Chat, Topo) -> Bool) -> (Chat, Topo)? {
+        var seen: Chat?
+        return poll(app, timeout: timeout, seen: &seen, wanted)
     }
 
     /// Raises the keyboard with the flank that raises it, a simulator's late account alert taking
