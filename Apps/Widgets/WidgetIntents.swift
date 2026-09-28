@@ -1,5 +1,6 @@
 import AppIntents
 import Foundation
+import WidgetKit
 
 /// What a control on one of the mind's widgets hands on when it is tapped, compiled into the app
 /// and the extension alike so the widget can name them and the app can run them.
@@ -121,5 +122,37 @@ enum WidgetURL {
         guard let slot = value("slot"), let control = value("control"),
               let revision = value("revision").flatMap(Int.init) else { return nil }
         return SurfaceStore.Cue(nonce: nonce, slot: slot, id: control, revision: revision, say: value("say"), time: time)
+    }
+}
+
+/// The one thing a placed widget is configured with: which of the mind's slots it shows.
+struct SurfaceConfiguration: WidgetConfigurationIntent {
+    static let title: LocalizedStringResource = "Topo"
+    static let description = IntentDescription("Which of Topo's widgets this one shows.")
+
+    @Parameter(title: "Widget", optionsProvider: SlotOptions())
+    var slot: String?
+
+    init() {}
+}
+
+/// The slots in the app group, listed as the person places a widget.
+struct SlotOptions: DynamicOptionsProvider {
+    func results() async throws -> [String] {
+        SurfaceStore.shared()?.slots() ?? []
+    }
+}
+
+extension WidgetFamilyName {
+    init(_ family: WidgetFamily) {
+        switch family {
+        case .systemSmall: self = .systemSmall
+        case .systemMedium: self = .systemMedium
+        case .systemLarge, .systemExtraLarge: self = .systemLarge
+        case .accessoryCircular: self = .accessoryCircular
+        case .accessoryRectangular: self = .accessoryRectangular
+        case .accessoryInline: self = .accessoryInline
+        default: self = .default
+        }
     }
 }

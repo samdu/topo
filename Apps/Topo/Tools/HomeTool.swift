@@ -206,6 +206,16 @@ final class HomeAccess {
         return made().authorization.contains(.authorized)
     }
 
+    /// The homes HomeKit has already loaded with access granted, primary first, or nil: it never
+    /// makes the store and never waits, so it asks the person nothing. What a widget's `run`
+    /// action is judged against when it is set (`WidgetTool`).
+    var loadedHomes: [HomeRecord]? {
+        guard let store, homesLoaded, store.authorization.contains(.authorized) else { return nil }
+        var homes = store.homes()
+        homes.sort { $0.primary && !$1.primary }
+        return homes
+    }
+
     /// Every home, primary first, once HomeKit has loaded them.
     func homes() async throws -> [HomeRecord] {
         try await wait(for: .loaded)
@@ -293,6 +303,10 @@ struct HomeTool: Tool {
     let broker: PermissionBroker
     /// How long one read of an accessory is waited on before its value is said as `?`.
     var readBound: Duration = .seconds(4)
+    /// Characteristics, by short name, this tool refuses to set however they are named: the
+    /// widgets' tool table refuses a lock's and a garage door's target state
+    /// (`WidgetAction.refusedCharacteristics`); the guest's refuses none.
+    var refusing: Set<String> = []
 
     let name = "home"
     let summary = "the lights, locks, thermostats and scenes of the person's home (HomeKit)"
@@ -332,6 +346,7 @@ struct HomeTool: Tool {
             case let .set(id, name, text):
                 let accessory = try accessory(id, in: homes)
                 let characteristic = try Self.characteristic(name, of: accessory)
+                try Self.admit(characteristic, of: accessory, refusing: refusing)
                 let value = try Self.judge(text, for: characteristic, of: accessory)
                 try await home.write(value, to: characteristic.id)
                 let back = await read(characteristic.id)
@@ -439,7 +454,34 @@ struct HomeTool: Tool {
     // MARK: Finding
 
     private func accessory(_ id: String, in homes: [HomeRecord]) throws -> HomeAccessory {
-        try Self.one(id, among: homes.flatMap(\.accessories), id: \.id, name: \.name, kind: "accessory")
+        try Self.accessory(id, in: homes)
+    }
+
+    static func accessory(_ id: String, in homes: [HomeRecord]) throws -> HomeAccessory {
+        try one(id, among: homes.flatMap(\.accessories), id: \.id, name: \.name, kind: "accessory")
+    }
+
+    /// Refuses a characteristic this tool does not set, by the short name it resolved to.
+    static func admit(_ characteristic: HomeCharacteristic, of accessory: HomeAccessory, refusing: Set<String>) throws {
+        guard refusing.contains(characteristic.name) else { return }
+        throw ToolFailure("\(accessory.name) \(characteristic.name) is not a widget's to set; a lock or a door goes through a turn",
+                          status: ToolReply.refused)
+    }
+
+    /// A `set` or `scene` call judged against homes already loaded, the way the call itself would
+    /// judge it, with nothing written and nothing run.
+    static func judge(_ call: Call, in homes: [HomeRecord], refusing: Set<String>) throws {
+        switch call {
+        case let .set(id, name, text):
+            let accessory = try accessory(id, in: homes)
+            let characteristic = try characteristic(name, of: accessory)
+            try admit(characteristic, of: accessory, refusing: refusing)
+            _ = try judge(text, for: characteristic, of: accessory)
+        case let .scene(id):
+            _ = try one(id, among: homes.flatMap(\.scenes), id: \.id, name: \.name, kind: "scene")
+        case .list, .get, .scenes:
+            break
+        }
     }
 
     /// The one thing whose id is `text` or starts with it. None is a failure; more than one is a

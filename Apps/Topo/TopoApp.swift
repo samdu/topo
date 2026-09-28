@@ -51,6 +51,9 @@ struct TopoApp: App {
         let eventKit = EventKitStore()
         let location = LocationPermission()
         let home = HomeAccess { HomeKitStore() }
+        let reminders = RemindersTool(store: eventKit, authorizer: EventKitAuthorizer(entity: .reminder, store: eventKit), broker: broker)
+        let notify = NotifyTool(scheduler: UserNotificationScheduler(), authorizer: NotificationAuthorizer(), broker: broker)
+        let homeTool = HomeTool(home: home, authorizer: HomeAuthorizer(home: home), broker: broker)
         GuestResident.shared.toolTable = [
             LookTool(vault: {
                 #if DEBUG
@@ -59,13 +62,14 @@ struct TopoApp: App {
                 (memory.look, memory.lookReading)
                 #endif
             }),
-            RemindersTool(store: eventKit, authorizer: EventKitAuthorizer(entity: .reminder, store: eventKit), broker: broker),
+            reminders,
             CalendarTool(store: eventKit, authorizer: EventKitAuthorizer(entity: .event, store: eventKit), broker: broker),
-            NotifyTool(scheduler: UserNotificationScheduler(), authorizer: NotificationAuthorizer(), broker: broker),
+            notify,
             ContactsTool(directory: ContactStoreDirectory(), authorizer: ContactsAuthorizer(), broker: broker),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
                          broker: broker),
-            HomeTool(home: home, authorizer: HomeAuthorizer(home: home), broker: broker),
+            homeTool,
+            WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
         ]
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))

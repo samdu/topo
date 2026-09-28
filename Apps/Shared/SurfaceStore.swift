@@ -110,9 +110,23 @@ struct SurfaceStore: Sendable {
             .sorted()
     }
 
-    /// Takes a slot away, its images with it.
+    /// What `topo widget set` said of the slot's document when it was set: the reader's notes
+    /// and the controls judged only at the tap.
+    func notes(slot: String) -> [String] {
+        guard let data = coordinatedRead(notesURL(slot: slot)) else { return [] }
+        return String(decoding: data, as: UTF8.self).split(separator: "\n").map(String.init)
+    }
+
+    func writeNotes(_ notes: [String], slot: String) throws {
+        try coordinatedWrite(notesURL(slot: slot)) { _ in notes.isEmpty ? nil : Data(notes.joined(separator: "\n").utf8) }
+    }
+
+    func notesURL(slot: String) -> URL { folder.appendingPathComponent("\(slot).notes") }
+
+    /// Takes a slot away, its images and its notes with it.
     func remove(slot: String) throws {
         try coordinatedWrite(url(slot: slot)) { _ in nil }
+        try coordinatedWrite(notesURL(slot: slot)) { _ in nil }
         if FileManager.default.fileExists(atPath: images(slot: slot).path) {
             try FileManager.default.removeItem(at: images(slot: slot))
         }

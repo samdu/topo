@@ -233,7 +233,8 @@ enum WidgetAction: Equatable, Sendable {
         ["home", "scene"], ["home", "set"], ["notify"], ["reminders", "done"], ["reminders", "add"],
         ["look", "set"], ["look", "reset"],
     ]
-    static let refusedCharacteristics: Set<String> = ["lock-target-state", "target-door-state"]
+    /// By the short names `topo home` gives them (`HomeNames`): a lock's target is `lock`.
+    static let refusedCharacteristics: Set<String> = ["lock", "lock-target-state", "target-door-state"]
 
     /// Why `argv` is not a call a `run` action may make, or nil when it is on the allowlist.
     static func refusal(_ argv: [String]) -> String? {
@@ -242,7 +243,7 @@ enum WidgetAction: Equatable, Sendable {
             return "is topo \(argv.prefix(2).joined(separator: " ")), which a widget may not run; it may run "
                 + allowed.map { "topo " + $0.joined(separator: " ") }.joined(separator: ", ")
         }
-        if argv.starts(with: ["home", "set"]), argv.count > 3, refusedCharacteristics.contains(argv[3]) {
+        if argv.starts(with: ["home", "set"]), argv.count > 3, refusedCharacteristics.contains(argv[3].lowercased()) {
             return "sets \(argv[3]), which a widget may not set; a lock or a door goes through a turn"
         }
         return nil
