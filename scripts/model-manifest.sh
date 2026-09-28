@@ -159,13 +159,14 @@ alpine-minirootfs|https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/aarch64/|
 # from the branch's repository, laid into the fakefs beside the rootfs on the phone
 # (Packages/TopoUserland's RootfsInstaller). bash, which Claude Code's Bash tool needs (the
 # minirootfs has only BusyBox's sh), and exactly what `apk add bash` pulls on top of the pinned
-# minirootfs: readline, libncursesw and ncurses-terminfo-base. Each file is checked against the
+# minirootfs: readline, libncursesw and ncurses-terminfo-base; and tzdata, the zoneinfo the
+# guest's /etc/localtime points into (the minirootfs has none). Each file is checked against the
 # repository's APKINDEX — the version it lists for the name, and the size — and the set is checked
 # closed (`closed`): every dependency of every package here is provided by a package here or by one
 # the minirootfs installed, at a version that meets the dependency's constraint. The repository keeps only the newest build of each package, so a package
 # superseded upstream is a bump here and a re-run, or its URL answers 404.
 packages="
-alpine-bash|https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/|bash-5.2.37-r0 readline-8.2.13-r1 libncursesw-6.5_p20250503-r0 ncurses-terminfo-base-6.5_p20250503-r0
+alpine-bash|https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/|bash-5.2.37-r0 readline-8.2.13-r1 libncursesw-6.5_p20250503-r0 ncurses-terminfo-base-6.5_p20250503-r0 tzdata-2026d-r0
 "
 
 # id | version | platform: Claude Code, from the release distribution the official installer reads

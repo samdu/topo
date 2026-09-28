@@ -37,6 +37,43 @@ final class GuestTests: XCTestCase {
         try await Guest.shared.writeResolver()
     }
 
+    /// The guest tells the time in the zone `/etc/localtime` is pointed at, standard time and
+    /// summer time each on its own date, from the tzdata laid in with the packages; a second zone
+    /// replaces the first, with nothing left beside it.
+    func testTheGuestKeepsThePhonesZone() async throws {
+        _ = try SharedGuest.booted()
+        defer { Task { _ = try? await Guest.shared.run("/bin/rm", ["-f", "/etc/localtime"]) } }
+        let probe = "readlink /etc/localtime; date -d @1737000000 +%z; date -d @1752000000 +%z; ls /etc/localtime.topo 2>/dev/null"
+
+        try await Guest.shared.writeTimeZone(identifier: "America/Los_Angeles")
+        let pacific = try await Guest.shared.run("/bin/sh", ["-c", probe])
+        XCTAssertEqual(pacific.output, "/usr/share/zoneinfo/America/Los_Angeles\n-0800\n-0700\n", pacific.errors)
+
+        try await Guest.shared.writeTimeZone(identifier: "Europe/London")
+        let london = try await Guest.shared.run("/bin/sh", ["-c", probe])
+        XCTAssertEqual(london.output, "/usr/share/zoneinfo/Europe/London\n+0000\n+0100\n", london.errors)
+    }
+
+    /// A name that is not a zone's, or a zone the guest has no zoneinfo for, throws and leaves
+    /// `/etc/localtime` where it was: no path out of the zoneinfo, and nothing the shell runs.
+    func testTheTimeZoneRefusesWhatIsNotAZoneName() async throws {
+        _ = try SharedGuest.booted()
+        defer { Task { _ = try? await Guest.shared.run("/bin/rm", ["-f", "/etc/localtime"]) } }
+        try await Guest.shared.writeTimeZone(identifier: "Europe/London")
+        let refused = ["../../etc/passwd", "/etc/passwd", "America/$(touch /tmp/ran)", "America/..", "America//Denver",
+                       "", "a b", String(repeating: "A", count: 65), "Mars/Olympus", "America"]
+        for name in refused {
+            do {
+                try await Guest.shared.writeTimeZone(identifier: name)
+                XCTFail("\(name) was written")
+            } catch let failure as Guest.Failure {
+                guard case .timeZone = failure else { return XCTFail("\(name): \(failure)") }
+            }
+        }
+        let after = try await Guest.shared.run("/bin/sh", ["-c", "readlink /etc/localtime; ls /etc/localtime.topo /tmp/ran 2>/dev/null"])
+        XCTAssertEqual(after.output, "/usr/share/zoneinfo/Europe/London\n")
+    }
+
     /// The guest answers to its own name, whatever the host is called: busybox's shell asks at
     /// start, and a host name longer than the kernel's 65-byte field is a crash rather than a name.
     func testTheGuestHasItsOwnHostname() async throws {

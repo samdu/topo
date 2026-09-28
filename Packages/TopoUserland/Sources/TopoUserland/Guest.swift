@@ -27,6 +27,9 @@ public final class Guest: Sendable {
         case unmount(Int32)
         /// `/etc/resolv.conf` could not be written, with what the guest said.
         case resolver(String)
+        /// `/etc/localtime` could not be pointed at the zone: not a zone name, no zoneinfo for it in
+        /// the guest, or the write failed, with why.
+        case timeZone(String)
 
         public var description: String {
             switch self {
@@ -38,6 +41,7 @@ public final class Guest: Sendable {
             case .link(let errno): "the link could not be made (\(errno))"
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
+            case .timeZone(let why): "/etc/localtime could not be written: \(why)"
             }
         }
     }
@@ -89,6 +93,32 @@ public final class Guest: Sendable {
         let script = "[ -e /etc/resolv.conf ] || printf 'nameserver %s\\n' \(Self.nameservers.joined(separator: " ")) > /etc/resolv.conf"
         let exit = try await run("/bin/sh", ["-c", script])
         if exit.status != 0 { throw Failure.resolver(exit.errors) }
+    }
+
+    /// Whether `identifier` is a plain zone name, one that names a file under
+    /// `/usr/share/zoneinfo` and nothing outside it: components of letters, digits, `_`, `+` and
+    /// `-`, apart by `/`, none empty, `.` or `..`, 64 bytes at most.
+    public static func isZoneName(_ identifier: String) -> Bool {
+        guard identifier.utf8.count <= 64 else { return false }
+        return identifier.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { part in
+            !part.isEmpty && part != "." && part != ".."
+                && part.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_+-".unicodeScalars.contains($0)) }
+        }
+    }
+
+    /// Points the guest's `/etc/localtime` at `/usr/share/zoneinfo/<identifier>`, so every program
+    /// started after it — BusyBox `date`, musl's `localtime`, and Claude Code's runtime, which takes
+    /// the zone's name from where the link points — tells the time in that zone. A link and not a
+    /// copy, for that name. Made beside and moved over, through the guest so the fakefs records
+    /// it. A name that is not a zone name (`isZoneName`), or one the guest has no zoneinfo for —
+    /// tzdata is one of the guest's packages, and a fakefs imported before it has none — throws
+    /// and leaves `/etc/localtime` as it was. Requires a booted kernel.
+    public func writeTimeZone(identifier: String) async throws {
+        guard Self.isZoneName(identifier) else { throw Failure.timeZone("not a zone name: \(identifier)") }
+        let script = #"z="/usr/share/zoneinfo/$1"; [ -f "$z" ] || { echo "no zoneinfo for $1" >&2; exit 1; }; "#
+            + #"ln -sfn "$z" /etc/localtime.topo && mv -fT /etc/localtime.topo /etc/localtime"#
+        let exit = try await run("/bin/sh", ["-c", script, "zone", identifier])
+        if exit.status != 0 { throw Failure.timeZone(exit.errors) }
     }
 
     /// Bind-mounts the host directory `host` at `point` in the guest (the fork's realfs), making

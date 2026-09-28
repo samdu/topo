@@ -41,7 +41,7 @@ final class ModelDownloadsTests: XCTestCase {
         XCTAssertEqual(rootfs.files[0].sha256.count, 64)
         XCTAssertGreaterThan(rootfs.files[0].size, 0)
         // bash for the guest: Alpine's own packages for the same branch and architecture, exactly
-        // bash and what it depends on at their pinned versions, in the order they are laid in, each
+        // bash and what it depends on, and tzdata, at their pinned versions, in the order they are laid in, each
         // from the branch's repository and checked by digest like the rootfs.
         let shell = try XCTUnwrap(manifest.model(ModelManifest.shell))
         XCTAssertNil(shell.repo)
@@ -51,6 +51,7 @@ final class ModelDownloadsTests: XCTestCase {
             "readline-8.2.13-r1.apk",
             "libncursesw-6.5_p20250503-r0.apk",
             "ncurses-terminfo-base-6.5_p20250503-r0.apk",
+            "tzdata-2026d-r0.apk",
         ])
         for file in shell.files {
             XCTAssertEqual(file.sha256.count, 64, file.path)

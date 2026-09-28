@@ -223,6 +223,7 @@
 		A7E08831026CDD7367068B3B /* StatusNoticeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A13FD41A080E7B11883AD6 /* StatusNoticeTests.swift */; };
 		A80108F5A130859F4C15CA59 /* Speakable.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF519B4570159A5CED371583 /* Speakable.swift */; };
 		A80AAFDB7F75D142FA415516 /* TurnMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */; };
+		A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5781A49D54D87338285451F9 /* GuestClockTests.swift */; };
 		A861E04568B9169AD4FC67B0 /* MemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD2D48725224C0E601F432D /* MemoryTests.swift */; };
 		A8807AF0D00F928C12D256FA /* Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */; };
 		A95359D2B28EF0C108A6537D /* TopoTools in Frameworks */ = {isa = PBXBuildFile; productRef = 7C767439B30ED0E6848AC6D4 /* TopoTools */; };
@@ -242,6 +243,7 @@
 		B15EA92763AE1DC3A0B80DA0 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
 		B19EE86A1617D62050D9A220 /* VaultHomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E624F2EA4D0E819F8FE0215 /* VaultHomeTests.swift */; };
+		B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 771746CA069BC2B3B60EC32C /* GuestClock.swift */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
 		B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		B63B6F52C265588ADE976B9B /* TopoProxy in Frameworks */ = {isa = PBXBuildFile; productRef = F62F043A4758AE7705F44F5A /* TopoProxy */; };
@@ -413,6 +415,7 @@
 		4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Markdown.swift; sourceTree = "<group>"; };
 		522A26D8E0BA7917872C2EAC /* fling.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fling.json; sourceTree = "<group>"; };
 		570E29C16DA2E655E25483F5 /* PhoneTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTool.swift; sourceTree = "<group>"; };
+		5781A49D54D87338285451F9 /* GuestClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClockTests.swift; sourceTree = "<group>"; };
 		57BE8636EBBD805D555F974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		5990B1776EC4BC101510B22E /* TopoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoAuth; path = Packages/TopoAuth; sourceTree = SOURCE_ROOT; };
 		5AEBDE5DBDF558DA07A77435 /* NotifyTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotifyTool.swift; sourceTree = "<group>"; };
@@ -437,6 +440,7 @@
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		766030764883BAAC87FAA3B1 /* ChatNoticesRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNoticesRenderTests.swift; sourceTree = "<group>"; };
 		768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAppDelegate.swift; sourceTree = "<group>"; };
+		771746CA069BC2B3B60EC32C /* GuestClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClock.swift; sourceTree = "<group>"; };
 		7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestPidfdTests.swift; sourceTree = "<group>"; };
 		7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftRowTests.swift; sourceTree = "<group>"; };
 		7A4CB88ED3E53A495B415761 /* NotePush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotePush.swift; sourceTree = "<group>"; };
@@ -643,6 +647,7 @@
 			isa = PBXGroup;
 			children = (
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
+				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
 				0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */,
 				1DABB17BCD6602885282D24F /* Info.plist */,
 				7A4CB88ED3E53A495B415761 /* NotePush.swift */,
@@ -859,6 +864,7 @@
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
+				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
 				834457A014E7809E1A052937 /* LicenceTests.swift */,
@@ -1591,6 +1597,7 @@
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
+				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
 				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
@@ -1660,6 +1667,7 @@
 				39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */,
 				01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */,
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
+				B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */,
 				DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
 				C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */,
