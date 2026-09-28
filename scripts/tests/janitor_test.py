@@ -63,7 +63,7 @@ def jobs(**concl):
 
 def issue(number, title="x", age=timedelta(hours=1), labels=(), comments=0, **kw):
     d = {"number": number, "title": title, "createdAt": ago(age),
-         "labels": {"nodes": [{"name": l} for l in labels]}, "comments": {"totalCount": comments}}
+         "labels": {"nodes": [{"name": l} for l in labels], "pageInfo": {"hasNextPage": False}}, "comments": {"totalCount": comments}}
     d.update(kw)
     return d
 
@@ -289,6 +289,11 @@ class Decisions(unittest.TestCase):
                                                   dict(issue(9), labels={"nodes": {}}), dict(issue(10), labels={"nodes": "triaged"})], NOW)
         self.assertEqual(bad, ["#8", "#9", "#10"], "a bool count and labels that are not a list are malformed")
         self.assertEqual([w["key"] for w in wants], ["issue:1"])
+        old_shape = dict(issue(11), labels={"nodes": [{"name": f"l{k}"} for k in range(20)]})
+        more = dict(issue(12), labels={"nodes": [{"name": "bug"}], "pageInfo": {"hasNextPage": True}})
+        wants, keep, bad = janitor.decide_issues([good, old_shape, more], NOW)
+        self.assertEqual(bad, ["#11", "#12"], "a label list that may not be whole is malformed")
+        self.assertEqual([w["key"] for w in wants], ["issue:1"])
         for node in (None, "x", {"title": "no number"}, dict(issue(6), number="6"), dict(issue(7), number=True)):
             wants, keep, bad = janitor.decide_issues([good, node], NOW)
             self.assertEqual([w["key"] for w in wants], ["issue:1"], node)
@@ -379,6 +384,14 @@ if tool == "gh":
         if S.get("issues_error"): print(S["issues_error"], file=sys.stderr); sys.exit(1)
         start = int(a[a.index("-f", 3) + 1].split("=", 1)[1]) if a.count("-f") > 1 else 0
         page = S.get("issues", [])[start:start + 100]
+        # GitHub answers `labels(first: N)` with at most N labels and says whether more stand.
+        import re; first = int(re.search(r"labels\(first: (\d+)\)", a[a.index("-f") + 1]).group(1))
+        def cut(i):
+            if not (isinstance(i, dict) and isinstance(i.get("labels"), dict) and isinstance(i["labels"].get("nodes"), list)):
+                return i
+            ls = i["labels"]["nodes"]
+            return dict(i, labels={"nodes": ls[:first], "pageInfo": {"hasNextPage": len(ls) > first}})
+        page = [cut(i) for i in page]
         more = start + 100 < len(S.get("issues", []))
         out({"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": more, "endCursor": str(start + 100) if more else None},
                                                 "nodes": page}}}})
@@ -788,6 +801,54 @@ class WholePass(unittest.TestCase):
         self.run_pass(bad)
         self.assertTrue(any("could not read the open issues" in m["body"]["text"] for m in Bridge.received[n:]),
                         "a new failure inside REPEAT is said")
+
+    def test_a_triaged_label_past_the_twentieth_is_read_and_a_label_list_with_more_is_skipped(self):
+        self.assertIn("labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", janitor.ISSUES_QUERY)
+        many = [f"l{k}" for k in range(20)]
+        s = self.scripted(prs=[], issues=[issue(40, "Twenty-one", labels=many + ["triaged"]),
+                                          issue(41, "Too many", labels=[f"l{k}" for k in range(101)]),
+                                          issue(42, "Plain")])
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertNotIn("#40", text, "the 21st label, triaged, is read")
+        self.assertIn("1 open issue node came back malformed and was skipped: #41.", text)
+        self.assertNotIn("issue: #41", text)
+        self.assertEqual([l.split(",")[0] for l in self.issue_lines()], ["- issue: #42 Plain"])
+        old = self.scripted(prs=[], issues=[issue(40, "Twenty-one", labels=many + ["triaged"])])
+        with open(self.script, "w") as f:
+            json.dump(old, f)
+        from unittest import mock
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(janitor, "ISSUES_QUERY", janitor.ISSUES_QUERY.replace("labels(first: 100)", "labels(first: 20)")):
+            nodes, whole = janitor.Shell().open_issues()
+        self.assertEqual(len(nodes[0]["labels"]["nodes"]), 20)
+        wants, keep, bad = janitor.decide_issues(nodes, NOW)
+        self.assertEqual((wants, bad), ([], ["#40"]), "read the old way, the issue is skipped, never called untriaged")
+
+    def test_while_a_report_waits_on_the_bridge_step_six_queues_nothing(self):
+        state = {"undelivered": [{"id": "earlier", "at": "2026-09-28T00:00Z", "lines": ["an earlier line"]}]}
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        Bridge.status = 503
+        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(49)]
+        s = self.scripted(prs=drafts, issues_error="HTTP 502", worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n")
+        for i in range(4):
+            if i:
+                self.backdate()
+            p, _ = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("issues:read: waits for the undelivered reports", p.stderr)
+        queued = self.undelivered()
+        self.assertEqual(queued[0], "an earlier line", "nothing dropped")
+        self.assertEqual(sum("a draft, untouched" in l for l in queued), 4 * 49, "every PR line is queued")
+        self.assertFalse([l for l in queued if "issue" in l or "dropped" in l], "no step-6 line is queued")
+        self.assertNotIn("issues:read", self.state_file()["fired"])
+        Bridge.status = 200
+        self.run_pass(s)
+        self.assertEqual(self.undelivered(), [])
+        self.run_pass(s)
+        self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"], "said once the queue is clear")
 
     def test_eleven_malformed_nodes_name_ten_and_count_the_rest(self):
         self.run_pass(self.scripted(prs=[], issues=[dict(issue(i), title=None) for i in range(1, 12)]))

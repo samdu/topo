@@ -117,7 +117,7 @@ ISSUES_QUERY = f"""query($owner: String!, $name: String!, $after: String) {{
   repository(owner: $owner, name: $name) {{
     issues(states: OPEN, first: {ISSUES_PAGE}, after: $after) {{
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ number title createdAt labels(first: 20) {{ nodes {{ name }} }} comments {{ totalCount }} }}
+      nodes {{ number title createdAt labels(first: 100) {{ nodes {{ name }} pageInfo {{ hasNextPage }} }} comments {{ totalCount }} }}
     }}
   }}
 }}"""
@@ -300,7 +300,8 @@ def decide_issues(issues, now):
             n = None
         try:
             nodes = i["labels"]["nodes"]
-            if not isinstance(nodes, list):
+            # A label list with a next page may have left `triaged` off it.
+            if not isinstance(nodes, list) or i["labels"]["pageInfo"]["hasNextPage"] is not False:
                 raise ValueError
             labels = {l["name"] for l in nodes}
             comments = i["comments"]["totalCount"]
@@ -814,16 +815,19 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     # earlier report is undelivered, so a queue that waits on the bridge holds
     # PR lines rather than issue lines that are said again anyway. A line not
     # said leaves its key unfired, and it is said on a later pass.
-    # No line of this step takes a place the pass's other lines left full: one
-    # that finds the report at PENDING_MAX is not said, and its key not fired.
+    # No line of this step joins a report while an earlier one is undelivered,
+    # or takes a place the pass's other lines left full: such a line is not
+    # said, and its key not fired, so a later pass says it.
     untriaged = None   # the keys that stand, known only off a whole read
     malformed = read = False
 
     def say_issue(key, text):
-        if len(lines) < PENDING_MAX:
-            say(key, text)
-        else:
+        if state.get("undelivered"):
+            quiet.append(f"{key}: waits for the undelivered reports")
+        elif len(lines) >= PENDING_MAX:
             quiet.append(f"{key}: the report is full")
+        else:
+            say(key, text)
 
     try:
         issues, whole = sh.open_issues()
