@@ -235,6 +235,40 @@ final class WidgetDocumentTests: XCTestCase {
         XCTAssertEqual(kept.document, expected)
     }
 
+    /// `accessoryInline` draws one line of whatever tree it is given, the default's included.
+    func testTheDefaultDrawsOneLineInline() throws {
+        let reading = WidgetDocument.read(#"""
+        {"families": {"default": {"kind": "vstack", "children": [{"kind": "text", "text": "one"}, {"kind": "text", "text": "two"},
+          {"kind": "button", "id": "go", "label": "Go", "action": {"kind": "open"}}]}}}
+        """#)
+        XCTAssertTrue(reading.notes.contains { $0.contains("on accessoryInline") && $0.contains("one text and one glyph") }, "\(reading.notes)")
+        let kids = try children(XCTUnwrap(reading.document.tree(for: .accessoryInline)))
+        XCTAssertEqual(kids, [.text(.init(text: "one"))])
+        let kept = WidgetDocument.read(reading.document.text, from: .store)
+        XCTAssertEqual(kept.notes, [])
+    }
+
+    /// A control's label is nodes against the document's budget: 500 words, or 64 text nodes,
+    /// are cut at it.
+    func testALabelCountsAgainstTheNodeBudget() throws {
+        let words = (0..<500).map { #""w\#($0)""# }.joined(separator: ",")
+        let nodes = (0..<64).map { #"{"kind": "text", "text": "t\#($0)"}"# }.joined(separator: ",")
+        for label in [words, nodes] {
+            let reading = read(#"{"kind": "button", "id": "go", "label": [\#(label)], "action": {"kind": "open"}}"#)
+            XCTAssertEqual(reading.state, .read(nodes: WidgetDocument.nodeLimit))
+            guard case .control(let control) = try tree(reading) else { return XCTFail() }
+            XCTAssertEqual(control.label.count, WidgetDocument.nodeLimit - 1)
+            XCTAssertTrue(reading.notes.contains { $0.contains("past the 64 nodes") }, "\(reading.notes)")
+        }
+    }
+
+    func testAFifthImageIsDropped() throws {
+        let images = (0..<5).map { #"{"kind": "image", "name": "i\#($0)"}"# }.joined(separator: ",")
+        let reading = read(#"{"kind": "vstack", "children": [\#(images)]}"#)
+        XCTAssertEqual(try children(tree(reading)).count, 4)
+        XCTAssertTrue(reading.notes.contains { $0.contains("past the 4 images") }, "\(reading.notes)")
+    }
+
     /// What the app keeps is what was read, and a read of the kept copy is the same document with
     /// no notes.
     func testTheKeptCopyReadsBackTheSame() throws {

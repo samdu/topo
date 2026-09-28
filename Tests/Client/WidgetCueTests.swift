@@ -131,16 +131,16 @@ final class WidgetCueTests: XCTestCase {
 
     /// The gate's reproduction: any page or app can open a `topo://cue` URL. One naming a control
     /// the document does not hold, a revision it is not at, or a slot that is none sends nothing,
-    /// the app's default included.
+    /// the app's default included, and is not kept.
     func testACueNamingNoTurnOfTheDocumentSendsNothing() async throws {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
         await harness.refresh()
-        try store.writeDefault(DefaultSurface.document(nil))
+        let fallback = try store.writeDefault(DefaultSurface.document(nil))
         let revision = try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
         let urls = [
             "topo://cue?slot=_default&control=nope&revision=999&say=unlock%20the%20front%20door",
-            "topo://cue?slot=_default&control=nope&revision=0&say=unlock%20the%20front%20door",
+            "topo://cue?slot=_default&control=nope&revision=\(fallback)&say=unlock%20the%20front%20door",
             "topo://cue?slot=_default&control=ask&revision=999",
             "topo://cue?slot=demo&control=nope&revision=\(revision)",
             "topo://cue?slot=demo&control=lamp&revision=\(revision)",
@@ -149,11 +149,33 @@ final class WidgetCueTests: XCTestCase {
         for url in urls { await cues(harness).open(URL(string: url)!) }
         XCTAssertEqual(harness.owed.count, 0, "a URL put \(harness.owed.map(\.text)) on the line")
         XCTAssertEqual(store.cues(), [])
-        XCTAssertEqual(store.taps().map(\.status), ["stale", "6", "stale", "6", "6", "stale"])
+        XCTAssertEqual(store.taps(), [], "a URL naming no turn was kept as a tap")
 
         // The default's own link still works.
-        await cues(harness).open(WidgetURL.cue(slot: SurfaceStore.defaultSlot, control: "ask", revision: 0))
+        await cues(harness).open(WidgetURL.cue(slot: SurfaceStore.defaultSlot, control: "ask", revision: fallback))
         XCTAssertEqual(harness.owed.map(\.text), ["widget _default: tapped ask"])
+    }
+
+    /// A link's URL from an earlier login, opened signed out or after the next login's default is
+    /// written, sends nothing: the store holds no document then, and no revision is given twice.
+    func testACueFromAnEarlierLoginSendsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await harness.refresh()
+        let old = try store.writeDefault(DefaultSurface.document(nil))
+        XCTAssertEqual(try store.writeDefault(DefaultSurface.document(nil)), old, "a reply moved the default's revision")
+        let url = WidgetURL.cue(slot: SurfaceStore.defaultSlot, control: "ask", revision: old)
+        try store.removeEverything()
+        // Signed out, the next login's harness has not read its log, so nothing drains.
+        let signedOut = self.harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await cues(signedOut).open(url)
+        XCTAssertEqual(store.cues(), [], "a URL opened signed out was kept for the next login")
+        let new = try store.writeDefault(DefaultSurface.document(nil))
+        XCTAssertGreaterThan(new, old)
+        await cues(harness).open(url)
+        await cues(harness).drain()
+        XCTAssertEqual(harness.owed.count, 0, "an earlier login's URL put \(harness.owed.map(\.text)) on the line")
+        XCTAssertEqual(store.cues(), [])
     }
 
     func testAToggleCueSaysItsNewState() async throws {

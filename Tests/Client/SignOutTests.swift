@@ -66,7 +66,9 @@ final class SignOutTests: XCTestCase {
         let signOut = SignOut(forgetSurfaces: { reloader.forget(store) })
         await signOut.act()
         let left = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        XCTAssertEqual(left, [], "the app group kept \(left)")
+        XCTAssertEqual(left, ["_revisions.json"], "the app group kept \(left)")
+        let counters = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: store.revisionsURL))
+        XCTAssertEqual(Array(counters.keys), [SurfaceStore.floor], "a slot's name outlived the login")
         XCTAssertEqual(everything, 1, "WidgetCenter was not told to reload every timeline")
         guard case .signedOut = SurfaceProvider.surface(slot: "demo", family: .systemSmall, at: Date(), store: store) else {
             return XCTFail("a placed widget still draws something after the sign-out")

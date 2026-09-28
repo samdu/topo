@@ -7,11 +7,12 @@ import Foundation
 /// - `<slot>.json`, one document per slot, as the app kept it (`WidgetDocument.text`), and
 ///   `_default.json`, the app's own (`DefaultSurface`);
 /// - `<slot>/<name>.png`, a slot's images, re-encoded by `topo widget image`;
-/// - `revisions.json`, the last revision given each slot, which outlives a slot's clearing so a
-///   slot written again never reuses a revision an old timeline's tap still carries;
-/// - `pending.jsonl`, the turn taps the cue intent recorded and the app has not yet put on the
+/// - `_revisions.json`, the last revision given each slot, which outlives a slot's clearing, and
+///   a sign-out as `_floor`, the highest given, so no revision is issued twice to any slot of any
+///   login and an old timeline's tap never matches a document written since;
+/// - `_pending.jsonl`, the turn taps the cue intent recorded and the app has not yet put on the
 ///   line (`WidgetCues`);
-/// - `taps.jsonl`, the last actions taken: time, slot, control, revision, kind and status, and
+/// - `_taps.jsonl`, the last actions taken: time, slot, control, revision, kind and status, and
 ///   never an argument or a word a tool said.
 ///
 /// Every write is one atomic replace under an `NSFileCoordinator` write, and every read is under a
@@ -103,9 +104,16 @@ struct SurfaceStore: Sendable {
         return kept.revision
     }
 
-    /// The app's own default, written whole at the revision it carries.
-    func writeDefault(_ document: WidgetDocument) throws {
-        try coordinatedWrite(url(slot: Self.defaultSlot)) { _ in Data(document.text.utf8) }
+    /// The app's own default, written whole. It keeps the revision it was first given in this
+    /// login, so a tap on the default drawn a reply ago still lands, and a login's first takes the
+    /// next, so a tap from an earlier login's default does not.
+    @discardableResult
+    func writeDefault(_ document: WidgetDocument) throws -> Int {
+        var kept = document
+        let current = read(slot: Self.defaultSlot).flatMap { $0.readable ? $0.document.revision : nil }
+        kept.revision = try current ?? nextRevision(slot: Self.defaultSlot)
+        try coordinatedWrite(url(slot: Self.defaultSlot)) { _ in Data(kept.text.utf8) }
+        return kept.revision
     }
 
     /// The slots the mind has written, by name: every document but the app's own.
@@ -140,15 +148,24 @@ struct SurfaceStore: Sendable {
     }
 
     /// Everything, the default and the pending taps included: what a sign-out leaves.
+    /// Removes every slot, image, cue and tap, leaving the counters as their `_floor` alone. A
+    /// counter file that cannot be read is left as it is, and writes go on failing closed.
     func removeEverything() throws {
-        guard FileManager.default.fileExists(atPath: folder.path) else { return }
-        var error: NSError?
-        var thrown: Error?
-        NSFileCoordinator().coordinate(writingItemAt: folder, options: .forDeleting, error: &error) { url in
-            do { try FileManager.default.removeItem(at: url) } catch { thrown = error }
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        for name in names where name != revisionsURL.lastPathComponent {
+            var error: NSError?
+            var thrown: Error?
+            NSFileCoordinator().coordinate(writingItemAt: folder.appendingPathComponent(name), options: .forDeleting, error: &error) { url in
+                do { try FileManager.default.removeItem(at: url) } catch { thrown = error }
+            }
+            if let error { throw error }
+            if let thrown { throw thrown }
         }
-        if let error { throw error }
-        if let thrown { throw thrown }
+        guard names.contains(revisionsURL.lastPathComponent) else { return }
+        try coordinatedWrite(revisionsURL) { data in
+            guard let data, let revisions = try? JSONDecoder().decode([String: Int].self, from: data) else { return data }
+            return try JSONEncoder().encode([Self.floor: revisions.values.max() ?? 0])
+        }
     }
 
     // MARK: Revisions
@@ -160,13 +177,16 @@ struct SurfaceStore: Sendable {
         return revisions[slot] ?? 0
     }
 
+    /// The highest revision an earlier login gave, which every slot's next is above.
+    static let floor = "_floor"
+
     private func nextRevision(slot: String) throws -> Int {
         var next = 0
         try coordinatedWrite(revisionsURL) { data in
             // A counter file that cannot be read is an error, never a fresh start: a counter
             // begun again issues a revision an old timeline already carries.
             var revisions = try data.map { try JSONDecoder().decode([String: Int].self, from: $0) } ?? [:]
-            next = (revisions[slot] ?? 0) + 1
+            next = max(revisions[slot] ?? 0, revisions[Self.floor] ?? 0) + 1
             revisions[slot] = next
             return try JSONEncoder().encode(revisions)
         }

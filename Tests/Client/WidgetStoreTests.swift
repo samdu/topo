@@ -99,8 +99,22 @@ final class WidgetStoreTests: XCTestCase {
         try store.writeImage(Data([1, 2, 3]), slot: "a", name: "pic")
         try store.appendCue(.init(nonce: "n", slot: "a", id: "b", revision: 1, time: Date()))
         try store.removeEverything()
-        XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder.path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_revisions.json"])
         XCTAssertEqual(store.cues(), [])
+    }
+
+    /// A sign-out keeps the highest revision given, and nothing else of the counters: every
+    /// slot's next, the default's included, is above it.
+    func testNoRevisionIsGivenTwiceAcrossLogins() throws {
+        let store = store()
+        try store.write(document("x"), slot: "a")
+        try store.write(document("x"), slot: "a")
+        let fallback = try store.writeDefault(document("d"))
+        try store.removeEverything()
+        let counters = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: store.revisionsURL))
+        XCTAssertEqual(counters, [SurfaceStore.floor: 2])
+        XCTAssertEqual(try store.write(document("x"), slot: "b"), 3)
+        XCTAssertGreaterThan(try store.writeDefault(document("d")), fallback)
     }
 
     /// Review Focus 9: a writer replacing a document as fast as it can, and a reader beside it

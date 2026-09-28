@@ -44,9 +44,13 @@ final class WidgetCues {
     }
 
     /// A `topo://cue` URL, which a `link` hands on in place of an intent: recorded as the intent
-    /// records its cue, then drained.
+    /// records its cue, then drained, if it names a turn of a document the store holds now at its
+    /// revision. Any page may open one, and one opened signed out, when the store holds nothing,
+    /// is not kept for the next login's drain.
     func open(_ url: URL) async {
-        guard let cue = WidgetURL.cue(from: url), let store = store() else { return }
+        guard let cue = WidgetURL.cue(from: url), let store = store(),
+              let document = store.read(slot: cue.slot)?.document, document.revision == cue.revision,
+              document.turn(slot: cue.slot, control: cue.id, turningOn: cue.turningOn) != nil else { return }
         try? store.appendCue(cue)
         await drain()
     }

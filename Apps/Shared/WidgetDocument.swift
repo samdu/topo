@@ -508,6 +508,7 @@ final class WidgetReader {
     private let source: WidgetDocument.Source
     private var family: WidgetFamilyName = .default
     private var controls = 0
+    private var images = 0
     /// Every control id kept, with its action, so an id reused in another family names the same
     /// control and nothing else.
     private var ids: [String: WidgetControl] = [:]
@@ -588,6 +589,11 @@ final class WidgetReader {
             if longest > WidgetDocument.accessoryTextLimit {
                 note("families.default", "has a text of \(longest) characters, and draws on \(missing.rawValue), a lock-screen family, cut to \(WidgetDocument.accessoryTextLimit)")
             }
+        }
+        // `accessoryInline` draws one line whichever tree it is given, so the default is kept
+        // for it as that line.
+        if let fallback = document.families[.default], document.families[.accessoryInline] == nil {
+            document.families[.accessoryInline] = inline(fallback.cuttingTexts(to: WidgetDocument.accessoryTextLimit), "families.default, on accessoryInline,")
         }
         return document
     }
@@ -731,6 +737,12 @@ final class WidgetReader {
             fields.note("name", "is not the name of an image topo widget image put in this slot, and the image was dropped")
             return nil
         }
+        guard images < WidgetDocument.imageLimit else {
+            fields.note("name", "is \(name), past the \(WidgetDocument.imageLimit) images a document holds, and the image was dropped")
+            fields.skip(["fit", "corner"])
+            return nil
+        }
+        images += 1
         return .image(.init(name: name, fit: fields.named("fit", WidgetNode.Image.Fit.self) ?? .fit,
                             corner: fields.number("corner", in: 0...32, "a length in points between 0 and 32") ?? 0))
     }
@@ -786,12 +798,21 @@ final class WidgetReader {
             fields.skip(["label", "action", "on"])
             return nil
         }
+        // The control counts before its label, as a stack before its children, and each word of
+        // the label is a node against the same budget.
+        nodes += 1
+        defer { nodes -= 1 }
         var label: [WidgetNode] = []
         if let raw = fields.take("label") {
             let entries = (raw as? [Any]) ?? [raw]
             for (index, entry) in entries.enumerated() {
                 let path = "\(fields.path).label[\(index)]"
                 if let words = entry as? String {
+                    guard nodes < WidgetDocument.nodeLimit else {
+                        note(path, "is past the \(WidgetDocument.nodeLimit) nodes a document holds, and was cut")
+                        continue
+                    }
+                    nodes += 1
                     if words.count > WidgetDocument.labelLimit {
                         note(path, "is \(words.count) characters, and a label holds \(WidgetDocument.labelLimit), so it was cut")
                     }
