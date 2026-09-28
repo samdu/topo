@@ -139,8 +139,12 @@ struct HomeScene: Sendable, Equatable {
     var id: String
     var name: String
     /// The HomeKit types of the characteristics running it writes, so a scene that unlocks a door
-    /// can be refused where setting that characteristic is (`HomeTool.refusing`).
+    /// can be refused where setting that characteristic is (`HomeTool.refusing`). An action that
+    /// is not a characteristic write is `unknownAction`, which the widgets refuse, since what it
+    /// does cannot be read.
     var writes: [String] = []
+
+    static let unknownAction = "unknown-action"
 }
 
 struct HomeRecord: Sendable, Equatable {
@@ -315,9 +319,10 @@ struct HomeTool: Tool {
     var refusing: Set<String> = []
 
     /// What a widget's `run` may not set: the short names `WidgetAction` refuses before the call
-    /// is resolved, and the HomeKit types, so a renamed short name cannot let one through.
+    /// is resolved, the HomeKit types, so a renamed short name cannot let one through, and a
+    /// scene action that cannot be read, so a scene fails closed.
     static let widgetRefused: Set<String> = WidgetAction.refusedCharacteristics
-        .union([HMCharacteristicTypeTargetLockMechanismState, HMCharacteristicTypeTargetDoorState])
+        .union([HMCharacteristicTypeTargetLockMechanismState, HMCharacteristicTypeTargetDoorState, HomeScene.unknownAction])
 
     let name = "home"
     let summary = "the lights, locks, thermostats and scenes of the person's home (HomeKit)"
@@ -480,9 +485,15 @@ struct HomeTool: Tool {
                           status: ToolReply.refused)
     }
 
-    /// Refuses a scene that writes a characteristic this tool does not set.
+    /// Refuses a scene that writes a characteristic this tool does not set, or holds an action
+    /// that cannot be read.
     static func admit(_ scene: HomeScene, refusing: Set<String>) throws {
-        guard !refusing.isDisjoint(with: scene.writes) else { return }
+        let refused = refusing.intersection(scene.writes)
+        guard !refused.isEmpty else { return }
+        if refused == [HomeScene.unknownAction] {
+            throw ToolFailure("the scene \(scene.name) holds an action that cannot be read, which is not a widget's to run; run it through a turn",
+                              status: ToolReply.refused)
+        }
         throw ToolFailure("the scene \(scene.name) sets a lock or a door, which is not a widget's to run; a lock or a door goes through a turn",
                           status: ToolReply.refused)
     }
@@ -613,7 +624,9 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
                        accessories: home.accessories.map(Self.record),
                        scenes: home.actionSets.map { set in
                            HomeScene(id: set.uniqueIdentifier.uuidString, name: set.name,
-                                     writes: set.actions.compactMap { ($0 as? HMCharacteristicWriteAction<NSCopying>)?.characteristic.characteristicType })
+                                     writes: set.actions.map {
+                                         ($0 as? HMCharacteristicWriteAction<NSCopying>)?.characteristic.characteristicType ?? HomeScene.unknownAction
+                                     })
                        })
         }
     }
