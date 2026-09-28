@@ -72,6 +72,9 @@ final class Harness {
             turns.forEach(seen)
         }
     }
+    /// Told every reply the log has brought, each time a read or a landing brings it, whatever
+    /// the screen: the app's default widget follows the newest (`DefaultSurface`).
+    var onLanded: (@MainActor (Turn) -> Void)?
     /// Told the nonce of a turn that ended in a failure rather than a reply, as it ends: no reply
     /// is coming for it, and the screen's error line is not a place to work out whose. Not called
     /// for a turn another primary is answering, whose reply is still on its way.
@@ -610,6 +613,7 @@ final class Harness {
     /// A reply the handler has not been given. Offered once, whichever path brought it; with no
     /// handler installed it is left unoffered, for whichever one is installed next.
     private func seen(_ turn: Turn) {
+        if turn.role == .assistant { onLanded?(turn) }
         guard turn.role == .assistant, let onReply, !offered.contains(turn.ref) else { return }
         if onReply(turn) { offered.insert(turn.ref) }
     }

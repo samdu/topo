@@ -17,6 +17,7 @@ struct TopoApp: App {
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
+    @State private var defaultSurface: DefaultSurface
     private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
@@ -77,6 +78,10 @@ struct TopoApp: App {
         var widgetHome = homeTool
         widgetHome.refusing = WidgetAction.refusedCharacteristics
         let widgetTable = ToolTable(GuestResident.shared.toolTable.map { $0 is HomeTool ? widgetHome : $0 })
+        // The app's own widget follows the newest reply the log brings.
+        let defaultSurface = DefaultSurface()
+        _defaultSurface = State(initialValue: defaultSurface)
+        harness.onLanded = { [weak harness] reply in defaultSurface.landed(reply, in: harness?.turns ?? []) }
         let widgetCues = WidgetCues(harness: harness)
         _widgetCues = State(initialValue: widgetCues)
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
@@ -168,6 +173,7 @@ struct TopoApp: App {
             .onChange(of: signIn.phase, initial: true) { _, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
                 guard phase == .signedIn else { return }
+                defaultSurface.launched(latest: harness.turns.last { $0.role == .assistant })
                 Task { try? await NotePush.ensureSubscription() }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in

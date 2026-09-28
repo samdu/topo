@@ -350,6 +350,7 @@
 		E11803C2ACE44982CF4D443D /* VaultMountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EF1677D8D77561257325F30 /* VaultMountTests.swift */; };
 		E2952F8F672806D95C01C341 /* LookTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D237ABF387E8A76064A494FA /* LookTool.swift */; };
 		E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
+		E31E3699C246943267961135 /* DefaultSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7B76958213F991C66478F1 /* DefaultSurface.swift */; };
 		E42BB8C3B4B9D5F09895B354 /* accessoryRectangular.json in Resources */ = {isa = PBXBuildFile; fileRef = C3A55F344E7F7783741D58B4 /* accessoryRectangular.json */; };
 		E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C72071D6B88AB32EF3BBFD /* TuningTests.swift */; };
 		E4F6A39CB234B2F7FF938D1C /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
@@ -464,6 +465,7 @@
 		175EA8671E9C84024DDB99D4 /* VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
 		17DE2B33A2255E112B603120 /* DraftTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftTests.swift; sourceTree = "<group>"; };
 		18A1A7F63DF3D04E332620C0 /* Speaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speaker.swift; sourceTree = "<group>"; };
+		1A7B76958213F991C66478F1 /* DefaultSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultSurface.swift; sourceTree = "<group>"; };
 		1AF008F3C113182739CEB6D7 /* SignOutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignOutTests.swift; sourceTree = "<group>"; };
 		1D550B30D535A628FF48FCC4 /* WidgetTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTool.swift; sourceTree = "<group>"; };
 		1DABB17BCD6602885282D24F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -786,6 +788,7 @@
 			isa = PBXGroup;
 			children = (
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
+				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
 				0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */,
 				460C5C5620D24E4F80E9E415 /* GuestResolver.swift */,
 				1DABB17BCD6602885282D24F /* Info.plist */,
@@ -1940,6 +1943,7 @@
 				C9EBB675F20EA85264A72BA6 /* ConnectedGlyph.swift in Sources */,
 				EA62ABE92498980EC79A486C /* ContactsTool.swift in Sources */,
 				AD9E6CF1B98606CCE69DADAD /* DebugRun.swift in Sources */,
+				E31E3699C246943267961135 /* DefaultSurface.swift in Sources */,
 				4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */,
 				05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */,
 				366808E32D484A6F8AB966CE /* Ear.swift in Sources */,

@@ -1,5 +1,6 @@
 import SwiftUI
 import UIKit
+import TopoCore
 import XCTest
 
 @testable import Topo
@@ -143,6 +144,59 @@ final class WidgetSnapshotTests: XCTestCase {
         }
     }
 
+    // MARK: The default (Review Focus 7)
+
+    private static func reply(_ text: String) -> Turn {
+        Turn(ref: TurnRef(device: DeviceID("phone"), sequence: 2), parents: [], role: .assistant, text: text,
+             at: Date(timeIntervalSince1970: 1_900_000_000))
+    }
+
+    /// The default written for a reply whose every word is a sentinel holds none of it on a
+    /// lock-screen family: no field of the entry the provider makes for one carries the reply's
+    /// text, and the picture it draws is the one it draws for a different reply at the same time.
+    /// The home-screen families carry the first sentence, marked private.
+    func testDefaultLockFamiliesHoldNoReply() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("default-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SurfaceStore(folder: folder)
+        let sentinel = "Zebracorn"
+        let secret = Self.reply("\(sentinel) ate the \(sentinel) pie. \(sentinel) again.")
+        let other = Self.reply("Nothing to see here. At all.")
+
+        var pictures: [WidgetFamilyName: [UInt8]] = [:]
+        for (reply, pass) in [(secret, 0), (other, 1)] {
+            try store.writeDefault(DefaultSurface.document(reply))
+            for (family, size) in Self.families {
+                guard case .drawn(let node, let context, _, _) = SurfaceProvider.surface(slot: nil, family: family, at: Date(), store: store) else {
+                    return XCTFail("\(family.rawValue): the default was not drawn")
+                }
+                if family.isAccessory {
+                    XCTAssertFalse(String(describing: node).contains(sentinel), "\(family.rawValue) carries the reply")
+                    XCTAssertFalse(String(describing: context).contains(sentinel), "\(family.rawValue)'s context carries the reply")
+                    let drawn = Self.pixels(try Self.render(node, family: family, size: size, dark: false, privateText: context.privateText))
+                    if pass == 0 { pictures[family] = drawn }
+                    else { XCTAssertEqual(Self.changed(drawn, pictures[family] ?? []), 0, "\(family.rawValue) draws the reply") }
+                } else if pass == 0 {
+                    XCTAssertTrue(context.privateText, "\(family.rawValue): the reply is not marked private")
+                    var words: [String] = []
+                    node.walk { if case .text(let text) = $0 { words.append(text.text) } }
+                    XCTAssertTrue(words.contains("\(sentinel) ate the \(sentinel) pie."), "\(family.rawValue) lacks the first sentence: \(words)")
+                    XCTAssertFalse(words.contains { $0.contains("again") }, "\(family.rawValue) carries more than the first sentence")
+                }
+            }
+        }
+    }
+
+    /// The default reads whole, with and without a reply, and is never a signed-out entry.
+    func testTheDefaultReadsWhole() throws {
+        for reply in [nil, Self.reply("Out tonight. The bins.")] {
+            let document = DefaultSurface.document(reply)
+            let reading = WidgetDocument.read(document.text, from: .store)
+            XCTAssertEqual(reading.notes, [])
+            for (family, _) in Self.families { XCTAssertNotNil(document.tree(for: family), family.rawValue) }
+        }
+    }
+
     /// The comparison can fail for what it claims: with any one node taken out, the fixture is
     /// another picture than its reference.
     func testANodeTakenOutIsAnotherPicture() throws {
@@ -162,5 +216,37 @@ final class WidgetSnapshotTests: XCTestCase {
                                      "\(family.rawValue) without the node at \(path) is still its reference")
             }
         }
+    }
+}
+
+/// When the default is written: for the newest reply the log brings, once each.
+@MainActor
+final class DefaultSurfaceTests: XCTestCase {
+    private func turn(_ sequence: Int64, _ role: TurnRole, _ text: String) -> Turn {
+        Turn(ref: TurnRef(device: DeviceID("phone"), sequence: sequence), parents: [], role: role, text: text, at: Date())
+    }
+
+    func testTheDefaultFollowsTheNewestReplyOnce() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("default-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SurfaceStore(folder: folder)
+        var reloads = 0
+        let surface = DefaultSurface(store: { store },
+                                     reloader: SurfaceReloader(reloadKind: { _ in reloads += 1 }, reloadEverything: {},
+                                                               schedule: { _, body in body() }))
+        let turns = [turn(1, .person, "Bins?"), turn(2, .assistant, "Tonight. Out front."),
+                     turn(3, .person, "Thanks"), turn(4, .assistant, "Any time.")]
+        surface.launched(latest: nil)
+        XCTAssertNotNil(store.read(slot: SurfaceStore.defaultSlot), "signed in with no reply yet draws nothing")
+        // A read brings every reply in order; only the newest is the default.
+        for reply in turns where reply.role == .assistant { surface.landed(reply, in: turns) }
+        surface.landed(turns[3], in: turns)
+        var words: [String] = []
+        store.read(slot: SurfaceStore.defaultSlot)?.document.tree(for: .systemMedium)?.walk {
+            if case .text(let text) = $0 { words.append(text.text) }
+        }
+        XCTAssertTrue(words.contains("Any time."), "\(words)")
+        XCTAssertFalse(words.contains("Tonight."), "\(words)")
+        XCTAssertEqual(reloads, 2, "one write on launch and one for the newest reply")
     }
 }
