@@ -284,7 +284,7 @@ final class WidgetToolTests: XCTestCase {
 
     // MARK: Review Focus 3
 
-    private static func picture(width: Int, height: Int, type: UTType, noise: Bool = false) -> Data {
+    private static func picture(width: Int, height: Int, type: UTType, noise: Bool = false, orientation: Int? = nil) -> Data {
         var bytes = [UInt8](repeating: 128, count: width * height * 4)
         if noise { for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) } }
         let context = CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
@@ -292,9 +292,25 @@ final class WidgetToolTests: XCTestCase {
         let image = context.makeImage()!
         let out = NSMutableData()
         let destination = CGImageDestinationCreateWithData(out, type.identifier as CFString, 1, nil)!
-        CGImageDestinationAddImage(destination, image, nil)
+        CGImageDestinationAddImage(destination, image, orientation.map { [kCGImagePropertyOrientation: $0] as CFDictionary })
         CGImageDestinationFinalize(destination)
         return out as Data
+    }
+
+    /// A camera's JPEG, landscape pixels marked to be turned a quarter (EXIF orientation 6), is
+    /// kept upright: a portrait PNG.
+    func testAnImageIsKeptUpright() async throws {
+        let tool = try await tool(loaded: true)
+        let turned = Self.picture(width: 40, height: 20, type: .jpeg, orientation: 6)
+        let marked = try XCTUnwrap(CGImageSourceCreateWithData(turned as CFData, nil))
+        let said = CGImageSourceCopyPropertiesAtIndex(marked, 0, nil) as? [CFString: Any]
+        XCTAssertEqual(said?[kCGImagePropertyOrientation] as? Int, 6, "the fixture carries no orientation")
+        try turned.write(to: home.appendingPathComponent("turned.jpg"))
+        let reply = await tool.run(["image", "demo", "photo", "/home/topo/turned.jpg"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        let kept = try XCTUnwrap(store.imageData(slot: "demo", name: "photo"))
+        let image = try XCTUnwrap(CGImageSourceCreateWithData(kept as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        XCTAssertEqual([image.width, image.height], [20, 40], "the picture was kept on its side")
     }
 
     func testImageRefusesLinkEscapeAndOversize() async throws {

@@ -182,16 +182,8 @@ struct TopoApp: App {
             // the acceleration, so it is not the screen's to report.
             .onChange(of: signIn.phase, initial: true) { was, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
-                // Every way a login ends — the settings sheet, a demotion, a viewer's launch —
-                // ends here too, and a signed-out phone keeps no surface. Only a login ending:
-                // a launch that finds no token (the keychain unreadable before the first unlock
-                // included) takes nothing away.
-                if was == .signedIn, phase != .signedIn {
-                    SurfaceReloader.shared.forget(SurfaceStore.shared())
-                    defaultSurface.forget()
-                }
+                defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
                 guard phase == .signedIn else { return }
-                defaultSurface.launched(latest: harness.turns.last { $0.role == .assistant })
                 Task { try? await NotePush.ensureSubscription() }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in

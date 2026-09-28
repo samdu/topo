@@ -50,8 +50,9 @@ final class WidgetSnapshotTests: XCTestCase {
     }
 
     static func render(_ node: WidgetNode, family: WidgetFamilyName, size: CGSize, dark: Bool,
-                       privateText: Bool = false) throws -> CGImage {
-        let context = WidgetContext(slot: "fixture", revision: 1, family: family, images: ["photo": photo], privateText: privateText)
+                       privateText: Bool = false, failed: Set<String> = []) throws -> CGImage {
+        let context = WidgetContext(slot: "fixture", revision: 1, family: family, images: ["photo": photo], privateText: privateText,
+                                    failed: failed)
         let view = WidgetNodeView(node: node, context: context)
             .padding(family.isAccessory ? 0 : 16)
             .frame(width: size.width, height: size.height)
@@ -212,6 +213,21 @@ final class WidgetSnapshotTests: XCTestCase {
         }
     }
 
+    /// A control whose last run failed is drawn with its mark: each control of each fixture, marked,
+    /// is another picture than the fixture unmarked.
+    func testAFailedControlIsDrawnMarked() throws {
+        for (family, size) in Self.families {
+            let tree = try XCTUnwrap(Self.fixture(family).tree(for: family))
+            var ids: [String] = []
+            tree.walk { if case .control(let control) = $0 { ids.append(control.id) } }
+            let plain = Self.pixels(try Self.render(tree, family: family, size: size, dark: false))
+            for id in ids {
+                let marked = Self.pixels(try Self.render(tree, family: family, size: size, dark: false, failed: [id]))
+                XCTAssertGreaterThan(Self.changed(marked, plain), Self.changedTolerance, "\(family.rawValue): \(id) failed and drew no mark")
+            }
+        }
+    }
+
     /// The comparison can fail for what it claims: with any one node taken out, the fixture is
     /// another picture than its reference.
     func testANodeTakenOutIsAnotherPicture() throws {
@@ -239,6 +255,27 @@ final class WidgetSnapshotTests: XCTestCase {
 final class DefaultSurfaceTests: XCTestCase {
     private func turn(_ sequence: Int64, _ role: TurnRole, _ text: String) -> Turn {
         Turn(ref: TurnRef(device: DeviceID("phone"), sequence: sequence), parents: [], role: role, text: text, at: Date())
+    }
+
+    /// A login ending by any path — here a takeover, the phase leaving signed in for idle — clears
+    /// every surface and reloads every timeline; a launch that finds no login clears nothing.
+    func testALoginEndingClearsTheSurfaces() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("default-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SurfaceStore(folder: folder)
+        var everything = 0
+        let surface = DefaultSurface(store: { store },
+                                     reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: { everything += 1 },
+                                                               schedule: { _, body in body() }))
+        try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
+        surface.follow(from: .idle, to: .signedIn, latest: turn(2, .assistant, "Tonight."))
+        XCTAssertNotNil(store.read(slot: SurfaceStore.defaultSlot))
+        surface.follow(from: .idle, to: .idle, latest: nil)
+        XCTAssertEqual(store.slots(), ["demo"], "a launch with no login took the surfaces")
+        surface.follow(from: .signedIn, to: .idle, latest: nil)
+        XCTAssertEqual(store.slots(), [])
+        XCTAssertNil(store.read(slot: SurfaceStore.defaultSlot), "the default outlived the login")
+        XCTAssertEqual(everything, 1, "WidgetCenter was not told to reload every timeline")
     }
 
     func testTheDefaultFollowsTheNewestReplyOnce() throws {

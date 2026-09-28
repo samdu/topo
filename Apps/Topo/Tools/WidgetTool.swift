@@ -237,7 +237,16 @@ struct WidgetTool: Tool {
         guard max(width, height) <= imagePixels else {
             throw ImageRefusal("\(path) is \(width)×\(height), over the \(imagePixels) px an image may be on its long side")
         }
-        guard let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { throw ImageRefusal("\(path) holds no picture") }
+        // Drawn upright: a camera's JPEG or HEIC stores its pixels as the sensor saw them and says
+        // how to turn them (EXIF orientation), which a PNG has no field for, so the turn is made
+        // here, at the image's own size.
+        let upright: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+                                        kCGImageSourceShouldCacheImmediately: true]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, upright as CFDictionary) else {
+            throw ImageRefusal("\(path) holds no picture")
+        }
         let out = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(out, UTType.png.identifier as CFString, 1, nil) else {
             throw ImageRefusal("\(path) could not be re-encoded")

@@ -119,6 +119,10 @@ final class WidgetActions {
     /// Each control's last run, which its next waits on, so a control's effects land in the
     /// order its taps were handled.
     private var chains: [String: Task<Void, Never>] = [:]
+    /// Each toggle's confirmed state at a revision: the last its run succeeded at, or the stored
+    /// one before its chain began. A failed run puts the toggle back to it, not to the state the
+    /// failed tap flipped from, which another failed tap may have flipped already.
+    private var confirmed: [String: Bool] = [:]
 
     init(table: ToolTable, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound,
@@ -157,28 +161,37 @@ final class WidgetActions {
             return record(String(ToolReply.refused))
         }
         // A toggle turns to the opposite of its stored state, flipped as the tap is handled, not
-        // of the state the tapped entry drew; a run that fails puts it back.
+        // of the state the tapped entry drew; a run that fails puts it back to its confirmed one.
+        let key = "\(slot)/\(id)"
+        let state = "\(key)/\(revision)"
         var was: Bool?
         if control.kind == .toggle {
             guard let stored = try? store.flip(slot: slot, control: id, revision: revision) else { return record("stale") }
             was = stored
+            if chains[key] == nil { confirmed[state] = stored }
         }
         guard let argv = control.argv(turningOn: was.map { !$0 }) else { return record(String(ToolReply.refused)) }
         // After the control's last run, whatever it answered, so two quick taps' writes land in
         // the order they were flipped and a failed one holds up none after it.
-        let key = "\(slot)/\(id)"
         let previous = chains[key]
         let (table, bound) = (table, bound)
         let task = Task { @MainActor in
             await previous?.value
             let reply = await ToolService.bounded(argv, table: table, until: .now + bound, bound: bound)
-            if reply.status != 0, let was {
-                try? store.unflip(to: was, slot: slot, control: id, revision: revision)
+            if let was {
+                if reply.status == 0 {
+                    confirmed[state] = !was
+                } else {
+                    try? store.setOn(confirmed[state] ?? was, slot: slot, control: id, revision: revision)
+                }
             }
             record(String(reply.status))
         }
         chains[key] = task
         await task.value
-        if chains[key] == task { chains[key] = nil }
+        if chains[key] == task {
+            chains[key] = nil
+            confirmed[state] = nil
+        }
     }
 }

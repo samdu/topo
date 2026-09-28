@@ -1,4 +1,5 @@
 import Foundation
+import TopoAuth
 import TopoCore
 
 /// The app's own widget, `_default`: what every placed widget draws before the mind has written a
@@ -37,6 +38,18 @@ final class DefaultSurface {
             guard written == nil, !wroteEmpty else { return }
         }
         write(reply)
+    }
+
+    /// The login's phase moving. Every way a login ends — the settings sheet, a demotion, a
+    /// viewer's takeover — ends here too, and a signed-out phone keeps no surface; only a login
+    /// ending: a launch that finds no token (the keychain unreadable before the first unlock
+    /// included) takes nothing away. Signed in, the default is written for the newest reply.
+    func follow(from was: SignIn.Phase, to phase: SignIn.Phase, latest reply: Turn?) {
+        if was == .signedIn, phase != .signedIn {
+            reloader.forget(store())
+            forget()
+        }
+        if phase == .signedIn { launched(latest: reply) }
     }
 
     /// A login ended and the surfaces with it: the next sign-in writes the default afresh.

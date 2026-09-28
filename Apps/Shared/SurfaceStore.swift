@@ -12,6 +12,8 @@ import Foundation
 ///   login and an old timeline's tap never matches a document written since;
 /// - `_pending.jsonl`, the turn taps the cue intent recorded and the app has not yet put on the
 ///   line (`WidgetCues`);
+/// - `_outcomes.json`, the last run of each control of each slot, its revision and status, which
+///   the failure mark is drawn from, so no number of other taps evicts a control's failure;
 /// - `_taps.jsonl`, the last actions taken: time, slot, control, revision, kind and status, and
 ///   never an argument or a word a tool said.
 ///
@@ -48,6 +50,7 @@ struct SurfaceStore: Sendable {
     var pendingURL: URL { folder.appendingPathComponent("_pending.jsonl") }
     var tapsURL: URL { folder.appendingPathComponent("_taps.jsonl") }
     var revisionsURL: URL { folder.appendingPathComponent("_revisions.json") }
+    var outcomesURL: URL { folder.appendingPathComponent("_outcomes.json") }
 
     // MARK: Coordination
 
@@ -128,14 +131,8 @@ struct SurfaceStore: Sendable {
     }
 
     /// Sets toggle `control` to `on`, whatever it is now: a cue's resolved state, set again as
-    /// often as a drain is.
+    /// often as a drain is, or a run's confirmed state after one failed.
     func setOn(_ on: Bool, slot: String, control: String, revision: Int) throws {
-        try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
-    }
-
-    /// Puts toggle `control` back to `on` if it is still `!on`: a run that failed after its
-    /// `flip`.
-    func unflip(to on: Bool, slot: String, control: String, revision: Int) throws {
         try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
     }
 
@@ -306,16 +303,30 @@ struct SurfaceStore: Sendable {
         try coordinatedWrite(tapsURL) { data in
             Self.encode(Array((Self.decode(Tap.self, data) + [tap]).suffix(Self.tapsKept)))
         }
+        guard tap.kind == "run" else { return }
+        try coordinatedWrite(outcomesURL) { data in
+            var outcomes = data.flatMap { try? JSONDecoder().decode([String: [String: Outcome]].self, from: $0) } ?? [:]
+            outcomes[tap.slot, default: [:]][tap.id] = Outcome(revision: tap.revision, status: tap.status)
+            return try JSONEncoder().encode(outcomes)
+        }
+    }
+
+    /// A control's last run: the revision it was tapped at and what it answered.
+    struct Outcome: Codable, Equatable, Sendable {
+        var revision: Int
+        var status: String
     }
 
     func taps() -> [Tap] { lines(tapsURL) }
 
     /// The controls of `slot` whose last tap at `revision` failed: a run that answered anything
     /// but 0.
+    /// Read from each control's last outcome, not the taps' log, so a failure stands until that
+    /// control runs again or the slot is written anew.
     func failed(slot: String, revision: Int) -> Set<String> {
-        var last: [String: String] = [:]
-        for tap in taps() where tap.slot == slot && tap.revision == revision && tap.kind == "run" { last[tap.id] = tap.status }
-        return Set(last.filter { $0.value != "0" && $0.value != "stale" }.keys)
+        guard let data = coordinatedRead(outcomesURL),
+              let outcomes = try? JSONDecoder().decode([String: [String: Outcome]].self, from: data) else { return [] }
+        return Set((outcomes[slot] ?? [:]).filter { $0.value.revision == revision && !["0", "stale"].contains($0.value.status) }.keys)
     }
 
     // MARK: Lines

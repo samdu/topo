@@ -328,4 +328,46 @@ final class WidgetActionTests: XCTestCase {
         XCTAssertEqual(store.taps().suffix(2).map(\.status), [String(ToolReply.denied), "0"])
         XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, false)
     }
+
+    /// A failed run puts a toggle back to its confirmed state — the last a run succeeded at, or
+    /// the stored one before its taps began — not to the state its own tap flipped from.
+    func testAFailedToggleGoesBackToItsConfirmedState() async throws {
+        let home = EffectTool()
+        let revision = try set(["home", "set", "LAMP", "power"], kind: "toggle")
+        let actions = actions([home])
+        func twoTaps() async {
+            let answered = expectation(description: "both taps answered")
+            Task { @MainActor in
+                async let first: Void = actions.run(slot: "demo", control: "go", revision: revision, turningOn: true)
+                async let second: Void = actions.run(slot: "demo", control: "go", revision: revision, turningOn: true)
+                _ = await (first, second)
+                answered.fulfill()
+            }
+            await fulfillment(of: [answered], timeout: 10)
+        }
+        home.failing = ["on", "off"]
+        await twoTaps()
+        XCTAssertEqual(home.effects, [])
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, false, "two failed taps left the switch on")
+
+        home.failing = ["on"]
+        await twoTaps()
+        XCTAssertEqual(home.effects, ["off"])
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, false, "the switch is not at the second tap's state")
+    }
+
+    /// A control's failure is marked until that control runs again or the slot is written anew,
+    /// however many other taps the log has kept since.
+    func testAFailureOutlivesFiftyOtherTaps() throws {
+        func tap(_ id: String, _ status: String, revision: Int = 1) throws {
+            try store.appendTap(SurfaceStore.Tap(time: Date(), slot: "demo", id: id, revision: revision, kind: "run", status: status))
+        }
+        try tap("a", String(ToolReply.denied))
+        for _ in 0..<50 { try tap("b", "0") }
+        XCTAssertFalse(store.taps().contains { $0.id == "a" }, "the log still holds a's tap, so this holds nothing")
+        XCTAssertEqual(store.failed(slot: "demo", revision: 1), ["a"])
+        XCTAssertEqual(store.failed(slot: "demo", revision: 2), [], "a failure outlived its revision")
+        try tap("a", "0")
+        XCTAssertEqual(store.failed(slot: "demo", revision: 1), [])
+    }
 }
