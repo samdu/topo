@@ -34,7 +34,11 @@ judgement:
      holds: a verdict that blocks, a draft untouched for `GRACE`, a green PR
      with Proof boxes unticked, a ready PR with no validate run, a run
      cancelled with nothing after it, and a PR nothing has touched for
-     `IDLE` while no run is in progress.
+     `IDLE` while no run is in progress;
+  6. reports each open issue that is untriaged — no `triaged` label and no
+     comment — once it is older than `GRACE`, again every `REPEAT` while it
+     stays so. One GraphQL read gives the title, the labels and a comment
+     count; the body is never read.
 
 Everything it decides is a function of what it read; everything it does is a
 `gh`, `git`, `tmux` or shell call behind `Shell`, so `--dry-run` prints the
@@ -104,6 +108,16 @@ SETUP_STEPS = {
 }
 SETUP_PREFIXES = ("Run actions/", "Post Run ", "Join the tailnet")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
+ISSUES_PAGE = 100                  # an issue list this long may have left one off
+TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
+FROM_TOPO = "from-topo"            # the mind on the phone filed it
+ISSUES_QUERY = f"""query($owner: String!, $name: String!) {{
+  repository(owner: $owner, name: $name) {{
+    issues(states: OPEN, first: {ISSUES_PAGE}) {{
+      nodes {{ number title createdAt labels(first: 20) {{ nodes {{ name }} }} comments {{ totalCount }} }}
+    }}
+  }}
+}}"""
 
 
 # --- time ------------------------------------------------------------------
@@ -265,6 +279,30 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     return out
 
 
+def decide_issues(issues, now):
+    """The open issues to report, and the numbers still untriaged.
+
+    `issues` is the GraphQL read's nodes. An issue is untriaged while it has
+    no `triaged` label and no comment; one is reported once it is older than
+    GRACE. Returns (reports, untriaged numbers), a report being
+    {"kind": "report", "key": "issue:N", "text": ...}. Pure: nothing is read.
+    """
+    out, untriaged = [], set()
+    for i in issues:
+        labels = {l["name"] for l in (i.get("labels") or {}).get("nodes") or []}
+        if TRIAGED in labels or ((i.get("comments") or {}).get("totalCount") or 0) > 0:
+            continue
+        n = i["number"]
+        untriaged.add(n)
+        age = now - parse_time(i["createdAt"])
+        if age <= GRACE:
+            continue
+        by = " (filed by Topo)" if FROM_TOPO in labels else ""
+        out.append({"kind": "report", "key": f"issue:{n}",
+                    "text": f"issue: #{n} {i['title']}{by}, opened {minutes(age)} ago, untriaged."})
+    return out, untriaged
+
+
 def decide_publish(published_commit, main_sha, state, now):
     """Whether to republish the install page. Returns a reason string or None."""
     if not main_sha:
@@ -394,6 +432,20 @@ class Shell:
 
     def rerun(self, run_id):
         self.run(["gh", "run", "rerun", str(run_id), "--repo", REPO, "--failed"], mutating=True)
+
+    def open_issues(self):
+        """The open issues, as GraphQL nodes: number, title, createdAt, labels and a
+        comment count, never a body. A list that fills its page may have left
+        one off, and is refused rather than read as whole."""
+        owner, name = REPO.split("/")
+        answer = self.gh_json("api", "graphql", "-f", f"query={ISSUES_QUERY}", "-F", f"owner={owner}", "-F", f"name={name}")
+        try:
+            nodes = answer["data"]["repository"]["issues"]["nodes"]
+        except (KeyError, TypeError):
+            raise RuntimeError("gh api graphql answered without the repository's issues")
+        if not isinstance(nodes, list):
+            raise RuntimeError("gh api graphql answered without the repository's issues")
+        return nodes
 
     def main_sha(self):
         return self.run(["gh", "api", f"repos/{REPO}/commits/main", "--jq", ".sha"]).stdout.strip()
@@ -718,12 +770,33 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     except RuntimeError as ex:
         say("sweep:read", f"could not read the worktrees: {ex}")
 
+    # 6: the open issues nobody has triaged.
+    untriaged = None   # the numbers still untriaged, known only off a whole read
+    try:
+        issues = sh.open_issues()
+        if len(issues) >= ISSUES_PAGE:
+            say("issues:page", f"the open issue list filled its page of {ISSUES_PAGE}; no issue is reported off a list that may be missing one.")
+        else:
+            wants, untriaged = decide_issues(issues, now)
+            for w in wants:
+                say(w["key"], w["text"])
+            for i in issues:
+                if i["number"] not in untriaged:
+                    quiet.append(f"issue #{i['number']}: triaged")
+    except RuntimeError as ex:
+        say("issues:read", f"could not read the open issues: {ex}")
+
     # Forget what no open PR carries, so the file does not grow — but only on a
-    # pass that read the PRs, since an unread list is not an empty one.
+    # pass that read the PRs, since an unread list is not an empty one. Issue
+    # keys likewise, only on a pass that read the whole issue list.
+    if untriaged is not None:
+        state["fired"] = {k: v for k, v in state["fired"].items()
+                          if not (k == "issues:page" or (k.startswith("issue:") and int(k[len("issue:"):]) not in untriaged))}
     if prs_ok:
         live = {pr["headRefOid"] for pr in prs}
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
+                          if k.startswith(("issue:", "issues:"))
+                          or (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
                           or k.endswith(":read") or k.rsplit(":", 1)[-1] in live}
         state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}
     state["publish"] = {k: v for k, v in state["publish"].items()

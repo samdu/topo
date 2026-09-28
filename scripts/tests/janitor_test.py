@@ -61,6 +61,13 @@ def jobs(**concl):
     return out
 
 
+def issue(number, title="x", age=timedelta(hours=1), labels=(), comments=0, **kw):
+    d = {"number": number, "title": title, "createdAt": ago(age),
+         "labels": {"nodes": [{"name": l} for l in labels]}, "comments": {"totalCount": comments}}
+    d.update(kw)
+    return d
+
+
 def kinds(wants):
     return [w["kind"] + ":" + w["key"].split(":")[1] if w["kind"] == "report" else w["kind"] for w in wants]
 
@@ -261,6 +268,15 @@ class Decisions(unittest.TestCase):
         out = janitor.decide_sweep(wts, "/r/topo", lambda b: history.get(b), NOW)
         self.assertEqual([o["path"] for o in out], ["/r/.worktrees/topo-old"])
 
+    def test_an_untriaged_issue_past_the_grace_is_reported_and_a_triaged_one_is_not(self):
+        issues = [issue(1, "Old", age=timedelta(hours=3)), issue(2, "Mine", labels=["from-topo", "bug"]),
+                  issue(3, labels=["triaged"]), issue(4, comments=1), issue(5, age=timedelta(minutes=5))]
+        wants, untriaged = janitor.decide_issues(issues, NOW)
+        self.assertEqual([w["key"] for w in wants], ["issue:1", "issue:2"])
+        self.assertEqual(wants[0]["text"], "issue: #1 Old, opened 3 h ago, untriaged.")
+        self.assertEqual(wants[1]["text"], "issue: #2 Mine (filed by Topo), opened 60 min ago, untriaged.")
+        self.assertEqual(untriaged, {1, 2, 5}, "one inside the grace is untriaged, just not said yet")
+
     def test_failing_tests_are_read_off_an_xcodebuild_log(self):
         log = ("Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.2 seconds).\n"
                "Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.3 seconds).\n"
@@ -341,6 +357,9 @@ if tool == "gh":
         if asked > 1 and branch in S.get("history_later", {}): out(S["history_later"][branch][:limit])
         out(S["history"].get(branch, [])[:limit])
     if a[:2] == ["variable", "get"]: out("false")
+    if a[:2] == ["api", "graphql"]:
+        if S.get("issues_error"): print(S["issues_error"], file=sys.stderr); sys.exit(1)
+        out({"data": {"repository": {"issues": {"nodes": S.get("issues", [])}}}})
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
@@ -582,6 +601,112 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertIn("tmux kill-session -t =deep", calls)
         self.assertNotIn("=topo-older", calls)
+
+    def backdate(self, hours=4):
+        """Every fired key as if said `hours` ago: the next pass is past REPEAT."""
+        state = self.state_file()
+        at = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        state["fired"] = {k: at for k in state["fired"]}
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+
+    def issue_lines(self, since=None):
+        """The issue lines of the last message, or of every message from `since` on."""
+        got = Bridge.received[-1:] if since is None else Bridge.received[since:]
+        return [l for m in got for l in m["body"]["text"].splitlines() if l.startswith("- issue:")]
+
+    def test_untriaged_issues_are_reported_by_number_and_title_and_never_their_body(self):
+        s = self.scripted(issues=[issue(40, "The badge is yellow", body="SECRET-MARKER"),
+                                  issue(41, "Topo cannot see the lights", labels=["from-topo"], age=timedelta(hours=5)),
+                                  issue(42, "Planned", labels=["triaged"]), issue(43, "Answered", comments=2)])
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(janitor.ISSUES_QUERY, calls)
+        self.assertIn("issues(states: OPEN, first: 100)", janitor.ISSUES_QUERY, "repository.issues holds no PR")
+        self.assertNotIn("body", janitor.ISSUES_QUERY)
+        self.assertNotIn("gh issue", calls)
+        self.assertRegex(self.issue_lines()[0], r"^- issue: #40 The badge is yellow, opened \d+ h ago, untriaged\.$")
+        self.assertRegex(self.issue_lines()[1], r"^- issue: #41 Topo cannot see the lights \(filed by Topo\), opened \d+ h ago, untriaged\.$")
+        self.assertEqual(len(self.issue_lines()), 2)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertNotIn("SECRET-MARKER", text)
+        self.assertNotIn("issue: #7", text, "the open PR is not an issue")
+        self.assertEqual({k for k in self.state_file()["fired"] if k.startswith("issue")}, {"issue:40", "issue:41"})
+
+    def test_an_untriaged_issue_is_said_again_only_after_the_repeat_window(self):
+        s = self.scripted(prs=[], issues=[issue(40, "Stands")])
+        self.run_pass(s)
+        self.assertEqual(len(self.issue_lines()), 1)
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertEqual(self.issue_lines(since=n), [], "said once inside REPEAT")
+        n = len(Bridge.received)
+        self.backdate()
+        self.run_pass(s)
+        self.assertEqual(len(self.issue_lines(since=n)), 1)
+        self.assertIn("#40 Stands", self.issue_lines(since=n)[0])
+
+    def test_a_triaged_issue_goes_quiet_and_stays_quiet_past_the_repeat_window(self):
+        for how in ({"labels": ["triaged"]}, {"comments": 1}):
+            with self.subTest(how):
+                self.setUp()
+                self.run_pass(self.scripted(prs=[], issues=[issue(40, "Later")]))
+                self.assertEqual(len(self.issue_lines()), 1)
+                n = len(Bridge.received)
+                triaged = self.scripted(prs=[], issues=[issue(40, "Later", **{k: v for k, v in how.items() if k == "comments"},
+                                                              labels=how.get("labels", ()))])
+                self.run_pass(triaged)
+                self.assertNotIn("issue:40", self.state_file()["fired"], "a triaged issue's key is forgotten")
+                self.backdate()
+                p, _ = self.run_pass(triaged)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(self.issue_lines(since=n), [], "nothing is said about a triaged issue past REPEAT")
+
+    def test_a_closed_issue_is_forgotten_only_on_a_pass_that_read_the_list(self):
+        self.run_pass(self.scripted(prs=[], issues=[issue(40, "Closing")]))
+        self.assertIn("issue:40", self.state_file()["fired"])
+        p, _ = self.run_pass(self.scripted(prs=[], issues_error="HTTP 502: Bad Gateway"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("issue:40", self.state_file()["fired"], "an unread list is not an empty one")
+        self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
+        self.run_pass(self.scripted(prs=[], issues=[]))
+        self.assertNotIn("issue:40", self.state_file()["fired"])
+
+    def test_a_failed_or_page_filling_issue_read_reports_nothing_off_it_and_the_pr_cleanup_keeps_issue_keys(self):
+        self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
+        fired = {k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue")}
+        self.assertEqual(list(fired), ["issue:40"])
+
+        p, calls = self.run_pass(self.scripted(issues=[issue(40, "Kept"), issue(44, "New")], issues_error="HTTP 502"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pr merge 7", calls, "the PR list was read whole")
+        self.assertEqual(self.issue_lines(), [])
+        self.assertIn("could not read the open issues: gh api graphql", Bridge.received[-1]["body"]["text"])
+        self.assertEqual({k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue:")}, fired)
+
+        many = [issue(100 + i, f"t{i}") for i in range(100)]
+        p, calls = self.run_pass(self.scripted(issues=many))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pr merge 7", calls)
+        self.assertEqual(self.issue_lines(), [])
+        self.assertIn("the open issue list filled its page of 100", Bridge.received[-1]["body"]["text"])
+        after = self.state_file()["fired"]
+        self.assertEqual({k: v for k, v in after.items() if k.startswith("issue:")}, fired)
+        self.assertIn("issues:page", after)
+
+        p, calls = self.run_pass(self.scripted(issues=many))
+        self.assertIn("issues:page", self.state_file()["fired"], "a PR read does not drop the page key")
+
+        self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
+        self.assertNotIn("issues:page", self.state_file()["fired"], "a whole read ends the page condition")
+        self.assertIn("issue:40", self.state_file()["fired"])
+
+    def test_a_dry_run_prints_the_issue_lines_and_writes_no_state(self):
+        p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Dry")]), extra=["--dry-run"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(p.stdout, r"- issue: #40 Dry, opened \d+ h ago, untriaged\.")
+        self.assertEqual(Bridge.received, [])
+        self.assertFalse(os.path.exists(self.state))
 
     def test_a_dry_run_runs_nothing_and_prints_the_report(self):
         p, calls = self.run_pass(self.scripted(published="abc1234"), extra=["--dry-run"])
