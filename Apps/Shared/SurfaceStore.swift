@@ -127,6 +127,12 @@ struct SurfaceStore: Sendable {
         return was
     }
 
+    /// Sets toggle `control` to `on`, whatever it is now: a cue's resolved state, set again as
+    /// often as a drain is.
+    func setOn(_ on: Bool, slot: String, control: String, revision: Int) throws {
+        try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
+    }
+
     /// Puts toggle `control` back to `on` if it is still `!on`: a run that failed after its
     /// `flip`.
     func unflip(to on: Bool, slot: String, control: String, revision: Int) throws {
@@ -250,9 +256,12 @@ struct SurfaceStore: Sendable {
         var slot: String
         var id: String
         var revision: Int
-        /// A toggle's new state; nil for a button or a link.
+        /// A toggle's new state as the tapped entry drew it; nil for a button or a link.
         var turningOn: Bool?
         var time: Date
+        /// A toggle's new state as the app resolved it from the stored one, written before the
+        /// toggle is set, so a drain after a crash sets and says the same state.
+        var resolved: Bool?
     }
 
     func appendCue(_ cue: Cue) throws {
@@ -260,6 +269,17 @@ struct SurfaceStore: Sendable {
     }
 
     func cues() -> [Cue] { lines(pendingURL) }
+
+    /// Writes `resolved` into the pending cue under `nonce`.
+    func resolveCue(nonce: String, _ resolved: Bool) throws {
+        try coordinatedWrite(pendingURL) { data in
+            Self.encode(Self.decode(Cue.self, data).map { cue in
+                var cue = cue
+                if cue.nonce == nonce { cue.resolved = resolved }
+                return cue
+            })
+        }
+    }
 
     /// Takes the cue under `nonce` off the pending list.
     func removeCue(nonce: String) throws {

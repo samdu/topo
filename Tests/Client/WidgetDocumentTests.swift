@@ -282,6 +282,17 @@ final class WidgetDocumentTests: XCTestCase {
         }
     }
 
+    /// The inline line drawn from the default is not kept, so a default at the budget is a
+    /// document at the budget, and its kept copy reads with no notes.
+    func testTheInlineDefaultIsNotKept() throws {
+        let texts = (0..<63).map { #"{"kind": "text", "text": "\#($0)"}"# }.joined(separator: ",")
+        let reading = WidgetDocument.read(#"{"families": {"default": {"kind": "vstack", "children": [\#(texts)]}}}"#)
+        XCTAssertEqual(reading.state, .read(nodes: WidgetDocument.nodeLimit))
+        XCTAssertNil(reading.document.families[.accessoryInline])
+        XCTAssertEqual(try children(XCTUnwrap(reading.document.tree(for: .accessoryInline))), [.text(.init(text: "0"))])
+        XCTAssertEqual(WidgetDocument.read(reading.document.text, from: .store).notes, [])
+    }
+
     /// What the app keeps is what was read, and a read of the kept copy is the same document with
     /// no notes.
     func testTheKeptCopyReadsBackTheSame() throws {

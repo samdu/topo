@@ -33,6 +33,29 @@ private final class CountingTool: Tool, @unchecked Sendable {
     }
 }
 
+/// `home` whose `on` is slow and `off` quick, recording each effect as it lands.
+private final class EffectTool: Tool, @unchecked Sendable {
+    let name = "home"
+    let summary = "a home whose on is slow"
+    let usage = "anything"
+    private let lock = NSLock()
+    private var _effects: [String] = []
+    private var _failing: Set<String> = []
+    var effects: [String] { lock.withLock { _effects } }
+    var failing: Set<String> {
+        get { lock.withLock { _failing } }
+        set { lock.withLock { _failing = newValue } }
+    }
+
+    func run(_ arguments: [String]) async -> ToolReply {
+        let state = arguments.last ?? ""
+        try? await Task.sleep(for: state == "on" ? .milliseconds(300) : .milliseconds(10))
+        if failing.contains(state) { return ToolReply(status: ToolReply.denied, text: "topo: HomeKit is not allowed\n") }
+        lock.withLock { _effects.append(state) }
+        return .ok("done\n")
+    }
+}
+
 /// A loaded home with a lock, a scene that unlocks it and one holding an action that cannot be
 /// read, recording what it was asked to do.
 @MainActor
@@ -277,5 +300,32 @@ final class WidgetActionTests: XCTestCase {
         let timeline = SurfaceProvider.timeline(slot: "demo", family: .systemSmall, now: Date(), store: store)
         XCTAssertEqual(timeline.entries.first?.relevance?.score, 1)
         XCTAssertNil(SurfaceProvider.timeline(slot: "plain", family: .systemSmall, now: Date(), store: store).entries.first?.relevance)
+    }
+
+    /// A control's runs land in the order its taps were handled, whichever call is quicker, and a
+    /// run that fails holds up none after it.
+    func testAControlsRunsLandInTheOrderItsTapsWere() async throws {
+        let home = EffectTool()
+        let revision = try set(["home", "set", "LAMP", "power"], kind: "toggle")
+        let actions = actions([home])
+        // Two taps, answered within a deadline, so a chain that stalls fails rather than hangs.
+        func twoTaps() async {
+            let answered = expectation(description: "both taps answered")
+            Task { @MainActor in
+                async let first: Void = actions.run(slot: "demo", control: "go", revision: revision, turningOn: true)
+                async let second: Void = actions.run(slot: "demo", control: "go", revision: revision, turningOn: true)
+                _ = await (first, second)
+                answered.fulfill()
+            }
+            await fulfillment(of: [answered], timeout: 10)
+        }
+        await twoTaps()
+        XCTAssertEqual(home.effects, ["on", "off"], "the quicker off landed before the on tapped first")
+
+        home.failing = ["on"]
+        await twoTaps()
+        XCTAssertEqual(home.effects, ["on", "off", "off"], "a failed run held up the tap after it")
+        XCTAssertEqual(store.taps().suffix(2).map(\.status), [String(ToolReply.denied), "0"])
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, false)
     }
 }

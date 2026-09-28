@@ -208,6 +208,25 @@ final class WidgetCueTests: XCTestCase {
         XCTAssertEqual(store.read(slot: "demo")?.document.controls["fan"]?.on, false, "a cue drained twice flipped twice")
     }
 
+    /// A crash after a turn toggle's state was resolved and set, before its turn reached the
+    /// line: the next drain sets and says the same state, once.
+    func testATurnToggleIsOneStateAcrossACrash() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let text = #"{"families": {"systemSmall": {"kind": "toggle", "id": "fan", "label": "Fan", "action": {"kind": "turn", "say": "fan"}}}}"#
+        let revision = try store.write(WidgetDocument.read(text).document, slot: "demo")
+        try store.appendCue(SurfaceStore.Cue(nonce: "A", slot: "demo", id: "fan", revision: revision, turningOn: true, time: Date()))
+        // What the drain did before the crash.
+        try store.resolveCue(nonce: "A", true)
+        try store.setOn(true, slot: "demo", control: "fan", revision: revision)
+        let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await relaunched.refresh()
+        await cues(relaunched).drain()
+        XCTAssertEqual(relaunched.owed.map(\.text), ["widget demo: fan on"])
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["fan"]?.on, true)
+        XCTAssertEqual(store.cues(), [])
+    }
+
     // MARK: -
 
     private func makeDefaults() -> UserDefaults {

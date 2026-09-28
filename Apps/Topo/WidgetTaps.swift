@@ -77,18 +77,20 @@ final class WidgetCues {
                 try? store.removeCue(nonce: cue.nonce)
                 continue
             }
-            // A toggle's new state is the opposite of its stored one, flipped here under the
-            // store's coordination, and only for a cue not already sent, so a drain run twice
-            // flips once.
+            // A toggle's new state is the opposite of its stored one, resolved once and written
+            // into the cue before the toggle is set to it, so a drain after a crash anywhere
+            // here sets and says the same state; a cue already sent sets nothing.
             var turningOn: Bool?
             let sent = harness.said(cue.nonce) || harness.owed.contains { $0.nonce == cue.nonce }
-            if !sent, document.controls[cue.id]?.kind == .toggle {
-                guard let was = try? store.flip(slot: cue.slot, control: cue.id, revision: cue.revision) else {
-                    record("stale")
-                    try? store.removeCue(nonce: cue.nonce)
+            if !sent, let toggle = document.controls[cue.id], toggle.kind == .toggle {
+                let resolved = cue.resolved ?? !toggle.on
+                do {
+                    if cue.resolved == nil { try store.resolveCue(nonce: cue.nonce, resolved) }
+                    try store.setOn(resolved, slot: cue.slot, control: cue.id, revision: cue.revision)
+                } catch {
                     continue
                 }
-                turningOn = !was
+                turningOn = resolved
                 reloader.reload()
             }
             guard let words = document.turn(slot: cue.slot, control: cue.id, turningOn: turningOn),
@@ -114,6 +116,9 @@ final class WidgetActions {
     /// The slot's document as the tap finds it: the store's, read through the reader. A suite
     /// hands one the reader would not keep, to hold the tap's own allowlist check.
     let read: @MainActor (SurfaceStore, String) -> WidgetDocument?
+    /// Each control's last run, which its next waits on, so a control's effects land in the
+    /// order its taps were handled.
+    private var chains: [String: Task<Void, Never>] = [:]
 
     init(table: ToolTable, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound,
@@ -159,10 +164,21 @@ final class WidgetActions {
             was = stored
         }
         guard let argv = control.argv(turningOn: was.map { !$0 }) else { return record(String(ToolReply.refused)) }
-        let reply = await ToolService.bounded(argv, table: table, until: .now + bound, bound: bound)
-        if reply.status != 0, let was {
-            try? store.unflip(to: was, slot: slot, control: id, revision: revision)
+        // After the control's last run, whatever it answered, so two quick taps' writes land in
+        // the order they were flipped and a failed one holds up none after it.
+        let key = "\(slot)/\(id)"
+        let previous = chains[key]
+        let (table, bound) = (table, bound)
+        let task = Task { @MainActor in
+            await previous?.value
+            let reply = await ToolService.bounded(argv, table: table, until: .now + bound, bound: bound)
+            if reply.status != 0, let was {
+                try? store.unflip(to: was, slot: slot, control: id, revision: revision)
+            }
+            record(String(reply.status))
         }
-        record(String(reply.status))
+        chains[key] = task
+        await task.value
+        if chains[key] == task { chains[key] = nil }
     }
 }

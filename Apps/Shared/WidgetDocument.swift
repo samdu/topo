@@ -42,11 +42,15 @@ struct WidgetDocument: Equatable, Sendable {
     var relevance: Double?
 
     /// The tree drawn for `family`: its own, or the document's `default`, its texts cut to the
-    /// family's limit, since `default` is read with the home screen's.
+    /// family's limit, since `default` is read with the home screen's, and on `accessoryInline`
+    /// drawn as that family's one line. The projection is not kept, so the document holds only
+    /// what its budget counted.
     func tree(for family: WidgetFamilyName) -> WidgetNode? {
         if let own = families[family] { return own }
         guard let fallback = families[.default] else { return nil }
-        return family.isAccessory ? fallback.cuttingTexts(to: family.textLimit) : fallback
+        guard family.isAccessory else { return fallback }
+        let cut = fallback.cuttingTexts(to: family.textLimit)
+        return family == .accessoryInline ? cut.inlined().0 : cut
     }
 
     /// The id a whole widget's tap is cued under, which no control's id can be.
@@ -395,6 +399,23 @@ indirect enum WidgetNode: Equatable, Sendable {
     var control: WidgetControl? { if case .control(let control) = self { control } else { nil } }
 
     /// Every node of the tree, this one first, then its children and a control's label in order.
+    /// This tree as `accessoryInline` draws it, one glyph and one text on one line, and the kinds
+    /// of what that drops.
+    func inlined() -> (WidgetNode, dropped: [String]) {
+        var text: WidgetNode?
+        var glyph: WidgetNode?
+        var dropped: [String] = []
+        walk { each in
+            switch each {
+            case .text where text == nil: text = each
+            case .glyph where glyph == nil: glyph = each
+            case .stack where each == self: break
+            default: dropped.append(each.kind)
+            }
+        }
+        return (.stack(.init(axis: .hstack, children: [glyph, text].compactMap { $0 })), dropped)
+    }
+
     /// This tree with toggle `id` drawn `on`, in every family it is in.
     func settingOn(_ on: Bool, ofControl id: String) -> WidgetNode {
         switch self {
@@ -604,31 +625,20 @@ final class WidgetReader {
                 note("families.default", "has a text of \(longest) characters, and draws on \(missing.rawValue), a lock-screen family, cut to \(WidgetDocument.accessoryTextLimit)")
             }
         }
-        // `accessoryInline` draws one line whichever tree it is given, so the default is kept
-        // for it as that line.
-        if let fallback = document.families[.default], document.families[.accessoryInline] == nil {
-            document.families[.accessoryInline] = inline(fallback.cuttingTexts(to: WidgetDocument.accessoryTextLimit), "families.default, on accessoryInline,")
+        // `accessoryInline` draws the default as one line (`tree(for:)`), which is said here.
+        if source == .mind, let fallback = document.families[.default], document.families[.accessoryInline] == nil {
+            _ = inline(fallback, "families.default, on accessoryInline,")
         }
         return document
     }
 
     /// `accessoryInline` draws one line: one text and one glyph, and nothing else.
     private func inline(_ node: WidgetNode, _ path: String) -> WidgetNode {
-        var text: WidgetNode?
-        var glyph: WidgetNode?
-        var dropped: [String] = []
-        node.walk { each in
-            switch each {
-            case .text where text == nil: text = each
-            case .glyph where glyph == nil: glyph = each
-            case .stack where each == node: break
-            default: dropped.append(each.kind)
-            }
-        }
+        let (line, dropped) = node.inlined()
         if !dropped.isEmpty {
             note(path, "draws one text and one glyph on one line, so its \(dropped.joined(separator: ", ")) were dropped")
         }
-        return .stack(.init(axis: .hstack, children: [glyph, text].compactMap { $0 }))
+        return line
     }
 
     // MARK: A node
