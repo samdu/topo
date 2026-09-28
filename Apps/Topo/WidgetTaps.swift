@@ -13,8 +13,10 @@ final class WidgetTaps: WidgetTapHandler {
         self.actions = actions
     }
 
+    /// The intent returns once the cue is recorded and the app is coming forward: the drain, and
+    /// the turn it sends, run on without holding the intent open.
     func cued(_ cue: SurfaceStore.Cue, recorded: Bool) async {
-        await cues.drain()
+        Task { await cues.drain() }
     }
 
     func run(slot: String, control: String, revision: Int, turningOn: Bool?) async {
