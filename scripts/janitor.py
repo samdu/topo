@@ -110,6 +110,7 @@ SETUP_PREFIXES = ("Run actions/", "Post Run ", "Join the tailnet")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
 ISSUES_PAGE = 100                  # issues read per GraphQL page
 ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
+ISSUE_LINES = 60                   # issue lines one pass says, so a report is mostly PR lines
 TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
 ISSUES_QUERY = f"""query($owner: String!, $name: String!, $after: String) {{
@@ -286,23 +287,42 @@ def decide_issues(issues, now):
 
     `issues` is the GraphQL read's nodes. An issue is untriaged while it has
     no `triaged` label and no comment; one is reported once it is older than
-    GRACE. Returns (reports, untriaged numbers), a report being
-    {"kind": "report", "key": "issue:N", "text": ...}. Pure: nothing is read.
+    GRACE. Returns (reports, keep, bad): a report is
+    {"kind": "report", "key": "issue:N", "text": ...}; `keep` the numbers whose
+    keys stand (the untriaged, and a malformed node's when it has a number),
+    or None when a malformed node has no number to keep, so no issue key may
+    be dropped; `bad` names each malformed node, which is skipped. Pure.
     """
-    out, untriaged = [], set()
-    for i in issues:
-        labels = {l["name"] for l in (i.get("labels") or {}).get("nodes") or []}
-        if TRIAGED in labels or ((i.get("comments") or {}).get("totalCount") or 0) > 0:
+    out, keep, bad = [], set(), []
+    for at, i in enumerate(issues, 1):
+        n = i.get("number") if isinstance(i, dict) else None
+        if not isinstance(n, int) or isinstance(n, bool):
+            n = None
+        try:
+            labels = {l["name"] for l in i["labels"]["nodes"]}
+            comments = i["comments"]["totalCount"]
+            title = i["title"]
+            created = parse_time(i["createdAt"])
+            if n is None or not isinstance(title, str) or not isinstance(comments, int) or created is None:
+                raise ValueError
+        except (KeyError, TypeError, ValueError, AttributeError):
+            bad.append(f"#{n}" if n is not None else f"node {at}")
+            if n is None:
+                keep = None
+            elif keep is not None:
+                keep.add(n)
             continue
-        n = i["number"]
-        untriaged.add(n)
-        age = now - parse_time(i["createdAt"])
+        if TRIAGED in labels or comments > 0:
+            continue
+        if keep is not None:
+            keep.add(n)
+        age = now - created
         if age <= GRACE:
             continue
         by = " (filed by Topo)" if FROM_TOPO in labels else ""
         out.append({"kind": "report", "key": f"issue:{n}",
-                    "text": f"issue: #{n} {i['title']}{by}, opened {minutes(age)} ago, untriaged."})
-    return out, untriaged
+                    "text": f"issue: #{n} {title}{by}, opened {minutes(age)} ago, untriaged."})
+    return out, keep, bad
 
 
 def decide_publish(published_commit, main_sha, state, now):
@@ -785,27 +805,42 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
         say("sweep:read", f"could not read the worktrees: {ex}")
 
     # 6: the open issues nobody has triaged.
-    untriaged = None   # the numbers still untriaged, known only off a whole read
+    # Issue lines are the first cut: the pass's PR lines come first, a pass
+    # says at most ISSUE_LINES of them inside PENDING_MAX, and none while an
+    # earlier report is undelivered, so a queue that waits on the bridge holds
+    # PR lines rather than issue lines that are said again anyway. A line not
+    # said leaves its key unfired, and it is said on a later pass.
+    untriaged = None   # the keys that stand, known only off a whole read
+    malformed = False
     try:
         issues, whole = sh.open_issues()
         if not whole:
             say("issues:page", f"the open issue list runs past {ISSUES_PAGES} pages of {ISSUES_PAGE}; no issue is reported off a list not read whole.")
         else:
-            wants, untriaged = decide_issues(issues, now)
-            for w in wants:
+            wants, untriaged, bad = decide_issues(issues, now)
+            if bad:
+                malformed = True
+                say("issues:node", f"{len(bad)} open issue node{'s' if len(bad) > 1 else ''} came back malformed and {'were' if len(bad) > 1 else 'was'} skipped: {', '.join(bad[:10])}.")
+            owed = [w for w in wants if due(state, w["key"], now)]
+            quiet += [f"{w['key']}: said within the last {minutes(REPEAT)}" for w in wants if w not in owed]
+            room = 0 if state.get("undelivered") else max(0, min(ISSUE_LINES, PENDING_MAX - len(lines) - 1))
+            for w in owed[:room]:
                 say(w["key"], w["text"])
-            for i in issues:
-                if i["number"] not in untriaged:
-                    quiet.append(f"issue #{i['number']}: triaged")
+            held = len(owed) - room
+            if held > 0 and state.get("undelivered"):
+                quiet.append(f"{held} issue line(s) wait for the undelivered reports")
+            elif held > 0:
+                lines.append(f"{held} more untriaged issue{'s' if held > 1 else ''} wait for the next pass.")
     except RuntimeError as ex:
         say("issues:read", f"could not read the open issues: {ex}")
 
     # Forget what no open PR carries, so the file does not grow — but only on a
     # pass that read the PRs, since an unread list is not an empty one. Issue
     # keys likewise, only on a pass that read the whole issue list.
-    if untriaged is not None:
+    if untriaged is not None or malformed:
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if not (k == "issues:page" or (k.startswith("issue:") and int(k[len("issue:"):]) not in untriaged))}
+                          if not (k == "issues:page" or (k == "issues:node" and not malformed)
+                                  or (untriaged is not None and k.startswith("issue:") and int(k[len("issue:"):]) not in untriaged))}
     if prs_ok:
         live = {pr["headRefOid"] for pr in prs}
         state["fired"] = {k: v for k, v in state["fired"].items()

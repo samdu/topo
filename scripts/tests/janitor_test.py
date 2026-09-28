@@ -271,11 +271,25 @@ class Decisions(unittest.TestCase):
     def test_an_untriaged_issue_past_the_grace_is_reported_and_a_triaged_one_is_not(self):
         issues = [issue(1, "Old", age=timedelta(hours=3)), issue(2, "Mine", labels=["from-topo", "bug"]),
                   issue(3, labels=["triaged"]), issue(4, comments=1), issue(5, age=timedelta(minutes=5))]
-        wants, untriaged = janitor.decide_issues(issues, NOW)
+        wants, untriaged, bad = janitor.decide_issues(issues, NOW)
+        self.assertEqual(bad, [])
         self.assertEqual([w["key"] for w in wants], ["issue:1", "issue:2"])
         self.assertEqual(wants[0]["text"], "issue: #1 Old, opened 3 h ago, untriaged.")
         self.assertEqual(wants[1]["text"], "issue: #2 Mine (filed by Topo), opened 60 min ago, untriaged.")
         self.assertEqual(untriaged, {1, 2, 5}, "one inside the grace is untriaged, just not said yet")
+
+    def test_a_malformed_issue_node_is_skipped_and_named(self):
+        good = issue(1, "Good")
+        wants, keep, bad = janitor.decide_issues([good, dict(issue(2), title=None), dict(issue(3), createdAt="nonsense"),
+                                                  dict(issue(4), labels=None), dict(issue(5), comments={})], NOW)
+        self.assertEqual([w["key"] for w in wants], ["issue:1"])
+        self.assertEqual(bad, ["#2", "#3", "#4", "#5"])
+        self.assertEqual(keep, {1, 2, 3, 4, 5}, "a malformed node's own key stands")
+        for node in (None, "x", {"title": "no number"}, dict(issue(6), number="6"), dict(issue(7), number=True)):
+            wants, keep, bad = janitor.decide_issues([good, node], NOW)
+            self.assertEqual([w["key"] for w in wants], ["issue:1"], node)
+            self.assertEqual(bad, ["node 2"], node)
+            self.assertIsNone(keep, "with a node that has no number, no issue key may be dropped")
 
     def test_failing_tests_are_read_off_an_xcodebuild_log(self):
         log = ("Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.2 seconds).\n"
@@ -707,27 +721,104 @@ class WholePass(unittest.TestCase):
         self.assertIn("issue:40", self.state_file()["fired"])
 
     def test_the_issue_list_is_read_page_by_page_on_the_cursor(self):
-        issues = [issue(1000 + i, f"t{i}") for i in range(150)]
+        issues = [issue(1000 + i, f"t{i}", comments=1 if 0 < i < 100 else 0) for i in range(150)]
         p, calls = self.run_pass(self.scripted(prs=[], issues=issues))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(calls.count("gh api graphql"), 2)
         self.assertIn("-f after=100", calls)
         lines = self.issue_lines()
-        self.assertEqual(len(lines), 150, "both pages' issues are reported")
+        self.assertEqual(len(lines), 51, "both pages' untriaged issues are reported")
         self.assertIn("#1000 t0,", lines[0])
+        self.assertIn("#1100 t100,", lines[1])
         self.assertIn("#1149 t149,", lines[-1])
         self.assertNotIn("issues:page", self.state_file()["fired"])
 
     def test_exactly_five_full_pages_is_whole_and_a_sixth_is_not(self):
         p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(500)]))
         self.assertEqual(calls.count("gh api graphql"), 5)
-        self.assertEqual(len(self.issue_lines(since=0)), 200, "500 lines, cut to PENDING_MAX")
+        self.assertEqual(len(self.issue_lines()), janitor.ISSUE_LINES)
+        self.assertIn("440 more untriaged issues wait for the next pass.", Bridge.received[-1]["body"]["text"])
         self.assertNotIn("issues:page", self.state_file()["fired"])
-        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), 500)
+        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES)
         p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(501)]))
         self.assertEqual(calls.count("gh api graphql"), 5)
         self.assertIn("issues:page", self.state_file()["fired"])
-        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), 500, "no key dropped off an unwhole read")
+        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES, "no key dropped off an unwhole read")
+
+    def test_issue_lines_past_the_cap_are_unfired_and_said_on_the_next_pass(self):
+        s = self.scripted(prs=[], issues=[issue(1000 + i, f"t{i}") for i in range(janitor.ISSUE_LINES + 10)])
+        self.run_pass(s)
+        first = self.issue_lines()
+        self.assertEqual(len(first), janitor.ISSUE_LINES)
+        self.assertIn("10 more untriaged issues wait for the next pass.", Bridge.received[-1]["body"]["text"])
+        fired = {k for k in self.state_file()["fired"] if k.startswith("issue:")}
+        self.assertEqual(fired, {f"issue:{1000 + i}" for i in range(janitor.ISSUE_LINES)}, "a line cut is not fired")
+        self.run_pass(s)
+        second = self.issue_lines()
+        self.assertEqual(len(second), 10)
+        self.assertIn(f"#{1000 + janitor.ISSUE_LINES} ", second[0])
+        self.assertNotIn("wait for the next pass", Bridge.received[-1]["body"]["text"])
+
+    def test_a_pass_over_the_line_cap_cuts_issue_lines_and_keeps_every_pr_line(self):
+        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(195)]
+        p, calls = self.run_pass(self.scripted(prs=drafts, issues=[issue(1000 + i, f"t{i}") for i in range(20)]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(Bridge.received), 1, "one message, nothing dropped")
+        text = Bridge.received[-1]["body"]["text"].splitlines()[1:]
+        self.assertEqual(sum("a draft, untouched" in l for l in text), 195, "every PR line is kept")
+        self.assertIn("swept worktree topo-old", "\n".join(text))
+        said = self.issue_lines()
+        self.assertEqual(len(text), janitor.PENDING_MAX)
+        self.assertEqual(len(said), janitor.PENDING_MAX - 195 - 2)
+        self.assertEqual(text[-1], f"- {20 - len(said)} more untriaged issues wait for the next pass.")
+        fired = {k for k in self.state_file()["fired"] if k.startswith("issue:")}
+        self.assertEqual(fired, {f"issue:{1000 + i}" for i in range(len(said))}, "a line cut is not fired")
+        self.assertNotIn("dropped", Bridge.received[-1]["body"]["text"])
+
+    def test_no_issue_line_joins_a_queue_that_waits_on_the_bridge(self):
+        s = self.scripted(prs=[pr(body="- [ ] device: phone")], issues=[issue(40, "A"), issue(41, "B")])
+        Bridge.status = 503
+        self.run_pass(s)
+        queued = lambda: [l for l in self.undelivered() if l.startswith("issue:")]
+        self.assertEqual(len(queued()), 2, "an empty queue takes the pass's issue lines")
+        for _ in range(3):
+            self.backdate()
+            p, _ = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(queued()), 2, "a standing queue gains no issue line, past REPEAT or not")
+        self.assertEqual(sum("Proof box" in l for l in self.undelivered()), 4, "PR lines still join it")
+        self.assertIn("issue line(s) wait for the undelivered reports", p.stderr)
+        Bridge.status = 200
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertEqual(self.undelivered(), [])
+        self.assertEqual(len(self.issue_lines(since=n)), 2, "the queue's own two, delivered; none added on the pass that emptied it")
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertEqual(len(self.issue_lines(since=n)), 2, "the two held since are said once the queue is clear")
+
+    def test_a_malformed_issue_node_is_noted_and_the_pass_still_cleans_up(self):
+        self.run_pass(self.scripted(prs=[], issues=[issue(39, "Closing"), issue(40, "Good")]))
+        self.assertIn("issue:39", self.state_file()["fired"])
+        p, _ = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good"), dict(issue(41), title=None)]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertIn("1 open issue node came back malformed and was skipped: #41.", text)
+        self.assertNotIn("stopped early", text)
+        fired = self.state_file()["fired"]
+        self.assertNotIn("issue:39", fired, "cleanup ran: the closed issue is forgotten")
+        self.assertIn("issue:40", fired)
+        self.assertIn("issues:node", fired)
+        self.run_pass(self.scripted(prs=[], issues=[issue(39, "Back"), issue(40, "Good")]))
+        self.backdate()
+        p, _ = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good"), None]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("skipped: node 2.", Bridge.received[-1]["body"]["text"])
+        self.assertNotIn("stopped early", Bridge.received[-1]["body"]["text"])
+        self.assertIn("issue:39", self.state_file()["fired"], "a node with no number may be #39: its key stays")
+        self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good")]))
+        self.assertNotIn("issues:node", self.state_file()["fired"])
+        self.assertNotIn("issue:39", self.state_file()["fired"])
 
     def test_a_dry_run_prints_the_issue_lines_and_writes_no_state(self):
         p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Dry")]), extra=["--dry-run"])
