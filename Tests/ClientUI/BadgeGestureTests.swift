@@ -82,15 +82,19 @@ final class BadgeGestureTests: XCTestCase {
     /// item's container carries its one child's identifier too, so the type is what names the one
     /// that is the badge.
     ///
-    /// Before it is pressed, the chat is up and has reported, and a simulator's own account alert
-    /// is put away: an alert arriving over a press takes the touch, and the press it was meant as
-    /// never reaches the badge.
+    /// Before it is pressed, the chat has laid itself out and is running — Topo's canvas has made
+    /// its first report into the badge's, which it does from its display link once the chat is on
+    /// the screen — and a simulator's own account alert is put away: an alert arriving over a
+    /// press takes the touch, and the press it was meant as never reaches the badge.
     private func badge(in app: XCUIApplication) -> XCUIElement {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
         ChatReading.dismissAccountAlert()
-        let reported = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH '{'"), object: badge)
-        XCTAssertEqual(XCTWaiter().wait(for: [reported], timeout: 20), .completed, "the chat has not reported")
+        let running = ChatReading.chat(app)?.mascot != nil
+            || XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                ChatReading.chat(app)?.mascot != nil
+            }, object: nil)], timeout: 20) == .completed
+        XCTAssertTrue(running, "the chat never reported Topo: \(String(describing: badge.value))")
         return badge
     }
 

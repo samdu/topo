@@ -40,11 +40,13 @@ final class TopoPlacementTests: XCTestCase {
             let rested: (ChatReading.Chat, ChatReading.Topo) -> Bool = { _, now in
                 now.roost == "glass" && now.standing && ChatReading.near(now.frame, topo.frame)
             }
-            let up = try ride(app, "\(transcript): on the short glass", rising: true, there: risen, back: rested)
+            let placed = { (now: ChatReading.Topo, label: String) in try self.assertOnTheGlass(now, label) }
+            let up = try ride(app, "\(transcript): on the short glass", rising: true, there: risen, back: rested, placed: placed)
             try assertOnTheGlass(up, "\(transcript), keyboard up")
             XCTAssertLessThan(try XCTUnwrap(up.box).minY, try XCTUnwrap(topo.box).minY, "he did not ride the pane up")
             ChatReading.attach(app, "glass-\(transcript)-keyboard", to: self)
-            let down = try ride(app, "\(transcript): back on the resting glass", rising: false, there: rested, back: risen)
+            let down = try ride(app, "\(transcript): back on the resting glass", rising: false, there: rested, back: risen,
+                                placed: placed)
             try assertOnTheGlass(down, "\(transcript), keyboard down")
             app.terminate()
         }
@@ -223,18 +225,21 @@ final class TopoPlacementTests: XCTestCase {
     /// the trail caught nothing informative of — a starved simulator's display link can fire
     /// once or not at all in the keyboard's third of a second — is no verdict either way: the
     /// keyboard is taken back until he stands `back`, that move judged too, and the move made
-    /// again, five times at most. A sample that disagrees fails at once, on any of them.
+    /// again, five moves in all. A sample that disagrees fails at once, on any of them, and where
+    /// he stands is `placed`'s to hold at the end of every move, so a move that leaves him wrong
+    /// fails whether or not its carry was sampled.
     private func ride(_ app: XCUIApplication, _ what: String, rising: Bool,
                       there: (ChatReading.Chat, ChatReading.Topo) -> Bool,
-                      back: (ChatReading.Chat, ChatReading.Topo) -> Bool) throws -> ChatReading.Topo {
+                      back: (ChatReading.Chat, ChatReading.Topo) -> Bool,
+                      placed: (ChatReading.Topo, String) throws -> Void) throws -> ChatReading.Topo {
         let cues = 5
         for cue in 1...cues {
-            let (now, rode) = try move(app, "\(what), cue \(cue)", rising: rising, until: there)
+            let (now, rode) = try move(app, "\(what), cue \(cue)", rising: rising, until: there, placed: placed)
             if rode {
                 print("\(what): rode on cue \(cue)")
                 return now
             }
-            if cue < cues { _ = try move(app, "\(what), back for cue \(cue + 1)", rising: !rising, until: back) }
+            if cue < cues { _ = try move(app, "\(what), back for cue \(cue + 1)", rising: !rising, until: back, placed: placed) }
         }
         let message = "\(what): no frame of the carry sampled in \(cues) cues"
         XCTFail(message)
@@ -246,13 +251,15 @@ final class TopoPlacementTests: XCTestCase {
     /// did not ride fails, and so does his not getting there. A run not complete within five
     /// seconds of his arrival is no verdict.
     private func move(_ app: XCUIApplication, _ what: String, rising: Bool,
-                      until there: (ChatReading.Chat, ChatReading.Topo) -> Bool) throws -> (ChatReading.Topo, Bool) {
+                      until there: (ChatReading.Chat, ChatReading.Topo) -> Bool,
+                      placed: (ChatReading.Topo, String) throws -> Void) throws -> (ChatReading.Topo, Bool) {
         let before = try ChatReading.wait(app, "\(what): at rest before the move") { _, now in
             now.standing && !(now.trail.last?.moving ?? false)
         }.1
         let since = before.trail.last?.t ?? -.infinity
         if rising { ChatReading.raiseKeyboard(app) } else { ChatReading.lowerKeyboard(app) }
         let (_, arrived) = try ChatReading.wait(app, what) { chat, now in there(chat, now) }
+        try placed(arrived, what)
         // The run is complete at the first still frame after the slide, one tick after it ends.
         let now = ChatReading.poll(app, timeout: 5) { chat, now in
             there(chat, now) && Carry.judge(now.trail, since: since, rising: rising) != .incomplete
@@ -343,6 +350,18 @@ final class CarryJudgeTests: XCTestCase {
         }
         let end = Drawn(t: start + 0.1 * Double(moving.count + 1), top: 342, keyboard: 539, moving: false)
         return [still] + samples + [end]
+    }
+
+    /// The keyboard falling back to the foot, him from 342 to 617: the same verdicts the other way.
+    private func fall(_ moving: [(Double, Double)]) -> [Drawn] {
+        rise(moving).map { Drawn(t: $0.t, top: 959 - $0.top, keyboard: 1413 - $0.keyboard, moving: $0.moving) }
+    }
+
+    func testAFallIsJudgedTheSameWay() {
+        guard case .rode = Carry.judge(fall([(0.5, 0.5)]), since: 0, rising: false) else { return XCTFail("a fall ridden is not a ride") }
+        guard case .off = Carry.judge(fall([(0.5, 1)]), since: 0, rising: false) else { return XCTFail("a fall jumped passed") }
+        XCTAssertEqual(Carry.judge(fall([(0.9, 1)]), since: 0, rising: false), .noVerdict)
+        XCTAssertEqual(Carry.judge(fall([(0.5, 0.5)]), since: 0, rising: true), .incomplete, "a fall read as a rise")
     }
 
     func testARideSampledMidwayIsARide() {
