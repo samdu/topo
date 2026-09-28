@@ -116,6 +116,36 @@ struct SurfaceStore: Sendable {
         return kept.revision
     }
 
+    /// A toggle's tap, handled: under one coordinated write, the slot's document, if still at
+    /// `revision`, is kept with toggle `control` flipped, at the same revision, since what
+    /// changed is its state and not its design. Answers the state it was in, or nil when the
+    /// slot is at another revision or holds no such toggle. The state is the stored one, not the
+    /// one the tapped entry drew, so two taps before a reload are on and then off.
+    func flip(slot: String, control: String, revision: Int) throws -> Bool? {
+        var was: Bool?
+        try setting(slot: slot, control: control, revision: revision) { was = $0; return !$0 }
+        return was
+    }
+
+    /// Puts toggle `control` back to `on` if it is still `!on`: a run that failed after its
+    /// `flip`.
+    func unflip(to on: Bool, slot: String, control: String, revision: Int) throws {
+        try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
+    }
+
+    /// `change` is handed the toggle's stored state and answers its new one, or nil to leave it.
+    private func setting(slot: String, control: String, revision: Int, _ change: (Bool) -> Bool?) throws {
+        guard Self.isSlot(slot) else { return }
+        try coordinatedWrite(url(slot: slot)) { data in
+            guard let data else { return nil }
+            var document = WidgetDocument.read(String(decoding: data, as: UTF8.self), from: .store).document
+            guard document.revision == revision, let toggle = document.controls[control], toggle.kind == .toggle,
+                  let on = change(toggle.on) else { return data }
+            document.families = document.families.mapValues { $0.settingOn(on, ofControl: control) }
+            return Data(document.text.utf8)
+        }
+    }
+
     /// The slots the mind has written, by name: every document but the app's own.
     func slots() -> [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []

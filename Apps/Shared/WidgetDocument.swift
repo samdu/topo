@@ -395,6 +395,20 @@ indirect enum WidgetNode: Equatable, Sendable {
     var control: WidgetControl? { if case .control(let control) = self { control } else { nil } }
 
     /// Every node of the tree, this one first, then its children and a control's label in order.
+    /// This tree with toggle `id` drawn `on`, in every family it is in.
+    func settingOn(_ on: Bool, ofControl id: String) -> WidgetNode {
+        switch self {
+        case .stack(var stack):
+            stack.children = stack.children.map { $0.settingOn(on, ofControl: id) }
+            return .stack(stack)
+        case .control(var control) where control.id == id && control.kind == .toggle:
+            control.on = on
+            return .control(control)
+        default:
+            return self
+        }
+    }
+
     /// This tree with every text, a control's label's included, cut to `limit` characters.
     func cuttingTexts(to limit: Int) -> WidgetNode {
         switch self {
@@ -799,7 +813,12 @@ final class WidgetReader {
             return nil
         }
         // The control counts before its label, as a stack before its children, and each word of
-        // the label is a node against the same budget.
+        // the label is a node against the same budget; a control needs room for one word.
+        guard nodes + 1 < WidgetDocument.nodeLimit else {
+            fields.note("id", "is \(id), and a control and its label are past the \(WidgetDocument.nodeLimit) nodes a document holds, so the \(kind.rawValue) was cut")
+            fields.skip(["label", "action", "on"])
+            return nil
+        }
         nodes += 1
         defer { nodes -= 1 }
         var label: [WidgetNode] = []
@@ -824,7 +843,11 @@ final class WidgetReader {
                 }
             }
         }
-        if label.isEmpty { fields.note("label", "draws nothing, so the control is labelled with its id"); label = [.text(.init(text: id))] }
+        if label.isEmpty {
+            fields.note("label", "draws nothing, so the control is labelled with its id")
+            label = [.text(.init(text: id))]
+            nodes += 1
+        }
         let allowing: Set<String> = kind == .link ? ["turn", "open"] : ["turn", "open", "run"]
         var action = WidgetAction.open
         if let raw = fields.take("action") {

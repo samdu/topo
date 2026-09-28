@@ -7,6 +7,12 @@ import WidgetKit
 struct SurfaceEntry: TimelineEntry {
     let date: Date
     let surface: Surface
+
+    /// The drawn document's `relevance`, which orders the Smart Stack.
+    var relevance: TimelineEntryRelevance? {
+        guard case .drawn(_, let context, _, _) = surface, let score = context.relevance else { return nil }
+        return TimelineEntryRelevance(score: Float(score))
+    }
 }
 
 /// What one entry draws. Only the tree for the entry's family is carried, so a lock-screen entry
@@ -62,7 +68,8 @@ struct SurfaceProvider: AppIntentTimelineProvider {
             let isDefault = name == SurfaceStore.defaultSlot
             let context = WidgetContext(slot: name, revision: document.revision, family: family, images: images,
                                         privateText: isDefault && !family.isAccessory,
-                                        failed: store.failed(slot: name, revision: document.revision))
+                                        failed: store.failed(slot: name, revision: document.revision),
+                                        relevance: document.relevance)
             return .drawn(node: node, context: context, tint: document.tint, tap: document.tap)
         }
         return .signedOut

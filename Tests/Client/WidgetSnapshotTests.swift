@@ -107,17 +107,32 @@ final class WidgetSnapshotTests: XCTestCase {
         return Self.pixels(stored)
     }
 
-    /// Every node below the root, as the child indexes that reach it.
+    /// Every node below the root, as the indexes that reach it: a child's, or a control's label
+    /// entry's as `-1 - index`.
     static func paths(_ node: WidgetNode, _ prefix: [Int] = []) -> [[Int]] {
-        guard case .stack(let stack) = node else { return [] }
-        return stack.children.enumerated().flatMap { index, child in [prefix + [index]] + paths(child, prefix + [index]) }
+        switch node {
+        case .stack(let stack):
+            return stack.children.enumerated().flatMap { index, child in [prefix + [index]] + paths(child, prefix + [index]) }
+        case .control(let control):
+            return control.label.indices.map { prefix + [-1 - $0] }
+        default:
+            return []
+        }
     }
 
     static func removing(_ path: [Int], from node: WidgetNode) -> WidgetNode {
-        guard case .stack(var stack) = node, let first = path.first else { return node }
-        if path.count == 1 { stack.children.remove(at: first) }
-        else { stack.children[first] = removing(Array(path.dropFirst()), from: stack.children[first]) }
-        return .stack(stack)
+        guard let first = path.first else { return node }
+        switch node {
+        case .control(var control) where first < 0:
+            control.label.remove(at: -1 - first)
+            return .control(control)
+        case .stack(var stack) where first >= 0:
+            if path.count == 1 { stack.children.remove(at: first) }
+            else { stack.children[first] = removing(Array(path.dropFirst()), from: stack.children[first]) }
+            return .stack(stack)
+        default:
+            return node
+        }
     }
 
     func testEachFamilyDrawsItsReference() throws {

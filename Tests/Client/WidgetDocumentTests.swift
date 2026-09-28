@@ -269,6 +269,19 @@ final class WidgetDocumentTests: XCTestCase {
         XCTAssertTrue(reading.notes.contains { $0.contains("past the 4 images") }, "\(reading.notes)")
     }
 
+    /// A control and its label fit the node budget together, the label drawn from the id counted.
+    func testAControlWithNoLabelAtTheBudgetIsCounted() throws {
+        for texts in [61, 62] {
+            let children = (0..<texts).map { #"{"kind": "text", "text": "\#($0)"}"# }
+                + [#"{"kind": "button", "id": "go", "label": [{"kind": "topo"}], "action": {"kind": "open"}}"#]
+            let reading = read(#"{"kind": "vstack", "children": [\#(children.joined(separator: ","))]}"#)
+            var drawn = 0
+            try tree(reading).walk { _ in drawn += 1 }
+            XCTAssertLessThanOrEqual(drawn, WidgetDocument.nodeLimit, "\(texts) texts and a button draw \(drawn) nodes")
+            XCTAssertEqual(reading.state, .read(nodes: drawn))
+        }
+    }
+
     /// What the app keeps is what was read, and a read of the kept copy is the same document with
     /// no notes.
     func testTheKeptCopyReadsBackTheSame() throws {

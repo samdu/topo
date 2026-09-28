@@ -72,12 +72,27 @@ final class WidgetCues {
                 reloader.reload()
                 continue
             }
-            guard let words = document.turn(slot: cue.slot, control: cue.id, turningOn: cue.turningOn) else {
+            guard document.turn(slot: cue.slot, control: cue.id, turningOn: nil) != nil else {
                 record(String(ToolReply.refused))
                 try? store.removeCue(nonce: cue.nonce)
                 continue
             }
-            guard harness.willSend(words, nonce: cue.nonce) else { continue }
+            // A toggle's new state is the opposite of its stored one, flipped here under the
+            // store's coordination, and only for a cue not already sent, so a drain run twice
+            // flips once.
+            var turningOn: Bool?
+            let sent = harness.said(cue.nonce) || harness.owed.contains { $0.nonce == cue.nonce }
+            if !sent, document.controls[cue.id]?.kind == .toggle {
+                guard let was = try? store.flip(slot: cue.slot, control: cue.id, revision: cue.revision) else {
+                    record("stale")
+                    try? store.removeCue(nonce: cue.nonce)
+                    continue
+                }
+                turningOn = !was
+                reloader.reload()
+            }
+            guard let words = document.turn(slot: cue.slot, control: cue.id, turningOn: turningOn),
+                  harness.willSend(words, nonce: cue.nonce) else { continue }
             record("cued")
             try? store.removeCue(nonce: cue.nonce)
             queued = true
@@ -132,10 +147,22 @@ final class WidgetActions {
         }
         // The kept copy is read through the reader again, which takes a run off the allowlist
         // back to `open`; the allowlist is asked again here all the same.
-        guard let argv = control.argv(turningOn: turningOn), WidgetAction.refusal(argv) == nil else {
+        guard control.argv(turningOn: true).map({ WidgetAction.refusal($0) == nil }) == true,
+              control.argv(turningOn: false).map({ WidgetAction.refusal($0) == nil }) == true else {
             return record(String(ToolReply.refused))
         }
+        // A toggle turns to the opposite of its stored state, flipped as the tap is handled, not
+        // of the state the tapped entry drew; a run that fails puts it back.
+        var was: Bool?
+        if control.kind == .toggle {
+            guard let stored = try? store.flip(slot: slot, control: id, revision: revision) else { return record("stale") }
+            was = stored
+        }
+        guard let argv = control.argv(turningOn: was.map { !$0 }) else { return record(String(ToolReply.refused)) }
         let reply = await ToolService.bounded(argv, table: table, until: .now + bound, bound: bound)
+        if reply.status != 0, let was {
+            try? store.unflip(to: was, slot: slot, control: id, revision: revision)
+        }
         record(String(reply.status))
     }
 }

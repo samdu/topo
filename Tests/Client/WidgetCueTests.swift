@@ -189,6 +189,25 @@ final class WidgetCueTests: XCTestCase {
         XCTAssertEqual(harness.owed.map(\.text), ["widget demo: fan on"])
     }
 
+    /// A turn toggle's words are the opposite of its stored state, flipped as each cue is drained:
+    /// two taps drawn off say on and off, and a cue drained again flips nothing.
+    func testATurnToggleTappedTwiceSaysOnThenOff() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await harness.refresh()
+        let text = #"{"families": {"systemSmall": {"kind": "toggle", "id": "fan", "label": "Fan", "action": {"kind": "turn", "say": "fan"}}}}"#
+        let revision = try store.write(WidgetDocument.read(text).document, slot: "demo")
+        let first = SurfaceStore.Cue(nonce: "A", slot: "demo", id: "fan", revision: revision, turningOn: true, time: Date())
+        try store.appendCue(first)
+        try store.appendCue(SurfaceStore.Cue(nonce: "B", slot: "demo", id: "fan", revision: revision, turningOn: true, time: Date()))
+        await cues(harness).drain()
+        XCTAssertEqual(harness.owed.map(\.text), ["widget demo: fan on", "widget demo: fan off"])
+        try store.appendCue(first)
+        await cues(harness).drain()
+        XCTAssertEqual(harness.owed.count, 2)
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["fan"]?.on, false, "a cue drained twice flipped twice")
+    }
+
     // MARK: -
 
     private func makeDefaults() -> UserDefaults {

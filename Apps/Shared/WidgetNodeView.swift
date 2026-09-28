@@ -18,6 +18,8 @@ struct WidgetContext: Sendable {
     /// The controls whose last tap at this revision failed: each is drawn with the failure mark,
     /// so a run the phone refused or ran out of time on is seen rather than silent.
     var failed: Set<String> = []
+    /// The drawn document's `relevance`, handed to WidgetKit for the Smart Stack's order.
+    var relevance: Double?
 }
 
 /// The one switch from a node to what draws it, the same on the home screen, on the lock screen

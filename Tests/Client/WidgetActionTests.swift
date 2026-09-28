@@ -240,4 +240,42 @@ final class WidgetActionTests: XCTestCase {
         probe.refusing = appHome.refusing
         try await assertRefusesLocks(ToolTable([probe]), fake)
     }
+
+    /// A toggle turns to the opposite of its stored state as each tap is handled, not of the
+    /// state the tapped entry drew: two taps before any reload, both drawn off, are on and off.
+    func testTwoToggleTapsBeforeAReloadAreOnThenOff() async throws {
+        let home = CountingTool("home")
+        home.delay = .milliseconds(200)
+        let revision = try set(["home", "set", "LAMP", "power"], kind: "toggle")
+        let actions = actions([home])
+        async let first: Void = actions.run(slot: "demo", control: "go", revision: revision, turningOn: true)
+        async let second: Void = actions.run(slot: "demo", control: "go", revision: revision, turningOn: true)
+        _ = await (first, second)
+        XCTAssertEqual(home.calls, [["set", "LAMP", "power", "on"], ["set", "LAMP", "power", "off"]])
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, false)
+    }
+
+    /// A toggle whose run failed is drawn as it was, so the next tap asks for the same state.
+    func testAFailedToggleStaysAsItWas() async throws {
+        let home = CountingTool("home")
+        home.reply = ToolReply(status: ToolReply.denied, text: "topo: HomeKit is not allowed\n")
+        let revision = try set(["home", "set", "LAMP", "power"], kind: "toggle")
+        await actions([home]).run(slot: "demo", control: "go", revision: revision, turningOn: true)
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, false)
+        XCTAssertEqual(store.read(slot: "demo")?.document.revision, revision, "a toggle's state moved the slot's revision")
+        home.reply = .ok("done\n")
+        await actions([home]).run(slot: "demo", control: "go", revision: revision, turningOn: true)
+        XCTAssertEqual(home.calls.map(\.last), ["on", "on"])
+        XCTAssertEqual(store.read(slot: "demo")?.document.controls["go"]?.on, true)
+    }
+
+    /// The drawn document's relevance reaches WidgetKit.
+    func testRelevanceReachesTheTimeline() throws {
+        let text = #"{"relevance": 1, "families": {"systemSmall": {"kind": "divider"}}}"#
+        try store.write(WidgetDocument.read(text).document, slot: "demo")
+        try store.write(WidgetDocument.read(#"{"families": {"systemSmall": {"kind": "divider"}}}"#).document, slot: "plain")
+        let timeline = SurfaceProvider.timeline(slot: "demo", family: .systemSmall, now: Date(), store: store)
+        XCTAssertEqual(timeline.entries.first?.relevance?.score, 1)
+        XCTAssertNil(SurfaceProvider.timeline(slot: "plain", family: .systemSmall, now: Date(), store: store).entries.first?.relevance)
+    }
 }
