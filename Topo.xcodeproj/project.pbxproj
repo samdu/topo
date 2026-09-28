@@ -11,6 +11,7 @@
 		0082A334CEDB494269F8E8D9 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		00BBDBC10968078A6D750507 /* ChatReading.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A401F08D7A75D151418BFA /* ChatReading.swift */; };
 		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
+		019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */; };
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		036B6CB589587A4D2BC8FF69 /* WidgetToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37FFE301CDB57C54D6E76A8E /* WidgetToolTests.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
@@ -216,6 +217,7 @@
 		8969FA455CA20EEC9FDE4171 /* GuestMountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E76FB1A1AE01CF01D39D057 /* GuestMountTests.swift */; };
 		898DCC65F9AF024811776C52 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		8B196B5F4F3F24774A508DD3 /* WidgetHostView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D208F0EB92F7CB7D30DC4D7F /* WidgetHostView.swift */; };
+		8BFACA8AF2DA41DC0EAB795B /* GuestZoneTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0282172ECF3161683779EE2 /* GuestZoneTests.swift */; };
 		8BFB64AEF27B709A911F2A4A /* WidgetNodeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B9F578527FAA2BB3C84ACEA5 /* WidgetNodeView.swift */; };
 		8C031FE613E8A808216E049D /* AboutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CC10F86563FE12BC674EFBB /* AboutView.swift */; };
 		8D68671CC764D16A596405E9 /* SurfaceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297C1A9489C88545BA87293C /* SurfaceProvider.swift */; };
@@ -261,6 +263,7 @@
 		A7E08831026CDD7367068B3B /* StatusNoticeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5A13FD41A080E7B11883AD6 /* StatusNoticeTests.swift */; };
 		A80108F5A130859F4C15CA59 /* Speakable.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF519B4570159A5CED371583 /* Speakable.swift */; };
 		A80AAFDB7F75D142FA415516 /* TurnMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 246C14F0F1DA59FAADD12F66 /* TurnMenuTests.swift */; };
+		A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5781A49D54D87338285451F9 /* GuestClockTests.swift */; };
 		A84F4654C8C62B71D6789CF7 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		A861E04568B9169AD4FC67B0 /* MemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD2D48725224C0E601F432D /* MemoryTests.swift */; };
 		A8807AF0D00F928C12D256FA /* Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */; };
@@ -283,6 +286,7 @@
 		B15EA92763AE1DC3A0B80DA0 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		B16823C950B580D616761BB3 /* purple-elephants.wav in Resources */ = {isa = PBXBuildFile; fileRef = D9BDDB4560950858CA3F4314 /* purple-elephants.wav */; };
 		B19EE86A1617D62050D9A220 /* VaultHomeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E624F2EA4D0E819F8FE0215 /* VaultHomeTests.swift */; };
+		B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = 771746CA069BC2B3B60EC32C /* GuestClock.swift */; };
 		B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = 175EA8671E9C84024DDB99D4 /* VoiceInput.swift */; };
 		B630AF198CFBDA95BC965D15 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		B63B6F52C265588ADE976B9B /* TopoProxy in Frameworks */ = {isa = PBXBuildFile; productRef = F62F043A4758AE7705F44F5A /* TopoProxy */; };
@@ -513,6 +517,7 @@
 		522A26D8E0BA7917872C2EAC /* fling.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fling.json; sourceTree = "<group>"; };
 		52E1D82FD07A2B981E7CF050 /* accessoryRectangular-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "accessoryRectangular-dark.png"; sourceTree = "<group>"; };
 		570E29C16DA2E655E25483F5 /* PhoneTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTool.swift; sourceTree = "<group>"; };
+		5781A49D54D87338285451F9 /* GuestClockTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClockTests.swift; sourceTree = "<group>"; };
 		57BE8636EBBD805D555F974A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		588781B8314DD6D53044210F /* accessoryInline.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = accessoryInline.json; sourceTree = "<group>"; };
 		5990B1776EC4BC101510B22E /* TopoAuth */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoAuth; path = Packages/TopoAuth; sourceTree = SOURCE_ROOT; };
@@ -541,6 +546,7 @@
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		766030764883BAAC87FAA3B1 /* ChatNoticesRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNoticesRenderTests.swift; sourceTree = "<group>"; };
 		768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAppDelegate.swift; sourceTree = "<group>"; };
+		771746CA069BC2B3B60EC32C /* GuestClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClock.swift; sourceTree = "<group>"; };
 		7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestPidfdTests.swift; sourceTree = "<group>"; };
 		7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftRowTests.swift; sourceTree = "<group>"; };
 		7A4CB88ED3E53A495B415761 /* NotePush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotePush.swift; sourceTree = "<group>"; };
@@ -616,6 +622,7 @@
 		C6BCB70D375EC37F314FCB10 /* VaultMount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMount.swift; sourceTree = "<group>"; };
 		C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSimdTests.swift; sourceTree = "<group>"; };
 		CA6630E76EBC7CE89C1289F2 /* TopoUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedGuest.swift; sourceTree = "<group>"; };
 		CCC0910114D0F4D264253EC5 /* VaultMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMigration.swift; sourceTree = "<group>"; };
@@ -658,6 +665,7 @@
 		EB40574A451BCD56247E1E50 /* HomeTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeTool.swift; sourceTree = "<group>"; };
 		EC5C273524C6EE9CB5783D8E /* GuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestTests.swift; sourceTree = "<group>"; };
 		EFC4DEFA1DE3ED504C31746F /* LookStage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookStage.swift; sourceTree = "<group>"; };
+		F0282172ECF3161683779EE2 /* GuestZoneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestZoneTests.swift; sourceTree = "<group>"; };
 		F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AcknowledgementsTests.swift; sourceTree = "<group>"; };
 		F176612C66B66529BC2738F9 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		F3D543E552C5A46713503953 /* DebugRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRunTests.swift; sourceTree = "<group>"; };
@@ -789,6 +797,7 @@
 			children = (
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
+				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
 				0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */,
 				460C5C5620D24E4F80E9E415 /* GuestResolver.swift */,
 				1DABB17BCD6602885282D24F /* Info.plist */,
@@ -864,10 +873,12 @@
 				7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */,
 				ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */,
 				9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */,
+				C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */,
 				EC5C273524C6EE9CB5783D8E /* GuestTests.swift */,
 				C451F4F8393DE072AF04D71A /* GuestToolScriptTests.swift */,
 				E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */,
 				055408BFEC002888603D7515 /* GuestVaultMountTests.swift */,
+				F0282172ECF3161683779EE2 /* GuestZoneTests.swift */,
 				A3A3C4700E7D184EF8B26C0A /* RootfsInstallerTests.swift */,
 				3103735350B8C5C4A6CE6F11 /* StreamJSONTests.swift */,
 			);
@@ -1044,6 +1055,7 @@
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
+				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
 				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
@@ -1760,10 +1772,12 @@
 				563AB75B91F1FE43E9036ABE /* GuestPidfdTests.swift in Sources */,
 				525CF069E985418F523B38D8 /* GuestProcessTests.swift in Sources */,
 				E596F876098F2B54AB0DD7C6 /* GuestSessionTests.swift in Sources */,
+				019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */,
 				1BC59D44A4D7713252277BB6 /* GuestTests.swift in Sources */,
 				5640F3967B126752EA8C3B2F /* GuestToolScriptTests.swift in Sources */,
 				07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */,
 				C7B7F92C7AAC8A7B931060AF /* GuestVaultMountTests.swift in Sources */,
+				8BFACA8AF2DA41DC0EAB795B /* GuestZoneTests.swift in Sources */,
 				3F631DF7F5E2E65CCCC2C53F /* RootfsInstallerTests.swift in Sources */,
 				3D995697C1B9630733547F8B /* Scripted.swift in Sources */,
 				422EFA35BED87AC91682AF97 /* StreamJSONTests.swift in Sources */,
@@ -1858,6 +1872,7 @@
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
+				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
 				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
@@ -1950,6 +1965,7 @@
 				39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */,
 				01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */,
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
+				B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */,
 				DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */,
 				CC49A0C7A2E6F3B755DD2ABB /* GuestResolver.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
