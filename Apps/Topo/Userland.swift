@@ -226,6 +226,13 @@ final class Userland {
         }
     }
 
+    /// Brings the guest's `/etc/localtime` to the phone's zone now, after any write already under
+    /// way (`GuestClock.refresh`). The resident's launch waits on it. Needs a booted guest; a write
+    /// that fails leaves the zone as it was.
+    func bringZoneUpToDate() async {
+        await clock.refresh().value
+    }
+
     /// The installer for Claude Code once the downloader has it: now if it does, otherwise after
     /// `prepare` has fetched it. Throws what the fetch failed with. Installing it into a booted
     /// guest is the caller's, off the main thread, since the digest reads the whole binary.

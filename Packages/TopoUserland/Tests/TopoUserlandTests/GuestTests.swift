@@ -61,7 +61,7 @@ final class GuestTests: XCTestCase {
         defer { Task { _ = try? await Guest.shared.run("/bin/rm", ["-f", "/etc/localtime"]) } }
         try await Guest.shared.writeTimeZone(identifier: "Europe/London")
         let refused = ["../../etc/passwd", "/etc/passwd", "America/$(touch /tmp/ran)", "America/..", "America//Denver",
-                       "", "a b", String(repeating: "A", count: 65), "Mars/Olympus", "America"]
+                       "", "a b", String(repeating: "A", count: 65), "Mars/Olympus", "America", "zone.tab", "tzdata.zi"]
         for name in refused {
             do {
                 try await Guest.shared.writeTimeZone(identifier: name)

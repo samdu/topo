@@ -110,12 +110,13 @@ public final class Guest: Sendable {
     /// started after it — BusyBox `date`, musl's `localtime`, and Claude Code's runtime, which takes
     /// the zone's name from where the link points — tells the time in that zone. A link and not a
     /// copy, for that name. Made beside and moved over, through the guest so the fakefs records
-    /// it. A name that is not a zone name (`isZoneName`), or one the guest has no zoneinfo for —
+    /// it. A name that is not a zone name (`isZoneName`), or one the guest has no zoneinfo for — no
+    /// regular file of that name starting with the `TZif` magic (`zone.tab` beside the zones is not one) —
     /// tzdata is one of the guest's packages, and a fakefs imported before it has none — throws
     /// and leaves `/etc/localtime` as it was. Requires a booted kernel.
     public func writeTimeZone(identifier: String) async throws {
         guard Self.isZoneName(identifier) else { throw Failure.timeZone("not a zone name: \(identifier)") }
-        let script = #"z="/usr/share/zoneinfo/$1"; [ -f "$z" ] || { echo "no zoneinfo for $1" >&2; exit 1; }; "#
+        let script = #"z="/usr/share/zoneinfo/$1"; [ -f "$z" ] && [ "$(head -c 4 "$z")" = TZif ] || { echo "no zoneinfo for $1" >&2; exit 1; }; "#
             + #"ln -sfn "$z" /etc/localtime.topo && mv -fT /etc/localtime.topo /etc/localtime"#
         let exit = try await run("/bin/sh", ["-c", script, "zone", identifier])
         if exit.status != 0 { throw Failure.timeZone(exit.errors) }
