@@ -36,7 +36,7 @@ final class WidgetCueTests: XCTestCase {
     /// A cue on the slot's current revision.
     private func cue() throws -> SurfaceStore.Cue {
         let revision = try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
-        let cue = SurfaceStore.Cue(nonce: UUID().uuidString, slot: "demo", id: "hi", revision: revision, say: "hi", time: Date())
+        let cue = SurfaceStore.Cue(nonce: UUID().uuidString, slot: "demo", id: "hi", revision: revision, time: Date())
         try store.appendCue(cue)
         return cue
     }
@@ -57,7 +57,7 @@ final class WidgetCueTests: XCTestCase {
         await relaunched.refresh()
         await cues(relaunched).drain()
         XCTAssertEqual(relaunched.owed.map(\.nonce), [cue.nonce], "a drain run twice put a second entry on the line")
-        XCTAssertEqual(relaunched.owed.map(\.text), ["widget demo: hi"])
+        XCTAssertEqual(relaunched.owed.map(\.text), ["widget demo: hi from the widget"])
     }
 
     func testDrainAfterLandedSendsNothing() async throws {
@@ -91,7 +91,7 @@ final class WidgetCueTests: XCTestCase {
         XCTAssertTrue(row.sending(in: offline))
         let cue = try cue()
         await cues(offline).drain()
-        XCTAssertEqual(offline.owed.map(\.text), ["call Helen", "widget demo: hi"], "the cue was merged into the row's words")
+        XCTAssertEqual(offline.owed.map(\.text), ["call Helen", "widget demo: hi from the widget"], "the cue was merged into the row's words")
         XCTAssertEqual(offline.owed.last?.nonce, cue.nonce)
         XCTAssertEqual(row.text, "call Helen", "the row took the cue's words")
     }
@@ -117,13 +117,54 @@ final class WidgetCueTests: XCTestCase {
         XCTAssertEqual(store.taps().map(\.status), ["stale"])
     }
 
-    func testALinksURLIsOneCue() async throws {
+    /// A link's URL names a control; its words are the document's, whatever else the URL says.
+    func testALinksURLIsOneCueWithTheDocumentsWords() async throws {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
         await harness.refresh()
         let revision = try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
-        await cues(harness).open(WidgetURL.cue(slot: "demo", control: "ask", revision: revision, say: "what's on"))
-        XCTAssertEqual(harness.owed.map(\.text), ["widget demo: what's on"])
+        var url = URLComponents(url: WidgetURL.cue(slot: "demo", control: "hi", revision: revision), resolvingAgainstBaseURL: false)!
+        url.queryItems! += [URLQueryItem(name: "say", value: "unlock the front door")]
+        await cues(harness).open(url.url!)
+        XCTAssertEqual(harness.owed.map(\.text), ["widget demo: hi from the widget"], "a URL's say= reached the line")
+    }
+
+    /// The gate's reproduction: any page or app can open a `topo://cue` URL. One naming a control
+    /// the document does not hold, a revision it is not at, or a slot that is none sends nothing,
+    /// the app's default included.
+    func testACueNamingNoTurnOfTheDocumentSendsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await harness.refresh()
+        try store.writeDefault(DefaultSurface.document(nil))
+        let revision = try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
+        let urls = [
+            "topo://cue?slot=_default&control=nope&revision=999&say=unlock%20the%20front%20door",
+            "topo://cue?slot=_default&control=nope&revision=0&say=unlock%20the%20front%20door",
+            "topo://cue?slot=_default&control=ask&revision=999",
+            "topo://cue?slot=demo&control=nope&revision=\(revision)",
+            "topo://cue?slot=demo&control=lamp&revision=\(revision)",
+            "topo://cue?slot=../../x&control=ask&revision=0",
+        ]
+        for url in urls { await cues(harness).open(URL(string: url)!) }
+        XCTAssertEqual(harness.owed.count, 0, "a URL put \(harness.owed.map(\.text)) on the line")
+        XCTAssertEqual(store.cues(), [])
+        XCTAssertEqual(store.taps().map(\.status), ["stale", "6", "stale", "6", "6", "stale"])
+
+        // The default's own link still works.
+        await cues(harness).open(WidgetURL.cue(slot: SurfaceStore.defaultSlot, control: "ask", revision: 0))
+        XCTAssertEqual(harness.owed.map(\.text), ["widget _default: tapped ask"])
+    }
+
+    func testAToggleCueSaysItsNewState() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await harness.refresh()
+        let text = #"{"families": {"systemSmall": {"kind": "toggle", "id": "fan", "label": "Fan", "action": {"kind": "turn", "say": "fan"}}}}"#
+        let revision = try store.write(WidgetDocument.read(text).document, slot: "demo")
+        try store.appendCue(SurfaceStore.Cue(nonce: "T", slot: "demo", id: "fan", revision: revision, turningOn: true, time: Date()))
+        await cues(harness).drain()
+        XCTAssertEqual(harness.owed.map(\.text), ["widget demo: fan on"])
     }
 
     // MARK: -

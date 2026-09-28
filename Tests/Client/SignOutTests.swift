@@ -58,7 +58,7 @@ final class SignOutTests: XCTestCase {
         try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
         try store.writeDefault(DefaultSurface.document(nil))
         try store.writeImage(Data([0x89]), slot: "demo", name: "photo")
-        try store.appendCue(SurfaceStore.Cue(nonce: "N", slot: "demo", id: "hi", revision: 1, say: nil, time: Date()))
+        try store.appendCue(SurfaceStore.Cue(nonce: "N", slot: "demo", id: "hi", revision: 1, time: Date()))
         var everything = 0
         var kinds = 0
         let reloader = SurfaceReloader(reloadKind: { _ in kinds += 1 }, reloadEverything: { everything += 1 },

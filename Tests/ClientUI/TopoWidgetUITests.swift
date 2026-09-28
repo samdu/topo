@@ -63,7 +63,7 @@ final class TopoWidgetUITests: XCTestCase {
                 parts.scheme = "topo"
                 parts.host = "cue"
                 parts.queryItems = [URLQueryItem(name: "slot", value: "fixture"), URLQueryItem(name: "control", value: id),
-                                    URLQueryItem(name: "revision", value: "0")] + (say.map { [URLQueryItem(name: "say", value: $0)] } ?? [])
+                                    URLQueryItem(name: "revision", value: "0")]
                 return "url: " + parts.url!.absoluteString
             }
             var words = say ?? "tapped \(id)"

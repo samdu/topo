@@ -59,7 +59,7 @@ final class WidgetHostRecorder: WidgetTapHandler {
         // What the intent put in the app group is taken back out, so a later ordinary launch on
         // this simulator does not send it.
         if recorded { try? SurfaceStore.shared()?.removeCue(nonce: cue.nonce) }
-        handed.append("cue: \(cue.words)")
+        handed.append("cue: " + (document.turn(slot: cue.slot, control: cue.id, turningOn: cue.turningOn) ?? "refused \(cue.id)"))
     }
 
     func run(slot: String, control: String, revision: Int, turningOn: Bool?) async {

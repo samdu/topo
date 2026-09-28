@@ -1,4 +1,5 @@
 import Foundation
+import HomeKit
 import TopoTools
 import XCTest
 
@@ -30,6 +31,31 @@ private final class CountingTool: Tool, @unchecked Sendable {
         lock.withLock { _effects += 1 }
         return reply
     }
+}
+
+/// A loaded home with a lock and a scene that unlocks it, recording what it was asked to do.
+@MainActor
+private final class LockedHome: HomeStore {
+    var authorization: HMHomeManagerAuthorizationStatus = []
+    var changed: (@MainActor (HomeChange) -> Void)?
+    var records: [HomeRecord] = []
+    private(set) var writes: [String] = []
+    private(set) var scenesRun: [String] = []
+    func homes() -> [HomeRecord] { records }
+    func read(_ characteristic: String) async throws -> HomeValue? { nil }
+    func write(_ value: HomeValue, to characteristic: String) async throws { writes.append(characteristic) }
+    func run(scene: String) async throws { scenesRun.append(scene) }
+
+    static let house = HomeRecord(id: "H", name: "Home", primary: true, accessories: [
+        HomeAccessory(id: "LOCK-1", name: "Front door", room: "Hall", category: "Door Lock", reachable: true, services: [
+            HomeService(name: "Front door", kind: "Lock Mechanism", characteristics: [
+                HomeCharacteristic(id: "LOCK-T", name: "lock", format: "uint8", readable: true, writable: true, minimum: nil,
+                                   maximum: nil, step: nil, validValues: [0, 1], maxLength: nil, units: nil, value: nil,
+                                   type: HMCharacteristicTypeTargetLockMechanismState),
+            ]),
+        ]),
+    ], scenes: [HomeScene(id: "SC-LEAVE", name: "Leave", writes: [HMCharacteristicTypeTargetLockMechanismState]),
+                HomeScene(id: "SC-LIGHTS", name: "Lights", writes: [HMCharacteristicTypePowerState])])
 }
 
 /// Review Focus 6 and 12: a `run` control's tap goes through `ToolService.bounded` once, answers
@@ -143,14 +169,49 @@ final class WidgetActionTests: XCTestCase {
         XCTAssertEqual(reloads, [SurfaceStore.kind], "a stale tap reloads the widget onto the slot as it is")
     }
 
+    /// The tap judges the allowlist itself, whatever the document it is handed: here one the
+    /// reader would have turned to `open`, handed past it.
     func testARunOffTheAllowlistIsRefusedAtTheTap() async throws {
         let calendar = CountingTool("calendar")
-        // Written straight into the store, past the reader, as an older build or a hand edit could.
         var document = WidgetDocument()
+        document.revision = 4
         document.families[.systemSmall] = .control(WidgetControl(kind: .button, id: "go", label: [], action: .run(["calendar", "add", "x"])))
-        let revision = try store.write(document, slot: "demo")
-        await actions([calendar]).run(slot: "demo", control: "go", revision: revision, turningOn: nil)
-        XCTAssertEqual(calendar.calls, [])
+        let store = store
+        let actions = WidgetActions(table: ToolTable([calendar]), store: { store },
+                                    reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }),
+                                    read: { _, _ in document })
+        await actions.run(slot: "demo", control: "go", revision: 4, turningOn: nil)
+        XCTAssertEqual(calendar.calls, [], "the tap ran a call off the allowlist")
         XCTAssertEqual(store.taps().map(\.status), [String(ToolReply.refused)])
+    }
+
+    /// The widgets' table as the app builds it (`WidgetActions.table`) refuses a lock's target
+    /// named by id, and a scene that unlocks it, at the tap: the reader passes both, since only
+    /// HomeKit's data says what they are.
+    func testTheWidgetsTableRefusesALockAndASceneThatUnlocksOne() async throws {
+        let fake = LockedHome()
+        let access = HomeAccess {
+            Task { @MainActor in
+                fake.authorization = [.determined, .authorized]
+                fake.changed?(.authorization)
+                fake.records = [LockedHome.house]
+                fake.changed?(.homes)
+            }
+            return fake
+        }
+        let home = HomeTool(home: access, authorizer: HomeAuthorizer(home: access), broker: PermissionBroker())
+        let store = store
+        let actions = WidgetActions(table: WidgetActions.table([home]), store: { store },
+                                    reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }))
+        for argv in [["home", "set", "LOCK-1", "LOCK-T", "0"], ["home", "scene", "SC-LEAVE"]] {
+            let revision = try set(argv)
+            await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil)
+            XCTAssertEqual(store.taps().last?.status, String(ToolReply.refused), "\(argv) ran from a widget")
+        }
+        XCTAssertEqual(fake.writes, [])
+        XCTAssertEqual(fake.scenesRun, [])
+        let lights = try set(["home", "scene", "SC-LIGHTS"])
+        await actions.run(slot: "demo", control: "go", revision: lights, turningOn: nil)
+        XCTAssertEqual(fake.scenesRun, ["SC-LIGHTS"], "a scene that sets no lock is refused too")
     }
 }

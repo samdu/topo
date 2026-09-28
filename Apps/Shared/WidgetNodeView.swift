@@ -176,20 +176,20 @@ struct WidgetNodeView: View {
             switch (control.kind, control.action) {
             case (_, .open):
                 Link(destination: WidgetURL.open) { label(control) }
-            case (.link, .turn(let say)):
-                Link(destination: WidgetURL.cue(slot: context.slot, control: control.id, revision: context.revision, say: say)) {
+            case (.link, .turn):
+                Link(destination: WidgetURL.cue(slot: context.slot, control: control.id, revision: context.revision)) {
                     label(control)
                 }
-            case (.toggle, .turn(let say)):
+            case (.toggle, .turn):
                 Toggle(isOn: control.on, intent: WidgetCueIntent(slot: context.slot, control: control.id, revision: context.revision,
-                                                                say: say, turningOn: !control.on)) { label(control) }
+                                                                turningOn: !control.on)) { label(control) }
                     .toggleStyle(WidgetSwitch())
             case (.toggle, .run):
                 Toggle(isOn: control.on, intent: WidgetRunIntent(slot: context.slot, control: control.id, revision: context.revision,
                                                                 turningOn: !control.on)) { label(control) }
                     .toggleStyle(WidgetSwitch())
-            case (_, .turn(let say)):
-                Button(intent: WidgetCueIntent(slot: context.slot, control: control.id, revision: context.revision, say: say)) {
+            case (_, .turn):
+                Button(intent: WidgetCueIntent(slot: context.slot, control: control.id, revision: context.revision)) {
                     label(control)
                 }
             case (_, .run):

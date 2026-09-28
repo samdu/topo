@@ -47,7 +47,8 @@ final class WidgetToolTests: XCTestCase {
                 ]),
             ]),
         ],
-        scenes: [HomeScene(id: "SC-1111", name: "Good night")])
+        scenes: [HomeScene(id: "SC-1111", name: "Good night"),
+                 HomeScene(id: "SC-LEAVE", name: "Leave", writes: [HMCharacteristicTypeTargetLockMechanismState])])
 
     private var folder: URL!
     private var home: URL!
@@ -152,6 +153,22 @@ final class WidgetToolTests: XCTestCase {
         XCTAssertEqual(made, 0, "the judge made HomeKit's store, which is what asks the person")
         let listed = await tool.run([])
         XCTAssertTrue(listed.text.contains("unchecked: fan"), listed.text)
+    }
+
+    /// A scene that sets a lock's target is refused at `set` against a loaded home, and kept as
+    /// unchecked with none loaded, for the tap to judge.
+    func testASceneThatUnlocksIsRefusedAtWrite() async throws {
+        let loaded = try await tool(loaded: true)
+        let reply = await loaded.run(["set", "demo", Self.document(Self.button("leave", ["home", "scene", "SC-LEAVE"]))])
+        XCTAssertEqual(reply.status, ToolReply.refused, reply.text)
+        XCTAssertEqual(action("leave"), .open)
+        let night = await loaded.run(["set", "demo", Self.document(Self.button("night", ["home", "scene", "SC-1111"]))])
+        XCTAssertEqual(night.status, ToolReply.ok, night.text)
+
+        let unloaded = try await tool(loaded: false)
+        let later = await unloaded.run(["set", "demo", Self.document(Self.button("leave", ["home", "scene", "SC-LEAVE"]))])
+        XCTAssertEqual(later.status, ToolReply.ok, later.text)
+        XCTAssertTrue(later.text.contains("unchecked: leave"), later.text)
     }
 
     func testToggleJudgedBothWays() async throws {

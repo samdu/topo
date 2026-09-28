@@ -138,6 +138,9 @@ struct HomeAccessory: Sendable, Equatable {
 struct HomeScene: Sendable, Equatable {
     var id: String
     var name: String
+    /// The HomeKit types of the characteristics running it writes, so a scene that unlocks a door
+    /// can be refused where setting that characteristic is (`HomeTool.refusing`).
+    var writes: [String] = []
 }
 
 struct HomeRecord: Sendable, Equatable {
@@ -366,6 +369,7 @@ struct HomeTool: Tool {
                 return .ok(PhoneTool.lines(lines, none: "no scenes"))
             case let .scene(id):
                 let scene = try Self.one(id, among: homes.flatMap(\.scenes), id: \.id, name: \.name, kind: "scene")
+                try Self.admit(scene, refusing: refusing)
                 try await home.run(scene: scene.id)
                 return .ok("ran: \(PhoneTool.line([scene.id, scene.name]))\n")
             }
@@ -476,6 +480,13 @@ struct HomeTool: Tool {
                           status: ToolReply.refused)
     }
 
+    /// Refuses a scene that writes a characteristic this tool does not set.
+    static func admit(_ scene: HomeScene, refusing: Set<String>) throws {
+        guard !refusing.isDisjoint(with: scene.writes) else { return }
+        throw ToolFailure("the scene \(scene.name) sets a lock or a door, which is not a widget's to run; a lock or a door goes through a turn",
+                          status: ToolReply.refused)
+    }
+
     /// A `set` or `scene` call judged against homes already loaded, the way the call itself would
     /// judge it, with nothing written and nothing run.
     static func judge(_ call: Call, in homes: [HomeRecord], refusing: Set<String>) throws {
@@ -486,7 +497,7 @@ struct HomeTool: Tool {
             try admit(characteristic, of: accessory, refusing: refusing)
             _ = try judge(text, for: characteristic, of: accessory)
         case let .scene(id):
-            _ = try one(id, among: homes.flatMap(\.scenes), id: \.id, name: \.name, kind: "scene")
+            try admit(one(id, among: homes.flatMap(\.scenes), id: \.id, name: \.name, kind: "scene"), refusing: refusing)
         case .list, .get, .scenes:
             break
         }
@@ -600,7 +611,10 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
         manager.homes.map { home in
             HomeRecord(id: home.uniqueIdentifier.uuidString, name: home.name, primary: home.isPrimary,
                        accessories: home.accessories.map(Self.record),
-                       scenes: home.actionSets.map { HomeScene(id: $0.uniqueIdentifier.uuidString, name: $0.name) })
+                       scenes: home.actionSets.map { set in
+                           HomeScene(id: set.uniqueIdentifier.uuidString, name: set.name,
+                                     writes: set.actions.compactMap { ($0 as? HMCharacteristicWriteAction<NSCopying>)?.characteristic.characteristicType })
+                       })
         }
     }
 

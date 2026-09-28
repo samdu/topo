@@ -57,6 +57,20 @@ struct WidgetDocument: Equatable, Sendable {
         return found
     }
 
+    /// The words of the turn a tap on control `id` of `slot` sends, from this document: its
+    /// `turn` action's `say`, or `tapped <id>`, a toggle's new state after it. `tap` is the whole
+    /// widget's own tap when no control has that id. Nil when the document has no turn by that id.
+    func turn(slot: String, control id: String, turningOn: Bool?) -> String? {
+        if let control = controls[id] {
+            guard case .turn(let say) = control.action else { return nil }
+            var words = say ?? "tapped \(id)"
+            if control.kind == .toggle { words += (turningOn ?? !control.on) ? " on" : " off" }
+            return "widget \(slot): \(words)"
+        }
+        guard id == "tap", case .turn(let say)? = tap else { return nil }
+        return "widget \(slot): " + (say ?? "tapped the widget")
+    }
+
     // MARK: Budgets
 
     static let byteLimit = 16 * 1024

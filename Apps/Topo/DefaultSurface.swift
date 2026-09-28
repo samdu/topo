@@ -39,6 +39,12 @@ final class DefaultSurface {
         write(reply)
     }
 
+    /// A login ended and the surfaces with it: the next sign-in writes the default afresh.
+    func forget() {
+        written = nil
+        wroteEmpty = false
+    }
+
     private func write(_ reply: Turn?) {
         guard let store = store() else { return }
         do {

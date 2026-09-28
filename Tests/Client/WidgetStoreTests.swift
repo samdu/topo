@@ -58,15 +58,38 @@ final class WidgetStoreTests: XCTestCase {
 
     func testACueComesOffByItsNonce() throws {
         let store = store()
-        let first = SurfaceStore.Cue(nonce: "n1", slot: "s", id: "a", revision: 1, say: nil, time: Date(timeIntervalSince1970: 1))
-        let second = SurfaceStore.Cue(nonce: "n2", slot: "s", id: "b", revision: 1, say: "hello", time: Date(timeIntervalSince1970: 2))
+        let first = SurfaceStore.Cue(nonce: "n1", slot: "s", id: "a", revision: 1, time: Date(timeIntervalSince1970: 1))
+        let second = SurfaceStore.Cue(nonce: "n2", slot: "s", id: "b", revision: 1, time: Date(timeIntervalSince1970: 2))
         try store.appendCue(first)
         try store.appendCue(second)
         XCTAssertEqual(store.cues(), [first, second])
         try store.removeCue(nonce: "n1")
         XCTAssertEqual(store.cues(), [second])
-        XCTAssertEqual(first.words, "widget s: tapped a")
-        XCTAssertEqual(second.words, "widget s: hello")
+    }
+
+    /// The gate's reproduction: a slot named for one of the store's own files. The store's files
+    /// all start `_`, which no slot can, so a slot called `revisions`, `pending` or `taps` is a
+    /// slot and the counters run on.
+    func testASlotNamedForTheStoresFilesIsOnlyASlot() throws {
+        let store = store()
+        XCTAssertEqual(try store.write(document("a"), slot: "demo"), 1)
+        XCTAssertEqual(try store.write(document("b"), slot: "demo"), 2)
+        for name in ["revisions", "pending", "taps"] { try store.write(document(name), slot: name) }
+        XCTAssertEqual(try store.write(document("c"), slot: "demo"), 3, "a slot's write restarted the counters")
+        XCTAssertEqual(store.revision(slot: "demo"), 3)
+        XCTAssertEqual(store.slots(), ["demo", "pending", "revisions", "taps"])
+        XCTAssertThrowsError(try store.write(document("x"), slot: "_revisions"))
+        XCTAssertThrowsError(try store.write(document("x"), slot: "../escape"))
+        XCTAssertNil(store.read(slot: "../escape"))
+    }
+
+    /// A counter file that cannot be read fails the write rather than starting the counters again.
+    func testACounterThatCannotBeReadFailsClosed() throws {
+        let store = store()
+        XCTAssertEqual(try store.write(document("a"), slot: "demo"), 1)
+        try Data("not json".utf8).write(to: store.revisionsURL)
+        XCTAssertThrowsError(try store.write(document("b"), slot: "demo"), "a counter file it could not read was taken for none")
+        XCTAssertEqual(store.read(slot: "demo")?.document.revision, 1, "the document moved on without a revision")
     }
 
     func testEverythingGoesTogether() throws {
@@ -74,7 +97,7 @@ final class WidgetStoreTests: XCTestCase {
         try store.write(document("x"), slot: "a")
         try store.writeDefault(document("d"))
         try store.writeImage(Data([1, 2, 3]), slot: "a", name: "pic")
-        try store.appendCue(.init(nonce: "n", slot: "a", id: "b", revision: 1, say: nil, time: Date()))
+        try store.appendCue(.init(nonce: "n", slot: "a", id: "b", revision: 1, time: Date()))
         try store.removeEverything()
         XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder.path))
         XCTAssertEqual(store.cues(), [])

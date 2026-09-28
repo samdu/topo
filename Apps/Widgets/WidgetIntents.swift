@@ -39,24 +39,20 @@ struct WidgetCueIntent: AppIntent {
     @Parameter(title: "Slot") var slot: String
     @Parameter(title: "Control") var control: String
     @Parameter(title: "Revision") var revision: Int
-    @Parameter(title: "Say") var say: String?
     @Parameter(title: "Turning on") var turningOn: Bool?
 
     init() {}
 
-    init(slot: String, control: String, revision: Int, say: String?, turningOn: Bool? = nil) {
+    init(slot: String, control: String, revision: Int, turningOn: Bool? = nil) {
         self.slot = slot
         self.control = control
         self.revision = revision
-        self.say = say
         self.turningOn = turningOn
     }
 
-    /// The cue this tap records.
+    /// The cue this tap records: which control, at which revision, and never words.
     func cue(nonce: String = UUID().uuidString, at time: Date = Date()) -> SurfaceStore.Cue {
-        var words = say
-        if let turningOn { words = (say ?? "tapped \(control)") + (turningOn ? " on" : " off") }
-        return SurfaceStore.Cue(nonce: nonce, slot: slot, id: control, revision: revision, say: words, time: time)
+        SurfaceStore.Cue(nonce: nonce, slot: slot, id: control, revision: revision, turningOn: turningOn, time: time)
     }
 
     @MainActor
@@ -104,24 +100,24 @@ enum WidgetURL {
     static let scheme = "topo"
     static let open = URL(string: "topo://open")!
 
-    static func cue(slot: String, control: String, revision: Int, say: String?) -> URL {
+    static func cue(slot: String, control: String, revision: Int) -> URL {
         var parts = URLComponents()
         parts.scheme = scheme
         parts.host = "cue"
         parts.queryItems = [URLQueryItem(name: "slot", value: slot), URLQueryItem(name: "control", value: control),
                             URLQueryItem(name: "revision", value: String(revision))]
-            + (say.map { [URLQueryItem(name: "say", value: $0)] } ?? [])
         return parts.url!
     }
 
-    /// The cue a `topo://cue` URL carries, under a nonce minted as it is read.
+    /// The cue a `topo://cue` URL carries, under a nonce minted as it is read. Anything else the
+    /// URL carries is ignored: the words are the document's.
     static func cue(from url: URL, nonce: String = UUID().uuidString, at time: Date = Date()) -> SurfaceStore.Cue? {
         guard url.scheme == scheme, url.host == "cue",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems else { return nil }
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         guard let slot = value("slot"), let control = value("control"),
               let revision = value("revision").flatMap(Int.init) else { return nil }
-        return SurfaceStore.Cue(nonce: nonce, slot: slot, id: control, revision: revision, say: value("say"), time: time)
+        return SurfaceStore.Cue(nonce: nonce, slot: slot, id: control, revision: revision, time: time)
     }
 }
 

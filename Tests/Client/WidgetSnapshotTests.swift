@@ -249,4 +249,20 @@ final class DefaultSurfaceTests: XCTestCase {
         XCTAssertFalse(words.contains("Tonight."), "\(words)")
         XCTAssertEqual(reloads, 2, "one write on launch and one for the newest reply")
     }
+
+    /// Signed out and in again: the sign-out took the default with it, and the sign-in writes it
+    /// afresh rather than leaving every widget saying "Sign in on your phone".
+    func testSigningBackInWritesTheDefaultAgain() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("default-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SurfaceStore(folder: folder)
+        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
+        let surface = DefaultSurface(store: { store }, reloader: reloader)
+        surface.launched(latest: nil)
+        reloader.forget(store)
+        surface.forget()
+        XCTAssertNil(store.read(slot: SurfaceStore.defaultSlot))
+        surface.launched(latest: nil)
+        XCTAssertNotNil(store.read(slot: SurfaceStore.defaultSlot), "signed back in, and the widgets still say to sign in")
+    }
 }

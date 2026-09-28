@@ -29,7 +29,7 @@ final class WidgetTaps: WidgetTapHandler {
 /// only once its nonce is on the line or in the log, and `Harness.willSend(_:nonce:)` does
 /// nothing for a nonce already there, so a drain run twice (before a removal, after a crash) is
 /// one turn. It waits for the harness's first read of the log, since before it the harness
-/// cannot know what the log holds.
+/// cannot know what the log holds. A cue carries no words: they are the slot's document's.
 @MainActor
 final class WidgetCues {
     let harness: Harness
@@ -55,18 +55,26 @@ final class WidgetCues {
         guard harness.hasRead, let store = store() else { return }
         var queued = false
         for cue in store.cues() {
-            // A tap on an old timeline is not what the slot says now. The app's own default is
-            // rewritten after every reply, and its one control means the same at every revision.
-            if cue.slot != SurfaceStore.defaultSlot, cue.revision != store.revision(slot: cue.slot) {
+            func record(_ status: String) {
                 try? store.appendTap(SurfaceStore.Tap(time: cue.time, slot: cue.slot, id: cue.id, revision: cue.revision,
-                                                     kind: "turn", status: "stale"))
+                                                     kind: "turn", status: status))
+            }
+            // The words are the document's at the revision the tap was drawn from, the app's
+            // default included: a tap on an old timeline, or on a control the document does not
+            // hold as a turn, sends nothing.
+            guard let document = store.read(slot: cue.slot)?.document, document.revision == cue.revision else {
+                record("stale")
                 try? store.removeCue(nonce: cue.nonce)
                 reloader.reload()
                 continue
             }
-            guard harness.willSend(cue.words, nonce: cue.nonce) else { continue }
-            try? store.appendTap(SurfaceStore.Tap(time: cue.time, slot: cue.slot, id: cue.id, revision: cue.revision,
-                                                 kind: "turn", status: "cued"))
+            guard let words = document.turn(slot: cue.slot, control: cue.id, turningOn: cue.turningOn) else {
+                record(String(ToolReply.refused))
+                try? store.removeCue(nonce: cue.nonce)
+                continue
+            }
+            guard harness.willSend(words, nonce: cue.nonce) else { continue }
+            record("cued")
             try? store.removeCue(nonce: cue.nonce)
             queued = true
         }
@@ -84,13 +92,28 @@ final class WidgetActions {
     let store: @MainActor () -> SurfaceStore?
     let reloader: SurfaceReloader
     let bound: Duration
+    /// The slot's document as the tap finds it: the store's, read through the reader. A suite
+    /// hands one the reader would not keep, to hold the tap's own allowlist check.
+    let read: @MainActor (SurfaceStore, String) -> WidgetDocument?
 
     init(table: ToolTable, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
-         reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound) {
+         reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound,
+         read: @escaping @MainActor (SurfaceStore, String) -> WidgetDocument? = { $0.read(slot: $1)?.document }) {
         self.table = table
         self.store = store
         self.reloader = reloader
         self.bound = bound
+        self.read = read
+    }
+
+    /// The widgets' tool table: the guest's tools, with `home` refusing a lock's and a door's
+    /// target, and any scene that sets one (`HomeTool.widgetRefused`).
+    static func table(_ tools: [any Tool]) -> ToolTable {
+        ToolTable(tools.map { tool in
+            guard var home = tool as? HomeTool else { return tool }
+            home.refusing = HomeTool.widgetRefused
+            return home
+        })
     }
 
     func run(slot: String, control id: String, revision: Int, turningOn: Bool?) async {
@@ -99,7 +122,7 @@ final class WidgetActions {
             try? store.appendTap(SurfaceStore.Tap(time: Date(), slot: slot, id: id, revision: revision, kind: "run", status: status))
             reloader.reload()
         }
-        guard let document = store.read(slot: slot)?.document, document.revision == revision,
+        guard let document = read(store, slot), document.revision == revision,
               let control = document.controls[id] else {
             return record("stale")
         }

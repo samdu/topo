@@ -36,12 +36,17 @@ struct SurfaceStore: Sendable {
             .map { SurfaceStore(folder: $0.appendingPathComponent("Surfaces", isDirectory: true)) }
     }
 
+    /// A slot's document. A slot is `_default` or a name `WidgetDocument.isSlot` takes, and the
+    /// store's own files all start `_`, which no slot the mind names can: a slot is never one of
+    /// them, and never a path out of the folder.
     func url(slot: String) -> URL { folder.appendingPathComponent("\(slot).json") }
+
+    static func isSlot(_ slot: String) -> Bool { slot == defaultSlot || WidgetDocument.isSlot(slot) }
     func images(slot: String) -> URL { folder.appendingPathComponent(slot, isDirectory: true) }
     func image(slot: String, name: String) -> URL { images(slot: slot).appendingPathComponent("\(name).png") }
-    var pendingURL: URL { folder.appendingPathComponent("pending.jsonl") }
-    var tapsURL: URL { folder.appendingPathComponent("taps.jsonl") }
-    var revisionsURL: URL { folder.appendingPathComponent("revisions.json") }
+    var pendingURL: URL { folder.appendingPathComponent("_pending.jsonl") }
+    var tapsURL: URL { folder.appendingPathComponent("_taps.jsonl") }
+    var revisionsURL: URL { folder.appendingPathComponent("_revisions.json") }
 
     // MARK: Coordination
 
@@ -63,7 +68,8 @@ struct SurfaceStore: Sendable {
         var thrown: Error?
         NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &error) { url in
             do {
-                let now = try? Data(contentsOf: url)
+                // A file that is there and cannot be read fails the write rather than reading as none.
+                let now = FileManager.default.fileExists(atPath: url.path) ? try Data(contentsOf: url) : nil
                 if let next = try change(now) {
                     try next.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                 } else if now != nil {
@@ -83,13 +89,14 @@ struct SurfaceStore: Sendable {
     /// The slot's kept document, read under a coordinated read. Nil is no file; a file the
     /// reader cannot take is a reading that says why.
     func read(slot: String) -> WidgetDocument.Reading? {
-        guard let data = coordinatedRead(url(slot: slot)) else { return nil }
+        guard Self.isSlot(slot), let data = coordinatedRead(url(slot: slot)) else { return nil }
         return WidgetDocument.read(String(decoding: data, as: UTF8.self), from: .store)
     }
 
     /// Keeps `document` as the slot's, under the next revision, and answers that revision.
     @discardableResult
     func write(_ document: WidgetDocument, slot: String) throws -> Int {
+        guard WidgetDocument.isSlot(slot) else { throw CocoaError(.fileWriteInvalidFileName) }
         var kept = document
         kept.revision = try nextRevision(slot: slot)
         try coordinatedWrite(url(slot: slot)) { _ in Data(kept.text.utf8) }
@@ -104,9 +111,9 @@ struct SurfaceStore: Sendable {
     /// The slots the mind has written, by name: every document but the app's own.
     func slots() -> [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        return names.filter { $0.hasSuffix(".json") && $0 != "revisions.json" }
+        return names.filter { $0.hasSuffix(".json") }
             .map { String($0.dropLast(5)) }
-            .filter { $0 != Self.defaultSlot }
+            .filter(WidgetDocument.isSlot)
             .sorted()
     }
 
@@ -156,7 +163,9 @@ struct SurfaceStore: Sendable {
     private func nextRevision(slot: String) throws -> Int {
         var next = 0
         try coordinatedWrite(revisionsURL) { data in
-            var revisions = data.flatMap { try? JSONDecoder().decode([String: Int].self, from: $0) } ?? [:]
+            // A counter file that cannot be read is an error, never a fresh start: a counter
+            // begun again issues a revision an old timeline already carries.
+            var revisions = try data.map { try JSONDecoder().decode([String: Int].self, from: $0) } ?? [:]
             next = (revisions[slot] ?? 0) + 1
             revisions[slot] = next
             return try JSONEncoder().encode(revisions)
@@ -182,19 +191,18 @@ struct SurfaceStore: Sendable {
 
     // MARK: Cues
 
-    /// A `turn` tap, recorded by the cue intent under a nonce minted there.
+    /// A `turn` tap, recorded by the cue intent under a nonce minted there. It names the control
+    /// and carries no words: the turn's words are the slot's document's at that revision
+    /// (`WidgetDocument.turn`), so nothing that can open a `topo://` URL can put words of its own
+    /// in the person's name.
     struct Cue: Codable, Equatable, Sendable {
         var nonce: String
         var slot: String
         var id: String
         var revision: Int
-        var say: String?
+        /// A toggle's new state; nil for a button or a link.
+        var turningOn: Bool?
         var time: Date
-
-        /// The words the turn carries.
-        var words: String {
-            "widget \(slot): " + (say ?? "tapped \(id)")
-        }
     }
 
     func appendCue(_ cue: Cue) throws {

@@ -75,9 +75,7 @@ struct TopoApp: App {
         ]
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
-        var widgetHome = homeTool
-        widgetHome.refusing = HomeTool.widgetRefused
-        let widgetTable = ToolTable(GuestResident.shared.toolTable.map { $0 is HomeTool ? widgetHome : $0 })
+        let widgetTable = WidgetActions.table(GuestResident.shared.toolTable)
         // The app's own widget follows the newest reply the log brings.
         let defaultSurface = DefaultSurface()
         _defaultSurface = State(initialValue: defaultSurface)
@@ -176,7 +174,10 @@ struct TopoApp: App {
                 // ends here too, and a signed-out phone keeps no surface. Only a login ending:
                 // a launch that finds no token (the keychain unreadable before the first unlock
                 // included) takes nothing away.
-                if was == .signedIn, phase != .signedIn { SurfaceReloader.shared.forget(SurfaceStore.shared()) }
+                if was == .signedIn, phase != .signedIn {
+                    SurfaceReloader.shared.forget(SurfaceStore.shared())
+                    defaultSurface.forget()
+                }
                 guard phase == .signedIn else { return }
                 defaultSurface.launched(latest: harness.turns.last { $0.role == .assistant })
                 Task { try? await NotePush.ensureSubscription() }
