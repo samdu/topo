@@ -11,6 +11,7 @@
 		0082A334CEDB494269F8E8D9 /* Tuning.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2692590D1320E8D8078ECB31 /* Tuning.swift */; };
 		00BBDBC10968078A6D750507 /* ChatReading.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6A401F08D7A75D151418BFA /* ChatReading.swift */; };
 		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
+		019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */; };
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */; };
@@ -499,6 +500,7 @@
 		C6BCB70D375EC37F314FCB10 /* VaultMount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMount.swift; sourceTree = "<group>"; };
 		C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
 		C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
+		C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSimdTests.swift; sourceTree = "<group>"; };
 		CA6630E76EBC7CE89C1289F2 /* TopoUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedGuest.swift; sourceTree = "<group>"; };
 		CCC0910114D0F4D264253EC5 /* VaultMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMigration.swift; sourceTree = "<group>"; };
@@ -686,6 +688,7 @@
 				7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */,
 				ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */,
 				9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */,
+				C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */,
 				EC5C273524C6EE9CB5783D8E /* GuestTests.swift */,
 				C451F4F8393DE072AF04D71A /* GuestToolScriptTests.swift */,
 				E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */,
@@ -1502,6 +1505,7 @@
 				563AB75B91F1FE43E9036ABE /* GuestPidfdTests.swift in Sources */,
 				525CF069E985418F523B38D8 /* GuestProcessTests.swift in Sources */,
 				E596F876098F2B54AB0DD7C6 /* GuestSessionTests.swift in Sources */,
+				019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */,
 				1BC59D44A4D7713252277BB6 /* GuestTests.swift in Sources */,
 				5640F3967B126752EA8C3B2F /* GuestToolScriptTests.swift in Sources */,
 				07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */,
