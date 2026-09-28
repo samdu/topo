@@ -3,8 +3,10 @@ import WidgetKit
 
 /// Every reload of the widgets' timelines goes through here, so a burst of writes — the mind
 /// setting a slot, then its image, then another slot — is one reload and not a storm WidgetKit
-/// budgets against the app: a write asks for a reload, and the reload happens once, `window`
-/// after the first ask, for every ask made in between.
+/// budgets against the app. It coalesces requests, at most one reload per window, and the first
+/// request starts the window: the reload happens `window` after the first ask, for every ask
+/// made in between, and a later ask does not push it back, which bounds how long a widget waits
+/// while the mind is still writing.
 @MainActor
 final class SurfaceReloader {
     static let window: Duration = .seconds(2)
