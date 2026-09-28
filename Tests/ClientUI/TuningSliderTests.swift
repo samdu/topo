@@ -88,10 +88,12 @@ final class TuningSliderTests: XCTestCase {
         let chosen = "label CONTAINS 'On the glass' OR value CONTAINS 'On the glass'"
         glass.tap()
         // A tap reaching a starved app can be lost, leaving the menu up, open in full, with nothing
-        // chosen. It is made again only while the menu is still up to be hit and the picker still
-        // shows no glass, twice more at most; what the chat wears is still held below.
+        // chosen. This is a retry, not a wait for readiness: the tap is made again only while the
+        // menu is still up to be hit and the picker still shows no glass, twice more at most, and
+        // each one is logged; what the chat wears is still held below.
         for _ in 0..<2 where !becomes(glass, "exists == false", timeout: 3)
             && glass.isHittable && !becomes(picker, chosen, timeout: 0.5) {
+            print("retapped On the glass: menu still up")
             glass.tap()
         }
         // The menu is gone and the choice is the picker's before the sheet is closed: a tap on
