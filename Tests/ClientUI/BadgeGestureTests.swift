@@ -82,19 +82,21 @@ final class BadgeGestureTests: XCTestCase {
     /// item's container carries its one child's identifier too, so the type is what names the one
     /// that is the badge.
     ///
-    /// Before it is pressed, the chat has laid itself out and is running — Topo's canvas has made
-    /// its first report into the badge's, which it does from its display link once the chat is on
-    /// the screen — and a simulator's own account alert is put away: an alert arriving over a
-    /// press takes the touch, and the press it was meant as never reaches the badge.
+    /// Before it is pressed, the chat is running: Topo stands where his roam put him, which it
+    /// does only after the geometry has held still for a settle timed on his clock, and that clock
+    /// moves only on the canvas's display-link ticks. Then, at the moment of the press, a
+    /// simulator's own account alert is put away and the badge can be hit: an alert arriving over
+    /// a press takes the touch, and the press it was meant as never reaches the badge.
     private func badge(in app: XCUIApplication) -> XCUIElement {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
-        ChatReading.dismissAccountAlert()
-        let running = ChatReading.chat(app)?.mascot != nil
-            || XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                ChatReading.chat(app)?.mascot != nil
-            }, object: nil)], timeout: 20) == .completed
-        XCTAssertTrue(running, "the chat never reported Topo: \(String(describing: badge.value))")
+        let standing = { ChatReading.chat(app)?.mascot?.standing ?? false }
+        let running = standing() || XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            standing()
+        }, object: nil)], timeout: 20) == .completed
+        XCTAssertTrue(running, "Topo never stood anywhere: \(String(describing: badge.value))")
+        ChatReading.dismissAccountAlert(timeout: 0.5)
+        XCTAssertTrue(badge.isHittable, "the badge cannot be hit")
         return badge
     }
 
@@ -106,6 +108,8 @@ final class BadgeGestureTests: XCTestCase {
         // microphone for.
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
         app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
+        // A transcript read, so Topo is placed and the readiness `badge(in:)` waits for comes.
+        app.launchEnvironment["TOPO_DEBUG_TRANSCRIPT"] = "empty"
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
         return app

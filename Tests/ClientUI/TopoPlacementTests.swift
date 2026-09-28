@@ -247,7 +247,8 @@ final class TopoPlacementTests: XCTestCase {
     }
 
     /// One move of the keyboard: waits for him to stand where it leaves him, then for the run it
-    /// drew to be complete, and judges the run. True for a ride, false for no verdict; a run he
+    /// drew to be complete, and judges the run; where he stands is held on his arrival and again
+    /// on the report judged. True for a ride, false for no verdict; a run he
     /// did not ride fails, and so does his not getting there. A run not complete within five
     /// seconds of his arrival is no verdict.
     private func move(_ app: XCUIApplication, _ what: String, rising: Bool,
@@ -261,9 +262,13 @@ final class TopoPlacementTests: XCTestCase {
         let (_, arrived) = try ChatReading.wait(app, what) { chat, now in there(chat, now) }
         try placed(arrived, what)
         // The run is complete at the first still frame after the slide, one tick after it ends.
-        let now = ChatReading.poll(app, timeout: 5) { chat, now in
+        let complete = ChatReading.poll(app, timeout: 5) { chat, now in
             there(chat, now) && Carry.judge(now.trail, since: since, rising: rising) != .incomplete
-        }?.1 ?? arrived
+        }?.1
+        // The report judged is the last one read, and where he stands is held on it too: he may
+        // have moved since he arrived.
+        let now = try complete ?? XCTUnwrap(ChatReading.chat(app)?.mascot, "\(what): no report after arriving")
+        try placed(now, "\(what), at the end")
         switch Carry.judge(now.trail, since: since, rising: rising) {
         case .rode: return (now, true)
         case .incomplete, .noVerdict: return (now, false)
