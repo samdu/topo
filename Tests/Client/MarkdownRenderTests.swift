@@ -331,12 +331,14 @@ final class MarkdownRenderTests: XCTestCase {
     }
 
     /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
-    /// shows its top, and the block is scrolled to once the row has made it.
+    /// shows its top, and the block is scrolled to once the row has made it, and stays in view once
+    /// the transcript has come to rest.
     func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
         let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
         let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
         XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
         XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+        XCTAssertGreaterThan(reached.kept, 20, "the block was scrolled to and did not stay on the screen")
     }
 
     /// A block already whole on the screen, cued, pulses where it is: the transcript does not
@@ -350,8 +352,9 @@ final class MarkdownRenderTests: XCTestCase {
     /// A live transcript of 40 turns with `text` as its first reply (off the screen, its row not
     /// made, the transcript opening at its end) or its last (on the screen), and that reply's
     /// first block cued: the most of the block's enclosure and of the pulse any picture showed
-    /// while the pulse ran, and how far the transcript scrolled.
-    private func reach(_ text: String, first: Bool) throws -> (shown: Int, pulsed: Int, moved: CGFloat) {
+    /// while the pulse ran, how far the transcript scrolled, and the least of the block's enclosure
+    /// and pulse any picture showed once the transcript had come to rest.
+    private func reach(_ text: String, first: Bool) throws -> (shown: Int, pulsed: Int, moved: CGFloat, kept: Int) {
         var look = look(.phone)
         look.markdown.codePulse.accent = Color(pulseInk)
         look.markdown.codePulse.opacity = 1
@@ -444,11 +447,23 @@ final class MarkdownRenderTests: XCTestCase {
         if shown > 20 {
             XCTAssertTrue(judged.seen || judged.fitted, "no look fitted inside a breath in \(judged.cues) cues")
         }
-        stage.poll(for: 1) {
+        // Then where the block is once the transcript has come to rest — no move for half a second,
+        // waited for up to five — and for four seconds after, every look: a scroll that lands and is
+        // undone shows the block once and then not, which the most it ever showed can't tell.
+        var still = Date(), last = scroll.contentOffset.y
+        stage.poll(for: 5) {
             moved = max(moved, abs(scroll.contentOffset.y - offset))
+            if scroll.contentOffset.y != last { last = scroll.contentOffset.y; still = Date() }
+            return Date().timeIntervalSince(still) >= 0.5
+        }
+        var kept = Int.max
+        try stage.poll(for: 4) {
+            moved = max(moved, abs(scroll.contentOffset.y - offset))
+            let drawn = try Pixels(stage.image(), blank: true)
+            kept = min(kept, drawn.count(outline) + pulsing(drawn, rows: 0...drawn.height))
             return false
         }
-        return (shown, pulsed, moved)
+        return (shown, pulsed, moved, kept)
     }
 
     /// The moments of a breath, in seconds from its start, in which a picture tells the look's ring
