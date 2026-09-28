@@ -41,6 +41,19 @@ final class TopoWidgetUITests: XCTestCase {
         for (index, child) in ((node["children"] as? [[String: Any]]) ?? []).enumerated() {
             walk(child, "\(path).\(index)", texts: &texts, controls: &controls)
         }
+        // A control's label is not walked: SwiftUI merges it into the control's own element,
+        // where `labels` finds its words.
+    }
+
+    /// The words of a control's label, plain strings and text nodes, which SwiftUI draws as part
+    /// of the control's element rather than as elements of their own.
+    private func labels(_ control: [String: Any]) -> [String] {
+        guard let label = control["label"] else { return [] }
+        return ((label as? [Any]) ?? [label]).compactMap { entry in
+            if let words = entry as? String { return words }
+            if let node = entry as? [String: Any], node["kind"] as? String == "text" { return node["text"] as? String }
+            return nil
+        }
     }
 
     /// What a tap on `control` hands on, as the host writes it down.
@@ -91,6 +104,9 @@ final class TopoWidgetUITests: XCTestCase {
             let id = control["id"] as! String
             let element = app.descendants(matching: .any).matching(identifier: "widget-control-\(id)").firstMatch
             XCTAssertTrue(element.waitForExistence(timeout: 5), "\(family): no control \(id)")
+            for words in labels(control) {
+                XCTAssertTrue(element.label.contains(words), "\(family): control \(id) is labelled \(element.label), not \(words)")
+            }
             element.tap()
             let want = expected(control)
             // A `topo://` link opens the app it is in; the host hears it as the URL comes back.

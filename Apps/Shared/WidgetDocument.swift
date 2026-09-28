@@ -41,10 +41,17 @@ struct WidgetDocument: Equatable, Sendable {
     /// How relevant the Smart Stack should take it to be, 0 to 1.
     var relevance: Double?
 
-    /// The tree drawn for `family`: its own, or the document's `default`.
+    /// The tree drawn for `family`: its own, or the document's `default`, its texts cut to the
+    /// family's limit, since `default` is read with the home screen's.
     func tree(for family: WidgetFamilyName) -> WidgetNode? {
-        families[family] ?? families[.default]
+        if let own = families[family] { return own }
+        guard let fallback = families[.default] else { return nil }
+        return family.isAccessory ? fallback.cuttingTexts(to: family.textLimit) : fallback
     }
+
+    /// The id a whole widget's tap is cued under, which no control's id can be.
+    static let wholeTap = "_tap"
+
 
     /// Every control in the document, by id: what a tap's intent is looked up in.
     var controls: [String: WidgetControl] {
@@ -58,17 +65,20 @@ struct WidgetDocument: Equatable, Sendable {
     }
 
     /// The words of the turn a tap on control `id` of `slot` sends, from this document: its
-    /// `turn` action's `say`, or `tapped <id>`, a toggle's new state after it. `tap` is the whole
-    /// widget's own tap when no control has that id. Nil when the document has no turn by that id.
+    /// `turn` action's `say`, or `tapped <id>`, a toggle's new state after it; `wholeTap` is the
+    /// whole widget's own tap. Nil when the document has no turn by that id.
     func turn(slot: String, control id: String, turningOn: Bool?) -> String? {
+        guard id != Self.wholeTap else {
+            guard case .turn(let say)? = tap else { return nil }
+            return "widget \(slot): " + (say ?? "tapped the widget")
+        }
         if let control = controls[id] {
             guard case .turn(let say) = control.action else { return nil }
             var words = say ?? "tapped \(id)"
             if control.kind == .toggle { words += (turningOn ?? !control.on) ? " on" : " off" }
             return "widget \(slot): \(words)"
         }
-        guard id == "tap", case .turn(let say)? = tap else { return nil }
-        return "widget \(slot): " + (say ?? "tapped the widget")
+        return nil
     }
 
     // MARK: Budgets
@@ -119,7 +129,9 @@ struct WidgetDocument: Equatable, Sendable {
 
     static func read(_ text: String, from source: Source = .mind) -> Reading {
         let empty = WidgetDocument()
-        guard text.utf8.count <= byteLimit else {
+        // The kept copy is the app's own writing of a document already judged, so only the
+        // mind's is held to the byte budget; the node budgets bound both.
+        guard source == .store || text.utf8.count <= byteLimit else {
             return Reading(document: empty, state: .unreadable("is \(text.utf8.count) bytes, over the \(byteLimit / 1024) KB a document holds"))
         }
         guard let parsed = try? JSONSerialization.jsonObject(with: Data(text.utf8)) else {
@@ -383,6 +395,23 @@ indirect enum WidgetNode: Equatable, Sendable {
     var control: WidgetControl? { if case .control(let control) = self { control } else { nil } }
 
     /// Every node of the tree, this one first, then its children and a control's label in order.
+    /// This tree with every text, a control's label's included, cut to `limit` characters.
+    func cuttingTexts(to limit: Int) -> WidgetNode {
+        switch self {
+        case .stack(var stack):
+            stack.children = stack.children.map { $0.cuttingTexts(to: limit) }
+            return .stack(stack)
+        case .text(var text):
+            text.text = String(text.text.prefix(limit))
+            return .text(text)
+        case .control(var control):
+            control.label = control.label.map { $0.cuttingTexts(to: limit) }
+            return .control(control)
+        default:
+            return self
+        }
+    }
+
     func walk(_ visit: (WidgetNode) -> Void) {
         visit(self)
         switch self {
@@ -411,7 +440,7 @@ extension WidgetDocument {
     }
 
     var text: String {
-        let data = (try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .prettyPrinted])) ?? Data()
+        let data = (try? JSONSerialization.data(withJSONObject: json, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data()
         return String(decoding: data, as: UTF8.self)
     }
 }
@@ -549,6 +578,16 @@ final class WidgetReader {
             guard var node = self.node(tree, path, depth: 1) else { continue }
             if family == .accessoryInline { node = inline(node, path) }
             document.families[family] = node
+        }
+        // `default` is read with the home screen's limit and cut to the lock screen's where it
+        // draws there, which is said here since the cut is made at the draw.
+        let lockScreen = WidgetFamilyName.allCases.filter { $0.isAccessory && $0 != .accessoryCorner }
+        if source == .mind, let fallback = document.families[.default], let missing = lockScreen.first(where: { document.families[$0] == nil }) {
+            var longest = 0
+            fallback.walk { if case .text(let text) = $0 { longest = max(longest, text.text.count) } }
+            if longest > WidgetDocument.accessoryTextLimit {
+                note("families.default", "has a text of \(longest) characters, and draws on \(missing.rawValue), a lock-screen family, cut to \(WidgetDocument.accessoryTextLimit)")
+            }
         }
         return document
     }
@@ -753,6 +792,9 @@ final class WidgetReader {
             for (index, entry) in entries.enumerated() {
                 let path = "\(fields.path).label[\(index)]"
                 if let words = entry as? String {
+                    if words.count > WidgetDocument.labelLimit {
+                        note(path, "is \(words.count) characters, and a label holds \(WidgetDocument.labelLimit), so it was cut")
+                    }
                     label.append(.text(.init(text: String(words.prefix(WidgetDocument.labelLimit)))))
                 } else if let object = entry as? [String: Any], let node = node(object, path, depth: depth + 1, labelOnly: true) {
                     label.append(node)

@@ -182,6 +182,59 @@ final class WidgetDocumentTests: XCTestCase {
         XCTAssertEqual(reading.document.tree(for: .systemLarge), .spacer(min: 0))
     }
 
+    /// `default` is read with the home screen's 200 and drawn on a lock-screen family cut to 60,
+    /// which the read says.
+    func testTheDefaultDrawsSixtyOnALockScreen() throws {
+        let long = String(repeating: "z", count: 200)
+        let reading = WidgetDocument.read(#"{"families": {"default": {"kind": "text", "text": "\#(long)"}}}"#)
+        XCTAssertTrue(reading.notes.contains { $0.hasPrefix("families.default") && $0.contains("cut to 60") }, "\(reading.notes)")
+        guard case .text(let home)? = reading.document.tree(for: .systemSmall),
+              case .text(let lock)? = reading.document.tree(for: .accessoryRectangular) else { return XCTFail() }
+        XCTAssertEqual(home.text.count, 200)
+        XCTAssertEqual(lock.text.count, 60)
+    }
+
+    func testALabelPastSixtyIsCutWithANote() throws {
+        let reading = read(#"{"kind": "button", "id": "go", "label": "\#(String(repeating: "w", count: 61))", "action": {"kind": "open"}}"#)
+        XCTAssertTrue(reading.notes.contains { $0.contains("label[0] is 61 characters") }, "\(reading.notes)")
+        guard case .control(let control) = try tree(reading), case .text(let label)? = control.label.first else { return XCTFail() }
+        XCTAssertEqual(label.text.count, 60)
+    }
+
+    /// A control may be called `tap`: the whole widget's tap is cued under an id no control has.
+    func testAControlNamedTapIsNotTheWholeWidgetsTap() throws {
+        let cases: [(String, String?)] = [(#"{"kind": "open"}"#, nil), (#"{"kind": "turn", "say": "the control"}"#, "widget s: the control")]
+        for (action, words) in cases {
+            let reading = WidgetDocument.read(#"{"tap": {"kind": "turn", "say": "the widget"}, "families": {"systemSmall": {"kind": "button", "id": "tap", "label": "Tap", "action": \#(action)}}}"#)
+            XCTAssertEqual(reading.notes, [])
+            XCTAssertEqual(reading.document.turn(slot: "s", control: WidgetDocument.wholeTap, turningOn: nil), "widget s: the widget")
+            XCTAssertEqual(reading.document.turn(slot: "s", control: "tap", turningOn: nil), words)
+        }
+    }
+
+    /// A document the mind wrote inside the byte budget is kept and drawn, though its kept copy,
+    /// which writes out every text's style and design, is past the budget: 63 texts at their
+    /// limit, with slashes.
+    func testALargeDocumentIsKeptAndDrawn() throws {
+        let words = String(repeating: "a/b ", count: 50)
+        let texts = (0..<63).map { _ in #"{"kind":"text","text":"\#(words)"}"# }.joined(separator: ",")
+        let input = #"{"version":1,"families":{"systemLarge":{"kind":"vstack","children":[\#(texts)]}}}"#
+        XCTAssertLessThanOrEqual(input.utf8.count, WidgetDocument.byteLimit)
+        let reading = WidgetDocument.read(input)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertGreaterThan(reading.document.text.utf8.count, WidgetDocument.byteLimit, "the kept copy fits the budget, so this holds nothing")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("widget-large-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SurfaceStore(folder: folder)
+        let revision = try store.write(reading.document, slot: "demo")
+        let kept = try XCTUnwrap(store.read(slot: "demo"))
+        XCTAssertTrue(kept.readable, "the kept copy was not read: \(kept.state)")
+        XCTAssertEqual(kept.notes, [])
+        var expected = reading.document
+        expected.revision = revision
+        XCTAssertEqual(kept.document, expected)
+    }
+
     /// What the app keeps is what was read, and a read of the kept copy is the same document with
     /// no notes.
     func testTheKeptCopyReadsBackTheSame() throws {

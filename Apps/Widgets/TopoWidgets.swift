@@ -46,7 +46,7 @@ struct SurfaceEntryView: View {
     static func url(_ action: WidgetAction, _ context: WidgetContext) -> URL? {
         switch action {
         case .open: WidgetURL.open
-        case .turn: WidgetURL.cue(slot: context.slot, control: "tap", revision: context.revision)
+        case .turn: WidgetURL.cue(slot: context.slot, control: WidgetDocument.wholeTap, revision: context.revision)
         case .run: nil
         }
     }
