@@ -57,12 +57,15 @@ struct SecretTool: Tool {
         return (3...4).contains(parts.count) && parts.allSatisfy { !$0.isEmpty }
     }
 
+    /// Said while a refused clear stands.
+    private func refused(_ words: String) -> ToolReply {
+        .failed("1Password is not used: at an earlier sign-out \(words). "
+                + "The app tries again at each launch, and Disconnect in Settings › Connections tries now.\n")
+    }
+
     func run(_ arguments: [String]) async -> ToolReply {
         guard let call = Self.parse(arguments) else { return .usage(usage) }
-        if let words = leftBehind.words {
-            return .failed("1Password is not used: at an earlier sign-out \(words). "
-                           + "The app tries again at each launch, and Disconnect in Settings › Connections tries now.\n")
-        }
+        if let words = leftBehind.words { return refused(words) }
         let connection: Connection?
         do {
             let store = store
@@ -75,14 +78,24 @@ struct SecretTool: Tool {
             return .failed("The 1Password connection could not be read from the keychain: \(error)\n")
         }
         guard let connection else { return ToolReply(status: ToolReply.failed, text: Self.notConnected) }
+        // A sign-out whose clear was refused while the keychain was being read: the token read is
+        // that login's, so `op` is not run with it. Asked again once `op` has answered, so a clear
+        // refused while it ran keeps its answer from the mind.
+        if let words = leftBehind.words { return refused(words) }
         let exit: OnePasswordExit
         do {
             exit = try await onePassword.run(call.arguments, token: connection.token)
         } catch {
             return .failed("1Password's op could not be run in the guest: \(error)\n")
         }
+        if let words = leftBehind.words { return refused(words) }
         guard exit.status == 0 else {
             return .failed("op: \(exit.said.isEmpty ? "status \(exit.status)" : exit.said)\n")
+        }
+        // The token is never an answer, however op comes by it: a field holding the service
+        // account's own token, or a name that is it, is refused whole.
+        guard !exit.output.contains(connection.token) else {
+            return .failed("1Password answered this connection's own service-account token, which is never answered.\n")
         }
         switch call {
         case .vaults:

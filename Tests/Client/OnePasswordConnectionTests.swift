@@ -80,6 +80,51 @@ private final class NoBrowser: Browser {
     func close() {}
 }
 
+/// A keychain holding one 1Password connection, whose read can be held at the gate until the test
+/// lets it return, and whose clear can be refused.
+private final class GatedStore: ConnectionStore, @unchecked Sendable {
+    private let lock = NSLock()
+    private var held: Connection?
+    private var refusing = false
+    private let reached = DispatchSemaphore(value: 0)
+    private let gate: DispatchSemaphore?
+    struct Refused: Error {}
+
+    init(_ held: Connection?, gated: Bool = false) {
+        self.held = held
+        gate = gated ? DispatchSemaphore(value: 0) : nil
+    }
+
+    var refuses: Bool {
+        get { lock.withLock { refusing } }
+        set { lock.withLock { refusing = newValue } }
+    }
+    var holds: Connection? { lock.withLock { held } }
+
+    /// Waits, off the main actor, until a read is at the gate.
+    func reach() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global().async { self.reached.wait(); continuation.resume() }
+        }
+    }
+    func release() { gate?.signal() }
+
+    func load(_ service: ConnectionService) throws -> Connection? {
+        let connection = lock.withLock { service == .onePassword ? held : nil }
+        if let gate { reached.signal(); gate.wait() }
+        return connection
+    }
+    func save(_ connection: Connection, for service: ConnectionService) throws {
+        lock.withLock { if service == .onePassword { held = connection } }
+    }
+    func clear(_ service: ConnectionService) throws {
+        try lock.withLock {
+            if refusing { throw Refused() }
+            if service == .onePassword { held = nil }
+        }
+    }
+}
+
 private let token = "ops_" + String(repeating: "eyJhbGciOi", count: 8)
 private let twoVaults = #"[{"id":"v1","name":"Homelab"},{"id":"v2","name":"Shared"}]"#
 
@@ -263,6 +308,76 @@ final class SecretToolTests: XCTestCase {
         XCTAssertEqual(reply.status, ToolReply.failed)
         XCTAssertTrue(reply.text.contains("could not be removed"), reply.text)
         XCTAssertTrue(op.calls.isEmpty, "op ran with an earlier login's token")
+    }
+
+    /// A sign-out whose clear is refused after the request's first look and before the keychain
+    /// read returns: the token read is that login's, and `op` is not run with it.
+    func testAClearRefusedWhileTheTokenIsReadRunsNoOp() async {
+        let op = HeldOnePassword()
+        op.answer(OnePasswordExit(status: 0, output: twoVaults, errors: ""))
+        let leftBehind = ConnectionsLeftBehind.isolated()
+        let store = GatedStore(Connection(token: token, account: "Homelab"), gated: true)
+        let tool = SecretTool(store: store, onePassword: op, leftBehind: leftBehind)
+        let request = Task { await tool.run(["vaults"]) }
+        await store.reach()
+        leftBehind.words = "the connections' tokens could not be removed from this phone's keychain: -25308"
+        store.release()
+        let reply = await request.value
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertTrue(reply.text.contains("could not be removed"), reply.text)
+        XCTAssertTrue(op.calls.isEmpty, "op ran with an earlier login's token")
+    }
+
+    /// The same refused while `op` runs: what it answers does not reach the mind.
+    func testAClearRefusedWhileOpRunsKeepsItsAnswer() async {
+        let op = HeldOnePassword()
+        op.answer(OnePasswordExit(status: 0, output: "hunter2", errors: ""))
+        op.hold()
+        let leftBehind = ConnectionsLeftBehind.isolated()
+        let store = InMemoryConnectionStore([.onePassword: Connection(token: token, account: "Homelab")])
+        let tool = SecretTool(store: store, onePassword: op, leftBehind: leftBehind)
+        let request = Task { await tool.run(["get", "op://Homelab/Router/password"]) }
+        await op.reach()
+        leftBehind.words = "the connections' tokens could not be removed from this phone's keychain: -25308"
+        op.release()
+        let reply = await request.value
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertFalse(reply.text.contains("hunter2"), reply.text)
+    }
+
+    /// A field whose value is the service account's own token is refused like the token itself,
+    /// and so is any answer holding it.
+    func testTheTokenAsAFieldsValueIsNeverAnswered() async {
+        let (tool, _) = tool(OnePasswordExit(status: 0, output: token, errors: ""),
+                             OnePasswordExit(status: 0, output: "prefix \(token) suffix", errors: ""),
+                             OnePasswordExit(status: 0, output: #"[{"id":"v1","name":"\#(token)"}]"#, errors: ""))
+        for arguments in [["get", "op://Homelab/Topo/credential"], ["get", "op://Homelab/Topo/notes"], ["vaults"]] {
+            let reply = await tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.failed, "\(arguments)")
+            XCTAssertFalse(reply.text.contains(token), "\(arguments) answered the token")
+        }
+    }
+
+    /// A clear the keychain refused leaves the row failed with Disconnect still offered, and
+    /// Disconnect tries the clear again: once the keychain lets it, the token is gone.
+    @MainActor func testAFailedClearKeepsDisconnectWhichTriesItAgain() {
+        XCTAssertTrue(ConnectionsView.onePasswordActions(.failed("x")).contains(.disconnect))
+        XCTAssertTrue(ConnectionsView.onePasswordActions(.failed("x")).contains(.paste))
+        XCTAssertEqual(ConnectionsView.onePasswordActions(.connected(vaults: "Homelab")), [.disconnect])
+        XCTAssertFalse(ConnectionsView.onePasswordActions(.disconnected).contains(.disconnect))
+
+        let store = GatedStore(Connection(token: token, account: "Homelab"))
+        let connections = Connections(store: store, flow: NoGitHub(), onePassword: HeldOnePassword(), pasteboard: FakePasteboard(),
+                                      copy: { _ in }, browser: NoBrowser(), leftBehind: .isolated())
+        XCTAssertEqual(connections.onePassword, .connected(vaults: "Homelab"))
+        store.refuses = true
+        connections.disconnectOnePassword()
+        guard case .failed = connections.onePassword else { return XCTFail("not failed: \(connections.onePassword)") }
+        XCTAssertNotNil(store.holds)
+        store.refuses = false
+        connections.disconnectOnePassword()
+        XCTAssertEqual(connections.onePassword, .disconnected)
+        XCTAssertNil(store.holds, "the retried Disconnect left the token")
     }
 
     func testAnythingElseIsUsage() {

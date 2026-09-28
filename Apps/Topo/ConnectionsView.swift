@@ -61,28 +61,50 @@ struct ConnectionsView: View {
         }
     }
 
+    /// What the 1Password row offers in each state. A failure keeps Disconnect beside the paste,
+    /// since the failure may be a clear the keychain refused, with the token still on the phone:
+    /// Disconnect tries the clear again (every connection's, while a refused sign-out clear stands).
+    enum OnePasswordAction: Equatable {
+        case createServiceAccount, paste, cancel, disconnect
+    }
+
+    static func onePasswordActions(_ state: Connections.OnePassword) -> [OnePasswordAction] {
+        switch state {
+        case .disconnected: [.createServiceAccount, .paste]
+        case .failed: [.createServiceAccount, .paste, .disconnect]
+        case .verifying: [.cancel]
+        case .connected: [.disconnect]
+        }
+    }
+
     private var onePassword: some View {
         Section {
             switch connections.onePassword {
-            case .disconnected, .failed:
-                if case let .failed(words) = connections.onePassword { Text(words) }
-                Button("Create a service account") { connections.open(Connections.onePasswordServiceAccounts) }
-                PasteButton(payloadType: String.self) { strings in
-                    guard let text = strings.first else { return }
-                    connections.connectOnePassword(pasted: text)
-                }
-            case .verifying:
-                Label("Checking the token with 1Password…", systemImage: "hourglass")
-                Button("Cancel", role: .cancel) { connections.cancelOnePassword() }
-            case let .connected(vaults):
-                LabeledContent("Vaults", value: vaults)
-                Button("Disconnect", role: .destructive) { confirmingOnePasswordDisconnect = true }
-                    .confirmationDialog("Disconnect 1Password?", isPresented: $confirmingOnePasswordDisconnect,
-                                        titleVisibility: .visible) {
-                        Button("Disconnect", role: .destructive) { connections.disconnectOnePassword() }
-                    } message: {
-                        Text("Topo forgets the service-account token on this phone. Revoke the service account in 1Password too: a copy of its token taken while it was connected keeps working until you do.")
+            case let .failed(words): Text(words)
+            case .verifying: Label("Checking the token with 1Password…", systemImage: "hourglass")
+            case let .connected(vaults): LabeledContent("Vaults", value: vaults)
+            case .disconnected: EmptyView()
+            }
+            ForEach(Self.onePasswordActions(connections.onePassword), id: \.self) { action in
+                switch action {
+                case .createServiceAccount:
+                    Button("Create a service account") { connections.open(Connections.onePasswordServiceAccounts) }
+                case .paste:
+                    PasteButton(payloadType: String.self) { strings in
+                        guard let text = strings.first else { return }
+                        connections.connectOnePassword(pasted: text)
                     }
+                case .cancel:
+                    Button("Cancel", role: .cancel) { connections.cancelOnePassword() }
+                case .disconnect:
+                    Button("Disconnect", role: .destructive) { confirmingOnePasswordDisconnect = true }
+                        .confirmationDialog("Disconnect 1Password?", isPresented: $confirmingOnePasswordDisconnect,
+                                            titleVisibility: .visible) {
+                            Button("Disconnect", role: .destructive) { connections.disconnectOnePassword() }
+                        } message: {
+                            Text("Topo forgets the service-account token on this phone. Revoke the service account in 1Password too: a copy of its token taken while it was connected keeps working until you do.")
+                        }
+                }
             }
         } header: {
             Text("1Password")
