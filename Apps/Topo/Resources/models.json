@@ -330,11 +330,6 @@
           "path": "ncurses-terminfo-base-6.5_p20250503-r0.apk",
           "size": 21749,
           "sha256": "3d37403e0b5ab9eb0c1ce269444e4a385faec9fe6af452c1c6956806b13d2bd6"
-        },
-        {
-          "path": "tzdata-2026d-r0.apk",
-          "size": 190879,
-          "sha256": "b2a19d14136bc9eab8b35bc802c739686562ee99ed29af97d94c7d24f78b39b9"
         }
       ]
     },

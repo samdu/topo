@@ -34,8 +34,8 @@ final class SystemZoneChanges: ZoneChanges, @unchecked Sendable {
 
 /// The guest's `/etc/localtime`, kept to the phone's zone, as `GuestResolver` keeps its name
 /// servers: written once the guest is booted and again on every cue, each write reading the zone
-/// as it starts and skipped when that zone is the one last written. A write that failed is not
-/// remembered, so the next cue tries it again. No `TZ` is set anywhere, because a `TZ` fixed in
+/// as it starts and skipped when that zone is the one last written. Only a write that succeeded
+/// is remembered, so after a failed one the next cue tries again. No `TZ` is set anywhere, because a `TZ` fixed in
 /// the resident's environment would outrank the file for everything it starts until a relaunch.
 @MainActor final class GuestClock {
     private let changes: ZoneChanges
@@ -72,12 +72,8 @@ final class SystemZoneChanges: ZoneChanges, @unchecked Sendable {
             await before?.value
             let zone = self.zone()
             guard zone != self.written else { return }
-            do {
-                try await self.write(zone)
-                self.written = zone
-            } catch {
-                self.written = nil
-            }
+            guard (try? await self.write(zone)) != nil else { return }
+            self.written = zone
         }
         last = task
         return task

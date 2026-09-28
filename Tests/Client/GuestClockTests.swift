@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 @testable import Topo
 import XCTest
 
@@ -124,14 +125,21 @@ final class GuestClockTests: XCTestCase {
         XCTAssertEqual(writer.lock.withLock { writer.done }, 3)
     }
 
-    /// The phone's own cues: a system zone change calls back.
-    func testTheSystemZoneChangeCallsBack() async {
+    /// The phone's own cues: a system zone change and a foreground each call back.
+    func testTheSystemZoneChangeAndAForegroundCallBack() async {
+        final class Count: @unchecked Sendable {
+            let lock = NSLock()
+            var calls = 0
+        }
+        let count = Count()
         let changes = SystemZoneChanges()
-        let called = expectation(description: "the zone change called back")
-        called.assertForOverFulfill = false
-        changes.start { called.fulfill() }
+        changes.start { count.lock.withLock { count.calls += 1 } }
         NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil)
-        await fulfillment(of: [called], timeout: 5)
+        XCTAssertEqual(count.lock.withLock { count.calls }, 1, "the zone change did not call back")
+        NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        XCTAssertEqual(count.lock.withLock { count.calls }, 2, "the foreground did not call back")
         changes.cancel()
+        NotificationCenter.default.post(name: .NSSystemTimeZoneDidChange, object: nil)
+        XCTAssertEqual(count.lock.withLock { count.calls }, 2, "a cancelled listener still called back")
     }
 }

@@ -259,7 +259,9 @@ final class Userland {
             // A guest with no resolver still runs, with no name resolving in it, so a failed write
             // is not the boot's: the boot's answer is kept for the life of the process.
             await self.resolver.start()
-            // The same for the zone: a guest that cannot be told it tells the time in the zone it had.
+            // The same for the zone: the phone's zoneinfo mounted, then the link kept to its zone. A
+            // guest refused either tells the time by whatever link it had, UTC with none.
+            try? Guest.shared.mountZoneinfo()
             await self.clock.start()
             return try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {

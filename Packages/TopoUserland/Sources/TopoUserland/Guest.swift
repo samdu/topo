@@ -118,6 +118,18 @@ public final class Guest: Sendable {
         if exit.status != 0 { throw Failure.resolver(exit.errors) }
     }
 
+    /// Where the guest's zoneinfo is, and the phone's own: the same path on both sides.
+    public static let zoneinfo = "/usr/share/zoneinfo"
+
+    /// Mounts the phone's own zoneinfo (`/usr/share/zoneinfo`, iOS's time zone database, which
+    /// every app's libc reads) at the same path in the guest, over whatever the fakefs has there, so
+    /// the guest's zones are the phone's and follow its updates, with nothing downloaded. Read-only in
+    /// effect: the host refuses the app a write there. A refusal to open the directory throws here.
+    /// Mounting it again changes nothing. Requires a booted kernel.
+    public func mountZoneinfo() throws {
+        try mount(URL(fileURLWithPath: Self.zoneinfo), at: Self.zoneinfo)
+    }
+
     /// Whether `identifier` is a plain zone name, one that names a file under
     /// `/usr/share/zoneinfo` and nothing outside it: components of letters, digits, `_`, `+` and
     /// `-`, apart by `/`, none empty, `.` or `..`, 64 bytes at most.
@@ -134,9 +146,9 @@ public final class Guest: Sendable {
     /// the zone's name from where the link points — tells the time in that zone. A link and not a
     /// copy, for that name. Made beside and moved over, through the guest so the fakefs records
     /// it. A name that is not a zone name (`isZoneName`), or one the guest has no zoneinfo for — no
-    /// regular file of that name starting with the `TZif` magic (`zone.tab` beside the zones is not one) —
-    /// tzdata is one of the guest's packages, and a fakefs imported before it has none — throws
-    /// and leaves `/etc/localtime` as it was. Requires a booted kernel.
+    /// regular file of that name starting with the `TZif` magic (`leapseconds` and `+VERSION` beside
+    /// the zones are not ones) under the zoneinfo `mountZoneinfo` mounts, the minirootfs having none
+    /// of its own — throws and leaves `/etc/localtime` as it was. Requires a booted kernel.
     public func writeTimeZone(identifier: String) async throws {
         guard Self.isZoneName(identifier) else { throw Failure.timeZone("not a zone name: \(identifier)") }
         let script = #"z="/usr/share/zoneinfo/$1"; [ -f "$z" ] && [ "$(head -c 4 "$z")" = TZif ] || { echo "no zoneinfo for $1" >&2; exit 1; }; "#
