@@ -188,4 +188,63 @@ final class OnePasswordRunTests: XCTestCase {
         XCTAssertEqual(files, "", "a killed shell left the call's files: \(files)")
         _ = try await sh("rm -f /tmp/\(marker)* \(op)")
     }
+
+    /// A daemon that writes its pid only after the 5 s the call waits for it is found by its
+    /// arguments and ended with the call. The stand-in runs itself as `<command> daemon`, as `op`
+    /// runs `op daemon`, in a session of its own, and writes its pid 7 s late.
+    func testADaemonWhosePidComesAfterTheWaitIsFoundByName() async throws {
+        let marker = "named-\(UUID().uuidString.prefix(8))"
+        let op = try await standIn("""
+        if [ "$1" = daemon ]; then \
+        p="$TMPDIR/com.agilebits.op.0"; mkdir -p "$p"; : > "$p/op-daemon.pid"; \
+        sh -c "sleep 300 & echo \\$! > /tmp/\(marker)-child; exec sleep 300" </dev/null >/dev/null 2>&1 & \
+        (sleep 7; echo $$ > "$p/op-daemon.pid") </dev/null >/dev/null 2>&1 & \
+        echo $$ > /tmp/\(marker)-daemon; exec sleep 300; fi; \
+        setsid "$0" daemon </dev/null >/dev/null 2>&1 & \
+        while [ ! -s /tmp/\(marker)-daemon ] || [ ! -s /tmp/\(marker)-child ]; do sleep 0.1; done; exit 0
+        """)
+        let clock = ContinuousClock.now
+        let exit = try await OnePasswordRun.run(["vault", "list"], token: token, command: op)
+        XCTAssertLessThan(ContinuousClock.now - clock, .seconds(20), "the call waited on its daemon")
+        XCTAssertEqual(exit.status, 0, exit.errors)
+        let left = try await survivors(marker)
+        XCTAssertEqual(left, "", "a daemon whose pid came late outlived the call: \(left)")
+        _ = try await sh("rm -f /tmp/\(marker)* \(op)")
+    }
+}
+
+/// A guest whose first run throws after the program has started, as a failed wait does, and whose
+/// runs after it answer; every run recorded.
+private final class ThrowingGuest: GuestRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var runs: [(arguments: [String], environment: [String: String])] = []
+    struct WaitFailed: Error {}
+
+    func run(_ path: String, _ arguments: [String], environment: [String: String]) async throws -> Guest.Exit {
+        let first = lock.withLock { () -> Bool in
+            runs.append((arguments, environment))
+            return runs.count == 1
+        }
+        if first { throw WaitFailed() }
+        return Guest.Exit(status: 0, output: "", errors: "")
+    }
+}
+
+final class OnePasswordRunCleanupTests: XCTestCase {
+    /// A run whose wait throws still ends what it left: the leftover ending runs for its group
+    /// file before the error is thrown on.
+    func testAWaitThatThrowsStillEndsWhatTheRunLeft() async throws {
+        let guest = ThrowingGuest()
+        do {
+            _ = try await OnePasswordRun.run(["vault", "list"], token: "ops_x", command: "/opt/op-cli/op", guest: guest)
+            XCTFail("a failed wait was answered")
+        } catch is ThrowingGuest.WaitFailed {}
+        let runs = guest.runs
+        XCTAssertEqual(runs.count, 2, "no ending ran after the failed wait")
+        let group = try XCTUnwrap(runs.first?.environment["TOPO_OP_GROUP"])
+        let ending = try XCTUnwrap(runs.last?.arguments)
+        XCTAssertEqual(Array(ending.dropFirst(2)), ["leftover", group, "/opt/op-cli/op"])
+        XCTAssertEqual(ending.first, "-c")
+        XCTAssertNil(runs.last?.environment["OP_SERVICE_ACCOUNT_TOKEN"], "the ending was handed the token")
+    }
 }

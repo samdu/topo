@@ -12,6 +12,8 @@ struct SecretTool: Tool {
     /// A clear refused at a sign-out, a takeover or a demotion: while it stands the token is an
     /// earlier login's, and `op` is not run with it.
     var leftBehind = ConnectionsLeftBehind()
+    /// Where a request waits on no clear of the token and a clear ends it: `Connections.secrets`.
+    var requests = SecretRequests()
 
     let name = "secret"
     let summary = "the person's secrets from their connected 1Password vaults: list them, read one"
@@ -63,9 +65,15 @@ struct SecretTool: Tool {
                 + "The app tries again at each launch, and Disconnect in Settings › Connections tries now.\n")
     }
 
+    /// One request through `requests`: refused while a refused clear stands or a clear runs,
+    /// and answering nothing if a clear starts while it runs.
     func run(_ arguments: [String]) async -> ToolReply {
         guard let call = Self.parse(arguments) else { return .usage(usage) }
-        if let words = leftBehind.words { return refused(words) }
+        let leftBehind = leftBehind
+        return await requests.run(refusal: { leftBehind.words.map(refused) }) { await answer(call) }
+    }
+
+    private func answer(_ call: Call) async -> ToolReply {
         let connection: Connection?
         do {
             let store = store
@@ -78,17 +86,15 @@ struct SecretTool: Tool {
             return .failed("The 1Password connection could not be read from the keychain: \(error)\n")
         }
         guard let connection else { return ToolReply(status: ToolReply.failed, text: Self.notConnected) }
-        // A sign-out whose clear was refused while the keychain was being read: the token read is
-        // that login's, so `op` is not run with it. Asked again once `op` has answered, so a clear
-        // refused while it ran keeps its answer from the mind.
-        if let words = leftBehind.words { return refused(words) }
+        // A clear that started while the keychain was read cancelled this request: the token read
+        // may be a login's that is gone, and `op` is not run with it.
+        guard !Task.isCancelled else { return SecretRequests.stopped }
         let exit: OnePasswordExit
         do {
             exit = try await onePassword.run(call.arguments, token: connection.token)
         } catch {
             return .failed("1Password's op could not be run in the guest: \(error)\n")
         }
-        if let words = leftBehind.words { return refused(words) }
         guard exit.status == 0 else {
             return .failed("op: \(exit.said.isEmpty ? "status \(exit.status)" : exit.said)\n")
         }

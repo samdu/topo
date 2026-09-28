@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import TopoAuth
+import TopoTools
 import UIKit
 
 /// What connecting GitHub asks of GitHub, so a test can stand in for it.
@@ -63,6 +64,8 @@ final class Connections {
     /// A `forget()` the keychain refused, kept across launches, so no later login is handed what
     /// an earlier one connected.
     let leftBehind: ConnectionsLeftBehind
+    /// The `topo secret` requests in flight, which a clear of the 1Password token ends.
+    let secrets: SecretRequests
     private var generation = 0
     private var task: Task<Void, Never>?
     private var onePasswordGeneration = 0
@@ -71,7 +74,8 @@ final class Connections {
     init(store: ConnectionStore = KeychainConnectionStore(), flow: GitHubConnecting = GitHubDeviceFlow(),
          onePassword: OnePasswordRunning = GuestOnePassword(), pasteboard: Pasteboard = SystemPasteboard(),
          copy: @escaping @MainActor (String) -> Void = { UIPasteboard.general.string = $0 },
-         browser: Browser = WebAuthBrowser(), leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind()) {
+         browser: Browser = WebAuthBrowser(), leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind(),
+         secrets: SecretRequests = SecretRequests()) {
         self.store = store
         self.flow = flow
         self.op = onePassword
@@ -79,6 +83,7 @@ final class Connections {
         self.copy = copy
         self.browser = browser
         self.leftBehind = leftBehind
+        self.secrets = secrets
         github = Self.standing(store)
         self.onePassword = Self.standingOnePassword(store)
         // A clear refused before, at a sign-out, a takeover or a demotion, is tried again at each
@@ -161,11 +166,13 @@ final class Connections {
     func disconnectOnePassword() {
         if leftBehind.words != nil { return forget() }
         supersedeOnePassword()
-        do {
-            try store.clear(.onePassword)
-            onePassword = .disconnected
-        } catch {
-            onePassword = .failed("The token could not be removed from this phone's keychain: \(error)")
+        secrets.clearing {
+            do {
+                try store.clear(.onePassword)
+                onePassword = .disconnected
+            } catch {
+                onePassword = .failed("The token could not be removed from this phone's keychain: \(error)")
+            }
         }
     }
 
@@ -245,18 +252,20 @@ final class Connections {
         supersede()
         supersedeOnePassword()
         browser.close()
-        do {
-            try store.clearAll()
-            github = .disconnected
-            onePassword = .disconnected
-            unforgotten = nil
-            leftBehind.words = nil
-        } catch {
-            let words = "the connections' tokens could not be removed from this phone's keychain: \(error)"
-            github = .failed(Self.sentence(words))
-            onePassword = .failed(Self.sentence(words))
-            unforgotten = words
-            leftBehind.words = words
+        secrets.clearing {
+            do {
+                try store.clearAll()
+                github = .disconnected
+                onePassword = .disconnected
+                unforgotten = nil
+                leftBehind.words = nil
+            } catch {
+                let words = "the connections' tokens could not be removed from this phone's keychain: \(error)"
+                github = .failed(Self.sentence(words))
+                onePassword = .failed(Self.sentence(words))
+                unforgotten = words
+                leftBehind.words = words
+            }
         }
     }
 
@@ -301,6 +310,57 @@ struct SystemPasteboard: Pasteboard {
 /// connection succeeds, so the tools hand out nothing a login that is gone connected — whoever
 /// signs in next — and each launch tries the clear again; and whether this install has launched
 /// before, since an uninstall takes the defaults and leaves the keychain.
+/// The `topo secret` requests in flight, and the clears of the 1Password token they must not run
+/// across. A request is let in, under one lock, only while no clear is running; a clear, under the
+/// same lock, cancels every request in flight before it starts, and a request cancelled is never
+/// answered with what it read. So a request either answers before a clear or answers nothing, and
+/// one let in after a refused clear sees its words. A clear does not wait for a request: its
+/// cancel ends `op` (`OnePasswordRun`), and a sign-out stays synchronous.
+final class SecretRequests: @unchecked Sendable {
+    private let lock = NSLock()
+    private var clearRunning = false
+    private var running: [UUID: Task<ToolReply, Never>] = [:]
+
+    static let stopped = ToolReply.failed("Stopped: 1Password was disconnected, or the app signed out, while this ran.\n")
+    static let whileClearing = ToolReply.failed("1Password is being disconnected; ask again once it is.\n")
+
+    /// Runs `body` as one request, unless a clear is running or `refusal` answers one, both read
+    /// under the lock a clear takes.
+    func run(refusal: () -> ToolReply?, _ body: @escaping @Sendable () async -> ToolReply) async -> ToolReply {
+        let id = UUID()
+        let started = lock.withLock { () -> Result<Task<ToolReply, Never>, Refusal> in
+            if clearRunning { return .failure(Refusal(reply: Self.whileClearing)) }
+            if let reply = refusal() { return .failure(Refusal(reply: reply)) }
+            let task = Task { await body() }
+            running[id] = task
+            return .success(task)
+        }
+        let task: Task<ToolReply, Never>
+        switch started {
+        case .failure(let refusal): return refusal.reply
+        case .success(let running): task = running
+        }
+        let reply = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        return lock.withLock {
+            running[id] = nil
+            return task.isCancelled ? Self.stopped : reply
+        }
+    }
+
+    /// Runs a clear of the token: every request in flight cancelled first, none let in until it
+    /// has finished.
+    func clearing(_ clear: () -> Void) {
+        lock.withLock {
+            clearRunning = true
+            running.values.forEach { $0.cancel() }
+        }
+        clear()
+        lock.withLock { clearRunning = false }
+    }
+
+    private struct Refusal: Error { let reply: ToolReply }
+}
+
 final class ConnectionsLeftBehind: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "zone.hexagon.topo.connections.left-behind"

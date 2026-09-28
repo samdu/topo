@@ -113,16 +113,17 @@ public struct OnePasswordInstaller: Sendable {
 /// `TMPDIR` are a directory made for the call and removed after it. `op` starts a daemon of its
 /// own whether or not caching is off — `op daemon`, in a session of its own, reparented to init,
 /// carrying the token — and writes its pid under `TMPDIR`, sometimes after `op` has returned, so
-/// when `op` returns the script waits up to 5 s for that pid and ends it with its session and its
-/// children, then every other process of its own process group: the watcher that bounds `op` at
-/// 60 s and leaves with the shell, and anything `op` started without leaving it. Nothing is
-/// matched by name.
+/// when `op` returns the script waits up to 5 s for that pid — and with none by then finds every
+/// `op daemon` in the guest by its arguments, which can only be this call's since one run of `op`
+/// is let in at a time — and ends it with its session and its children, then every other process
+/// of its own process group: the watcher that bounds `op` at 60 s and leaves with the shell, and
+/// anything `op` started without leaving it.
 ///
 /// A cancelled run does the same from outside through the file the script wrote its group id to;
 /// one cancelled before that file exists leaves a mark the script reads once it has written the
 /// file, so either the script sees the mark and runs nothing or the cancel sees the group. After
-/// every call the app ends what a shell that did not reach its own end (a SIGKILL from another
-/// guest process) left behind, and removes the call's files.
+/// every call — a wait that threw included — the app ends what a shell that did not reach its own
+/// end (a SIGKILL from another guest process) left behind, and removes the call's files.
 public enum OnePasswordRun {
     /// The whole of what the guest runs: `$@` is `op`'s arguments, `$TOPO_OP_GROUP` the file the
     /// group id is written to, `$TOPO_OP_GROUP.cancelled` a cancel's mark, and `$TOPO_OP_GROUP.d`
@@ -139,8 +140,9 @@ public enum OnePasswordRun {
             exit 130
         fi
         d="$TOPO_OP_GROUP.d"
+        cmd='\#(command)'
         mkdir -m 700 "$d" || exit 70
-        OP_CONFIG_DIR="$d" TMPDIR="$d" \#(command) "$@" &
+        OP_CONFIG_DIR="$d" TMPDIR="$d" "$cmd" "$@" &
         op=$!
         (
             i=0
@@ -157,9 +159,11 @@ public enum OnePasswordRun {
 
     /// Ends the daemon whose pid `op` writes under `$d` — polling up to 5 s for a pid in that
     /// file, since `op` can return before the daemon has made its directory or written it, and an
-    /// empty file is one not yet written — with every process in the daemon's session and each
-    /// one it is the parent of, then every process in process group `$group` but the shell
-    /// running this: a sweep of `/proc` by each task's `stat`, the daemon last.
+    /// empty file is one not yet written; with no pid by then, every `op daemon` in the guest,
+    /// found by its arguments (`op daemon`, or `$cmd daemon`), which is only ever this call's
+    /// since one `op` runs at a time — with every process in each daemon's session and each one
+    /// it is the parent of, then every process in process group `$group` but the shell running
+    /// this: a sweep of `/proc` by each task's `stat`, the daemons last.
     static let end = #"""
     daemon=""
     i=0
@@ -169,10 +173,20 @@ public enum OnePasswordRun {
         sleep 0.1
         i=$((i + 1))
     done
-    session=""
-    if [ -n "$daemon" ] && stat="$(cat "/proc/$daemon/stat" 2>/dev/null)"; then
-        session="$(echo ${stat##*) } | cut -d ' ' -f 4)"
+    if [ -z "$daemon" ]; then
+        for task in /proc/[0-9]*; do
+            args="$(tr '\000' ' ' < "$task/cmdline" 2>/dev/null)"
+            case "$args" in
+            "op daemon"*|*"$cmd daemon"*) daemon="$daemon ${task#/proc/}" ;;
+            esac
+        done
     fi
+    sessions=""
+    for one in $daemon; do
+        if stat="$(cat "/proc/$one/stat" 2>/dev/null)"; then
+            sessions="$sessions $(echo ${stat##*) } | cut -d ' ' -f 4)"
+        fi
+    done
     for task in /proc/[0-9]*; do
         pid=${task#/proc/}
         [ "$pid" = "$$" ] || [ "$pid" = 1 ] && continue
@@ -182,20 +196,22 @@ public enum OnePasswordRun {
         taskSession=${rest##* }
         taskGroup=${rest#* }
         taskGroup=${taskGroup% *}
-        if [ "$taskGroup" = "$group" ] || [ -n "$session" -a "$taskSession" = "$session" ] \
-            || [ -n "$daemon" -a "$parent" = "$daemon" ]; then
-            kill -KILL "$pid" 2>/dev/null
-        fi
+        hit=""
+        [ "$taskGroup" = "$group" ] && hit=1
+        for one in $sessions; do [ "$taskSession" = "$one" ] && hit=1; done
+        for one in $daemon; do [ "$parent" = "$one" ] && hit=1; done
+        [ -n "$hit" ] && kill -KILL "$pid" 2>/dev/null
     done
-    [ -n "$daemon" ] && kill -KILL "$daemon" 2>/dev/null
+    for one in $daemon; do kill -KILL "$one" 2>/dev/null; done
     """#
 
-    /// A run's ending from outside, given the group file as `$1`: nothing when there is no group
-    /// yet, otherwise the same ending, then the call's files removed.
+    /// A run's ending from outside, given the group file as `$1` and the command as `$2`: nothing
+    /// when there is no group yet, otherwise the same ending, then the call's files removed.
     static let endFromOutside = #"""
     group="$(cat "$1" 2>/dev/null)"
     [ -n "$group" ] || exit 0
     d="$1.d"
+    cmd="$2"
     """# + "\n" + end + "\n" + #"rm -rf "$1" "$d" "$1.cancelled""#
 
     /// What a cancel runs beside the run: its mark first, then the ending from outside.
@@ -205,20 +221,83 @@ public enum OnePasswordRun {
     /// left its group file behind.
     static let leftover = #"[ -e "$1" ] || { rm -f "$1.cancelled"; exit 0; }"# + "\n" + endFromOutside
 
+    /// One run at a time: the ending's sweep by name would otherwise reach another call's daemon.
+    static let turn = Turn()
+
+    /// Runs `op` once. A caller waits for the run before it, and stops waiting when cancelled.
+    /// The leftover ending runs after the call whatever it answered, a wait that threw included.
     public static func run(_ arguments: [String], token: String, command: String = OnePasswordInstaller.command,
-                           guest: Guest = .shared) async throws -> Guest.Exit {
+                           guest: any GuestRunning = Guest.shared) async throws -> Guest.Exit {
+        try await turn.enter()
+        defer { turn.leave() }
         let groupFile = "/tmp/topo-op-\(UUID().uuidString).group"
         var environment = Guest.environment
         environment["OP_SERVICE_ACCOUNT_TOKEN"] = token
         environment["OP_CACHE"] = "false"
         environment["TOPO_OP_GROUP"] = groupFile
         try Task.checkCancellation()
-        let exit = try await withTaskCancellationHandler {
-            try await guest.run("/bin/sh", ["-c", script(command: command), "op"] + arguments, environment: environment)
-        } onCancel: {
-            Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile]) }
+        let exit: Guest.Exit
+        do {
+            exit = try await withTaskCancellationHandler {
+                try await guest.run("/bin/sh", ["-c", script(command: command), "op"] + arguments, environment: environment)
+            } onCancel: {
+                Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment) }
+            }
+        } catch {
+            _ = try? await guest.run("/bin/sh", ["-c", leftover, "leftover", groupFile, command], environment: Guest.environment)
+            throw error
         }
-        _ = try? await guest.run("/bin/sh", ["-c", leftover, "leftover", groupFile])
+        _ = try? await guest.run("/bin/sh", ["-c", leftover, "leftover", groupFile, command], environment: Guest.environment)
         return exit
+    }
+}
+
+/// What runs a program in the guest: `Guest`, or a stand-in in a test.
+public protocol GuestRunning: Sendable {
+    func run(_ path: String, _ arguments: [String], environment: [String: String]) async throws -> Guest.Exit
+}
+
+extension Guest: GuestRunning {}
+
+/// A turn at something only one caller does at once: callers enter in the order they came, and one
+/// cancelled while it waits stops waiting.
+final class Turn: @unchecked Sendable {
+    private let lock = NSLock()
+    private var busy = false
+    private var waiting: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
+
+    func enter() async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                // Read under the lock the cancel handler takes: a cancel that came before this
+                // found nobody to resume, and one after it finds this caller waiting.
+                let now = lock.withLock { () -> Bool? in
+                    if Task.isCancelled { return nil }
+                    if !busy { busy = true; return true }
+                    waiting.append((id, continuation))
+                    return false
+                }
+                switch now {
+                case nil: continuation.resume(throwing: CancellationError())
+                case true?: continuation.resume()
+                case false?: break
+                }
+            }
+        } onCancel: {
+            let gone = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+                guard let index = waiting.firstIndex(where: { $0.id == id }) else { return nil }
+                return waiting.remove(at: index).continuation
+            }
+            gone?.resume(throwing: CancellationError())
+        }
+    }
+
+    func leave() {
+        let next = lock.withLock { () -> CheckedContinuation<Void, Error>? in
+            if waiting.isEmpty { busy = false; return nil }
+            return waiting.removeFirst().continuation
+        }
+        next?.resume()
     }
 }

@@ -80,19 +80,26 @@ private final class NoBrowser: Browser {
     func close() {}
 }
 
-/// A keychain holding one 1Password connection, whose read can be held at the gate until the test
-/// lets it return, and whose clear can be refused.
+/// A keychain holding one 1Password connection, whose next read can be held at a gate until the
+/// test lets it return, whose clear can be refused, and whose read can fail.
 private final class GatedStore: ConnectionStore, @unchecked Sendable {
     private let lock = NSLock()
     private var held: Connection?
     private var refusing = false
+    private var gated = false
+    private var unreadable = false
     private let reached = DispatchSemaphore(value: 0)
-    private let gate: DispatchSemaphore?
+    private let gate = DispatchSemaphore(value: 0)
     struct Refused: Error {}
+    struct Unreadable: Error {}
 
-    init(_ held: Connection?, gated: Bool = false) {
-        self.held = held
-        gate = gated ? DispatchSemaphore(value: 0) : nil
+    init(_ held: Connection?) { self.held = held }
+
+    /// The next read waits at the gate.
+    func holdNextRead() { lock.withLock { gated = true } }
+    var failsReads: Bool {
+        get { lock.withLock { unreadable } }
+        set { lock.withLock { unreadable = newValue } }
     }
 
     var refuses: Bool {
@@ -107,11 +114,15 @@ private final class GatedStore: ConnectionStore, @unchecked Sendable {
             DispatchQueue.global().async { self.reached.wait(); continuation.resume() }
         }
     }
-    func release() { gate?.signal() }
+    func release() { gate.signal() }
 
     func load(_ service: ConnectionService) throws -> Connection? {
-        let connection = lock.withLock { service == .onePassword ? held : nil }
-        if let gate { reached.signal(); gate.wait() }
+        let (connection, wait, fails) = lock.withLock { () -> (Connection?, Bool, Bool) in
+            defer { gated = false }
+            return (service == .onePassword ? held : nil, gated, unreadable)
+        }
+        if fails { throw Unreadable() }
+        if wait { reached.signal(); gate.wait() }
         return connection
     }
     func save(_ connection: Connection, for service: ConnectionService) throws {
@@ -310,39 +321,99 @@ final class SecretToolTests: XCTestCase {
         XCTAssertTrue(op.calls.isEmpty, "op ran with an earlier login's token")
     }
 
-    /// A sign-out whose clear is refused after the request's first look and before the keychain
-    /// read returns: the token read is that login's, and `op` is not run with it.
-    func testAClearRefusedWhileTheTokenIsReadRunsNoOp() async {
-        let op = HeldOnePassword()
-        op.answer(OnePasswordExit(status: 0, output: twoVaults, errors: ""))
+    private let refusedWords = "the connections' tokens could not be removed from this phone's keychain"
+
+    /// Settings and `topo secret` as the app wires them: one keychain, one record of a refused
+    /// clear, one set of requests in flight.
+    @MainActor private func wired(_ store: GatedStore, _ op: HeldOnePassword) -> (Connections, SecretTool) {
         let leftBehind = ConnectionsLeftBehind.isolated()
-        let store = GatedStore(Connection(token: token, account: "Homelab"), gated: true)
-        let tool = SecretTool(store: store, onePassword: op, leftBehind: leftBehind)
-        let request = Task { await tool.run(["vaults"]) }
-        await store.reach()
-        leftBehind.words = "the connections' tokens could not be removed from this phone's keychain: -25308"
-        store.release()
-        let reply = await request.value
-        XCTAssertEqual(reply.status, ToolReply.failed)
-        XCTAssertTrue(reply.text.contains("could not be removed"), reply.text)
-        XCTAssertTrue(op.calls.isEmpty, "op ran with an earlier login's token")
+        let connections = Connections(store: store, flow: NoGitHub(), onePassword: HeldOnePassword(), pasteboard: FakePasteboard(),
+                                      copy: { _ in }, browser: NoBrowser(), leftBehind: leftBehind)
+        return (connections, SecretTool(store: store, onePassword: op, leftBehind: leftBehind, requests: connections.secrets))
     }
 
-    /// The same refused while `op` runs: what it answers does not reach the mind.
-    func testAClearRefusedWhileOpRunsKeepsItsAnswer() async {
+    /// A sign-out while a request is reading the token, its clear refused: the request is ended
+    /// before `op` runs with a token of a login that is gone, and the next is refused.
+    @MainActor func testASignOutWhileTheTokenIsReadRunsNoOp() async {
+        let op = HeldOnePassword()
+        op.answer(OnePasswordExit(status: 0, output: twoVaults, errors: ""))
+        let store = GatedStore(Connection(token: token, account: "Homelab"))
+        let (connections, tool) = wired(store, op)
+        store.holdNextRead()
+        let request = Task { await tool.run(["vaults"]) }
+        await store.reach()
+        store.refuses = true
+        connections.forget()
+        store.release()
+        let reply = await request.value
+        XCTAssertEqual(reply, SecretRequests.stopped)
+        XCTAssertTrue(op.calls.isEmpty, "op ran with an earlier login's token")
+        let next = await tool.run(["vaults"])
+        XCTAssertTrue(next.text.contains(refusedWords), next.text)
+        XCTAssertTrue(op.calls.isEmpty)
+    }
+
+    /// A sign-out while `op` runs: `op` is cancelled and its answer never reaches the mind, whether
+    /// the keychain refuses the clear or not.
+    @MainActor func testASignOutWhileOpRunsEndsItAndKeepsItsAnswer() async {
+        for refuses in [true, false] {
+            let op = HeldOnePassword()
+            op.answer(OnePasswordExit(status: 0, output: "hunter2", errors: ""))
+            op.hold()
+            let store = GatedStore(Connection(token: token, account: "Homelab"))
+            let (connections, tool) = wired(store, op)
+            let request = Task { await tool.run(["get", "op://Homelab/Router/password"]) }
+            await op.reach()
+            store.refuses = refuses
+            connections.forget()
+            op.release()
+            let reply = await request.value
+            XCTAssertEqual(reply, SecretRequests.stopped, "refused: \(refuses)")
+            XCTAssertEqual(op.cancelled, 1, "op was not ended; refused: \(refuses)")
+        }
+    }
+
+    /// The other order: a request that answered before the sign-out keeps its answer, and the
+    /// sign-out's refused clear stops the next.
+    @MainActor func testARequestAnsweredBeforeASignOutKeepsItsAnswer() async {
+        let op = HeldOnePassword()
+        op.answer(OnePasswordExit(status: 0, output: "hunter2", errors: ""))
+        let store = GatedStore(Connection(token: token, account: "Homelab"))
+        let (connections, tool) = wired(store, op)
+        let reply = await tool.run(["get", "op://Homelab/Router/password"])
+        XCTAssertEqual(reply, .ok("hunter2\n"))
+        store.refuses = true
+        connections.forget()
+        let next = await tool.run(["get", "op://Homelab/Router/password"])
+        XCTAssertTrue(next.text.contains(refusedWords), next.text)
+        XCTAssertEqual(op.calls.count, 1)
+    }
+
+    /// Disconnect ends a request in flight the same way.
+    @MainActor func testADisconnectWhileOpRunsEndsIt() async {
         let op = HeldOnePassword()
         op.answer(OnePasswordExit(status: 0, output: "hunter2", errors: ""))
         op.hold()
-        let leftBehind = ConnectionsLeftBehind.isolated()
-        let store = InMemoryConnectionStore([.onePassword: Connection(token: token, account: "Homelab")])
-        let tool = SecretTool(store: store, onePassword: op, leftBehind: leftBehind)
+        let store = GatedStore(Connection(token: token, account: "Homelab"))
+        let (connections, tool) = wired(store, op)
         let request = Task { await tool.run(["get", "op://Homelab/Router/password"]) }
         await op.reach()
-        leftBehind.words = "the connections' tokens could not be removed from this phone's keychain: -25308"
+        connections.disconnectOnePassword()
         op.release()
         let reply = await request.value
-        XCTAssertEqual(reply.status, ToolReply.failed)
-        XCTAssertFalse(reply.text.contains("hunter2"), reply.text)
+        XCTAssertEqual(reply, SecretRequests.stopped)
+        XCTAssertEqual(op.cancelled, 1)
+        XCTAssertNil(store.holds)
+    }
+
+    /// A keychain whose read fails at launch is said on the 1Password row, not shown as
+    /// disconnected.
+    @MainActor func testAnUnreadableKeychainIsSaidOnTheRow() {
+        let store = GatedStore(Connection(token: token, account: "Homelab"))
+        store.failsReads = true
+        let (connections, _) = wired(store, HeldOnePassword())
+        guard case let .failed(words) = connections.onePassword else { return XCTFail("not failed: \(connections.onePassword)") }
+        XCTAssertTrue(words.contains("could not be read"), words)
     }
 
     /// A field whose value is the service account's own token is refused like the token itself,
