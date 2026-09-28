@@ -2,10 +2,12 @@
 // instruction for GuestSimdTests: the destination's 16 bytes in hex, with the
 // destination filled with 0xaa beforehand, so a 64-bit form shows its upper
 // half zeroed. The input holds 0, 1, -1 and the byte, halfword, word and
-// doubleword minimums (each saturates to its maximum), and a positive and a
-// negative lane at every size, so SQABS and SQNEG differ at every size. ugrep's line numbering
-// reaches SQABS. Last it runs SQABS on the 1D arrangement, which is
-// unallocated and must raise SIGILL, so the program ends with status 132.
+// doubleword minimums in each half (each saturates to its maximum, the 64-bit
+// forms included), and a positive lane at every size, so SQABS and SQNEG differ
+// at every size. ugrep's line numbering
+// reaches SQABS. Then a child runs SQNEG on the 1D arrangement, which is
+// unallocated, and the parent prints the signal it died of; last the parent
+// runs SQABS 1D, unallocated too, so the program ends with status 132.
 //
 // Freestanding and static, so it runs on the bare minirootfs. `sqabs` beside
 // this file is its build, made with Homebrew's llvm and lld:
@@ -23,7 +25,7 @@ typedef long L;
 typedef unsigned char U8;
 
 static const U8 input[16] = {
-    0x00, 0x01, 0xff, 0x80, 0x7f, 0x81, 0xff, 0x7f,
+    0x00, 0x00, 0x00, 0x80, 0x01, 0xff, 0xff, 0x7f,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
 };
 
@@ -97,8 +99,26 @@ static void report(void) {
 #ifdef HOST
 int main(void) { report(); return 0; }
 #else
+static L sys(L n, L a, L b, L c, L d) {
+    register L x8 __asm__("x8") = n;
+    register L x0 __asm__("x0") = a;
+    register L x1 __asm__("x1") = b;
+    register L x2 __asm__("x2") = c;
+    register L x3 __asm__("x3") = d;
+    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x8), "r"(x1), "r"(x2), "r"(x3) : "memory");
+    return x0;
+}
+
 void _start(void) {
     report();
+    L child = sys(220 /* clone */, 17 /* SIGCHLD */, 0, 0, 0);
+    if (child == 0) {
+        __asm__ volatile(".inst 0x2ee07800"); // sqneg v0.1d, v0.1d: unallocated
+        leave();
+    }
+    int status = 0;
+    sys(260 /* wait4 */, child, (L)&status, 0, 0);
+    out((status & 0x7f) == 4 ? "sqneg 1d SIGILL\n" : "sqneg 1d ran\n", (status & 0x7f) == 4 ? 16 : 13);
     __asm__ volatile(".inst 0x0ee07800"); // sqabs v0.1d, v0.1d: unallocated
     leave();
 }

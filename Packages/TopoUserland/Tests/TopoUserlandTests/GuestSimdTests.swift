@@ -3,8 +3,8 @@ import TopoUserland
 
 /// SQABS and SQNEG (vector) in the booted guest (`patches/ish/0005-sqabs-sqneg-vector.patch`), as
 /// the architecture has them: every arrangement, saturating each type's minimum to its maximum and
-/// zeroing the upper half for the 64-bit forms, and the unallocated 1D arrangement still an illegal
-/// instruction. ugrep's line numbering, which Claude Code's Bash tool runs as `grep`, reaches SQABS.
+/// zeroing the upper half for the 64-bit forms, and the unallocated 1D arrangement of each still an
+/// illegal instruction. ugrep's line numbering, which Claude Code's Bash tool runs as `grep`, reaches SQABS.
 final class GuestSimdTests: XCTestCase {
     private let fm = FileManager.default
     private var host: URL?
@@ -35,23 +35,25 @@ final class GuestSimdTests: XCTestCase {
 
         let exit = try await Guest.shared.run("\(point)/sqabs")
         XCTAssertEqual(exit.output, """
-            sqabs 8b 0001017f7f7f017f0000000000000000
-            sqabs 16b 0001017f7f7f017f000000000000007f
-            sqabs 4h 0001017f817eff7f0000000000000000
-            sqabs 8h 0001017f817eff7f000000000000ff7f
-            sqabs 2s 00ff007f7f81ff7f0000000000000000
-            sqabs 4s 00ff007f7f81ff7f00000000ffffff7f
-            sqabs 2d 0001ff807f81ff7fffffffffffffff7f
-            sqneg 8b 00ff017f817f01810000000000000000
-            sqneg 16b 00ff017f817f0181000000000000007f
-            sqneg 4h 00ff017f817e01800000000000000000
-            sqneg 8h 00ff017f817e0180000000000000ff7f
-            sqneg 2s 00ff007f817e00800000000000000000
-            sqneg 4s 00ff007f817e008000000000ffffff7f
-            sqneg 2d 00ff007f807e0080ffffffffffffff7f
+            sqabs 8b 0000007f0101017f0000000000000000
+            sqabs 16b 0000007f0101017f000000000000007f
+            sqabs 4h 0000ff7fff00ff7f0000000000000000
+            sqabs 8h 0000ff7fff00ff7f000000000000ff7f
+            sqabs 2s ffffff7f01ffff7f0000000000000000
+            sqabs 4s ffffff7f01ffff7f00000000ffffff7f
+            sqabs 2d 0000008001ffff7fffffffffffffff7f
+            sqneg 8b 0000007fff0101810000000000000000
+            sqneg 16b 0000007fff010181000000000000007f
+            sqneg 4h 0000ff7fff0001800000000000000000
+            sqneg 8h 0000ff7fff000180000000000000ff7f
+            sqneg 2s ffffff7fff0000800000000000000000
+            sqneg 4s ffffff7fff00008000000000ffffff7f
+            sqneg 2d 00000080fe000080ffffffffffffff7f
+            sqneg 1d SIGILL
 
             """)
-        // The last instruction is SQABS on 1D, which is unallocated: 128 + SIGILL.
+        // SQNEG on 1D killed its child with SIGILL (the last line), and the last instruction is SQABS
+        // on 1D, both unallocated: 128 + SIGILL.
         XCTAssertEqual(exit.status, 132, "the unallocated 1D arrangement did not trap")
     }
 }
