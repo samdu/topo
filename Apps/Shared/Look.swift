@@ -438,6 +438,8 @@ struct Look: Equatable, Sendable {
     struct Settings: Equatable, Sendable {
         /// Its controls address Topo, so they take Topo's colour.
         var tint = Theme.primary
+        /// A code the person types somewhere else, as the Connections screen shows GitHub's.
+        var codeFont = Font.system(.title2, design: .monospaced)
     }
     /// The lozenge under the transcript: a floating pane of glass carrying two flanks and, set
     /// into the middle of it, the microphone in its well.

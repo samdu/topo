@@ -11,6 +11,7 @@ struct ChatView: View {
     @Environment(SignIn.self) private var signIn
     @Environment(RoleSelector.self) private var roleSelector
     @Environment(Memory.self) private var memory
+    @Environment(Connections.self) private var connections
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     @AppStorage("firstRunAnswered") private var answered = false
     @Environment(VoiceInput.self) private var voice
@@ -231,15 +232,7 @@ struct ChatView: View {
             // stops answering, forgets its login, and the root shows the viewer screen.
             while !Task.isCancelled {
                 if await roleSelector.demotionRecorded() {
-                    // What was waiting goes into the log first, while this screen and its task
-                    // still stand; the role flips after, and the login goes last.
-                    await harness.demote()
-                    roleSelector.acceptDemotion()
-                    // The login goes, so the reply being read goes with it, as at a sign-out,
-                    // and so does the folder: a viewer holds no login and keeps no memory.
-                    speaker.stop()
-                    memory.forget()
-                    signIn.signOut()
+                    await takeover.act()
                     return
                 }
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
@@ -325,13 +318,22 @@ struct ChatView: View {
         }
     }
 
-    /// The way out, built here because this is where the four things it ends are in scope, and
+    /// The far end of a takeover, built here for the same reason as the way out below.
+    private var takeover: Takeover {
+        Takeover(demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
+                 stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
+                 forgetConnections: { connections.forget() },
+                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
+    }
+
+    /// The way out, built here because this is where the five things it ends are in scope, and
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
         SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
                 forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
-                forgetLogin: { signIn.signOut() })
+                forgetConnections: { connections.forget() },
+                forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 
     private func sendSpoken(_ heard: String) async {

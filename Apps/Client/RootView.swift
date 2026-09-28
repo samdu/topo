@@ -9,6 +9,7 @@ struct RootView: View {
     #if os(iOS)
     @Environment(Harness.self) private var harness
     @Environment(Memory.self) private var memory
+    @Environment(Connections.self) private var connections
     #endif
     @AppStorage("firstRunAnswer") private var firstRunAnswer = ""
     /// Set once the first answer is in the log, so the question is not asked twice.
@@ -28,12 +29,11 @@ struct RootView: View {
             // launch leaves an outbox on disk) puts what was waiting into the log as a limb's
             // turns and drops the login.
             ViewerRootView().task {
-                if signIn.phase == .signedIn || harness.hasWaiting {
-                    await harness.demote()
-                    // A viewer holds no login, and with no login it keeps no copy of the memory.
-                    memory.forget()
-                    signIn.signOut()
-                }
+                await ViewerArrival(holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
+                                    demoteHarness: { await harness.demote() },
+                                    forgetMemory: { memory.forget() },
+                                    forgetConnections: { connections.forget() },
+                                    forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) }).act()
             }
         case .primary:
             if signIn.phase != .signedIn {
