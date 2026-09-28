@@ -299,11 +299,15 @@ def decide_issues(issues, now):
         if not isinstance(n, int) or isinstance(n, bool):
             n = None
         try:
-            labels = {l["name"] for l in i["labels"]["nodes"]}
+            nodes = i["labels"]["nodes"]
+            if not isinstance(nodes, list):
+                raise ValueError
+            labels = {l["name"] for l in nodes}
             comments = i["comments"]["totalCount"]
             title = i["title"]
             created = parse_time(i["createdAt"])
-            if n is None or not isinstance(title, str) or not isinstance(comments, int) or created is None:
+            if (n is None or not isinstance(title, str) or isinstance(comments, bool)
+                    or not isinstance(comments, int) or created is None):
                 raise ValueError
         except (KeyError, TypeError, ValueError, AttributeError):
             bad.append(f"#{n}" if n is not None else f"node {at}")
@@ -810,33 +814,53 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     # earlier report is undelivered, so a queue that waits on the bridge holds
     # PR lines rather than issue lines that are said again anyway. A line not
     # said leaves its key unfired, and it is said on a later pass.
+    # No line of this step takes a place the pass's other lines left full: one
+    # that finds the report at PENDING_MAX is not said, and its key not fired.
     untriaged = None   # the keys that stand, known only off a whole read
-    malformed = False
+    malformed = read = False
+
+    def say_issue(key, text):
+        if len(lines) < PENDING_MAX:
+            say(key, text)
+        else:
+            quiet.append(f"{key}: the report is full")
+
     try:
         issues, whole = sh.open_issues()
+        read = True
         if not whole:
-            say("issues:page", f"the open issue list runs past {ISSUES_PAGES} pages of {ISSUES_PAGE}; no issue is reported off a list not read whole.")
+            say_issue("issues:page", f"the open issue list runs past {ISSUES_PAGES} pages of {ISSUES_PAGE}; no issue is reported off a list not read whole.")
         else:
             wants, untriaged, bad = decide_issues(issues, now)
             if bad:
                 malformed = True
-                say("issues:node", f"{len(bad)} open issue node{'s' if len(bad) > 1 else ''} came back malformed and {'were' if len(bad) > 1 else 'was'} skipped: {', '.join(bad[:10])}.")
+                more = f" and {len(bad) - 10} more" if len(bad) > 10 else ""
+                say_issue("issues:node", f"{len(bad)} open issue node{'s' if len(bad) > 1 else ''} came back malformed and {'were' if len(bad) > 1 else 'was'} skipped: {', '.join(bad[:10])}{more}.")
             owed = [w for w in wants if due(state, w["key"], now)]
             quiet += [f"{w['key']}: said within the last {minutes(REPEAT)}" for w in wants if w not in owed]
-            room = 0 if state.get("undelivered") else max(0, min(ISSUE_LINES, PENDING_MAX - len(lines) - 1))
+            free = PENDING_MAX - len(lines)
+            if state.get("undelivered") or free <= 0:
+                room = 0
+            elif len(owed) <= min(ISSUE_LINES, free):
+                room = len(owed)
+            else:
+                room = min(ISSUE_LINES, free - 1)   # and one line saying how many wait
             for w in owed[:room]:
                 say(w["key"], w["text"])
             held = len(owed) - room
-            if held > 0 and state.get("undelivered"):
-                quiet.append(f"{held} issue line(s) wait for the undelivered reports")
+            if held > 0 and (state.get("undelivered") or free <= 0):
+                quiet.append(f"{held} issue line(s) wait for the undelivered reports or a report with room")
             elif held > 0:
                 lines.append(f"{held} more untriaged issue{'s' if held > 1 else ''} wait for the next pass.")
     except RuntimeError as ex:
-        say("issues:read", f"could not read the open issues: {ex}")
+        say_issue("issues:read", f"could not read the open issues: {ex}")
 
     # Forget what no open PR carries, so the file does not grow — but only on a
     # pass that read the PRs, since an unread list is not an empty one. Issue
-    # keys likewise, only on a pass that read the whole issue list.
+    # keys likewise, only on a pass that read the whole issue list; a read that
+    # answered at all ends the read failure, so the next one is said.
+    if read:
+        state["fired"].pop("issues:read", None)
     if untriaged is not None or malformed:
         state["fired"] = {k: v for k, v in state["fired"].items()
                           if not (k == "issues:page" or (k == "issues:node" and not malformed)

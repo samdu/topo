@@ -285,6 +285,10 @@ class Decisions(unittest.TestCase):
         self.assertEqual([w["key"] for w in wants], ["issue:1"])
         self.assertEqual(bad, ["#2", "#3", "#4", "#5"])
         self.assertEqual(keep, {1, 2, 3, 4, 5}, "a malformed node's own key stands")
+        wants, keep, bad = janitor.decide_issues([good, dict(issue(8), comments={"totalCount": False}),
+                                                  dict(issue(9), labels={"nodes": {}}), dict(issue(10), labels={"nodes": "triaged"})], NOW)
+        self.assertEqual(bad, ["#8", "#9", "#10"], "a bool count and labels that are not a list are malformed")
+        self.assertEqual([w["key"] for w in wants], ["issue:1"])
         for node in (None, "x", {"title": "no number"}, dict(issue(6), number="6"), dict(issue(7), number=True)):
             wants, keep, bad = janitor.decide_issues([good, node], NOW)
             self.assertEqual([w["key"] for w in wants], ["issue:1"], node)
@@ -744,6 +748,51 @@ class WholePass(unittest.TestCase):
         self.assertEqual(calls.count("gh api graphql"), 5)
         self.assertIn("issues:page", self.state_file()["fired"])
         self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES, "no key dropped off an unwhole read")
+
+    def test_the_paged_read_returns_every_issue_on_both_pages(self):
+        from unittest import mock
+        with open(self.script, "w") as f:
+            json.dump(self.scripted(issues=[issue(1000 + i) for i in range(150)]), f)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            nodes, whole = janitor.Shell().open_issues()
+        self.assertTrue(whole)
+        self.assertEqual([n["number"] for n in nodes], [1000 + i for i in range(150)])
+        self.assertEqual(self.calls().count("gh api graphql"), 2)
+
+    def test_a_report_the_other_lines_fill_takes_no_issue_line_and_no_notice(self):
+        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(199)]
+        p, calls = self.run_pass(self.scripted(prs=drafts, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(Bridge.received), 1)
+        text = Bridge.received[-1]["body"]["text"].splitlines()[1:]
+        self.assertEqual(len(text), janitor.PENDING_MAX)
+        self.assertEqual(sum("a draft, untouched" in l for l in text), 199, "every PR line is kept")
+        self.assertIn("swept worktree topo-old", "\n".join(text))
+        self.assertEqual(self.issue_lines(), [])
+        self.assertNotIn("wait for the next pass", "\n".join(text))
+        self.assertNotIn("dropped", "\n".join(text))
+        self.assertFalse([k for k in self.state_file()["fired"] if k.startswith("issue:")], "said on a pass with room")
+        self.backdate()
+        p, _ = self.run_pass(self.scripted(prs=drafts, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")], issues_error="HTTP 502"))
+        self.assertEqual(len(Bridge.received[-1]["body"]["text"].splitlines()[1:]), janitor.PENDING_MAX)
+        self.assertNotIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
+        self.assertNotIn("issues:read", self.state_file()["fired"])
+
+    def test_an_issue_read_that_fails_again_after_one_that_answered_is_said(self):
+        bad, good = self.scripted(prs=[], issues_error="HTTP 502"), self.scripted(prs=[], issues=[])
+        self.run_pass(bad)
+        self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
+        self.run_pass(good)
+        self.assertNotIn("issues:read", self.state_file()["fired"])
+        n = len(Bridge.received)
+        self.run_pass(bad)
+        self.assertTrue(any("could not read the open issues" in m["body"]["text"] for m in Bridge.received[n:]),
+                        "a new failure inside REPEAT is said")
+
+    def test_eleven_malformed_nodes_name_ten_and_count_the_rest(self):
+        self.run_pass(self.scripted(prs=[], issues=[dict(issue(i), title=None) for i in range(1, 12)]))
+        self.assertIn("11 open issue nodes came back malformed and were skipped: "
+                      + ", ".join(f"#{i}" for i in range(1, 11)) + " and 1 more.", Bridge.received[-1]["body"]["text"])
 
     def test_issue_lines_past_the_cap_are_unfired_and_said_on_the_next_pass(self):
         s = self.scripted(prs=[], issues=[issue(1000 + i, f"t{i}") for i in range(janitor.ISSUE_LINES + 10)])
