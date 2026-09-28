@@ -2,7 +2,7 @@ import Foundation
 import TopoUserland
 import XCTest
 
-/// The guest's zone: `/etc/localtime` linked into the zoneinfo mounted at `/usr/share/zoneinfo`.
+/// The guest's zone: `/etc/localtime` linked into the zoneinfo mounted at `Guest.zoneinfo`.
 /// Each test mounts its own zoneinfo there and takes it and the link away after, so the shared
 /// guest is left as it was found.
 final class GuestZoneTests: XCTestCase {
@@ -27,7 +27,7 @@ final class GuestZoneTests: XCTestCase {
         for zone in ["America/Los_Angeles", "Europe/London"] {
             let copy = dir.appendingPathComponent(zone)
             try fm.createDirectory(at: copy.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try fm.copyItem(at: URL(fileURLWithPath: Guest.zoneinfo).appendingPathComponent(zone), to: copy)
+            try fm.copyItem(at: URL(fileURLWithPath: Guest.hostZoneinfo).appendingPathComponent(zone), to: copy)
         }
         try Data("not a zone\n".utf8).write(to: dir.appendingPathComponent("Bogus"))
         try Guest.shared.mount(dir, at: Guest.zoneinfo)
@@ -41,11 +41,11 @@ final class GuestZoneTests: XCTestCase {
 
         try await Guest.shared.writeTimeZone(identifier: "America/Los_Angeles")
         let pacific = try await Guest.shared.run("/bin/sh", ["-c", probe])
-        XCTAssertEqual(pacific.output, "/usr/share/zoneinfo/America/Los_Angeles\n-0800\n-0700\n", pacific.errors)
+        XCTAssertEqual(pacific.output, "/opt/topo/zoneinfo/America/Los_Angeles\n-0800\n-0700\n", pacific.errors)
 
         try await Guest.shared.writeTimeZone(identifier: "Europe/London")
         let london = try await Guest.shared.run("/bin/sh", ["-c", probe])
-        XCTAssertEqual(london.output, "/usr/share/zoneinfo/Europe/London\n+0000\n+0100\n", london.errors)
+        XCTAssertEqual(london.output, "/opt/topo/zoneinfo/Europe/London\n+0000\n+0100\n", london.errors)
     }
 
     /// A name that is not a zone's, a zone the zoneinfo has no file for, or a file that is not TZif
@@ -65,18 +65,19 @@ final class GuestZoneTests: XCTestCase {
             }
         }
         let after = try await Guest.shared.run("/bin/sh", ["-c", "readlink /etc/localtime; ls /etc/localtime.topo /tmp/ran 2>/dev/null"])
-        XCTAssertEqual(after.output, "/usr/share/zoneinfo/Europe/London\n")
+        XCTAssertEqual(after.output, "/opt/topo/zoneinfo/Europe/London\n")
     }
 
-    /// The phone's own zoneinfo mounts at the same path, carries the zones as TZif, and takes no
-    /// write from the guest; a zone written against it tells the time in that zone.
+    /// The phone's own zoneinfo mounts at the guest's path, not over `/usr/share/zoneinfo`, which
+    /// stays apk's; it carries the zones as TZif and takes no write from the guest; a zone written against it tells the time in that zone.
     func testThePhonesZoneinfoIsMountedAndTakesNoWrite() async throws {
         try Guest.shared.mountZoneinfo()
         try Guest.shared.mountZoneinfo()
         let probe = try await Guest.shared.run("/bin/sh", ["-c",
-            "head -c 4 /usr/share/zoneinfo/America/Los_Angeles; echo; touch /usr/share/zoneinfo/topo-was-here && echo wrote"])
-        XCTAssertEqual(probe.output, "TZif\n", probe.errors)
-        XCTAssertFalse(fm.fileExists(atPath: Guest.zoneinfo + "/topo-was-here"))
+            "head -c 4 /opt/topo/zoneinfo/America/Los_Angeles; echo; touch /opt/topo/zoneinfo/topo-was-here && echo wrote; "
+            + "grep -c ' /usr/share/zoneinfo ' /proc/mounts"])
+        XCTAssertEqual(probe.output, "TZif\n0\n", probe.errors)
+        XCTAssertFalse(fm.fileExists(atPath: Guest.hostZoneinfo + "/topo-was-here"))
 
         try await Guest.shared.writeTimeZone(identifier: "Asia/Tokyo")
         let tokyo = try await Guest.shared.run("/bin/date", ["-d", "@1752000000", "+%z"])
