@@ -19,22 +19,45 @@ final class GuestTests: XCTestCase {
         XCTAssertEqual(exit.errors, "err\n")
     }
 
-    /// The guest is written a resolver, which the minirootfs has none of, as a file the fakefs
-    /// knows; one already there, the guest's own or the person's, is left as it is.
-    func testTheGuestHasAResolver() async throws {
+    /// The guest is written the phone's name servers as a file the fakefs knows, over whatever
+    /// the file held — the minirootfs's none, a stale one, the mind's own — and the public
+    /// fallback when the phone lists none.
+    func testTheGuestsResolverIsThePhonesAndReplacesWhatWasThere() async throws {
         _ = try SharedGuest.booted()
         _ = try await Guest.shared.run("/bin/rm", ["-f", "/etc/resolv.conf"])
-        try await Guest.shared.writeResolver()
+        try await Guest.shared.writeResolver(servers: ["100.100.100.100"])
         let written = try await Guest.shared.run("/bin/sh", ["-c", "cat /etc/resolv.conf && [ -f /etc/resolv.conf ]"])
         XCTAssertEqual(written.status, 0, written.errors)
-        XCTAssertEqual(written.output, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+        XCTAssertEqual(written.output, "nameserver 100.100.100.100\n")
 
         _ = try await Guest.shared.run("/bin/sh", ["-c", "echo 'nameserver 9.9.9.9' > /etc/resolv.conf"])
-        try await Guest.shared.writeResolver()
-        let kept = try await Guest.shared.run("/bin/cat", ["/etc/resolv.conf"])
-        XCTAssertEqual(kept.output, "nameserver 9.9.9.9\n")
-        _ = try await Guest.shared.run("/bin/rm", ["-f", "/etc/resolv.conf"])
-        try await Guest.shared.writeResolver()
+        try await Guest.shared.writeResolver(servers: ["10.0.0.1", "fd7a:115c:a1e0::53"])
+        let replaced = try await Guest.shared.run("/bin/sh", ["-c", "cat /etc/resolv.conf; ls /etc/resolv.conf.topo 2>/dev/null"])
+        XCTAssertEqual(replaced.output, "nameserver 10.0.0.1\nnameserver fd7a:115c:a1e0::53\n")
+
+        try await Guest.shared.writeResolver(servers: [])
+        let fallback = try await Guest.shared.run("/bin/cat", ["/etc/resolv.conf"])
+        XCTAssertEqual(fallback.output, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    }
+
+    /// Only numeric addresses with no scope reach the file, IPv4 first, three at most, each once;
+    /// a list with none of those is the fallback.
+    func testTheResolverFileTakesAddressesOnly() {
+        XCTAssertEqual(Guest.resolverFile(for: ["2001:558:feed::1", "fe80::1%en0", "192.168.1.1", "192.168.1.1",
+                                                "not an address", "10.0.0.1", "10.0.0.2"]),
+                       "nameserver 192.168.1.1\nnameserver 10.0.0.1\nnameserver 10.0.0.2\n")
+        XCTAssertEqual(Guest.resolverFile(for: ["fe80::1%en0", "; rm -rf /", ""]),
+                       "nameserver 1.1.1.1\nnameserver 8.8.8.8\n")
+    }
+
+    /// The phone's resolver answers numeric addresses, the simulator's being its Mac's, which
+    /// lists at least one.
+    func testThePhonesNameserversAreAddresses() {
+        let servers = Guest.systemNameservers()
+        XCTAssertFalse(servers.isEmpty, "res_ninit listed no server, or failed")
+        for server in servers {
+            XCTAssertNotEqual(Guest.resolverFile(for: [server]), Guest.resolverFile(for: []), server)
+        }
     }
 
     /// The guest tells the time in the zone `/etc/localtime` is pointed at, standard time and

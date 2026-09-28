@@ -13,6 +13,7 @@
 		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
+		046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */; };
 		05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		05C48F859FA1C2DDAAB4C44D /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */; };
 		05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
@@ -273,6 +274,7 @@
 		CB95DF525A42DFB75D528726 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
 		CBF883802BF44C4DE1D6B5C9 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		CC1BB7C2FF4CA8DFAD2E8157 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
+		CC49A0C7A2E6F3B755DD2ABB /* GuestResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 460C5C5620D24E4F80E9E415 /* GuestResolver.swift */; };
 		CC57D44CB7EB39BF75BEF57D /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		CEDE0DECFBB5BCF16F65601D /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
 		CFF0361D936128D236BEE661 /* TopoTVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */; };
@@ -410,8 +412,10 @@
 		43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacesModel.swift; sourceTree = "<group>"; };
 		4449A2BC546425D8D0480134 /* UserlandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UserlandTests.swift; sourceTree = "<group>"; };
 		45A790C5DC880D6BBF044F6A /* Voice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Voice.swift; sourceTree = "<group>"; };
+		460C5C5620D24E4F80E9E415 /* GuestResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResolver.swift; sourceTree = "<group>"; };
 		46425616D224D5EDABBDE93E /* DeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceIdentity.swift; sourceTree = "<group>"; };
 		48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResolverTests.swift; sourceTree = "<group>"; };
 		4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Markdown.swift; sourceTree = "<group>"; };
 		522A26D8E0BA7917872C2EAC /* fling.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = fling.json; sourceTree = "<group>"; };
 		570E29C16DA2E655E25483F5 /* PhoneTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneTool.swift; sourceTree = "<group>"; };
@@ -649,6 +653,7 @@
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
 				0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */,
+				460C5C5620D24E4F80E9E415 /* GuestResolver.swift */,
 				1DABB17BCD6602885282D24F /* Info.plist */,
 				7A4CB88ED3E53A495B415761 /* NotePush.swift */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
@@ -865,6 +870,7 @@
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
 				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
+				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
 				834457A014E7809E1A052937 /* LicenceTests.swift */,
@@ -1598,6 +1604,7 @@
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
 				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
+				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
 				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
@@ -1669,6 +1676,7 @@
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
 				B3B84E525F90B0060529D896 /* GuestClock.swift in Sources */,
 				DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */,
+				CC49A0C7A2E6F3B755DD2ABB /* GuestResolver.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
 				C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */,
 				DBF301F96AA4B4AB1BD70913 /* LocationTool.swift in Sources */,

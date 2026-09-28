@@ -120,6 +120,8 @@ final class Userland {
     private var claudeReadiness: [CheckedContinuation<ClaudeCodeInstaller, Error>] = []
     private var claudeInstaller: ClaudeCodeInstaller?
     private var booting: Task<ClaudeCodeInstaller.Installed, Error>?
+    /// The guest's resolver, kept to the phone's name servers from the boot on.
+    private let resolver = GuestResolver()
     /// The guest's `/etc/localtime`, kept to the phone's zone from the boot on.
     private let clock = GuestClock()
 
@@ -254,9 +256,9 @@ final class Userland {
             let fakefs = try await self.ready()
             let claude = try await self.claudeCode()
             try Guest.shared.boot(fakefs: fakefs)
-            // A guest with no resolver still runs, with no name resolving in it, so a failure here
+            // A guest with no resolver still runs, with no name resolving in it, so a failed write
             // is not the boot's: the boot's answer is kept for the life of the process.
-            try? await Guest.shared.writeResolver()
+            await self.resolver.start()
             // The same for the zone: a guest that cannot be told it tells the time in the zone it had.
             await self.clock.start()
             return try await withCheckedThrowingContinuation { continuation in
