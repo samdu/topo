@@ -229,25 +229,22 @@ final class TopoPlacementTests: XCTestCase {
                       back: (ChatReading.Chat, ChatReading.Topo) -> Bool) throws -> ChatReading.Topo {
         let cues = 5
         for cue in 1...cues {
-            let (now, rode) = try XCTContext.runActivity(named: "\(what), cue \(cue)") { _ in
-                try move(app, "\(what), cue \(cue)", rising: rising, until: there)
+            let (now, rode) = try move(app, "\(what), cue \(cue)", rising: rising, until: there)
+            if rode {
+                print("\(what): rode on cue \(cue)")
+                return now
             }
-            if rode { return now }
-            if cue < cues {
-                _ = try XCTContext.runActivity(named: "\(what), back for cue \(cue + 1)") { _ in
-                    try move(app, "\(what), back for cue \(cue + 1)", rising: !rising, until: back)
-                }
-            }
+            if cue < cues { _ = try move(app, "\(what), back for cue \(cue + 1)", rising: !rising, until: back) }
         }
         let message = "\(what): no frame of the carry sampled in \(cues) cues"
         XCTFail(message)
         throw ChatReading.NotThere(description: message)
     }
 
-    /// One move of the keyboard: waits for him to stand where it leaves him with the run it drew
-    /// complete, then judges the run. True for a ride, false for no verdict; a run he did not
-    /// ride fails. A run that never completes is no verdict once he stands there and the wait's
-    /// bound is out.
+    /// One move of the keyboard: waits for him to stand where it leaves him, then for the run it
+    /// drew to be complete, and judges the run. True for a ride, false for no verdict; a run he
+    /// did not ride fails, and so does his not getting there. A run not complete within five
+    /// seconds of his arrival is no verdict.
     private func move(_ app: XCUIApplication, _ what: String, rising: Bool,
                       until there: (ChatReading.Chat, ChatReading.Topo) -> Bool) throws -> (ChatReading.Topo, Bool) {
         let before = try ChatReading.wait(app, "\(what): at rest before the move") { _, now in
@@ -255,10 +252,11 @@ final class TopoPlacementTests: XCTestCase {
         }.1
         let since = before.trail.last?.t ?? -.infinity
         if rising { ChatReading.raiseKeyboard(app) } else { ChatReading.lowerKeyboard(app) }
-        let complete = ChatReading.poll(app, timeout: 20) { chat, now in
+        let (_, arrived) = try ChatReading.wait(app, what) { chat, now in there(chat, now) }
+        // The run is complete at the first still frame after the slide, one tick after it ends.
+        let now = ChatReading.poll(app, timeout: 5) { chat, now in
             there(chat, now) && Carry.judge(now.trail, since: since, rising: rising) != .incomplete
-        }
-        let (_, now) = try complete ?? ChatReading.wait(app, "\(what)", timeout: 1) { chat, now in there(chat, now) }
+        }?.1 ?? arrived
         switch Carry.judge(now.trail, since: since, rising: rising) {
         case .rode: return (now, true)
         case .incomplete, .noVerdict: return (now, false)
