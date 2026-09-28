@@ -37,8 +37,8 @@ judgement:
      `IDLE` while no run is in progress;
   6. reports each open issue that is untriaged — no `triaged` label and no
      comment — once it is older than `GRACE`, again every `REPEAT` while it
-     stays so. One GraphQL read gives the title, the labels and a comment
-     count; the body is never read.
+     stays so. A paged GraphQL read (at most `ISSUES_PAGES` pages) gives the
+     title, the labels and a comment count; the body is never read.
 
 Everything it decides is a function of what it read; everything it does is a
 `gh`, `git`, `tmux` or shell call behind `Shell`, so `--dry-run` prints the
@@ -108,12 +108,14 @@ SETUP_STEPS = {
 }
 SETUP_PREFIXES = ("Run actions/", "Post Run ", "Join the tailnet")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
-ISSUES_PAGE = 100                  # an issue list this long may have left one off
+ISSUES_PAGE = 100                  # issues read per GraphQL page
+ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
 TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
 FROM_TOPO = "from-topo"            # the mind on the phone filed it
-ISSUES_QUERY = f"""query($owner: String!, $name: String!) {{
+ISSUES_QUERY = f"""query($owner: String!, $name: String!, $after: String) {{
   repository(owner: $owner, name: $name) {{
-    issues(states: OPEN, first: {ISSUES_PAGE}) {{
+    issues(states: OPEN, first: {ISSUES_PAGE}, after: $after) {{
+      pageInfo {{ hasNextPage endCursor }}
       nodes {{ number title createdAt labels(first: 20) {{ nodes {{ name }} }} comments {{ totalCount }} }}
     }}
   }}
@@ -435,17 +437,29 @@ class Shell:
 
     def open_issues(self):
         """The open issues, as GraphQL nodes: number, title, createdAt, labels and a
-        comment count, never a body. A list that fills its page may have left
-        one off, and is refused rather than read as whole."""
+        comment count, never a body. Read a page at a time on `endCursor`, at
+        most ISSUES_PAGES pages; answers (nodes, whole), `whole` False when a
+        next page still stands after the last one read."""
         owner, name = REPO.split("/")
-        answer = self.gh_json("api", "graphql", "-f", f"query={ISSUES_QUERY}", "-F", f"owner={owner}", "-F", f"name={name}")
-        try:
-            nodes = answer["data"]["repository"]["issues"]["nodes"]
-        except (KeyError, TypeError):
-            raise RuntimeError("gh api graphql answered without the repository's issues")
-        if not isinstance(nodes, list):
-            raise RuntimeError("gh api graphql answered without the repository's issues")
-        return nodes
+        nodes, after = [], None
+        for _ in range(ISSUES_PAGES):
+            args = ["api", "graphql", "-f", f"query={ISSUES_QUERY}", "-F", f"owner={owner}", "-F", f"name={name}"]
+            if after:
+                args += ["-f", f"after={after}"]
+            answer = self.gh_json(*args)
+            try:
+                issues = answer["data"]["repository"]["issues"]
+                page, more, after = issues["nodes"], issues["pageInfo"]["hasNextPage"], issues["pageInfo"]["endCursor"]
+            except (KeyError, TypeError):
+                raise RuntimeError("gh api graphql answered without the repository's issues")
+            if not isinstance(page, list):
+                raise RuntimeError("gh api graphql answered without the repository's issues")
+            nodes += page
+            if not more:
+                return nodes, True
+            if not after:
+                raise RuntimeError("gh api graphql said there is a next page and gave no cursor")
+        return nodes, False
 
     def main_sha(self):
         return self.run(["gh", "api", f"repos/{REPO}/commits/main", "--jq", ".sha"]).stdout.strip()
@@ -773,9 +787,9 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     # 6: the open issues nobody has triaged.
     untriaged = None   # the numbers still untriaged, known only off a whole read
     try:
-        issues = sh.open_issues()
-        if len(issues) >= ISSUES_PAGE:
-            say("issues:page", f"the open issue list filled its page of {ISSUES_PAGE}; no issue is reported off a list that may be missing one.")
+        issues, whole = sh.open_issues()
+        if not whole:
+            say("issues:page", f"the open issue list runs past {ISSUES_PAGES} pages of {ISSUES_PAGE}; no issue is reported off a list not read whole.")
         else:
             wants, untriaged = decide_issues(issues, now)
             for w in wants:

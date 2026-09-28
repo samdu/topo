@@ -359,7 +359,11 @@ if tool == "gh":
     if a[:2] == ["variable", "get"]: out("false")
     if a[:2] == ["api", "graphql"]:
         if S.get("issues_error"): print(S["issues_error"], file=sys.stderr); sys.exit(1)
-        out({"data": {"repository": {"issues": {"nodes": S.get("issues", [])}}}})
+        start = int(a[a.index("-f", 3) + 1].split("=", 1)[1]) if a.count("-f") > 1 else 0
+        page = S.get("issues", [])[start:start + 100]
+        more = start + 100 < len(S.get("issues", []))
+        out({"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": more, "endCursor": str(start + 100) if more else None},
+                                                "nodes": page}}}})
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
@@ -622,7 +626,7 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn(janitor.ISSUES_QUERY, calls)
-        self.assertIn("issues(states: OPEN, first: 100)", janitor.ISSUES_QUERY, "repository.issues holds no PR")
+        self.assertIn("issues(states: OPEN, first: 100, after: $after)", janitor.ISSUES_QUERY, "repository.issues holds no PR")
         self.assertNotIn("body", janitor.ISSUES_QUERY)
         self.assertNotIn("gh issue", calls)
         self.assertRegex(self.issue_lines()[0], r"^- issue: #40 The badge is yellow, opened \d+ h ago, untriaged\.$")
@@ -684,12 +688,13 @@ class WholePass(unittest.TestCase):
         self.assertIn("could not read the open issues: gh api graphql", Bridge.received[-1]["body"]["text"])
         self.assertEqual({k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue:")}, fired)
 
-        many = [issue(100 + i, f"t{i}") for i in range(100)]
+        many = [issue(1000 + i, f"t{i}") for i in range(501)]
         p, calls = self.run_pass(self.scripted(issues=many))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("pr merge 7", calls)
         self.assertEqual(self.issue_lines(), [])
-        self.assertIn("the open issue list filled its page of 100", Bridge.received[-1]["body"]["text"])
+        self.assertIn("the open issue list runs past 5 pages of 100", Bridge.received[-1]["body"]["text"])
+        self.assertEqual(calls.count("gh api graphql"), 5, "no sixth page is read")
         after = self.state_file()["fired"]
         self.assertEqual({k: v for k, v in after.items() if k.startswith("issue:")}, fired)
         self.assertIn("issues:page", after)
@@ -700,6 +705,29 @@ class WholePass(unittest.TestCase):
         self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
         self.assertNotIn("issues:page", self.state_file()["fired"], "a whole read ends the page condition")
         self.assertIn("issue:40", self.state_file()["fired"])
+
+    def test_the_issue_list_is_read_page_by_page_on_the_cursor(self):
+        issues = [issue(1000 + i, f"t{i}") for i in range(150)]
+        p, calls = self.run_pass(self.scripted(prs=[], issues=issues))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(calls.count("gh api graphql"), 2)
+        self.assertIn("-f after=100", calls)
+        lines = self.issue_lines()
+        self.assertEqual(len(lines), 150, "both pages' issues are reported")
+        self.assertIn("#1000 t0,", lines[0])
+        self.assertIn("#1149 t149,", lines[-1])
+        self.assertNotIn("issues:page", self.state_file()["fired"])
+
+    def test_exactly_five_full_pages_is_whole_and_a_sixth_is_not(self):
+        p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(500)]))
+        self.assertEqual(calls.count("gh api graphql"), 5)
+        self.assertEqual(len(self.issue_lines(since=0)), 200, "500 lines, cut to PENDING_MAX")
+        self.assertNotIn("issues:page", self.state_file()["fired"])
+        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), 500)
+        p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(501)]))
+        self.assertEqual(calls.count("gh api graphql"), 5)
+        self.assertIn("issues:page", self.state_file()["fired"])
+        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), 500, "no key dropped off an unwhole read")
 
     def test_a_dry_run_prints_the_issue_lines_and_writes_no_state(self):
         p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Dry")]), extra=["--dry-run"])
