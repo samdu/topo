@@ -61,6 +61,13 @@ def jobs(**concl):
     return out
 
 
+def issue(number, title="x", age=timedelta(hours=1), labels=(), comments=0, **kw):
+    d = {"number": number, "title": title, "createdAt": ago(age),
+         "labels": {"nodes": [{"name": l} for l in labels], "pageInfo": {"hasNextPage": False}}, "comments": {"totalCount": comments}}
+    d.update(kw)
+    return d
+
+
 def kinds(wants):
     return [w["kind"] + ":" + w["key"].split(":")[1] if w["kind"] == "report" else w["kind"] for w in wants]
 
@@ -261,6 +268,38 @@ class Decisions(unittest.TestCase):
         out = janitor.decide_sweep(wts, "/r/topo", lambda b: history.get(b), NOW)
         self.assertEqual([o["path"] for o in out], ["/r/.worktrees/topo-old"])
 
+    def test_an_untriaged_issue_past_the_grace_is_reported_and_a_triaged_one_is_not(self):
+        issues = [issue(1, "Old", age=timedelta(hours=3)), issue(2, "Mine", labels=["from-topo", "bug"]),
+                  issue(3, labels=["triaged"]), issue(4, comments=1), issue(5, age=timedelta(minutes=5))]
+        wants, untriaged, bad = janitor.decide_issues(issues, NOW)
+        self.assertEqual(bad, [])
+        self.assertEqual([w["key"] for w in wants], ["issue:1", "issue:2"])
+        self.assertEqual(wants[0]["text"], "issue: #1 Old, opened 3 h ago, untriaged.")
+        self.assertEqual(wants[1]["text"], "issue: #2 Mine (filed by Topo), opened 60 min ago, untriaged.")
+        self.assertEqual(untriaged, {1, 2, 5}, "one inside the grace is untriaged, just not said yet")
+
+    def test_a_malformed_issue_node_is_skipped_and_named(self):
+        good = issue(1, "Good")
+        wants, keep, bad = janitor.decide_issues([good, dict(issue(2), title=None), dict(issue(3), createdAt="nonsense"),
+                                                  dict(issue(4), labels=None), dict(issue(5), comments={})], NOW)
+        self.assertEqual([w["key"] for w in wants], ["issue:1"])
+        self.assertEqual(bad, ["#2", "#3", "#4", "#5"])
+        self.assertEqual(keep, {1, 2, 3, 4, 5}, "a malformed node's own key stands")
+        wants, keep, bad = janitor.decide_issues([good, dict(issue(8), comments={"totalCount": False}),
+                                                  dict(issue(9), labels={"nodes": {}}), dict(issue(10), labels={"nodes": "triaged"})], NOW)
+        self.assertEqual(bad, ["#8", "#9", "#10"], "a bool count and labels that are not a list are malformed")
+        self.assertEqual([w["key"] for w in wants], ["issue:1"])
+        old_shape = dict(issue(11), labels={"nodes": [{"name": f"l{k}"} for k in range(20)]})
+        more = dict(issue(12), labels={"nodes": [{"name": "bug"}], "pageInfo": {"hasNextPage": True}})
+        wants, keep, bad = janitor.decide_issues([good, old_shape, more], NOW)
+        self.assertEqual(bad, ["#11", "#12"], "a label list that may not be whole is malformed")
+        self.assertEqual([w["key"] for w in wants], ["issue:1"])
+        for node in (None, "x", {"title": "no number"}, dict(issue(6), number="6"), dict(issue(7), number=True)):
+            wants, keep, bad = janitor.decide_issues([good, node], NOW)
+            self.assertEqual([w["key"] for w in wants], ["issue:1"], node)
+            self.assertEqual(bad, ["node 2"], node)
+            self.assertIsNone(keep, "with a node that has no number, no issue key may be dropped")
+
     def test_failing_tests_are_read_off_an_xcodebuild_log(self):
         log = ("Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.2 seconds).\n"
                "Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.3 seconds).\n"
@@ -341,6 +380,21 @@ if tool == "gh":
         if asked > 1 and branch in S.get("history_later", {}): out(S["history_later"][branch][:limit])
         out(S["history"].get(branch, [])[:limit])
     if a[:2] == ["variable", "get"]: out("false")
+    if a[:2] == ["api", "graphql"]:
+        if S.get("issues_error"): print(S["issues_error"], file=sys.stderr); sys.exit(1)
+        start = int(a[a.index("-f", 3) + 1].split("=", 1)[1]) if a.count("-f") > 1 else 0
+        page = S.get("issues", [])[start:start + 100]
+        # GitHub answers `labels(first: N)` with at most N labels and says whether more stand.
+        import re; first = int(re.search(r"labels\(first: (\d+)\)", a[a.index("-f") + 1]).group(1))
+        def cut(i):
+            if not (isinstance(i, dict) and isinstance(i.get("labels"), dict) and isinstance(i["labels"].get("nodes"), list)):
+                return i
+            ls = i["labels"]["nodes"]
+            return dict(i, labels={"nodes": ls[:first], "pageInfo": {"hasNextPage": len(ls) > first}})
+        page = [cut(i) for i in page]
+        more = start + 100 < len(S.get("issues", []))
+        out({"data": {"repository": {"issues": {"pageInfo": {"hasNextPage": more, "endCursor": str(start + 100) if more else None},
+                                                "nodes": page}}}})
     if a[0] == "api" and "/runs?head_sha=" in a[1]:
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
@@ -582,6 +636,306 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s)
         self.assertIn("tmux kill-session -t =deep", calls)
         self.assertNotIn("=topo-older", calls)
+
+    def backdate(self, hours=4):
+        """Every fired key as if said `hours` ago: the next pass is past REPEAT."""
+        state = self.state_file()
+        at = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        state["fired"] = {k: at for k in state["fired"]}
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+
+    def issue_lines(self, since=None):
+        """The issue lines of the last message, or of every message from `since` on."""
+        got = Bridge.received[-1:] if since is None else Bridge.received[since:]
+        return [l for m in got for l in m["body"]["text"].splitlines() if l.startswith("- issue:")]
+
+    def test_untriaged_issues_are_reported_by_number_and_title_and_never_their_body(self):
+        s = self.scripted(issues=[issue(40, "The badge is yellow", body="SECRET-MARKER"),
+                                  issue(41, "Topo cannot see the lights", labels=["from-topo"], age=timedelta(hours=5)),
+                                  issue(42, "Planned", labels=["triaged"]), issue(43, "Answered", comments=2)])
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(janitor.ISSUES_QUERY, calls)
+        self.assertIn("issues(states: OPEN, first: 100, after: $after)", janitor.ISSUES_QUERY, "repository.issues holds no PR")
+        self.assertNotIn("body", janitor.ISSUES_QUERY)
+        self.assertNotIn("gh issue", calls)
+        self.assertRegex(self.issue_lines()[0], r"^- issue: #40 The badge is yellow, opened \d+ h ago, untriaged\.$")
+        self.assertRegex(self.issue_lines()[1], r"^- issue: #41 Topo cannot see the lights \(filed by Topo\), opened \d+ h ago, untriaged\.$")
+        self.assertEqual(len(self.issue_lines()), 2)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertNotIn("SECRET-MARKER", text)
+        self.assertNotIn("issue: #7", text, "the open PR is not an issue")
+        self.assertEqual({k for k in self.state_file()["fired"] if k.startswith("issue")}, {"issue:40", "issue:41"})
+
+    def test_an_untriaged_issue_is_said_again_only_after_the_repeat_window(self):
+        s = self.scripted(prs=[], issues=[issue(40, "Stands")])
+        self.run_pass(s)
+        self.assertEqual(len(self.issue_lines()), 1)
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertEqual(self.issue_lines(since=n), [], "said once inside REPEAT")
+        n = len(Bridge.received)
+        self.backdate()
+        self.run_pass(s)
+        self.assertEqual(len(self.issue_lines(since=n)), 1)
+        self.assertIn("#40 Stands", self.issue_lines(since=n)[0])
+
+    def test_a_triaged_issue_goes_quiet_and_stays_quiet_past_the_repeat_window(self):
+        for how in ({"labels": ["triaged"]}, {"comments": 1}):
+            with self.subTest(how):
+                self.setUp()
+                self.run_pass(self.scripted(prs=[], issues=[issue(40, "Later")]))
+                self.assertEqual(len(self.issue_lines()), 1)
+                n = len(Bridge.received)
+                triaged = self.scripted(prs=[], issues=[issue(40, "Later", **{k: v for k, v in how.items() if k == "comments"},
+                                                              labels=how.get("labels", ()))])
+                self.run_pass(triaged)
+                self.assertNotIn("issue:40", self.state_file()["fired"], "a triaged issue's key is forgotten")
+                self.backdate()
+                p, _ = self.run_pass(triaged)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertEqual(self.issue_lines(since=n), [], "nothing is said about a triaged issue past REPEAT")
+
+    def test_a_closed_issue_is_forgotten_only_on_a_pass_that_read_the_list(self):
+        self.run_pass(self.scripted(prs=[], issues=[issue(40, "Closing")]))
+        self.assertIn("issue:40", self.state_file()["fired"])
+        p, _ = self.run_pass(self.scripted(prs=[], issues_error="HTTP 502: Bad Gateway"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("issue:40", self.state_file()["fired"], "an unread list is not an empty one")
+        self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
+        self.run_pass(self.scripted(prs=[], issues=[]))
+        self.assertNotIn("issue:40", self.state_file()["fired"])
+
+    def test_a_failed_or_page_filling_issue_read_reports_nothing_off_it_and_the_pr_cleanup_keeps_issue_keys(self):
+        self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
+        fired = {k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue")}
+        self.assertEqual(list(fired), ["issue:40"])
+
+        p, calls = self.run_pass(self.scripted(issues=[issue(40, "Kept"), issue(44, "New")], issues_error="HTTP 502"))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pr merge 7", calls, "the PR list was read whole")
+        self.assertEqual(self.issue_lines(), [])
+        self.assertIn("could not read the open issues: gh api graphql", Bridge.received[-1]["body"]["text"])
+        self.assertEqual({k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue:")}, fired)
+
+        many = [issue(1000 + i, f"t{i}") for i in range(501)]
+        p, calls = self.run_pass(self.scripted(issues=many))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("pr merge 7", calls)
+        self.assertEqual(self.issue_lines(), [])
+        self.assertIn("the open issue list runs past 5 pages of 100", Bridge.received[-1]["body"]["text"])
+        self.assertEqual(calls.count("gh api graphql"), 5, "no sixth page is read")
+        after = self.state_file()["fired"]
+        self.assertEqual({k: v for k, v in after.items() if k.startswith("issue:")}, fired)
+        self.assertIn("issues:page", after)
+
+        p, calls = self.run_pass(self.scripted(issues=many))
+        self.assertIn("issues:page", self.state_file()["fired"], "a PR read does not drop the page key")
+
+        self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
+        self.assertNotIn("issues:page", self.state_file()["fired"], "a whole read ends the page condition")
+        self.assertIn("issue:40", self.state_file()["fired"])
+
+    def test_the_issue_list_is_read_page_by_page_on_the_cursor(self):
+        issues = [issue(1000 + i, f"t{i}", comments=1 if 0 < i < 100 else 0) for i in range(150)]
+        p, calls = self.run_pass(self.scripted(prs=[], issues=issues))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(calls.count("gh api graphql"), 2)
+        self.assertIn("-f after=100", calls)
+        lines = self.issue_lines()
+        self.assertEqual(len(lines), 51, "both pages' untriaged issues are reported")
+        self.assertIn("#1000 t0,", lines[0])
+        self.assertIn("#1100 t100,", lines[1])
+        self.assertIn("#1149 t149,", lines[-1])
+        self.assertNotIn("issues:page", self.state_file()["fired"])
+
+    def test_exactly_five_full_pages_is_whole_and_a_sixth_is_not(self):
+        p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(500)]))
+        self.assertEqual(calls.count("gh api graphql"), 5)
+        self.assertEqual(len(self.issue_lines()), janitor.ISSUE_LINES)
+        self.assertIn("440 more untriaged issues wait for the next pass.", Bridge.received[-1]["body"]["text"])
+        self.assertNotIn("issues:page", self.state_file()["fired"])
+        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES)
+        p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(501)]))
+        self.assertEqual(calls.count("gh api graphql"), 5)
+        self.assertIn("issues:page", self.state_file()["fired"])
+        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES, "no key dropped off an unwhole read")
+
+    def test_the_paged_read_returns_every_issue_on_both_pages(self):
+        from unittest import mock
+        with open(self.script, "w") as f:
+            json.dump(self.scripted(issues=[issue(1000 + i) for i in range(150)]), f)
+        with mock.patch.dict(os.environ, self.env, clear=True):
+            nodes, whole = janitor.Shell().open_issues()
+        self.assertTrue(whole)
+        self.assertEqual([n["number"] for n in nodes], [1000 + i for i in range(150)])
+        self.assertEqual(self.calls().count("gh api graphql"), 2)
+
+    def test_a_report_the_other_lines_fill_takes_no_issue_line_and_no_notice(self):
+        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(199)]
+        p, calls = self.run_pass(self.scripted(prs=drafts, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(Bridge.received), 1)
+        text = Bridge.received[-1]["body"]["text"].splitlines()[1:]
+        self.assertEqual(len(text), janitor.PENDING_MAX)
+        self.assertEqual(sum("a draft, untouched" in l for l in text), 199, "every PR line is kept")
+        self.assertIn("swept worktree topo-old", "\n".join(text))
+        self.assertEqual(self.issue_lines(), [])
+        self.assertNotIn("wait for the next pass", "\n".join(text))
+        self.assertNotIn("dropped", "\n".join(text))
+        self.assertFalse([k for k in self.state_file()["fired"] if k.startswith("issue:")], "said on a pass with room")
+        self.backdate()
+        p, _ = self.run_pass(self.scripted(prs=drafts, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")], issues_error="HTTP 502"))
+        self.assertEqual(len(Bridge.received[-1]["body"]["text"].splitlines()[1:]), janitor.PENDING_MAX)
+        self.assertNotIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
+        self.assertNotIn("issues:read", self.state_file()["fired"])
+
+    def test_an_issue_read_that_fails_again_after_one_that_answered_is_said(self):
+        bad, good = self.scripted(prs=[], issues_error="HTTP 502"), self.scripted(prs=[], issues=[])
+        self.run_pass(bad)
+        self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
+        self.run_pass(good)
+        self.assertNotIn("issues:read", self.state_file()["fired"])
+        n = len(Bridge.received)
+        self.run_pass(bad)
+        self.assertTrue(any("could not read the open issues" in m["body"]["text"] for m in Bridge.received[n:]),
+                        "a new failure inside REPEAT is said")
+
+    def test_a_triaged_label_past_the_twentieth_is_read_and_a_label_list_with_more_is_skipped(self):
+        self.assertIn("labels(first: 100) { nodes { name } pageInfo { hasNextPage } }", janitor.ISSUES_QUERY)
+        many = [f"l{k}" for k in range(20)]
+        s = self.scripted(prs=[], issues=[issue(40, "Twenty-one", labels=many + ["triaged"]),
+                                          issue(41, "Too many", labels=[f"l{k}" for k in range(101)]),
+                                          issue(42, "Plain")])
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertNotIn("#40", text, "the 21st label, triaged, is read")
+        self.assertIn("1 open issue node came back malformed and was skipped: #41.", text)
+        self.assertNotIn("issue: #41", text)
+        self.assertEqual([l.split(",")[0] for l in self.issue_lines()], ["- issue: #42 Plain"])
+        old = self.scripted(prs=[], issues=[issue(40, "Twenty-one", labels=many + ["triaged"])])
+        with open(self.script, "w") as f:
+            json.dump(old, f)
+        from unittest import mock
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(janitor, "ISSUES_QUERY", janitor.ISSUES_QUERY.replace("labels(first: 100)", "labels(first: 20)")):
+            nodes, whole = janitor.Shell().open_issues()
+        self.assertEqual(len(nodes[0]["labels"]["nodes"]), 20)
+        wants, keep, bad = janitor.decide_issues(nodes, NOW)
+        self.assertEqual((wants, bad), ([], ["#40"]), "read the old way, the issue is skipped, never called untriaged")
+
+    def test_while_a_report_waits_on_the_bridge_step_six_queues_nothing(self):
+        state = {"undelivered": [{"id": "earlier", "at": "2026-09-28T00:00Z", "lines": ["an earlier line"]}]}
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        Bridge.status = 503
+        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(49)]
+        s = self.scripted(prs=drafts, issues_error="HTTP 502", worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n")
+        for i in range(4):
+            if i:
+                self.backdate()
+            p, _ = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("issues:read: waits for the undelivered reports", p.stderr)
+        queued = self.undelivered()
+        self.assertEqual(queued[0], "an earlier line", "nothing dropped")
+        self.assertEqual(sum("a draft, untouched" in l for l in queued), 4 * 49, "every PR line is queued")
+        self.assertFalse([l for l in queued if "issue" in l or "dropped" in l], "no step-6 line is queued")
+        self.assertNotIn("issues:read", self.state_file()["fired"])
+        Bridge.status = 200
+        self.run_pass(s)
+        self.assertEqual(self.undelivered(), [])
+        self.run_pass(s)
+        self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"], "said once the queue is clear")
+
+    def test_eleven_malformed_nodes_name_ten_and_count_the_rest(self):
+        self.run_pass(self.scripted(prs=[], issues=[dict(issue(i), title=None) for i in range(1, 12)]))
+        self.assertIn("11 open issue nodes came back malformed and were skipped: "
+                      + ", ".join(f"#{i}" for i in range(1, 11)) + " and 1 more.", Bridge.received[-1]["body"]["text"])
+
+    def test_issue_lines_past_the_cap_are_unfired_and_said_on_the_next_pass(self):
+        s = self.scripted(prs=[], issues=[issue(1000 + i, f"t{i}") for i in range(janitor.ISSUE_LINES + 10)])
+        self.run_pass(s)
+        first = self.issue_lines()
+        self.assertEqual(len(first), janitor.ISSUE_LINES)
+        self.assertIn("10 more untriaged issues wait for the next pass.", Bridge.received[-1]["body"]["text"])
+        fired = {k for k in self.state_file()["fired"] if k.startswith("issue:")}
+        self.assertEqual(fired, {f"issue:{1000 + i}" for i in range(janitor.ISSUE_LINES)}, "a line cut is not fired")
+        self.run_pass(s)
+        second = self.issue_lines()
+        self.assertEqual(len(second), 10)
+        self.assertIn(f"#{1000 + janitor.ISSUE_LINES} ", second[0])
+        self.assertNotIn("wait for the next pass", Bridge.received[-1]["body"]["text"])
+
+    def test_a_pass_over_the_line_cap_cuts_issue_lines_and_keeps_every_pr_line(self):
+        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(195)]
+        p, calls = self.run_pass(self.scripted(prs=drafts, issues=[issue(1000 + i, f"t{i}") for i in range(20)]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(Bridge.received), 1, "one message, nothing dropped")
+        text = Bridge.received[-1]["body"]["text"].splitlines()[1:]
+        self.assertEqual(sum("a draft, untouched" in l for l in text), 195, "every PR line is kept")
+        self.assertIn("swept worktree topo-old", "\n".join(text))
+        said = self.issue_lines()
+        self.assertEqual(len(text), janitor.PENDING_MAX)
+        self.assertEqual(len(said), janitor.PENDING_MAX - 195 - 2)
+        self.assertEqual(text[-1], f"- {20 - len(said)} more untriaged issues wait for the next pass.")
+        fired = {k for k in self.state_file()["fired"] if k.startswith("issue:")}
+        self.assertEqual(fired, {f"issue:{1000 + i}" for i in range(len(said))}, "a line cut is not fired")
+        self.assertNotIn("dropped", Bridge.received[-1]["body"]["text"])
+
+    def test_no_issue_line_joins_a_queue_that_waits_on_the_bridge(self):
+        s = self.scripted(prs=[pr(body="- [ ] device: phone")], issues=[issue(40, "A"), issue(41, "B")])
+        Bridge.status = 503
+        self.run_pass(s)
+        queued = lambda: [l for l in self.undelivered() if l.startswith("issue:")]
+        self.assertEqual(len(queued()), 2, "an empty queue takes the pass's issue lines")
+        for _ in range(3):
+            self.backdate()
+            p, _ = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(queued()), 2, "a standing queue gains no issue line, past REPEAT or not")
+        self.assertEqual(sum("Proof box" in l for l in self.undelivered()), 4, "PR lines still join it")
+        self.assertIn("issue line(s) wait for the undelivered reports", p.stderr)
+        Bridge.status = 200
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertEqual(self.undelivered(), [])
+        self.assertEqual(len(self.issue_lines(since=n)), 2, "the queue's own two, delivered; none added on the pass that emptied it")
+        n = len(Bridge.received)
+        self.run_pass(s)
+        self.assertEqual(len(self.issue_lines(since=n)), 2, "the two held since are said once the queue is clear")
+
+    def test_a_malformed_issue_node_is_noted_and_the_pass_still_cleans_up(self):
+        self.run_pass(self.scripted(prs=[], issues=[issue(39, "Closing"), issue(40, "Good")]))
+        self.assertIn("issue:39", self.state_file()["fired"])
+        p, _ = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good"), dict(issue(41), title=None)]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertIn("1 open issue node came back malformed and was skipped: #41.", text)
+        self.assertNotIn("stopped early", text)
+        fired = self.state_file()["fired"]
+        self.assertNotIn("issue:39", fired, "cleanup ran: the closed issue is forgotten")
+        self.assertIn("issue:40", fired)
+        self.assertIn("issues:node", fired)
+        self.run_pass(self.scripted(prs=[], issues=[issue(39, "Back"), issue(40, "Good")]))
+        self.backdate()
+        p, _ = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good"), None]))
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("skipped: node 2.", Bridge.received[-1]["body"]["text"])
+        self.assertNotIn("stopped early", Bridge.received[-1]["body"]["text"])
+        self.assertIn("issue:39", self.state_file()["fired"], "a node with no number may be #39: its key stays")
+        self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good")]))
+        self.assertNotIn("issues:node", self.state_file()["fired"])
+        self.assertNotIn("issue:39", self.state_file()["fired"])
+
+    def test_a_dry_run_prints_the_issue_lines_and_writes_no_state(self):
+        p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Dry")]), extra=["--dry-run"])
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertRegex(p.stdout, r"- issue: #40 Dry, opened \d+ h ago, untriaged\.")
+        self.assertEqual(Bridge.received, [])
+        self.assertFalse(os.path.exists(self.state))
 
     def test_a_dry_run_runs_nothing_and_prints_the_report(self):
         p, calls = self.run_pass(self.scripted(published="abc1234"), extra=["--dry-run"])

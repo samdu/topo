@@ -30,6 +30,9 @@ public final class Guest: Sendable {
         case resolver(String)
         /// `/tmp` could not be emptied, with what the guest said.
         case temporary(String)
+        /// `/etc/localtime` could not be pointed at the zone: not a zone name, no zoneinfo for it in
+        /// the guest, or the write failed, with why.
+        case timeZone(String)
 
         public var description: String {
             switch self {
@@ -42,6 +45,7 @@ public final class Guest: Sendable {
             case .unmount(let errno): "the directory could not be unmounted (\(errno))"
             case .resolver(let why): "the guest's resolver could not be written: \(why)"
             case .temporary(let said): "/tmp could not be emptied: \(said)"
+            case .timeZone(let why): "/etc/localtime could not be written: \(why)"
             }
         }
     }
@@ -131,6 +135,58 @@ public final class Guest: Sendable {
     public func clearTemporary() async throws {
         let exit = try await run("/bin/sh", ["-c", "find /tmp -mindepth 1 -maxdepth 1 -exec rm -rf {} +"])
         if exit.status != 0 { throw Failure.temporary(exit.errors) }
+    }
+
+    /// Where the guest reaches the phone's zoneinfo: a path no Alpine package owns, so an `apk`
+    /// that installs or upgrades tzdata writes its own `/usr/share/zoneinfo` and never meets the mount.
+    public static let zoneinfo = "/opt/topo/zoneinfo"
+
+    /// The phone's own time zone database, where Apple's libc reads it (`TZDIR` in its `tzfile.h`):
+    /// `/var/db/timezone/zoneinfo` on a device, `/usr/share/zoneinfo` in the simulator. Each is a
+    /// link to a versioned directory (`/var/db/timezone/tz/<version>/zoneinfo`), which the mount
+    /// resolves and holds.
+    public static let hostZoneinfo: String = {
+        #if targetEnvironment(simulator)
+        "/usr/share/zoneinfo"
+        #else
+        "/var/db/timezone/zoneinfo"
+        #endif
+    }()
+
+    /// Mounts the phone's own zoneinfo (`hostZoneinfo`) at `zoneinfo` in the guest, so the guest's
+    /// zones are the phone's, with nothing downloaded. The mount is of the versioned directory the
+    /// link resolves to when it is made, so a time zone update iOS installs while the process runs
+    /// reaches the guest at the next launch. Read-only in effect, not by construction: the mount
+    /// is read-write, and the host refuses the app a write there. A refusal to open the directory
+    /// throws here. Mounting it again changes nothing. Requires a booted kernel.
+    public func mountZoneinfo() throws {
+        try mount(URL(fileURLWithPath: Self.hostZoneinfo), at: Self.zoneinfo)
+    }
+
+    /// Whether `identifier` is a plain zone name, one that names a file under the zoneinfo and
+    /// nothing outside it: components of letters, digits, `_`, `+` and
+    /// `-`, apart by `/`, none empty, `.` or `..`, 64 bytes at most.
+    public static func isZoneName(_ identifier: String) -> Bool {
+        guard identifier.utf8.count <= 64 else { return false }
+        return identifier.split(separator: "/", omittingEmptySubsequences: false).allSatisfy { part in
+            !part.isEmpty && part != "." && part != ".."
+                && part.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_+-".unicodeScalars.contains($0)) }
+        }
+    }
+
+    /// Points the guest's `/etc/localtime` at `<zoneinfo>/<identifier>`, so every program
+    /// started after it — BusyBox `date`, musl's `localtime`, and Claude Code's runtime, which takes
+    /// the zone's name from where the link points — tells the time in that zone. A link and not a
+    /// copy, for that name. Made beside and moved over, through the guest so the fakefs records
+    /// it. A name that is not a zone name (`isZoneName`), or one the guest has no zoneinfo for — no
+    /// regular file of that name starting with the `TZif` magic (`leapseconds` and `+VERSION` beside
+    /// the zones are not ones) under the zoneinfo `mountZoneinfo` mounts — throws and leaves `/etc/localtime` as it was. Requires a booted kernel.
+    public func writeTimeZone(identifier: String) async throws {
+        guard Self.isZoneName(identifier) else { throw Failure.timeZone("not a zone name: \(identifier)") }
+        let script = #"z="$2/$1"; [ -f "$z" ] && [ "$(head -c 4 "$z")" = TZif ] || { echo "no zoneinfo for $1" >&2; exit 1; }; "#
+            + #"ln -sfn "$z" /etc/localtime.topo && mv -fT /etc/localtime.topo /etc/localtime"#
+        let exit = try await run("/bin/sh", ["-c", script, "zone", identifier, Self.zoneinfo])
+        if exit.status != 0 { throw Failure.timeZone(exit.errors) }
     }
 
     /// Bind-mounts the host directory `host` at `point` in the guest (the fork's realfs), making
