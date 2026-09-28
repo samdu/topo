@@ -2,7 +2,8 @@
 // instruction for GuestSimdTests: the destination's 16 bytes in hex, with the
 // destination filled with 0xaa beforehand, so a 64-bit form shows its upper
 // half zeroed. The input holds 0, 1, -1 and the byte, halfword, word and
-// doubleword minimums (each saturates to its maximum). ugrep's line numbering
+// doubleword minimums (each saturates to its maximum), and a positive and a
+// negative lane at every size, so SQABS and SQNEG differ at every size. ugrep's line numbering
 // reaches SQABS. Last it runs SQABS on the 1D arrangement, which is
 // unallocated and must raise SIGILL, so the program ends with status 132.
 //
@@ -22,7 +23,7 @@ typedef long L;
 typedef unsigned char U8;
 
 static const U8 input[16] = {
-    0x00, 0x01, 0xff, 0x80, 0x7f, 0x81, 0xff, 0xff,
+    0x00, 0x01, 0xff, 0x80, 0x7f, 0x81, 0xff, 0x7f,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80,
 };
 

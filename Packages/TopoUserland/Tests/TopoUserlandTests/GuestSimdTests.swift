@@ -35,20 +35,20 @@ final class GuestSimdTests: XCTestCase {
 
         let exit = try await Guest.shared.run("\(point)/sqabs")
         XCTAssertEqual(exit.output, """
-            sqabs 8b 0001017f7f7f01010000000000000000
-            sqabs 16b 0001017f7f7f0101000000000000007f
-            sqabs 4h 0001017f817e01000000000000000000
-            sqabs 8h 0001017f817e0100000000000000ff7f
-            sqabs 2s 00ff007f817e00000000000000000000
-            sqabs 4s 00ff007f817e000000000000ffffff7f
-            sqabs 2d 00ff007f807e0000ffffffffffffff7f
-            sqneg 8b 00ff017f817f01010000000000000000
-            sqneg 16b 00ff017f817f0101000000000000007f
-            sqneg 4h 00ff017f817e01000000000000000000
-            sqneg 8h 00ff017f817e0100000000000000ff7f
-            sqneg 2s 00ff007f817e00000000000000000000
-            sqneg 4s 00ff007f817e000000000000ffffff7f
-            sqneg 2d 00ff007f807e0000ffffffffffffff7f
+            sqabs 8b 0001017f7f7f017f0000000000000000
+            sqabs 16b 0001017f7f7f017f000000000000007f
+            sqabs 4h 0001017f817eff7f0000000000000000
+            sqabs 8h 0001017f817eff7f000000000000ff7f
+            sqabs 2s 00ff007f7f81ff7f0000000000000000
+            sqabs 4s 00ff007f7f81ff7f00000000ffffff7f
+            sqabs 2d 0001ff807f81ff7fffffffffffffff7f
+            sqneg 8b 00ff017f817f01810000000000000000
+            sqneg 16b 00ff017f817f0181000000000000007f
+            sqneg 4h 00ff017f817e01800000000000000000
+            sqneg 8h 00ff017f817e0180000000000000ff7f
+            sqneg 2s 00ff007f817e00800000000000000000
+            sqneg 4s 00ff007f817e008000000000ffffff7f
+            sqneg 2d 00ff007f807e0080ffffffffffffff7f
 
             """)
         // The last instruction is SQABS on 1D, which is unallocated: 128 + SIGILL.
