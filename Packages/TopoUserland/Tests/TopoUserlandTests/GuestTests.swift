@@ -60,6 +60,18 @@ final class GuestTests: XCTestCase {
         }
     }
 
+    /// `/tmp` is emptied as a boot with a tmpfs there would, dot-files and folders included, and
+    /// stays a directory the next process can write in.
+    func testClearingTemporaryEmptiesTmp() async throws {
+        _ = try SharedGuest.booted()
+        let made = try await Guest.shared.run("/bin/sh", ["-c", "mkdir -p /tmp/left/deep && echo password=gho_x > /tmp/tmp.abc && touch /tmp/.hidden"])
+        XCTAssertEqual(made.status, 0, made.errors)
+        try await Guest.shared.clearTemporary()
+        let left = try await Guest.shared.run("/bin/sh", ["-c", "ls -A /tmp; [ -d /tmp ] && touch /tmp/after && rm /tmp/after"])
+        XCTAssertEqual(left.status, 0, left.errors)
+        XCTAssertEqual(left.output, "")
+    }
+
     /// The guest answers to its own name, whatever the host is called: busybox's shell asks at
     /// start, and a host name longer than the kernel's 65-byte field is a crash rather than a name.
     func testTheGuestHasItsOwnHostname() async throws {

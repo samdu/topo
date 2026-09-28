@@ -62,10 +62,34 @@ final class GuestMountTests: XCTestCase {
         let file = "/usr/local/bin/file-\(UUID().uuidString.prefix(8))"
         _ = try await sh("echo keep > \(file)")
         XCTAssertThrowsError(try Guest.shared.link("/opt/a/claude", at: file)) { error in
-            XCTAssertEqual(error as? Guest.Failure, .link(-17), "a file at the path was not refused with EEXIST")
+            XCTAssertEqual(error as? Guest.Failure, .link(-17, path: file), "a file at the path was not refused with EEXIST")
+            XCTAssertTrue("\(error)".contains(file), "the refusal names the path")
         }
         let kept = try await sh("[ -L \(file) ] && echo link; cat \(file)")
         XCTAssertEqual(kept.output, "keep\n", "the file at the path was replaced")
+    }
+
+    /// A command's path is the app's: a regular file left there (the mind's own `gh` script from
+    /// before the app had one) gives way to the link, on this launch and every one after; a
+    /// directory there is never removed, and the refusal names it.
+    func testACommandLinkReplacesAFileButNeverADirectory() async throws {
+        let file = "/usr/local/bin/cmd-\(UUID().uuidString.prefix(8))"
+        _ = try await sh("printf '#!/bin/sh\\necho mine\\n' > \(file); chmod +x \(file)")
+        try await Guest.shared.linkCommand("/opt/a/tool", at: file)
+        try await Guest.shared.linkCommand("/opt/a/tool", at: file)
+        let linked = try await sh("readlink \(file)")
+        XCTAssertEqual(linked.output, "/opt/a/tool\n")
+
+        let directory = "/usr/local/bin/dir-\(UUID().uuidString.prefix(8))"
+        _ = try await sh("mkdir -p \(directory) && echo note > \(directory)/keep")
+        do {
+            try await Guest.shared.linkCommand("/opt/a/tool", at: directory)
+            XCTFail("a directory was taken for a link")
+        } catch {
+            XCTAssertEqual(error as? Guest.Failure, .link(-17, path: directory))
+        }
+        let kept = try await sh("cat \(directory)/keep")
+        XCTAssertEqual(kept.output, "note\n")
     }
 
     /// The guest runs as root, so a realfs mount it could make for itself would be a bind mount of

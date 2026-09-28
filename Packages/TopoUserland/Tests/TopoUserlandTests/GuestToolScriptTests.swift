@@ -139,4 +139,201 @@ final class GuestToolScriptTests: XCTestCase {
         XCTAssertEqual(missing.status, 3)
         XCTAssertTrue(missing.errors.contains("not in this environment"), missing.errors)
     }
+
+    // MARK: The GitHub shims
+
+    /// `topo github`, as the app's `GitHubTool` answers it: connected with `token`, or not.
+    private struct GitHub: Tool {
+        let token: String?
+        /// What it answers with no token: not connected, or the keychain's refusal.
+        var unconnected = "GitHub is not connected\n"
+        let name = "github"
+        let summary = "github"
+        let usage = "topo github [token|credential]"
+        func run(_ arguments: [String]) async -> ToolReply {
+            guard let token else { return .failed(unconnected) }
+            switch arguments.first {
+            case "token": return .ok(token + "\n")
+            case "credential": return .ok("username=samdu\npassword=\(token)\n")
+            default: return .ok("connected as samdu\n")
+            }
+        }
+    }
+
+    private func startedGitHub(token: String?, unconnected: String = "GitHub is not connected\n") async throws -> [String: String] {
+        let lines = lines
+        let service = try ToolService(tools: [GitHub(token: token, unconnected: unconnected)], log: { lines.add($0) })
+        self.service = service
+        let port = try await service.start()
+        return ToolService.environment(port: port, token: await service.token)
+    }
+
+    /// Runs `command` in bash with the home's `.topo/bin` first on the path, as the app's links
+    /// put `topo`, `git-credential-topo` and `gh` first in `/usr/local/bin`.
+    private func shell(_ command: String, _ environment: [String: String]) async throws -> Guest.Exit {
+        var env = Guest.environment
+        env.merge(environment) { _, new in new }
+        env["PATH"] = "\(point!)/.topo/bin:" + (env["PATH"] ?? "")
+        return try await Guest.shared.run("/bin/bash", ["-c", command], environment: env)
+    }
+
+    func testTheShimsAreWrittenExecutable() async throws {
+        for path in [GuestTools.credentialHelperPath, GuestTools.ghPath] {
+            let exit = try await Guest.shared.run("/bin/sh", ["-c", "[ -x \(point!)/\(path) ] && head -1 \(point!)/\(path)"])
+            XCTAssertEqual(exit.output, "#!/bin/bash\n", path)
+        }
+        XCTAssertEqual(GuestTools.links.map(\.command), [GuestTools.command, GuestTools.credentialHelperCommand, GuestTools.ghCommand])
+        // An empty helper first, which clears every helper configured before it, then this one.
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_COUNT"], "2")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_0"], "credential.https://github.com.helper")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_0"], "")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_KEY_1"], "credential.https://github.com.helper")
+        XCTAssertEqual(GuestTools.environment["GIT_CONFIG_VALUE_1"], "topo")
+        XCTAssertFalse(GuestTools.environment.keys.contains { $0.hasPrefix("GH_") || $0.hasPrefix("GITHUB_") },
+                       "no GitHub token rides the environment the resident is given")
+    }
+
+    /// The helper answers github.com over https with what `topo github credential` says, and
+    /// nothing for any other host, for another action, or when GitHub is not connected; the token
+    /// is in none of the service's log lines.
+    func testTheCredentialHelperAnswersGitHubOnly() async throws {
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let environment = try await startedGitHub(token: token)
+        let helper = "git-credential-topo"
+        let github = try await shell("printf 'protocol=https\\nhost=github.com\\n\\n' | \(helper) get", environment)
+        XCTAssertEqual(github.status, 0, github.errors + " service: " + lines.text)
+        XCTAssertEqual(github.output, "username=samdu\npassword=\(token)\n")
+        let other = try await shell("printf 'protocol=https\\nhost=gitlab.com\\n\\n' | \(helper) get", environment)
+        XCTAssertEqual(other.status, 0)
+        XCTAssertEqual(other.output, "")
+        let plain = try await shell("printf 'protocol=http\\nhost=github.com\\n\\n' | \(helper) get", environment)
+        XCTAssertEqual(plain.output, "")
+        let store = try await shell("printf 'protocol=https\\nhost=github.com\\npassword=x\\n\\n' | \(helper) store", environment)
+        XCTAssertEqual(store.status, 0)
+        XCTAssertEqual(store.output, "")
+        XCTAssertFalse(lines.text.contains(token), "a log line carried the token: " + lines.text)
+    }
+
+    func testTheCredentialHelperSaysWhereToConnectAndAnswersNothing() async throws {
+        let environment = try await startedGitHub(token: nil)
+        let exit = try await shell("printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get", environment)
+        XCTAssertEqual(exit.status, 0)
+        XCTAssertEqual(exit.output, "", "git gets no username or password")
+        XCTAssertTrue(exit.errors.contains("GitHub is not connected"), exit.errors)
+        XCTAssertTrue(exit.errors.contains("status 1"), exit.errors)
+    }
+
+    /// An app that does not answer is said as that, not as GitHub not being connected.
+    func testTheShimsSayTheAppDidNotAnswer() async throws {
+        let environment = try await startedGitHub(token: "gho_x")
+        await service?.stop()
+        let helper = try await shell("printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get", environment)
+        XCTAssertEqual(helper.output, "")
+        XCTAssertTrue(helper.errors.contains("did not answer"), helper.errors)
+        XCTAssertTrue(helper.errors.contains("status 3"), helper.errors)
+        XCTAssertFalse(helper.errors.contains("not connected"), helper.errors)
+    }
+
+    /// What a tool answers never lands in a file: the request goes through a FIFO and the answer
+    /// comes back on wget's standard output, so neither a finished `topo` nor one killed mid-call
+    /// leaves GitHub's token, or the service's, in a file on the guest's disk.
+    func testNoAnswerIsEverWrittenToAFile() async throws {
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let environment = try await startedGitHub(token: token)
+        let exit = try await shell("""
+        topo github token > /dev/null; echo "status $?"
+        for delay in 0 0 0 0.001 0.002 0.003 0.005 0.008 0.01 0.015 0.02 0.03 0.05 0.08 0.1 0.15 0.2 0.3 0 0.001 0.002 0.004 0.006 0.01 0.02 0.04 0.06 0.1 0.2 0.4; do
+            topo github token > /dev/null & pid=$!
+            sleep $delay; kill -9 $pid 2>/dev/null; wait $pid 2>/dev/null
+        done
+        find /tmp /root -type f -exec grep -l -e \(token) -e "$TOPO_TOOLS_TOKEN" {} + 2>/dev/null; true
+        """, environment)
+        XCTAssertEqual(exit.output, "status 0\n", "the token is in a file: " + exit.output + exit.errors)
+    }
+
+    func testTheGhWrapperHandsTheTokenToGhAlone() async throws {
+        let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
+        try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
+        let fake = try await Guest.shared.run("/bin/sh", ["-c", "printf '#!/bin/sh\\necho \"token=${GH_TOKEN:-none} args=$*\"\\n' > /usr/bin/gh && chmod +x /usr/bin/gh"])
+        XCTAssertEqual(fake.status, 0, fake.errors)
+        let token = "gho_" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        let environment = try await startedGitHub(token: token)
+        let wrapped = try await shell("gh api user; echo \"after=${GH_TOKEN:-unset}\"", environment)
+        XCTAssertEqual(wrapped.output, "token=\(token) args=api user\nafter=unset\n", wrapped.errors)
+        let own = try await shell("GH_TOKEN=mine gh auth status", environment)
+        XCTAssertEqual(own.output, "token=mine args=auth status\n")
+
+        await service?.stop()
+        let none = try await startedGitHub(token: nil)
+        // A login of the guest's own (`gh auth login`, `hosts.yml`) is never reached: gh is not run.
+        let unconnected = try await shell("gh api user; echo \"status=$?\"", none)
+        XCTAssertEqual(unconnected.output, "status=1\n", "gh ran without the app's token")
+        XCTAssertTrue(unconnected.errors.contains("not connected"), unconnected.errors)
+        _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
+    }
+
+    /// The wrapper and the helper say which of the three it was — not connected, the keychain
+    /// unreadable (both the app's own words, status 1), or the app not answering (status 3) —
+    /// with the status `topo` gave.
+    func testTheShimsSayWhyAndWithWhichStatus() async throws {
+        let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
+        try XCTSkipIf(present.status == 0, "this rootfs has a real gh; the stand-in would replace it")
+        let fake = try await Guest.shared.run("/bin/sh", ["-c", "printf '#!/bin/sh\\necho ran\\n' > /usr/bin/gh && chmod +x /usr/bin/gh"])
+        XCTAssertEqual(fake.status, 0, fake.errors)
+        let helper = "printf 'protocol=https\\nhost=github.com\\n\\n' | git-credential-topo get"
+        let cases: [(String, String, [String])] = [
+            ("not connected", "GitHub is not connected\n", ["GitHub is not connected", "status 1"]),
+            ("keychain", "The GitHub connection could not be read from the keychain: -25308\n",
+             ["could not be read from the keychain", "status 1"]),
+        ]
+        for (name, unconnected, said) in cases {
+            let environment = try await startedGitHub(token: nil, unconnected: unconnected)
+            let gh = try await shell("gh api user", environment)
+            XCTAssertEqual(gh.output, "", "\(name): gh ran without the app's token")
+            let credential = try await shell(helper, environment)
+            XCTAssertEqual(credential.output, "", name)
+            for words in said {
+                XCTAssertTrue(gh.errors.contains(words), "\(name), gh: \(gh.errors)")
+                XCTAssertTrue(credential.errors.contains(words), "\(name), helper: \(credential.errors)")
+            }
+            XCTAssertFalse(gh.errors.contains("status 0"), gh.errors)
+            await service?.stop()
+        }
+        let gone = try await startedGitHub(token: "gho_x")
+        await service?.stop()
+        let gh = try await shell("gh api user; echo \"status=$?\"", gone)
+        XCTAssertEqual(gh.output, "status=3\n", "gh ran without the app's token")
+        XCTAssertTrue(gh.errors.contains("did not answer") && gh.errors.contains("status 3"), gh.errors)
+        XCTAssertFalse(gh.errors.contains("not connected"), gh.errors)
+        _ = try await Guest.shared.run("/bin/rm", ["-f", "/usr/bin/gh"])
+    }
+
+    /// A `topo` ended by SIGTERM at any point of a call prints neither the service's token nor
+    /// anything of the request on its standard output: the FIFO's writer writes only once it has
+    /// opened the FIFO, which a `topo` ended first has removed.
+    func testATerminatedTopoNeverPrintsTheRequest() async throws {
+        let environment = try await startedGitHub(token: "gho_x")
+        let exit = try await shell("""
+        out="$(mktemp -d)"; n=0
+        for i in $(seq 60); do
+            d=$(( (i - 1) % 12 ))
+            topo github token > "$out/$i" 2>/dev/null & p=$!
+            [ "$d" -gt 0 ] && sleep "0.00$d"
+            kill -TERM $p 2>/dev/null; wait $p 2>/dev/null
+        done
+        sleep 0.5
+        grep -l -e "$TOPO_TOOLS_TOKEN" -e "$(printf github | base64)" "$out"/* 2>/dev/null | wc -l
+        rm -rf "$out"
+        """, environment)
+        XCTAssertEqual(exit.output.trimmingCharacters(in: .whitespacesAndNewlines), "0",
+                       "a terminated topo printed the request: " + exit.output + exit.errors)
+    }
+
+    func testTheGhWrapperWithNoGhSaysHowToInstallIt() async throws {
+        let present = try await Guest.shared.run("/bin/sh", ["-c", "[ -e /usr/bin/gh ]"])
+        try XCTSkipIf(present.status == 0, "this rootfs has gh")
+        let exit = try await shell("gh api user", try await startedGitHub(token: "gho_x"))
+        XCTAssertEqual(exit.status, 127)
+        XCTAssertTrue(exit.errors.contains("apk add github-cli"), exit.errors)
+    }
 }

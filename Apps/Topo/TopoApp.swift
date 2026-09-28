@@ -10,6 +10,7 @@ struct TopoApp: App {
     @State private var signIn: SignIn
     @State private var harness: Harness
     @State private var memory: Memory
+    @State private var connections: Connections
     @State private var roleSelector: RoleSelector
     @State private var audio: AudioSession
     @State private var voice: VoiceInput
@@ -47,6 +48,8 @@ struct TopoApp: App {
         memory.writer = GuestResident.shared.turns
         // The phone's own tools, which the guest's `topo` reaches through the tool service. Making
         // them asks for nothing: each permission is asked for by the first call that needs it.
+        let connections = Connections()
+        _connections = State(initialValue: connections)
         let broker = PermissionBroker()
         let eventKit = EventKitStore()
         let location = LocationPermission()
@@ -63,6 +66,7 @@ struct TopoApp: App {
             CalendarTool(store: eventKit, authorizer: EventKitAuthorizer(entity: .event, store: eventKit), broker: broker),
             NotifyTool(scheduler: UserNotificationScheduler(), authorizer: NotificationAuthorizer(), broker: broker),
             ContactsTool(directory: ContactStoreDirectory(), authorizer: ContactsAuthorizer(), broker: broker),
+            GitHubTool(store: connections.store, leftBehind: connections.leftBehind),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
                          broker: broker),
             HomeTool(home: home, authorizer: HomeAuthorizer(home: home), broker: broker),
@@ -118,10 +122,18 @@ struct TopoApp: App {
         #endif
     }
 
+    /// The connect `TOPO_DEBUG_CONNECT_GITHUB` asks for, in a debug build. Nothing in a release one.
+    private func debugConnectGitHub() async {
+        #if DEBUG
+        await DebugRun.connectGitHub(connections)
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView().environment(signIn).environment(harness).environment(roleSelector)
                 .environment(voice).environment(speaker).environment(memory).environment(mascot)
+                .environment(connections)
                 // What every view draws with, which is the vault's `look.json` read onto the
                 // compiled look. It is worn here rather than on the chat so that the first run,
                 // the sign-in and the viewer screen are drawn by the same document; the memory
@@ -162,6 +174,7 @@ struct TopoApp: App {
                 .task { await debugTurn() }
                 .task { await debugUserland() }
                 .task { await debugGuestTurn() }
+                .task { await debugConnectGitHub() }
         }
     }
 }

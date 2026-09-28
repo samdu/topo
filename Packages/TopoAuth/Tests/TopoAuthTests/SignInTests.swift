@@ -54,6 +54,16 @@ extension Stubbed {
             #expect(again.phase == .idle)
             #expect(try store.load() == nil)
         }
+
+        /// What the rest of a sign-out could not do is said on the sign-in screen, and the login
+        /// goes all the same.
+        @Test func aSignOutThatLeftSomethingBehindSaysSo() async throws {
+            try store.save(Tokens(accessToken: "a", refreshToken: "r", expiresAt: .distantFuture, scopes: []))
+            let signIn = make()
+            signIn.signOut(unfinished: "the GitHub token could not be removed")
+            #expect(signIn.phase == .failed("Signed out, but the GitHub token could not be removed"))
+            #expect(try store.load() == nil)
+        }
     }
 }
 
