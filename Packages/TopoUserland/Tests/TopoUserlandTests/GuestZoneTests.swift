@@ -48,14 +48,15 @@ final class GuestZoneTests: XCTestCase {
         XCTAssertEqual(london.output, "/opt/topo/zoneinfo/Europe/London\n+0000\n+0100\n", london.errors)
     }
 
-    /// A name that is not a zone's, a zone the zoneinfo has no file for, or a file that is not TZif
-    /// throws and leaves `/etc/localtime` where it was: no path out of the zoneinfo, and nothing the
+    /// A name that is not a zone's — a real zone reached through `..` included — a zone the
+    /// zoneinfo has no file for, or a file that is not TZif throws and leaves `/etc/localtime` where it was: no path out of the zoneinfo, and nothing the
     /// shell runs.
     func testTheTimeZoneRefusesWhatIsNotAZone() async throws {
         try plantZoneinfo()
         try await Guest.shared.writeTimeZone(identifier: "Europe/London")
         let refused = ["../../etc/passwd", "/etc/passwd", "America/$(touch /tmp/ran)", "America/..", "America//Denver",
-                       "", "a b", String(repeating: "A", count: 65), "Mars/Olympus", "America", "Bogus"]
+                       "", "a b", String(repeating: "A", count: 65), "Mars/Olympus", "America", "Bogus",
+                       "America/../Europe/London"]
         for name in refused {
             do {
                 try await Guest.shared.writeTimeZone(identifier: name)

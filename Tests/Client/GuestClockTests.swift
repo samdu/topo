@@ -48,9 +48,9 @@ final class GuestClockTests: XCTestCase {
         }
     }
 
-    /// The first write is made before `start` answers; a cue writes the zone the phone is in then,
-    /// and a cue with the zone unchanged writes nothing.
-    func testACueWritesThePhonesZoneThenAndOnlyWhenItChanged() async {
+    /// The first write is made before `start` answers; every cue writes the zone the phone is in
+    /// then, the same zone again included, since a command in the guest may have relinked it.
+    func testEveryCueWritesThePhonesZoneThen() async {
         let changes = FakeZoneChanges()
         let zones = Zones("America/Los_Angeles")
         let clock = GuestClock(changes: changes, zone: zones.current, write: zones.record)
@@ -58,16 +58,16 @@ final class GuestClockTests: XCTestCase {
         XCTAssertEqual(zones.written, ["America/Los_Angeles"])
 
         changes.change()
-        await clock.refresh().value
-        XCTAssertEqual(zones.written, ["America/Los_Angeles"], "an unchanged zone was written again")
+        await waitFor(2, zones)
+        XCTAssertEqual(zones.written, ["America/Los_Angeles", "America/Los_Angeles"], "an unchanged zone was not written again")
 
         zones.set("Europe/London")
         changes.change()
-        await waitFor(2, zones)
-        XCTAssertEqual(zones.written, ["America/Los_Angeles", "Europe/London"])
+        await waitFor(3, zones)
+        XCTAssertEqual(zones.written.last, "Europe/London")
     }
 
-    /// A write that failed is not taken for written: the next cue, the zone unchanged, tries again.
+    /// A write that failed leaves nothing to skip: the next cue writes again.
     func testAFailedWriteIsTriedAgainAtTheNextCue() async {
         let changes = FakeZoneChanges()
         let zones = Zones("Asia/Tokyo")
@@ -80,10 +80,23 @@ final class GuestClockTests: XCTestCase {
         changes.change()
         await waitFor(2, zones)
         XCTAssertEqual(zones.written, ["Asia/Tokyo", "Asia/Tokyo"])
+    }
 
-        changes.change()
-        await clock.refresh().value
-        XCTAssertEqual(zones.written.count, 2, "a zone written once it succeeded was written again")
+    /// The clock listens before its first write: a zone change that lands while that write runs is
+    /// a cue after it, and the new zone is written.
+    func testAChangeDuringTheFirstWriteIsNotLost() async {
+        let changes = FakeZoneChanges()
+        let zones = Zones("America/Los_Angeles")
+        let clock = GuestClock(changes: changes, zone: zones.current, write: { zone in
+            try zones.record(zone)
+            if zones.written.count == 1 {
+                zones.set("Europe/London")
+                changes.change()
+            }
+        })
+        await clock.start()
+        await waitFor(2, zones)
+        XCTAssertEqual(zones.written, ["America/Los_Angeles", "Europe/London"], "the change during the first write was lost")
     }
 
     /// A second start writes nothing more and listens to nothing more.

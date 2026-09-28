@@ -34,15 +34,15 @@ final class SystemZoneChanges: ZoneChanges, @unchecked Sendable {
 
 /// The guest's `/etc/localtime`, kept to the phone's zone, as `GuestResolver` keeps its name
 /// servers: written once the guest is booted and again on every cue, each write reading the zone
-/// as it starts and skipped when that zone is the one last written. Only a write that succeeded
-/// is remembered, so after a failed one the next cue tries again. No `TZ` is set anywhere, because a `TZ` fixed in
-/// the resident's environment would outrank the file for everything it starts until a relaunch.
+/// as it starts. Every cue writes, whatever was written before, since a command in the guest may
+/// have pointed the link elsewhere since; a write is one guest shell. No `TZ` is set anywhere,
+/// because a `TZ` fixed in the resident's environment would outrank the file for everything it
+/// starts until a relaunch.
 @MainActor final class GuestClock {
     private let changes: ZoneChanges
     private let zone: @Sendable () -> String
     private let write: @Sendable (String) async throws -> Void
     private var last: Task<Void, Never>?
-    private var written: String?
     private var started = false
 
     init(changes: ZoneChanges = SystemZoneChanges(),
@@ -53,15 +53,16 @@ final class SystemZoneChanges: ZoneChanges, @unchecked Sendable {
         self.write = write
     }
 
-    /// Writes the zone now and on every cue after. Answers once the first write has been made; a
-    /// failed write leaves the guest on the zone it had and is not the caller's.
+    /// Writes the zone now and on every cue after. It listens before the first write, so a change
+    /// that lands while that write runs is a cue after it. Answers once the first write has been
+    /// made; a failed write leaves the guest on the zone it had and is not the caller's.
     func start() async {
         guard !started else { return }
         started = true
-        await refresh().value
         changes.start { [weak self] in
             Task { @MainActor in _ = self?.refresh() }
         }
+        await refresh().value
     }
 
     /// One write, after the one before it: the task that makes it.
@@ -70,10 +71,7 @@ final class SystemZoneChanges: ZoneChanges, @unchecked Sendable {
         let before = last
         let task = Task { @MainActor in
             await before?.value
-            let zone = self.zone()
-            guard zone != self.written else { return }
-            guard (try? await self.write(zone)) != nil else { return }
-            self.written = zone
+            try? await self.write(self.zone())
         }
         last = task
         return task
