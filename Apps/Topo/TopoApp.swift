@@ -76,7 +76,7 @@ struct TopoApp: App {
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
         var widgetHome = homeTool
-        widgetHome.refusing = WidgetAction.refusedCharacteristics
+        widgetHome.refusing = HomeTool.widgetRefused
         let widgetTable = ToolTable(GuestResident.shared.toolTable.map { $0 is HomeTool ? widgetHome : $0 })
         // The app's own widget follows the newest reply the log brings.
         let defaultSurface = DefaultSurface()

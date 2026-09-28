@@ -150,7 +150,7 @@ final class HomeToolTests: XCTestCase {
     /// resolved before the refusal, with nothing written.
     func testARefusedCharacteristicIsRefusedByNameAndByID() async {
         var (tool, fake) = tool()
-        tool.refusing = WidgetAction.refusedCharacteristics
+        tool.refusing = HomeTool.widgetRefused
         for name in ["lock", "D-target"] {
             let reply = await tool.run(["set", Self.lockID, name, "1"])
             XCTAssertEqual(reply.status, ToolReply.refused, "\(name): \(reply.text)")
@@ -158,6 +158,29 @@ final class HomeToolTests: XCTestCase {
         XCTAssertTrue(fake.writes.isEmpty)
         let lamp = await tool.run(["set", Self.lampID, "power", "on"])
         XCTAssertEqual(lamp.status, ToolReply.ok, lamp.text)
+    }
+
+    /// The refusal keys on HomeKit's type as well as the short name, so a lock's target or a
+    /// garage door's under any name `HomeNames` might give it is still refused.
+    func testARefusedCharacteristicIsRefusedByTypeUnderAnyName() async {
+        for type in [HMCharacteristicTypeTargetLockMechanismState, HMCharacteristicTypeTargetDoorState] {
+            var target = Self.characteristic("X-target", "bolt", "uint8", valid: [0, 1])
+            target.type = type
+            let gate = HomeRecord(id: "H2", name: "The gate", primary: true, accessories: [
+                HomeAccessory(id: "G1", name: "Gate", room: "Yard", category: "Door", reachable: true, services: [
+                    HomeService(name: "Gate", kind: "Lock Mechanism", characteristics: [target]),
+                ]),
+            ], scenes: [])
+            var (tool, fake) = tool([gate])
+            tool.refusing = HomeTool.widgetRefused
+            for name in ["bolt", "X-target"] {
+                let reply = await tool.run(["set", "G1", name, "1"])
+                XCTAssertEqual(reply.status, ToolReply.refused, "\(type) as \(name): \(reply.text)")
+            }
+            XCTAssertTrue(fake.writes.isEmpty)
+            XCTAssertThrowsError(try HomeTool.judge(.set("G1", characteristic: "bolt", value: "1"), in: [gate],
+                                                    refusing: HomeTool.widgetRefused), "the judge at set let \(type) through")
+        }
     }
 
     func testANameTwoServicesCarryIsRefusedAndTheIDIsTaken() async {

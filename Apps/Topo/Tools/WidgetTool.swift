@@ -374,7 +374,7 @@ struct WidgetRunJudge: Sendable {
                     return .unchecked("HomeKit has not loaded a home on this launch, so it is judged in full at the tap")
                 }
                 guard !homes.isEmpty else { return .refused("names a home, and no home is set up on this phone") }
-                try HomeTool.judge(call, in: homes, refusing: WidgetAction.refusedCharacteristics)
+                try HomeTool.judge(call, in: homes, refusing: HomeTool.widgetRefused)
             case "notify":
                 guard let notify else { return .unchecked("notify is judged at the tap") }
                 _ = try notify.parse(rest)

@@ -38,6 +38,9 @@ struct HomeCharacteristic: Sendable, Equatable {
     var units: String?
     /// HomeKit's cached value, nil when it holds none.
     var value: HomeValue?
+    /// HomeKit's characteristic type (`HMCharacteristicTypeTargetLockMechanismState` …), which
+    /// the short name is made from.
+    var type = ""
 
     /// Integer formats, and the bounds of each: a `uint64` past `Int.max` is one `topo home` neither
     /// reads nor writes.
@@ -303,10 +306,15 @@ struct HomeTool: Tool {
     let broker: PermissionBroker
     /// How long one read of an accessory is waited on before its value is said as `?`.
     var readBound: Duration = .seconds(4)
-    /// Characteristics, by short name, this tool refuses to set however they are named: the
-    /// widgets' tool table refuses a lock's and a garage door's target state
-    /// (`WidgetAction.refusedCharacteristics`); the guest's refuses none.
+    /// Characteristics this tool refuses to set however the call names them, by short name or by
+    /// HomeKit type: the widgets' tool table refuses a lock's and a garage door's target state
+    /// (`widgetRefused`); the guest's refuses none.
     var refusing: Set<String> = []
+
+    /// What a widget's `run` may not set: the short names `WidgetAction` refuses before the call
+    /// is resolved, and the HomeKit types, so a renamed short name cannot let one through.
+    static let widgetRefused: Set<String> = WidgetAction.refusedCharacteristics
+        .union([HMCharacteristicTypeTargetLockMechanismState, HMCharacteristicTypeTargetDoorState])
 
     let name = "home"
     let summary = "the lights, locks, thermostats and scenes of the person's home (HomeKit)"
@@ -463,7 +471,7 @@ struct HomeTool: Tool {
 
     /// Refuses a characteristic this tool does not set, by the short name it resolved to.
     static func admit(_ characteristic: HomeCharacteristic, of accessory: HomeAccessory, refusing: Set<String>) throws {
-        guard refusing.contains(characteristic.name) else { return }
+        guard refusing.contains(characteristic.name) || refusing.contains(characteristic.type) else { return }
         throw ToolFailure("\(accessory.name) \(characteristic.name) is not a widget's to set; a lock or a door goes through a turn",
                           status: ToolReply.refused)
     }
@@ -666,7 +674,7 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
             minimum: metadata?.minimumValue?.decimalValue, maximum: metadata?.maximumValue?.decimalValue,
             step: metadata?.stepValue?.decimalValue, validValues: metadata?.validValues?.map(\.decimalValue),
             maxLength: metadata?.maxLength?.intValue, units: metadata?.units.map(HomeNames.units),
-            value: value(characteristic.value, format: format))
+            value: value(characteristic.value, format: format), type: characteristic.characteristicType)
     }
 
     /// A `uint64` above `Int.max` has no `HomeValue`, so it reads as `?` rather than as a wrong number.
