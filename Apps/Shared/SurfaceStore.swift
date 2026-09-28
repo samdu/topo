@@ -232,6 +232,14 @@ struct SurfaceStore: Sendable {
 
     func taps() -> [Tap] { lines(tapsURL) }
 
+    /// The controls of `slot` whose last tap at `revision` failed: a run that answered anything
+    /// but 0.
+    func failed(slot: String, revision: Int) -> Set<String> {
+        var last: [String: String] = [:]
+        for tap in taps() where tap.slot == slot && tap.revision == revision && tap.kind == "run" { last[tap.id] = tap.status }
+        return Set(last.filter { $0.value != "0" && $0.value != "stale" }.keys)
+    }
+
     // MARK: Lines
 
     private func append<T: Codable>(_ value: T, to url: URL) throws {

@@ -146,6 +146,20 @@ final class HomeToolTests: XCTestCase {
         XCTAssertEqual(fake.writes.map(\.1), [.int(60), .bool(false)])
     }
 
+    /// The widgets' table refuses a lock's target however it is named: by short name and by id,
+    /// resolved before the refusal, with nothing written.
+    func testARefusedCharacteristicIsRefusedByNameAndByID() async {
+        var (tool, fake) = tool()
+        tool.refusing = WidgetAction.refusedCharacteristics
+        for name in ["lock", "D-target"] {
+            let reply = await tool.run(["set", Self.lockID, name, "1"])
+            XCTAssertEqual(reply.status, ToolReply.refused, "\(name): \(reply.text)")
+        }
+        XCTAssertTrue(fake.writes.isEmpty)
+        let lamp = await tool.run(["set", Self.lampID, "power", "on"])
+        XCTAssertEqual(lamp.status, ToolReply.ok, lamp.text)
+    }
+
     func testANameTwoServicesCarryIsRefusedAndTheIDIsTaken() async {
         let (tool, fake) = tool()
         let reply = await tool.run(["set", Self.stripID, "power", "on"])

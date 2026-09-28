@@ -16,6 +16,7 @@ struct TopoApp: App {
     @State private var speaker: Speaker
     /// Topo on the composer's glass: the chat's harness moves him, and so do the guest's turns.
     @State private var mascot: Mascot
+    @State private var widgetCues: WidgetCues
     private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
@@ -71,6 +72,14 @@ struct TopoApp: App {
             homeTool,
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
         ]
+        // A widget's run control reaches the same tools, with `home` refusing a lock's and a
+        // door's target; a turn control's cue goes on this harness's line.
+        var widgetHome = homeTool
+        widgetHome.refusing = WidgetAction.refusedCharacteristics
+        let widgetTable = ToolTable(GuestResident.shared.toolTable.map { $0 is HomeTool ? widgetHome : $0 })
+        let widgetCues = WidgetCues(harness: harness)
+        _widgetCues = State(initialValue: widgetCues)
+        WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
@@ -164,6 +173,7 @@ struct TopoApp: App {
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)
                 if phase == .active {
+                    Task { await widgetCues.drain() }
                     voice.prepare()
                     speaker.prepare()
                     // The guest's rootfs and Claude Code, fetched (and the rootfs imported)
@@ -176,6 +186,12 @@ struct TopoApp: App {
                     Task { await memory.sync() }
                 }
             }
+            // A widget's cue waits for the harness's first read of the log, which is when it
+            // can tell a cue it already sent; a link's cue arrives as a URL.
+            .onChange(of: harness.hasRead) { _, read in
+                if read { Task { await widgetCues.drain() } }
+            }
+            .onOpenURL { url in Task { await widgetCues.open(url) } }
             // Nothing unless a debug build was launched asking for a turn; the screen
             // behaves as it always does either way.
             .task { await debugTurn() }

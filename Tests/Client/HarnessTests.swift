@@ -174,6 +174,24 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(Lease(record: try XCTUnwrap(lease))?.holder, phone)
     }
 
+    /// A nonce minted elsewhere (a widget's cue) goes on the line once: again while it is
+    /// outstanding is nothing, and again once its turn is in the log is nothing.
+    func testWillSendWithNonceDeduplicates() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("Out tonight."))))
+        await harness.refresh()
+        XCTAssertTrue(harness.willSend("widget bins: tapped done", nonce: "N1"))
+        XCTAssertTrue(harness.willSend("widget bins: tapped done", nonce: "N1"))
+        XCTAssertEqual(harness.owed.map(\.nonce), ["N1"], "outstanding: a second entry for one nonce")
+        await harness.retry()
+        XCTAssertTrue(harness.said("N1"))
+        XCTAssertTrue(harness.willSend("widget bins: tapped done", nonce: "N1"))
+        XCTAssertEqual(harness.owed.count, 0, "landed: the nonce went on the line again")
+        await harness.retry()
+        let people = try await log(db).filter { $0.role == .person }
+        XCTAssertEqual(people.map(\.nonce), ["N1"])
+    }
+
     /// The context Topo wears is everything the reply was written over: input and both cache
     /// counts. A cached conversation is mostly cache reads, so input alone would show him a
     /// nearly empty context on a nearly full one.

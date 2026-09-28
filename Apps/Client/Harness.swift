@@ -389,6 +389,20 @@ final class Harness {
         return outgoing.nonce
     }
 
+    /// Puts the words on the line under a nonce minted elsewhere — a widget's cue, recorded in the
+    /// app group under it before the app ever saw it — unless that nonce is already on the line
+    /// or already in the log, so a cue drained twice is one turn. Answers whether the nonce is on
+    /// the line or in the log now, which is when its record may go. Only a harness that has read
+    /// the log (`hasRead`) knows what the log holds.
+    @discardableResult
+    func willSend(_ text: String, nonce: String) -> Bool {
+        if said(nonce) || pending.contains(where: { $0.nonce == nonce }) { return true }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        pending.append(Outgoing(text: text, nonce: nonce))
+        return true
+    }
+
     /// That turn was said into the microphone and its reply is one to read aloud, which is what
     /// makes it spoken; the mark outlives the screen, so the reply to what was said before a
     /// relaunch is still an answer to something spoken.

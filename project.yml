@@ -63,8 +63,10 @@ targets:
       - Apps/Shared
       - Apps/Client
       - Apps/Topo
-      # The widgets' two intents, which the app runs and the extension names.
+      # The widgets' two intents, which the app runs and the extension names, and the provider,
+      # whose entries the suites hold.
       - Apps/Widgets/WidgetIntents.swift
+      - Apps/Widgets/SurfaceProvider.swift
       # What the About screen reads, rather than a copy of it in Swift.
       - path: THIRD-PARTY
         buildPhase: resources

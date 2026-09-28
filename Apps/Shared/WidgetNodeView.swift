@@ -15,6 +15,9 @@ struct WidgetContext: Sendable {
     /// The words are a reply's, so they are redacted where the person's settings say to
     /// (`.privacySensitive()`). The default's home-screen families; never relied on alone.
     var privateText = false
+    /// The controls whose last tap at this revision failed: each is drawn with the failure mark,
+    /// so a run the phone refused or ran out of time on is seen rather than silent.
+    var failed: Set<String> = []
 }
 
 /// The one switch from a node to what draws it, the same on the home screen, on the lock screen
@@ -196,6 +199,14 @@ struct WidgetNodeView: View {
             }
         }
         .tint(Theme.primary)
+        .overlay(alignment: .topTrailing) {
+            if context.failed.contains(control.id) {
+                Image(systemName: "exclamationmark.circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(Theme.signal)
+                    .accessibilityLabel("the last tap failed")
+            }
+        }
         .accessibilityIdentifier("widget-control-\(control.id)")
     }
 }

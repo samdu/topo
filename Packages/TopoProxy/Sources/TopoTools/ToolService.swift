@@ -193,7 +193,7 @@ public actor ToolService {
     /// The call, answered by the tool or by the bound, whichever comes first. The tool is not
     /// waited for past the bound: a tool that ignores cancellation (a prompt nobody answers) runs
     /// on, answering nobody.
-    static func bounded(_ arguments: [String], table: ToolTable, until deadline: ContinuousClock.Instant,
+    public static func bounded(_ arguments: [String], table: ToolTable, until deadline: ContinuousClock.Instant,
                         bound: Duration) async -> ToolReply {
         let once = Once()
         let seconds = Int(bound / .seconds(1))
