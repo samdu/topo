@@ -85,11 +85,19 @@ final class TuningSliderTests: XCTestCase {
         picker.tap()
         let glass = app.buttons["On the glass"]
         XCTAssertTrue(glass.waitForExistence(timeout: 5), "the placement offers no glass")
+        let chosen = "label CONTAINS 'On the glass' OR value CONTAINS 'On the glass'"
         glass.tap()
+        // A tap reaching a starved app can be lost, leaving the menu up, open in full, with nothing
+        // chosen. It is made again only while the menu is still up to be hit and the picker still
+        // shows no glass, twice more at most; what the chat wears is still held below.
+        for _ in 0..<2 where !becomes(glass, "exists == false", timeout: 3)
+            && glass.isHittable && !becomes(picker, chosen, timeout: 0.5) {
+            glass.tap()
+        }
         // The menu is gone and the choice is the picker's before the sheet is closed: a tap on
         // Done while the menu is still going lands on nothing and leaves the sheet up.
         XCTAssertTrue(becomes(glass, "exists == false"), "the placement menu did not close")
-        XCTAssertTrue(becomes(picker, "label CONTAINS 'On the glass' OR value CONTAINS 'On the glass'"),
+        XCTAssertTrue(becomes(picker, chosen),
                       "the picker does not show the glass chosen: \(picker.label) \(String(describing: picker.value))")
         done(app)
         XCTAssertTrue(wait(in: app) { $0.placement == "glass" && $0.overridePlacement == "glass" && $0.presence == 1 },
