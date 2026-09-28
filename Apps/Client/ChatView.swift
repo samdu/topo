@@ -330,7 +330,8 @@ struct ChatView: View {
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
         SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
-                forgetMemory: { memory.forget() }, forgetLogin: { signIn.signOut() })
+                forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
+                forgetLogin: { signIn.signOut() })
     }
 
     private func sendSpoken(_ heard: String) async {

@@ -170,8 +170,13 @@ struct TopoApp: App {
             // run, or on a sign-in it has already answered, mirrors like any other. The
             // subscription is saved from here for the same reason, and a failure costs only
             // the acceleration, so it is not the screen's to report.
-            .onChange(of: signIn.phase, initial: true) { _, phase in
+            .onChange(of: signIn.phase, initial: true) { was, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
+                // Every way a login ends — the settings sheet, a demotion, a viewer's launch —
+                // ends here too, and a signed-out phone keeps no surface. Only a login ending:
+                // a launch that finds no token (the keychain unreadable before the first unlock
+                // included) takes nothing away.
+                if was == .signedIn, phase != .signedIn { SurfaceReloader.shared.forget(SurfaceStore.shared()) }
                 guard phase == .signedIn else { return }
                 defaultSurface.launched(latest: harness.turns.last { $0.role == .assistant })
                 Task { try? await NotePush.ensureSubscription() }

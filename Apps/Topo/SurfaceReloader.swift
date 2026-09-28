@@ -47,4 +47,11 @@ final class SurfaceReloader {
     func reloadAll() {
         reloadEverything()
     }
+
+    /// A sign-out: every surface gone from the app group, and every timeline read again now, so
+    /// each placed widget draws the signed-out state.
+    func forget(_ store: SurfaceStore?) {
+        try? store?.removeEverything()
+        reloadAll()
+    }
 }

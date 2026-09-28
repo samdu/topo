@@ -73,6 +73,9 @@ struct SignOut {
     /// The memory is the person's and stays in their iCloud; the copy of it on this phone goes
     /// with the login.
     var forgetMemory: @MainActor () -> Void = {}
+    /// The widgets' documents, images and pending taps, and every timeline read again at once, so
+    /// no lock screen keeps the conversation of an account the phone no longer has.
+    var forgetSurfaces: @MainActor () -> Void = {}
     /// The tokens, last, so nothing above it runs without an account to run against.
     var forgetLogin: @MainActor () -> Void = {}
 
@@ -80,6 +83,7 @@ struct SignOut {
         stopSpeaking()
         await forgetHarness()
         forgetMemory()
+        forgetSurfaces()
         forgetLogin()
     }
 }
