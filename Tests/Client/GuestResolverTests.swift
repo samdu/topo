@@ -82,4 +82,31 @@ final class GuestResolverTests: XCTestCase {
         await fulfillment(of: [called], timeout: 5)
         changes.cancel()
     }
+
+    /// Writes run one after another: a path change while a write is still going waits for it.
+    func testWritesNeverOverlap() async {
+        final class Writer: @unchecked Sendable {
+            let lock = NSLock()
+            var running = 0
+            var most = 0
+            var done = 0
+            func write(_ servers: [String]) async {
+                lock.withLock { running += 1; most = max(most, running) }
+                try? await Task.sleep(for: .milliseconds(50))
+                lock.withLock { running -= 1; done += 1 }
+            }
+        }
+        let writer = Writer()
+        let changes = FakePathChanges()
+        let resolver = GuestResolver(changes: changes, servers: { ["10.0.0.1"] }, write: { await writer.write($0) })
+        await resolver.start()
+        changes.change()
+        changes.change()
+        changes.change()
+        for _ in 0..<200 where writer.lock.withLock({ writer.done }) < 4 {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(writer.lock.withLock { writer.done }, 4)
+        XCTAssertEqual(writer.lock.withLock { writer.most }, 1, "two writes of the resolver overlapped")
+    }
 }
