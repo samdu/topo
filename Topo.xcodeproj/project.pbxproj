@@ -158,8 +158,10 @@
 		73E254E137E14567F45A6FE9 /* MascotCrossingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9595FA9BE88E06B2220A262C /* MascotCrossingTests.swift */; };
 		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
+		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
+		7A8B1ADFEA35183A04493998 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		7B6542E14EB920F1A6FABB7D /* TopoPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */; };
 		7CA608BAC02829F2E58A6BA4 /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		7CB6A24D84137A9DC47A4A43 /* ModelDownloadsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */; };
@@ -251,6 +253,7 @@
 		B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D33CC62A8C821EACD662C /* TopoHubApp.swift */; };
 		B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */; };
 		B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 45B7067577746DC49D3FFD8F /* TopoAuth */; };
+		BCF92A147BD39566DBC81227 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		BD0BB7A7D364CC4E7926AE75 /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
 		BDAC31A885ADB3E134011054 /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
 		BE2E77872613825E0A6215B5 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
@@ -301,6 +304,7 @@
 		E4B477BCEAFEA10585AC5B5A /* TuningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37C72071D6B88AB32EF3BBFD /* TuningTests.swift */; };
 		E4F6A39CB234B2F7FF938D1C /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		E596F876098F2B54AB0DD7C6 /* GuestSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */; };
+		E6389B2B3C4E2A4B98D31F2D /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		E72AC5641EFE61743159DCD5 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 5A4E38620A9CC6B4ED612A12 /* TopoAuth */; };
 		E842D90B19FB83DA9860E903 /* SpeakableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE6988A9926AEFE077104598 /* SpeakableTests.swift */; };
 		E855FBF41819F3010E5322B5 /* GuestBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402EB6E7D75092F33B78F15B /* GuestBridge.swift */; };
@@ -317,6 +321,7 @@
 		F0E3735FB1184C474A985C4B /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		F122D5CBDFF0ED4BF5FD49A7 /* ComposerGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE26BC3B71DBCF5F73F6B15 /* ComposerGeometryTests.swift */; };
 		F179B6F2808ECFFAA6763959 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
+		F4010B6C30D29D40FE5B6DF3 /* WidgetDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */; };
 		F4974068046E34EB0AB10E96 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
 		F6F5EA00208CF8B3ECEBEBD1 /* ThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B7F8C14868F6151C38208F7 /* ThemeTests.swift */; };
 		F710CD8D19E9952AD050CCD8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 843B7316243F6B0BFD30D130 /* Assets.xcassets */; };
@@ -469,6 +474,7 @@
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		999383D4C5743811758B9CEF /* MarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTests.swift; sourceTree = "<group>"; };
 		9A03F8DA19F37B857BA8F079 /* Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harness.swift; sourceTree = "<group>"; };
+		9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDocument.swift; sourceTree = "<group>"; };
 		9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSessionTests.swift; sourceTree = "<group>"; };
 		9C9A782EE9118805036640C7 /* ReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplayTests.swift; sourceTree = "<group>"; };
 		9E270E681606D89AAEA041E6 /* VaultDownloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultDownloads.swift; sourceTree = "<group>"; };
@@ -512,6 +518,7 @@
 		D3A03D6163E6AC87912A0A8E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadsTests.swift; sourceTree = "<group>"; };
 		D6A401F08D7A75D151418BFA /* ChatReading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatReading.swift; sourceTree = "<group>"; };
+		D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDocumentTests.swift; sourceTree = "<group>"; };
 		D7E1A5F0E00768D69191A35A /* models.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = models.json; sourceTree = "<group>"; };
 		D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptView.swift; sourceTree = "<group>"; };
 		D946D8851F96D23296B16179 /* RoleSelectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelectorTests.swift; sourceTree = "<group>"; };
@@ -911,6 +918,7 @@
 				FEC48E94648977786C921A1C /* VaultMigrationTests.swift */,
 				0EF1677D8D77561257325F30 /* VaultMountTests.swift */,
 				BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */,
+				D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */,
 				55452FFA3CFFCD17323E6A45 /* Traces */,
 			);
 			path = Client;
@@ -987,6 +995,7 @@
 				6B5D9DE746B7D268AD71B7A2 /* Theme.swift */,
 				94DA9AB030655FE57E305922 /* TopoCloudKit.swift */,
 				3C73B06423A3D15D5A7B7093 /* WebAuth.swift */,
+				9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1465,6 +1474,7 @@
 				82621EF76ECEDB9B9F825F8C /* VoiceInput.swift in Sources */,
 				D2DC72F45F5F9DB79FDAFD95 /* WatchRootView.swift in Sources */,
 				0BB1FC3236EA16193196ED7B /* WebAuth.swift in Sources */,
+				7A8B1ADFEA35183A04493998 /* WidgetDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1486,6 +1496,7 @@
 				D7D4A4D582A7379655220F68 /* TopoCloudKit.swift in Sources */,
 				B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */,
 				05D9E8725893BABEF9CC5913 /* WebAuth.swift in Sources */,
+				E6389B2B3C4E2A4B98D31F2D /* WidgetDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1580,6 +1591,7 @@
 				39DD8E0131A9E3A312E554E5 /* Voice.swift in Sources */,
 				B4F9B93DE9603D8CA5C352EA /* VoiceInput.swift in Sources */,
 				CEDE0DECFBB5BCF16F65601D /* WebAuth.swift in Sources */,
+				77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1644,6 +1656,7 @@
 				5671EB2AE05D38CDD2472D44 /* VaultMigrationTests.swift in Sources */,
 				E11803C2ACE44982CF4D443D /* VaultMountTests.swift in Sources */,
 				A399F66B2B5BFE21E44EE31E /* VocabularyTests.swift in Sources */,
+				F4010B6C30D29D40FE5B6DF3 /* WidgetDocumentTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1717,6 +1730,7 @@
 				2908E979E18FAFFBCBBA3F5C /* Voice.swift in Sources */,
 				0033D5043460871D4D290C82 /* VoiceInput.swift in Sources */,
 				94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */,
+				BCF92A147BD39566DBC81227 /* WidgetDocument.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
