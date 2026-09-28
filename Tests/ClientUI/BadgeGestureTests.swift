@@ -81,9 +81,16 @@ final class BadgeGestureTests: XCTestCase {
     /// The badge is the element carrying the chat's debug report, and it is a button. A toolbar
     /// item's container carries its one child's identifier too, so the type is what names the one
     /// that is the badge.
+    ///
+    /// Before it is pressed, the chat is up and has reported, and a simulator's own account alert
+    /// is put away: an alert arriving over a press takes the touch, and the press it was meant as
+    /// never reaches the badge.
     private func badge(in app: XCUIApplication) -> XCUIElement {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
+        ChatReading.dismissAccountAlert()
+        let reported = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value BEGINSWITH '{'"), object: badge)
+        XCTAssertEqual(XCTWaiter().wait(for: [reported], timeout: 20), .completed, "the chat has not reported")
         return badge
     }
 

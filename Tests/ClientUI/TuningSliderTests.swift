@@ -29,16 +29,15 @@ final class TuningSliderTests: XCTestCase {
         // The slider's value is its field's, in points; halfway along 0...64 is 32.
         let moved = try XCTUnwrap((slider.value as? String).flatMap(Double.init), "the slider has no value")
         XCTAssertNotEqual(moved, shipped, "the slider did not move")
-        app.navigationBars["Settings"].buttons["Done"].tap()
-        XCTAssertTrue(badge.waitForExistence(timeout: 10))
+        done(app)
         XCTAssertTrue(wait(for: moved, in: app), "the chat does not wear the slider's \(moved): \(String(describing: clearance(in: app)))")
 
         _ = try openTuning(app, badge: badge)
         let reset = app.buttons["Reset"]
         XCTAssertTrue(reset.isEnabled, "Reset is not offered with a slider moved")
         reset.tap()
-        XCTAssertFalse(reset.isEnabled, "Reset is still offered with nothing to reset")
-        app.navigationBars["Settings"].buttons["Done"].tap()
+        XCTAssertTrue(becomes(reset, "isEnabled == false"), "Reset is still offered with nothing to reset")
+        done(app)
         XCTAssertTrue(wait(for: shipped, in: app), "Reset did not give the chat its look back: \(String(describing: clearance(in: app)))")
     }
 
@@ -74,9 +73,9 @@ final class TuningSliderTests: XCTestCase {
         let reset = app.buttons["Reset"]
         XCTAssertTrue(reset.isEnabled, "Reset is not offered with a pin kept")
         reset.tap()
-        XCTAssertFalse(reset.isEnabled, "Reset is still offered with nothing to reset")
-        XCTAssertFalse(pin.exists, "the pin is still shown after Reset")
-        app.navigationBars["Settings"].buttons["Done"].tap()
+        XCTAssertTrue(becomes(reset, "isEnabled == false"), "Reset is still offered with nothing to reset")
+        XCTAssertTrue(becomes(pin, "exists == false"), "the pin is still shown after Reset")
+        done(app)
         XCTAssertTrue(wait(in: app) { $0.placement == "roam" && $0.overridePlacement == nil },
                       "Reset did not give him his roaming back")
 
@@ -87,9 +86,31 @@ final class TuningSliderTests: XCTestCase {
         let glass = app.buttons["On the glass"]
         XCTAssertTrue(glass.waitForExistence(timeout: 5), "the placement offers no glass")
         glass.tap()
-        app.navigationBars["Settings"].buttons["Done"].tap()
+        // The menu is gone and the choice is the picker's before the sheet is closed: a tap on
+        // Done while the menu is still going lands on nothing and leaves the sheet up.
+        XCTAssertTrue(becomes(glass, "exists == false"), "the placement menu did not close")
+        XCTAssertTrue(becomes(picker, "label CONTAINS 'On the glass' OR value CONTAINS 'On the glass'"),
+                      "the picker does not show the glass chosen: \(picker.label) \(String(describing: picker.value))")
+        done(app)
         XCTAssertTrue(wait(in: app) { $0.placement == "glass" && $0.overridePlacement == "glass" && $0.presence == 1 },
                       "the chat does not wear the glass chosen, on a pane drawn whole")
+    }
+
+    /// Waits, bounded, for `element` to be as `predicate` says: what a tap changes is drawn by the
+    /// app's next update, which a snapshot taken on the line after the tap can come before.
+    private func becomes(_ element: XCUIElement, _ predicate: String, timeout: TimeInterval = 10) -> Bool {
+        let expectation = XCTNSPredicateExpectation(predicate: NSPredicate(format: predicate), object: element)
+        return XCTWaiter().wait(for: [expectation], timeout: timeout) == .completed
+    }
+
+    /// Closes the settings with Done once it can be hit, and waits for the sheet to be gone, so
+    /// what is read next is the chat and not the sheet over it.
+    private func done(_ app: XCUIApplication) {
+        let settings = app.navigationBars["Settings"]
+        let done = settings.buttons["Done"]
+        XCTAssertTrue(becomes(done, "hittable == true"), "Done cannot be hit")
+        done.tap()
+        XCTAssertTrue(becomes(settings, "exists == false"), "Done did not close the settings")
     }
 
     private struct Placed: Decodable {
@@ -108,16 +129,23 @@ final class TuningSliderTests: XCTestCase {
         return false
     }
 
-    /// Opens the settings and scrolls to the Tuning section, which is the last in the sheet.
+    /// Opens the settings and scrolls to the Tuning section, which is the last in the sheet, until
+    /// Reset, its last row, can be hit. Each scroll is a drag held a moment first: a fling handed
+    /// to a starved app can arrive as a touch too short to move the list, so the list is dragged
+    /// until it gets there, a bounded number of times, from the leading margin, where no row's
+    /// control is to be picked up by it.
     private func openTuning(_ app: XCUIApplication, badge: XCUIElement) throws -> XCUIElement {
         badge.tap()
         XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the tap did not open the settings")
         let slider = app.sliders["tuning-clearance"]
+        let reset = app.buttons["Reset"]
         let form = app.collectionViews.firstMatch
-        for _ in 0..<6 where !(slider.exists && slider.isHittable && app.buttons["Reset"].isHittable) {
-            form.swipeUp(velocity: .slow)
+        for _ in 0..<10 where !(slider.exists && slider.isHittable && reset.exists && reset.isHittable) {
+            form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.8))
+                .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.3)))
         }
         XCTAssertTrue(slider.isHittable, "the settings have no clearance slider")
+        XCTAssertTrue(reset.exists && reset.isHittable, "the settings have no Reset")
         return slider
     }
 
