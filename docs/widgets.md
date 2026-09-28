@@ -1,0 +1,50 @@
+# Widgets
+
+The mind designs the person's home-screen and lock-screen widgets itself. It writes a small layout document per widget with `topo widget`, the app judges it field by field the way `LookDocument` judges `look.json`, and a WidgetKit extension draws it. A control on a widget carries an action the mind wired: a turn, opening Topo, or one `topo` call run with no turn. The app writes one widget of its own, the default, so no widget is blank before the mind has written one.
+
+## The app group
+
+Everything a widget draws lives in the app group `group.zone.hexagon.topo` (on the iOS app and the extension only), under `Surfaces/`: one document per slot (`<slot>.json`), what `topo widget set` said of it (`<slot>.notes`), the slot's images (`<slot>/<name>.png`), the slot revisions (`revisions.json`), the pending cues (`pending.jsonl`) and the last 50 taps (`taps.jsonl`). `SurfaceStore` is the only way in: every write is one atomic replace under an `NSFileCoordinator`, every read a coordinated read, and the files are protected until first unlock, so a widget reads them on a locked phone. The vault is not used, because the extension cannot reach its folder and a widget's read has to work behind the lock.
+
+## The document
+
+A slot is a name the mind picks (`[a-z0-9-]`, at most 32 characters, at most 12 slots); `_default` is the app's. A document's top level is `version` (1), `families` (a node tree per family: `systemSmall`, `systemMedium`, `systemLarge`, `accessoryCircular`, `accessoryRectangular`, `accessoryInline`, and `default`, which a missing family falls back to), and optional `tint`, `until` (ISO 8601; past it the slot draws the default), `tap` (a turn or open for the whole widget, since a widget's own URL carries no intent) and `relevance`. `revision` is the app's: assigned at `set`, one more than the slot's last (the count outlives `topo widget clear`), and refused from the mind.
+
+The node kinds are `vstack`, `hstack`, `zstack`, `text` (words, or a date drawn `relative`, `timer`, `time` or `date` so it ticks with no reload), `glyph` (an SF Symbol the system has), `image` (one `topo widget image` put in the slot), `gauge`, `progress`, `topo` (Topo in one pose, drawn as a still frame of `TopoMascot`), `spacer`, `divider`, and the controls `button`, `toggle` and `link`. A colour is a `Theme` token or a light/dark hex pair. `topo help widget` lists the fields and `topo widget example` prints a document with every kind.
+
+`WidgetDocument.read` judges every field where it is read. An unknown kind drops that node alone; a bad field falls back to its default with a note and its node, words and children stand; a text past its length (200, 60 on a lock-screen family) is cut and a gauge value past its bounds is drawn at the bound, each with a note; a tree past its budget (16 KB, 64 nodes, depth 6, 4 images, 6 controls a family) is cut there with a note. `accessoryInline` keeps one glyph and one text. A control's id is `[a-z0-9-]`, unique in its family, and the same id in two families is the same control. Nothing the reader keeps can trap in a view: every number is finite and in range, every name a case, every symbol one the system has.
+
+## `topo widget`
+
+`Apps/Topo/Tools/WidgetTool.swift`, a row in the guest's `ToolTable` beside `topo look`:
+
+- `topo widget`: every slot, its revision, families, `until` and images, the reader's notes and the controls judged only at the tap, and which placed widgets show it (`WidgetCenter`).
+- `topo widget set SLOT JSON`: 0 when the reader took everything, 6 with the notes when it refused part (the rest is written), 2 when nothing could be read. It writes and asks for a reload.
+- `topo widget image SLOT NAME PATH`: a PNG, JPEG or HEIC from under `/home/topo` (the app's `Documents/home`), read through a descriptor opened beneath the home's resolved path with `O_NOFOLLOW_ANY`, so no link anywhere along the path is followed; a `..` or `.`, a path outside the home, a file over 512 KB or 1024 px on its long side, one that is not one of those types, or a fifth image in the slot is status 6 with nothing copied. What is kept is the decoded image re-encoded as PNG.
+- `topo widget clear [SLOT]`, `topo widget taps [SLOT]` (time, slot, control, revision, kind and status — never an argument or a tool's words), `topo widget example`.
+
+A `run` action is judged at `set` by `WidgetRunJudge`: the allowlist (`WidgetAction.allowed`: `home scene`, `home set`, `notify`, `reminders done`, `reminders add`, `look set`, `look reset`), then the call's own tool's argument reader, and for `home` the homes HomeKit has already loaded with access granted (`HomeAccess.loadedHomes`), never making the manager and so never asking. With none loaded the action is kept and listed as unchecked, and the tap judges it in full. A `home set` on a lock's or a garage door's target (`lock`, the short name `topo home` gives a lock's target, `lock-target-state` and `target-door-state`) is refused, by name and by id, since an id is resolved to its short name first. A toggle's call is judged with `on` and with `off` appended. A refused action opens Topo instead, with a note.
+
+## The extension
+
+`TopoWidgets` (`Apps/Widgets`, bundle `zone.hexagon.topo.widgets`), embedded in `Topo`: one kind, `TopoSurface`, an `AppIntentConfiguration` whose one parameter is the slot, its options the slots in the app group. A widget with no slot picked, a slot that is gone or past its `until`, draws the default; with no default either, the phone is signed out and it draws the octopus mark and "Sign in on your phone". The timeline is one entry now and one at `until`, `.never` without one: the app reloads on every write, through `SurfaceReloader`, which coalesces to one reload of a kind per 2 s (and reloads everything at once on sign-out). The extension reads the app group and nothing else. `WidgetNodeView` is one switch over the node kinds; every text and control carries an accessibility identifier from its place (`widget-text-0.1`, `widget-control-<id>`), and a control whose last run at this revision failed is drawn with a mark.
+
+## Taps
+
+- `open` is a link to `topo://open`.
+- `turn` is `WidgetCueIntent` (`openAppWhenRun`), or for a `link` a `topo://cue?…` URL. The intent mints a nonce and records the cue in `pending.jsonl` under it, and the app drains the cues (`WidgetCues`) on becoming active, on the URL, and on the harness's first read of the log: each goes on the line as `widget <slot>: <say>` (or `tapped <id>`) through `Harness.willSend(_:nonce:)`, which does nothing for a nonce already on the line or in the log, and its record goes only after. So a drain run twice is one turn, and a cue queues behind a turn in flight rather than joining its words.
+- `run` is `WidgetRunIntent`, a `LiveActivityIntent`: it runs in the app's process, launching the app into the background if it is not running (measured on the simulator, backgrounded and killed; a plain `AppIntent` from a widget runs in the extension). `WidgetActions` refuses a tap whose revision is not the slot's current one (`stale`, and a reload), judges the call against the allowlist again, and runs it through `ToolService.bounded` over the guest's tools with `home` refusing the targets above, so the 90 s bound, cancellation at it and the permission broker apply as to a guest call. The status goes to `taps.jsonl`, never the words.
+
+`WidgetTaps` is the handler for both, set on `WidgetIntents.handler` in `TopoApp.init`, which the system finishes before an intent it launched the app for runs.
+
+## The default
+
+`DefaultSurface` writes `_default` after each reply the log brings (`Harness.onLanded`) and on launch once signed in. The home-screen families carry Topo, the reply's first sentence, its time and an "Ask Topo" link, the words marked `.privacySensitive()`. The lock-screen families carry Topo, the time and "Ask Topo", and no word of the reply, since a locked phone shows them to whoever holds it whatever the person's settings. A slot the mind writes for a lock-screen family is drawn as written; `topo help widget` says those families show on a locked phone.
+
+## Sign-out
+
+A sign-out removes `Surfaces/` whole and reloads every timeline at once (`SignOut.forgetSurfaces`), and so does any login ending by another path (`TopoApp`, on the phase leaving signed in), so each placed widget draws the signed-out state. A launch that finds no token takes nothing away.
+
+## Tests
+
+`WidgetDocumentTests` (the reader's refusals), `WidgetStoreTests` and `SurfaceReloaderTests` (coordination and coalescing), `WidgetSnapshotTests` (each family's fixture in `Tests/Client/Widgets/` drawn through `ImageRenderer` in light and dark against its reference PNG, a fixture with any node taken out shown to differ, and the default's lock-screen families holding no reply), `WidgetToolTests`, `WidgetCueTests`, `WidgetActionTests`, `SignOutTests.testClearsWidgetSurfaces`, and `TopoWidgetUITests`, which launches the app's debug host (`TOPO_DEBUG_WIDGET=<document JSON>`, `WidgetHostView`) over each fixture, finds every text and control by identifier and taps each control. `TEST_RUNNER_TOPO_RECORD_WIDGETS=1` records the references afresh, and fails.
