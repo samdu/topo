@@ -14,6 +14,8 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(name: "TopoIsh", path: "Frameworks/TopoIsh.xcframework"),
-        .target(name: "TopoUserland", dependencies: ["TopoIsh"]),
+        // The phone's own name servers, read through libresolv for the guest's resolver.
+        .target(name: "TopoResolv", linkerSettings: [.linkedLibrary("resolv")]),
+        .target(name: "TopoUserland", dependencies: ["TopoIsh", "TopoResolv"]),
     ]
 )

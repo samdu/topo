@@ -34,7 +34,11 @@ judgement:
      holds: a verdict that blocks, a draft untouched for `GRACE`, a green PR
      with Proof boxes unticked, a ready PR with no validate run, a run
      cancelled with nothing after it, and a PR nothing has touched for
-     `IDLE` while no run is in progress.
+     `IDLE` while no run is in progress;
+  6. reports each open issue that is untriaged — no `triaged` label and no
+     comment — once it is older than `GRACE`, again every `REPEAT` while it
+     stays so. A paged GraphQL read (at most `ISSUES_PAGES` pages) gives the
+     title, the labels and a comment count; the body is never read.
 
 Everything it decides is a function of what it read; everything it does is a
 `gh`, `git`, `tmux` or shell call behind `Shell`, so `--dry-run` prints the
@@ -104,6 +108,19 @@ SETUP_STEPS = {
 }
 SETUP_PREFIXES = ("Run actions/", "Post Run ", "Join the tailnet")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
+ISSUES_PAGE = 100                  # issues read per GraphQL page
+ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
+ISSUE_LINES = 60                   # issue lines one pass says, so a report is mostly PR lines
+TRIAGED = "triaged"                # buddy-prime has read it: planned, parked or put to Sam
+FROM_TOPO = "from-topo"            # the mind on the phone filed it
+ISSUES_QUERY = f"""query($owner: String!, $name: String!, $after: String) {{
+  repository(owner: $owner, name: $name) {{
+    issues(states: OPEN, first: {ISSUES_PAGE}, after: $after) {{
+      pageInfo {{ hasNextPage endCursor }}
+      nodes {{ number title createdAt labels(first: 100) {{ nodes {{ name }} pageInfo {{ hasNextPage }} }} comments {{ totalCount }} }}
+    }}
+  }}
+}}"""
 
 
 # --- time ------------------------------------------------------------------
@@ -265,6 +282,54 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     return out
 
 
+def decide_issues(issues, now):
+    """The open issues to report, and the numbers still untriaged.
+
+    `issues` is the GraphQL read's nodes. An issue is untriaged while it has
+    no `triaged` label and no comment; one is reported once it is older than
+    GRACE. Returns (reports, keep, bad): a report is
+    {"kind": "report", "key": "issue:N", "text": ...}; `keep` the numbers whose
+    keys stand (the untriaged, and a malformed node's when it has a number),
+    or None when a malformed node has no number to keep, so no issue key may
+    be dropped; `bad` names each malformed node, which is skipped. Pure.
+    """
+    out, keep, bad = [], set(), []
+    for at, i in enumerate(issues, 1):
+        n = i.get("number") if isinstance(i, dict) else None
+        if not isinstance(n, int) or isinstance(n, bool):
+            n = None
+        try:
+            nodes = i["labels"]["nodes"]
+            # A label list with a next page may have left `triaged` off it.
+            if not isinstance(nodes, list) or i["labels"]["pageInfo"]["hasNextPage"] is not False:
+                raise ValueError
+            labels = {l["name"] for l in nodes}
+            comments = i["comments"]["totalCount"]
+            title = i["title"]
+            created = parse_time(i["createdAt"])
+            if (n is None or not isinstance(title, str) or isinstance(comments, bool)
+                    or not isinstance(comments, int) or created is None):
+                raise ValueError
+        except (KeyError, TypeError, ValueError, AttributeError):
+            bad.append(f"#{n}" if n is not None else f"node {at}")
+            if n is None:
+                keep = None
+            elif keep is not None:
+                keep.add(n)
+            continue
+        if TRIAGED in labels or comments > 0:
+            continue
+        if keep is not None:
+            keep.add(n)
+        age = now - created
+        if age <= GRACE:
+            continue
+        by = " (filed by Topo)" if FROM_TOPO in labels else ""
+        out.append({"kind": "report", "key": f"issue:{n}",
+                    "text": f"issue: #{n} {title}{by}, opened {minutes(age)} ago, untriaged."})
+    return out, keep, bad
+
+
 def decide_publish(published_commit, main_sha, state, now):
     """Whether to republish the install page. Returns a reason string or None."""
     if not main_sha:
@@ -394,6 +459,32 @@ class Shell:
 
     def rerun(self, run_id):
         self.run(["gh", "run", "rerun", str(run_id), "--repo", REPO, "--failed"], mutating=True)
+
+    def open_issues(self):
+        """The open issues, as GraphQL nodes: number, title, createdAt, labels and a
+        comment count, never a body. Read a page at a time on `endCursor`, at
+        most ISSUES_PAGES pages; answers (nodes, whole), `whole` False when a
+        next page still stands after the last one read."""
+        owner, name = REPO.split("/")
+        nodes, after = [], None
+        for _ in range(ISSUES_PAGES):
+            args = ["api", "graphql", "-f", f"query={ISSUES_QUERY}", "-F", f"owner={owner}", "-F", f"name={name}"]
+            if after:
+                args += ["-f", f"after={after}"]
+            answer = self.gh_json(*args)
+            try:
+                issues = answer["data"]["repository"]["issues"]
+                page, more, after = issues["nodes"], issues["pageInfo"]["hasNextPage"], issues["pageInfo"]["endCursor"]
+            except (KeyError, TypeError):
+                raise RuntimeError("gh api graphql answered without the repository's issues")
+            if not isinstance(page, list):
+                raise RuntimeError("gh api graphql answered without the repository's issues")
+            nodes += page
+            if not more:
+                return nodes, True
+            if not after:
+                raise RuntimeError("gh api graphql said there is a next page and gave no cursor")
+        return nodes, False
 
     def main_sha(self):
         return self.run(["gh", "api", f"repos/{REPO}/commits/main", "--jq", ".sha"]).stdout.strip()
@@ -718,12 +809,71 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     except RuntimeError as ex:
         say("sweep:read", f"could not read the worktrees: {ex}")
 
+    # 6: the open issues nobody has triaged.
+    # Issue lines are the first cut: the pass's PR lines come first, a pass
+    # says at most ISSUE_LINES of them inside PENDING_MAX, and none while an
+    # earlier report is undelivered, so a queue that waits on the bridge holds
+    # PR lines rather than issue lines that are said again anyway. A line not
+    # said leaves its key unfired, and it is said on a later pass.
+    # No line of this step joins a report while an earlier one is undelivered,
+    # or takes a place the pass's other lines left full: such a line is not
+    # said, and its key not fired, so a later pass says it.
+    untriaged = None   # the keys that stand, known only off a whole read
+    malformed = read = False
+
+    def say_issue(key, text):
+        if state.get("undelivered"):
+            quiet.append(f"{key}: waits for the undelivered reports")
+        elif len(lines) >= PENDING_MAX:
+            quiet.append(f"{key}: the report is full")
+        else:
+            say(key, text)
+
+    try:
+        issues, whole = sh.open_issues()
+        read = True
+        if not whole:
+            say_issue("issues:page", f"the open issue list runs past {ISSUES_PAGES} pages of {ISSUES_PAGE}; no issue is reported off a list not read whole.")
+        else:
+            wants, untriaged, bad = decide_issues(issues, now)
+            if bad:
+                malformed = True
+                more = f" and {len(bad) - 10} more" if len(bad) > 10 else ""
+                say_issue("issues:node", f"{len(bad)} open issue node{'s' if len(bad) > 1 else ''} came back malformed and {'were' if len(bad) > 1 else 'was'} skipped: {', '.join(bad[:10])}{more}.")
+            owed = [w for w in wants if due(state, w["key"], now)]
+            quiet += [f"{w['key']}: said within the last {minutes(REPEAT)}" for w in wants if w not in owed]
+            free = PENDING_MAX - len(lines)
+            if state.get("undelivered") or free <= 0:
+                room = 0
+            elif len(owed) <= min(ISSUE_LINES, free):
+                room = len(owed)
+            else:
+                room = min(ISSUE_LINES, free - 1)   # and one line saying how many wait
+            for w in owed[:room]:
+                say(w["key"], w["text"])
+            held = len(owed) - room
+            if held > 0 and (state.get("undelivered") or free <= 0):
+                quiet.append(f"{held} issue line(s) wait for the undelivered reports or a report with room")
+            elif held > 0:
+                lines.append(f"{held} more untriaged issue{'s' if held > 1 else ''} wait for the next pass.")
+    except RuntimeError as ex:
+        say_issue("issues:read", f"could not read the open issues: {ex}")
+
     # Forget what no open PR carries, so the file does not grow — but only on a
-    # pass that read the PRs, since an unread list is not an empty one.
+    # pass that read the PRs, since an unread list is not an empty one. Issue
+    # keys likewise, only on a pass that read the whole issue list; a read that
+    # answered at all ends the read failure, so the next one is said.
+    if read:
+        state["fired"].pop("issues:read", None)
+    if untriaged is not None or malformed:
+        state["fired"] = {k: v for k, v in state["fired"].items()
+                          if not (k == "issues:page" or (k == "issues:node" and not malformed)
+                                  or (untriaged is not None and k.startswith("issue:") and int(k[len("issue:"):]) not in untriaged))}
     if prs_ok:
         live = {pr["headRefOid"] for pr in prs}
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
+                          if k.startswith(("issue:", "issues:"))
+                          or (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
                           or k.endswith(":read") or k.rsplit(":", 1)[-1] in live}
         state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}
     state["publish"] = {k: v for k, v in state["publish"].items()

@@ -34,22 +34,20 @@ final class TopoPlacementTests: XCTestCase {
             try assertFirstDrawnWhereHeStands(topo, transcript)
             ChatReading.attach(app, "glass-\(transcript)", to: self)
             let resting = try XCTUnwrap(topo.paneRect).height
-            ChatReading.raiseKeyboard(app)
-            let (_, up) = try ChatReading.wait(app, "\(transcript): on the short glass, the rise drawn") { chat, now in
-                now.roost == "glass" && now.standing && (now.paneRect?.height ?? resting) < resting - 1
-                    && chat.presence == 1 && Self.carried(now.trail, rising: true) != nil
+            let risen: (ChatReading.Chat, ChatReading.Topo) -> Bool = { chat, now in
+                now.roost == "glass" && now.standing && (now.paneRect?.height ?? resting) < resting - 1 && chat.presence == 1
             }
+            let rested: (ChatReading.Chat, ChatReading.Topo) -> Bool = { _, now in
+                now.roost == "glass" && now.standing && ChatReading.near(now.frame, topo.frame)
+            }
+            let placed = { (now: ChatReading.Topo, label: String) in try self.assertOnTheGlass(now, label) }
+            let up = try ride(app, "\(transcript): on the short glass", rising: true, there: risen, back: rested, placed: placed)
             try assertOnTheGlass(up, "\(transcript), keyboard up")
             XCTAssertLessThan(try XCTUnwrap(up.box).minY, try XCTUnwrap(topo.box).minY, "he did not ride the pane up")
-            assertRidesTheKeyboard(try XCTUnwrap(Self.carried(up.trail, rising: true)), "\(transcript), rising")
             ChatReading.attach(app, "glass-\(transcript)-keyboard", to: self)
-            ChatReading.lowerKeyboard(app)
-            let (_, down) = try ChatReading.wait(app, "\(transcript): back on the resting glass, the fall drawn") { _, now in
-                now.roost == "glass" && now.standing && ChatReading.near(now.frame, topo.frame)
-                    && Self.carried(now.trail, rising: false) != nil
-            }
+            let down = try ride(app, "\(transcript): back on the resting glass", rising: false, there: rested, back: risen,
+                                placed: placed)
             try assertOnTheGlass(down, "\(transcript), keyboard down")
-            assertRidesTheKeyboard(try XCTUnwrap(Self.carried(down.trail, rising: false)), "\(transcript), falling")
             app.terminate()
         }
     }
@@ -222,10 +220,139 @@ final class TopoPlacementTests: XCTestCase {
                        "\(label): drawn somewhere else first: \(topo.recent.map { $0.frame ?? [] })", file: file, line: line)
     }
 
-    /// The last run of frames on the glass that the keyboard carried up (`rising`) or down: the
-    /// still frame before it, every moving frame, and the still frame after, with the keyboard's
-    /// edge having moved more than 100 points. Nil until such a run is complete.
-    static func carried(_ trail: [ChatReading.Topo.Drawn], rising: Bool) -> [ChatReading.Topo.Drawn]? {
+    /// The keyboard moved up (`rising`) or down until he stands `there`, and what the glass drew on
+    /// the way judged (`Carry.judge`), only from the samples drawn since this move began. A move
+    /// the trail caught nothing informative of — a starved simulator's display link can fire
+    /// once or not at all in the keyboard's third of a second — is no verdict either way: the
+    /// keyboard is taken back until he stands `back`, that move judged too, and the move made
+    /// again, five moves in all. A sample that disagrees fails at once, on any of them, and where
+    /// he stands is `placed`'s to hold at the end of every move, so a move that leaves him wrong
+    /// fails whether or not its carry was sampled.
+    private func ride(_ app: XCUIApplication, _ what: String, rising: Bool,
+                      there: (ChatReading.Chat, ChatReading.Topo) -> Bool,
+                      back: (ChatReading.Chat, ChatReading.Topo) -> Bool,
+                      placed: (ChatReading.Topo, String) throws -> Void) throws -> ChatReading.Topo {
+        let cues = 5
+        var sampled: [String] = []
+        for cue in 1...cues {
+            let (now, unridden) = try move(app, "\(what), cue \(cue)", rising: rising, until: there, placed: placed)
+            guard let unridden else {
+                print("\(what): rode on cue \(cue)")
+                return now
+            }
+            sampled.append("cue \(cue): \(unridden)")
+            if cue < cues { _ = try move(app, "\(what), back for cue \(cue + 1)", rising: !rising, until: back, placed: placed) }
+        }
+        let message = "\(what): no frame of the carry sampled in \(cues) cues; \(sampled.joined(separator: "; "))"
+        XCTFail(message)
+        throw ChatReading.NotThere(description: message)
+    }
+
+    /// One move of the keyboard: waits for him to stand where it leaves him, then for the run it
+    /// drew to be complete, and judges the run; where he stands is held at rest before the move,
+    /// on his arrival, and again on the report judged. Nil for a ride; for no verdict, what the move sampled
+    /// (`Carry.sampled`); a run he did not ride fails, and so does his not getting there. A run
+    /// not complete within five seconds of his arrival is no verdict.
+    private func move(_ app: XCUIApplication, _ what: String, rising: Bool,
+                      until there: (ChatReading.Chat, ChatReading.Topo) -> Bool,
+                      placed: (ChatReading.Topo, String) throws -> Void) throws -> (ChatReading.Topo, String?) {
+        let before = try ChatReading.wait(app, "\(what): at rest before the move") { _, now in
+            now.standing && !(now.trail.last?.moving ?? false)
+        }.1
+        try placed(before, "\(what), before the move")
+        let since = before.trail.last?.t ?? -.infinity
+        if rising { ChatReading.raiseKeyboard(app) } else { ChatReading.lowerKeyboard(app) }
+        let (_, arrived) = try ChatReading.wait(app, what) { chat, now in there(chat, now) }
+        try placed(arrived, what)
+        // The run is complete at the first still frame after the slide, one tick after it ends.
+        let complete = ChatReading.poll(app, timeout: 5) { chat, now in
+            there(chat, now) && Carry.judge(now.trail, since: since, rising: rising) != .incomplete
+        }?.1
+        // The report judged is the last one read, and where he stands is held on it too: he may
+        // have moved since he arrived.
+        let now = try complete ?? XCTUnwrap(ChatReading.chat(app)?.mascot, "\(what): no report after arriving")
+        try placed(now, "\(what), at the end")
+        switch Carry.judge(now.trail, since: since, rising: rising) {
+        case .rode: return (now, nil)
+        case .incomplete, .noVerdict: return (now, Carry.sampled(now.trail, since: since, rising: rising))
+        case let .off(message):
+            XCTFail("\(what): \(message)")
+            throw ChatReading.NotThere(description: message)
+        }
+    }
+}
+
+/// What the glass drew of one move of the keyboard, judged. Frame by frame through a run the
+/// keyboard carried, he is as far along his way as the keyboard is along its own: both go by
+/// the keyboard's one curve, the pane riding it and he riding the pane. A Topo put at his end at
+/// once, or left at his start, is a whole run apart from the keyboard — but only at a sample well
+/// inside the run: at 98% of the keyboard's way, a Topo already at his end is within the
+/// tolerance, so a run whose every moving sample is that near one end or the other says nothing.
+enum Carry: Equatable {
+    /// No run the keyboard carried yet: the still frame before, every moving frame, and the
+    /// still frame after, with the keyboard's edge having moved more than 100 points.
+    case incomplete
+    /// A run whose moving samples all agree, none of them informative.
+    case noVerdict
+    case rode([ChatReading.Topo.Drawn])
+    case off(String)
+
+    /// How far he may be from the keyboard's progress at a moving sample, as a share of the way.
+    /// Across 720 frames sampled on a simulator, idle and starved, he was never more than 0.0017
+    /// off it, so this is some seventeen times that; the smaller it is, the more of the slide a
+    /// sample informs from, which is what a starved display link needs.
+    static let tolerance = 0.03
+    /// Whether a sample `along` the keyboard's way tells a ride from a jump: more than the
+    /// tolerance from either end, so a Topo left at his start and one put at his end both fail it.
+    static func informs(_ along: Double) -> Bool { along > tolerance && along < 1 - tolerance }
+
+    /// Every run drawn since the clock read `since` — the trail's last sample before the move, so
+    /// a run from an earlier move is never judged as this one's. One run off fails the move
+    /// whatever the others did, and a ride needs every run ridden: each with a sample that informs.
+    static func judge(_ trail: [ChatReading.Topo.Drawn], since: Double, rising: Bool) -> Carry {
+        let runs = carried(trail.filter { $0.t >= since }, rising: rising)
+        guard !runs.isEmpty else { return .incomplete }
+        var told = true
+        for run in runs {
+            guard let first = run.first, let last = run.last else { continue }
+            let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
+            guard abs(him) > 20 else { return .off("he did not move with the pane: \(run)") }
+            var this = false
+            for sample in run.dropFirst().dropLast() {
+                let along = (sample.keyboard - first.keyboard) / keyboard
+                let his = (sample.top - first.top) / him
+                guard abs(his - along) <= tolerance else {
+                    return .off("at \(sample) he is \(Int(his * 100))% of his way and the keyboard \(Int(along * 100))%: \(run)")
+                }
+                if informs(along) { this = true }
+            }
+            told = told && this
+        }
+        return told ? .rode(runs.flatMap { $0 }) : .noVerdict
+    }
+
+    /// What a move drew of the keyboard's way, for a failure to show: each moving frame since
+    /// `since` as `him/keyboard` percentages of the way, the first twenty of them. Starvation
+    /// reads as few frames or none mid-slide; drift, as the two apart.
+    static func sampled(_ trail: [ChatReading.Topo.Drawn], since: Double, rising: Bool) -> String {
+        let trail = trail.filter { $0.t >= since }
+        let runs = carried(trail, rising: rising)
+        guard !runs.isEmpty else { return "incomplete, \(trail.filter(\.moving).count) moving frames" }
+        // Only a run `judge` has not already failed reaches here, so he moved more than 20 points.
+        let shares = runs.flatMap { run -> [String] in
+            guard let first = run.first, let last = run.last else { return [] }
+            let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
+            return run.filter(\.moving).map { sample in
+                "\(Int(((sample.top - first.top) / him * 100).rounded()))/\(Int(((sample.keyboard - first.keyboard) / keyboard * 100).rounded()))"
+            }
+        }
+        let more = shares.count > 20 ? " and \(shares.count - 20) more" : ""
+        return "[\(shares.prefix(20).joined(separator: " "))\(more)]"
+    }
+
+    /// Every run of frames the keyboard carried up (`rising`) or down: the still frame before it,
+    /// every moving frame, and the still frame after. Empty until one such run is complete.
+    static func carried(_ trail: [ChatReading.Topo.Drawn], rising: Bool) -> [[ChatReading.Topo.Drawn]] {
         var runs: [[ChatReading.Topo.Drawn]] = []
         var run: [ChatReading.Topo.Drawn] = []
         for sample in trail {
@@ -239,26 +366,102 @@ final class TopoPlacementTests: XCTestCase {
                 run = [sample]
             }
         }
-        return runs.last { run in
+        return runs.filter { run in
             guard let first = run.first, let last = run.last, !first.moving, !last.moving, run.count >= 3 else { return false }
             return rising ? last.keyboard < first.keyboard - 100 : last.keyboard > first.keyboard + 100
         }
     }
+}
 
-    /// Frame by frame through a run the keyboard carried, he is as far along his way as the
-    /// keyboard is along its own: both go by the keyboard's one curve, the pane riding it and he
-    /// riding the pane. A Topo put at his end at once, or left at his start, is a whole run apart.
-    private func assertRidesTheKeyboard(_ run: [ChatReading.Topo.Drawn], _ label: String,
-                                        file: StaticString = #filePath, line: UInt = #line) {
-        guard let first = run.first, let last = run.last else { return XCTFail("\(label): no run", file: file, line: line) }
-        let keyboard = last.keyboard - first.keyboard, him = last.top - first.top
-        XCTAssertGreaterThan(abs(him), 20, "\(label): he did not move with the pane: \(run)", file: file, line: line)
-        for sample in run.dropFirst().dropLast() {
-            let along = (sample.keyboard - first.keyboard) / keyboard
-            let his = (sample.top - first.top) / him
-            XCTAssertEqual(his, along, accuracy: 0.15,
-                           "\(label): at \(sample) he is \(Int(his * 100))% of his way and the keyboard \(Int(along * 100))%: \(run)",
-                           file: file, line: line)
+/// `Carry.judge` against trails written by hand: the verdicts a starved simulator's sparse samples
+/// must and must not give, which no run on a fast one is sure to reach. Launches nothing.
+final class CarryJudgeTests: XCTestCase {
+    private typealias Drawn = ChatReading.Topo.Drawn
+
+    /// The keyboard rising from the foot at 874 to 539, him from 617 to 342, each sample `(keyboard
+    /// along, him along)` as shares of the way, at clock `from` on.
+    private func rise(_ moving: [(Double, Double)], from start: Double = 1) -> [Drawn] {
+        let still = Drawn(t: start, top: 617, keyboard: 874, moving: false)
+        let samples = moving.enumerated().map { index, share in
+            Drawn(t: start + 0.1 * Double(index + 1), top: 617 - 275 * share.1, keyboard: 874 - 335 * share.0, moving: true)
+        }
+        let end = Drawn(t: start + 0.1 * Double(moving.count + 1), top: 342, keyboard: 539, moving: false)
+        return [still] + samples + [end]
+    }
+
+    /// The keyboard falling back to the foot, him from 342 to 617: the same verdicts the other way.
+    private func fall(_ moving: [(Double, Double)]) -> [Drawn] {
+        rise(moving).map { Drawn(t: $0.t, top: 959 - $0.top, keyboard: 1413 - $0.keyboard, moving: $0.moving) }
+    }
+
+    func testAFallIsJudgedTheSameWay() {
+        guard case .rode = Carry.judge(fall([(0.5, 0.5)]), since: 0, rising: false) else { return XCTFail("a fall ridden is not a ride") }
+        guard case .off = Carry.judge(fall([(0.5, 1)]), since: 0, rising: false) else { return XCTFail("a fall jumped passed") }
+        XCTAssertEqual(Carry.judge(fall([(0.98, 1)]), since: 0, rising: false), .noVerdict)
+        XCTAssertEqual(Carry.judge(fall([(0.5, 0.5)]), since: 0, rising: true), .incomplete, "a fall read as a rise")
+    }
+
+    func testARideSampledMidwayIsARide() {
+        guard case .rode = Carry.judge(rise([(0.5, 0.5)]), since: 0, rising: true) else { return XCTFail("not a ride") }
+    }
+
+    func testAJumpSampledMidwayIsOff() {
+        guard case .off = Carry.judge(rise([(0.5, 1)]), since: 0, rising: true) else { return XCTFail("a jump passed") }
+        guard case .off = Carry.judge(rise([(0.5, 0)]), since: 0, rising: true) else { return XCTFail("staying put passed") }
+    }
+
+    /// At 98% of the keyboard's way a Topo already at his end is within the tolerance: that sample
+    /// cannot tell the two apart, so it is no verdict and never a ride.
+    func testALoneSampleNearAnEndIsNoVerdict() {
+        XCTAssertEqual(Carry.judge(rise([(0.98, 1)]), since: 0, rising: true), .noVerdict)
+        XCTAssertEqual(Carry.judge(rise([(0.02, 0)]), since: 0, rising: true), .noVerdict)
+        XCTAssertEqual(Carry.judge(rise([(0.98, 1), (0.99, 1)]), since: 0, rising: true), .noVerdict)
+    }
+
+    /// Informative from the tolerance in: a jump sampled at 96% is caught, and so is a Topo
+    /// left at his start at 4%.
+    func testTheInformativeSpanIsWhereAJumpFails() {
+        guard case .off = Carry.judge(rise([(0.96, 1)]), since: 0, rising: true) else { return XCTFail("a jump at 96% passed") }
+        guard case .off = Carry.judge(rise([(0.04, 0)]), since: 0, rising: true) else { return XCTFail("staying put at 4% passed") }
+        XCTAssertFalse(Carry.informs(Carry.tolerance))
+        XCTAssertFalse(Carry.informs(1 - Carry.tolerance))
+    }
+
+    func testNoMovingSampleIsIncomplete() {
+        XCTAssertEqual(Carry.judge(rise([]), since: 0, rising: true), .incomplete)
+        XCTAssertEqual(Carry.judge([], since: 0, rising: true), .incomplete)
+        XCTAssertEqual(Carry.judge(Array(rise([(0.5, 0.5)]).dropLast()), since: 0, rising: true), .incomplete)
+    }
+
+    /// A ride from an earlier move is not this one's: only the samples since the move began count.
+    func testAnEarlierMovesRideIsNotThisOnes() {
+        let earlier = rise([(0.5, 0.5)], from: 1)
+        let now = rise([(0.98, 1)], from: 5)
+        XCTAssertEqual(Carry.judge(earlier + now, since: 5, rising: true), .noVerdict)
+        XCTAssertEqual(Carry.judge(earlier, since: 5, rising: true), .incomplete)
+    }
+
+    /// What a move sampled reads as each moving frame's shares, him then keyboard.
+    func testWhatAMoveSampledReadsAsShares() {
+        XCTAssertEqual(Carry.sampled(rise([(0.98, 1), (0.99, 1)]), since: 0, rising: true), "[100/98 100/99]")
+        XCTAssertEqual(Carry.sampled(rise(Array(repeating: (0.5, 0.5), count: 25)), since: 0, rising: true),
+                       "[" + Array(repeating: "50/50", count: 20).joined(separator: " ") + " and 5 more]")
+        XCTAssertEqual(Carry.sampled(Array(rise([(0.5, 0.5)]).dropLast()), since: 0, rising: true), "incomplete, 1 moving frames")
+    }
+
+    /// Two runs in one move: the first off, the second ridden. The move fails on the first.
+    func testARunOffFailsTheMoveWhateverRunsAfterIt() {
+        let off = rise([(0.5, 1)], from: 1), ridden = rise([(0.5, 0.5)], from: 2)
+        guard case .off = Carry.judge(off + ridden, since: 0, rising: true) else { return XCTFail("a run off was passed over") }
+        guard case .off = Carry.judge(ridden + off, since: 0, rising: true) else { return XCTFail("a run off was passed over") }
+        XCTAssertEqual(Carry.judge(rise([(0.98, 1)], from: 1) + ridden, since: 0, rising: true), .noVerdict, "a run not ridden was passed over")
+        guard case .rode = Carry.judge(rise([(0.4, 0.4)], from: 1) + ridden, since: 0, rising: true) else { return XCTFail("two runs ridden are not a ride") }
+    }
+
+    /// Any sample that disagrees fails, however many agree.
+    func testOneSampleOffIsOff() {
+        guard case .off = Carry.judge(rise([(0.3, 0.3), (0.6, 0.95), (0.9, 0.9)]), since: 0, rising: true) else {
+            return XCTFail("a disagreeing sample passed")
         }
     }
 }

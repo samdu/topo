@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key. macOS only (plutil).
+# naming the key. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# it passes, and an unsigned one passes saying its entitlements were not read. macOS only
+# (plutil, codesign).
 #
 #   scripts/tests/check-built-plist-test.sh
 set -euo pipefail
@@ -12,7 +14,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription
-      NSContactsUsageDescription NSLocationWhenInUseUsageDescription)
+      NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription)
 
 # A product with everything the check reads.
 make_app() {
@@ -54,8 +56,43 @@ for key in "${keys[@]}"; do
     done
 done
 
+# Signed ad hoc, with and without the entitlement: codesign wants an executable to sign.
+sign() {
+    local app="$1" homekit="$2"
+    cp /usr/bin/true "$app/Topo"
+    plutil -insert CFBundleExecutable -string Topo "$app/Info.plist"
+    local entitlements="$work/entitlements-$homekit.plist"
+    # PlistBuddy, since plutil reads the dots of an entitlement's name as a key path.
+    /usr/libexec/PlistBuddy -c "Add :com.apple.developer.icloud-services array" \
+        -c "Add :com.apple.developer.icloud-services:0 string CloudKit" "$entitlements" >/dev/null
+    if [ "$homekit" = yes ]; then
+        /usr/libexec/PlistBuddy -c "Add :com.apple.developer.homekit bool true" "$entitlements" >/dev/null
+    fi
+    codesign --force --sign - --entitlements "$entitlements" "$app" 2>/dev/null
+}
+
+make_app "$work/signed/Topo.app"
+sign "$work/signed/Topo.app" yes
+if ! out="$("$check" "$work/signed/Topo.app" 2>&1)"; then
+    fail "a product signed with the HomeKit entitlement was refused: $out"
+elif [[ "$out" != *"the HomeKit entitlement"* ]]; then
+    fail "a signed product's pass does not say the entitlement was read: $out"
+fi
+
+make_app "$work/no-homekit/Topo.app"
+sign "$work/no-homekit/Topo.app" no
+if errors="$("$check" "$work/no-homekit/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product signed without the HomeKit entitlement passed"
+elif [[ "$errors" != *"com.apple.developer.homekit"* ]]; then
+    fail "the refusal of a product signed without the HomeKit entitlement does not name it: $errors"
+fi
+
+out="$("$check" "$work/whole/Topo.app" 2>&1)"
+[[ "$out" == *"entitlements not read: the product is unsigned"* ]] \
+    || fail "an unsigned product's pass does not say its entitlements were not read: $out"
+
 if [ "$failures" -gt 0 ]; then
     echo "$failures failure(s)" >&2
     exit 1
 fi
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read"

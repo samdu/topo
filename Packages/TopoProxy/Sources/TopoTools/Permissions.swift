@@ -15,7 +15,7 @@ public enum Access: Sendable, Equatable {
 /// One of the phone's permissions, as a tool needs it: what it stands at, and the system's own
 /// prompt for it.
 public protocol Authorizer: Sendable {
-    /// What the person knows it as: "Reminders", "Calendars", "Contacts", "Location", "Notifications".
+    /// What the person knows it as: "Reminders", "Calendars", "Contacts", "Location", "Notifications", "HomeKit".
     var name: String { get }
     func access() async -> Access
     /// Raises the system's prompt and answers whether it was granted.
@@ -56,13 +56,19 @@ public actor PermissionBroker {
 
     /// Restricted is lifted where it was set, not under Topo's own settings.
     static func restricted(_ name: String) -> ToolReply {
+        if name == "HomeKit" {
+            return ToolReply(status: ToolReply.denied, text:
+                "topo: HomeKit is restricted on this phone, so Topo cannot use it. A restriction is lifted by whoever set it — a device profile's by whoever manages the phone (Settings › General › VPN & Device Management) — and then the person allows Topo in the Settings app, under Privacy & Security › HomeKit › Topo. Ask the person, rather than trying again.\n")
+        }
         let item = name == "Location" ? "Location Services" : name
         return ToolReply(status: ToolReply.denied, text:
             "topo: \(name) is restricted on this phone, so Topo cannot use it. A Screen Time restriction is lifted in the Settings app, under Screen Time › Content & Privacy Restrictions › \(item), by whoever holds the Screen Time passcode; a device profile's, by whoever manages the phone (Settings › General › VPN & Device Management). Ask the person, rather than trying again.\n")
     }
 
+    /// HomeKit's switch is under Privacy & Security, not under the app's own settings.
     static func refusal(_ name: String) -> ToolReply {
-        ToolReply(status: ToolReply.denied, text:
-            "topo: Topo is not allowed to use \(name) on this phone. The person can allow it in the Settings app, under Apps › Topo › \(name); ask them, rather than trying again.\n")
+        let place = name == "HomeKit" ? "Privacy & Security › HomeKit › Topo" : "Apps › Topo › \(name)"
+        return ToolReply(status: ToolReply.denied, text:
+            "topo: Topo is not allowed to use \(name) on this phone. The person can allow it in the Settings app, under \(place); ask them, rather than trying again.\n")
     }
 }
