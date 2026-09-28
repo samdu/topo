@@ -208,8 +208,10 @@ final class ConnectionsTests: XCTestCase {
 
 extension ConnectionsLeftBehind {
     /// One kept in a defaults suite of its own, so no test reads another's.
-    static func isolated() -> ConnectionsLeftBehind {
-        ConnectionsLeftBehind(defaults: UserDefaults(suiteName: "topo-tests-\(UUID().uuidString)")!)
+    static func isolated(installed: Bool = true) -> ConnectionsLeftBehind {
+        let leftBehind = ConnectionsLeftBehind(defaults: UserDefaults(suiteName: "topo-tests-\(UUID().uuidString)")!)
+        leftBehind.installed = installed
+        return leftBehind
     }
 }
 
@@ -261,6 +263,29 @@ final class ConnectionsLeftBehindTests: XCTestCase {
         XCTAssertEqual(relaunched.github, .disconnected)
         let after = await tool.run(["token"])
         XCTAssertEqual(after.text, GitHubTool.notConnected)
+    }
+
+    /// A reinstall after a clear the keychain refused: the defaults and their mark are gone, the
+    /// keychain item is not. The first launch of the install clears it before anything reads it,
+    /// and a clear that fails again is kept as before.
+    func testTheFirstLaunchOfAnInstallClearsAnEarlierInstallsTokens() async {
+        let store = StubbornStore(Connection(token: "gho_first", account: "first"))
+        store.refuses = false
+        let fresh = ConnectionsLeftBehind.isolated(installed: false)
+        let connections = Connections(store: store, flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                                      leftBehind: fresh)
+        XCTAssertEqual(connections.github, .disconnected)
+        XCTAssertTrue(fresh.installed)
+        let reply = await GitHubTool(store: store, leftBehind: fresh).run(["token"])
+        XCTAssertEqual(reply.text, GitHubTool.notConnected)
+
+        let stubborn = StubbornStore(Connection(token: "gho_first", account: "first"))
+        let again = ConnectionsLeftBehind.isolated(installed: false)
+        _ = Connections(store: stubborn, flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(), leftBehind: again)
+        XCTAssertNotNil(again.words)
+        let refused = await GitHubTool(store: stubborn, leftBehind: again).run(["token"])
+        XCTAssertEqual(refused.status, ToolReply.failed)
+        XCTAssertFalse(refused.text.contains("gho_first"))
     }
 
     /// While the clear still fails, a connect is refused rather than saved beside the old token.

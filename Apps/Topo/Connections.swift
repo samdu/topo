@@ -61,9 +61,12 @@ final class Connections {
         self.browser = browser
         self.leftBehind = leftBehind
         github = Self.standing(store)
-        // A clear refused before, at a sign-out, a takeover or a demotion: tried again at each
-        // launch, since until it succeeds the tokens there are a login's that is gone.
-        if leftBehind.words != nil { forget() }
+        // A clear refused before, at a sign-out, a takeover or a demotion, is tried again at each
+        // launch, since until it succeeds the tokens there are a login's that is gone. So is the
+        // first launch of an install: the keychain outlives an uninstall and the app's defaults do
+        // not, so a token found then is an earlier install's, and whose login it was is unknown.
+        if leftBehind.words != nil || !leftBehind.installed { forget() }
+        leftBehind.installed = true
     }
 
     /// What the keychain holds for GitHub: connected, not, or unreadable — which is said, never
@@ -182,10 +185,12 @@ final class Connections {
 
 /// A `forget()` the keychain refused: its words, kept in the app's defaults until a clear of every
 /// connection succeeds, so the tools hand out nothing a login that is gone connected — whoever
-/// signs in next — and each launch tries the clear again.
+/// signs in next — and each launch tries the clear again; and whether this install has launched
+/// before, since an uninstall takes the defaults and leaves the keychain.
 final class ConnectionsLeftBehind: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "zone.hexagon.topo.connections.left-behind"
+    private let installedKey = "zone.hexagon.topo.connections.installed"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -194,6 +199,13 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
     var words: String? {
         get { defaults.string(forKey: key) }
         set { defaults.set(newValue, forKey: key) }
+    }
+
+    /// Whether this install has launched before: false on the first launch after an install,
+    /// when the keychain may still hold an earlier install's tokens.
+    var installed: Bool {
+        get { defaults.bool(forKey: installedKey) }
+        set { defaults.set(newValue, forKey: installedKey) }
     }
 }
 
