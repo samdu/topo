@@ -23,6 +23,11 @@
 # signature of a signed product. An unsigned product (the PR check's device build) carries no
 # entitlements to read, and the script says so rather than passing it as checked.
 #
+# `CFBundleURLTypes` is read the same way and for the same reason: the widgets open `topo://`,
+# no setting generates the key, and without it a tap on a widget's link opens nothing. The
+# widget extension is read off the product too: `PlugIns/TopoWidgets.appex`, the one the widgets
+# are, embedded in the app.
+#
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
 #
@@ -80,6 +85,20 @@ if codesign -d "$app" >/dev/null 2>&1; then
     entitlements="the HomeKit entitlement"
 fi
 
+schemes="$(plutil -extract CFBundleURLTypes json -o - -- "$plist" 2>/dev/null || true)"
+case "$schemes" in
+    *'"CFBundleURLSchemes":["topo"]'*) ;;
+    *)
+        echo "$app/Info.plist does not declare the topo URL scheme (CFBundleURLTypes: ${schemes:-absent}); a widget's link would open nothing" >&2
+        status=1
+        ;;
+esac
+
+if [ ! -f "$app/PlugIns/TopoWidgets.appex/Info.plist" ]; then
+    echo "$app does not embed PlugIns/TopoWidgets.appex; there would be no widgets" >&2
+    status=1
+fi
+
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2
@@ -94,5 +113,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' five usage strings, $entitlements, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' five usage strings, the topo URL scheme, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

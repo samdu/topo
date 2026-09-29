@@ -38,6 +38,9 @@ struct HomeCharacteristic: Sendable, Equatable {
     var units: String?
     /// HomeKit's cached value, nil when it holds none.
     var value: HomeValue?
+    /// HomeKit's characteristic type (`HMCharacteristicTypeTargetLockMechanismState` …), which
+    /// the short name is made from.
+    var type = ""
 
     /// Integer formats, and the bounds of each: a `uint64` past `Int.max` is one `topo home` neither
     /// reads nor writes.
@@ -135,6 +138,13 @@ struct HomeAccessory: Sendable, Equatable {
 struct HomeScene: Sendable, Equatable {
     var id: String
     var name: String
+    /// The HomeKit types of the characteristics running it writes, so a scene that unlocks a door
+    /// can be refused where setting that characteristic is (`HomeTool.refusing`). An action that
+    /// is not a characteristic write is `unknownAction`, which the widgets refuse, since what it
+    /// does cannot be read.
+    var writes: [String] = []
+
+    static let unknownAction = "unknown-action"
 }
 
 struct HomeRecord: Sendable, Equatable {
@@ -204,6 +214,16 @@ final class HomeAccess {
             return false
         }
         return made().authorization.contains(.authorized)
+    }
+
+    /// The homes HomeKit has already loaded with access granted, primary first, or nil: it never
+    /// makes the store and never waits, so it asks the person nothing. What a widget's `run`
+    /// action is judged against when it is set (`WidgetTool`).
+    var loadedHomes: [HomeRecord]? {
+        guard let store, homesLoaded, store.authorization.contains(.authorized) else { return nil }
+        var homes = store.homes()
+        homes.sort { $0.primary && !$1.primary }
+        return homes
     }
 
     /// Every home, primary first, once HomeKit has loaded them.
@@ -293,6 +313,16 @@ struct HomeTool: Tool {
     let broker: PermissionBroker
     /// How long one read of an accessory is waited on before its value is said as `?`.
     var readBound: Duration = .seconds(4)
+    /// Characteristics this tool refuses to set however the call names them, by short name or by
+    /// HomeKit type: the widgets' tool table refuses a lock's and a garage door's target state
+    /// (`widgetRefused`); the guest's refuses none.
+    var refusing: Set<String> = []
+
+    /// What a widget's `run` may not set: the short names `WidgetAction` refuses before the call
+    /// is resolved, the HomeKit types, so a renamed short name cannot let one through, and a
+    /// scene action that cannot be read, so a scene fails closed.
+    static let widgetRefused: Set<String> = WidgetAction.refusedCharacteristics
+        .union([HMCharacteristicTypeTargetLockMechanismState, HMCharacteristicTypeTargetDoorState, HomeScene.unknownAction])
 
     let name = "home"
     let summary = "the lights, locks, thermostats and scenes of the person's home (HomeKit)"
@@ -332,6 +362,7 @@ struct HomeTool: Tool {
             case let .set(id, name, text):
                 let accessory = try accessory(id, in: homes)
                 let characteristic = try Self.characteristic(name, of: accessory)
+                try Self.admit(characteristic, of: accessory, refusing: refusing)
                 let value = try Self.judge(text, for: characteristic, of: accessory)
                 try await home.write(value, to: characteristic.id)
                 let back = await read(characteristic.id)
@@ -343,6 +374,7 @@ struct HomeTool: Tool {
                 return .ok(PhoneTool.lines(lines, none: "no scenes"))
             case let .scene(id):
                 let scene = try Self.one(id, among: homes.flatMap(\.scenes), id: \.id, name: \.name, kind: "scene")
+                try Self.admit(scene, refusing: refusing)
                 try await home.run(scene: scene.id)
                 return .ok("ran: \(PhoneTool.line([scene.id, scene.name]))\n")
             }
@@ -439,7 +471,47 @@ struct HomeTool: Tool {
     // MARK: Finding
 
     private func accessory(_ id: String, in homes: [HomeRecord]) throws -> HomeAccessory {
-        try Self.one(id, among: homes.flatMap(\.accessories), id: \.id, name: \.name, kind: "accessory")
+        try Self.accessory(id, in: homes)
+    }
+
+    static func accessory(_ id: String, in homes: [HomeRecord]) throws -> HomeAccessory {
+        try one(id, among: homes.flatMap(\.accessories), id: \.id, name: \.name, kind: "accessory")
+    }
+
+    /// Refuses a characteristic this tool does not set, by the short name it resolved to.
+    static func admit(_ characteristic: HomeCharacteristic, of accessory: HomeAccessory, refusing: Set<String>) throws {
+        guard refusing.contains(characteristic.name) || refusing.contains(characteristic.type) else { return }
+        throw ToolFailure("\(accessory.name) \(characteristic.name) is not a widget's to set; a lock or a door goes through a turn",
+                          status: ToolReply.refused)
+    }
+
+    /// Refuses a scene that writes a characteristic this tool does not set, or holds an action
+    /// that cannot be read.
+    static func admit(_ scene: HomeScene, refusing: Set<String>) throws {
+        let refused = refusing.intersection(scene.writes)
+        guard !refused.isEmpty else { return }
+        if refused == [HomeScene.unknownAction] {
+            throw ToolFailure("the scene \(scene.name) holds an action that cannot be read, which is not a widget's to run; run it through a turn",
+                              status: ToolReply.refused)
+        }
+        throw ToolFailure("the scene \(scene.name) sets a lock or a door, which is not a widget's to run; a lock or a door goes through a turn",
+                          status: ToolReply.refused)
+    }
+
+    /// A `set` or `scene` call judged against homes already loaded, the way the call itself would
+    /// judge it, with nothing written and nothing run.
+    static func judge(_ call: Call, in homes: [HomeRecord], refusing: Set<String>) throws {
+        switch call {
+        case let .set(id, name, text):
+            let accessory = try accessory(id, in: homes)
+            let characteristic = try characteristic(name, of: accessory)
+            try admit(characteristic, of: accessory, refusing: refusing)
+            _ = try judge(text, for: characteristic, of: accessory)
+        case let .scene(id):
+            try admit(one(id, among: homes.flatMap(\.scenes), id: \.id, name: \.name, kind: "scene"), refusing: refusing)
+        case .list, .get, .scenes:
+            break
+        }
     }
 
     /// The one thing whose id is `text` or starts with it. None is a failure; more than one is a
@@ -550,7 +622,12 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
         manager.homes.map { home in
             HomeRecord(id: home.uniqueIdentifier.uuidString, name: home.name, primary: home.isPrimary,
                        accessories: home.accessories.map(Self.record),
-                       scenes: home.actionSets.map { HomeScene(id: $0.uniqueIdentifier.uuidString, name: $0.name) })
+                       scenes: home.actionSets.map { set in
+                           HomeScene(id: set.uniqueIdentifier.uuidString, name: set.name,
+                                     writes: set.actions.map {
+                                         ($0 as? HMCharacteristicWriteAction<NSCopying>)?.characteristic.characteristicType ?? HomeScene.unknownAction
+                                     })
+                       })
         }
     }
 
@@ -624,7 +701,7 @@ final class HomeKitStore: NSObject, HomeStore, HMHomeManagerDelegate {
             minimum: metadata?.minimumValue?.decimalValue, maximum: metadata?.maximumValue?.decimalValue,
             step: metadata?.stepValue?.decimalValue, validValues: metadata?.validValues?.map(\.decimalValue),
             maxLength: metadata?.maxLength?.intValue, units: metadata?.units.map(HomeNames.units),
-            value: value(characteristic.value, format: format))
+            value: value(characteristic.value, format: format), type: characteristic.characteristicType)
     }
 
     /// A `uint64` above `Int.max` has no `HomeValue`, so it reads as `?` rather than as a wrong number.

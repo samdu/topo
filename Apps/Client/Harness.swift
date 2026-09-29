@@ -72,6 +72,9 @@ final class Harness {
             turns.forEach(seen)
         }
     }
+    /// Told every reply the log has brought, each time a read or a landing brings it, whatever
+    /// the screen: the app's default widget follows the newest (`DefaultSurface`).
+    var onLanded: (@MainActor (Turn) -> Void)?
     /// Told the nonce of a turn that ended in a failure rather than a reply, as it ends: no reply
     /// is coming for it, and the screen's error line is not a place to work out whose. Not called
     /// for a turn another primary is answering, whose reply is still on its way.
@@ -389,6 +392,20 @@ final class Harness {
         return outgoing.nonce
     }
 
+    /// Puts the words on the line under a nonce minted elsewhere — a widget's cue, recorded in the
+    /// app group under it before the app ever saw it — unless that nonce is already on the line
+    /// or already in the log, so a cue drained twice is one turn. Answers whether the nonce is on
+    /// the line or in the log now, which is when its record may go. Only a harness that has read
+    /// the log (`hasRead`) knows what the log holds.
+    @discardableResult
+    func willSend(_ text: String, nonce: String) -> Bool {
+        if said(nonce) || pending.contains(where: { $0.nonce == nonce }) { return true }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        pending.append(Outgoing(text: text, nonce: nonce))
+        return true
+    }
+
     /// That turn was said into the microphone and its reply is one to read aloud, which is what
     /// makes it spoken; the mark outlives the screen, so the reply to what was said before a
     /// relaunch is still an answer to something spoken.
@@ -596,6 +613,7 @@ final class Harness {
     /// A reply the handler has not been given. Offered once, whichever path brought it; with no
     /// handler installed it is left unoffered, for whichever one is installed next.
     private func seen(_ turn: Turn) {
+        if turn.role == .assistant { onLanded?(turn) }
         guard turn.role == .assistant, let onReply, !offered.contains(turn.ref) else { return }
         if onReply(turn) { offered.insert(turn.ref) }
     }

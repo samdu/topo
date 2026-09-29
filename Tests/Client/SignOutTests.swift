@@ -18,6 +18,7 @@ final class SignOutTests: XCTestCase {
         let signOut = SignOut(stopSpeaking: { calls.ended.append("speaker") },
                               forgetHarness: { calls.ended.append("harness") },
                               forgetMemory: { calls.ended.append("memory") },
+                              forgetSurfaces: { calls.ended.append("surfaces") },
                               forgetConnections: { calls.ended.append("connections") },
                               forgetLogin: { calls.ended.append("login") })
         return (signOut, calls)
@@ -26,7 +27,7 @@ final class SignOutTests: XCTestCase {
     func testSigningOutEndsEveryOneOfThem() async {
         let (signOut, calls) = signOut()
         await signOut.act()
-        XCTAssertEqual(Set(calls.ended), ["speaker", "harness", "memory", "connections", "login"])
+        XCTAssertEqual(Set(calls.ended), ["speaker", "harness", "memory", "surfaces", "connections", "login"])
     }
 
     func testTheLoginGoesLast() async {
@@ -46,7 +47,34 @@ final class SignOutTests: XCTestCase {
     func testTheOrderIsTheWholeOrder() async {
         let (signOut, calls) = signOut()
         await signOut.act()
-        XCTAssertEqual(calls.ended, ["speaker", "harness", "memory", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["speaker", "harness", "memory", "surfaces", "connections", "login"])
+    }
+
+    /// The widgets go with the login: the app group's documents, images and pending taps
+    /// removed, and every timeline reloaded at once rather than after the reload window.
+    func testClearsWidgetSurfaces() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("signout-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = SurfaceStore(folder: folder)
+        try store.write(WidgetDocument.read(WidgetTool.example).document, slot: "demo")
+        try store.writeDefault(DefaultSurface.document(nil))
+        try store.writeImage(Data([0x89]), slot: "demo", name: "photo")
+        try store.appendCue(SurfaceStore.Cue(nonce: "N", slot: "demo", id: "hi", revision: 1, time: Date()))
+        var everything = 0
+        var kinds = 0
+        let reloader = SurfaceReloader(reloadKind: { _ in kinds += 1 }, reloadEverything: { everything += 1 },
+                                       schedule: { _, _ in })
+        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
+                              forgetConnections: {}, forgetLogin: {})
+        await signOut.act()
+        let left = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
+        XCTAssertEqual(left, ["_revisions.json"], "the app group kept \(left)")
+        let counters = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: store.revisionsURL))
+        XCTAssertEqual(Array(counters.keys), [SurfaceStore.floor], "a slot's name outlived the login")
+        XCTAssertEqual(everything, 1, "WidgetCenter was not told to reload every timeline")
+        guard case .signedOut = SurfaceProvider.surface(slot: "demo", family: .systemSmall, at: Date(), store: store) else {
+            return XCTFail("a placed widget still draws something after the sign-out")
+        }
     }
 
     /// Nothing is ended by building the value: the button's press is what ends them.

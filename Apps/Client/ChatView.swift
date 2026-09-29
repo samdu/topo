@@ -331,7 +331,8 @@ struct ChatView: View {
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
         SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
-                forgetMemory: { memory.forget() }, forgetConnections: { connections.forget() },
+                forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
+                forgetConnections: { connections.forget() },
                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }
 

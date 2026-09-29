@@ -20,6 +20,7 @@ What is built, what comes next and in what order, what is parked, and the thread
 - The phone's own tools (P7): a loopback tool service and the `topo` CLI in the guest, found by a skill, with `topo look`, reminders, calendar, notify, contacts and location (#189, #214).
 - P7c's HomeKit: `topo home` lists, gets and sets accessories and runs scenes, behind the HomeKit entitlement (#226).
 - P7d, the guest on the network: it reaches the internet directly through the app's sockets and does its own TLS, and its `/etc/resolv.conf` holds the phone's own name servers, VPN included, written at boot and again on every network change (#225, #242). There is no egress proxy; `apk` works from the guest as it is, and git and `gh` are one `apk add` away, since the rootfs ships only Alpine's minirootfs and bash.
+- The phone's widgets: `topo widget` writes home-screen and lock-screen widgets the mind designs, with controls that cue a turn or run one `topo` call, drawn by a WidgetKit extension from the app group, over a default of the newest reply (`docs/widgets.md`). The watch's widgets and Control Center controls are the plan's PRs B and C.
 - Womble for iOS 12 devices, viewer only.
 - The hub app skeleton (`TopoHub`), holding the lease and showing the pairing code.
 - CI: the three-job PR check with the audio lane, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns an infrastructure red, republishes the install page and sweeps merged worktrees.

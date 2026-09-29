@@ -161,6 +161,33 @@ struct LookTool: Tool {
         return String(decoding: data, as: UTF8.self)
     }
 
+    /// Why a `set` or `reset` call would refuse something, judged by the look's own reader with
+    /// nothing set: nil when it would take the whole call.
+    static func refusal(_ arguments: [String]) -> String? {
+        switch arguments.first {
+        case "set":
+            let pairs = Array(arguments.dropFirst())
+            guard !pairs.isEmpty, pairs.count.isMultiple(of: 2) else { return "topo look set takes a field and a value, as many pairs as you like" }
+            for index in stride(from: 0, to: pairs.count, by: 2) {
+                let path = Self.path(pairs[index])
+                guard LookDocument.place(of: path) == .field else { return "\(pairs[index]) is not a field of the look" }
+                var object: [String: Any] = [path[path.count - 1]: value(pairs[index + 1])]
+                for key in path.dropLast().reversed() { object = [key: object] }
+                guard let data = try? JSONSerialization.data(withJSONObject: object) else { return "\(pairs[index]) cannot be written" }
+                let reading = LookDocument.read(String(decoding: data, as: UTF8.self))
+                if let note = reading.notes.first { return note }
+            }
+            return nil
+        case "reset":
+            for field in arguments.dropFirst() where ![.field, .part].contains(LookDocument.place(of: Self.path(field))) {
+                return "\(field) is not a field or a part of the look"
+            }
+            return nil
+        default:
+            return "topo look takes set or reset in a widget"
+        }
+    }
+
     static func path(_ field: String) -> [String] {
         field.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
     }

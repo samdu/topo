@@ -196,7 +196,7 @@ public enum GuestTools {
     public static let skill = """
     ---
     name: topo
-    description: The phone's own tools, through the `topo` command in Bash. Use it for the person's reminders, calendar and contacts, their GitHub connection, secrets from their 1Password vaults, the lights, locks, thermostats and scenes of their home, where the phone is, a notification on the phone now or later, and how the Topo app looks on this phone (the transcript's margins and insets, Topo's size, speed and the room he keeps from the words) — whenever the person asks about their day, to be reminded, to add or check something, who someone is, to turn a light on or run a scene, where they are, or for the app to look or move differently ("tighten your margins").
+    description: The phone's own tools, through the `topo` command in Bash. Use it for the person's reminders, calendar and contacts, their GitHub connection, secrets from their 1Password vaults, the lights, locks, thermostats and scenes of their home, where the phone is, a notification on the phone now or later, and how the Topo app looks on this phone (the transcript's margins and insets, Topo's size, speed and the room he keeps from the words), and the person's home-screen, lock-screen and watch widgets, which you design and wire up yourself — whenever the person asks about their day, to be reminded, to add or check something, who someone is, to turn a light on or run a scene, where they are, or for the app to look or move differently ("tighten your margins").
     ---
 
     # topo
