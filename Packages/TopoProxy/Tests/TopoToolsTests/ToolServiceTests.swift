@@ -128,6 +128,23 @@ import TopoProxy
         #expect(await held.release() == ["cancelled\n"])
     }
 
+    /// A caller that is cancelled — a widget's run at a sign-out — cancels the call it waits on,
+    /// so the tool can see it before its effect.
+    @Test func aCancelledCallerCancelsTheCall() async throws {
+        let held = HeldAnswer()
+        let tool = ScriptedTool(name: "held") { _ in
+            await held.wait()
+            return .ok("answered\n")
+        }
+        let caller = Task {
+            await ToolService.bounded(["held"], table: ToolTable([tool]), until: .now + .seconds(30), bound: .seconds(30))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        caller.cancel()
+        #expect(await held.release() == ["cancelled\n"])
+        #expect(await caller.value.status == 0)
+    }
+
     /// Codex on #189: the bound runs from the connection's accept, so a client that sends a head
     /// promising a body and then one byte of it is answered or closed at the bound, not held.
     @Test func aClientThatNeverFinishesItsBodyIsLetGoAtTheBound() async throws {

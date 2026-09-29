@@ -370,4 +370,32 @@ final class WidgetActionTests: XCTestCase {
         try tap("a", "0")
         XCTAssertEqual(store.failed(slot: "demo", revision: 1), [])
     }
+
+    /// A run still in flight when the login ends is cancelled before its effect, and writes no
+    /// tap and no outcome once it answers, so the next login sees nothing of it.
+    func testARunInFlightAtSignOutLeavesNothing() async throws {
+        let notify = CountingTool("notify")
+        notify.delay = .milliseconds(600)
+        let revision = try set(["notify", "Bins"])
+        let store = store
+        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
+        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader)
+        let tap = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
+        try await Task.sleep(for: .milliseconds(150))
+        reloader.forget(store)
+        await tap.value
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(notify.effects, 0, "the run took its effect after the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.tapsURL.path), "a tap outlived the login")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.outcomesURL.path), "an outcome outlived the login")
+    }
+
+    /// A stale tap from an older revision is logged but leaves the newer failure marked.
+    func testAStaleTapLeavesANewerFailureMarked() throws {
+        try store.appendTap(SurfaceStore.Tap(time: Date(), slot: "demo", id: "a", revision: 2, kind: "run", status: String(ToolReply.denied)))
+        try store.appendTap(SurfaceStore.Tap(time: Date(), slot: "demo", id: "a", revision: 1, kind: "run", status: "stale"))
+        try store.appendTap(SurfaceStore.Tap(time: Date(), slot: "demo", id: "a", revision: 1, kind: "run", status: "0"))
+        XCTAssertEqual(store.taps().count, 3)
+        XCTAssertEqual(store.failed(slot: "demo", revision: 2), ["a"], "an older tap cleared the newer failure")
+    }
 }

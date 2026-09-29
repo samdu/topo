@@ -132,6 +132,13 @@ final class WidgetActions {
         self.reloader = reloader
         self.bound = bound
         self.read = read
+        reloader.onForget { [weak self] in self?.cancelAll() }
+    }
+
+    /// A sign-out: every run in flight is cancelled, so none takes its effect after the login
+    /// has ended, and each one's record is dropped (`run`).
+    func cancelAll() {
+        chains.values.forEach { $0.cancel() }
     }
 
     /// The widgets' tool table: the guest's tools, with `home` refusing a lock's and a door's
@@ -178,6 +185,10 @@ final class WidgetActions {
         let task = Task { @MainActor in
             await previous?.value
             let reply = await ToolService.bounded(argv, table: table, until: .now + bound, bound: bound)
+            // A run that outlived its slot's document at this revision — a sign-out cleared it, or
+            // the slot was written anew — writes nothing, so the next login sees no tap of this
+            // one's controls.
+            guard !Task.isCancelled, read(store, slot)?.revision == revision else { return }
             if let was {
                 if reply.status == 0 {
                     confirmed[state] = !was

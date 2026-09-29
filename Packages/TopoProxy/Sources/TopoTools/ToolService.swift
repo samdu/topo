@@ -199,18 +199,24 @@ public actor ToolService {
         let seconds = Int(bound / .seconds(1))
         let late = ToolReply(status: ToolReply.timedOut, text:
             "topo: no answer within \(seconds) s. If the phone is showing a permission prompt, ask the person to answer it, then try again.\n")
-        return await withCheckedContinuation { (continuation: CheckedContinuation<ToolReply, Never>) in
-            let work = Task { await table.run(arguments) }
-            let timer = Task { try await Task.sleep(until: deadline) }
-            Task {
-                let reply = await work.value
-                timer.cancel()
-                once.resume(continuation, with: reply)
+        let work = Task { await table.run(arguments) }
+        // The caller cancelled (a widget's run at a sign-out) is the call cancelled, so a tool
+        // that checks before its effect takes none; its answer still comes back.
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<ToolReply, Never>) in
+                let timer = Task { try await Task.sleep(until: deadline) }
+                Task {
+                    let reply = await work.value
+                    timer.cancel()
+                    once.resume(continuation, with: reply)
+                }
+                Task {
+                    guard (try? await timer.value) != nil else { return }
+                    if once.resume(continuation, with: late) { work.cancel() }
+                }
             }
-            Task {
-                guard (try? await timer.value) != nil else { return }
-                if once.resume(continuation, with: late) { work.cancel() }
-            }
+        } onCancel: {
+            work.cancel()
         }
     }
 

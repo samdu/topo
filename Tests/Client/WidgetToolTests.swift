@@ -284,9 +284,12 @@ final class WidgetToolTests: XCTestCase {
 
     // MARK: Review Focus 3
 
-    private static func picture(width: Int, height: Int, type: UTType, noise: Bool = false, orientation: Int? = nil) -> Data {
+    private static func picture(width: Int, height: Int, type: UTType, noise: Bool = false, orientation: Int? = nil,
+                                redCorner: Int = 0) -> Data {
         var bytes = [UInt8](repeating: 128, count: width * height * 4)
         if noise { for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) } }
+        // A red block at the top-left of the stored pixels, which says where they were turned to.
+        for y in 0..<redCorner { for x in 0..<redCorner { bytes.replaceSubrange((y * width + x) * 4..<(y * width + x) * 4 + 3, with: [255, 0, 0]) } }
         let context = CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
         let image = context.makeImage()!
@@ -297,11 +300,11 @@ final class WidgetToolTests: XCTestCase {
         return out as Data
     }
 
-    /// A camera's JPEG, landscape pixels marked to be turned a quarter (EXIF orientation 6), is
-    /// kept upright: a portrait PNG.
+    /// A camera's JPEG, landscape pixels marked to be turned a quarter clockwise (EXIF orientation
+    /// 6), is kept upright: a portrait PNG, the stored top-left corner at its top right.
     func testAnImageIsKeptUpright() async throws {
         let tool = try await tool(loaded: true)
-        let turned = Self.picture(width: 40, height: 20, type: .jpeg, orientation: 6)
+        let turned = Self.picture(width: 40, height: 20, type: .jpeg, orientation: 6, redCorner: 8)
         let marked = try XCTUnwrap(CGImageSourceCreateWithData(turned as CFData, nil))
         let said = CGImageSourceCopyPropertiesAtIndex(marked, 0, nil) as? [CFString: Any]
         XCTAssertEqual(said?[kCGImagePropertyOrientation] as? Int, 6, "the fixture carries no orientation")
@@ -311,6 +314,17 @@ final class WidgetToolTests: XCTestCase {
         let kept = try XCTUnwrap(store.imageData(slot: "demo", name: "photo"))
         let image = try XCTUnwrap(CGImageSourceCreateWithData(kept as CFData, nil).flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
         XCTAssertEqual([image.width, image.height], [20, 40], "the picture was kept on its side")
+        var pixels = [UInt8](repeating: 0, count: 20 * 40 * 4)
+        let context = CGContext(data: &pixels, width: 20, height: 40, bitsPerComponent: 8, bytesPerRow: 20 * 4,
+                                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 20, height: 40))
+        func red(_ x: Int, _ y: Int) -> Bool {
+            let at = (y * 20 + x) * 4
+            return pixels[at] > 200 && pixels[at + 1] < 80 && pixels[at + 2] < 80
+        }
+        XCTAssertTrue(red(16, 3), "the red corner is not at the top right")
+        XCTAssertFalse(red(3, 3), "the top left is red")
+        XCTAssertFalse(red(16, 36), "the bottom right is red")
     }
 
     func testImageRefusesLinkEscapeAndOversize() async throws {
