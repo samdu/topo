@@ -60,8 +60,7 @@ struct WidgetCueIntent: AppIntent {
         let cue = cue()
         var recorded = false
         if let store = SurfaceStore.shared() {
-            try store.appendCue(cue)
-            recorded = true
+            recorded = try store.recordCue(cue)
         }
         await WidgetIntents.handler?.cued(cue, recorded: recorded)
         return .result()

@@ -398,4 +398,35 @@ final class WidgetActionTests: XCTestCase {
         XCTAssertEqual(store.taps().count, 3)
         XCTAssertEqual(store.failed(slot: "demo", revision: 2), ["a"], "an older tap cleared the newer failure")
     }
+
+    /// Two taps on a slow control, the second waiting behind the first, and a sign-out while the
+    /// first runs: neither takes its effect, and neither leaves a tap or an outcome.
+    func testEveryRunInFlightIsCancelledAtSignOut() async throws {
+        let notify = CountingTool("notify")
+        notify.delay = .milliseconds(600)
+        let revision = try set(["notify", "Bins"])
+        let store = store
+        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
+        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader)
+        let first = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
+        let second = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
+        try await Task.sleep(for: .milliseconds(150))
+        reloader.forget(store)
+        await first.value
+        await second.value
+        try await Task.sleep(for: .milliseconds(800))
+        XCTAssertEqual(notify.effects, 0, "a run took its effect after the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.tapsURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.outcomesURL.path))
+    }
+
+    /// A run control tapped on a widget still drawn after a sign-out is recorded nowhere.
+    func testARunTappedAfterSignOutIsRecordedNowhere() async throws {
+        let notify = CountingTool("notify")
+        let revision = try set(["notify", "Bins"])
+        try store.removeEverything()
+        await actions([notify]).run(slot: "demo", control: "go", revision: revision, turningOn: nil)
+        XCTAssertEqual(notify.calls, [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.tapsURL.path), "a tap after the sign-out was recorded")
+    }
 }

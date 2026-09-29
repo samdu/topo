@@ -66,8 +66,10 @@ final class WidgetCues {
             // The words are the document's at the revision the tap was drawn from, the app's
             // default included: a tap on an old timeline, or on a control the document does not
             // hold as a turn, sends nothing.
+            // A cue outlives no layout: one whose slot holds no document at its revision (a
+            // sign-out, an earlier login's, a slot written anew) is dropped with no record, the
+            // rule the intent keeps it by (`SurfaceStore.recordCue`).
             guard let document = store.read(slot: cue.slot)?.document, document.revision == cue.revision else {
-                record("stale")
                 try? store.removeCue(nonce: cue.nonce)
                 reloader.reload()
                 continue
@@ -119,6 +121,8 @@ final class WidgetActions {
     /// Each control's last run, which its next waits on, so a control's effects land in the
     /// order its taps were handled.
     private var chains: [String: Task<Void, Never>] = [:]
+    /// Every run in flight, the ones a chain waits behind included, which a sign-out cancels.
+    private var running: [UUID: Task<Void, Never>] = [:]
     /// Each toggle's confirmed state at a revision: the last its run succeeded at, or the stored
     /// one before its chain began. A failed run puts the toggle back to it, not to the state the
     /// failed tap flipped from, which another failed tap may have flipped already.
@@ -138,7 +142,7 @@ final class WidgetActions {
     /// A sign-out: every run in flight is cancelled, so none takes its effect after the login
     /// has ended, and each one's record is dropped (`run`).
     func cancelAll() {
-        chains.values.forEach { $0.cancel() }
+        running.values.forEach { $0.cancel() }
     }
 
     /// The widgets' tool table: the guest's tools, with `home` refusing a lock's and a door's
@@ -159,6 +163,9 @@ final class WidgetActions {
         }
         guard let document = read(store, slot), document.revision == revision,
               let control = document.controls[id] else {
+            // A tap drawn in an earlier login — a widget still showing after a sign-out — is
+            // recorded nowhere, so nothing of it reaches the next login's taps.
+            if store.isEarlierLogin(revision) { return reloader.reload() }
             return record("stale")
         }
         // The kept copy is read through the reader again, which takes a run off the allowlist
@@ -199,7 +206,10 @@ final class WidgetActions {
             record(String(reply.status))
         }
         chains[key] = task
+        let token = UUID()
+        running[token] = task
         await task.value
+        running[token] = nil
         if chains[key] == task {
             chains[key] = nil
             confirmed[state] = nil

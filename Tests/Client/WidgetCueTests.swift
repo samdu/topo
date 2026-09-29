@@ -105,7 +105,8 @@ final class WidgetCueTests: XCTestCase {
         XCTAssertEqual(store.cues().count, 1, "a cue went before the harness knew what the log holds")
     }
 
-    func testAStaleCueIsRecordedAndDropped() async throws {
+    /// A cue outlives no layout: the slot written anew since, it is dropped with no record.
+    func testAStaleCueIsDroppedUnrecorded() async throws {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
         await harness.refresh()
@@ -114,7 +115,29 @@ final class WidgetCueTests: XCTestCase {
         await cues(harness).drain()
         XCTAssertEqual(harness.owed.count, 0)
         XCTAssertEqual(store.cues(), [])
-        XCTAssertEqual(store.taps().map(\.status), ["stale"])
+        XCTAssertEqual(store.taps(), [])
+    }
+
+    /// A turn control tapped on a widget still drawn after a sign-out keeps no cue, and a cue kept
+    /// before the sign-out reaches neither the next login's line nor its taps.
+    func testATurnTappedAfterSignOutReachesNoLogin() async throws {
+        let text = #"{"families": {"systemSmall": {"kind": "button", "id": "hi", "label": "Hi", "action": {"kind": "turn", "say": "hi"}}}}"#
+        let revision = try store.write(WidgetDocument.read(text).document, slot: "demo")
+        let before = SurfaceStore.Cue(nonce: "B", slot: "demo", id: "hi", revision: revision, time: Date())
+        XCTAssertTrue(try store.recordCue(before))
+        try store.removeEverything()
+        try store.appendCue(before)
+        let after = SurfaceStore.Cue(nonce: "A", slot: "demo", id: "hi", revision: revision, time: Date())
+        XCTAssertFalse(try store.recordCue(after), "a tap after the sign-out kept its cue")
+        XCTAssertEqual(store.cues().map(\.nonce), ["B"])
+        try store.write(WidgetDocument.read(text).document, slot: "demo")
+        let db = InMemoryRecordDatabase()
+        let next = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await next.refresh()
+        await cues(next).drain()
+        XCTAssertEqual(next.owed.count, 0)
+        XCTAssertEqual(store.cues(), [])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.tapsURL.path), "an earlier login's tap reached this one's")
     }
 
     /// A link's URL names a control; its words are the document's, whatever else the URL says.

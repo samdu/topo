@@ -213,6 +213,14 @@ struct SurfaceStore: Sendable {
     /// The highest revision an earlier login gave, which every slot's next is above.
     static let floor = "_floor"
 
+    /// Whether `revision` was given before the last sign-out, so a tap drawn with it is an earlier
+    /// login's and is recorded nowhere.
+    func isEarlierLogin(_ revision: Int) -> Bool {
+        guard let data = coordinatedRead(revisionsURL),
+              let revisions = try? JSONDecoder().decode([String: Int].self, from: data) else { return false }
+        return revision <= revisions[Self.floor] ?? 0
+    }
+
     private func nextRevision(slot: String) throws -> Int {
         var next = 0
         try coordinatedWrite(revisionsURL) { data in
@@ -263,6 +271,15 @@ struct SurfaceStore: Sendable {
 
     func appendCue(_ cue: Cue) throws {
         try append(cue, to: pendingURL)
+    }
+
+    /// A turn control's tap, kept only when the slot's document is at the cue's revision now: a
+    /// tap on a widget still drawn after a sign-out, or on an old timeline, is not kept for a
+    /// drain, which could be the next login's. Answers whether it was kept.
+    func recordCue(_ cue: Cue) throws -> Bool {
+        guard read(slot: cue.slot)?.document.revision == cue.revision else { return false }
+        try appendCue(cue)
+        return true
     }
 
     func cues() -> [Cue] { lines(pendingURL) }
