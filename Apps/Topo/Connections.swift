@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import TopoAuth
+import TopoTools
 import UIKit
 
 /// What connecting GitHub asks of GitHub, so a test can stand in for it.
@@ -33,14 +34,28 @@ final class Connections {
         case failed(String)
     }
 
+    enum OnePassword: Equatable {
+        case disconnected
+        /// A pasted token being checked with `op vault list` in the guest.
+        case verifying
+        case connected(vaults: String)
+        case failed(String)
+    }
+
     private(set) var github: GitHub
+    private(set) var onePassword: OnePassword
 
     /// Where the person revokes Topo's authorization, which a disconnect does not: GitHub's list
     /// of the OAuth apps they have authorized.
     static let githubAuthorizations = URL(string: "https://github.com/settings/applications")!
+    /// Where a person makes a service account for the vault they choose.
+    static let onePasswordServiceAccounts = URL(string: "https://my.1password.com/developer-tools/infrastructure-secrets/serviceaccount")!
 
     let store: ConnectionStore
     private let flow: GitHubConnecting
+    private let op: OnePasswordRunning
+    /// The pasteboard a token was pasted from, cleared once the token is saved.
+    private let pasteboard: Pasteboard
     /// Puts the code on the pasteboard, which is a write and asks nothing of the person.
     private let copy: @MainActor (String) -> Void
     /// The in-app browser: the system's web-authentication sheet (`WebAuth`), which is Safari,
@@ -49,18 +64,28 @@ final class Connections {
     /// A `forget()` the keychain refused, kept across launches, so no later login is handed what
     /// an earlier one connected.
     let leftBehind: ConnectionsLeftBehind
+    /// The `topo secret` requests in flight, which a clear of the 1Password token ends.
+    let secrets: SecretRequests
     private var generation = 0
     private var task: Task<Void, Never>?
+    private var onePasswordGeneration = 0
+    private var onePasswordTask: Task<Void, Never>?
 
     init(store: ConnectionStore = KeychainConnectionStore(), flow: GitHubConnecting = GitHubDeviceFlow(),
+         onePassword: OnePasswordRunning = GuestOnePassword(), pasteboard: Pasteboard = SystemPasteboard(),
          copy: @escaping @MainActor (String) -> Void = { UIPasteboard.general.string = $0 },
-         browser: Browser = WebAuthBrowser(), leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind()) {
+         browser: Browser = WebAuthBrowser(), leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind(),
+         secrets: SecretRequests = SecretRequests()) {
         self.store = store
         self.flow = flow
+        self.op = onePassword
+        self.pasteboard = pasteboard
         self.copy = copy
         self.browser = browser
         self.leftBehind = leftBehind
+        self.secrets = secrets
         github = Self.standing(store)
+        self.onePassword = Self.standingOnePassword(store)
         // A clear refused before, at a sign-out, a takeover or a demotion, is tried again at each
         // launch, since until it succeeds the tokens there are a login's that is gone. So is the
         // first launch of an install: the keychain outlives an uninstall and the app's defaults do
@@ -77,6 +102,86 @@ final class Connections {
         } catch {
             return .failed("The GitHub connection could not be read from this phone's keychain: \(error)")
         }
+    }
+
+    /// The same for 1Password.
+    private static func standingOnePassword(_ store: ConnectionStore) -> OnePassword {
+        do {
+            return try store.load(.onePassword).map { .connected(vaults: $0.account) } ?? .disconnected
+        } catch {
+            return .failed("The 1Password connection could not be read from this phone's keychain: \(error)")
+        }
+    }
+
+    /// Takes a pasted service-account token, checks it with `op vault list` in the guest, and
+    /// saves it with the vaults it reaches only when that answers with at least one. The text must
+    /// be one `ops_` token and nothing else.
+    func connectOnePassword(pasted: String) {
+        if leftBehind.words != nil { forget() }
+        if let words = leftBehind.words {
+            onePassword = .failed(Self.sentence(words))
+            return
+        }
+        let token = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
+        let generation = supersedeOnePassword()
+        guard token.hasPrefix("ops_"), token.count > 4, token.count < 8192,
+              !token.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+            onePassword = .failed("That is not a 1Password service-account token, which starts ops_. Copy the token 1Password showed when the service account was made.")
+            return
+        }
+        onePassword = .verifying
+        let pasted = pasteboard.changeCount
+        onePasswordTask = Task { [op, store, pasteboard] in
+            do {
+                let exit = try await op.run(OnePasswordVaults.arguments, token: token)
+                guard generation == self.onePasswordGeneration else { return }
+                guard exit.status == 0, let vaults = OnePasswordVaults.read(exit.output) else {
+                    onePassword = .failed("1Password refused the token: \(exit.said.isEmpty ? "status \(exit.status)" : exit.said)")
+                    return
+                }
+                guard !vaults.isEmpty else {
+                    onePassword = .failed("The service account reaches no vault. Give it one in 1Password and paste the token again.")
+                    return
+                }
+                let names = vaults.map(\.name).joined(separator: ", ")
+                try store.save(Connection(token: token, account: names), for: .onePassword)
+                onePassword = .connected(vaults: names)
+                // The token was on the pasteboard, where any app the person opens next can read
+                // it; it goes once it is kept, unless something else has been copied since.
+                if pasteboard.changeCount == pasted { pasteboard.clear() }
+            } catch {
+                guard generation == self.onePasswordGeneration else { return }
+                onePassword = .failed("The token could not be checked: \(error)")
+            }
+        }
+    }
+
+    /// Stops a check in flight; what was connected before stays.
+    func cancelOnePassword() {
+        supersedeOnePassword()
+        onePassword = Self.standingOnePassword(store)
+    }
+
+    /// Forgets the service-account token on this phone.
+    func disconnectOnePassword() {
+        if leftBehind.words != nil { return forget() }
+        supersedeOnePassword()
+        secrets.clearing {
+            do {
+                try store.clear(.onePassword)
+                onePassword = .disconnected
+            } catch {
+                onePassword = .failed("The token could not be removed from this phone's keychain: \(error)")
+            }
+        }
+    }
+
+    @discardableResult
+    private func supersedeOnePassword() -> Int {
+        onePasswordGeneration += 1
+        onePasswordTask?.cancel()
+        onePasswordTask = nil
+        return onePasswordGeneration
     }
 
     /// Starts connecting GitHub: a code from GitHub, copied and shown, and GitHub's page for it
@@ -145,17 +250,22 @@ final class Connections {
     /// said on the row rather than shown as disconnected.
     func forget() {
         supersede()
+        supersedeOnePassword()
         browser.close()
-        do {
-            try store.clearAll()
-            github = .disconnected
-            unforgotten = nil
-            leftBehind.words = nil
-        } catch {
-            let words = "the GitHub token could not be removed from this phone's keychain: \(error)"
-            github = .failed(Self.sentence(words))
-            unforgotten = words
-            leftBehind.words = words
+        secrets.clearing {
+            do {
+                try store.clearAll()
+                github = .disconnected
+                onePassword = .disconnected
+                unforgotten = nil
+                leftBehind.words = nil
+            } catch {
+                let words = "the connections' tokens could not be removed from this phone's keychain: \(error)"
+                github = .failed(Self.sentence(words))
+                onePassword = .failed(Self.sentence(words))
+                unforgotten = words
+                leftBehind.words = words
+            }
         }
     }
 
@@ -183,10 +293,74 @@ final class Connections {
     }
 }
 
+/// The pasteboard as `Connections` needs it: whether it changed, and emptying it. Neither reads
+/// its contents, so neither puts up the paste prompt.
+@MainActor
+protocol Pasteboard {
+    var changeCount: Int { get }
+    func clear()
+}
+
+struct SystemPasteboard: Pasteboard {
+    var changeCount: Int { UIPasteboard.general.changeCount }
+    func clear() { UIPasteboard.general.items = [] }
+}
+
 /// A `forget()` the keychain refused: its words, kept in the app's defaults until a clear of every
 /// connection succeeds, so the tools hand out nothing a login that is gone connected — whoever
 /// signs in next — and each launch tries the clear again; and whether this install has launched
 /// before, since an uninstall takes the defaults and leaves the keychain.
+/// The `topo secret` requests in flight, and the clears of the 1Password token they must not run
+/// across. A request is let in, under one lock, only while no clear is running; a clear, under the
+/// same lock, cancels every request in flight before it starts, and a request cancelled is never
+/// answered with what it read. So a request either answers before a clear or answers nothing, and
+/// one let in after a refused clear sees its words. A clear does not wait for a request: its
+/// cancel ends `op` (`OnePasswordRun`), and a sign-out stays synchronous.
+final class SecretRequests: @unchecked Sendable {
+    private let lock = NSLock()
+    private var clearRunning = false
+    private var running: [UUID: Task<ToolReply, Never>] = [:]
+
+    static let stopped = ToolReply.failed("Stopped: 1Password was disconnected, or the app signed out, while this ran.\n")
+    static let whileClearing = ToolReply.failed("1Password is being disconnected; ask again once it is.\n")
+
+    /// Runs `body` as one request, unless a clear is running or `refusal` answers one, both read
+    /// under the lock a clear takes.
+    func run(refusal: () -> ToolReply?, _ body: @escaping @Sendable () async -> ToolReply) async -> ToolReply {
+        let id = UUID()
+        let started = lock.withLock { () -> Result<Task<ToolReply, Never>, Refusal> in
+            if clearRunning { return .failure(Refusal(reply: Self.whileClearing)) }
+            if let reply = refusal() { return .failure(Refusal(reply: reply)) }
+            let task = Task { await body() }
+            running[id] = task
+            return .success(task)
+        }
+        let task: Task<ToolReply, Never>
+        switch started {
+        case .failure(let refusal): return refusal.reply
+        case .success(let running): task = running
+        }
+        let reply = await withTaskCancellationHandler { await task.value } onCancel: { task.cancel() }
+        return lock.withLock {
+            running[id] = nil
+            return task.isCancelled ? Self.stopped : reply
+        }
+    }
+
+    /// Runs a clear of the token: every request in flight cancelled first, none let in until it
+    /// has finished.
+    func clearing(_ clear: () -> Void) {
+        lock.withLock {
+            clearRunning = true
+            running.values.forEach { $0.cancel() }
+        }
+        clear()
+        lock.withLock { clearRunning = false }
+    }
+
+    private struct Refusal: Error { let reply: ToolReply }
+}
+
 final class ConnectionsLeftBehind: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "zone.hexagon.topo.connections.left-behind"
@@ -236,6 +410,25 @@ final class WebAuthBrowser: Browser {
 #if DEBUG
 extension DebugRun {
     static let connectGitHubVariable = "TOPO_DEBUG_CONNECT_GITHUB"
+    static let onePasswordTokenVariable = "TOPO_DEBUG_ONEPASSWORD_TOKEN"
+
+    /// `TOPO_DEBUG_ONEPASSWORD_TOKEN=<ops_…>`: connects 1Password at launch as a paste does — the
+    /// token checked with `op vault list` in the guest and saved with the vaults it reaches — and
+    /// prints each state the row takes (the vaults' names or 1Password's refusal, never the token),
+    /// so a simulator run can then call `topo secret` against a real vault. The token arrives as
+    /// the launch's environment and nowhere else, as the setup token does.
+    @MainActor static func connectOnePassword(_ connections: Connections,
+                                              environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        guard let token = environment[onePasswordTokenVariable], !token.isEmpty else { return }
+        connections.connectOnePassword(pasted: token)
+        var said = ""
+        while !Task.isCancelled {
+            let now = "\(connections.onePassword)".replacingOccurrences(of: token, with: "[token]")
+            if now != said { print("[topo-debug] 1password: \(now)"); said = now }
+            if case .verifying = connections.onePassword {} else { return }
+            try? await Task.sleep(for: .milliseconds(250))
+        }
+    }
 
     /// `TOPO_DEBUG_CONNECT_GITHUB=1`: connects GitHub at launch as the screen's Connect does — a
     /// real code from github.com, copied, and GitHub's page for it in the sheet — printing each

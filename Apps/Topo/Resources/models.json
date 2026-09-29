@@ -344,6 +344,23 @@
           "sha256": "cc8266db086b92faa10180d8c34fb4f196022ad13d0d8800b656966f94a9f0f4"
         }
       ]
+    },
+    {
+      "id": "op-cli",
+      "version": "2.39.0",
+      "url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/",
+      "files": [
+        {
+          "path": "op_linux_arm64_v2.39.0.zip",
+          "size": 13935663,
+          "sha256": "829baeff1c07e055cfa132031b1d9f2282ccdf5076258e482caf2fda70aea5d0"
+        }
+      ],
+      "binary": {
+        "path": "op",
+        "size": 41025720,
+        "sha256": "86d9147108e615df1899c028cab683ae4eac421b797a9cff05299aea85ab06e9"
+      }
     }
   ]
 }
