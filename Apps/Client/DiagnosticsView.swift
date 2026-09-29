@@ -14,6 +14,7 @@ struct DiagnosticsView: View {
     @Environment(Memory.self) private var memory
     @Environment(\.dismiss) private var dismiss
     @State private var rows: [(String, String)] = []
+    @State private var probing = false
 
     var body: some View {
         NavigationStack {
@@ -32,6 +33,19 @@ struct DiagnosticsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Refresh") { Task { await load() } }
                 }
+                #if DEBUG
+                ToolbarItem(placement: .bottomBar) {
+                    Button(probing ? "Probing…" : "DNS probe (copies)") {
+                        probing = true
+                        Task {
+                            let text = await DNSProbe.run()
+                            UIPasteboard.general.string = text
+                            rows = [("dns probe (copied)", text)]
+                            probing = false
+                        }
+                    }.disabled(probing)
+                }
+                #endif
             }
             .task { await load() }
         }
