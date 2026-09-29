@@ -24,35 +24,56 @@ struct ConnectionsView: View {
         .tint(look.settings.tint)
     }
 
+    /// What the GitHub row offers in each state. A failure keeps Disconnect beside Try again, since
+    /// the failure may be a clear the keychain refused, with the token still on the phone:
+    /// Disconnect tries the clear again (every connection's, while a refused sign-out clear stands).
+    enum GitHubAction: Equatable {
+        case connect, tryAgain, copyCode, openGitHub, cancel, revoke, disconnect
+    }
+
+    static func githubActions(_ state: Connections.GitHub) -> [GitHubAction] {
+        switch state {
+        case .disconnected: [.connect]
+        case .starting, .finishing: []
+        case .waiting: [.copyCode, .openGitHub, .cancel]
+        case .connected: [.revoke, .disconnect]
+        case .failed: [.tryAgain, .disconnect]
+        }
+    }
+
     private var github: some View {
         Section {
             switch connections.github {
-            case .disconnected:
-                Button("Connect GitHub") { connections.connectGitHub() }
-            case .starting:
-                Label("Asking GitHub for a code…", systemImage: "hourglass")
+            case .disconnected: EmptyView()
+            case .starting: Label("Asking GitHub for a code…", systemImage: "hourglass")
             case let .waiting(code):
                 Text(code.userCode)
                     .font(look.settings.codeFont)
                     .textSelection(.enabled)
                     .accessibilityLabel("GitHub code \(code.userCode)")
-                Button("Copy code") { UIPasteboard.general.string = code.userCode }
-                Button("Open GitHub") { connections.reopenGitHub() }
-                Button("Cancel", role: .cancel) { connections.cancelGitHub() }
-            case .finishing:
-                Label("Approved; asking GitHub who you are…", systemImage: "hourglass")
-            case let .connected(login):
-                LabeledContent("Connected as", value: "@\(login)")
-                Button("Revoke on GitHub") { connections.open(Connections.githubAuthorizations) }
-                Button("Disconnect", role: .destructive) { confirmingDisconnect = true }
-                    .confirmationDialog("Disconnect GitHub?", isPresented: $confirmingDisconnect, titleVisibility: .visible) {
-                        Button("Disconnect", role: .destructive) { connections.disconnectGitHub() }
-                    } message: {
-                        Text("Topo forgets the token on this phone. GitHub keeps the authorization until you revoke it at github.com/settings/applications.")
+            case .finishing: Label("Approved; asking GitHub who you are…", systemImage: "hourglass")
+            case let .connected(login): LabeledContent("Connected as", value: "@\(login)")
+            case let .failed(words): Text(words)
+            }
+            ForEach(Self.githubActions(connections.github), id: \.self) { action in
+                switch action {
+                case .connect: Button("Connect GitHub") { connections.connectGitHub() }
+                case .tryAgain: Button("Try again") { connections.connectGitHub() }
+                case .copyCode:
+                    if case let .waiting(code) = connections.github {
+                        Button("Copy code") { UIPasteboard.general.string = code.userCode }
                     }
-            case let .failed(words):
-                Text(words)
-                Button("Try again") { connections.connectGitHub() }
+                case .openGitHub: Button("Open GitHub") { connections.reopenGitHub() }
+                case .cancel: Button("Cancel", role: .cancel) { connections.cancelGitHub() }
+                case .revoke: Button("Revoke on GitHub") { connections.open(Connections.githubAuthorizations) }
+                case .disconnect:
+                    Button("Disconnect", role: .destructive) { confirmingDisconnect = true }
+                        .confirmationDialog("Disconnect GitHub?", isPresented: $confirmingDisconnect, titleVisibility: .visible) {
+                            Button("Disconnect", role: .destructive) { connections.disconnectGitHub() }
+                        } message: {
+                            Text("Topo forgets the token on this phone. GitHub keeps the authorization until you revoke it at github.com/settings/applications.")
+                        }
+                }
             }
         } header: {
             Text("GitHub")

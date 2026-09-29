@@ -122,8 +122,9 @@ public struct OnePasswordInstaller: Sendable {
 /// A cancelled run does the same from outside through the file the script wrote its group id to;
 /// one cancelled before that file exists leaves a mark the script reads once it has written the
 /// file, so either the script sees the mark and runs nothing or the cancel sees the group. After
-/// every call — a wait that threw included — the app ends what a shell that did not reach its own
-/// end (a SIGKILL from another guest process) left behind, and removes the call's files.
+/// every call the app ends what a shell that did not reach its own end (a SIGKILL from another
+/// guest process) left behind, and removes the call's files; after a wait that threw it runs the
+/// cancel instead, so a shell still running stops at its group file or is ended.
 public enum OnePasswordRun {
     /// The whole of what the guest runs: `$@` is `op`'s arguments, `$TOPO_OP_GROUP` the file the
     /// group id is written to, `$TOPO_OP_GROUP.cancelled` a cancel's mark, and `$TOPO_OP_GROUP.d`
@@ -225,7 +226,8 @@ public enum OnePasswordRun {
     static let turn = Turn()
 
     /// Runs `op` once. A caller waits for the run before it, and stops waiting when cancelled.
-    /// The leftover ending runs after the call whatever it answered, a wait that threw included.
+    /// The leftover ending runs after the call; after a wait that threw, the cancel runs instead,
+    /// since the shell may still be running and not yet have written its group file.
     public static func run(_ arguments: [String], token: String, command: String = OnePasswordInstaller.command,
                            guest: any GuestRunning = Guest.shared) async throws -> Guest.Exit {
         try await turn.enter()
@@ -244,7 +246,9 @@ public enum OnePasswordRun {
                 Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment) }
             }
         } catch {
-            _ = try? await guest.run("/bin/sh", ["-c", leftover, "leftover", groupFile, command], environment: Guest.environment)
+            // A wait that threw may have left the shell running, perhaps not yet at its group
+            // file: the cancel's mark stops it there, and a group already written is ended.
+            _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment)
             throw error
         }
         _ = try? await guest.run("/bin/sh", ["-c", leftover, "leftover", groupFile, command], environment: Guest.environment)

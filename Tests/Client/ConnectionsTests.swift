@@ -299,6 +299,28 @@ final class ConnectionsLeftBehindTests: XCTestCase {
         guard case let .failed(words) = connections.github else { return XCTFail("\(connections.github)") }
         XCTAssertTrue(words.contains("could not be removed"), words)
     }
+
+    /// A Disconnect the keychain refused leaves the GitHub row failed with Disconnect still
+    /// offered, and Disconnect tries the clear again: once the keychain lets it, the token is gone.
+    func testAFailedClearKeepsDisconnectWhichTriesItAgain() throws {
+        XCTAssertEqual(ConnectionsView.githubActions(.failed("x")), [.tryAgain, .disconnect])
+        XCTAssertEqual(ConnectionsView.githubActions(.connected(login: "samdu")), [.revoke, .disconnect])
+        XCTAssertFalse(ConnectionsView.githubActions(.disconnected).contains(.disconnect))
+
+        let store = StubbornStore(Connection(token: "gho_first", account: "first"))
+        store.refuses = false
+        let connections = Connections(store: store, flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                                      leftBehind: .isolated())
+        XCTAssertEqual(connections.github, .connected(login: "first"))
+        store.refuses = true
+        connections.disconnectGitHub()
+        guard case .failed = connections.github else { return XCTFail("not failed: \(connections.github)") }
+        XCTAssertNotNil(try store.load(.github))
+        store.refuses = false
+        connections.disconnectGitHub()
+        XCTAssertEqual(connections.github, .disconnected)
+        XCTAssertNil(try store.load(.github), "the retried Disconnect left the token")
+    }
 }
 
 /// A keychain that refuses every read, or every clear.

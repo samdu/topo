@@ -115,7 +115,7 @@ final class Connections {
 
     /// Takes a pasted service-account token, checks it with `op vault list` in the guest, and
     /// saves it with the vaults it reaches only when that answers with at least one. The text must
-    /// be one `ops_` token and nothing else.
+    /// be one `ops_` token and nothing else (`isServiceAccountToken`).
     func connectOnePassword(pasted: String) {
         if leftBehind.words != nil { forget() }
         if let words = leftBehind.words {
@@ -124,8 +124,7 @@ final class Connections {
         }
         let token = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
         let generation = supersedeOnePassword()
-        guard token.hasPrefix("ops_"), token.count > 4, token.count < 8192,
-              !token.contains(where: { $0.isWhitespace || $0.isNewline }) else {
+        guard Self.isServiceAccountToken(token) else {
             onePassword = .failed("That is not a 1Password service-account token, which starts ops_. Copy the token 1Password showed when the service account was made.")
             return
         }
@@ -154,6 +153,16 @@ final class Connections {
                 onePassword = .failed("The token could not be checked: \(error)")
             }
         }
+    }
+
+    /// `ops_` and then only `[A-Za-z0-9_]`, the alphabet 1Password's service-account tokens are
+    /// written in, under 8 KiB.
+    static func isServiceAccountToken(_ text: String) -> Bool {
+        text.hasPrefix("ops_") && text.utf8.count > 4 && text.utf8.count < 8192
+            && text.utf8.dropFirst(4).allSatisfy { byte in
+                (UInt8(ascii: "A")...UInt8(ascii: "Z")).contains(byte) || (UInt8(ascii: "a")...UInt8(ascii: "z")).contains(byte)
+                    || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte) || byte == UInt8(ascii: "_")
+            }
     }
 
     /// Stops a check in flight; what was connected before stays.

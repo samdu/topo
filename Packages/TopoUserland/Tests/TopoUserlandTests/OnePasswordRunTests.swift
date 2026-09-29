@@ -191,15 +191,16 @@ final class OnePasswordRunTests: XCTestCase {
 
     /// A daemon that writes its pid only after the 5 s the call waits for it is found by its
     /// arguments and ended with the call. The stand-in runs itself as `<command> daemon`, as `op`
-    /// runs `op daemon`, in a session of its own, and writes its pid 7 s late.
+    /// runs `op daemon`, in a session of its own, and stays that process — no `exec`, no subshell
+    /// of its own that would carry the same arguments — writing its pid itself 7 s late.
     func testADaemonWhosePidComesAfterTheWaitIsFoundByName() async throws {
         let marker = "named-\(UUID().uuidString.prefix(8))"
         let op = try await standIn("""
         if [ "$1" = daemon ]; then \
         p="$TMPDIR/com.agilebits.op.0"; mkdir -p "$p"; : > "$p/op-daemon.pid"; \
         sh -c "sleep 300 & echo \\$! > /tmp/\(marker)-child; exec sleep 300" </dev/null >/dev/null 2>&1 & \
-        (sleep 7; echo $$ > "$p/op-daemon.pid") </dev/null >/dev/null 2>&1 & \
-        echo $$ > /tmp/\(marker)-daemon; exec sleep 300; fi; \
+        echo $$ > /tmp/\(marker)-daemon; i=0; \
+        while :; do sleep 1; i=$((i + 1)); [ $i = 7 ] && echo $$ > "$p/op-daemon.pid"; done; fi; \
         setsid "$0" daemon </dev/null >/dev/null 2>&1 & \
         while [ ! -s /tmp/\(marker)-daemon ] || [ ! -s /tmp/\(marker)-child ]; do sleep 0.1; done; exit 0
         """)
@@ -210,6 +211,50 @@ final class OnePasswordRunTests: XCTestCase {
         let left = try await survivors(marker)
         XCTAssertEqual(left, "", "a daemon whose pid came late outlived the call: \(left)")
         _ = try await sh("rm -f /tmp/\(marker)* \(op)")
+    }
+
+    /// A wait that throws while the shell is still starting, before it has written its group file:
+    /// the shell stops at the file and `op` never runs with the token. The guest here throws at
+    /// once and starts the real shell a second later.
+    func testAWaitThatThrowsBeforeTheGroupFileRunsNoOp() async throws {
+        let marker = "early-\(UUID().uuidString.prefix(8))"
+        let op = try await standIn("echo ran > /tmp/\(marker)-op; exit 0")
+        let guest = LateGuest()
+        do {
+            _ = try await OnePasswordRun.run(["vault", "list"], token: token, command: op, guest: guest)
+            XCTFail("a failed wait was answered")
+        } catch is LateGuest.WaitFailed {}
+        let shell = try await guest.late()
+        XCTAssertEqual(shell.status, 130, "the shell went on past its group file: \(shell)")
+        let ran = try await sh("[ -e /tmp/\(marker)-op ] && echo ran || echo not").output
+        XCTAssertEqual(ran, "not\n", "op ran after its wait threw")
+        _ = try await sh("rm -f /tmp/\(marker)* \(op)")
+    }
+}
+
+/// The real guest, except that its first run answers a failed wait at once and starts the program
+/// a second later, as a shell still starting when the wait failed.
+private final class LateGuest: GuestRunning, @unchecked Sendable {
+    private let lock = NSLock()
+    private var first = true
+    private var started: Task<Guest.Exit, Error>?
+    struct WaitFailed: Error {}
+
+    func run(_ path: String, _ arguments: [String], environment: [String: String]) async throws -> Guest.Exit {
+        let isFirst = lock.withLock { () -> Bool in defer { first = false }; return first }
+        guard isFirst else { return try await Guest.shared.run(path, arguments, environment: environment) }
+        lock.withLock {
+            started = Task {
+                try await Task.sleep(for: .seconds(1))
+                return try await Guest.shared.run(path, arguments, environment: environment)
+            }
+        }
+        throw WaitFailed()
+    }
+
+    /// What the program started late answered.
+    func late() async throws -> Guest.Exit {
+        try await XCTUnwrap(lock.withLock { started }).value
     }
 }
 
@@ -231,8 +276,8 @@ private final class ThrowingGuest: GuestRunning, @unchecked Sendable {
 }
 
 final class OnePasswordRunCleanupTests: XCTestCase {
-    /// A run whose wait throws still ends what it left: the leftover ending runs for its group
-    /// file before the error is thrown on.
+    /// A run whose wait throws still ends what it left: the cancel runs for its group file before
+    /// the error is thrown on, since the shell may still be running.
     func testAWaitThatThrowsStillEndsWhatTheRunLeft() async throws {
         let guest = ThrowingGuest()
         do {
@@ -243,7 +288,7 @@ final class OnePasswordRunCleanupTests: XCTestCase {
         XCTAssertEqual(runs.count, 2, "no ending ran after the failed wait")
         let group = try XCTUnwrap(runs.first?.environment["TOPO_OP_GROUP"])
         let ending = try XCTUnwrap(runs.last?.arguments)
-        XCTAssertEqual(Array(ending.dropFirst(2)), ["leftover", group, "/opt/op-cli/op"])
+        XCTAssertEqual(Array(ending.dropFirst(2)), ["cancel", group, "/opt/op-cli/op"])
         XCTAssertEqual(ending.first, "-c")
         XCTAssertNil(runs.last?.environment["OP_SERVICE_ACCOUNT_TOKEN"], "the ending was handed the token")
     }

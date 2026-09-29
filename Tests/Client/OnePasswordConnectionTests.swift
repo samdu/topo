@@ -232,6 +232,20 @@ final class OnePasswordConnectionTests: XCTestCase {
         XCTAssertNil(try store.load(.onePassword))
     }
 
+    /// A token with a character outside `[A-Za-z0-9_]` after `ops_` is not a service-account
+    /// token, and is refused without running `op`.
+    func testATokenOutsideTheAlphabetIsRefused() {
+        let connections = connections()
+        connections.connectOnePassword(pasted: "ops_abc!")
+        guard case let .failed(words) = connections.onePassword else { return XCTFail("\(connections.onePassword)") }
+        XCTAssertTrue(words.contains("ops_"), words)
+        XCTAssertTrue(op.calls.isEmpty)
+        XCTAssertTrue(Connections.isServiceAccountToken(token), "the test's own token is refused")
+        for text in ["ops_abc!", "ops_a-b", "ops_a.b", "ops_a=b", "ops_a/b", "ops_é"] {
+            XCTAssertFalse(Connections.isServiceAccountToken(text), text)
+        }
+    }
+
     func testARefusedTokenIsSaidAndNotSaved() async throws {
         op.answer(OnePasswordExit(status: 1, output: "", errors: "[ERROR] invalid token\n"))
         let connections = connections()
