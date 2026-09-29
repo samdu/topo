@@ -330,6 +330,15 @@ final class MarkdownRenderTests: XCTestCase {
         XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
     }
 
+    /// The same, the block at the foot of a reply far taller than the screen: bringing the row in
+    /// shows its top, and the block is scrolled to once the row has made it.
+    func testABlockAtTheFootOfATallRowNotYetMadeIsScrolledToAndPulses() throws {
+        let paragraphs = (1...30).map { "Paragraph \($0) of a long reply, which takes a line or two of the column." }
+        let reached = try reach(paragraphs.joined(separator: "\n\n") + "\n\n```\nlet x = 1\n```", first: true)
+        XCTAssertGreaterThan(reached.shown, 20, "the block at the foot of the tall row was not scrolled into view")
+        XCTAssertGreaterThan(reached.pulsed, 20, "the block was scrolled to and did not pulse")
+    }
+
     /// A block already whole on the screen, cued, pulses where it is: the transcript does not
     /// move by a point.
     func testABlockAlreadyOnTheScreenIsNotScrolled() throws {
