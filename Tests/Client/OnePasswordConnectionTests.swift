@@ -246,6 +246,9 @@ final class OnePasswordConnectionTests: XCTestCase {
         for text in ["ops_eyJzaWduSW5BZGRyZXNzIjoibXkuMXBhc3N3b3JkLmNvbSJ9", "ops_a1_B2"] {
             XCTAssertTrue(Connections.isServiceAccountToken(text), text)
         }
+        // Under 8 KiB: 8,191 bytes is one, 8,192 is not.
+        XCTAssertTrue(Connections.isServiceAccountToken("ops_" + String(repeating: "a", count: 8187)))
+        XCTAssertFalse(Connections.isServiceAccountToken("ops_" + String(repeating: "a", count: 8188)))
         for text in ["ops_abc!", "ops_a-b", "ops_a.b", "ops_a=b", "ops_a/b", "ops_é"] {
             XCTAssertFalse(Connections.isServiceAccountToken(text), text)
         }
