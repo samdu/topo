@@ -232,6 +232,28 @@ final class OnePasswordConnectionTests: XCTestCase {
         XCTAssertNil(try store.load(.onePassword))
     }
 
+    /// A token with a character outside `[A-Za-z0-9_]` after `ops_` is not a service-account
+    /// token, and is refused without running `op`.
+    func testATokenOutsideTheAlphabetIsRefused() {
+        let connections = connections()
+        connections.connectOnePassword(pasted: "ops_abc!")
+        guard case let .failed(words) = connections.onePassword else { return XCTFail("\(connections.onePassword)") }
+        XCTAssertTrue(words.contains("ops_"), words)
+        XCTAssertTrue(op.calls.isEmpty)
+        XCTAssertTrue(Connections.isServiceAccountToken(token), "the test's own token is refused")
+        // Digits and underscores are in the alphabet too: a token shaped as 1Password's are, base64
+        // with digits in it, and one with an underscore.
+        for text in ["ops_eyJzaWduSW5BZGRyZXNzIjoibXkuMXBhc3N3b3JkLmNvbSJ9", "ops_a1_B2"] {
+            XCTAssertTrue(Connections.isServiceAccountToken(text), text)
+        }
+        // Under 8 KiB: 8,191 bytes is one, 8,192 is not.
+        XCTAssertTrue(Connections.isServiceAccountToken("ops_" + String(repeating: "a", count: 8187)))
+        XCTAssertFalse(Connections.isServiceAccountToken("ops_" + String(repeating: "a", count: 8188)))
+        for text in ["ops_abc!", "ops_a-b", "ops_a.b", "ops_a=b", "ops_a/b", "ops_é"] {
+            XCTAssertFalse(Connections.isServiceAccountToken(text), text)
+        }
+    }
+
     func testARefusedTokenIsSaidAndNotSaved() async throws {
         op.answer(OnePasswordExit(status: 1, output: "", errors: "[ERROR] invalid token\n"))
         let connections = connections()
