@@ -37,8 +37,8 @@ struct SettingsView: View {
                     Button("Where it lives") { showMemory = true }
                 }
                 Section("Connections") {
-                    // GitHub, and who it is connected as, on the screen behind it.
-                    Button("GitHub") { showConnections = true }
+                    // GitHub and 1Password, and who or what each reaches, on the screen behind it.
+                    Button("GitHub and 1Password") { showConnections = true }
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }

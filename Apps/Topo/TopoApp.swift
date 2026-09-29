@@ -67,6 +67,8 @@ struct TopoApp: App {
             NotifyTool(scheduler: UserNotificationScheduler(), authorizer: NotificationAuthorizer(), broker: broker),
             ContactsTool(directory: ContactStoreDirectory(), authorizer: ContactsAuthorizer(), broker: broker),
             GitHubTool(store: connections.store, leftBehind: connections.leftBehind),
+            SecretTool(store: connections.store, onePassword: GuestOnePassword(), leftBehind: connections.leftBehind,
+                       requests: connections.secrets),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
                          broker: broker),
             HomeTool(home: home, authorizer: HomeAuthorizer(home: home), broker: broker),
@@ -122,10 +124,13 @@ struct TopoApp: App {
         #endif
     }
 
-    /// The connect `TOPO_DEBUG_CONNECT_GITHUB` asks for, in a debug build. Nothing in a release one.
-    private func debugConnectGitHub() async {
+    /// The connects `TOPO_DEBUG_CONNECT_GITHUB` and `TOPO_DEBUG_ONEPASSWORD_TOKEN` ask for, in a
+    /// debug build. Nothing in a release one.
+    private func debugConnections() async {
         #if DEBUG
-        await DebugRun.connectGitHub(connections)
+        async let github: Void = DebugRun.connectGitHub(connections)
+        async let onePassword: Void = DebugRun.connectOnePassword(connections)
+        _ = await (github, onePassword)
         #endif
     }
 
@@ -174,7 +179,7 @@ struct TopoApp: App {
                 .task { await debugTurn() }
                 .task { await debugUserland() }
                 .task { await debugGuestTurn() }
-                .task { await debugConnectGitHub() }
+                .task { await debugConnections() }
         }
     }
 }

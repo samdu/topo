@@ -34,15 +34,19 @@ struct ModelManifest: Codable, Sendable {
         /// Code's version, which the guest's `claude --version` prints.
         let version: String?
         let files: [File]
+        /// The one file inside a downloaded archive the app runs, pinned on its own: `op` in
+        /// 1Password's zip.
+        let binary: File?
 
         init(id: String, repo: String? = nil, revision: String? = nil, url: String? = nil, version: String? = nil,
-             files: [File]) {
+             files: [File], binary: File? = nil) {
             self.id = id
             self.repo = repo
             self.revision = revision
             self.url = url
             self.version = version
             self.files = files
+            self.binary = binary
         }
 
         var bytes: Int64 { files.reduce(0) { $0 + $1.size } }
@@ -74,6 +78,9 @@ struct ModelManifest: Codable, Sendable {
     /// Claude Code: Anthropic's `linux-arm64-musl` build, one binary, which the guest runs from
     /// its home here through a mount (`TopoUserland.ClaudeCodeInstaller`), never a copy.
     static let claudeCode = "claude-code"
+    /// 1Password's CLI: the zip 1Password ships, fetched only once 1Password is connected, and
+    /// the `op` inside it pinned as the entry's `binary` (`TopoUserland.OnePasswordInstaller`).
+    static let onePassword = "op-cli"
 
     static func load(from url: URL) throws -> ModelManifest {
         try JSONDecoder().decode(ModelManifest.self, from: Data(contentsOf: url))

@@ -5,12 +5,15 @@ import Foundation
 /// each time it needs one.
 public enum ConnectionService: String, CaseIterable, Sendable {
     case github
+    /// A 1Password service account, which reaches the vaults it was made for.
+    case onePassword = "1password"
 }
 
 /// One connection: the token, and who it is on the other side, as the Connections screen says it.
 public struct Connection: Codable, Equatable, Sendable {
     public var token: String
-    /// The GitHub login.
+    /// What the Connections screen names it by: the GitHub login, or the 1Password vaults the
+    /// service account reaches.
     public var account: String
 
     public init(token: String, account: String) {

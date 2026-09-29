@@ -2,8 +2,9 @@
 # Writes Apps/Topo/Resources/models.json: the pinned list of every file the phone downloads for
 # its on-device models and its guest, with sizes and sha256 digests: the models from the Hugging
 # Face tree API at the revision pinned below, the rootfs from the URL pinned below, bash and the
-# packages it depends on from Alpine's package repository at the versions pinned below, and Claude
-# Code from Anthropic's release distribution at the version pinned below. The app downloads exactly this
+# packages it depends on from Alpine's package repository at the versions pinned below, Claude
+# Code from Anthropic's release distribution at the version pinned below, and 1Password's CLI from
+# its download cache at the version pinned below. The app downloads exactly this
 # list through its background session and admits a file only when its digest matches, so a bump of
 # a model is a bump of a revision here, a bump of Claude Code a bump of its version, and either a
 # re-run of this script.
@@ -179,6 +180,16 @@ claude="
 claude-code|2.1.278|linux-arm64-musl
 "
 
+# id | version | platform: 1Password's CLI, `op`, as the zip 1Password's own install instructions
+# fetch (https://cache.agilebits.com/dist/1P/op2/pkg/v<version>/op_<platform>_v<version>.zip). There
+# is no checksum file beside it, so the zip is hashed here, and so is the `op` inside it, which is
+# the entry's `binary`: the app extracts it in the guest and checks it against that before it is
+# ever handed a token. The platform is linux_arm64, a static Go build that runs in the guest.
+onepassword_cache="https://cache.agilebits.com/dist/1P/op2/pkg"
+onepassword="
+op-cli|2.39.0|linux_arm64
+"
+
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
@@ -293,6 +304,27 @@ while IFS='|' read -r id version platform; do
   entries+=("$(jq -cn --arg id "$id" --arg v "$version" --arg u "$releases/$version/$platform/" \
     --arg p "$name" --argjson s "$size" --arg d "$digest" '{id:$id,version:$v,url:$u,files:[{path:$p,size:$s,sha256:$d}]}')")
 done <<< "$claude"
+
+while IFS='|' read -r id version platform; do
+  [ -z "$id" ] && continue
+  echo "== 1Password CLI $version ($platform)" >&2
+  base="$onepassword_cache/v$version/"
+  name="op_${platform}_v$version.zip"
+  local_file="$cache/op-cli/$version/$name"
+  if [ ! -f "$local_file" ]; then
+    mkdir -p "$(dirname "$local_file")"
+    echo "   fetching $name" >&2
+    curl -sSfL "$base$name" -o "$local_file"
+  fi
+  size="$(stat -f %z "$local_file")"
+  digest="$(shasum -a 256 "$local_file" | cut -d' ' -f1)"
+  unzip -o -q "$local_file" op -d "$tmp/op-cli"
+  binary_size="$(stat -f %z "$tmp/op-cli/op")"
+  binary_digest="$(shasum -a 256 "$tmp/op-cli/op" | cut -d' ' -f1)"
+  entries+=("$(jq -cn --arg id "$id" --arg v "$version" --arg u "$base" --arg p "$name" --argjson s "$size" --arg d "$digest" \
+    --argjson bs "$binary_size" --arg bd "$binary_digest" \
+    '{id:$id,version:$v,url:$u,files:[{path:$p,size:$s,sha256:$d}],binary:{path:"op",size:$bs,sha256:$bd}}')")
+done <<< "$onepassword"
 
 manifest="$(printf '%s\n' "${entries[@]}" | jq -s '{models:.}')"
 if [ "$check" = yes ]; then
