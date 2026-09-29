@@ -192,7 +192,8 @@ final class OnePasswordRunTests: XCTestCase {
     /// A daemon that writes its pid only after the 5 s the call waits for it is found by its
     /// arguments and ended with the call. The stand-in runs itself as `<command> daemon`, as `op`
     /// runs `op daemon`, in a session of its own, and stays that process — no `exec`, no subshell
-    /// of its own that would carry the same arguments — writing its pid itself 7 s late.
+    /// of its own that would carry the same arguments — writing its pid itself 30 s late, long
+    /// after the call's 5 s poll however slow the guest, so only the sweep by name can end it.
     func testADaemonWhosePidComesAfterTheWaitIsFoundByName() async throws {
         let marker = "named-\(UUID().uuidString.prefix(8))"
         let op = try await standIn("""
@@ -200,7 +201,7 @@ final class OnePasswordRunTests: XCTestCase {
         p="$TMPDIR/com.agilebits.op.0"; mkdir -p "$p"; : > "$p/op-daemon.pid"; \
         sh -c "sleep 300 & echo \\$! > /tmp/\(marker)-child; exec sleep 300" </dev/null >/dev/null 2>&1 & \
         echo $$ > /tmp/\(marker)-daemon; i=0; \
-        while :; do sleep 1; i=$((i + 1)); [ $i = 7 ] && echo $$ > "$p/op-daemon.pid"; done; fi; \
+        while :; do sleep 1; i=$((i + 1)); [ $i = 30 ] && echo $$ > "$p/op-daemon.pid"; done; fi; \
         setsid "$0" daemon </dev/null >/dev/null 2>&1 & \
         while [ ! -s /tmp/\(marker)-daemon ] || [ ! -s /tmp/\(marker)-child ]; do sleep 0.1; done; exit 0
         """)

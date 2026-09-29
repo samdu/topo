@@ -241,6 +241,11 @@ final class OnePasswordConnectionTests: XCTestCase {
         XCTAssertTrue(words.contains("ops_"), words)
         XCTAssertTrue(op.calls.isEmpty)
         XCTAssertTrue(Connections.isServiceAccountToken(token), "the test's own token is refused")
+        // Digits and underscores are in the alphabet too: a token shaped as 1Password's are, base64
+        // with digits in it, and one with an underscore.
+        for text in ["ops_eyJzaWduSW5BZGRyZXNzIjoibXkuMXBhc3N3b3JkLmNvbSJ9", "ops_a1_B2"] {
+            XCTAssertTrue(Connections.isServiceAccountToken(text), text)
+        }
         for text in ["ops_abc!", "ops_a-b", "ops_a.b", "ops_a=b", "ops_a/b", "ops_é"] {
             XCTAssertFalse(Connections.isServiceAccountToken(text), text)
         }

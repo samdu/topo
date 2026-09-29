@@ -124,7 +124,9 @@ public struct OnePasswordInstaller: Sendable {
 /// file, so either the script sees the mark and runs nothing or the cancel sees the group. After
 /// every call the app ends what a shell that did not reach its own end (a SIGKILL from another
 /// guest process) left behind, and removes the call's files; after a wait that threw it runs the
-/// cancel instead, so a shell still running stops at its group file or is ended.
+/// cancel instead, so a shell still running stops at its group file or is ended — which `Guest`
+/// never leaves, throwing only when the spawn failed or once the shell has exited, but another
+/// `GuestRunning` might.
 public enum OnePasswordRun {
     /// The whole of what the guest runs: `$@` is `op`'s arguments, `$TOPO_OP_GROUP` the file the
     /// group id is written to, `$TOPO_OP_GROUP.cancelled` a cancel's mark, and `$TOPO_OP_GROUP.d`
@@ -246,8 +248,10 @@ public enum OnePasswordRun {
                 Task.detached { _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment) }
             }
         } catch {
-            // A wait that threw may have left the shell running, perhaps not yet at its group
-            // file: the cancel's mark stops it there, and a group already written is ended.
+            // `Guest` throws only when the spawn failed or after the shell has exited, so there the
+            // cancel finds nothing to stop and leaves its empty mark for the launch's /tmp clean.
+            // Another `GuestRunning` may throw with the shell still starting, perhaps not yet at its
+            // group file: the mark stops it there, and a group already written is ended.
             _ = try? await guest.run("/bin/sh", ["-c", cancel, "cancel", groupFile, command], environment: Guest.environment)
             throw error
         }

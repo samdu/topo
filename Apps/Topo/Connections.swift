@@ -125,7 +125,7 @@ final class Connections {
         let token = pasted.trimmingCharacters(in: .whitespacesAndNewlines)
         let generation = supersedeOnePassword()
         guard Self.isServiceAccountToken(token) else {
-            onePassword = .failed("That is not a 1Password service-account token, which starts ops_. Copy the token 1Password showed when the service account was made.")
+            onePassword = .failed("That is not a 1Password service-account token, which is ops_ and then only letters, digits and underscores. Copy the token 1Password showed when the service account was made.")
             return
         }
         onePassword = .verifying
