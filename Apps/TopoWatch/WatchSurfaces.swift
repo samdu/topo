@@ -49,6 +49,7 @@ final class WatchSurfaceCache {
             return false
         }
         var moved = false
+        var unconfirmed = false
         for surface in changes.saved where apply(surface) { moved = true }
         for slot in changes.deleted where WidgetDocument.isSlot(slot) && store.read(slot: slot) != nil {
             try? store.remove(slot: slot)
@@ -65,12 +66,17 @@ final class WatchSurfaceCache {
                     moved = true
                 case .surface(let surface)?:
                     if apply(surface) { moved = true }
-                case .unreadable?, nil:
+                case .unreadable?:
                     break
+                case nil:
+                    // Not asked and answered: kept, and the feed is read from the start again
+                    // next time, since a token saved now would never list this slot again and a
+                    // record deleted meanwhile would stay on the face.
+                    unconfirmed = true
                 }
             }
         }
-        defaults.set(changes.token, forKey: Self.tokenKey)
+        if !unconfirmed { defaults.set(changes.token, forKey: Self.tokenKey) }
         if moved { changed() }
         return true
     }

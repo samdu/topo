@@ -108,7 +108,9 @@ public actor InMemoryRecordDatabase: ZoneDatabase {
         var deleted: [RecordID] = []
         // Each record once, as the store holds it now: the feed says what moved, not how often.
         for entry in feed[start...].reversed() where entry.type == type && seen.insert(entry.id).inserted {
-            if let record = store[entry.id], record.type == type { changed.append(record) } else { deleted.append(entry.id) }
+            // From no token the feed is what exists, as CloudKit's is: a record gone before it is
+            // not reported, so a reader has to ask for what it cached by name.
+            if let record = store[entry.id], record.type == type { changed.append(record) } else if token != nil { deleted.append(entry.id) }
         }
         return RecordChanges(changed: changed.reversed(), deleted: deleted.reversed(), token: Data("\(feedEpoch):\(feed.count)".utf8))
     }

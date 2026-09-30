@@ -99,6 +99,17 @@ import TopoCoreTesting
         _ = try await db.changes(ofType: "T", since: nil)
     }
 
+    /// From no token the feed lists what exists and no deletion, as CloudKit's does, so a reader
+    /// that cached a record deleted since cannot learn of it from the feed alone.
+    @Test func theFeedFromNoTokenReportsNoDeletion() async throws {
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        _ = try await db.save(Record(type: "T", id: RecordID("b")))
+        try await db.delete([RecordID("a")])
+        let all = try await db.changes(ofType: "T", since: nil)
+        #expect(all.changed.map(\.id.name) == ["b"])
+        #expect(all.deleted.isEmpty)
+    }
+
     @Test func deletingWhatIsGoneIsNotAnError() async throws {
         try await db.delete([RecordID("never")])
         let saved = try await db.save(Record(type: "T", id: RecordID("r")))

@@ -49,7 +49,9 @@ struct WatchCueIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult {
         if let store = SurfaceStore.shared() { _ = try store.recordCue(cue()) }
-        await WatchIntents.drain?()
+        // The intent returns once the cue is recorded and the app is coming forward: the drain,
+        // and the turn it sends, run on without holding the intent open.
+        if let drain = WatchIntents.drain { Task { await drain() } }
         return .result()
     }
 }

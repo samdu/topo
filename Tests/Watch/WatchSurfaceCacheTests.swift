@@ -132,12 +132,19 @@ final class WatchSurfaceCacheTests: XCTestCase {
         XCTAssertFalse(read)
         XCTAssertEqual(store.read(slot: "weather"), before)
 
-        // The feed read afresh, the fetch by name failing: an answer that is not "gone" keeps it.
+        // The feed read afresh, the fetch by name failing: an answer that is not "gone" keeps it,
+        // though the record went before the read, which a feed from the start does not report.
         await database.expireChangeTokens()
-        await zone.omit(["weather"])
+        try await phoneClears("weather")
         await zone.fail(feed: false, fetch: true)
         await cache.fetch()
         XCTAssertEqual(store.read(slot: "weather"), before, "a failed fetch was taken for a missing record")
+
+        // Unconfirmed, it is asked about again: the next read starts from the beginning, and once
+        // the fetch by name answers, the slot goes.
+        await zone.fail(feed: false, fetch: false)
+        await cache.fetch()
+        XCTAssertEqual(store.slots(), [], "a slot left unconfirmed was never asked about again")
     }
 
     func testRecordIsReadNotTrusted() async throws {
