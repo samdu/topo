@@ -87,6 +87,32 @@ import Testing
         }
     }
 
+    /// Every question has its own bound, whenever it arrives: after the sweep has fired and found
+    /// nothing left, and while it is set for a question already answered.
+    @Test func everyQuestionIsBoundedWheneverItArrives() async throws {
+        let resolver = ScriptedResolver { name, _ in name.hasPrefix("fast") ? [.now([a(name, [10, 0, 0, 1])])] : [] }
+        let (forwarder, port) = try await started(resolver, queryBound: .milliseconds(400))
+        defer { Task { await forwarder.stop() } }
+        #expect(Reply(try #require(try udp(port: port, query(1, "never1.example")))).rcode == DNSReply.servFail)
+        #expect(try udp(port: port, query(2, "fast.example")) != nil)
+        try await Task.sleep(for: .milliseconds(100))
+        let clients = try (0..<3).map { _ in try UDPClient(port: port) }
+        defer { clients.forEach { $0.close() } }
+        var asked: [Date] = []
+        for (index, client) in clients.enumerated() {
+            asked.append(Date())
+            try client.send(query(UInt16(10 + index), "never\(index + 2).example"))
+            try await Task.sleep(for: .milliseconds(150))
+        }
+        for (index, client) in clients.enumerated() {
+            let reply = try #require(try client.receive(wait: 3), "question \(index) unanswered")
+            let took = Date().timeIntervalSince(asked[index])
+            #expect(Reply(reply).rcode == DNSReply.servFail)
+            #expect(took >= 0.35 && took < 1.2, "question \(index) answered after \(took) s")
+        }
+        try await eventually { resolver.live == 0 }
+    }
+
     /// A flood of questions answered at once holds nothing past its answers: no bound is left
     /// waiting per question for its 4 s.
     @Test func aFloodHoldsNothingPerQuestion() async throws {
