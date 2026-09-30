@@ -253,8 +253,14 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     # The verdict first, whatever else is red: the reviewer ran beside the
     # suites, so a blocking review and a suite red arrive on the same run.
     # The review cap is the one way review_gate is red beside a green
-    # reviewer_ran with codex skipped: no finding to fix, a decision to make.
-    capped = any(j["name"] == "codex" and j.get("conclusion") == "skipped" for j in jobs)
+    # reviewer_ran with no verdict posted this run — codex skipped, or
+    # post_feedback's recount holding the post: no finding to fix, a
+    # decision to make.
+    capped = any((j["name"] == "codex" and j.get("conclusion") == "skipped")
+                 or (j["name"] == "post_feedback" and j.get("conclusion") == "success"
+                     and any(s.get("name") == "Report Codex feedback" and s.get("conclusion") == "skipped"
+                             for s in j.get("steps") or []))
+                 for j in jobs)
     if "review_gate" in red_names and "reviewer_ran" not in red_names:
         if capped:
             report("cap", f"{title}: the review cap is reached on {short}, four Codex verdicts; it merges on Sam's word or goes back to draft for a replan.")

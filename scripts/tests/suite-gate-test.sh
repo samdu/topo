@@ -70,6 +70,10 @@ check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly
 check.(needs.("test").sort == suite.sort, "test needs exactly the suite jobs (#{needs.('test').join(', ')})")
 check.(needs.("codex").sort == (fast + %w[codex_wait]).sort, "codex needs exactly the fast jobs #{fast.join(', ')} and codex_wait (#{needs.('codex').join(', ')})")
 check.(needs.("codex_wait").sort == (fast + %w[review_cap]).sort, "codex_wait needs exactly the fast jobs #{fast.join(', ')} and review_cap (#{needs.('codex_wait').join(', ')})")
+%w[reviewer_ran review_gate].each do |job|
+  capped = jobs.fetch(job).fetch("steps").map { |s| s.dig("env", "CAPPED") }.compact
+  check.(capped == ["${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}"], "#{job} reads the cap from review_cap and from post_feedback's recount (#{capped.inspect})")
+end
 check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.capped == 'false' &&"), "codex_wait runs only on review_cap's false")
 check.(needs.("reviewer_ran").sort == (suite + %w[test review_cap codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, review_cap, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
 check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test review_cap codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, review_cap, codex and post_feedback (#{needs.('review_gate').join(', ')})")
@@ -185,7 +189,7 @@ IS_DRAFT=true CAPPED=true SUITE_RESULTS="$(results none success test)" \
   expect fail "reviewer_ran: a capped draft is a draft" "this PR is a draft" "$work/ran.sh"
 for cap in failure cancelled; do
   CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success test)" \
-    expect fail "reviewer_ran: review_cap $cap" "could not be counted (review_cap: $cap)" "$work/ran.sh"
+    expect fail "reviewer_ran: review_cap $cap" "(review_cap: $cap)" "$work/ran.sh"
 done
 
 # Left out by select: a skip beside `false` passes both snippets, and nothing else does.
