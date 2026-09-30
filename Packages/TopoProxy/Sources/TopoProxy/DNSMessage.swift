@@ -174,12 +174,14 @@ public enum DNSReply {
     public static func make(to query: DNSQuery, rcode: UInt8, answers: [DNSRecord], limit: Int,
                             ednsSize: UInt16) -> (bytes: [UInt8], truncated: Bool) {
         let opt: [UInt8] = query.ednsSize == nil ? [] : [0, 0, 41, UInt8(ednsSize >> 8), UInt8(ednsSize & 0xff), 0, 0, 0, 0, 0, 0]
+        // More records than a header can count cannot fit any limit either.
+        let cut = header(id: query.id, rd: query.recursionDesired, rcode: rcode, tc: true, qd: 1, an: 0,
+                         ar: opt.isEmpty ? 0 : 1) + query.question + opt
+        guard answers.count <= 0xffff else { return (cut, true) }
         let records = answers.flatMap(\.wire)
         let whole = header(id: query.id, rd: query.recursionDesired, rcode: rcode, tc: false, qd: 1,
                            an: answers.count, ar: opt.isEmpty ? 0 : 1) + query.question + records + opt
         if whole.count <= limit { return (whole, false) }
-        let cut = header(id: query.id, rd: query.recursionDesired, rcode: rcode, tc: true, qd: 1, an: 0,
-                         ar: opt.isEmpty ? 0 : 1) + query.question + opt
         return (cut, true)
     }
 

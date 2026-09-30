@@ -19,8 +19,9 @@ import os
 /// over TCP, where a reply is at most 65,535. Only a query of one question, opcode `QUERY`, class
 /// IN is asked; anything else is `FORMERR` or `NOTIMP`, asked of nobody.
 ///
-/// It logs counts and nothing else — at most one line every 60 s while there is traffic — never a
-/// name, a type, an address, an answer or a client's port.
+/// It logs counts — at most one line every 60 s while there is traffic — and a line when it cannot
+/// start or its listener or socket is lost, never a name, a type, an address, an answer or a
+/// client's port.
 ///
 /// UDP is a socket of its own bound to `127.0.0.1`, each reply sent to the address its question
 /// came from; TCP is an `NWListener` required to the same address and port.
@@ -53,18 +54,23 @@ public actor DNSForwarder {
     private let connectionBound: Duration
     private let logInterval: Duration
 
-    private var tcp: NWListener?
+    private(set) var tcp: NWListener?
     /// The UDP side: a socket of its own rather than a listener, since `NWListener` over UDP hands
     /// datagrams from different clients to one connection, whose reply would go to only one of them.
     private var udp: DispatchSourceRead?
     /// Bumped by every start and stop, so a listener's late callback acts on nothing newer.
-    private var generation = 0
+    private(set) var generation = 0
     public private(set) var port: UInt16?
     private var starting: Task<UInt16, any Error>?
+    /// A listener of this generation failed after it was ready and before the start finished.
+    private var lostWhileStarting: Int?
     private var observer: (@Sendable (UInt16?) -> Void)?
 
     private var connections: [ObjectIdentifier: NWConnection] = [:]
-    private var pending: [ObjectIdentifier: Pending] = [:]
+    /// Keyed by a number never used twice, so a late callback or timer for a question already
+    /// answered finds nothing rather than a newer question at a reused address.
+    private var pending: [UInt64: Pending] = [:]
+    private var nextQuestion: UInt64 = 0
 
     private var counts = Counts()
     private var lastLog = ContinuousClock.now
@@ -114,6 +120,7 @@ public actor DNSForwarder {
             do {
                 let bound = try await ready(tcp, generation: current)
                 guard generation == current else { throw CancellationError() }
+                guard lostWhileStarting != current else { throw POSIXError(.ENOTCONN) }
                 listenUDP(try Self.udpSocket(port: bound), generation: current)
                 port = bound
                 observer?(bound)
@@ -125,6 +132,7 @@ public actor DNSForwarder {
                 if error is CancellationError { throw error }
             }
         }
+        log("dns: forwarder could not start; the guest resolves through the phone's name servers")
         throw failure ?? CancellationError()
     }
 
@@ -157,7 +165,12 @@ public actor DNSForwarder {
                 self.assumeIsolated { forwarder in
                     switch state {
                     case .ready:
-                        waiting.resume(.success(listener.port?.rawValue ?? 0))
+                        // Port 0 is the rewrite's "off"; a listener that cannot name its port is a failed start.
+                        if let port = listener.port?.rawValue, port != 0 {
+                            waiting.resume(.success(port))
+                        } else {
+                            waiting.resume(.failure(POSIXError(.EADDRNOTAVAIL)))
+                        }
                     case .waiting(let error):
                         // A port that cannot be bound waits for one that can; a start takes it as failed.
                         waiting.resume(.failure(error))
@@ -187,9 +200,15 @@ public actor DNSForwarder {
         }
     }
 
-    /// A listener of the running generation went away without being stopped.
+    /// A listener of the running generation went away without being stopped: the guest falls back
+    /// to the phone's own name servers until the next start, which the log says.
     private func lost(_ current: Int) {
-        guard current == generation, port != nil else { return }
+        guard current == generation else { return }
+        guard port != nil else {
+            lostWhileStarting = current
+            return
+        }
+        log("dns: forwarder lost; the guest resolves through the phone's name servers until it starts again")
         down()
     }
 
@@ -304,7 +323,7 @@ public actor DNSForwarder {
     /// Every datagram waiting, each answered to the address it came from. One over the limit is
     /// dropped unread (the buffer is larger, so the size is seen); a socket that fails is the
     /// forwarder gone.
-    private func drain(_ fd: Int32, generation current: Int) {
+    func drain(_ fd: Int32, generation current: Int) {
         guard generation == current else { return }
         var buffer = [UInt8](repeating: 0, count: 2 * Self.messageLimit)
         for _ in 0..<Self.inFlightLimit {
@@ -347,6 +366,8 @@ public actor DNSForwarder {
         let send: ([UInt8]) -> Void
         let done: () -> Void
         var handle: (any ResolverQuery)?
+        /// The question's bound, cancelled once it is answered.
+        var timer: DispatchWorkItem?
         var records: [DNSRecord] = []
         /// A record of the type asked for has arrived (for a CNAME question, the CNAME).
         var answered = false
@@ -363,6 +384,8 @@ public actor DNSForwarder {
         func abandon() {
             handle?.cancel()
             handle = nil
+            timer?.cancel()
+            timer = nil
             done()
         }
     }
@@ -394,25 +417,24 @@ public actor DNSForwarder {
             return
         }
         let question = Pending(query: query, limit: limit ?? udpLimit, transport: transport, send: send, done: done)
-        let id = ObjectIdentifier(question)
+        nextQuestion += 1
+        let id = nextQuestion
         pending[id] = question
         question.handle = resolver.query(name: query.presentationName, type: query.type, queue: queue) { [weak self] answer in
             self?.assumeIsolated { $0.answer(id, answer) }
         }
-        let current = generation
-        queue.asyncAfter(deadline: .now() + queryBound.timeInterval) { [weak self] in
-            self?.assumeIsolated { forwarder in
-                guard forwarder.generation == current else { return }
-                forwarder.finish(id, rcode: DNSReply.servFail, keep: false)
-            }
+        let timer = DispatchWorkItem { [weak self] in
+            self?.assumeIsolated { $0.finish(id, rcode: DNSReply.servFail, keep: false) }
         }
+        question.timer = timer
+        queue.asyncAfter(deadline: .now() + queryBound.timeInterval, execute: timer)
     }
 
     /// One callback of a question's query. The question is complete when a record of the type
     /// asked for has arrived and its batch has ended (a callback without `MoreComing`), or when a
     /// negative or an error arrives; a batch of CNAMEs alone is not complete, since the target's
     /// records can come in a later one.
-    private func answer(_ id: ObjectIdentifier, _ answer: RecordAnswer) {
+    private func answer(_ id: UInt64, _ answer: RecordAnswer) {
         guard let question = pending[id] else { return }
         switch answer.outcome {
         case .noSuchName:
@@ -447,10 +469,12 @@ public actor DNSForwarder {
     }
 
     /// Answers a question once: with what was gathered when `keep`, and with no records otherwise.
-    private func finish(_ id: ObjectIdentifier, rcode: UInt8, keep: Bool) {
+    private func finish(_ id: UInt64, rcode: UInt8, keep: Bool) {
         guard let question = pending.removeValue(forKey: id) else { return }
         question.handle?.cancel()
         question.handle = nil
+        question.timer?.cancel()
+        question.timer = nil
         let reply = DNSReply.make(to: question.query, rcode: rcode, answers: keep ? question.records : [],
                                   limit: question.limit, ednsSize: Self.ednsLimit)
         count(rcode == DNSReply.servFail ? \.servfail : \.answered)

@@ -48,15 +48,68 @@ import Testing
         defer { Task { await forwarder.stop() } }
         let client = try UDPClient(port: port)
         defer { client.close() }
-        for id in 0..<DNSForwarder.inFlightLimit { try client.send(query(UInt16(id), "slow\(id).example")) }
-        try await eventually { resolver.asked.count == DNSForwarder.inFlightLimit }
+        for id in 0..<64 { try client.send(query(UInt16(id), "slow\(id).example")) }
+        try await eventually { resolver.asked.count == 64 }
         let started = Date()
         try client.send(query(999, "one-more.example"))
         let reply = try #require(try client.receive(wait: 2))
         #expect(Date().timeIntervalSince(started) < 2)
         #expect(Reply(reply).id == 999)
         #expect(Reply(reply).rcode == DNSReply.servFail)
-        #expect(resolver.asked.count == DNSForwarder.inFlightLimit)
+        #expect(resolver.asked.count == 64)
+    }
+
+    /// The bounds the plan names, as values: the tests above run most of them shortened.
+    @Test func theBoundsAreThePlansValues() {
+        #expect(DNSForwarder.messageLimit == 512)
+        #expect(DNSForwarder.inFlightLimit == 64)
+        #expect(DNSForwarder.tcpConnectionLimit == 16)
+        #expect(DNSForwarder.ednsLimit == 1232)
+        #expect(DNSForwarder.tcpReplyLimit == 65_535)
+        #expect(DNSForwarder.defaultQueryBound == .seconds(4))
+        #expect(DNSForwarder.defaultConnectionBound == .seconds(10))
+        #expect(DNSForwarder.defaultLogInterval == .seconds(60))
+    }
+
+    /// A question answered before its bound leaves no timer behind to answer a later one.
+    @Test func aFinishedQuestionsBoundTouchesNoOther() async throws {
+        let resolver = ScriptedResolver { name, _ in
+            name.hasPrefix("fast") ? [.now([a(name, [10, 0, 0, 1])])] : [.after(.milliseconds(500), [a(name, [10, 0, 0, 2])])]
+        }
+        let (forwarder, port) = try await started(resolver, queryBound: .milliseconds(600))
+        defer { Task { await forwarder.stop() } }
+        for round in 0..<5 {
+            #expect(try udp(port: port, query(UInt16(2 * round), "fast\(round).example")) != nil)
+            try await Task.sleep(for: .milliseconds(300))
+            let slow = Reply(try #require(try udp(port: port, query(UInt16(2 * round + 1), "slow\(round).example"))))
+            #expect(slow.rcode == DNSReply.noError, "round \(round)")
+            #expect(slow.answers.count == 1, "round \(round)")
+        }
+    }
+
+    /// Over UDP a reply of exactly the limit goes whole and one a byte longer truncated: 512 with no
+    /// EDNS or an offer under it, the offer itself up to 1232 however much more is offered.
+    @Test func aReplyAtTheLimitFitsAndOneByteMoreIsTruncated() async throws {
+        let resolver = ScriptedResolver { name, _ in
+            let size = Int(name.dropFirst(3).prefix(5)) ?? 0
+            return [.now([RecordAnswer(outcome: .record, name: name, type: 16, ttl: 60,
+                                       rdata: [UInt8](repeating: 0x61, count: size))])]
+        }
+        let (forwarder, port) = try await started(resolver)
+        defer { Task { await forwarder.stop() } }
+        func name(_ size: Int) -> String { "pad" + String(format: "%05d", size) + ".example" }
+        for (edns, limit) in [(nil, 512), (100, 512), (600, 600), (4096, 1232)] as [(UInt16?, Int)] {
+            // Over TCP nothing is cut, so the reply's size for a record of 100 bytes gives the rest.
+            let base = try #require(try tcp(port: port, [query(1, name(100), type: 16, edns: edns)]).first).count - 100
+            let fitting = limit - base
+            let fits = try #require(try udp(port: port, query(2, name(fitting), type: 16, edns: edns)))
+            #expect(fits.count == limit, "edns \(String(describing: edns))")
+            #expect(!Reply(fits).truncated, "edns \(String(describing: edns))")
+            #expect(Reply(fits).answers.count == 1, "edns \(String(describing: edns))")
+            let over = Reply(try #require(try udp(port: port, query(3, name(fitting + 1), type: 16, edns: edns))))
+            #expect(over.truncated, "edns \(String(describing: edns))")
+            #expect(over.answers.isEmpty, "edns \(String(describing: edns))")
+        }
     }
 
     @Test func unansweredQueryServfailsAtBound() async throws {
@@ -345,6 +398,26 @@ import Testing
         #expect(try udp(port: port, query(2, "next.example")) != nil)
         #expect(seen.all.isEmpty)
         #expect(await forwarder.port == port)
+    }
+
+    /// A listener that fails or is taken away, or a UDP socket that fails, is the forwarder down,
+    /// observed and logged, and a start after it is up again.
+    @Test func aListenerOrSocketLostIsTheForwarderDown() async throws {
+        let seen = Lines()
+        let logged = Lines()
+        let forwarder = DNSForwarder(resolver: ScriptedResolver { _, _ in [] }, log: { logged.add($0) })
+        await forwarder.observe { seen.add($0 == nil ? "down" : "up") }
+        _ = try await forwarder.start()
+        await forwarder.tcp?.cancel()
+        try await eventually { seen.all == ["up", "down"] }
+        #expect(await forwarder.port == nil)
+        let port = try await forwarder.start()
+        #expect(port != 0)
+        let generation = await forwarder.generation
+        await forwarder.drain(-1, generation: generation)
+        try await eventually { seen.all == ["up", "down", "up", "down"] }
+        #expect(await forwarder.port == nil)
+        #expect(logged.all.filter { $0.hasPrefix("dns: forwarder lost") }.count == 2)
     }
 
     @Test func stopAndStartAreObserved() async throws {
