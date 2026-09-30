@@ -17,7 +17,7 @@ import Foundation
 /// no atomic batches. Every field that appears in a query filter needs a
 /// queryable index in the CloudKit schema; the whole of a type is read from
 /// the zone's change feed, which needs none.
-public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
+public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
     private let database: CKDatabase
     private let zoneID: CKRecordZone.ID
     private let lock = NSLock()
@@ -160,6 +160,73 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
         return out
     }
 
+    public func delete(_ ids: [RecordID]) async throws {
+        guard !ids.isEmpty else { return }
+        let ckIDs = ids.map { CKRecord.ID(recordName: $0.name, zoneID: zoneID) }
+        let result: [CKRecord.ID: Result<Void, any Error>]
+        do {
+            result = try await database.modifyRecords(saving: [], deleting: ckIDs, savePolicy: .ifServerRecordUnchanged,
+                                                      atomically: true).deleteResults
+        } catch {
+            // A record already gone is what was asked for.
+            if let ck = error as? CKError, ck.code == .unknownItem { return }
+            throw Self.mapped(error, recordIDs: ckIDs)
+        }
+        for (id, outcome) in result {
+            if case .failure(let e) = outcome {
+                if let ck = e as? CKError, ck.code == .unknownItem { continue }
+                throw Self.mapped(e, recordIDs: [id])
+            }
+        }
+        lock.withLock { for id in ids { fetched[id] = nil } }
+    }
+
+    /// The zone's change feed from `token`, kept to the one type. A deletion names its type, so
+    /// one of another type is not reported.
+    public func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
+        var server: CKServerChangeToken?
+        if let token {
+            server = try? NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: token)
+            guard server != nil else { throw RecordChangesError.tokenExpired }
+        }
+        var changed: [RecordID: Record] = [:]
+        var deleted: Set<RecordID> = []
+        var more = true
+        while more {
+            let page: (modificationResultsByID: [CKRecord.ID: Result<CKDatabase.RecordZoneChange.Modification, any Error>],
+                       deletions: [CKDatabase.RecordZoneChange.Deletion],
+                       changeToken: CKServerChangeToken, moreComing: Bool)
+            do {
+                page = try await database.recordZoneChanges(inZoneWith: zoneID, since: server)
+            } catch {
+                if let ck = error as? CKError, ck.code == .changeTokenExpired { throw RecordChangesError.tokenExpired }
+                throw Self.mapped(error, recordIDs: [])
+            }
+            for (id, result) in page.modificationResultsByID {
+                switch result {
+                case .success(let change):
+                    guard change.record.recordType == type else { continue }
+                    remember(change.record)
+                    let record = Self.record(from: change.record)
+                    changed[record.id] = record
+                    deleted.remove(record.id)
+                case .failure(let e):
+                    throw Self.mapped(e, recordIDs: [id])
+                }
+            }
+            for deletion in page.deletions where deletion.recordType == type {
+                let id = RecordID(deletion.recordID.recordName)
+                changed[id] = nil
+                deleted.insert(id)
+            }
+            server = page.changeToken
+            more = page.moreComing
+        }
+        let data = try NSKeyedArchiver.archivedData(withRootObject: server as Any, requiringSecureCoding: true)
+        return RecordChanges(changed: changed.values.sorted { $0.id.name < $1.id.name },
+                             deleted: deleted.sorted { $0.name < $1.name }, token: data)
+    }
+
     // MARK: - Mapping
 
     private func ckRecord(for record: Record) async throws -> CKRecord {
@@ -203,6 +270,7 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
             // whole batch with "Syntax error in request". Every reader here
             // treats an absent list as empty, so leave it off the wire.
             if case .strings(let a) = value, a.isEmpty { copy[key] = nil; continue }
+            if case .assets(let a) = value, a.isEmpty { copy[key] = nil; continue }
             copy[key] = ckValue(value)
         }
         return copy
@@ -239,6 +307,10 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
         case let d as Date: return .date(d)
         case let n as NSNumber: return .int(n.int64Value)
         case let a as [String]: return .strings(a)
+        case let a as [CKAsset]:
+            // An asset's file is on disk once the record is; one that cannot be read is not the file.
+            let data = a.compactMap { $0.fileURL.flatMap { try? Data(contentsOf: $0) } }
+            return data.count == a.count ? .assets(data) : nil
         default: return nil
         }
     }
@@ -249,7 +321,15 @@ public final class CloudKitRecordDatabase: RecordDatabase, @unchecked Sendable {
         case .int(let i): return NSNumber(value: i)
         case .date(let d): return d as NSDate
         case .strings(let a): return a as NSArray
+        case .assets(let a): return a.map(Self.asset) as NSArray
         }
+    }
+
+    /// A file for CloudKit to upload, in the temporary directory, which the system empties.
+    static func asset(_ data: Data) -> CKAsset {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("asset-\(UUID().uuidString)")
+        try? data.write(to: url, options: .atomic)
+        return CKAsset(fileURL: url)
     }
 
     /// CloudKit errors that will not clear on their own.

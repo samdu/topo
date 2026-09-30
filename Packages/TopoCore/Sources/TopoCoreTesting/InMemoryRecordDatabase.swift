@@ -19,10 +19,15 @@ import TopoCore
 /// `beforeSave` runs inside `save` before the tags are checked. Because the
 /// actor suspends at that await, a test can hold one writer there while
 /// another fetches and saves, which is how the lease race is reproduced.
-public actor InMemoryRecordDatabase: RecordDatabase {
+public actor InMemoryRecordDatabase: ZoneDatabase {
     private var store: [RecordID: Record] = [:]
     private var tagCounter = 0
     private var beforeSave: (@Sendable ([Record]) async -> Void)?
+    /// The change feed: one entry per save or delete, in order, which `changes(ofType:since:)`
+    /// reads from a token (the entry count when it was handed out, and the epoch it was handed
+    /// out in). A token from an earlier epoch has expired, as CloudKit's do.
+    private var feed: [(id: RecordID, type: String)] = []
+    private var feedEpoch = 0
 
     /// Every record ever saved, in save order. A record ID appearing twice
     /// here means a record was overwritten.
@@ -57,6 +62,7 @@ public actor InMemoryRecordDatabase: RecordDatabase {
             record.changeTag = "tag-\(tagCounter)"
             store[record.id] = record
             writes.append(record)
+            feed.append((record.id, record.type))
             saved.append(record)
         }
         return saved
@@ -78,6 +84,33 @@ public actor InMemoryRecordDatabase: RecordDatabase {
 
     public func records(ofType type: String) async throws -> [Record] {
         store.values.filter { $0.type == type }.sorted { $0.id.name < $1.id.name }
+    }
+
+    public func delete(_ ids: [RecordID]) async throws {
+        for id in ids {
+            guard let gone = store.removeValue(forKey: id) else { continue }
+            feed.append((id, gone.type))
+        }
+    }
+
+    /// Every token handed out so far stops being answered, as CloudKit's expire.
+    public func expireChangeTokens() { feedEpoch += 1 }
+
+    public func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
+        var start = 0
+        if let token {
+            let parts = String(decoding: token, as: UTF8.self).split(separator: ":").compactMap { Int($0) }
+            guard parts.count == 2, parts[0] == feedEpoch, parts[1] <= feed.count else { throw RecordChangesError.tokenExpired }
+            start = parts[1]
+        }
+        var seen: Set<RecordID> = []
+        var changed: [Record] = []
+        var deleted: [RecordID] = []
+        // Each record once, as the store holds it now: the feed says what moved, not how often.
+        for entry in feed[start...].reversed() where entry.type == type && seen.insert(entry.id).inserted {
+            if let record = store[entry.id], record.type == type { changed.append(record) } else { deleted.append(entry.id) }
+        }
+        return RecordChanges(changed: changed.reversed(), deleted: deleted.reversed(), token: Data("\(feedEpoch):\(feed.count)".utf8))
     }
 
     private func matches(_ record: Record, _ filter: RecordQuery.Filter) -> Bool {

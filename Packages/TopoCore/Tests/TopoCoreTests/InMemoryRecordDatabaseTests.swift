@@ -72,6 +72,41 @@ import TopoCoreTesting
         ]))
         #expect(some.map(\.id.name) == ["2"])
     }
+
+    // MARK: The change feed and deletes, as CloudKit's
+
+    @Test func theFeedFromATokenCarriesOnlyWhatMovedSince() async throws {
+        _ = try await db.save(Record(type: "T", id: RecordID("a")))
+        _ = try await db.save(Record(type: "U", id: RecordID("u")))
+        let first = try await db.changes(ofType: "T", since: nil)
+        #expect(first.changed.map(\.id.name) == ["a"])
+        #expect(first.deleted.isEmpty)
+        let b = try await db.save(Record(type: "T", id: RecordID("b"), fields: ["v": .int(1)]))
+        _ = try await db.save(b.with(v: 2))
+        try await db.delete([RecordID("a")])
+        let second = try await db.changes(ofType: "T", since: first.token)
+        #expect(second.changed.map(\.id.name) == ["b"], "a record saved twice is listed once, as it is now")
+        #expect(second.changed.first?.int("v") == 2)
+        #expect(second.deleted == [RecordID("a")])
+        let third = try await db.changes(ofType: "T", since: second.token)
+        #expect(third.changed.isEmpty && third.deleted.isEmpty)
+    }
+
+    @Test func anExpiredTokenIsRefusedAsCloudKitRefusesIt() async throws {
+        let token = try await db.changes(ofType: "T", since: nil).token
+        await db.expireChangeTokens()
+        await #expect(throws: RecordChangesError.self) { try await db.changes(ofType: "T", since: token) }
+        _ = try await db.changes(ofType: "T", since: nil)
+    }
+
+    @Test func deletingWhatIsGoneIsNotAnError() async throws {
+        try await db.delete([RecordID("never")])
+        let saved = try await db.save(Record(type: "T", id: RecordID("r")))
+        try await db.delete([saved.id])
+        #expect(await db.current(saved.id) == nil)
+        // A tag from before the delete no longer names anything, as on the server.
+        await #expect(throws: RecordDatabaseError.self) { try await db.save(saved) }
+    }
 }
 
 private extension Record {

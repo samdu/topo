@@ -77,3 +77,35 @@ extension RecordDatabase {
         try await fetch([id])[id]
     }
 }
+
+/// What changed in one record type of the zone since a token: the records saved and the IDs
+/// deleted, each as the store has it now, and the token to ask from next time.
+public struct RecordChanges: Sendable {
+    public var changed: [Record]
+    public var deleted: [RecordID]
+    /// Opaque; handed back to `changes(ofType:since:)`.
+    public var token: Data
+
+    public init(changed: [Record], deleted: [RecordID], token: Data) {
+        self.changed = changed
+        self.deleted = deleted
+        self.token = token
+    }
+}
+
+public enum RecordChangesError: Error, Sendable {
+    /// The store no longer answers from that token: read again from the start (nil), and
+    /// confirm anything a reader held that the fresh read does not mention by fetching it.
+    case tokenExpired
+}
+
+/// A `RecordDatabase` that can also delete, and say what changed since it was last asked: the
+/// zone's change feed read from a token. For records one device owns and replaces — a widget's
+/// document — where the log's append-only types never delete.
+public protocol ZoneDatabase: RecordDatabase {
+    /// Deletes every record named. A record already gone is not an error: what is asked is that
+    /// none of them be there.
+    func delete(_ ids: [RecordID]) async throws
+    /// The zone's changes to `type` since `token`, or every record of it with nil. Needs no index.
+    func changes(ofType type: String, since token: Data?) async throws -> RecordChanges
+}
