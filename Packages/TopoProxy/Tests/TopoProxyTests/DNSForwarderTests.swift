@@ -87,6 +87,31 @@ import Testing
         }
     }
 
+    /// A flood of questions answered at once holds nothing past its answers: no bound is left
+    /// waiting per question for its 4 s.
+    @Test func aFloodHoldsNothingPerQuestion() async throws {
+        let forwarder = DNSForwarder(resolver: InstantResolver(), log: { _ in })
+        let port = try await forwarder.start()
+        defer { Task { await forwarder.stop() } }
+        let clients = try (0..<8).map { _ in try UDPClient(port: port) }
+        defer { clients.forEach { $0.close() } }
+        for client in clients { _ = fcntl(client.fd, F_SETFL, fcntl(client.fd, F_GETFL) | O_NONBLOCK) }
+        let bytes = query(1, "flood.example")
+        var sink = [UInt8](repeating: 0, count: 2048)
+        var answered = 0
+        let before = footprint()
+        let end = Date().addingTimeInterval(3)
+        while Date() < end {
+            for client in clients {
+                _ = withAddress("127.0.0.1", port) { sendto(client.fd, bytes, bytes.count, 0, $0, $1) }
+                while recv(client.fd, &sink, sink.count, 0) > 0 { answered += 1 }
+            }
+        }
+        let grown = (footprint() - before) / 1_000_000
+        #expect(answered > 10_000, "the flood was \(answered) answers")
+        #expect(grown < 30, "grew \(grown) MB over \(answered) answers")
+    }
+
     /// Over UDP a reply of exactly the limit goes whole and one a byte longer truncated: 512 with no
     /// EDNS or an offer under it, the offer itself up to 1232 however much more is offered.
     @Test func aReplyAtTheLimitFitsAndOneByteMoreIsTruncated() async throws {
@@ -435,6 +460,27 @@ import Testing
 }
 
 // MARK: The scripted resolver
+
+/// Answers every question with one address at once, keeping nothing.
+final class InstantResolver: RecordResolver, @unchecked Sendable {
+    final class Handle: ResolverQuery, @unchecked Sendable { func cancel() {} }
+    func query(name: String, type: UInt16, queue: DispatchSerialQueue,
+               answer: @escaping @Sendable (RecordAnswer) -> Void) -> any ResolverQuery {
+        let item = RecordAnswer(outcome: .record, name: name, type: 1, ttl: 5, rdata: [10, 0, 0, 1])
+        queue.async { answer(item) }
+        return Handle()
+    }
+}
+
+/// The process's physical footprint in bytes.
+func footprint() -> Int {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+    let result = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) }
+    }
+    return result == KERN_SUCCESS ? Int(info.phys_footprint) : 0
+}
 
 /// Answers each query with batches of callbacks, now or after a delay, on the forwarder's queue,
 /// and counts what it was asked and what it cancelled.

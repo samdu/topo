@@ -71,6 +71,10 @@ public actor DNSForwarder {
     /// answered finds nothing rather than a newer question at a reused address.
     private var pending: [UInt64: Pending] = [:]
     private var nextQuestion: UInt64 = 0
+    /// One timer for every question's bound, armed for the earliest: a timer per question would
+    /// be held by the queue until its deadline even once cancelled, so a flood would pile them up.
+    private var sweep: DispatchSourceTimer?
+    private var sweepArmed = false
 
     private var counts = Counts()
     private var lastLog = ContinuousClock.now
@@ -222,6 +226,9 @@ public actor DNSForwarder {
         connections = [:]
         for question in pending.values { question.abandon() }
         pending = [:]
+        sweep?.cancel()
+        sweep = nil
+        sweepArmed = false
         let wasUp = port != nil
         port = nil
         if wasUp { observer?(nil) }
@@ -366,8 +373,8 @@ public actor DNSForwarder {
         let send: ([UInt8]) -> Void
         let done: () -> Void
         var handle: (any ResolverQuery)?
-        /// The question's bound, cancelled once it is answered.
-        var timer: DispatchWorkItem?
+        /// When the question is answered `SERVFAIL` if nothing has answered it.
+        var deadline = ContinuousClock.now
         var records: [DNSRecord] = []
         /// A record of the type asked for has arrived (for a CNAME question, the CNAME).
         var answered = false
@@ -384,8 +391,6 @@ public actor DNSForwarder {
         func abandon() {
             handle?.cancel()
             handle = nil
-            timer?.cancel()
-            timer = nil
             done()
         }
     }
@@ -423,11 +428,34 @@ public actor DNSForwarder {
         question.handle = resolver.query(name: query.presentationName, type: query.type, queue: queue) { [weak self] answer in
             self?.assumeIsolated { $0.answer(id, answer) }
         }
-        let timer = DispatchWorkItem { [weak self] in
-            self?.assumeIsolated { $0.finish(id, rcode: DNSReply.servFail, keep: false) }
+        question.deadline = .now + queryBound
+        if !sweepArmed { arm() }
+    }
+
+    /// Sets the sweep for the earliest bound among the questions in flight.
+    private func arm() {
+        guard let earliest = pending.values.map(\.deadline).min() else {
+            sweepArmed = false
+            return
         }
-        question.timer = timer
-        queue.asyncAfter(deadline: .now() + queryBound.timeInterval, execute: timer)
+        if sweep == nil {
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.setEventHandler { [weak self] in self?.assumeIsolated { $0.expire() } }
+            timer.resume()
+            sweep = timer
+        }
+        sweepArmed = true
+        let wait = max(earliest - .now, .zero)
+        sweep?.schedule(deadline: .now() + wait.timeInterval, leeway: .milliseconds(10))
+    }
+
+    /// Every question past its bound answered `SERVFAIL`, its query deallocated.
+    private func expire() {
+        let now = ContinuousClock.now
+        for (id, question) in pending where question.deadline <= now {
+            finish(id, rcode: DNSReply.servFail, keep: false)
+        }
+        arm()
     }
 
     /// One callback of a question's query. The question is complete when a record of the type
@@ -473,8 +501,6 @@ public actor DNSForwarder {
         guard let question = pending.removeValue(forKey: id) else { return }
         question.handle?.cancel()
         question.handle = nil
-        question.timer?.cancel()
-        question.timer = nil
         let reply = DNSReply.make(to: question.query, rcode: rcode, answers: keep ? question.records : [],
                                   limit: question.limit, ednsSize: Self.ednsLimit)
         count(rcode == DNSReply.servFail ? \.servfail : \.answered)
