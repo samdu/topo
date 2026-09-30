@@ -91,6 +91,18 @@ public final class Guest: Sendable {
         MemorySampler.shared.start()
     }
 
+    /// The guest's DNS stub: the one name server `resolv.conf` lists while the app's forwarder is
+    /// up. Nothing listens on it; the guest's socket layer carries `127.0.0.53` port 53 to the
+    /// forwarder's port (`setDNSPort`) and reports the forwarder's replies as from it.
+    public static let dnsStub = "127.0.0.53"
+
+    /// Carries the guest's queries to `dnsStub` to the forwarder at `127.0.0.1:port`, or, with
+    /// `nil`, stops carrying them, so the stub is an address nothing answers on
+    /// (`patches/ish/0006-dns-sentinel.patch`). Process-wide; needs no booted kernel.
+    public func setDNSPort(_ port: UInt16?) {
+        topo_ish_set_dns_port(port ?? 0)
+    }
+
     /// The name servers the guest falls back to when the phone lists none the guest can use.
     public static let fallbackNameservers = ["1.1.1.1", "8.8.8.8"]
 

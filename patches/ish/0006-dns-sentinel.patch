@@ -1,0 +1,131 @@
+diff --git a/fs/sock.c b/fs/sock.c
+index 788bbf7..d722d74 100644
+--- a/fs/sock.c
++++ b/fs/sock.c
+@@ -1,6 +1,7 @@
+ #include <fcntl.h>
+ #include <netinet/tcp.h>
+ #include <poll.h>
++#include <stdatomic.h>
+ #include <string.h>
+ #include <sys/socket.h>
+ #include <sys/stat.h>
+@@ -228,6 +229,58 @@ static void unix_abstract_release(struct unix_abstract *name) {
+ 
+ const char *sock_tmp_prefix = "/tmp/ishsock";
+ 
++// The guest's DNS stub. The guest's resolv.conf names 127.0.0.53, which nothing on the host listens
++// on, and musl can name no port; while the host has set a port here (0 is off), a connect or send
++// to 127.0.0.53:53 (or ::ffff:127.0.0.53 port 53) goes to 127.0.0.1 at that port instead, and
++// that address comes back to recvfrom, recvmsg and getpeername as 127.0.0.53:53, since musl drops
++// a reply from an address it did not send to. No other address, port or family is touched.
++_Atomic uint16_t ish_dns_sentinel_port = 0;
++
++#define DNS_SENTINEL_V4 0x7f000035 // 127.0.0.53
++#define DNS_LOOPBACK_V4 0x7f000001 // 127.0.0.1
++
++// The IPv4 address inside addr, host order, for AF_INET or a v4-mapped AF_INET6, or NULL.
++static uint32_t *dns_sentinel_v4(void *addr, size_t len, in_port_t **port) {
++    struct sockaddr *real_addr = addr;
++    if (real_addr->sa_family == PF_INET && len >= offsetof(struct sockaddr_in, sin_zero)) {
++        struct sockaddr_in *in = addr;
++        *port = &in->sin_port;
++        return &in->sin_addr.s_addr;
++    }
++    if (real_addr->sa_family == PF_INET6 && len >= offsetof(struct sockaddr_in6, sin6_scope_id)) {
++        struct sockaddr_in6 *in6 = addr;
++        if (!IN6_IS_ADDR_V4MAPPED(&in6->sin6_addr))
++            return NULL;
++        *port = &in6->sin6_port;
++        return (uint32_t *) &in6->sin6_addr.s6_addr[12];
++    }
++    return NULL;
++}
++
++static void dns_sentinel_in(void *addr, size_t len) {
++    uint16_t forwarder = atomic_load(&ish_dns_sentinel_port);
++    in_port_t *port;
++    uint32_t *v4 = dns_sentinel_v4(addr, len, &port);
++    if (forwarder == 0 || v4 == NULL)
++        return;
++    if (*v4 == htonl(DNS_SENTINEL_V4) && *port == htons(53)) {
++        *v4 = htonl(DNS_LOOPBACK_V4);
++        *port = htons(forwarder);
++    }
++}
++
++static void dns_sentinel_out(void *addr, size_t len) {
++    uint16_t forwarder = atomic_load(&ish_dns_sentinel_port);
++    in_port_t *port;
++    uint32_t *v4 = dns_sentinel_v4(addr, len, &port);
++    if (forwarder == 0 || v4 == NULL)
++        return;
++    if (*v4 == htonl(DNS_LOOPBACK_V4) && *port == htons(forwarder)) {
++        *v4 = htonl(DNS_SENTINEL_V4);
++        *port = htons(53);
++    }
++}
++
+ static int sockaddr_read_bind(addr_t sockaddr_addr, void *sockaddr, uint_t *sockaddr_len, struct fd *bind_fd) {
+     // Make sure we can read things without overflowing buffers
+     if (*sockaddr_len < 2)
+@@ -245,10 +298,14 @@ static int sockaddr_read_bind(addr_t sockaddr_addr, void *sockaddr, uint_t *sock
+         case PF_INET:
+             if (*sockaddr_len < sizeof(struct sockaddr_in))
+                 return _EINVAL;
++            if (bind_fd == NULL)
++                dns_sentinel_in(sockaddr, *sockaddr_len);
+             break;
+         case PF_INET6:
+             if (*sockaddr_len < sizeof(struct sockaddr_in6))
+                 return _EINVAL;
++            if (bind_fd == NULL)
++                dns_sentinel_in(sockaddr, *sockaddr_len);
+             break;
+ 
+         case PF_LOCAL: {
+@@ -558,6 +615,7 @@ int_t sys_getpeername(fd_t sock_fd, addr_t sockaddr_addr, addr_t sockaddr_len_ad
+     int res = getpeername(sock->real_fd, (void *) sockaddr, &sockaddr_len);
+     if (res < 0)
+         return errno_map();
++    dns_sentinel_out(sockaddr, sizeof(sockaddr) < sockaddr_len ? sizeof(sockaddr) : sockaddr_len);
+ 
+     int err = sockaddr_write(sockaddr_addr, sockaddr, sizeof(sockaddr), &sockaddr_len);
+     if (err < 0)
+@@ -806,6 +864,7 @@ int_t sys_recvfrom(fd_t sock_fd, addr_t buffer_addr, dword_t len, dword_t flags,
+     }
+     free(buffer);
+     if (sockaddr_addr != 0) {
++        dns_sentinel_out(sockaddr, sizeof(sockaddr) < sockaddr_len ? sizeof(sockaddr) : sockaddr_len);
+         int err = sockaddr_write(sockaddr_addr, sockaddr, sizeof(sockaddr), &sockaddr_len);
+         if (err < 0)
+             return err;
+@@ -1359,6 +1418,7 @@ int_t sys_recvmsg(fd_t sock_fd, addr_t msghdr_addr, int_t flags) {
+ 
+     // msg_name (changed)
+     if (msg.msg_name != 0) {
++        dns_sentinel_out(msg.msg_name, sizeof(msg_name) < msg.msg_namelen ? sizeof(msg_name) : msg.msg_namelen);
+         int err = sockaddr_write(msg_fake.msg_name, msg.msg_name, sizeof(msg_name), &msg.msg_namelen);
+         if (err < 0)
+             return err;
+diff --git a/fs/sock.h b/fs/sock.h
+index 6aeb2f7..cdc09a5 100644
+--- a/fs/sock.h
++++ b/fs/sock.h
+@@ -4,11 +4,16 @@
+ #include <sys/socket.h>
+ #include <netinet/in.h>
+ #include <netinet/tcp.h>
++#include <stdatomic.h>
++#include <stdint.h>
+ #include "kernel/errno.h"
+ #include "fs/fd.h"
+ #include "misc.h"
+ #include "debug.h"
+ 
++// The host's DNS forwarder port the guest's 127.0.0.53:53 is carried to; 0 (the default) is off.
++extern _Atomic uint16_t ish_dns_sentinel_port;
++
+ int_t sys_socketcall(dword_t call_num, addr_t args_addr);
+ 
+ int_t sys_socket(dword_t domain, dword_t type, dword_t protocol);
