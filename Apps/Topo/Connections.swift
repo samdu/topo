@@ -99,7 +99,6 @@ final class Connections {
         // in the other.
         if leftBehind.words != nil || !leftBehind.installed { forgetConnections() }
         if leftBehind.controlSecrets != nil || !leftBehind.installed { forgetControlSecrets() }
-        sayUnforgotten()
         leftBehind.installed = true
     }
 
@@ -126,7 +125,7 @@ final class Connections {
     /// saves it with the vaults it reaches only when that answers with at least one. The text must
     /// be one `ops_` token and nothing else (`isServiceAccountToken`).
     func connectOnePassword(pasted: String) {
-        if leftBehind.words != nil { forget() }
+        if leftBehind.words != nil { forgetConnections() }
         if let words = leftBehind.words {
             onePassword = .failed(Self.sentence(words))
             return
@@ -182,7 +181,7 @@ final class Connections {
 
     /// Forgets the service-account token on this phone.
     func disconnectOnePassword() {
-        if leftBehind.words != nil { return forget() }
+        if leftBehind.words != nil { return forgetConnections() }
         supersedeOnePassword()
         secrets.clearing {
             do {
@@ -205,7 +204,7 @@ final class Connections {
     /// Starts connecting GitHub: a code from GitHub, copied and shown, and GitHub's page for it
     /// opened in the in-app browser; then the poll, the login and the save.
     func connectGitHub() {
-        if leftBehind.words != nil { forget() }
+        if leftBehind.words != nil { forgetConnections() }
         if let words = leftBehind.words {
             github = .failed(Self.sentence(words))
             return
@@ -253,7 +252,7 @@ final class Connections {
 
     /// Forgets the GitHub token on this phone; with a clear refused before, every connection.
     func disconnectGitHub() {
-        if leftBehind.words != nil { return forget() }
+        if leftBehind.words != nil { return forgetConnections() }
         supersede()
         do {
             try store.clear(.github)
@@ -270,9 +269,10 @@ final class Connections {
     func forget() {
         forgetConnections()
         forgetControlSecrets()
-        sayUnforgotten()
     }
 
+    /// Every connection forgotten, and not the control secrets: also a Disconnect's or a connect's
+    /// retry of a clear refused before, which the person makes signed in.
     private func forgetConnections() {
         supersede()
         supersedeOnePassword()
@@ -290,6 +290,7 @@ final class Connections {
                 leftBehind.words = words
             }
         }
+        sayUnforgotten()
     }
 
     private func forgetControlSecrets() {
@@ -299,6 +300,7 @@ final class Connections {
         } catch {
             leftBehind.controlSecrets = "the controls' secrets could not be removed from this phone's keychain: \(error)"
         }
+        sayUnforgotten()
     }
 
     private func sayUnforgotten() {

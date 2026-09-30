@@ -335,6 +335,29 @@ final class ConnectionsLeftBehindTests: XCTestCase {
         XCTAssertEqual(relaunched.github, .connected(login: "next"), "the retry took the next login's token")
     }
 
+    /// A Disconnect made signed in, which retries a clear of the connections refused before, takes
+    /// the connections alone: the mind's control secrets survive it.
+    func testADisconnectRetryLeavesTheControlSecrets() throws {
+        let secrets = ControlSecrets(service: "zone.hexagon.topo.control-secret.tests.\(UUID().uuidString)")
+        defer { try? secrets.clearAll() }
+        let leftBehind = ConnectionsLeftBehind.isolated()
+        let store = StubbornStore(Connection(token: "gho_first", account: "first"))
+        let connections = Connections(store: store, flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                                      leftBehind: leftBehind, clearControlSecrets: { try secrets.clearAll() })
+        connections.forget()
+        XCTAssertNotNil(leftBehind.words)
+        try secrets.set("tok", name: "ha")
+        connections.disconnectGitHub()
+        XCTAssertEqual(try secrets.names(), ["ha"], "a Disconnect took the control secrets")
+        XCTAssertNotNil(connections.unforgotten)
+        XCTAssertFalse(connections.unforgotten?.contains("controls' secrets") == true)
+        store.refuses = false
+        connections.disconnectGitHub()
+        XCTAssertNil(leftBehind.words)
+        XCTAssertNil(connections.unforgotten, "the words outlived the clear that went through")
+        XCTAssertEqual(try secrets.names(), ["ha"])
+    }
+
     /// The first launch of an install clears the control secrets too, and an empty keychain is a
     /// clear that went through, not one left behind.
     func testTheFirstLaunchOfAnInstallClearsTheControlSecrets() throws {
