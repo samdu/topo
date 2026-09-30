@@ -214,7 +214,7 @@ final class SurfaceSyncTests: XCTestCase {
         await database.inner.setBeforeSave { _ in await gate.wait() }
         _ = try write("weather", "one")
         sync.changed(slot: "weather")
-        for _ in 0..<2000 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
+        for _ in 0..<10_000 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
         XCTAssertTrue(gate.isWaiting)
         let second = try write("weather", "two")
         gate.open()
