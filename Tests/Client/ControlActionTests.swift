@@ -227,10 +227,11 @@ final class ControlActionTests: XCTestCase {
         XCTAssertEqual(store.readControl(slot: "toggle-6")?.document.on, true)
     }
 
-    /// A slot written anew while an older revision's run is in flight: the new revision's taps,
-    /// both failing, put the toggle back to the new revision's own state, not to a tap's.
+    /// A slot written anew while an older revision's run is in flight: every run failing, the new
+    /// revision's taps put the toggle back to the new revision's own state, not to a tap's. (A run
+    /// that outlives its revision writes nothing, succeeding or not: the rewrite's state stands.)
     func testANewRevisionsFailuresGoBackToItsOwnState() async throws {
-        let home = ScriptedTool([(.milliseconds(300), .ok("done\n")),
+        let home = ScriptedTool([(.milliseconds(300), ToolReply(status: ToolReply.failed, text: "no\n")),
                                  (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n")),
                                  (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n"))])
         let first = try set("toggle-1", ["home", "set", "LAMP", "power"], on: false)
