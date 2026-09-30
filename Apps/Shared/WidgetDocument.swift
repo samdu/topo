@@ -40,6 +40,9 @@ struct WidgetDocument: Equatable, Sendable {
     var tap: WidgetAction?
     /// How relevant the Smart Stack should take it to be, 0 to 1.
     var relevance: Double?
+    /// When the slot matters, any one of which makes it so: the watch's Smart Stack brings the
+    /// slot up then, placed or not. The phone keeps it and draws nothing from it.
+    var relevant: [WidgetRelevant] = []
 
     /// The tree drawn for `family`: its own, or the document's `default`, its texts cut to the
     /// family's limit, since `default` is read with the home screen's, and on `accessoryInline`
@@ -97,6 +100,7 @@ struct WidgetDocument: Equatable, Sendable {
     static let accessoryTextLimit = 60
     static let sayLimit = 200
     static let labelLimit = 60
+    static let relevantLimit = 4
 
     /// A slot's name and a control's id: `[a-z0-9-]{1,32}`.
     static func isName(_ text: String) -> Bool {
@@ -161,6 +165,36 @@ struct WidgetDocument: Equatable, Sendable {
 }
 
 // MARK: The values
+
+/// One context in which a slot matters, as RelevanceKit names them. A context the running
+/// watchOS lacks is skipped there, not refused here.
+enum WidgetRelevant: Equatable, Sendable {
+    /// Between two times, `to` after `from`.
+    case dates(from: Date, to: Date)
+    /// One of the places the system infers, which asks the person for no location permission.
+    case place(Place)
+    /// Within `radius` metres of a point.
+    case near(latitude: Double, longitude: Double, radius: Double)
+    case sleep(Sleep)
+    /// While headphones are connected.
+    case headphones
+
+    enum Place: String, CaseIterable, Sendable { case home, work, school, commute }
+    enum Sleep: String, CaseIterable, Sendable { case bedtime, wakeup }
+
+    static let radii: ClosedRange<Double> = 50...50_000
+
+    var json: [String: Any] {
+        switch self {
+        case .dates(let from, let to):
+            ["from": WidgetReader.dates.string(from: from), "to": WidgetReader.dates.string(from: to)]
+        case .place(let place): ["place": place.rawValue]
+        case .near(let latitude, let longitude, let radius): ["near": ["lat": latitude, "lon": longitude, "radius": radius]]
+        case .sleep(let sleep): ["sleep": sleep.rawValue]
+        case .headphones: ["headphones": true]
+        }
+    }
+}
 
 /// A family by the name WidgetKit gives it, and `default`, the tree a family without its own
 /// takes. `accessoryCorner` is the watch's alone.
@@ -471,6 +505,7 @@ extension WidgetDocument {
         if let until { object["until"] = WidgetReader.dates.string(from: until) }
         if let tap { object["tap"] = tap.json }
         if let relevance { object["relevance"] = relevance }
+        if !relevant.isEmpty { object["relevant"] = relevant.map(\.json) }
         return object
     }
 
@@ -570,7 +605,7 @@ final class WidgetReader {
 
     func document(_ root: [String: Any]) -> WidgetDocument {
         var document = WidgetDocument()
-        let known: Set<String> = ["version", "revision", "families", "tint", "until", "tap", "relevance"]
+        let known: Set<String> = ["version", "revision", "families", "tint", "until", "tap", "relevance", "relevant"]
         for key in root.keys.sorted() where !known.contains(key) { note(key, "is not a field of a widget") }
         if let revision = root["revision"] {
             switch source {
@@ -594,6 +629,7 @@ final class WidgetReader {
             if let number = finite(relevance), (0...1).contains(number) { document.relevance = number }
             else { note("relevance", "is not a number between 0 and 1") }
         }
+        if let relevant = root["relevant"] { document.relevant = self.relevant(relevant) }
         guard let trees = root["families"] else { note("families", "is missing"); return document }
         guard let object = trees as? [String: Any] else { note("families", "is not an object"); return document }
         // The default first, so a family written after it counts against the same budget in a
@@ -630,6 +666,70 @@ final class WidgetReader {
             _ = inline(fallback, "families.default, on accessoryInline,")
         }
         return document
+    }
+
+    /// `relevant`: at most `relevantLimit` contexts, each read on its own, so one that lies is
+    /// dropped with a note and the rest stand.
+    private func relevant(_ raw: Any) -> [WidgetRelevant] {
+        guard let list = raw as? [Any] else {
+            note("relevant", "is not a list of contexts")
+            return []
+        }
+        if list.count > WidgetDocument.relevantLimit {
+            note("relevant", "has \(list.count) contexts, and a slot takes \(WidgetDocument.relevantLimit); the rest were dropped")
+        }
+        return list.prefix(WidgetDocument.relevantLimit).enumerated().compactMap { index, item in
+            context(item, "relevant.\(index)")
+        }
+    }
+
+    private static let contexts = "{\"from\", \"to\"}, {\"place\": …}, {\"near\": …}, {\"sleep\": …} or {\"headphones\": true}"
+
+    private func context(_ raw: Any, _ path: String) -> WidgetRelevant? {
+        func drop(_ why: String) -> WidgetRelevant? { note(path, why + ", and was dropped"); return nil }
+        guard let object = raw as? [String: Any] else { return drop("is not a context: one of \(Self.contexts)") }
+        let keys = Set(object.keys)
+        if keys == ["from", "to"] {
+            guard let from = object["from"].flatMap(date), let to = object["to"].flatMap(date) else {
+                return drop("has a from or to that \(Self.notADate)")
+            }
+            guard to > from else { return drop("ends at or before it starts") }
+            return .dates(from: from, to: to)
+        }
+        guard keys.count == 1, let key = keys.first else { return drop("is not a context: one of \(Self.contexts)") }
+        let value = object[key]!
+        switch key {
+        case "place":
+            guard let name = value as? String, let place = WidgetRelevant.Place(rawValue: name) else {
+                return drop("is not a place: \(WidgetRelevant.Place.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            return .place(place)
+        case "sleep":
+            guard let name = value as? String, let sleep = WidgetRelevant.Sleep(rawValue: name) else {
+                return drop("is not a sleep: \(WidgetRelevant.Sleep.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+            return .sleep(sleep)
+        case "headphones":
+            guard let on = value as? NSNumber, CFGetTypeID(on) == CFBooleanGetTypeID(), on.boolValue else {
+                return drop("is only ever true")
+            }
+            return .headphones
+        case "near":
+            guard let near = value as? [String: Any], Set(near.keys) == ["lat", "lon", "radius"],
+                  let latitude = near["lat"].flatMap(finite), let longitude = near["lon"].flatMap(finite),
+                  let radius = near["radius"].flatMap(finite) else {
+                return drop("is not {\"lat\", \"lon\", \"radius\"} in numbers")
+            }
+            guard (-90...90).contains(latitude), (-180...180).contains(longitude) else {
+                return drop("is not a place on the Earth")
+            }
+            guard WidgetRelevant.radii.contains(radius) else {
+                return drop("has a radius outside \(Int(WidgetRelevant.radii.lowerBound))–\(Int(WidgetRelevant.radii.upperBound)) m")
+            }
+            return .near(latitude: latitude, longitude: longitude, radius: radius)
+        default:
+            return drop("is not a context: one of \(Self.contexts)")
+        }
     }
 
     /// `accessoryInline` draws one line: one text and one glyph, and nothing else.
