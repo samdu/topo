@@ -4,7 +4,8 @@
 # one discovered from the file: the workflow has exactly those jobs; `test` needs and reads in its
 # SUITE_RESULTS exactly the suite jobs; `codex` needs and spells out
 # `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others) and
-# `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; and `reviewer_ran` and
+# `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; `codex_wait`
+# needs the fast jobs and `review_cap` and runs only on its `false`; and `reviewer_ran` and
 # `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
 # reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. The three selectable
 # jobs (topo_unit, topo_ui, others) each need select and run only on its `true` for them; `test`
@@ -15,7 +16,9 @@
 # to every value other than `success` (failure, cancelled, skipped, and empty for `test`), and holds
 # that each goes red naming the job, and that both pass only when every job succeeded or was
 # skipped with select's `false` for it: a skip beside `true`, an empty output or no output at all
-# (select failed), and a failure beside `false`, each stay red. That is the
+# (select failed), and a failure beside `false`, each stay red. reviewer_ran passes on the review
+# cap whatever the suite did, since `test` holds a red suite and review_gate the cap, fails on a
+# draft first, and fails naming review_cap when the count itself failed. That is the
 # snippets' reading of a result string, not a cancelled run: a run that is cancelled skips `test`
 # (`!cancelled()`) and concludes cancelled, and automerge merges only on the latest pull_request
 # run concluding `completed success` (.github/workflows/automerge.yaml). So a suite job added without being wired into the gate, or a gate snippet
@@ -42,7 +45,7 @@ jobs = YAML.load_file(path).fetch("jobs")
 # The jobs by name, written out here rather than discovered, so a suite job deleted from the
 # workflow is a difference and not a job that silently stops being checked.
 suite = %w[select topo_unit topo_ui others]
-review = %w[test codex_wait codex post_feedback reviewer_ran review_gate]
+review = %w[test review_cap codex_wait codex post_feedback reviewer_ran review_gate]
 # What the reviewer waits on: the suite less the UI tests, which it runs beside.
 fast = suite - %w[topo_ui]
 # The jobs select may leave out.
@@ -66,9 +69,10 @@ end
 check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
 check.(needs.("test").sort == suite.sort, "test needs exactly the suite jobs (#{needs.('test').join(', ')})")
 check.(needs.("codex").sort == (fast + %w[codex_wait]).sort, "codex needs exactly the fast jobs #{fast.join(', ')} and codex_wait (#{needs.('codex').join(', ')})")
-check.(needs.("codex_wait").sort == fast.sort, "codex_wait needs exactly the fast jobs #{fast.join(', ')} (#{needs.('codex_wait').join(', ')})")
-check.(needs.("reviewer_ran").sort == (suite + %w[test codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
-check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, codex and post_feedback (#{needs.('review_gate').join(', ')})")
+check.(needs.("codex_wait").sort == (fast + %w[review_cap]).sort, "codex_wait needs exactly the fast jobs #{fast.join(', ')} and review_cap (#{needs.('codex_wait').join(', ')})")
+check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.capped == 'false' &&"), "codex_wait runs only on review_cap's false")
+check.(needs.("reviewer_ran").sort == (suite + %w[test review_cap codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, review_cap, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
+check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test review_cap codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, review_cap, codex and post_feedback (#{needs.('review_gate').join(', ')})")
 
 selectable.each do |job|
   check.(needs.(job) == %w[select], "#{job} needs select (#{needs.(job).join(', ')})")
@@ -155,7 +159,7 @@ for job in "${suite[@]}"; do
   done
 done
 
-export IS_DRAFT=false CODEX_RESULT=success FEEDBACK_RESULT=success
+export IS_DRAFT=false CAP_RESULT=success CAPPED=false CODEX_RESULT=success FEEDBACK_RESULT=success
 SUITE_RESULTS="$(results none success test)" expect pass "reviewer_ran: every suite job succeeded" "" "$work/ran.sh"
 for job in "${suite[@]}" test; do
   for result in failure cancelled skipped; do
@@ -169,6 +173,19 @@ SUITE_RESULTS="$(results topo_ui failure test)" \
 for feedback in skipped failure cancelled; do
   SUITE_RESULTS="$(results topo_ui failure test)" FEEDBACK_RESULT="$feedback" \
     expect fail "reviewer_ran: red suite, post_feedback $feedback" "no review verdict was posted.*post_feedback: $feedback" "$work/ran.sh"
+done
+
+# The review cap: reviewer_ran passes, beside a red suite too, since `test` holds that; a draft is
+# still a draft; a count that failed is no verdict, named as review_cap's.
+CAPPED=true SUITE_RESULTS="$(results none success test)" \
+  expect pass "reviewer_ran: review cap reached" "review cap is reached" "$work/ran.sh"
+CAPPED=true CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results topo_ui failure test)" \
+  expect pass "reviewer_ran: review cap reached beside a red suite" "review cap is reached" "$work/ran.sh"
+IS_DRAFT=true CAPPED=true SUITE_RESULTS="$(results none success test)" \
+  expect fail "reviewer_ran: a capped draft is a draft" "this PR is a draft" "$work/ran.sh"
+for cap in failure cancelled; do
+  CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success test)" \
+    expect fail "reviewer_ran: review_cap $cap" "could not be counted (review_cap: $cap)" "$work/ran.sh"
 done
 
 # Left out by select: a skip beside `false` passes both snippets, and nothing else does.

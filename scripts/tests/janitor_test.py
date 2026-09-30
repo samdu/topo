@@ -194,6 +194,20 @@ class Decisions(unittest.TestCase):
         self.assertEqual(kinds(w), ["report:verdict", "report:idle"])
         self.assertIn("review_gate", w[1]["text"])
 
+    def test_the_review_cap_is_reported_as_the_cap_and_never_rerun(self):
+        j = jobs(test="success", codex="skipped", reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:cap"])
+        self.assertIn("review cap", w[0]["text"])
+        j = jobs(topo_ui=("failure", "Boot the simulator"), codex="skipped", reviewer_ran="success", review_gate="failure")
+        w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["report:cap", "rerun"], "the cap is said and the setup red still rerun")
+
+    def test_a_failed_review_count_is_no_verdict_and_rerun(self):
+        j = jobs(review_cap="failure", reviewer_ran="failure", review_gate="success")
+        w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["rerun"])
+
     def test_a_blocking_verdict_is_reported_beside_a_suite_red_of_either_kind(self):
         j = jobs(topo_ui=("failure", "Boot the simulator"), reviewer_ran="success", review_gate="failure")
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
