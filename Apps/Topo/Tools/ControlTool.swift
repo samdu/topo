@@ -12,6 +12,9 @@ struct ControlTool: Tool {
     var store: @Sendable () -> SurfaceStore? = { SurfaceStore.shared() }
     var reloader: @MainActor @Sendable () -> SurfaceReloader = { .shared }
     var secrets = ControlSecrets()
+    /// A clear of the control secrets the keychain refused at a sign-out, which refuses a new one
+    /// until the app has cleared them (it tries again at each launch).
+    var leftBehind = ConnectionsLeftBehind()
     /// A toggle's state set by the mind, told to the runs in flight (`WidgetActions.confirm`).
     var confirm: @MainActor @Sendable (_ on: Bool, _ slot: String, _ revision: Int) -> Void = { on, slot, revision in
         (WidgetIntents.handler as? WidgetTaps)?.actions.confirm(on, slot: ControlSlot.stored(slot), control: ControlSlot.control,
@@ -104,8 +107,12 @@ struct ControlTool: Tool {
             lines.append(head.joined(separator: " ") + ", " + Self.describe(document.action, kind: document.kind))
             for note in store.notes(slot: ControlSlot.stored(slot)) { lines.append("  " + note) }
         }
-        let names = (try? secrets.names()).map { $0.isEmpty ? "none" : $0.joined(separator: ", ") } ?? "the keychain could not be read"
-        lines.append("secrets: " + names)
+        if let words = leftBehind.controlSecrets {
+            lines.append("secrets: not used: at an earlier sign-out \(words); the app tries again at each launch")
+        } else {
+            let names = (try? secrets.names()).map { $0.isEmpty ? "none" : $0.joined(separator: ", ") } ?? "the keychain could not be read"
+            lines.append("secrets: " + names)
+        }
         lines.append("local network: " + (await MainActor.run { localState() }).rawValue)
         return lines.joined(separator: "\n") + "\n"
     }
@@ -238,6 +245,9 @@ struct ControlTool: Tool {
             return ToolReply(status: ToolReply.refused, text: "topo: \(name) is not a secret's name: [A-Za-z0-9_.-], at most 64\n")
         }
         guard !value.isEmpty else { return .usage("topo: a secret's value is not empty\n") }
+        if let words = leftBehind.controlSecrets {
+            return .failed("topo: no secret is kept: at an earlier sign-out \(words). The app tries again at each launch.\n")
+        }
         do {
             try secrets.set(value, name: name)
         } catch {

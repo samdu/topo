@@ -20,7 +20,11 @@ extension ControlRequest {
         var code: Int?
     }
 
-    static func perform(_ form: Form, secrets: ControlSecrets, deadline: Duration = deadline) async -> Answer {
+    static func perform(_ form: Form, secrets: ControlSecrets, leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind(),
+                        deadline: Duration = deadline) async -> Answer {
+        // While a clear of the control secrets refused at a sign-out stands, what the keychain
+        // holds is an earlier login's, so a request naming one sends nothing.
+        if !form.secrets.isEmpty, leftBehind.controlSecrets != nil { return Answer(status: ToolReply.failed) }
         // A reference to a missing secret sends nothing.
         guard let request = form.urlRequest(secret: { try? secrets.read($0) }) else { return Answer(status: ToolReply.failed) }
         let configuration = URLSessionConfiguration.ephemeral

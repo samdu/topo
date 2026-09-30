@@ -1,3 +1,4 @@
+import TopoAuth
 import XCTest
 
 @testable import Topo
@@ -83,23 +84,19 @@ final class SignOutTests: XCTestCase {
         }
     }
 
-    /// Every control secret goes with the login, as the surfaces do.
+    /// Every control secret goes with the connections, at a sign-out, a takeover or a demotion.
     func testClearsControlSecrets() async throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("signout-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: folder) }
         let secrets = ControlSecrets(service: "zone.hexagon.topo.control-secret.tests.\(UUID().uuidString)")
         defer { try? secrets.clearAll() }
+        let connections = Connections(store: InMemoryConnectionStore(), leftBehind: .isolated(),
+                                      clearControlSecrets: { try secrets.clearAll() })
         try secrets.set("tok", name: "ha")
         try secrets.set("other", name: "webhook")
-        let store = SurfaceStore(folder: folder)
-        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in }, reloadEveryControl: {},
-                                       schedule: { _, _ in })
-        let defaults = ControlDefaults(store: { store }, reloader: reloader, secrets: secrets)
-        defaults.follow(to: .signedIn)
-        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
-                              forgetConnections: {}, forgetLogin: {})
+        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: {},
+                              forgetConnections: { connections.forget() }, forgetLogin: {})
         await signOut.act()
         XCTAssertEqual(try secrets.names(), [], "a control secret outlived the login")
+        XCTAssertNil(connections.unforgotten)
     }
 
     /// Nothing is ended by building the value: the button's press is what ends them.

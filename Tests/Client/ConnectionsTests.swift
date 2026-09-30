@@ -236,6 +236,18 @@ private final class StubbornStore: ConnectionStore, @unchecked Sendable {
     }
 }
 
+/// A keychain whose clear of the control secrets the test refuses or lets through.
+private final class Refusing: @unchecked Sendable {
+    private let lock = NSLock()
+    private var refusing = true
+    struct Refused: Error {}
+    var refuses: Bool {
+        get { lock.withLock { refusing } }
+        set { lock.withLock { refusing = newValue } }
+    }
+    func clear() throws { if refuses { throw Refused() } }
+}
+
 @MainActor
 final class ConnectionsLeftBehindTests: XCTestCase {
     /// A clear the keychain refused at a sign-out is kept past it: whoever signs in next is handed
@@ -298,6 +310,47 @@ final class ConnectionsLeftBehindTests: XCTestCase {
         connections.connectGitHub()
         guard case let .failed(words) = connections.github else { return XCTFail("\(connections.github)") }
         XCTAssertTrue(words.contains("could not be removed"), words)
+    }
+
+    /// A clear of the control secrets the keychain refused at a sign-out is kept and said on the
+    /// sign-in screen, apart from the connections: the next launch tries it again alone, and a
+    /// GitHub token the next login connected meanwhile survives it.
+    func testAControlSecretsClearRefusedIsKeptApartAndTriedAgainAlone() {
+        let leftBehind = ConnectionsLeftBehind.isolated()
+        let refusing = Refusing()
+        let store = InMemoryConnectionStore()
+        let connections = Connections(store: store, flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                                      leftBehind: leftBehind, clearControlSecrets: { try refusing.clear() })
+        connections.forget()
+        XCTAssertNotNil(leftBehind.controlSecrets)
+        XCTAssertNil(leftBehind.words, "a refusal of the control secrets refused the connections")
+        XCTAssertTrue(connections.unforgotten?.contains("controls' secrets") == true, "\(String(describing: connections.unforgotten))")
+
+        try? store.save(Connection(token: "gho_next", account: "next"), for: .github)
+        refusing.refuses = false
+        let relaunched = Connections(store: store, flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                                     leftBehind: leftBehind, clearControlSecrets: { try refusing.clear() })
+        XCTAssertNil(leftBehind.controlSecrets, "the launch tried the clear again")
+        XCTAssertNil(relaunched.unforgotten)
+        XCTAssertEqual(relaunched.github, .connected(login: "next"), "the retry took the next login's token")
+    }
+
+    /// The first launch of an install clears the control secrets too, and an empty keychain is a
+    /// clear that went through, not one left behind.
+    func testTheFirstLaunchOfAnInstallClearsTheControlSecrets() throws {
+        let secrets = ControlSecrets(service: "zone.hexagon.topo.control-secret.tests.\(UUID().uuidString)")
+        defer { try? secrets.clearAll() }
+        let fresh = ConnectionsLeftBehind.isolated(installed: false)
+        let empty = Connections(store: InMemoryConnectionStore(), flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                                leftBehind: fresh, clearControlSecrets: { try secrets.clearAll() })
+        XCTAssertNil(fresh.controlSecrets)
+        XCTAssertNil(empty.unforgotten)
+
+        try secrets.set("earlier", name: "ha")
+        let again = ConnectionsLeftBehind.isolated(installed: false)
+        _ = Connections(store: InMemoryConnectionStore(), flow: HeldGitHub(), copy: { _ in }, browser: RecordingBrowser(),
+                        leftBehind: again, clearControlSecrets: { try secrets.clearAll() })
+        XCTAssertEqual(try secrets.names(), [], "an earlier install's control secret outlived the first launch")
     }
 
     /// A Disconnect the keychain refused leaves the GitHub row failed with Disconnect still

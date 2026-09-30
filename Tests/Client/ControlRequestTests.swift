@@ -114,6 +114,7 @@ private final class LoopbackServer: @unchecked Sendable {
 final class ControlRequestTests: XCTestCase {
     private var folder: URL!
     private var secrets: ControlSecrets!
+    private var leftBehind = ConnectionsLeftBehind.isolated()
     private var servers: [LoopbackServer] = []
 
     override func setUp() async throws {
@@ -138,10 +139,11 @@ final class ControlRequestTests: XCTestCase {
     private func actions(reloader: SurfaceReloader? = nil) -> WidgetActions {
         let store = store
         let secrets = secrets!
+        let leftBehind = leftBehind
         return WidgetActions(table: ToolTable([]), store: { store },
                              reloader: reloader ?? SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                                                    reloadEveryControl: {}, schedule: { _, _ in }),
-                             perform: { await ControlRequest.perform($0, secrets: secrets) })
+                             perform: { await ControlRequest.perform($0, secrets: secrets, leftBehind: leftBehind) })
     }
 
     /// Writes `button-1` making `request`, as `topo control set` would, and answers its revision.
@@ -266,6 +268,24 @@ final class ControlRequestTests: XCTestCase {
         XCTAssertEqual(server.requests.count, 0)
         XCTAssertEqual(last?.status, "1")
         XCTAssertNil(last?.code)
+    }
+
+    /// A clear of the control secrets the keychain refused at a sign-out: a request naming a secret
+    /// sends nothing, since what the keychain holds is the earlier login's; one naming none still goes.
+    func testASecretLeftBehindSendsNothing() async throws {
+        let server = try await server(.answer(204))
+        try secrets.set("earlier", name: "ha")
+        leftBehind.controlSecrets = "the controls' secrets could not be removed"
+        let named = try set(["url": server.url("/api"), "headers": ["Authorization": "Bearer ${secret:ha}"]])
+        await tap(actions(), revision: named)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.requests.count, 0, "a secret left behind at a sign-out was sent")
+        XCTAssertEqual(last?.status, "1")
+        let plain = try set(["url": server.url("/api")])
+        await tap(actions(), revision: plain)
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.requests.count, 1)
+        XCTAssertEqual(last?.status, "0")
     }
 
     /// A sentinel in a header's value, a secret, the query, the body and the response: in no line

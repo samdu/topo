@@ -49,6 +49,7 @@ final class ControlToolTests: XCTestCase {
 
     private var folder: URL!
     private var secrets: ControlSecrets!
+    private var leftBehind = ConnectionsLeftBehind.isolated()
     private var reloads: [String] = []
     private var scheduled: [@MainActor () -> Void] = []
     private var confirmed: [String] = []
@@ -91,7 +92,7 @@ final class ControlToolTests: XCTestCase {
                                        schedule: { [unowned self] _, body in scheduled.append(body) })
         let store = store
         return ControlTool(judge: WidgetRunJudge(home: homeTool, notify: nil, reminders: nil), store: { store }, reloader: { reloader },
-                           secrets: secrets,
+                           secrets: secrets, leftBehind: leftBehind,
                            confirm: { [unowned self] on, slot, revision in confirmed.append("\(slot) \(on) \(revision)") },
                            askLocal: { [unowned self] in asked.append($0) }, localState: { .notAsked })
     }
@@ -211,6 +212,21 @@ final class ControlToolTests: XCTestCase {
         XCTAssertFalse(listed.text.contains("SENTINEL"))
         _ = await tool.run(["secret", "clear", "ha"])
         XCTAssertNil(try secrets.read("ha"))
+    }
+
+    /// A clear of the control secrets refused at a sign-out: no secret is kept and none is listed
+    /// until the app has cleared them, and the listing and the refusal say why.
+    func testASecretLeftBehindRefusesANewOne() async throws {
+        let tool = try await tool()
+        try secrets.set("earlier", name: "ha")
+        leftBehind.controlSecrets = "the controls' secrets could not be removed"
+        let set = await tool.run(["secret", "set", "webhook", "tok"])
+        XCTAssertEqual(set.status, ToolReply.failed)
+        XCTAssertTrue(set.text.contains("could not be removed"), set.text)
+        XCTAssertNil(try secrets.read("webhook"))
+        let listed = await tool.run([])
+        XCTAssertFalse(listed.text.contains("secrets: ha"), listed.text)
+        XCTAssertTrue(listed.text.contains("could not be removed"), listed.text)
     }
 
     /// The listing and the taps: the URL's scheme, host and path and the headers' names, never a

@@ -66,6 +66,9 @@ final class Connections {
     let leftBehind: ConnectionsLeftBehind
     /// The `topo secret` requests in flight, which a clear of the 1Password token ends.
     let secrets: SecretRequests
+    /// Clears the credentials the controls' requests name (`topo control secret`), which go with
+    /// the connections' tokens.
+    private let clearControlSecrets: @Sendable () throws -> Void
     private var generation = 0
     private var task: Task<Void, Never>?
     private var onePasswordGeneration = 0
@@ -75,7 +78,8 @@ final class Connections {
          onePassword: OnePasswordRunning = GuestOnePassword(), pasteboard: Pasteboard = SystemPasteboard(),
          copy: @escaping @MainActor (String) -> Void = { UIPasteboard.general.string = $0 },
          browser: Browser = WebAuthBrowser(), leftBehind: ConnectionsLeftBehind = ConnectionsLeftBehind(),
-         secrets: SecretRequests = SecretRequests()) {
+         secrets: SecretRequests = SecretRequests(),
+         clearControlSecrets: @escaping @Sendable () throws -> Void = { try ControlSecrets().clearAll() }) {
         self.store = store
         self.flow = flow
         self.op = onePassword
@@ -84,13 +88,18 @@ final class Connections {
         self.browser = browser
         self.leftBehind = leftBehind
         self.secrets = secrets
+        self.clearControlSecrets = clearControlSecrets
         github = Self.standing(store)
         self.onePassword = Self.standingOnePassword(store)
         // A clear refused before, at a sign-out, a takeover or a demotion, is tried again at each
         // launch, since until it succeeds the tokens there are a login's that is gone. So is the
         // first launch of an install: the keychain outlives an uninstall and the app's defaults do
         // not, so a token found then is an earlier install's, and whose login it was is unknown.
-        if leftBehind.words != nil || !leftBehind.installed { forget() }
+        // Each clear is tried again alone, so a refusal of one never takes what a later login put
+        // in the other.
+        if leftBehind.words != nil || !leftBehind.installed { forgetConnections() }
+        if leftBehind.controlSecrets != nil || !leftBehind.installed { forgetControlSecrets() }
+        sayUnforgotten()
         leftBehind.installed = true
     }
 
@@ -254,10 +263,17 @@ final class Connections {
         }
     }
 
-    /// Every connection forgotten, for a sign-out, a demotion or a takeover: the generation moves
-    /// first, so nothing in flight can save behind the clear. A keychain that refuses the clear is
-    /// said on the row rather than shown as disconnected.
+    /// Every connection forgotten, and every control secret, for a sign-out, a demotion or a
+    /// takeover: the generation moves first, so nothing in flight can save behind the clear. A
+    /// keychain that refuses the clear is said on the row rather than shown as disconnected, and
+    /// either refusal is said on the sign-in screen (`unforgotten`).
     func forget() {
+        forgetConnections()
+        forgetControlSecrets()
+        sayUnforgotten()
+    }
+
+    private func forgetConnections() {
         supersede()
         supersedeOnePassword()
         browser.close()
@@ -266,16 +282,28 @@ final class Connections {
                 try store.clearAll()
                 github = .disconnected
                 onePassword = .disconnected
-                unforgotten = nil
                 leftBehind.words = nil
             } catch {
                 let words = "the connections' tokens could not be removed from this phone's keychain: \(error)"
                 github = .failed(Self.sentence(words))
                 onePassword = .failed(Self.sentence(words))
-                unforgotten = words
                 leftBehind.words = words
             }
         }
+    }
+
+    private func forgetControlSecrets() {
+        do {
+            try clearControlSecrets()
+            leftBehind.controlSecrets = nil
+        } catch {
+            leftBehind.controlSecrets = "the controls' secrets could not be removed from this phone's keychain: \(error)"
+        }
+    }
+
+    private func sayUnforgotten() {
+        let left = [leftBehind.words, leftBehind.controlSecrets].compactMap { $0 }
+        unforgotten = left.isEmpty ? nil : left.joined(separator: "; and ")
     }
 
     private static func sentence(_ words: String) -> String {
@@ -374,6 +402,7 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
     private let defaults: UserDefaults
     private let key = "zone.hexagon.topo.connections.left-behind"
     private let installedKey = "zone.hexagon.topo.connections.installed"
+    private let controlSecretsKey = "zone.hexagon.topo.control-secrets.left-behind"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -382,6 +411,13 @@ final class ConnectionsLeftBehind: @unchecked Sendable {
     var words: String? {
         get { defaults.string(forKey: key) }
         set { defaults.set(newValue, forKey: key) }
+    }
+
+    /// The same for the control secrets (`ControlSecrets`), kept apart so a refusal of theirs
+    /// refuses the controls' secrets alone and not the connections.
+    var controlSecrets: String? {
+        get { defaults.string(forKey: controlSecretsKey) }
+        set { defaults.set(newValue, forKey: controlSecretsKey) }
     }
 
     /// Whether this install has launched before: false on the first launch after an install,

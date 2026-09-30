@@ -102,8 +102,7 @@ final class ControlCueTests: XCTestCase {
         let store = store
         return ControlDefaults(store: { store }, reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {},
                                                                            reloadControlKind: { _ in }, reloadEveryControl: {},
-                                                                           schedule: { _, _ in }),
-                               secrets: ControlSecrets(service: "zone.hexagon.topo.control-secret.tests.\(UUID().uuidString)"))
+                                                                           schedule: { _, _ in }))
     }
 
     /// A default's tap, drained twice: one entry on the line, its words naming the slot.
