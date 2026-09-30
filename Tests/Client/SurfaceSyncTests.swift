@@ -120,10 +120,52 @@ final class SurfaceSyncTests: XCTestCase {
         sync.changed(slot: "weather")
         await sync.flush()
         try store.remove(slot: "weather")
-        sync.changed(slot: "weather")
+        sync.cleared(slot: "weather")
         await sync.flush()
         let gone = await stored("weather")
         XCTAssertNil(gone)
+    }
+
+    /// A document that cannot be read just now is not a slot cleared: its record stays, and the
+    /// slot waits for the next try. Only a clear deletes.
+    func testAnUnreadableDocumentIsNotACleared() async throws {
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let before = await stored("weather")
+        try Data("{ half a document".utf8).write(to: store.url(slot: "weather"))
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let after = await stored("weather")
+        XCTAssertNotNil(after, "a document that could not be read deleted the slot's record")
+        XCTAssertEqual(after, before)
+        XCTAssertEqual(sync.pending, ["weather"], "the slot was taken off the waiting list with nothing sent")
+
+        _ = try write("weather")
+        await sync.flush()
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// A write landing after the running pass's last look for more, before the loop lets go, gets
+    /// a pass of its own rather than waiting on the one that has ended.
+    func testAWriteAtTheEndOfAPassIsNotLeftWaiting() async throws {
+        _ = try write("weather")
+        _ = try write("tides")
+        var landed = false
+        sync.afterPass = { [unowned self] in
+            guard !landed else { return }
+            landed = true
+            sync.changed(slot: "tides")
+        }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        var tides = await stored("tides")
+        for _ in 0..<200 where tides == nil {
+            await Task.yield()
+            tides = await stored("tides")
+        }
+        XCTAssertNotNil(tides, "a write at the end of a pass was left waiting for an unrelated trigger")
+        XCTAssertEqual(sync.pending, [])
     }
 
     /// A sign-out whose deletes iCloud refused deletes them at the next sign-in, before anything

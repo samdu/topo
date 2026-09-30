@@ -49,11 +49,27 @@ final class WatchSurfaceCache {
             return false
         }
         var moved = false
+        // Something the feed said that did not reach the group: the token stays where it was,
+        // so the next read says it again, since a token past it never would.
         var unconfirmed = false
-        for surface in changes.saved where apply(surface) { moved = true }
+        func kept(_ outcome: Applied) {
+            switch outcome {
+            case .changed: moved = true
+            case .failed: unconfirmed = true
+            case .unchanged: break
+            }
+        }
+        func removed(_ slot: String) {
+            do {
+                try store.remove(slot: slot)
+                moved = true
+            } catch {
+                unconfirmed = true
+            }
+        }
+        for surface in changes.saved { kept(apply(surface)) }
         for slot in changes.deleted where WidgetDocument.isSlot(slot) && store.read(slot: slot) != nil {
-            try? store.remove(slot: slot)
-            moved = true
+            removed(slot)
         }
         if whole {
             // A feed read from the start lists what exists; a cached slot it does not list is
@@ -62,10 +78,9 @@ final class WatchSurfaceCache {
             for slot in store.slots() where !listed.contains(slot) {
                 switch try? await records.fetch(slot: slot) {
                 case .gone?:
-                    try? store.remove(slot: slot)
-                    moved = true
+                    removed(slot)
                 case .surface(let surface)?:
-                    if apply(surface) { moved = true }
+                    kept(apply(surface))
                 case .unreadable?:
                     break
                 case nil:
@@ -81,27 +96,31 @@ final class WatchSurfaceCache {
         return true
     }
 
+    enum Applied {
+        case changed, unchanged, failed
+    }
+
     /// Keeps `surface` as the reader keeps it: the phone's judgement is not trusted, the watch's
     /// reader judges every field again. A document the reader cannot take at all keeps the slot's
-    /// cached one. Answers whether the cache changed.
-    private func apply(_ surface: SurfaceRecord) -> Bool {
-        guard WidgetDocument.isSlot(surface.slot) else { return false }
+    /// cached one. A write to the group that fails is `failed`, which keeps the feed's token back.
+    private func apply(_ surface: SurfaceRecord) -> Applied {
+        guard WidgetDocument.isSlot(surface.slot) else { return .unchanged }
         let reading = WidgetDocument.read(surface.document, from: .store)
-        guard reading.readable else { return false }
+        guard reading.readable else { return .unchanged }
         var document = reading.document
         document.revision = surface.revision
         let cached = store.read(slot: surface.slot)?.document
         let images = surface.images.filter { WidgetDocument.isName($0.key) }
         let sameImages = Set(store.imageNames(slot: surface.slot)) == Set(images.keys)
             && images.allSatisfy { store.imageData(slot: surface.slot, name: $0.key) == $0.value }
-        if cached == document, sameImages { return false }
+        if cached == document, sameImages { return .unchanged }
         do {
             try store.keepImages(images, slot: surface.slot)
             try store.keep(document, slot: surface.slot)
         } catch {
-            return false
+            return .failed
         }
-        return true
+        return .changed
     }
 
     static func reloadWidgets() {
@@ -166,15 +185,17 @@ final class WatchSurfaceSync {
             await running.value
             return
         }
+        // `running` is let go in the same turn as the loop's last look at `again`, so a fetch asked
+        // for after that look starts its own rather than waiting on one that has ended.
         let task = Task { @MainActor in
             repeat {
                 again = false
                 await fetchBody()
             } while again
+            running = nil
         }
         running = task
         await task.value
-        running = nil
     }
 }
 
@@ -293,6 +314,19 @@ final class WatchCues {
         self.store = store
     }
 
+    /// A `topo://` URL a widget opened: a whole widget's `tap`. `topo://cue?…` is kept as a cue,
+    /// under a nonce minted here, only when the cached document is at its revision and holds a
+    /// turn by its control, then drained; `topo://open` drains what is there. Any page may open
+    /// one, and it carries no words.
+    func open(_ url: URL) async {
+        if let cue = WidgetURL.cue(from: url), let store = store(),
+           let document = store.read(slot: cue.slot)?.document, document.revision == cue.revision,
+           document.turn(slot: cue.slot, control: cue.id, turningOn: cue.turningOn) != nil {
+            try? store.appendCue(cue)
+        }
+        await drain()
+    }
+
     func drain() async {
         if let running {
             again = true
@@ -304,10 +338,10 @@ final class WatchCues {
                 again = false
                 await pass()
             } while again
+            running = nil
         }
         running = task
         await task.value
-        running = nil
     }
 
     private func pass() async {

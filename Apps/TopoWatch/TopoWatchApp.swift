@@ -24,7 +24,7 @@ struct TopoWatchApp: App {
     var body: some Scene {
         WindowGroup {
             WatchRootView(store: transcript).environment(signIn)
-                .onOpenURL { _ in Task { await cues.drain() } }
+                .onOpenURL { url in Task { await cues.open(url) } }
         }
         .onChange(of: phase) { _, phase in
             if phase == .active { Task { await cues.drain() } }

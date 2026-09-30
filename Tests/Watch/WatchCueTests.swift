@@ -59,6 +59,34 @@ final class WatchCueTests: XCTestCase {
         XCTAssertEqual(after.filter { $0.nonce == "tap-1" }.count, 1, "one tap became two turns")
     }
 
+    /// A whole widget's `tap`, which reaches the app as `topo://cue?…` and nothing else: the URL
+    /// is the only record of the tap, so the app keeps it as a cue and sends it once.
+    func testAURLIsKeptAndSent() async throws {
+        let database = InMemoryRecordDatabase()
+        let defaults = UserDefaults(suiteName: "topo.watch.cues.\(UUID().uuidString)")!
+        let cues = WatchCues(transcript: transcript(database, defaults), store: { self.store })
+        await cues.open(try XCTUnwrap(URL(string: "topo://cue?slot=dog&control=feed&revision=3")))
+        XCTAssertTrue(store.cues().isEmpty)
+        let sent = await turns(database)
+        XCTAssertEqual(sent.map(\.text), ["widget dog: feed Daphne"])
+    }
+
+    /// A URL any page could open, naming an old revision or no turn, keeps nothing.
+    func testAStaleURLKeepsNothing() async throws {
+        let database = InMemoryRecordDatabase()
+        let defaults = UserDefaults(suiteName: "topo.watch.cues.\(UUID().uuidString)")!
+        let unreachable = TranscriptStore(database: Unreachable(), device: DeviceID("watch-1"), ensureZone: {}, defaults: defaults)
+        // Unreachable, so a cue kept would stay in the store to be seen.
+        let cues = WatchCues(transcript: unreachable, store: { self.store })
+        for url in ["topo://cue?slot=dog&control=feed&revision=2", "topo://cue?slot=dog&control=walk&revision=3",
+                    "topo://open"] {
+            await cues.open(try XCTUnwrap(URL(string: url)))
+        }
+        XCTAssertTrue(store.cues().isEmpty, "a stale URL was kept as a cue")
+        let sent = await turns(database)
+        XCTAssertEqual(sent, [])
+    }
+
     func testStaleCueSendsNothing() async throws {
         let database = InMemoryRecordDatabase()
         let defaults = UserDefaults(suiteName: "topo.watch.cues.\(UUID().uuidString)")!

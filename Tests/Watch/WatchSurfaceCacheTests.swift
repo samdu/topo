@@ -110,6 +110,36 @@ final class WatchSurfaceCacheTests: XCTestCase {
         XCTAssertEqual(store.slots(), ["lamp"], "a slot whose record is gone stayed cached")
     }
 
+    /// The group refusing a write (full, or its folder locked): the feed's token stays, so the
+    /// next fetch reads the same change again and keeps it, where a token past it never would.
+    func testAFailedWriteKeepsTheToken() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        await cache.fetch()
+        try await phoneSets("weather", Self.document("sun"), revision: 4)
+        try await locked { await cache.fetch() }
+        XCTAssertEqual(store.read(slot: "weather")?.document.revision, 3)
+        await cache.fetch()
+        XCTAssertEqual(store.read(slot: "weather")?.document.revision, 4, "a change whose write failed was never read again")
+    }
+
+    func testAFailedRemoveKeepsTheToken() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        await cache.fetch()
+        try await phoneClears("weather")
+        try await locked { await cache.fetch() }
+        XCTAssertEqual(store.slots(), ["weather"])
+        await cache.fetch()
+        XCTAssertEqual(store.slots(), [], "a deletion whose removal failed was never read again")
+    }
+
+    /// Runs `body` with the store's folder read-only, so every write and removal in it fails.
+    private func locked(_ body: () async -> Void) async throws {
+        let manager = FileManager.default
+        try manager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        await body()
+        try manager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+    }
+
     func testQueryOmissionKeepsIt() async throws {
         try await phoneSets("weather", Self.document("rain"), revision: 3)
         await cache.fetch()

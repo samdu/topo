@@ -3,36 +3,30 @@ import AppIntents
 import SwiftUI
 import WidgetKit
 
-/// `TopoMoment`: the Smart Stack's own card for a slot, shown when a context the slot's `relevant`
-/// names holds, whether or not the person placed anything. The mind decides both what the card is
-/// (the slot's `accessoryRectangular` tree) and when it comes up.
-@available(watchOS 26, *)
-struct TopoMomentWidget: Widget {
-    static let kind = "TopoMoment"
-
-    var body: some WidgetConfiguration {
-        RelevanceConfiguration(kind: Self.kind, provider: MomentProvider()) { entry in
-            SurfaceEntryView(entry: entry)
-        }
-        .configurationDisplayName("Topo")
-        .description("What Topo thinks matters now.")
-    }
-}
-
 @available(watchOS 26, *)
 extension SurfaceEntry: RelevanceEntry {}
 
 @available(watchOS 26, *)
 struct MomentProvider: RelevanceEntriesProvider {
     func relevance() async -> WidgetRelevance<SurfaceConfiguration> {
-        WidgetRelevance(WatchRelevance.contexts().map {
+        WidgetRelevance(Self.offered().map {
             WidgetRelevanceAttribute(configuration: SurfaceConfiguration(slot: $0.slot), context: $0.context.context)
         })
     }
 
     func entry(configuration: SurfaceConfiguration, context: Context) async throws -> SurfaceEntry {
-        let now = Date()
-        return SurfaceEntry(date: now, surface: SurfaceProvider.surface(slot: configuration.slot, family: .accessoryRectangular, at: now))
+        Self.entry(slot: configuration.slot, at: Date())
+    }
+
+    /// The slots offered, each with the context it comes up in; `WidgetRelevance` keeps what it
+    /// is handed where nothing can read it, so this is what the suite holds.
+    static func offered(store: SurfaceStore? = SurfaceStore.shared(), at date: Date = Date()) -> [(slot: String, context: WidgetRelevant)] {
+        WatchRelevance.contexts(store: store, at: date)
+    }
+
+    /// The card: the slot's `accessoryRectangular` tree, the default's when the slot has none.
+    static func entry(slot: String?, store: SurfaceStore? = SurfaceStore.shared(), at date: Date) -> SurfaceEntry {
+        SurfaceEntry(date: date, surface: SurfaceProvider.surface(slot: slot, family: .accessoryRectangular, at: date, store: store))
     }
 
     func placeholder(context: Context) -> SurfaceEntry {

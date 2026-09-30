@@ -288,6 +288,19 @@ final class WidgetToolTests: XCTestCase {
         XCTAssertNil(gone)
     }
 
+    /// The last slot cleared while its record's delete cannot go: the list says the watch still
+    /// has it, rather than that there are no slots and nothing more.
+    func testAClearedSlotsDeleteOwedIsReportedBehind() async throws {
+        let offline = try await tool(loaded: true, iCloud: false)
+        _ = await offline.run(["set", "demo", WidgetTool.example])
+        _ = await offline.run(["clear", "demo"])
+        await sync.flush()
+        XCTAssertEqual(sync.owed, ["demo": .delete])
+        let listed = await offline.run([])
+        XCTAssertTrue(listed.text.contains("no slots"), listed.text)
+        XCTAssertTrue(listed.text.contains("slot: demo, cleared; record behind"), listed.text)
+    }
+
     func testTapsSayTheStatusAndNoOutput() async throws {
         let tool = try await tool(loaded: true)
         try store.appendTap(SurfaceStore.Tap(time: Date(timeIntervalSince1970: 1_900_000_000), slot: "demo", id: "lamp",

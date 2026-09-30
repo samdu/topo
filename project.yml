@@ -193,6 +193,9 @@ targets:
       # relevance it donates below watchOS 11.
       - Apps/Widgets/WidgetIntents.swift
       - Apps/Widgets/WatchRelevance.swift
+      # The providers, whose entries and relevance the watch's suite holds.
+      - Apps/Widgets/SurfaceProvider.swift
+      - Apps/Widgets/TopoMoment.swift
       - path: THIRD-PARTY
         buildPhase: resources
       # The mark itself, read at launch rather than copied into Swift.
@@ -211,6 +214,11 @@ targets:
         WKBackgroundModes: [remote-notification]
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        # `topo://open` and `topo://cue?…`, which a whole watch widget's `tap` opens; no setting
+        # generates this key, and `scripts/check-built-plist.sh --watch` reads it.
+        CFBundleURLTypes:
+          - CFBundleURLName: zone.hexagon.topo.watch
+            CFBundleURLSchemes: [topo]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.watch

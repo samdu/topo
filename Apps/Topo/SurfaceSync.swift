@@ -9,8 +9,11 @@ import TopoCore
 /// never wait on iCloud. What has not reached the record yet is kept in the defaults — outside
 /// `Surfaces/`, which a sign-out empties — and tried again on the next write and whenever the
 /// phone is signed in (at launch, after signing in): a slot waiting there is one `topo widget`
-/// reports as behind. A sign-out deletes every `Surface` record in the zone; one it could not
-/// delete is deleted at the next sign-in, before anything else is saved.
+/// reports as behind. Each waiting slot remembers what it owes: a save, for a set or an image, or
+/// a delete, for a clear — only a clear ever deletes a record, so a document that cannot be read
+/// just now is left for the next try rather than taken for a slot cleared. A sign-out deletes
+/// every `Surface` record in the zone; one it could not delete is deleted at the next sign-in,
+/// before anything else is saved.
 @MainActor
 final class SurfaceSync {
     static let shared = SurfaceSync()
@@ -27,6 +30,14 @@ final class SurfaceSync {
 
     private var running: Task<Void, Never>?
     private var again = false
+    /// Run at the end of each pass, before the loop decides whether to go round again: the suite's
+    /// way into the moment a write can land between the last pass and the loop's end.
+    var afterPass: (@MainActor () -> Void)?
+
+    /// What a waiting slot owes its record.
+    enum Owed: String {
+        case save, delete
+    }
 
     init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: TopoCloudKit.database()) },
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
@@ -41,30 +52,49 @@ final class SurfaceSync {
     }
 
     /// The slots whose record is behind their file: a save or a delete not yet confirmed.
-    var pending: Set<String> { Set(defaults.stringArray(forKey: Self.pendingKey) ?? []) }
+    var pending: Set<String> { Set(owed.keys) }
+
+    /// Each waiting slot and what it owes.
+    var owed: [String: Owed] {
+        (defaults.dictionary(forKey: Self.pendingKey) as? [String: String] ?? [:]).compactMapValues(Owed.init(rawValue:))
+    }
 
     /// Whether a sign-out's deletes are still owed.
     var owesForget: Bool { defaults.bool(forKey: Self.forgetKey) }
 
-    /// The slot's file changed — set, an image, cleared — so its record is owed. Answers at
-    /// once; the record follows.
+    /// The slot was set or given an image, so its record is owed a save. Answers at once; the
+    /// record follows.
     func changed(slot: String) {
-        setPending(pending.union([slot]))
+        owe(.save, slot: slot)
+    }
+
+    /// The slot was cleared, so its record is owed a delete.
+    func cleared(slot: String) {
+        owe(.delete, slot: slot)
+    }
+
+    private func owe(_ what: Owed, slot: String) {
+        var owed = owed
+        owed[slot] = what
+        setOwed(owed)
         Task { await flush() }
     }
 
     /// A login ended: nothing it owed is saved, and every `Surface` record is to go.
     func forget() {
-        setPending([])
+        setOwed([:])
         defaults.set(true, forKey: Self.forgetKey)
         Task { await flush() }
     }
 
-    /// Sends what is owed: a sign-out's deletes first, then each pending slot as its file is now
-    /// — saved when it has a document, deleted when it has none. A slot stays pending until the
-    /// store confirms it; a failure leaves it for the next try.
+    /// Sends what is owed: a sign-out's deletes first, then each waiting slot — a save of its
+    /// document as its file is now, or the delete a clear asked for. A slot stays waiting until
+    /// the store confirms it; a failure, or a document that cannot be read just now, leaves it for
+    /// the next try.
     /// One pass at a time: a flush asked for while one runs makes it go round again, and waits
-    /// for it.
+    /// for it. The loop lets go of `running` in the same turn as its last look at `again`, so a
+    /// flush asked for after that look starts a pass of its own rather than waiting on one that
+    /// has already ended.
     func flush() async {
         if let running {
             again = true
@@ -75,11 +105,12 @@ final class SurfaceSync {
             repeat {
                 again = false
                 await pass()
+                afterPass?()
             } while again
+            running = nil
         }
         running = task
         await task.value
-        running = nil
     }
 
     private func pass() async {
@@ -93,20 +124,34 @@ final class SurfaceSync {
             }
         }
         guard let store = store() else { return }
-        for slot in pending.sorted() {
+        for (slot, what) in owed.sorted(by: { $0.key < $1.key }) {
             do {
-                if let surface = surface(slot: slot, store) {
-                    try await records.save(surface)
-                } else {
+                switch what {
+                case .delete:
                     try await records.delete(slot: slot)
+                case .save:
+                    guard let surface = surface(slot: slot, store) else {
+                        // No file at all: the slot went by some path that owes nothing (a
+                        // sign-out clears what is owed), and there is nothing to save. A file
+                        // that is there but cannot be read now is tried again, never deleted.
+                        if !FileManager.default.fileExists(atPath: store.url(slot: slot).path) { settle(slot, what) }
+                        continue
+                    }
+                    try await records.save(surface)
                 }
-                // A write made while this one was on its way is owed again, and `changed`
-                // asked for another pass to send it.
-                if !again { setPending(pending.subtracting([slot])) }
+                settle(slot, what)
             } catch {
                 continue
             }
         }
+    }
+
+    /// Takes `slot` off the waiting list, unless something owed it anew while this was on its way.
+    private func settle(_ slot: String, _ what: Owed) {
+        guard !again, owed[slot] == what else { return }
+        var owed = owed
+        owed[slot] = nil
+        setOwed(owed)
     }
 
     /// The slot's record as its file is now, or nil when it has no document.
@@ -119,7 +164,7 @@ final class SurfaceSync {
                              runner: runner, images: images)
     }
 
-    private func setPending(_ slots: Set<String>) {
-        if slots.isEmpty { defaults.removeObject(forKey: Self.pendingKey) } else { defaults.set(slots.sorted(), forKey: Self.pendingKey) }
+    private func setOwed(_ owed: [String: Owed]) {
+        if owed.isEmpty { defaults.removeObject(forKey: Self.pendingKey) } else { defaults.set(owed.mapValues(\.rawValue), forKey: Self.pendingKey) }
     }
 }

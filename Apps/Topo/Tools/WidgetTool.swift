@@ -90,9 +90,13 @@ struct WidgetTool: Tool {
 
     private func list(_ store: SurfaceStore) async -> String {
         let slots = store.slots()
-        guard !slots.isEmpty else { return "no slots; placed widgets draw the default\n" }
-        let placed = await placed()
         let behind = await MainActor.run { sync().pending }
+        // A slot cleared whose record has not gone yet: the watch still draws it.
+        let clearing = behind.subtracting(slots).sorted().map { "slot: \($0), cleared; record behind: the watch still has it" }
+        guard !slots.isEmpty else {
+            return (["no slots; placed widgets draw the default"] + clearing).joined(separator: "\n") + "\n"
+        }
+        let placed = await placed()
         var lines: [String] = []
         for slot in slots {
             let document = store.read(slot: slot)?.document ?? WidgetDocument()
@@ -107,6 +111,7 @@ struct WidgetTool: Tool {
             let shown = placed.filter { $0.slot == slot }.map(\.family)
             lines.append("  placed: " + (shown.isEmpty ? "on no widget" : shown.joined(separator: ", ")))
         }
+        lines += clearing
         let unpicked = placed.filter { $0.slot == nil || !slots.contains($0.slot!) }.map(\.family)
         if !unpicked.isEmpty { lines.append("drawing the default: " + unpicked.joined(separator: ", ")) }
         return lines.joined(separator: "\n") + "\n"
@@ -170,15 +175,15 @@ struct WidgetTool: Tool {
         } catch {
             return .failed("topo: \(error.localizedDescription)\n")
         }
-        await changed(slots)
+        await changed(slots, cleared: true)
         return .ok(slots.isEmpty ? "no slots to clear\n" : "cleared: " + slots.joined(separator: ", ") + "\n")
     }
 
-    /// One reload of the timelines, and each slot's record owed.
-    private func changed(_ slots: [String]) async {
+    /// One reload of the timelines, and each slot's record owed: a save, or a delete for a clear.
+    private func changed(_ slots: [String], cleared: Bool = false) async {
         await MainActor.run {
             reloader().reload()
-            for slot in slots { sync().changed(slot: slot) }
+            for slot in slots { cleared ? sync().cleared(slot: slot) : sync().changed(slot: slot) }
         }
     }
 

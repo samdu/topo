@@ -18,6 +18,22 @@ struct TopoWatchWidgetBundle: WidgetBundle {
         if #available(watchOS 26, *) { TopoMomentWidget() }
     }
 }
+
+/// `TopoMoment`: the Smart Stack's own card for a slot, shown when a context the slot's `relevant`
+/// names holds, whether or not the person placed anything. The mind decides both what the card is
+/// (the slot's `accessoryRectangular` tree) and when it comes up.
+@available(watchOS 26, *)
+struct TopoMomentWidget: Widget {
+    static let kind = "TopoMoment"
+
+    var body: some WidgetConfiguration {
+        RelevanceConfiguration(kind: Self.kind, provider: MomentProvider()) { entry in
+            SurfaceEntryView(entry: entry)
+        }
+        .configurationDisplayName("Topo")
+        .description("What Topo thinks matters now.")
+    }
+}
 #else
 @main
 struct TopoWidgetBundle: WidgetBundle {

@@ -34,7 +34,7 @@
 # With `--watch`, it reads the watch app instead: `PlugIns/TopoWatchWidgets.appex` embedded, a
 # WidgetKit extension, since the complications are nothing without it; and `WKBackgroundModes`
 # declaring `remote-notification`, which no setting generates, for the `Surface` push that wakes
-# the watch to fetch the slots.
+# the watch to fetch the slots; and the topo URL scheme, which a whole watch widget's tap opens.
 #
 #   scripts/check-built-plist.sh <path to Topo.app> [expected CFBundleVersion]
 #   scripts/check-built-plist.sh --watch <path to TopoWatch.app>
@@ -57,7 +57,15 @@ if [ "${1:-}" = --watch ]; then
             status=1
             ;;
     esac
-    [ "$status" -eq 0 ] && echo "$watch embeds TopoWatchWidgets.appex and declares WKBackgroundModes $modes"
+    schemes="$(plutil -extract CFBundleURLTypes json -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+    case "$schemes" in
+        *'"CFBundleURLSchemes":["topo"]'*) ;;
+        *)
+            echo "$watch/Info.plist does not declare the topo URL scheme (CFBundleURLTypes: ${schemes:-absent}); a watch widget's tap would open nothing" >&2
+            status=1
+            ;;
+    esac
+    [ "$status" -eq 0 ] && echo "$watch embeds TopoWatchWidgets.appex, declares WKBackgroundModes $modes and the topo URL scheme"
     exit "$status"
 fi
 
