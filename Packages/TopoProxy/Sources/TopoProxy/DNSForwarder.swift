@@ -14,8 +14,7 @@ import os
 /// a message over 512 bytes is dropped (a TCP connection closed) before it is read; at most 64
 /// questions are in flight, and one past that is answered `SERVFAIL` without being asked; every
 /// question is answered within 4 s of its arrival, `SERVFAIL` at the bound; at most 16 TCP
-/// connections, each closed 10 s from its accept, and at most 64 UDP flows, each closed once idle
-/// and 10 s from its accept at the latest; a reply that does not fit 512 bytes over UDP (or the
+/// connections, each closed 10 s from its accept; a reply that does not fit 512 bytes over UDP (or the
 /// query's EDNS size, at most 1232) goes back truncated with `TC` set, so the client asks again
 /// over TCP, where a reply is at most 65,535. Only a query of one question, opcode `QUERY`, class
 /// IN is asked; anything else is `FORMERR` or `NOTIMP`, asked of nobody.
@@ -23,8 +22,11 @@ import os
 /// It logs counts and nothing else — at most one line every 60 s while there is traffic — never a
 /// name, a type, an address, an answer or a client's port.
 ///
-/// The actor runs on a serial queue of its own, which is also where the listeners, their
-/// connections and dnssd call back, so every query is started, answered and deallocated there and
+/// UDP is a socket of its own bound to `127.0.0.1`, each reply sent to the address its question
+/// came from; TCP is an `NWListener` required to the same address and port.
+///
+/// The actor runs on a serial queue of its own, which is also where the socket's reads, the
+/// listener, its connections and dnssd call back, so every query is started, answered and deallocated there and
 /// nothing blocks the cooperative pool.
 public actor DNSForwarder {
     public typealias Log = @Sendable (String) -> Void
@@ -32,14 +34,11 @@ public actor DNSForwarder {
     public static let messageLimit = 512
     public static let inFlightLimit = 64
     public static let tcpConnectionLimit = 16
-    public static let udpFlowLimit = 64
     public static let ednsLimit: UInt16 = 1232
     public static let tcpReplyLimit = 65_535
     public static let defaultQueryBound: Duration = .seconds(4)
     public static let defaultConnectionBound: Duration = .seconds(10)
     public static let defaultLogInterval: Duration = .seconds(60)
-    /// How long a UDP flow stays open with nothing in flight.
-    static let udpIdle: Duration = .seconds(1)
 
     public static let defaultLog: Log = { line in
         Logger(subsystem: "zone.hexagon.topo", category: "dns").info("\(line, privacy: .public)")
@@ -55,14 +54,15 @@ public actor DNSForwarder {
     private let logInterval: Duration
 
     private var tcp: NWListener?
-    private var udp: NWListener?
+    /// The UDP side: a socket of its own rather than a listener, since `NWListener` over UDP hands
+    /// datagrams from different clients to one connection, whose reply would go to only one of them.
+    private var udp: DispatchSourceRead?
     /// Bumped by every start and stop, so a listener's late callback acts on nothing newer.
     private var generation = 0
     public private(set) var port: UInt16?
     private var observer: (@Sendable (UInt16?) -> Void)?
 
     private var connections: [ObjectIdentifier: NWConnection] = [:]
-    private var flows: [ObjectIdentifier: Flow] = [:]
     private var pending: [ObjectIdentifier: Pending] = [:]
 
     private var counts = Counts()
@@ -81,10 +81,12 @@ public actor DNSForwarder {
     }
 
     /// Calls `observer` with the port each time the forwarder is ready and with nil each time it
-    /// goes down — stopped, or its listener failed or taken away (iOS reclaims a suspended app's).
-    /// Called on the forwarder's queue.
-    public func observe(_ observer: @escaping @Sendable (UInt16?) -> Void) {
+    /// goes down — stopped, or its listener failed or taken away (iOS reclaims a suspended app's) —
+    /// on the forwarder's queue, and answers with the port now, nil while it is down.
+    @discardableResult
+    public func observe(_ observer: @escaping @Sendable (UInt16?) -> Void) -> UInt16? {
         self.observer = observer
+        return port
     }
 
     /// Starts both listeners on one port and returns it; the port it has when already running.
@@ -99,20 +101,16 @@ public actor DNSForwarder {
             let tcp = try NWListener(using: Self.loopback(.tcp, port: .any))
             self.tcp = tcp
             do {
-                let bound = try await ready(tcp, generation: current, accept: { $0.acceptTCP($1) })
-                let udp = try NWListener(using: Self.loopback(.udp, port: NWEndpoint.Port(rawValue: bound)!))
-                self.udp = udp
-                _ = try await ready(udp, generation: current, accept: { $0.acceptUDP($1) })
+                let bound = try await ready(tcp, generation: current)
                 guard generation == current else { throw CancellationError() }
+                listenUDP(try Self.udpSocket(port: bound), generation: current)
                 port = bound
                 observer?(bound)
                 return bound
             } catch {
                 failure = error
                 tcp.cancel()
-                udp?.cancel()
                 self.tcp = nil
-                udp = nil
                 if error is CancellationError { throw error }
             }
         }
@@ -133,15 +131,14 @@ public actor DNSForwarder {
         return parameters
     }
 
-    private func ready(_ listener: NWListener, generation current: Int,
-                       accept: @escaping @Sendable (isolated DNSForwarder, NWConnection) -> Void) async throws -> UInt16 {
+    private func ready(_ listener: NWListener, generation current: Int) async throws -> UInt16 {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, any Error>) in
             let waiting = Waiting(continuation)
             listener.newConnectionHandler = { [weak self] connection in
                 guard let self else { connection.cancel(); return }
                 self.assumeIsolated { forwarder in
                     guard forwarder.generation == current else { connection.cancel(); return }
-                    accept(forwarder, connection)
+                    forwarder.acceptTCP(connection)
                 }
             }
             listener.stateUpdateHandler = { [weak self] state in
@@ -193,8 +190,6 @@ public actor DNSForwarder {
         udp = nil
         for connection in connections.values { connection.cancel() }
         connections = [:]
-        for flow in flows.values { flow.connection.cancel() }
-        flows = [:]
         for question in pending.values { question.abandon() }
         pending = [:]
         let wasUp = port != nil
@@ -263,73 +258,67 @@ public actor DNSForwarder {
 
     // MARK: UDP
 
-    /// Touched only on the forwarder's queue.
-    private final class Flow: @unchecked Sendable {
-        let connection: NWConnection
-        var inFlight = 0
-        /// Bumped by every datagram, so an idle timer set before it closes nothing.
-        var activity = 0
-        init(_ connection: NWConnection) { self.connection = connection }
+    /// A non-blocking datagram socket bound to `127.0.0.1` at `port`.
+    static func udpSocket(port: UInt16) throws -> Int32 {
+        let fd = socket(AF_INET, SOCK_DGRAM, 0)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        address.sin_addr.s_addr = in_addr_t(INADDR_LOOPBACK).bigEndian
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+        }
+        guard bound == 0, fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) == 0 else {
+            let error = errno
+            close(fd)
+            throw POSIXError(POSIXErrorCode(rawValue: error) ?? .EIO)
+        }
+        return fd
     }
 
-    private func acceptUDP(_ connection: NWConnection) {
-        guard flows.count < Self.udpFlowLimit else {
-            count(\.refused)
-            connection.cancel()
-            return
+    /// Reads `fd` whenever it is readable, on the forwarder's queue; the socket is closed when
+    /// the source is cancelled.
+    private func listenUDP(_ fd: Int32, generation current: Int) {
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source.setEventHandler { [weak self] in
+            self?.assumeIsolated { $0.drain(fd, generation: current) }
         }
-        let id = ObjectIdentifier(connection)
-        let flow = Flow(connection)
-        flows[id] = flow
-        connection.stateUpdateHandler = { [weak self] state in
-            switch state {
-            case .cancelled, .failed: self?.assumeIsolated { $0.flows[id] = nil }
-            default: break
-            }
-        }
-        connection.start(queue: queue)
-        let current = generation
-        queue.asyncAfter(deadline: .now() + connectionBound.timeInterval) { [weak self] in
-            self?.assumeIsolated { forwarder in
-                guard forwarder.generation == current else { return }
-                connection.cancel()
-            }
-        }
-        readDatagram(flow)
+        source.setCancelHandler { close(fd) }
+        udp = source
+        source.resume()
     }
 
-    private func readDatagram(_ flow: Flow) {
-        flow.connection.receiveMessage { [weak self] data, _, _, error in
-            guard let self else { return }
-            self.assumeIsolated { forwarder in
-                guard error == nil else { flow.connection.cancel(); return }
-                if let data {
-                    flow.activity += 1
-                    if data.count > Self.messageLimit {
-                        forwarder.count(\.dropped)
-                    } else {
-                        flow.inFlight += 1
-                        forwarder.received(Array(data), limit: nil, over: .udp) { reply in
-                            flow.connection.send(content: Data(reply), completion: .idempotent)
-                        } done: {
-                            flow.inFlight -= 1
-                            forwarder.idle(flow)
-                        }
-                    }
+    /// Every datagram waiting, each answered to the address it came from. One over the limit is
+    /// dropped unread (the buffer is larger, so the size is seen); a socket that fails is the
+    /// forwarder gone.
+    private func drain(_ fd: Int32, generation current: Int) {
+        guard generation == current else { return }
+        var buffer = [UInt8](repeating: 0, count: 2 * Self.messageLimit)
+        for _ in 0..<Self.inFlightLimit {
+            var from = sockaddr_storage()
+            var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
+            let size = withUnsafeMutablePointer(to: &from) {
+                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    recvfrom(fd, &buffer, buffer.count, MSG_DONTWAIT, $0, &length)
                 }
-                forwarder.readDatagram(flow)
             }
-        }
-    }
-
-    /// Closes a flow that has nothing in flight and has heard nothing for `udpIdle`.
-    private func idle(_ flow: Flow) {
-        guard flow.inFlight == 0 else { return }
-        let activity = flow.activity
-        queue.asyncAfter(deadline: .now() + Self.udpIdle.timeInterval) { [weak self] in
-            self?.assumeIsolated { _ in
-                guard flow.inFlight == 0, flow.activity == activity else { return }
-                flow.connection.cancel()
+            if size < 0 {
+                if errno == EINTR { continue }
+                if errno != EAGAIN && errno != EWOULDBLOCK { lost(current) }
+                return
+            }
+            guard size <= Self.messageLimit else {
+                count(\.dropped)
+                continue
+            }
+            let peer = from
+            received(Array(buffer[0..<size]), limit: nil, over: .udp) { reply in
+                var to = peer
+                _ = withUnsafePointer(to: &to) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, reply, reply.count, 0, $0, length) }
+                }
             }
         }
     }

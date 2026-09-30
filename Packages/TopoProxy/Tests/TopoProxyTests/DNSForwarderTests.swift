@@ -108,6 +108,21 @@ import Testing
         #expect(try tcpExchange(next, query(100, "x.example")) != nil)
     }
 
+    /// Every client gets its own reply, however many ask at once: a reply goes to the address its
+    /// question came from and to no other.
+    @Test func concurrentClientsEachGetTheirOwnReply() async throws {
+        let resolver = ScriptedResolver { name, _ in [.after(.milliseconds(100), [a(name, [10, 0, 0, 1])])] }
+        let (forwarder, port) = try await started(resolver)
+        defer { Task { await forwarder.stop() } }
+        let clients = try (0..<40).map { _ in try UDPClient(port: port) }
+        defer { clients.forEach { $0.close() } }
+        for (id, client) in clients.enumerated() { try client.send(query(UInt16(id), "c\(id).example")) }
+        for (id, client) in clients.enumerated() {
+            let reply = try client.receive(wait: 3)
+            #expect(reply.map { Reply($0).id } == UInt16(id), "client \(id)")
+        }
+    }
+
     @Test func largeAnswerTruncatedOverUDPWholeOverTCP() async throws {
         let many = (1...40).map { a("big.example.", [10, 0, 0, UInt8($0)], more: $0 < 40) }
         let resolver = ScriptedResolver { _, _ in [.now(many)] }
