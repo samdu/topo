@@ -19,6 +19,11 @@
 # the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location or
 # HomeKit with no string saying why, and nothing shows it until the first call that asks.
 #
+# `NSLocalNetworkUsageDescription` is one of them: a control's request to a device on the home
+# network is what asks for local network access. `NSAllowsArbitraryLoads` under
+# `NSAppTransportSecurity` is read the same way as the URL scheme below: no setting generates it,
+# and without it a control's request to a plain `http` URL fails at every press.
+#
 # HomeKit needs the `com.apple.developer.homekit` entitlement besides, which is read off the
 # signature of a signed product. An unsigned product (the PR check's device build) carries no
 # entitlements to read, and the script says so rather than passing it as checked.
@@ -64,7 +69,8 @@ for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
 done
 
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
-           NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription; do
+           NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \
+           NSLocalNetworkUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
         echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
@@ -94,6 +100,12 @@ case "$schemes" in
         ;;
 esac
 
+loads="$(plutil -extract NSAppTransportSecurity.NSAllowsArbitraryLoads raw -o - -- "$plist" 2>/dev/null || true)"
+if [ "$loads" != "true" ] && [ "$loads" != "1" ]; then
+    echo "$app/Info.plist does not set NSAppTransportSecurity's NSAllowsArbitraryLoads ( ${loads:-absent} ); a control's request to an http URL would fail" >&2
+    status=1
+fi
+
 if [ ! -f "$app/PlugIns/TopoWidgets.appex/Info.plist" ]; then
     echo "$app does not embed PlugIns/TopoWidgets.appex; there would be no widgets" >&2
     status=1
@@ -113,5 +125,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' five usage strings, the topo URL scheme, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' six usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

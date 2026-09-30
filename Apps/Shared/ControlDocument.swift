@@ -49,12 +49,15 @@ enum ControlAction: Equatable, Sendable {
     /// One `topo` call from the widgets' allowlist, run in the app with no turn; a toggle's gets
     /// `on` or `off` appended.
     case run([String])
+    /// One HTTP request, made by the app with no turn.
+    case request(ControlRequest)
 
     var kind: String {
         switch self {
         case .turn: "turn"
         case .open: "open"
         case .run: "run"
+        case .request: "request"
         }
     }
 
@@ -63,6 +66,62 @@ enum ControlAction: Equatable, Sendable {
         case .turn(let say): say.map { ["kind": "turn", "say": $0] } ?? ["kind": "turn"]
         case .open: ["kind": "open"]
         case .run(let argv): ["kind": "run", "topo": argv]
+        case .request(.one(let form)): form.json.merging(["kind": "request"]) { $1 }
+        case .request(.toggle(let on, let off)): ["kind": "request", "on": on.json, "off": off.json]
+        }
+    }
+}
+
+/// A control's `request`: a button's one form, or a toggle's two, one for each state asked for.
+/// Every form was judged by the reader (Review Focus 12); what it may never keep is
+/// `ControlRequest.perform`'s (13).
+enum ControlRequest: Equatable, Sendable {
+    case one(Form)
+    case toggle(on: Form, off: Form)
+
+    static let methods = ["GET", "POST", "PUT", "PATCH", "DELETE"]
+    static let urlLimit = 2048
+    static let headerLimit = 16
+    /// A header's name or value, in bytes.
+    static let headerByteLimit = 1024
+    static let bodyByteLimit = 8 * 1024
+    /// The headers that carry a credential, whose value has to name a secret rather than hold it.
+    static let credentialHeaders: Set<String> = ["authorization", "cookie", "proxy-authorization"]
+    /// `${secret:<name>}`, a reference to a control secret the app resolves at the tap.
+    static var reference: Regex<(Substring, Substring)> { /\$\{secret:([A-Za-z0-9_.-]{1,64})\}/ }
+
+    struct Form: Equatable, Sendable {
+        var method: String
+        var url: String
+        /// In the order the reader sorted them, which is the order they are sent in.
+        var headers: [Header] = []
+        var body: String?
+
+        var json: [String: Any] {
+            var object: [String: Any] = ["method": method, "url": url]
+            if !headers.isEmpty { object["headers"] = Dictionary(uniqueKeysWithValues: headers.map { ($0.name, $0.value) }) }
+            if let body { object["body"] = body }
+            return object
+        }
+
+        /// The secret names the form refers to, in its headers and body.
+        var secrets: Set<String> {
+            Set((headers.map(\.value) + [body].compactMap { $0 }).flatMap { text in
+                text.matches(of: ControlRequest.reference).map { String($0.output.1) }
+            })
+        }
+    }
+
+    struct Header: Equatable, Sendable {
+        var name: String
+        var value: String
+    }
+
+    /// The form a tap sends: a toggle's for the state asked for, or the opposite of `on` when none was.
+    func form(turningOn: Bool?, on: Bool) -> Form {
+        switch self {
+        case .one(let form): form
+        case .toggle(let whenOn, let whenOff): (turningOn ?? !on) ? whenOn : whenOff
         }
     }
 }
@@ -129,6 +188,12 @@ struct ControlDocument: Equatable, Sendable {
         guard case .run(let argv) = action else { return nil }
         guard kind == .toggle else { return argv }
         return argv + [(turningOn ?? !on) ? "on" : "off"]
+    }
+
+    /// The request a `request` tap sends, as `argv(turningOn:)` chooses a run's call.
+    func request(turningOn: Bool?) -> ControlRequest.Form? {
+        guard case .request(let request) = action else { return nil }
+        return request.form(turningOn: turningOn, on: on)
     }
 
     /// The words of the turn a tap on `slot` sends: `control <slot>: <say>`, `tapped` with nothing
@@ -327,7 +392,7 @@ final class ControlReader {
     /// The action, or nil with a note, which the document takes as the default's.
     private func action(_ raw: Any) -> ControlAction? {
         guard let object = raw as? [String: Any] else { note("action", "is not an object naming a kind" + Self.refused); return nil }
-        let kinds = ["turn", "open", "run"]
+        let kinds = ["turn", "open", "run", "request"]
         guard let kind = object["kind"] as? String, kinds.contains(kind) else {
             note("action.kind", "is not one of \(kinds.joined(separator: ", "))" + Self.refused)
             return nil
@@ -350,12 +415,106 @@ final class ControlReader {
         case "open":
             fields = ["kind"]
             made = .open
+        case "request":
+            return request(object)
         default:
             fields = ["kind", "topo"]
             made = run(object["topo"])
         }
         for key in object.keys.sorted() where !fields.contains(key) { note("action.\(key)", "is not a field of a \(kind) action") }
         return made
+    }
+
+    /// A `request`: a button's one form, whose fields are the action's own, or a toggle's `on` and
+    /// `off` forms, both needed. One form refused refuses the action.
+    private func request(_ object: [String: Any]) -> ControlAction? {
+        switch kind {
+        case .button:
+            let fields: Set<String> = ["kind", "method", "url", "headers", "body"]
+            if let key = object.keys.sorted().first(where: { !fields.contains($0) }) {
+                note("action.\(key)", "is not a field of a button's request" + Self.refused)
+                return nil
+            }
+            return form(object, at: "action").map { .request(.one($0)) }
+        case .toggle:
+            if let key = object.keys.sorted().first(where: { !["kind", "on", "off"].contains($0) }) {
+                note("action.\(key)", "is not a field of a toggle's request, which is an on and an off form" + Self.refused)
+                return nil
+            }
+            for state in ["on", "off"] where !(object[state] is [String: Any]) {
+                note("action.\(state)", "is not a request form, and a toggle's request needs one for on and one for off" + Self.refused)
+                return nil
+            }
+            guard let on = form(object["on"] as! [String: Any], at: "action.on"),
+                  let off = form(object["off"] as! [String: Any], at: "action.off") else { return nil }
+            return .request(.toggle(on: on, off: off))
+        }
+    }
+
+    /// One request form at `path`, or nil with a note naming the first rule it broke (Review Focus 12).
+    private func form(_ object: [String: Any], at path: String) -> ControlRequest.Form? {
+        func refuse(_ key: String, _ why: String) -> ControlRequest.Form? {
+            note("\(path).\(key)", why + Self.refused)
+            return nil
+        }
+        if kind == .toggle, let key = object.keys.sorted().first(where: { !["method", "url", "headers", "body"].contains($0) }) {
+            return refuse(key, "is not a field of a request form")
+        }
+        guard let url = object["url"] as? String else { return refuse("url", "is not text") }
+        guard url.count <= ControlRequest.urlLimit else {
+            return refuse("url", "is \(url.count) characters, over the \(ControlRequest.urlLimit) a request's holds")
+        }
+        guard let parsed = URL(string: url), let scheme = parsed.scheme?.lowercased(), ["http", "https"].contains(scheme) else {
+            return refuse("url", "is not an http or https URL")
+        }
+        guard let host = parsed.host(), !host.isEmpty else { return refuse("url", "names no host") }
+        var body: String?
+        if let raw = object["body"] {
+            guard let text = raw as? String else { return refuse("body", "is not text") }
+            guard text.utf8.count <= ControlRequest.bodyByteLimit else {
+                return refuse("body", "is \(text.utf8.count) bytes, over the \(ControlRequest.bodyByteLimit / 1024) KB a request's holds")
+            }
+            body = text
+        }
+        let method: String
+        if let raw = object["method"] {
+            guard let text = raw as? String, ControlRequest.methods.contains(text) else {
+                return refuse("method", "is not one of \(ControlRequest.methods.joined(separator: ", "))")
+            }
+            method = text
+        } else {
+            // A body defaults to POST, which the transport never resends (Review Focus 13).
+            method = body == nil ? "GET" : "POST"
+        }
+        var headers: [ControlRequest.Header] = []
+        if let raw = object["headers"] {
+            guard let table = raw as? [String: Any] else { return refuse("headers", "is not an object of names and values") }
+            guard table.count <= ControlRequest.headerLimit else {
+                return refuse("headers", "holds \(table.count) headers, over the \(ControlRequest.headerLimit) a request holds")
+            }
+            for name in table.keys.sorted() {
+                guard let value = table[name] as? String else { return refuse("headers.\(name)", "is not text") }
+                guard Self.isToken(name), name.utf8.count <= ControlRequest.headerByteLimit else {
+                    return refuse("headers", "names a header that is not an HTTP token of at most \(ControlRequest.headerByteLimit) bytes")
+                }
+                guard !value.contains(where: \.isNewline),
+                      value.utf8.count <= ControlRequest.headerByteLimit else {
+                    return refuse("headers.\(name)", "holds a line break or is over \(ControlRequest.headerByteLimit) bytes")
+                }
+                if ControlRequest.credentialHeaders.contains(name.lowercased()), !value.contains(ControlRequest.reference) {
+                    return refuse("headers.\(name)", "carries a credential, which is named as ${secret:<name>} and never written in")
+                }
+                headers.append(ControlRequest.Header(name: name, value: value))
+            }
+        }
+        return ControlRequest.Form(method: method, url: url, headers: headers, body: body)
+    }
+
+    /// An HTTP token (RFC 9110): one or more of the letters, digits and ``!#$%&'*+-.^_`|~``.
+    static func isToken(_ name: String) -> Bool {
+        !name.isEmpty && name.unicodeScalars.allSatisfy { scalar in
+            scalar.isASCII && (CharacterSet.alphanumerics.contains(scalar) || "!#$%&'*+-.^_`|~".unicodeScalars.contains(scalar))
+        }
     }
 
     /// A `run`, judged against the widgets' allowlist, a toggle's in both of the forms a tap can

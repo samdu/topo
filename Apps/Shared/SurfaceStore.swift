@@ -376,7 +376,7 @@ struct SurfaceStore: Sendable {
         }
         // A stale tap is logged but says nothing of the control's last run, and a tap drawn from
         // an older revision never replaces the outcome of a newer one.
-        guard tap.kind == "run", tap.status != "stale" else { return }
+        guard ["run", "request"].contains(tap.kind), tap.status != "stale" else { return }
         try coordinatedWrite(outcomesURL) { data in
             var outcomes = data.flatMap { try? JSONDecoder().decode([String: [String: Outcome]].self, from: $0) } ?? [:]
             if let last = outcomes[tap.slot]?[tap.id], last.revision > tap.revision { return data }

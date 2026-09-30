@@ -118,6 +118,7 @@
 		41A8C81F4F27B0107E5170B3 /* accessoryCircular-light.png in Resources */ = {isa = PBXBuildFile; fileRef = 6C2CA7A5988383E398431185 /* accessoryCircular-light.png */; };
 		422EFA35BED87AC91682AF97 /* StreamJSONTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3103735350B8C5C4A6CE6F11 /* StreamJSONTests.swift */; };
 		425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */; };
+		4284B708B9BC30F3EF1F3A7D /* ControlRequestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D56E758F45E3E653043D416F /* ControlRequestTests.swift */; };
 		442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D946D8851F96D23296B16179 /* RoleSelectorTests.swift */; };
 		443639D8481C026336CB1598 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		447E5988846796C166E2407C /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
@@ -314,6 +315,7 @@
 		BE2E77872613825E0A6215B5 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
 		BE5D03B4667AA4BD89FBD2AB /* ViewerRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF5484D41029680680F3D4D4 /* ViewerRootView.swift */; };
 		BEA87040D78A2A27FF876C41 /* SurfaceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297C1A9489C88545BA87293C /* SurfaceProvider.swift */; };
+		C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */ = {isa = PBXBuildFile; fileRef = B099B495226BFD2823184CC1 /* ControlRequest.swift */; };
 		C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 402EB6E7D75092F33B78F15B /* GuestBridge.swift */; };
 		C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB40574A451BCD56247E1E50 /* HomeTool.swift */; };
 		C1756029A2D22427CAACE8AF /* TranscriptView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D888582E5FD9BE0365C2CB2B /* TranscriptView.swift */; };
@@ -622,6 +624,7 @@
 		ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestProcessTests.swift; sourceTree = "<group>"; };
 		ADE17E3120F6835D9626B032 /* Ear.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ear.swift; sourceTree = "<group>"; };
 		AF6B19FB83C8D0AC3C45F1EB /* TopoTVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoTVApp.swift; sourceTree = "<group>"; };
+		B099B495226BFD2823184CC1 /* ControlRequest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlRequest.swift; sourceTree = "<group>"; };
 		B2F92FDD0A90790863EA800E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		B32DA01FEA350247ACEF3A0E /* MemoryMoveDuringTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryMoveDuringTurnTests.swift; sourceTree = "<group>"; };
 		B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceTokens.swift; sourceTree = "<group>"; };
@@ -661,6 +664,7 @@
 		D347C50B63441358B49281F4 /* MascotPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotPlacementTests.swift; sourceTree = "<group>"; };
 		D3A03D6163E6AC87912A0A8E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadsTests.swift; sourceTree = "<group>"; };
+		D56E758F45E3E653043D416F /* ControlRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlRequestTests.swift; sourceTree = "<group>"; };
 		D5D8E5964C0B2E93432931EE /* OnePassword.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePassword.swift; sourceTree = "<group>"; };
 		D6A401F08D7A75D151418BFA /* ChatReading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatReading.swift; sourceTree = "<group>"; };
 		D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDocumentTests.swift; sourceTree = "<group>"; };
@@ -828,6 +832,7 @@
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				B8C76AE9F6DF2889FA1D7CD5 /* Connections.swift */,
 				FDE1B5AC935DE7F86F1C6126 /* ConnectionsView.swift */,
+				B099B495226BFD2823184CC1 /* ControlRequest.swift */,
 				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
 				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
 				0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */,
@@ -1092,6 +1097,7 @@
 				9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */,
 				621361E24A923844780887AC /* ControlCueTests.swift */,
 				0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */,
+				D56E758F45E3E653043D416F /* ControlRequestTests.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
@@ -1920,6 +1926,7 @@
 				DAA85047031AD1661D0E8E48 /* ControlActionTests.swift in Sources */,
 				884C2A44B2BE25779EA4F3F7 /* ControlCueTests.swift in Sources */,
 				8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */,
+				4284B708B9BC30F3EF1F3A7D /* ControlRequestTests.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
@@ -2014,6 +2021,7 @@
 				D0076A594104D14F2C6E6E7E /* ConnectionsView.swift in Sources */,
 				EA62ABE92498980EC79A486C /* ContactsTool.swift in Sources */,
 				D925201A428816A89B31395C /* ControlDocument.swift in Sources */,
+				C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */,
 				AD9E6CF1B98606CCE69DADAD /* DebugRun.swift in Sources */,
 				E31E3699C246943267961135 /* DefaultSurface.swift in Sources */,
 				4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */,
@@ -2190,6 +2198,7 @@
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Topo reads your calendar and adds events when you ask it to.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Topo looks people up in your contacts when you ask about them.";
 				INFOPLIST_KEY_NSHomeKitUsageDescription = "Topo reads and controls your home's accessories when you ask it to.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Topo sends the requests your controls make to devices on your home network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Topo checks where you are when you ask something that depends on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Topo reads and adds your reminders when you ask it to.";
@@ -2407,6 +2416,7 @@
 				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Topo reads your calendar and adds events when you ask it to.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Topo looks people up in your contacts when you ask about them.";
 				INFOPLIST_KEY_NSHomeKitUsageDescription = "Topo reads and controls your home's accessories when you ask it to.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Topo sends the requests your controls make to devices on your home network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Topo checks where you are when you ask something that depends on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Topo reads and adds your reminders when you ask it to.";

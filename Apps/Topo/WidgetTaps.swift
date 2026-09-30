@@ -45,7 +45,7 @@ final class WidgetTaps: WidgetTapHandler {
             return .foreground
         case .open:
             return .foreground
-        case .run:
+        case .run, .request:
             await actions.run(slot: stored, control: ControlSlot.control, revision: revision, turningOn: turningOn)
             return .background
         }
@@ -63,6 +63,8 @@ private struct Tapped {
     var on: Bool
     /// The call a tap makes, given the state a toggle is turning to.
     var argv: (Bool?) -> [String]?
+    /// A control's request, given the state a toggle is turning to; nil when the action is no request.
+    var request: (Bool?) -> ControlRequest.Form? = { _ in nil }
     /// A turn's words, given the state a toggle is turning to; nil when the action is no turn.
     var turn: (Bool?) -> String?
     /// Asks for what shows the slot to be drawn again.
@@ -75,7 +77,8 @@ private struct Tapped {
         if let control = ControlSlot.slot(stored: slot) {
             guard id == ControlSlot.control, let document = store.readControl(slot: control)?.document else { return nil }
             return Tapped(revision: document.revision, isControl: true, isToggle: document.kind == .toggle, on: document.on,
-                          argv: { document.argv(turningOn: $0) }, turn: { document.turn(slot: control, turningOn: $0) },
+                          argv: { document.argv(turningOn: $0) }, request: { document.request(turningOn: $0) },
+                          turn: { document.turn(slot: control, turningOn: $0) },
                           reload: { $0.reloadControls(kind: document.kind.controlKind) })
         }
         guard let document = read(store, slot) else { return nil }
@@ -188,13 +191,17 @@ final class WidgetCues {
 /// run through `ToolService.bounded` over the widgets' own tool table — the guest's tools, the
 /// same bound, cancellation and permission broker, with `home` refusing a lock's and a door's
 /// target — and its status, never its words, written to `taps.jsonl`. A control slot's run is the
-/// same, read from its `ControlDocument` and reloading its control kind.
+/// same, read from its `ControlDocument` and reloading its control kind; a control's `request` takes
+/// the same path up to the call, where `ControlRequest.perform` takes the place of the tool table,
+/// and records its status with the HTTP code.
 @MainActor
 final class WidgetActions {
     let table: ToolTable
     let store: @MainActor () -> SurfaceStore?
     let reloader: SurfaceReloader
     let bound: Duration
+    /// Makes a control's request (`ControlRequest.perform`); a suite hands one of its own secrets.
+    let perform: @Sendable (ControlRequest.Form) async -> ControlRequest.Answer
     /// The slot's document as the tap finds it: the store's, read through the reader. A suite
     /// hands one the reader would not keep, to hold the tap's own allowlist check.
     let read: @MainActor (SurfaceStore, String) -> WidgetDocument?
@@ -210,11 +217,15 @@ final class WidgetActions {
 
     init(table: ToolTable, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound,
+         perform: @escaping @Sendable (ControlRequest.Form) async -> ControlRequest.Answer = {
+             await ControlRequest.perform($0, secrets: ControlSecrets())
+         },
          read: @escaping @MainActor (SurfaceStore, String) -> WidgetDocument? = { $0.read(slot: $1)?.document }) {
         self.table = table
         self.store = store
         self.reloader = reloader
         self.bound = bound
+        self.perform = perform
         self.read = read
         reloader.onForget { [weak self] in self?.cancelAll() }
     }
@@ -248,8 +259,9 @@ final class WidgetActions {
         let read = read
         func find() -> Tapped? { Tapped.find(store, slot: slot, id: id, read: read) }
         func reload() { Tapped.reloadGone(reloader, slot: slot) }
-        func record(_ status: String) {
-            try? store.appendTap(SurfaceStore.Tap(time: Date(), slot: slot, id: id, revision: revision, kind: "run", status: status))
+        func record(_ status: String, kind: String = "run", code: Int? = nil) {
+            try? store.appendTap(SurfaceStore.Tap(time: Date(), slot: slot, id: id, revision: revision, kind: kind, status: status,
+                                                  code: code))
             reload()
         }
         guard let tapped = find(), tapped.revision == revision, tapped.isControl else {
@@ -259,9 +271,11 @@ final class WidgetActions {
             return record("stale")
         }
         // The kept copy is read through the reader again, which takes a run off the allowlist
-        // back to `open`; the allowlist is asked again here all the same.
-        guard tapped.argv(true).map({ WidgetAction.refusal($0) == nil }) == true,
-              tapped.argv(false).map({ WidgetAction.refusal($0) == nil }) == true else {
+        // back to `open`; the allowlist is asked again here all the same. A request was judged by
+        // the same reader, and has no allowlist to ask.
+        let isRequest = tapped.request(nil) != nil
+        guard isRequest || (tapped.argv(true).map({ WidgetAction.refusal($0) == nil }) == true
+                            && tapped.argv(false).map({ WidgetAction.refusal($0) == nil }) == true) else {
             return record(String(ToolReply.refused))
         }
         // A widget's toggle turns to the opposite of its stored state, flipped as the tap is
@@ -288,26 +302,35 @@ final class WidgetActions {
             now = (control == nil ? nil : turningOn) ?? !stored
             if chains[key] == nil { confirmed[state] = stored }
         }
-        guard let argv = tapped.argv(now) else { return record(String(ToolReply.refused)) }
+        let argv = tapped.argv(now)
+        let form = tapped.request(now)
+        guard argv != nil || form != nil else { return record(String(ToolReply.refused)) }
         // After the control's last run, whatever it answered, so two quick taps' writes land in
         // the order they were flipped and a failed one holds up none after it.
         let previous = chains[key]
-        let (table, bound) = (table, bound)
+        let (table, bound, perform) = (table, bound, perform)
         let task = Task { @MainActor in
             await previous?.value
-            let reply = await ToolService.bounded(argv, table: table, until: .now + bound, bound: bound)
+            let status: Int32
+            var code: Int?
+            if let form {
+                let answer = await perform(form)
+                (status, code) = (answer.status, answer.code)
+            } else {
+                status = await ToolService.bounded(argv ?? [], table: table, until: .now + bound, bound: bound).status
+            }
             // A run that outlived its slot's document at this revision — a sign-out cleared it, or
             // the slot was written anew — writes nothing, so the next login sees no tap of this
             // one's controls.
             guard !Task.isCancelled, find()?.revision == revision else { return }
             if let was, let now {
-                if reply.status == 0 {
+                if status == 0 {
                     confirmed[state] = now
                 } else {
                     try? store.setOn(confirmed[state] ?? was, slot: slot, control: id, revision: revision)
                 }
             }
-            record(String(reply.status))
+            record(String(status), kind: form == nil ? "run" : "request", code: code)
         }
         chains[key] = task
         let token = UUID()
