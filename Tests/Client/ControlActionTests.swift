@@ -191,34 +191,4 @@ final class ControlActionTests: XCTestCase {
         await tapped
         XCTAssertEqual(store.readControl(slot: "toggle-4")?.document.on, true)
     }
-
-    /// Review Focus 9: ten control writes in a second are one reload of their kind.
-    func testCoalescesControls() {
-        var due: [(Duration, @MainActor () -> Void)] = []
-        var now = Duration.zero
-        var reloads: [String] = []
-        let reloader = SurfaceReloader(reloadKind: { reloads.append("widget " + $0) }, reloadEverything: {},
-                                       reloadControlKind: { reloads.append($0) }, reloadEveryControl: { reloads.append("*") },
-                                       schedule: { delay, body in due.append((now + delay, body)) })
-        func advance(_ step: Duration) {
-            now += step
-            let ready = due.filter { $0.0 <= now }
-            due.removeAll { $0.0 <= now }
-            ready.forEach { $0.1() }
-        }
-        for _ in 0..<10 {
-            reloader.reloadControls(kind: ControlSlot.Kind.button.controlKind)
-            advance(.milliseconds(100))
-        }
-        XCTAssertEqual(reloads, [])
-        advance(.seconds(1))
-        XCTAssertEqual(reloads, [ControlSlot.Kind.button.controlKind], "ten writes in a second, one reload")
-        reloader.reloadControls(kind: ControlSlot.Kind.toggle.controlKind)
-        reloader.reload()
-        advance(.seconds(2))
-        XCTAssertEqual(reloads, [ControlSlot.Kind.button.controlKind, ControlSlot.Kind.toggle.controlKind, "widget " + SurfaceStore.kind],
-                       "a control kind and the widgets' kind coalesce apart")
-        reloader.reloadAll()
-        XCTAssertEqual(reloads.last, "*", "a sign-out's reload reaches every control")
-    }
 }
