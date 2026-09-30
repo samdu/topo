@@ -1,5 +1,7 @@
 import HomeKit
 import ImageIO
+import TopoCore
+import TopoCoreTesting
 import TopoTools
 import UniformTypeIdentifiers
 import XCTest
@@ -55,6 +57,9 @@ final class WidgetToolTests: XCTestCase {
     private var reloads: [String] = []
     private var scheduled: [@MainActor () -> Void] = []
     private var made = 0
+    /// The records the tool's writes reach, in memory.
+    private var records: InMemoryRecordDatabase!
+    private var sync: SurfaceSync!
 
     override func setUp() async throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("widget-tool-\(UUID().uuidString)")
@@ -73,7 +78,7 @@ final class WidgetToolTests: XCTestCase {
 
     /// The tool over a store in a temporary folder, a reloader on a clock the test moves, and a
     /// home that is loaded (`loaded`) or never made.
-    private func tool(loaded: Bool) async throws -> WidgetTool {
+    private func tool(loaded: Bool, iCloud: Bool = true) async throws -> WidgetTool {
         let fake = LoadedHome()
         let access = HomeAccess { [unowned self] in
             made += 1
@@ -96,8 +101,13 @@ final class WidgetToolTests: XCTestCase {
                                        schedule: { [unowned self] _, body in scheduled.append(body) })
         let store = store
         let home = home!
+        let records = InMemoryRecordDatabase()
+        self.records = records
+        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, store: { store }, runner: "phone-test",
+                               defaults: UserDefaults(suiteName: "widget-tool-\(UUID().uuidString)")!, reloader: reloader)
+        self.sync = sync
         return WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: nil),
-                          store: { store }, reloader: { reloader }, home: { home }, placed: { [("systemSmall", "demo")] })
+                          store: { store }, reloader: { reloader }, sync: { sync }, home: { home }, placed: { [("systemSmall", "demo")] })
     }
 
     private static func document(_ controls: String) -> String {
@@ -251,6 +261,31 @@ final class WidgetToolTests: XCTestCase {
         let reply = await tool.run(["clear", "demo"])
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
         XCTAssertEqual(store.slots(), [])
+    }
+
+    // MARK: The slot's record (widgets B, Review Focus 2)
+
+    /// Each write is followed by the slot's record, and a clear by its delete; a slot whose
+    /// record has not gone is one `topo widget` says is behind.
+    func testTheRecordFollowsTheSlotAndIsReportedBehind() async throws {
+        let offline = try await tool(loaded: true, iCloud: false)
+        _ = await offline.run(["set", "demo", WidgetTool.example])
+        await sync.flush()
+        let behind = await offline.run([])
+        XCTAssertTrue(behind.text.contains("record behind"), behind.text)
+
+        let tool = try await tool(loaded: true)
+        _ = await tool.run(["set", "demo", WidgetTool.example])
+        await sync.flush()
+        let current = await records.current(SurfaceRecord.id(slot: "demo"))
+        let saved = try XCTUnwrap(SurfaceRecord(XCTUnwrap(current)))
+        XCTAssertEqual(saved.revision, store.read(slot: "demo")?.document.revision)
+        let listed = await tool.run([])
+        XCTAssertFalse(listed.text.contains("record behind"), listed.text)
+        _ = await tool.run(["clear", "demo"])
+        await sync.flush()
+        let gone = await records.current(SurfaceRecord.id(slot: "demo"))
+        XCTAssertNil(gone)
     }
 
     func testTapsSayTheStatusAndNoOutput() async throws {

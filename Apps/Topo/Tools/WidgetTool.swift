@@ -7,13 +7,15 @@ import WidgetKit
 /// `topo widget`: the mind's hand on the person's widgets. It writes a slot's document into the
 /// app group, judged by `WidgetDocument.read` and, for each `run` action, by `WidgetRunJudge`;
 /// copies an image the mind made in its home into a slot; clears slots; and shows what was tapped.
-/// Every write asks `SurfaceReloader` for one reload of the widgets' timelines.
+/// Every write asks `SurfaceReloader` for one reload of the widgets' timelines, and `SurfaceSync`
+/// for the slot's record, which is how the watch gets it.
 struct WidgetTool: Tool {
     let judge: WidgetRunJudge
     /// The app group's surfaces; nil where the process has no app group, which every call but
     /// `example` answers as a failure.
     var store: @Sendable () -> SurfaceStore? = { SurfaceStore.shared() }
     var reloader: @MainActor @Sendable () -> SurfaceReloader = { .shared }
+    var sync: @MainActor @Sendable () -> SurfaceSync = { .shared }
     /// The guest's home on the host, which `/home/topo` names in the guest.
     var home: @Sendable () -> URL = { GuestResident.homeDirectory }
     /// The widgets placed on this phone: each one's family, and the slot it was set to show.
@@ -51,6 +53,10 @@ struct WidgetTool: Tool {
         {"kind": "run", "topo": [...]} runs one topo call with no turn, one of:
         \(WidgetAction.allowed.map { "topo " + $0.joined(separator: " ") }.joined(separator: ", ")).
         A toggle's run gets on or off appended. A home set on a lock's or a door's target is refused.
+        When a slot matters: "relevant": up to \(WidgetDocument.relevantLimit) of {"from": ISO 8601, "to": ISO 8601},
+        {"place": "home"|"work"|"school"|"commute"}, {"near": {"lat": …, "lon": …, "radius": 50–50000 metres}},
+        {"sleep": "bedtime"|"wakeup"}, {"headphones": true}. The watch's Smart Stack decides, and may bring the
+        slot up on the watch face then, placed or not, for whoever is looking at the wrist.
         """
     }
 
@@ -86,6 +92,7 @@ struct WidgetTool: Tool {
         let slots = store.slots()
         guard !slots.isEmpty else { return "no slots; placed widgets draw the default\n" }
         let placed = await placed()
+        let behind = await MainActor.run { sync().pending }
         var lines: [String] = []
         for slot in slots {
             let document = store.read(slot: slot)?.document ?? WidgetDocument()
@@ -94,6 +101,7 @@ struct WidgetTool: Tool {
             if let until = document.until { head.append("until \(ToolDates.write(until))") }
             let images = store.imageNames(slot: slot)
             if !images.isEmpty { head.append("images: " + images.joined(separator: ", ")) }
+            if behind.contains(slot) { head.append("record behind: the watch has not got this yet") }
             lines.append(PhoneTool.line(head))
             for note in store.notes(slot: slot) { lines.append("  " + note) }
             let shown = placed.filter { $0.slot == slot }.map(\.family)
@@ -144,7 +152,7 @@ struct WidgetTool: Tool {
         } catch {
             return .failed("topo: the slot could not be written: \(error.localizedDescription)\n")
         }
-        await MainActor.run { reloader().reload() }
+        await changed([slot])
         var lines = ["set: \(slot), revision \(revision)"]
         lines += notes.map { "refused: \($0)" }
         lines += unchecked
@@ -162,8 +170,16 @@ struct WidgetTool: Tool {
         } catch {
             return .failed("topo: \(error.localizedDescription)\n")
         }
-        await MainActor.run { reloader().reload() }
+        await changed(slots)
         return .ok(slots.isEmpty ? "no slots to clear\n" : "cleared: " + slots.joined(separator: ", ") + "\n")
+    }
+
+    /// One reload of the timelines, and each slot's record owed.
+    private func changed(_ slots: [String]) async {
+        await MainActor.run {
+            reloader().reload()
+            for slot in slots { sync().changed(slot: slot) }
+        }
     }
 
     /// Why the mind may not write `slot`: `_default` is the app's, and no other name outside the
@@ -197,7 +213,7 @@ struct WidgetTool: Tool {
         } catch {
             return .failed("topo: the image could not be written: \(error.localizedDescription)\n")
         }
-        await MainActor.run { reloader().reload() }
+        await changed([slot])
         return .ok("image: \(slot)/\(name)\n")
     }
 

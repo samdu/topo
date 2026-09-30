@@ -89,6 +89,8 @@ struct TopoApp: App {
         let widgetCues = WidgetCues(harness: harness)
         _widgetCues = State(initialValue: widgetCues)
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
+        // Made now, so a sign-out before any slot is written still takes the records with it.
+        _ = SurfaceSync.shared
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
@@ -190,6 +192,9 @@ struct TopoApp: App {
                 defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
                 guard phase == .signedIn else { return }
                 Task { try? await NotePush.ensureSubscription() }
+                // What the watch is owed of the slots: a sign-out's deletes, then any record
+                // behind its file.
+                Task { await SurfaceSync.shared.flush() }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)

@@ -1,3 +1,5 @@
+import TopoCore
+import TopoCoreTesting
 import XCTest
 
 @testable import Topo
@@ -64,9 +66,18 @@ final class SignOutTests: XCTestCase {
         var kinds = 0
         let reloader = SurfaceReloader(reloadKind: { _ in kinds += 1 }, reloadEverything: { everything += 1 },
                                        schedule: { _, _ in })
+        // The slots' records, which the watch draws, go with the files.
+        let records = InMemoryRecordDatabase()
+        let sync = SurfaceSync(records: { SurfaceRecords(database: records) }, store: { store }, runner: "phone",
+                               defaults: UserDefaults(suiteName: "signout-\(UUID().uuidString)")!, reloader: reloader)
+        try await SurfaceRecords(database: records).save(XCTUnwrap(sync.surface(slot: "demo", store)))
         let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
                               forgetConnections: {}, forgetLogin: {})
         await signOut.act()
+        await sync.flush()
+        let surfaces = try await records.records(ofType: SurfaceRecord.type)
+        XCTAssertEqual(surfaces.map(\.id), [], "a slot's record outlived the login")
+        XCTAssertFalse(sync.owesForget)
         let left = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         XCTAssertEqual(left, ["_revisions.json"], "the app group kept \(left)")
         let counters = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: store.revisionsURL))
