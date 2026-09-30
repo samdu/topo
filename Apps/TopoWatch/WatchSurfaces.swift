@@ -267,3 +267,56 @@ final class WatchDefaultSurface {
         return WidgetDocument.read(String(decoding: data, as: UTF8.self)).document
     }
 }
+
+/// The cues a watch `turn` control recorded in the watch's group, sent through the transcript
+/// under the nonce `WatchCueIntent` minted with each. The words are the cached document's at the
+/// cue's revision; a cue whose revision the cache no longer holds, or whose control is not a
+/// turn there, is dropped with no record. A cue goes only once its nonce is on the line or in the
+/// log, and `TranscriptStore.send(_:nonce:)` queues nothing for a nonce already there, so a drain
+/// run twice, or after a crash, is one turn. It waits for a read of the log, without which the
+/// store cannot know what the log holds.
+@MainActor
+final class WatchCues {
+    let transcript: TranscriptStore
+    let store: @MainActor () -> SurfaceStore?
+    private var running: Task<Void, Never>?
+    private var again = false
+
+    init(transcript: TranscriptStore, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() }) {
+        self.transcript = transcript
+        self.store = store
+    }
+
+    func drain() async {
+        if let running {
+            again = true
+            await running.value
+            return
+        }
+        let task = Task { @MainActor in
+            repeat {
+                again = false
+                await pass()
+            } while again
+        }
+        running = task
+        await task.value
+        running = nil
+    }
+
+    private func pass() async {
+        guard let store = store(), !store.cues().isEmpty else { return }
+        if !transcript.hasRead { await transcript.refresh() }
+        guard transcript.hasRead else { return }
+        for cue in store.cues() {
+            guard let document = store.read(slot: cue.slot)?.document, document.revision == cue.revision,
+                  let words = document.turn(slot: cue.slot, control: cue.id, turningOn: cue.turningOn) else {
+                try? store.removeCue(nonce: cue.nonce)
+                continue
+            }
+            if await transcript.send(words, nonce: cue.nonce) {
+                try? store.removeCue(nonce: cue.nonce)
+            }
+        }
+    }
+}

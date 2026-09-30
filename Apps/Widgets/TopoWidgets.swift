@@ -15,6 +15,7 @@ import WidgetKit
 struct TopoWatchWidgetBundle: WidgetBundle {
     var body: some Widget {
         TopoSurfaceWidget()
+        if #available(watchOS 26, *) { TopoMomentWidget() }
     }
 }
 #else

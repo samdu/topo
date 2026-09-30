@@ -123,6 +123,25 @@ final class TranscriptStore {
         await flush()
     }
 
+    /// Puts `text` on the line under a nonce minted elsewhere — a watch widget's cue, recorded in
+    /// the watch's group under it before this app saw it — unless that nonce is already queued or
+    /// already in the log as last read, so a cue drained twice is one turn. Answers whether the
+    /// nonce is queued or in the log now, which is when the cue's record may go. Only a store
+    /// whose last read succeeded (`hasRead`) knows what the log holds, so without one it answers
+    /// false and queues nothing.
+    @discardableResult
+    func send(_ text: String, nonce: String) async -> Bool {
+        if pending.contains(where: { $0.nonce == nonce }) { return true }
+        guard hasRead else { return false }
+        if turns.contains(where: { $0.nonce == nonce }) { return true }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        pending.append(Outgoing(text: text, nonce: nonce))
+        save(pending)
+        await flush()
+        return true
+    }
+
     /// Sends whatever is queued, oldest first. Stops at the first one that
     /// will not go, so the order the person said things in is the order the
     /// log gets them.
