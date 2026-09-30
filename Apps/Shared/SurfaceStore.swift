@@ -127,6 +127,7 @@ struct SurfaceStore: Sendable {
     /// slot is at another revision or holds no such toggle. The state is the stored one, not the
     /// one the tapped entry drew, so two taps before a reload are on and then off.
     func flip(slot: String, control: String, revision: Int) throws -> Bool? {
+        if let toggle = ControlSlot.slot(stored: slot) { return try setControl(nil, slot: toggle, revision: revision) }
         var was: Bool?
         try setting(slot: slot, control: control, revision: revision) { was = $0; return !$0 }
         return was
@@ -135,6 +136,7 @@ struct SurfaceStore: Sendable {
     /// Sets toggle `control` to `on`, whatever it is now: a cue's resolved state, set again as
     /// often as a drain is, or a run's confirmed state after one failed.
     func setOn(_ on: Bool, slot: String, control: String, revision: Int) throws {
+        if let toggle = ControlSlot.slot(stored: slot) { _ = try setControl(on, slot: toggle, revision: revision); return }
         try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
     }
 
@@ -223,6 +225,34 @@ struct SurfaceStore: Sendable {
         return kept.revision
     }
 
+    /// A control toggle's tap, handled: under one coordinated write, the slot's document, if still
+    /// at `revision`, is kept with its state set to `on` — flipped when `on` is nil — at the same
+    /// revision. Answers the state it was in, or nil when the slot is at another revision or is
+    /// not a toggle. Control Center has drawn the new state by the time the tap is handled, so a
+    /// toggle's tap carries the state asked for rather than flipping the stored one.
+    func setControl(_ on: Bool?, slot: String, revision: Int) throws -> Bool? {
+        guard ControlSlot.kind(of: slot) == .toggle else { return nil }
+        var was: Bool?
+        try coordinatedWrite(url(slot: ControlSlot.stored(slot))) { data in
+            guard let data else { return nil }
+            var document = ControlDocument.read(String(decoding: data, as: UTF8.self), slot: slot, from: .store).document
+            guard document.revision == revision else { return data }
+            was = document.on
+            let next = on ?? !document.on
+            guard next != document.on else { return data }
+            document.on = next
+            return Data(document.text.utf8)
+        }
+        return was
+    }
+
+    /// The revision the document in `slot` — a widget's, the default, or a control's by its store
+    /// name — is at now, or nil when it holds none.
+    func heldRevision(slot: String) -> Int? {
+        if let control = ControlSlot.slot(stored: slot) { return readControl(slot: control)?.document.revision }
+        return read(slot: slot)?.document.revision
+    }
+
     // MARK: Revisions
 
     /// The slot's current revision, which a tap is judged against. Zero is a slot never written.
@@ -299,7 +329,7 @@ struct SurfaceStore: Sendable {
     /// tap on a widget still drawn after a sign-out, or on an old timeline, is not kept for a
     /// drain, which could be the next login's. Answers whether it was kept.
     func recordCue(_ cue: Cue) throws -> Bool {
-        guard read(slot: cue.slot)?.document.revision == cue.revision else { return false }
+        guard heldRevision(slot: cue.slot) == cue.revision else { return false }
         try appendCue(cue)
         return true
     }
@@ -336,6 +366,8 @@ struct SurfaceStore: Sendable {
         var kind: String
         /// The call's exit status, `stale` for a tap on an old revision, `cued` for a turn.
         var status: String
+        /// A control's request's HTTP status, when it answered one.
+        var code: Int?
     }
 
     func appendTap(_ tap: Tap) throws {
