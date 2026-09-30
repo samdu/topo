@@ -285,22 +285,3 @@ struct ControlTool: Tool {
                         "body": "{\"entity_id\": \"media_player.kitchen\"}"}}}
     """#
 }
-
-/// The app's own document for every control slot the mind has not written: written into each
-/// missing slot at sign-in, and back into a slot `topo control clear` clears. A slot holding a
-/// document is left as it is, so a relaunch keeps what the mind wrote.
-enum ControlDefaults {
-    static func write(slot: String, store: SurfaceStore) throws {
-        try store.writeControl(ControlDocument.standard(slot: slot), slot: slot)
-        try store.writeNotes([], slot: ControlSlot.stored(slot))
-    }
-
-    /// Every slot holding no readable document gets its default; answers the slots written.
-    @discardableResult
-    static func fill(_ store: SurfaceStore) -> [String] {
-        ControlSlot.all.filter { slot in
-            guard store.readControl(slot: slot)?.readable != true else { return false }
-            return (try? write(slot: slot, store: store)) != nil
-        }
-    }
-}

@@ -60,9 +60,13 @@ final class SignOutTests: XCTestCase {
         try store.writeDefault(DefaultSurface.document(nil))
         try store.writeImage(Data([0x89]), slot: "demo", name: "photo")
         try store.appendCue(SurfaceStore.Cue(nonce: "N", slot: "demo", id: "hi", revision: 1, time: Date()))
+        ControlDefaults.fill(store)
+        try store.writeNotes(["unchecked: x"], slot: ControlSlot.stored("button-1"))
         var everything = 0
         var kinds = 0
+        var everyControl = 0
         let reloader = SurfaceReloader(reloadKind: { _ in kinds += 1 }, reloadEverything: { everything += 1 },
+                                       reloadControlKind: { _ in kinds += 1 }, reloadEveryControl: { everyControl += 1 },
                                        schedule: { _, _ in })
         let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
                               forgetConnections: {}, forgetLogin: {})
@@ -72,9 +76,30 @@ final class SignOutTests: XCTestCase {
         let counters = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: store.revisionsURL))
         XCTAssertEqual(Array(counters.keys), [SurfaceStore.floor], "a slot's name outlived the login")
         XCTAssertEqual(everything, 1, "WidgetCenter was not told to reload every timeline")
+        XCTAssertEqual(everyControl, 1, "ControlCenter was not told to reload every control")
+        XCTAssertTrue(ControlSlot.all.allSatisfy { ControlValue.read(slot: $0, store: store).signedOut }, "a control outlived the login")
         guard case .signedOut = SurfaceProvider.surface(slot: "demo", family: .systemSmall, at: Date(), store: store) else {
             return XCTFail("a placed widget still draws something after the sign-out")
         }
+    }
+
+    /// Every control secret goes with the login, as the surfaces do.
+    func testClearsControlSecrets() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("signout-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let secrets = ControlSecrets(service: "zone.hexagon.topo.control-secret.tests.\(UUID().uuidString)")
+        defer { try? secrets.clearAll() }
+        try secrets.set("tok", name: "ha")
+        try secrets.set("other", name: "webhook")
+        let store = SurfaceStore(folder: folder)
+        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in }, reloadEveryControl: {},
+                                       schedule: { _, _ in })
+        let defaults = ControlDefaults(store: { store }, reloader: reloader, secrets: secrets)
+        defaults.follow(to: .signedIn)
+        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
+                              forgetConnections: {}, forgetLogin: {})
+        await signOut.act()
+        XCTAssertEqual(try secrets.names(), [], "a control secret outlived the login")
     }
 
     /// Nothing is ended by building the value: the button's press is what ends them.

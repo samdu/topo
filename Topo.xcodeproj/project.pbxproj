@@ -124,6 +124,7 @@
 		443639D8481C026336CB1598 /* Ear.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADE17E3120F6835D9626B032 /* Ear.swift */; };
 		447E5988846796C166E2407C /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
 		454E7BD87EC59EA7652916BC /* TopoAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */; };
+		46900B879C0B64EE7C9F2995 /* ControlDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BD599AC4315251579CE778 /* ControlDefaults.swift */; };
 		46E8500C0C4AD6DBF1BCCCEA /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333D38923B458890391C4F4C /* MascotView.swift */; };
 		473D96F72E5B9C40C4975D6A /* Mascot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F572EF397E4BF9E7FF6685 /* Mascot.swift */; };
 		47A5DAA62699857838E4805C /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
@@ -654,6 +655,7 @@
 		C59D3ACBB326C6FA9743600D /* Scripted.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Scripted.swift; sourceTree = "<group>"; };
 		C6BCB70D375EC37F314FCB10 /* VaultMount.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMount.swift; sourceTree = "<group>"; };
 		C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownText.swift; sourceTree = "<group>"; };
+		C7BD599AC4315251579CE778 /* ControlDefaults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlDefaults.swift; sourceTree = "<group>"; };
 		C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; path = PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestSimdTests.swift; sourceTree = "<group>"; };
 		CA6630E76EBC7CE89C1289F2 /* TopoUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -839,6 +841,7 @@
 				E5386B9F1DB4B3204F476074 /* Assets.xcassets */,
 				B8C76AE9F6DF2889FA1D7CD5 /* Connections.swift */,
 				FDE1B5AC935DE7F86F1C6126 /* ConnectionsView.swift */,
+				C7BD599AC4315251579CE778 /* ControlDefaults.swift */,
 				B099B495226BFD2823184CC1 /* ControlRequest.swift */,
 				1A7B76958213F991C66478F1 /* DefaultSurface.swift */,
 				771746CA069BC2B3B60EC32C /* GuestClock.swift */,
@@ -2031,6 +2034,7 @@
 				B0670989F3CF8988A0109163 /* Connections.swift in Sources */,
 				D0076A594104D14F2C6E6E7E /* ConnectionsView.swift in Sources */,
 				EA62ABE92498980EC79A486C /* ContactsTool.swift in Sources */,
+				46900B879C0B64EE7C9F2995 /* ControlDefaults.swift in Sources */,
 				D925201A428816A89B31395C /* ControlDocument.swift in Sources */,
 				C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */,
 				6C7A3B17FB92BD050F173310 /* ControlTool.swift in Sources */,

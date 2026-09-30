@@ -19,6 +19,7 @@ struct TopoApp: App {
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
     @State private var defaultSurface: DefaultSurface
+    @State private var controlDefaults = ControlDefaults()
     private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
@@ -192,6 +193,7 @@ struct TopoApp: App {
             .onChange(of: signIn.phase, initial: true) { was, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
                 defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
+                controlDefaults.follow(to: phase)
                 guard phase == .signedIn else { return }
                 Task { try? await NotePush.ensureSubscription() }
             }
