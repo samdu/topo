@@ -60,6 +60,7 @@ public actor DNSForwarder {
     /// Bumped by every start and stop, so a listener's late callback acts on nothing newer.
     private var generation = 0
     public private(set) var port: UInt16?
+    private var starting: Task<UInt16, any Error>?
     private var observer: (@Sendable (UInt16?) -> Void)?
 
     private var connections: [ObjectIdentifier: NWConnection] = [:]
@@ -94,6 +95,16 @@ public actor DNSForwarder {
     /// taken, both are tried again.
     public func start() async throws -> UInt16 {
         if let port { return port }
+        // One start at a time: a second caller while one is binding gets its answer, rather than
+        // making listeners of its own over the first's.
+        if let starting { return try await starting.value }
+        let task = Task { try await self.listen() }
+        starting = task
+        defer { starting = nil }
+        return try await task.value
+    }
+
+    private func listen() async throws -> UInt16 {
         var failure: (any Error)?
         for _ in 0..<5 {
             generation += 1

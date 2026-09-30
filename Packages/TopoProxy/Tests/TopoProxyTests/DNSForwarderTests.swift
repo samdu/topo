@@ -317,6 +317,36 @@ import Testing
                 == [Array("a.b".utf8), [0x20, 0xff], Array("example".utf8)])
     }
 
+    /// Two starts at once are one: one port, one `up`, and nothing left listening after a stop.
+    @Test func startingTwiceAtOnceIsOneStart() async throws {
+        let seen = Lines()
+        let forwarder = DNSForwarder(resolver: ScriptedResolver { _, _ in [] }, log: { _ in })
+        await forwarder.observe { seen.add($0.map { "up \($0)" } ?? "down") }
+        async let first = forwarder.start()
+        async let second = forwarder.start()
+        let (a, b) = try await (first, second)
+        #expect(a == b)
+        await forwarder.stop()
+        #expect(seen.all == ["up \(a)", "down"])
+        #expect(tcpConnect(host: "127.0.0.1", port: a) == ECONNREFUSED, "a listener outlived the stop")
+    }
+
+    /// A client that goes before its reply takes nothing down: the next client is answered.
+    @Test func aClientThatVanishedTakesNothingDown() async throws {
+        let seen = Lines()
+        let resolver = ScriptedResolver { name, _ in [.after(.milliseconds(400), [a(name, [10, 0, 0, 1])])] }
+        let (forwarder, port) = try await started(resolver)
+        defer { Task { await forwarder.stop() } }
+        await forwarder.observe { seen.add($0.map { "up \($0)" } ?? "down") }
+        let gone = try UDPClient(port: port)
+        try gone.send(query(1, "gone.example"))
+        gone.close()
+        try await Task.sleep(for: .milliseconds(700))
+        #expect(try udp(port: port, query(2, "next.example")) != nil)
+        #expect(seen.all.isEmpty)
+        #expect(await forwarder.port == port)
+    }
+
     @Test func stopAndStartAreObserved() async throws {
         let seen = Lines()
         let forwarder = DNSForwarder(resolver: ScriptedResolver { _, _ in [] }, log: { _ in })
