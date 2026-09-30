@@ -68,7 +68,9 @@ final class WatchSurfaceCache {
             }
         }
         for surface in changes.saved { kept(apply(surface)) }
-        for slot in changes.deleted where WidgetDocument.isSlot(slot) && store.read(slot: slot) != nil {
+        // Judged by what is on disk, not by what reads: a cached document that cannot be read
+        // just now is still a slot the deletion has to take away, and one a removal left part of.
+        for slot in changes.deleted where WidgetDocument.isSlot(slot) && holds(slot) {
             removed(slot)
         }
         if whole {
@@ -96,6 +98,12 @@ final class WatchSurfaceCache {
         return true
     }
 
+    /// Whether any file of `slot` is in the group: its document, its notes or its images.
+    private func holds(_ slot: String) -> Bool {
+        [store.url(slot: slot), store.notesURL(slot: slot), store.images(slot: slot)]
+            .contains { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
     enum Applied {
         case changed, unchanged, failed
     }
@@ -103,6 +111,9 @@ final class WatchSurfaceCache {
     /// Keeps `surface` as the reader keeps it: the phone's judgement is not trusted, the watch's
     /// reader judges every field again. A document the reader cannot take at all keeps the slot's
     /// cached one. A write to the group that fails is `failed`, which keeps the feed's token back.
+    /// The images the new document names are written before it and the ones it no longer names
+    /// taken away after it, so a write failing part-way leaves the cached document with every
+    /// image it names; an image kept under the same name may be the newer one until the retry.
     private func apply(_ surface: SurfaceRecord) -> Applied {
         guard WidgetDocument.isSlot(surface.slot) else { return .unchanged }
         let reading = WidgetDocument.read(surface.document, from: .store)
@@ -115,8 +126,12 @@ final class WatchSurfaceCache {
             && images.allSatisfy { store.imageData(slot: surface.slot, name: $0.key) == $0.value }
         if cached == document, sameImages { return .unchanged }
         do {
-            try store.keepImages(images, slot: surface.slot)
+            for (name, png) in images.sorted(by: { $0.key < $1.key })
+            where store.imageData(slot: surface.slot, name: name) != png {
+                try store.writeImage(png, slot: surface.slot, name: name)
+            }
             try store.keep(document, slot: surface.slot)
+            try store.keepImages(images, slot: surface.slot)
         } catch {
             return .failed
         }

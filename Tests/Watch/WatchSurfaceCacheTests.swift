@@ -132,6 +132,44 @@ final class WatchSurfaceCacheTests: XCTestCase {
         XCTAssertEqual(store.slots(), [], "a deletion whose removal failed was never read again")
     }
 
+    /// A write failing part-way through a slot with images leaves the cached document with every
+    /// image it names, so a watch off the network still draws it; the next fetch finishes it.
+    func testAFailedWriteLeavesTheCachedImages() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3, images: ["sky": Data([1]), "sun": Data([2])])
+        await cache.fetch()
+        try await phoneSets("weather", Self.document("snow"), revision: 4, images: ["sky": Data([3]), "moon": Data([4])])
+        // A folder where moon's file goes: its write fails, after sun's removal would have been done.
+        let moon = store.image(slot: "weather", name: "moon")
+        try FileManager.default.createDirectory(at: moon, withIntermediateDirectories: true)
+        try Data().write(to: moon.appendingPathComponent("in-the-way"))
+        await cache.fetch()
+        XCTAssertEqual(store.read(slot: "weather")?.document.revision, 3)
+        XCTAssertEqual(store.imageData(slot: "weather", name: "sun"), Data([2]), "the cached document lost an image it names")
+
+        try FileManager.default.removeItem(at: moon)
+        await cache.fetch()
+        XCTAssertEqual(store.read(slot: "weather")?.document.revision, 4)
+        XCTAssertEqual(store.imageData(slot: "weather", name: "moon"), Data([4]))
+        XCTAssertEqual(store.imageData(slot: "weather", name: "sky"), Data([3]))
+        XCTAssertEqual(store.imageNames(slot: "weather"), ["moon", "sky"])
+    }
+
+    /// A deletion is taken whether or not the cached document can be read just now.
+    func testADeletionTakesAnUnreadableSlot() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        await cache.fetch()
+        let path = store.url(slot: "weather").path
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path) }
+        XCTAssertNil(store.read(slot: "weather"))
+        try await phoneClears("weather")
+        await cache.fetch()
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: path)
+        await cache.fetch()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: path), "a deleted slot stayed because it could not be read")
+        XCTAssertEqual(store.slots(), [])
+    }
+
     /// Runs `body` with the store's folder read-only, so every write and removal in it fails.
     private func locked(_ body: () async -> Void) async throws {
         let manager = FileManager.default

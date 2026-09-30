@@ -8,14 +8,17 @@ extension SurfaceEntry: RelevanceEntry {}
 
 @available(watchOS 26, *)
 struct MomentProvider: RelevanceEntriesProvider {
+    /// The watch's group; the suite's own folder in a test.
+    var store: () -> SurfaceStore? = { SurfaceStore.shared() }
+
     func relevance() async -> WidgetRelevance<SurfaceConfiguration> {
-        WidgetRelevance(Self.offered().map {
+        WidgetRelevance(Self.offered(store: store()).map {
             WidgetRelevanceAttribute(configuration: SurfaceConfiguration(slot: $0.slot), context: $0.context.context)
         })
     }
 
     func entry(configuration: SurfaceConfiguration, context: Context) async throws -> SurfaceEntry {
-        Self.entry(slot: configuration.slot, at: Date())
+        Self.entry(slot: configuration.slot, store: store(), at: Date())
     }
 
     /// The slots offered, each with the context it comes up in; `WidgetRelevance` keeps what it

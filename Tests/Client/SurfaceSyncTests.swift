@@ -9,6 +9,12 @@ private actor Outage: ZoneDatabase {
     let inner = InMemoryRecordDatabase()
     var saves = false
     var deletes = false
+    /// Whether the zone is there, as it is not on an account nothing has written to yet.
+    var zone = true
+    private(set) var zonesMade = 0
+
+    func removeZone() { zone = false }
+    func makeZone() { zone = true; zonesMade += 1 }
 
     func fail(saves: Bool, deletes: Bool) {
         self.saves = saves
@@ -16,6 +22,7 @@ private actor Outage: ZoneDatabase {
     }
 
     private func check(_ failing: Bool) throws {
+        if !zone { throw RecordDatabaseError.unavailable(underlying: URLError(.resourceUnavailable)) }
         if failing { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
     }
 
@@ -53,7 +60,8 @@ final class SurfaceSyncTests: XCTestCase {
 
     private func makeSync(defaults: UserDefaults) -> SurfaceSync {
         let database = database!, store = store!
-        return SurfaceSync(records: { SurfaceRecords(database: database) }, store: { store }, runner: "phone-1",
+        return SurfaceSync(records: { SurfaceRecords(database: database) }, ensureZone: { await database.makeZone() },
+                           store: { store }, runner: "phone-1",
                            defaults: defaults, reloader: reloader, now: { Date(timeIntervalSince1970: 100) })
     }
 
@@ -143,6 +151,57 @@ final class SurfaceSyncTests: XCTestCase {
 
         _ = try write("weather")
         await sync.flush()
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// A save is of the whole slot: an image that cannot be read just now leaves the record as it
+    /// was and the save owed, never a record without the image.
+    func testAnUnreadableImageKeepsTheSaveOwed() async throws {
+        _ = try write("weather")
+        try store.writeImage(Data([0x89, 1]), slot: "weather", name: "sky")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let before = await stored("weather")
+
+        let revision = try write("weather", "rain")
+        let sky = store.image(slot: "weather", name: "sky").path
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: sky)
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let after = await stored("weather")
+        XCTAssertEqual(after, before, "a record was saved without the image the slot holds")
+        XCTAssertEqual(sync.pending, ["weather"])
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: sky)
+        await sync.flush()
+        let saved = await stored("weather")
+        let surface = try XCTUnwrap(saved.flatMap(SurfaceRecord.init))
+        XCTAssertEqual(surface.revision, revision)
+        XCTAssertEqual(surface.images, ["sky": Data([0x89, 1])])
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// The record mirrors the file: a save owed for a slot whose document has gone deletes it.
+    func testASaveForAGoneDocumentDeletesTheRecord() async throws {
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        try store.remove(slot: "weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let gone = await stored("weather")
+        XCTAssertNil(gone, "a record outlived its slot's file")
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// A fresh account has no zone until something writes one; a widget can be the first.
+    func testTheZoneIsMadeBeforeTheFirstSave() async throws {
+        await database.removeZone()
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let saved = await stored("weather")
+        XCTAssertNotNil(saved, "a save on an account with no zone never made one")
         XCTAssertEqual(sync.pending, [])
     }
 

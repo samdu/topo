@@ -153,11 +153,16 @@ struct WidgetTool: Tool {
         let revision: Int
         do {
             revision = try store.write(document, slot: slot)
-            try store.writeNotes(notes + unchecked, slot: slot)
         } catch {
             return .failed("topo: the slot could not be written: \(error.localizedDescription)\n")
         }
+        // The document is written, so its record is owed a save whatever happens to the notes.
         await changed([slot])
+        do {
+            try store.writeNotes(notes + unchecked, slot: slot)
+        } catch {
+            return .failed("topo: the slot was written, its notes could not be: \(error.localizedDescription)\n")
+        }
         var lines = ["set: \(slot), revision \(revision)"]
         lines += notes.map { "refused: \($0)" }
         lines += unchecked
@@ -170,12 +175,22 @@ struct WidgetTool: Tool {
             if let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
             guard store.slots().contains(slot) else { return .failed("topo: there is no slot \(slot)\n") }
         }
-        do {
-            for slot in slots { try store.remove(slot: slot) }
-        } catch {
-            return .failed("topo: \(error.localizedDescription)\n")
+        var failure: Error?
+        for slot in slots {
+            do {
+                try store.remove(slot: slot)
+            } catch {
+                failure = error
+                break
+            }
         }
-        await changed(slots, cleared: true)
+        // Every slot whose document is gone owes its record a delete, the ones removed before a
+        // removal failed included, and one whose removal failed after its document went.
+        let gone = slots.filter { !FileManager.default.fileExists(atPath: store.url(slot: $0).path) }
+        await changed(gone, cleared: true)
+        if let failure {
+            return .failed("topo: \(failure.localizedDescription)\n" + (gone.isEmpty ? "" : "cleared: " + gone.joined(separator: ", ") + "\n"))
+        }
         return .ok(slots.isEmpty ? "no slots to clear\n" : "cleared: " + slots.joined(separator: ", ") + "\n")
     }
 

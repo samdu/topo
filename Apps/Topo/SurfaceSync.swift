@@ -10,8 +10,11 @@ import TopoCore
 /// `Surfaces/`, which a sign-out empties — and tried again on the next write and whenever the
 /// phone is signed in (at launch, after signing in): a slot waiting there is one `topo widget`
 /// reports as behind. Each waiting slot remembers what it owes: a save, for a set or an image, or
-/// a delete, for a clear — only a clear ever deletes a record, so a document that cannot be read
-/// just now is left for the next try rather than taken for a slot cleared. A sign-out deletes
+/// a delete, for a clear. A save is of the whole slot or nothing: a document or an image that
+/// cannot be read just now leaves the save owed for the next try, never a record missing what the
+/// file holds and never a record deleted; a save owed for a slot whose document is gone deletes
+/// the record, since the record mirrors the file. Each pass makes sure the zone is there first,
+/// since a fresh account has none until something writes one. A sign-out deletes
 /// every `Surface` record in the zone; one it could not delete is deleted at the next sign-in,
 /// before anything else is saved.
 @MainActor
@@ -20,6 +23,7 @@ final class SurfaceSync {
 
     /// Nil where the process cannot reach CloudKit.
     private let records: @MainActor () -> SurfaceRecords?
+    private let ensureZone: @Sendable () async throws -> Void
     private let store: @MainActor () -> SurfaceStore?
     private let runner: String
     private let defaults: UserDefaults
@@ -40,10 +44,12 @@ final class SurfaceSync {
     }
 
     init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: TopoCloudKit.database()) },
+         ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          runner: String = DeviceIdentity.current.rawValue, defaults: UserDefaults = .standard,
          reloader: SurfaceReloader = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
         self.records = records
+        self.ensureZone = ensureZone
         self.store = store
         self.runner = runner
         self.defaults = defaults
@@ -114,7 +120,12 @@ final class SurfaceSync {
     }
 
     private func pass() async {
-        guard let records = records() else { return }
+        guard let records = records(), owesForget || !owed.isEmpty else { return }
+        do {
+            try await ensureZone()
+        } catch {
+            return
+        }
         if owesForget {
             do {
                 try await records.deleteAll()
@@ -130,14 +141,16 @@ final class SurfaceSync {
                 case .delete:
                     try await records.delete(slot: slot)
                 case .save:
-                    guard let surface = surface(slot: slot, store) else {
-                        // No file at all: the slot went by some path that owes nothing (a
-                        // sign-out clears what is owed), and there is nothing to save. A file
-                        // that is there but cannot be read now is tried again, never deleted.
-                        if !FileManager.default.fileExists(atPath: store.url(slot: slot).path) { settle(slot, what) }
+                    switch snapshot(slot: slot, store) {
+                    case .record(let surface):
+                        try await records.save(surface)
+                    case .gone:
+                        // The record mirrors the file, and the file is gone.
+                        try await records.delete(slot: slot)
+                    case .unreadable:
+                        // Tried again at the next pass, never saved in part and never deleted.
                         continue
                     }
-                    try await records.save(surface)
                 }
                 settle(slot, what)
             } catch {
@@ -154,14 +167,27 @@ final class SurfaceSync {
         setOwed(owed)
     }
 
-    /// The slot's record as its file is now, or nil when it has no document.
-    func surface(slot: String, _ store: SurfaceStore) -> SurfaceRecord? {
-        guard let reading = store.read(slot: slot), reading.readable else { return nil }
+    /// A slot's files as a save would send them.
+    enum Snapshot {
+        /// The document and every image it holds, each read whole.
+        case record(SurfaceRecord)
+        /// No document file.
+        case gone
+        /// A document or an image there and not readable now.
+        case unreadable
+    }
+
+    func snapshot(slot: String, _ store: SurfaceStore) -> Snapshot {
+        guard FileManager.default.fileExists(atPath: store.url(slot: slot).path) else { return .gone }
+        guard let reading = store.read(slot: slot), reading.readable else { return .unreadable }
         let document = reading.document
         var images: [String: Data] = [:]
-        for name in store.imageNames(slot: slot) { images[name] = store.imageData(slot: slot, name: name) }
-        return SurfaceRecord(slot: slot, document: document.text, revision: document.revision, updated: now(),
-                             runner: runner, images: images)
+        for name in store.imageNames(slot: slot) {
+            guard let png = store.imageData(slot: slot, name: name) else { return .unreadable }
+            images[name] = png
+        }
+        return .record(SurfaceRecord(slot: slot, document: document.text, revision: document.revision, updated: now(),
+                                     runner: runner, images: images))
     }
 
     private func setOwed(_ owed: [String: Owed]) {

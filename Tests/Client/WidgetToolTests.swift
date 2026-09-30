@@ -103,7 +103,8 @@ final class WidgetToolTests: XCTestCase {
         let home = home!
         let records = InMemoryRecordDatabase()
         self.records = records
-        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, store: { store }, runner: "phone-test",
+        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, ensureZone: {}, store: { store },
+                               runner: "phone-test",
                                defaults: UserDefaults(suiteName: "widget-tool-\(UUID().uuidString)")!, reloader: reloader)
         self.sync = sync
         return WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: nil),
@@ -299,6 +300,41 @@ final class WidgetToolTests: XCTestCase {
         let listed = await offline.run([])
         XCTAssertTrue(listed.text.contains("no slots"), listed.text)
         XCTAssertTrue(listed.text.contains("slot: demo, cleared; record behind"), listed.text)
+    }
+
+    /// A clear of every slot that fails part-way owes a delete for each slot whose document went
+    /// before it failed, so the watch is not left with slots the phone no longer has.
+    func testAClearFailingPartWayOwesWhatWent() async throws {
+        let offline = try await tool(loaded: true, iCloud: false)
+        _ = await offline.run(["set", "alpha", WidgetTool.example])
+        _ = await offline.run(["set", "beta", WidgetTool.example])
+        // beta's images folder cannot be taken away: its document goes, then the removal fails.
+        let images = store.images(slot: "beta")
+        try FileManager.default.createDirectory(at: images, withIntermediateDirectories: true)
+        try Data([0x89]).write(to: images.appendingPathComponent("sky.png"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: images.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: images.path) }
+
+        let reply = await offline.run(["clear"])
+        XCTAssertNotEqual(reply.status, ToolReply.ok, reply.text)
+        await sync.flush()
+        XCTAssertEqual(sync.owed, ["alpha": .delete, "beta": .delete], "a slot removed before the failure owes nothing")
+    }
+
+    /// The document is written and the notes are not: the record is still owed the document.
+    func testAFailedNotesWriteStillOwesTheSave() async throws {
+        let offline = try await tool(loaded: true, iCloud: false)
+        let notes = store.notesURL(slot: "demo")
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try Data().write(to: notes.appendingPathComponent("in-the-way"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: notes.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: notes.path) }
+
+        let reply = await offline.run(["set", "demo", WidgetTool.example])
+        XCTAssertNotEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertNotNil(store.read(slot: "demo"))
+        await sync.flush()
+        XCTAssertEqual(sync.owed, ["demo": .save], "a written document owed its record nothing")
     }
 
     func testTapsSayTheStatusAndNoOutput() async throws {
