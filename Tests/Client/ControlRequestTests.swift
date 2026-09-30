@@ -214,8 +214,7 @@ final class ControlRequestTests: XCTestCase {
                                                       secrets: secrets)
             try await Task.sleep(for: .milliseconds(500))
             // Measured: a GET is resent twice on a dropped connection, three received; the rest once.
-            let expected = method == "GET" ? 2...most : 1...most
-            XCTAssertTrue(expected.contains(server.requests.count), "\(server.requests.count) \(method)s for one tap")
+            XCTAssertEqual(server.requests.count, most, "\(server.requests.count) \(method)s for one tap")
             XCTAssertEqual(answer.status, ToolReply.failed)
         }
     }
@@ -273,14 +272,17 @@ final class ControlRequestTests: XCTestCase {
     /// The server receives the secret's value; the document in the app group holds its name.
     func testSecretResolvedAtTheTap() async throws {
         let server = try await server(.answer(200))
-        try secrets.set("Bearer tok-7Q2X", name: "ha")
+        try secrets.set("Bearer tok-OLD1", name: "ha")
         let revision = try set(["url": server.url("/api"), "headers": ["Authorization": "${secret:ha}"],
                                 "body": #"{"key": "${secret:ha}"}"#])
+        // Replaced after the set: the tap sends the value the keychain holds at the tap.
+        try secrets.set("Bearer tok-7Q2X", name: "ha")
         await tap(actions(), revision: revision)
         XCTAssertEqual(server.requests.count, 1)
         let received = server.requests[0]
         XCTAssertTrue(received.lowercased().contains("authorization: bearer tok-7q2x"), received)
         XCTAssertTrue(received.hasSuffix(#"{"key": "Bearer tok-7Q2X"}"#), received)
+        XCTAssertFalse(received.contains("OLD1"), "the value held at the set was sent")
         let file = try String(contentsOf: folder.appendingPathComponent("_control-button-1.json"), encoding: .utf8)
         XCTAssertTrue(file.contains("${secret:ha}"))
         XCTAssertFalse(file.contains("tok-7Q2X"))

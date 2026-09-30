@@ -112,32 +112,35 @@ final class SignOutTests: XCTestCase {
                                 acceptDemotion: { calls.ended.append("role") },
                                 stopSpeaking: { calls.ended.append("speaker") },
                                 forgetMemory: { calls.ended.append("memory") },
+                                forgetSurfaces: { calls.ended.append("surfaces") },
                                 forgetConnections: { calls.ended.append("connections") },
                                 forgetLogin: { calls.ended.append("login") })
         await takeover.act()
-        XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "surfaces", "connections", "login"])
     }
 
     /// A phone found a viewer at launch with a login or something waiting demotes, forgets the
-    /// memory and the connections, and the login last.
+    /// memory, the surfaces and the connections, and the login last.
     func testAViewerWithALoginEndsItAllTheLoginLast() async {
         let calls = Calls()
         await arrival(calls, holdsLogin: true).act()
-        XCTAssertEqual(calls.ended, ["harness", "memory", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["harness", "memory", "surfaces", "connections", "login"])
     }
 
-    /// One with no login and nothing waiting still forgets a connection's token, whose keychain
+    /// One with no login and nothing waiting still forgets the surfaces and a connection's token,
+    /// whose app group and keychain
     /// item outlives the login's.
     func testAViewerWithNoLoginStillForgetsItsConnections() async {
         let calls = Calls()
         await arrival(calls, holdsLogin: false).act()
-        XCTAssertEqual(calls.ended, ["connections"])
+        XCTAssertEqual(calls.ended, ["surfaces", "connections"])
     }
 
     private func arrival(_ calls: Calls, holdsLogin: Bool) -> ViewerArrival {
         ViewerArrival(holdsLogin: { holdsLogin },
                       demoteHarness: { calls.ended.append("harness") },
                       forgetMemory: { calls.ended.append("memory") },
+                      forgetSurfaces: { calls.ended.append("surfaces") },
                       forgetConnections: { calls.ended.append("connections") },
                       forgetLogin: { calls.ended.append("login") })
     }

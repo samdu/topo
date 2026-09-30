@@ -194,7 +194,7 @@ struct TopoApp: App {
             .onChange(of: signIn.phase, initial: true) { was, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
                 defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
-                controlDefaults.follow(to: phase)
+                controlDefaults.follow(from: was, to: phase)
                 guard phase == .signedIn else { return }
                 Task { try? await NotePush.ensureSubscription() }
             }

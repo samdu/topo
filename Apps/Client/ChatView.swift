@@ -322,6 +322,7 @@ struct ChatView: View {
     private var takeover: Takeover {
         Takeover(demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
                  stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
+                 forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                  forgetConnections: { connections.forget() },
                  forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
     }

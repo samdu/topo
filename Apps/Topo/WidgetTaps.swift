@@ -134,8 +134,15 @@ final class WidgetCues {
         await drain()
     }
 
+    /// Puts every cue on the harness's line and sends it. A harness that has not read the log —
+    /// the app launched in the background for the intent, with no screen to have read it — reads
+    /// it first, since only then does it know which nonces the log already holds; a read that
+    /// fails leaves the cues for the next drain.
     func drain() async {
-        guard harness.hasRead, let store = store() else { return }
+        guard let store = store() else { return }
+        if !harness.hasRead {
+            guard !store.cues().isEmpty, await harness.refresh() else { return }
+        }
         var queued = false
         for cue in store.cues() {
             func record(_ status: String) {

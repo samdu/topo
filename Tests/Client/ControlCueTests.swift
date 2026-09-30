@@ -110,7 +110,7 @@ final class ControlCueTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
         await harness.refresh()
-        defaults().follow(to: .signedIn)
+        defaults().follow(from: .idle, to: .signedIn)
         let revision = try XCTUnwrap(store.readControl(slot: "button-3")?.document.revision)
         let taps = taps(harness)
         let answer = await taps.controlTapped(slot: "button-3", revision: revision, turningOn: nil)
@@ -127,9 +127,9 @@ final class ControlCueTests: XCTestCase {
         try store.writeControl(ControlDocument.standard(slot: "button-1"), slot: "button-1")
         try store.removeEverything()
         let defaults = defaults()
-        defaults.follow(to: .idle)
+        defaults.follow(from: .idle, to: .idle)
         XCTAssertNil(store.readControl(slot: "button-1"), "a default was written signed out")
-        defaults.follow(to: .signedIn)
+        defaults.follow(from: .exchanging, to: .signedIn)
         for slot in ControlSlot.all {
             let document = try XCTUnwrap(store.readControl(slot: slot)?.document, slot)
             XCTAssertTrue(document.isDefault, slot)
@@ -142,14 +142,71 @@ final class ControlCueTests: XCTestCase {
 
     /// A written slot and its revision survive a relaunch that follows the login again.
     func testRelaunchKeepsWrittenSlots() async throws {
-        defaults().follow(to: .signedIn)
+        defaults().follow(from: .idle, to: .signedIn)
         let written = try store.writeControl(ControlDocument.read(#"{"title": "Lamp", "action": {"kind": "open"}}"#, slot: "button-2").document,
                                              slot: "button-2")
         let others = ControlSlot.all.map { store.readControl(slot: $0)?.document.revision }
-        defaults().follow(to: .signedIn)
+        // A launch already signed in: the phase starts where it stands.
+        defaults().follow(from: .signedIn, to: .signedIn)
         XCTAssertEqual(store.readControl(slot: "button-2")?.document.revision, written)
         XCTAssertEqual(store.readControl(slot: "button-2")?.document.title, "Lamp")
         XCTAssertEqual(ControlSlot.all.map { store.readControl(slot: $0)?.document.revision }, others, "a relaunch rewrote a slot")
+    }
+
+    /// A new login — the phase coming to signed in from anything else — keeps no slot an earlier
+    /// login wrote: each is the default again, above the earlier revisions.
+    func testANewLoginKeepsNoEarlierLoginsSlot() async throws {
+        defaults().follow(from: .idle, to: .signedIn)
+        let written = try store.writeControl(ControlDocument.read(#"{"title": "Lamp", "action": {"kind": "run", "topo": ["notify", "Lamp"]}}"#, slot: "button-2").document,
+                                             slot: "button-2")
+        defaults().follow(from: .approvingGuest(opening: nil, pasteHint: false), to: .signedIn)
+        let document = try XCTUnwrap(store.readControl(slot: "button-2")?.document)
+        XCTAssertTrue(document.isDefault, "an earlier login's slot outlived a new login")
+        XCTAssertGreaterThan(document.revision, written)
+    }
+
+    /// The far end of a takeover takes the surfaces as a sign-out does: a slot the mind wrote
+    /// draws "Sign in", and a tap on it at the revision it was drawn from runs nothing.
+    func testATakeoverLeavesNoControlToRun() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await harness.refresh()
+        defaults().follow(from: .idle, to: .signedIn)
+        let revision = try set("button-1", #"{"title": "Feed", "action": {"kind": "run", "topo": ["notify", "Feed"]}}"#)
+        let notify = RecordingTool()
+        let store = store
+        let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
+                                       reloadEveryControl: {}, schedule: { _, _ in })
+        let takeover = Takeover(demoteHarness: {}, acceptDemotion: {}, stopSpeaking: {}, forgetMemory: {},
+                                forgetSurfaces: { reloader.forget(store) }, forgetConnections: {}, forgetLogin: {})
+        await takeover.act()
+        XCTAssertTrue(ControlValue.read(slot: "button-1", store: store).signedOut)
+        XCTAssertEqual(ControlValue.read(slot: "button-1", store: store).title, "Sign in")
+        let answer = await taps(harness, tools: [notify]).controlTapped(slot: "button-1", revision: revision, turningOn: nil)
+        XCTAssertEqual(answer, .foreground)
+        XCTAssertEqual(notify.calls, [], "a control ran after the takeover")
+        XCTAssertEqual(store.taps(), [])
+    }
+
+    /// iOS 18 to 25: a turn control pressed with Topo killed launches the app in the background,
+    /// where no screen has read the log. The intent's own drain reads it and sends the turn.
+    func testAColdBackgroundTurnIsSent() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        XCTAssertFalse(harness.hasRead)
+        let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
+        let answer = await taps(harness).controlTapped(slot: "button-1", revision: revision, turningOn: nil)
+        XCTAssertEqual(answer, .foreground)
+        let words = "control button-1: lights please"
+        func landed() async -> Bool {
+            let log = TurnLog(database: db)
+            return ((try? await log.read())?.ordered ?? []).contains { $0.role == .person && $0.text == words }
+        }
+        for _ in 0..<200 { if await landed() { break }; try await Task.sleep(for: .milliseconds(20)) }
+        XCTAssertTrue(harness.hasRead)
+        let sent = await landed()
+        XCTAssertTrue(sent, "the turn waited for a screen to read the log")
+        XCTAssertEqual(store.cues(), [])
     }
 
     /// Signed out there are no documents: the value is "Sign in", and a tap on any revision comes
@@ -158,7 +215,7 @@ final class ControlCueTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
         await harness.refresh()
-        defaults().follow(to: .signedIn)
+        defaults().follow(from: .idle, to: .signedIn)
         let revision = try XCTUnwrap(store.readControl(slot: "button-1")?.document.revision)
         try store.removeEverything()
         XCTAssertTrue(ControlValue.read(slot: "button-1", store: store).signedOut)
@@ -187,6 +244,20 @@ final class ControlCueTests: XCTestCase {
         Harness(database: database, tokens: FixedToken(), device: phone, ensureZone: ensureZone,
                 defaults: defaults, brain: guestBrain(over: transport), leaseSleep: parked,
                 pause: { _ in throw CancellationError() })
+    }
+}
+
+/// A `notify` that records each call.
+private final class RecordingTool: Tool, @unchecked Sendable {
+    let name = "notify"
+    let summary = "a notify the test records"
+    let usage = "anything"
+    private let lock = NSLock()
+    private var _calls: [[String]] = []
+    var calls: [[String]] { lock.withLock { _calls } }
+    func run(_ arguments: [String]) async -> ToolReply {
+        lock.withLock { _calls.append(arguments) }
+        return .ok("done\n")
     }
 }
 

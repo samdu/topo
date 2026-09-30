@@ -111,6 +111,8 @@ struct Takeover {
     var stopSpeaking: @MainActor () -> Void
     /// A viewer holds no login and keeps no memory.
     var forgetMemory: @MainActor () -> Void
+    /// Nor the widgets and controls the mind wrote, which would go on drawing and running.
+    var forgetSurfaces: @MainActor () -> Void
     /// Nor any of its person's connections, and a connect in flight saves nothing after this.
     var forgetConnections: @MainActor () -> Void
     /// The tokens, last.
@@ -121,6 +123,7 @@ struct Takeover {
         acceptDemotion()
         stopSpeaking()
         forgetMemory()
+        forgetSurfaces()
         forgetConnections()
         forgetLogin()
     }
@@ -128,12 +131,14 @@ struct Takeover {
 
 /// A phone that finds itself a viewer at launch — a reinstall keeps the keychain while the role
 /// record says viewer, and a demotion decided at launch leaves an outbox on disk. What was waiting
-/// goes into the log as a limb's turns and the login and the memory go; a connection's token goes
-/// whether or not there was a login, since its keychain item is its own and outlives one.
+/// goes into the log as a limb's turns and the login and the memory go; the surfaces and a
+/// connection's token go whether or not there was a login, since the app group and the keychain
+/// item are their own and outlive one.
 struct ViewerArrival {
     var holdsLogin: @MainActor () -> Bool
     var demoteHarness: @MainActor () async -> Void
     var forgetMemory: @MainActor () -> Void
+    var forgetSurfaces: @MainActor () -> Void
     var forgetConnections: @MainActor () -> Void
     var forgetLogin: @MainActor () -> Void
 
@@ -143,6 +148,7 @@ struct ViewerArrival {
             await demoteHarness()
             forgetMemory()
         }
+        forgetSurfaces()
         forgetConnections()
         if held { forgetLogin() }
     }
