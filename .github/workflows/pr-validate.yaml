@@ -772,7 +772,11 @@ jobs:
       # cue drain, the watch's default, the shared reader built for watchOS),
       # hosted by the watch app on a watch simulator from the pinned runtime.
       # Its own bound, inside the job's, so a hung watch simulator fails here
-      # with a log rather than at the job's cap.
+      # with a log rather than at the job's cap. It builds in the watch build's
+      # derived data (build/watch, made fresh by the step above), not the
+      # restored cache: there a flat TopoCore.swiftmodule from main's watch
+      # build sits on the test targets' import path ahead of the one this
+      # checkout builds, and TopoCoreTesting compiles against the old one.
       - name: xcodebuild test (TopoWatch)
         if: ${{ !cancelled() }}
         timeout-minutes: 15
@@ -784,6 +788,7 @@ jobs:
           [ -n "$udid" ] || { echo "::error::No Apple Watch simulator for $WATCHOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
           xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
             -destination "platform=watchOS Simulator,id=$udid" \
+            -derivedDataPath build/watch \
             -resultBundlePath "$RESULTS/TopoWatch.xcresult" \
             2>&1 | tee "$RESULTS/TopoWatch-test.log"
 
