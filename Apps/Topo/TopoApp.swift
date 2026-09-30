@@ -78,7 +78,11 @@ struct TopoApp: App {
                          broker: broker),
             homeTool,
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
+            ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
         ]
+        // A control's request to the home network asks for local network access in the
+        // foreground only, since a background one while it is undetermined is denied unasked.
+        LocalNetworkAccess.shared.isActive = { UIApplication.shared.applicationState == .active }
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
         let widgetTable = WidgetActions.table(GuestResident.shared.toolTable)
@@ -195,6 +199,7 @@ struct TopoApp: App {
                 audio.warmRecord(phase == .active)
                 if phase == .active {
                     Task { await widgetCues.drain() }
+                    LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
                     speaker.prepare()
                     // The guest's rootfs and Claude Code, fetched (and the rootfs imported)

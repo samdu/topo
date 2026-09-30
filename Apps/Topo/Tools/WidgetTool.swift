@@ -105,7 +105,8 @@ struct WidgetTool: Tool {
     }
 
     private func taps(_ slot: String?, _ store: SurfaceStore) -> ToolReply {
-        let taps = store.taps().filter { slot == nil || $0.slot == slot }
+        // The controls' taps are `topo control taps`'s.
+        let taps = store.taps().filter { ControlSlot.slot(stored: $0.slot) == nil && (slot == nil || $0.slot == slot) }
         let lines = taps.map { PhoneTool.line([ToolDates.write($0.time), $0.slot, $0.id, "revision \($0.revision)", $0.kind, $0.status]) }
         return .ok(PhoneTool.lines(lines, none: "no taps"))
     }

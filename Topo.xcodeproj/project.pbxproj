@@ -175,6 +175,7 @@
 		69BD32B50A6166158C051F6B /* MemoryMoveDuringTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B32DA01FEA350247ACEF3A0E /* MemoryMoveDuringTurnTests.swift */; };
 		6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		6BA81614A5DAA60FB08C276F /* ClaudeCodeGuestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */; };
+		6C7A3B17FB92BD050F173310 /* ControlTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667A80E4EEE18FB3F1494035 /* ControlTool.swift */; };
 		6C7A5F804812209A36A4D554 /* MascotStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99C1823AE0D4FCE76F86A8D /* MascotStateTests.swift */; };
 		6D6F51A6884E7842339B80AC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */; };
 		6DDF523A0250D4A9CC22C13C /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
@@ -370,6 +371,7 @@
 		E07568309A0FBA96E0A9BF7C /* MarkdownRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42501D49784FE49024ED6C10 /* MarkdownRenderTests.swift */; };
 		E0D7810D8F2A07C996AA2E01 /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
 		E11803C2ACE44982CF4D443D /* VaultMountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EF1677D8D77561257325F30 /* VaultMountTests.swift */; };
+		E24A9C95DA4BA49B0D069F99 /* ControlToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D431E5424FB548AF6DBE3713 /* ControlToolTests.swift */; };
 		E2952F8F672806D95C01C341 /* LookTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = D237ABF387E8A76064A494FA /* LookTool.swift */; };
 		E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		E31E3699C246943267961135 /* DefaultSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7B76958213F991C66478F1 /* DefaultSurface.swift */; };
@@ -559,6 +561,7 @@
 		629737688F7BECCE20D49992 /* StoneRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StoneRenderTests.swift; sourceTree = "<group>"; };
 		631F54F3CC1F646736B81799 /* SurfacePages.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfacePages.swift; sourceTree = "<group>"; };
 		654D33CC62A8C821EACD662C /* TopoHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoHubApp.swift; sourceTree = "<group>"; };
+		667A80E4EEE18FB3F1494035 /* ControlTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlTool.swift; sourceTree = "<group>"; };
 		680EA7BD55CA0D2F27D81FE8 /* BadgeRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeRenderTests.swift; sourceTree = "<group>"; };
 		681C38D7D6494813315D4051 /* TopoWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWatchApp.swift; sourceTree = "<group>"; };
 		6904A480352F2D00E38BFD6F /* MascotRoost.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotRoost.swift; sourceTree = "<group>"; };
@@ -665,6 +668,7 @@
 		D340E2EBD4E7079577777054 /* TurnRowRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnRowRenderTests.swift; sourceTree = "<group>"; };
 		D347C50B63441358B49281F4 /* MascotPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotPlacementTests.swift; sourceTree = "<group>"; };
 		D3A03D6163E6AC87912A0A8E /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		D431E5424FB548AF6DBE3713 /* ControlToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlToolTests.swift; sourceTree = "<group>"; };
 		D4FE72F136CFD7989E309D1C /* ModelDownloadsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelDownloadsTests.swift; sourceTree = "<group>"; };
 		D56E758F45E3E653043D416F /* ControlRequestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlRequestTests.swift; sourceTree = "<group>"; };
 		D5D8E5964C0B2E93432931EE /* OnePassword.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnePassword.swift; sourceTree = "<group>"; };
@@ -1074,6 +1078,7 @@
 			isa = PBXGroup;
 			children = (
 				13B1C43B8F1C775A87CD4F70 /* ContactsTool.swift */,
+				667A80E4EEE18FB3F1494035 /* ControlTool.swift */,
 				93B5621388A948B9C5F0BD7B /* EventKitTools.swift */,
 				9FFBCB76953EE398AF63FB9D /* GitHubTool.swift */,
 				EB40574A451BCD56247E1E50 /* HomeTool.swift */,
@@ -1101,6 +1106,7 @@
 				621361E24A923844780887AC /* ControlCueTests.swift */,
 				0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */,
 				D56E758F45E3E653043D416F /* ControlRequestTests.swift */,
+				D431E5424FB548AF6DBE3713 /* ControlToolTests.swift */,
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
@@ -1930,6 +1936,7 @@
 				884C2A44B2BE25779EA4F3F7 /* ControlCueTests.swift in Sources */,
 				8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */,
 				4284B708B9BC30F3EF1F3A7D /* ControlRequestTests.swift in Sources */,
+				E24A9C95DA4BA49B0D069F99 /* ControlToolTests.swift in Sources */,
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
@@ -2026,6 +2033,7 @@
 				EA62ABE92498980EC79A486C /* ContactsTool.swift in Sources */,
 				D925201A428816A89B31395C /* ControlDocument.swift in Sources */,
 				C0075125BDB15F1EFE1B110F /* ControlRequest.swift in Sources */,
+				6C7A3B17FB92BD050F173310 /* ControlTool.swift in Sources */,
 				AD9E6CF1B98606CCE69DADAD /* DebugRun.swift in Sources */,
 				E31E3699C246943267961135 /* DefaultSurface.swift in Sources */,
 				4F2B0618E7CC00110B8630B7 /* DeviceIdentity.swift in Sources */,
