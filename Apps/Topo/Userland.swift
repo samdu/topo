@@ -124,8 +124,12 @@ final class Userland {
     private var claudeReadiness: [CheckedContinuation<ClaudeCodeInstaller, Error>] = []
     private var claudeInstaller: ClaudeCodeInstaller?
     private var booting: Task<ClaudeCodeInstaller.Installed, Error>?
-    /// The guest's resolver, kept to the phone's name servers from the boot on.
-    private let resolver = GuestResolver()
+    /// The guest's name server, which asks the phone's own resolver: started with the boot, and
+    /// again on a foreground after iOS has taken its listeners from a suspended app.
+    let forwarder: DNSForwarder
+    /// The guest's resolver, kept from the boot on to the forwarder's stub while it is up and to
+    /// the phone's name servers while it is not.
+    private let resolver: GuestResolver
     /// The guest's `/etc/localtime`, kept to the phone's zone from the boot on.
     private let clock = GuestClock()
 
@@ -137,6 +141,14 @@ final class Userland {
         self.shellSource = shellSource ?? DownloadedEntry(ModelManifest.shell)
         self.claudeSource = claudeSource ?? DownloadedEntry(ModelManifest.claudeCode)
         self.onePasswordSource = onePasswordSource ?? DownloadedEntry(ModelManifest.onePassword)
+        let forwarder = DNSForwarder(log: { line in
+            DNSForwarder.defaultLog(line)
+            #if DEBUG
+            DebugRun.say(line)
+            #endif
+        })
+        self.forwarder = forwarder
+        resolver = GuestResolver(forwarder: forwarder)
     }
 
     /// Where `op` is extracted to: beside the fakefs, outside the downloader's homes, whose sweep
@@ -198,6 +210,11 @@ final class Userland {
     func prepare() {
         prepareRootfs()
         prepareClaude()
+        // Once booted, a forwarder iOS took away while the app was suspended starts again, and the
+        // resolver hears it come up; one still running answers with its port and nothing changes.
+        if booting != nil {
+            Task { [forwarder] in _ = try? await forwarder.start() }
+        }
     }
 
     /// A fakefs already whole asks for nothing — not even the tarball or the packages, which a
@@ -322,6 +339,9 @@ final class Userland {
             let fakefs = try await self.ready()
             let claude = try await self.claudeCode()
             try Guest.shared.boot(fakefs: fakefs)
+            // The forwarder first, so the resolver's first write is already its stub; one that
+            // cannot start leaves the resolver writing the phone's own name servers.
+            _ = try? await self.forwarder.start()
             // A guest with no resolver still runs, with no name resolving in it, so a failed write
             // is not the boot's: the boot's answer is kept for the life of the process.
             await self.resolver.start()
@@ -407,8 +427,19 @@ final class Userland {
 }
 
 #if DEBUG
+extension Userland {
+    /// Stops the guest's forwarder, as iOS taking its listeners would, and waits for the
+    /// resolver's write of the phone's name servers.
+    func stopForwarder() async {
+        await forwarder.stop()
+        await resolver.settle()
+    }
+}
+
 extension DebugRun {
     static let userlandVariable = "TOPO_DEBUG_USERLAND"
+    /// `stopped`: the guest command runs with the DNS forwarder stopped once the guest is booted.
+    static let dnsVariable = "TOPO_DEBUG_DNS"
 
     /// What the guest's authorization was granted, for the device run: the scope string and the
     /// days left on the long-lived token (never a value), or that none is held and the guest runs
@@ -515,6 +546,12 @@ extension DebugRun {
                 + (userland.claudeFetchedThisLaunch ? "fetched" : "reused: nothing fetched, nothing copied"))
             let installed = try await userland.bootGuest()
             say("userland: booted")
+            if environment[dnsVariable] == "stopped" {
+                await userland.stopForwarder()
+                say("userland: dns forwarder stopped")
+            } else if let port = await userland.forwarder.port {
+                say("userland: dns forwarder on 127.0.0.1:\(port)")
+            }
             let milliseconds = Int(installed.verification / .milliseconds(1))
             say("userland: claude code \(installed.version) verified in \(milliseconds) ms, mounted at \(installed.command)")
             let proxy = try APIProxy(log: { line in say("proxy: \(line)") })

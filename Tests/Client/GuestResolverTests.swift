@@ -33,8 +33,100 @@ private final class Servers: @unchecked Sendable {
     var written: [[String]] { lock.withLock { writes } }
 }
 
+/// A forwarder whose ups and downs the test makes.
+private final class FakeForwarder: ForwarderChanges, @unchecked Sendable {
+    private let lock = NSLock()
+    private var changed: (@Sendable (UInt16?) -> Void)?
+    private let initial: UInt16?
+
+    init(_ initial: UInt16?) { self.initial = initial }
+    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async -> UInt16? {
+        lock.withLock { self.changed = changed }
+        return initial
+    }
+    func emit(_ port: UInt16?) { lock.withLock { changed }?(port) }
+}
+
+/// Every port handed to the guest's rewrite and every list written, in one order.
+private final class Events: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+    func port(_ port: UInt16?) { lock.withLock { events.append("port \(port.map(String.init) ?? "cleared")") } }
+    func write(_ servers: [String]) { lock.withLock { events.append("write \(servers.joined(separator: " "))") } }
+    var all: [String] { lock.withLock { events } }
+}
+
 @MainActor
 final class GuestResolverTests: XCTestCase {
+    private func resolver(_ forwarder: FakeForwarder, _ events: Events, changes: FakePathChanges = FakePathChanges(),
+                          servers: [String] = ["192.168.1.1"]) -> GuestResolver {
+        GuestResolver(changes: changes, forwarder: forwarder, servers: { servers },
+                      setPort: events.port, write: { events.write($0) })
+    }
+
+    private func waitFor(_ count: Int, _ events: Events) async {
+        for _ in 0..<200 where events.all.count < count {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    /// Review focus 3: with the forwarder up at the boot, the rewrite is given its port before
+    /// the first write, and the first write is the stub alone.
+    func testForwarderReadyWritesSentinel() async {
+        let events = Events()
+        await resolver(FakeForwarder(5353), events).start()
+        XCTAssertEqual(events.all, ["port 5353", "write 127.0.0.53"])
+    }
+
+    /// Review focus 3: the forwarder going down clears the rewrite and writes the phone's servers.
+    func testForwarderFailedWritesPhoneServers() async {
+        let events = Events()
+        let forwarder = FakeForwarder(5353)
+        let resolver = resolver(forwarder, events)
+        await resolver.start()
+        forwarder.emit(nil)
+        await resolver.settle()
+        XCTAssertEqual(events.all, ["port 5353", "write 127.0.0.53", "port cleared", "write 192.168.1.1"])
+    }
+
+    /// Review focus 3: a restart writes the stub again, with the new port given first; a forwarder
+    /// down at the boot writes the phone's servers until it is up.
+    func testForwarderRestartedWritesSentinelAgain() async {
+        let events = Events()
+        let forwarder = FakeForwarder(nil)
+        let resolver = resolver(forwarder, events)
+        await resolver.start()
+        for port: UInt16? in [6000, nil, 6001] {
+            forwarder.emit(port)
+            await resolver.settle()
+        }
+        XCTAssertEqual(events.all, ["port cleared", "write 192.168.1.1", "port 6000", "write 127.0.0.53",
+                                    "port cleared", "write 192.168.1.1", "port 6001", "write 127.0.0.53"])
+    }
+
+    /// Review focus 3: a path change while the forwarder is up writes the stub, not the servers.
+    func testPathChangeWhileForwarderUpKeepsSentinel() async {
+        let events = Events()
+        let changes = FakePathChanges()
+        await resolver(FakeForwarder(5353), events, changes: changes, servers: ["100.100.100.100"]).start()
+        changes.change()
+        await waitFor(3, events)
+        XCTAssertEqual(events.all, ["port 5353", "write 127.0.0.53", "write 127.0.0.53"])
+    }
+
+    /// An up and a down in quick succession end with the last: the phone's servers.
+    func testTheLastForwarderChangeIsTheLastWrite() async {
+        let events = Events()
+        let forwarder = FakeForwarder(nil)
+        let resolver = resolver(forwarder, events)
+        await resolver.start()
+        forwarder.emit(7000)
+        forwarder.emit(nil)
+        await resolver.settle()
+        XCTAssertEqual(events.all.last, "write 192.168.1.1")
+        XCTAssertEqual(events.all.filter { $0.hasPrefix("port") }.last, "port cleared")
+    }
+
     private func waitFor(_ count: Int, _ servers: Servers) async {
         for _ in 0..<200 where servers.written.count < count {
             try? await Task.sleep(for: .milliseconds(10))
