@@ -397,6 +397,7 @@
 		F710CD8D19E9952AD050CCD8 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 843B7316243F6B0BFD30D130 /* Assets.xcassets */; };
 		F7A2D32DD219158416C6EA76 /* systemSmall-light.png in Resources */ = {isa = PBXBuildFile; fileRef = 34907CBDA60D55F46C514383 /* systemSmall-light.png */; };
 		F9E31DDC84CCFFF526FA5044 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 783E689C1554D54D945E0F11 /* TopoCore */; };
+		FB2A7CDECF4A7336695E92D1 /* TopoProxy in Frameworks */ = {isa = PBXBuildFile; productRef = 1E0520175AF5BA83DF7E9611 /* TopoProxy */; };
 		FBA9410F54F2A098BAF3B9C6 /* VaultMount.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6BCB70D375EC37F314FCB10 /* VaultMount.swift */; };
 		FCE1E23F472309853AA683D3 /* LookToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C039ECC1C92B7FF7EE214C /* LookToolTests.swift */; };
 		FDDAC9AC6854A658AF14E67C /* ScriptedGuest.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */; };
@@ -742,6 +743,7 @@
 			files = (
 				5EE7759BD3F6736F8E5DD61C /* TopoUserland in Frameworks */,
 				A95359D2B28EF0C108A6537D /* TopoTools in Frameworks */,
+				FB2A7CDECF4A7336695E92D1 /* TopoProxy in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1413,6 +1415,7 @@
 			packageProductDependencies = (
 				C397A5056727C7C66CD989BC /* TopoUserland */,
 				7C767439B30ED0E6848AC6D4 /* TopoTools */,
+				1E0520175AF5BA83DF7E9611 /* TopoProxy */,
 			);
 			productName = TopoUserlandTests;
 			productReference = 822E74B0C8A75DD45679AF48 /* TopoUserlandTests.xctest */;
@@ -2753,6 +2756,10 @@
 		07E2FAB72874D49A25065E45 /* TopoCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = TopoCore;
+		};
+		1E0520175AF5BA83DF7E9611 /* TopoProxy */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = TopoProxy;
 		};
 		3F4F449C8FB0A054DAD1B18D /* TopoUserland */ = {
 			isa = XCSwiftPackageProductDependency;

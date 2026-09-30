@@ -1,8 +1,10 @@
 import Foundation
 
-/// A name server on `127.0.0.1` at a port of its own, over UDP, standing in for a network's: it
-/// answers every A question with `address` and every other type with no answers, and counts what
-/// it was asked. Blocking reads on a thread of its own; `stop` closes the socket, which ends them.
+/// A name server over UDP standing in for a network's: it answers every A question with
+/// `address` and every other type with no answers, and counts what it was asked. On `127.0.0.1`
+/// at a port of its own, or, as `onPort53`, where a `resolv.conf` can name it: port 53, which
+/// Darwin lets an unprivileged process bind only on every address, so it answers loopback peers
+/// alone. Blocking reads on a thread of its own; `stop` closes the socket, which ends them.
 final class StubDNS: @unchecked Sendable {
     let port: UInt16
     let address: [UInt8]
@@ -10,14 +12,18 @@ final class StubDNS: @unchecked Sendable {
     private let lock = NSLock()
     private var asked = 0
 
-    init(address: [UInt8]) throws {
+    private let loopbackOnly: Bool
+
+    init(address: [UInt8], onPort53: Bool = false) throws {
         self.address = address
+        loopbackOnly = onPort53
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
         self.fd = fd
         var local = sockaddr_in()
         local.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
         local.sin_family = sa_family_t(AF_INET)
-        local.sin_addr.s_addr = inet_addr("127.0.0.1")
+        local.sin_addr.s_addr = onPort53 ? INADDR_ANY : inet_addr("127.0.0.1")
+        local.sin_port = onPort53 ? UInt16(53).bigEndian : 0
         var length = socklen_t(MemoryLayout<sockaddr_in>.size)
         let bound = withUnsafeMutablePointer(to: &local) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -48,6 +54,12 @@ final class StubDNS: @unchecked Sendable {
                 }
             }
             guard count > 0 else { return }
+            let fromLoopback = withUnsafePointer(to: &peer) {
+                $0.withMemoryRebound(to: sockaddr_in.self, capacity: 1) {
+                    $0.pointee.sin_family == sa_family_t(AF_INET) && $0.pointee.sin_addr.s_addr == inet_addr("127.0.0.1")
+                }
+            }
+            guard fromLoopback || !loopbackOnly else { continue }
             lock.withLock { asked += 1 }
             guard let reply = answer(Array(buffer[0..<count])) else { continue }
             _ = withUnsafePointer(to: &peer) {
