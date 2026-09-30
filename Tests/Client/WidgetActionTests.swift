@@ -116,12 +116,15 @@ final class WidgetActionTests: XCTestCase {
     }
 
     private var store: SurfaceStore { SurfaceStore(folder: folder) }
+    /// The slots whose record a tap owed a save.
+    private var owedSaves: [String] = []
 
     private func actions(_ tools: [any Tool], bound: Duration = .seconds(5)) -> WidgetActions {
         let store = store
         let reloader = SurfaceReloader(reloadKind: { [unowned self] in reloads.append($0) }, reloadEverything: {},
                                        schedule: { _, body in body() })
-        return WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: bound)
+        return WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: bound,
+                             changed: { [unowned self] in owedSaves.append($0) })
     }
 
     /// Writes a slot with one button running `argv`, as `topo widget set` would, and answers
@@ -149,6 +152,16 @@ final class WidgetActionTests: XCTestCase {
         let revision = try set(["home", "set", "LAMP", "power"], kind: "toggle")
         await actions([home]).run(slot: "demo", control: "go", revision: revision, turningOn: true)
         XCTAssertEqual(home.calls, [["set", "LAMP", "power", "on"]])
+    }
+
+    /// A toggle's state is part of its slot's document, so its record, and the watch, follow a
+    /// tap as they follow a write: each flip, and each put back after a failed run, owes a save.
+    func testAToggleTapOwesItsRecordASave() async throws {
+        let home = CountingTool("home")
+        home.reply = ToolReply(status: ToolReply.denied, text: "topo: HomeKit is not allowed\n")
+        let revision = try set(["home", "set", "LAMP", "power"], kind: "toggle")
+        await actions([home]).run(slot: "demo", control: "go", revision: revision, turningOn: true)
+        XCTAssertEqual(owedSaves, ["demo", "demo"], "a flip or a put-back owed the record nothing")
     }
 
     func testStalledToolAnswersAtBound() async throws {
@@ -219,7 +232,7 @@ final class WidgetActionTests: XCTestCase {
         let store = store
         let actions = WidgetActions(table: ToolTable([calendar]), store: { store },
                                     reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }),
-                                    read: { _, _ in document })
+                                    read: { _, _ in document }, changed: { _ in })
         await actions.run(slot: "demo", control: "go", revision: 4, turningOn: nil)
         XCTAssertEqual(calendar.calls, [], "the tap ran a call off the allowlist")
         XCTAssertEqual(store.taps().map(\.status), [String(ToolReply.refused)])
@@ -231,7 +244,8 @@ final class WidgetActionTests: XCTestCase {
     private func assertRefusesLocks(_ table: ToolTable, _ fake: LockedHome, file: StaticString = #filePath, line: UInt = #line) async throws {
         let store = store
         let actions = WidgetActions(table: table, store: { store },
-                                    reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }))
+                                    reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }),
+                                    changed: { _ in })
         for argv in [["home", "set", "LOCK-1", "LOCK-T", "0"], ["home", "scene", "SC-LEAVE"], ["home", "scene", "SC-ODD"]] {
             let revision = try set(argv)
             await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil)
@@ -379,7 +393,7 @@ final class WidgetActionTests: XCTestCase {
         let revision = try set(["notify", "Bins"])
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
-        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader)
+        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader, changed: { _ in })
         let tap = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
         try await Task.sleep(for: .milliseconds(150))
         reloader.forget(store)
@@ -407,7 +421,7 @@ final class WidgetActionTests: XCTestCase {
         let revision = try set(["notify", "Bins"])
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in })
-        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader)
+        let actions = WidgetActions(table: ToolTable([notify]), store: { store }, reloader: reloader, changed: { _ in })
         let first = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
         let second = Task { @MainActor in await actions.run(slot: "demo", control: "go", revision: revision, turningOn: nil) }
         try await Task.sleep(for: .milliseconds(150))

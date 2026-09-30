@@ -150,6 +150,7 @@ struct WidgetTool: Tool {
                 document.setAction(.open, ofControl: control.id)
             }
         }
+        await expect([slot])
         let revision: Int
         do {
             revision = try store.write(document, slot: slot)
@@ -175,6 +176,7 @@ struct WidgetTool: Tool {
             if let refusal = Self.refusal(slot: slot) { return ToolReply(status: ToolReply.refused, text: "topo: \(refusal)\n") }
             guard store.slots().contains(slot) else { return .failed("topo: there is no slot \(slot)\n") }
         }
+        await expect(slots)
         var failure: Error?
         for slot in slots {
             do {
@@ -192,6 +194,11 @@ struct WidgetTool: Tool {
             return .failed("topo: \(failure.localizedDescription)\n" + (gone.isEmpty ? "" : "cleared: " + gone.joined(separator: ", ") + "\n"))
         }
         return .ok(slots.isEmpty ? "no slots to clear\n" : "cleared: " + slots.joined(separator: ", ") + "\n")
+    }
+
+    /// Each slot's record owed a save before its files are written (`SurfaceSync.expect`).
+    private func expect(_ slots: [String]) async {
+        await MainActor.run { for slot in slots { sync().expect(slot: slot) } }
     }
 
     /// One reload of the timelines, and each slot's record owed: a save, or a delete for a clear.
@@ -228,6 +235,7 @@ struct WidgetTool: Tool {
         } catch {
             return refused(error.localizedDescription)
         }
+        await expect([slot])
         do {
             try store.writeImage(png, slot: slot, name: name)
         } catch {

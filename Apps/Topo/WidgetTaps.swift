@@ -35,12 +35,15 @@ final class WidgetCues {
     let harness: Harness
     let store: @MainActor () -> SurfaceStore?
     let reloader: SurfaceReloader
+    /// The slot's record owed a save: a toggle's state is part of its document.
+    let changed: @MainActor (String) -> Void
 
     init(harness: Harness, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
-         reloader: SurfaceReloader = .shared) {
+         reloader: SurfaceReloader = .shared, changed: @escaping @MainActor (String) -> Void = { SurfaceSync.shared.changed(slot: $0) }) {
         self.harness = harness
         self.store = store
         self.reloader = reloader
+        self.changed = changed
     }
 
     /// A `topo://cue` URL, which a `link` hands on in place of an intent: recorded as the intent
@@ -88,6 +91,8 @@ final class WidgetCues {
                 let resolved = cue.resolved ?? !toggle.on
                 do {
                     if cue.resolved == nil { try store.resolveCue(nonce: cue.nonce, resolved) }
+                    // Owed before the write, in this job, so no pass reads the slot between them.
+                    changed(cue.slot)
                     try store.setOn(resolved, slot: cue.slot, control: cue.id, revision: cue.revision)
                 } catch {
                     continue
@@ -118,6 +123,8 @@ final class WidgetActions {
     /// The slot's document as the tap finds it: the store's, read through the reader. A suite
     /// hands one the reader would not keep, to hold the tap's own allowlist check.
     let read: @MainActor (SurfaceStore, String) -> WidgetDocument?
+    /// The slot's record owed a save: a toggle's state is part of its document.
+    let changed: @MainActor (String) -> Void
     /// Each control's last run, which its next waits on, so a control's effects land in the
     /// order its taps were handled.
     private var chains: [String: Task<Void, Never>] = [:]
@@ -130,12 +137,14 @@ final class WidgetActions {
 
     init(table: ToolTable, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound,
-         read: @escaping @MainActor (SurfaceStore, String) -> WidgetDocument? = { $0.read(slot: $1)?.document }) {
+         read: @escaping @MainActor (SurfaceStore, String) -> WidgetDocument? = { $0.read(slot: $1)?.document },
+         changed: @escaping @MainActor (String) -> Void = { SurfaceSync.shared.changed(slot: $0) }) {
         self.table = table
         self.store = store
         self.reloader = reloader
         self.bound = bound
         self.read = read
+        self.changed = changed
         reloader.onForget { [weak self] in self?.cancelAll() }
     }
 
@@ -180,6 +189,8 @@ final class WidgetActions {
         let state = "\(key)/\(revision)"
         var was: Bool?
         if control.kind == .toggle {
+            // Owed before the write, in this job, so no pass reads the slot between them.
+            changed(slot)
             guard let stored = try? store.flip(slot: slot, control: id, revision: revision) else { return record("stale") }
             was = stored
             if chains[key] == nil { confirmed[state] = stored }
@@ -200,6 +211,7 @@ final class WidgetActions {
                 if reply.status == 0 {
                     confirmed[state] = !was
                 } else {
+                    changed(slot)
                     try? store.setOn(confirmed[state] ?? was, slot: slot, control: id, revision: revision)
                 }
             }

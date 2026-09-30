@@ -58,10 +58,11 @@ final class SurfaceSyncTests: XCTestCase {
         try? FileManager.default.removeItem(at: folder)
     }
 
-    private func makeSync(defaults: UserDefaults) -> SurfaceSync {
-        let database = database!, store = store!
+    private func makeSync(defaults: UserDefaults, runner: String = "phone-1", store: SurfaceStore? = nil,
+                          mayOwn: @escaping @Sendable () async throws -> Bool = { true }) -> SurfaceSync {
+        let database = database!, store = store ?? self.store!
         return SurfaceSync(records: { SurfaceRecords(database: database) }, ensureZone: { await database.makeZone() },
-                           store: { store }, runner: "phone-1",
+                           mayOwn: mayOwn, store: { store }, runner: runner,
                            defaults: defaults, reloader: reloader, now: { Date(timeIntervalSince1970: 100) })
     }
 
@@ -205,6 +206,128 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertEqual(sync.pending, [])
     }
 
+    /// A second write to a slot whose save is in flight, owed while the save's answer is already
+    /// queued ahead of the flush it asks for: the pass must not settle the slot on the first
+    /// write's save.
+    func testASecondWriteDuringASaveIsNotSettledAway() async throws {
+        let gate = Gate()
+        await database.inner.setBeforeSave { _ in await gate.wait() }
+        _ = try write("weather", "one")
+        sync.changed(slot: "weather")
+        for _ in 0..<2000 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertTrue(gate.isWaiting)
+        let second = try write("weather", "two")
+        gate.open()
+        usleep(300_000) // the main actor busy while the save lands, so its answer queues first
+        sync.changed(slot: "weather")
+        await database.inner.setBeforeSave { _ in }
+        try await Task.sleep(for: .milliseconds(300))
+        await sync.flush()
+        let saved = await stored("weather")
+        XCTAssertEqual(saved.flatMap(SurfaceRecord.init)?.revision, second, "the second write was settled on the first's save")
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// A save owed before the write, and a process ended before `changed`: the relaunch still
+    /// sends what the file holds.
+    func testASaveOwedBeforeTheWriteOutlivesTheProcess() async throws {
+        let defaults = UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!
+        makeSync(defaults: defaults).expect(slot: "weather")
+        let revision = try write("weather")
+        let relaunched = makeSync(defaults: defaults)
+        XCTAssertEqual(relaunched.owed, ["weather": .save])
+        await relaunched.flush()
+        let saved = await stored("weather")
+        XCTAssertEqual(saved.flatMap(SurfaceRecord.init)?.revision, revision)
+    }
+
+    /// Revisions are each phone's own: a record another runner left at a higher revision is
+    /// replaced, not kept over this phone's document.
+    func testAnotherRunnersHigherRevisionIsReplaced() async throws {
+        let old = SurfaceRecord(slot: "weather", document: "{}", revision: 5, updated: Date(), runner: "phone-0")
+        _ = try await SurfaceRecords(database: database).save(old)
+        let revision = try write("weather", "new")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let surface = await stored("weather").flatMap(SurfaceRecord.init)
+        XCTAssertEqual(surface?.revision, revision)
+        XCTAssertEqual(surface?.runner, "phone-1")
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// Phone B took over; phone A, demoted, signs out. A's records go and B's stay, and B's next
+    /// sweep takes what A left; A, its role record a viewer's, sweeps nothing.
+    func testADemotedPhonesSignOutLeavesTheNewPrimarysRecords() async throws {
+        let storeB = SurfaceStore(folder: folder.appendingPathComponent("b"))
+        defer { try? FileManager.default.removeItem(at: storeB.folder) }
+        let a = makeSync(defaults: UserDefaults(suiteName: "surface-sync-a-\(UUID().uuidString)")!, runner: "phone-A",
+                         mayOwn: { false })
+        let b = makeSync(defaults: UserDefaults(suiteName: "surface-sync-b-\(UUID().uuidString)")!, runner: "phone-B", store: storeB)
+        _ = try write("weather")
+        _ = try write("lamp")
+        a.changed(slot: "weather")
+        a.changed(slot: "lamp")
+        await a.flush()
+        _ = try storeB.write(WidgetDocument.read(#"{"families": {"default": {"kind": "text", "text": "B"}}}"#).document, slot: "tides")
+        b.changed(slot: "tides")
+        await b.flush()
+
+        a.sweep()
+        await a.flush()
+        let beforeSignOut = await stored("tides")
+        XCTAssertNotNil(beforeSignOut, "a demoted phone swept the new primary's record")
+
+        await database.fail(saves: false, deletes: true)
+        a.forget()
+        await a.flush()
+        await database.fail(saves: false, deletes: false)
+        // One sign-out delete refused, then allowed: A's records all go at its next pass.
+        await a.flush()
+        let tides = await stored("tides"), weather = await stored("weather"), lamp = await stored("lamp")
+        XCTAssertNotNil(tides, "a demoted phone's sign-out deleted the new primary's record")
+        XCTAssertNil(weather)
+        XCTAssertNil(lamp)
+        XCTAssertEqual(b.pending, [])
+
+        // A leaves a record behind it never signs out of: B's sweep takes it.
+        let left = SurfaceRecord(slot: "left", document: "{}", revision: 1, updated: Date(), runner: "phone-A")
+        _ = try await SurfaceRecords(database: database).save(left)
+        b.sweep()
+        await b.flush()
+        let gone = await stored("left"), kept = await stored("tides")
+        XCTAssertNil(gone, "the primary's sweep left another runner's record")
+        XCTAssertNotNil(kept)
+    }
+
+    /// A sweep asked for and not yet run when the login ends takes nothing: a signed-out phone
+    /// owns nothing.
+    func testASignOutCancelsASweep() async throws {
+        let other = SurfaceRecord(slot: "tides", document: "{}", revision: 1, updated: Date(), runner: "phone-B")
+        _ = try await SurfaceRecords(database: database).save(other)
+        sync.sweep()
+        sync.forget()
+        await sync.flush()
+        let kept = await stored("tides")
+        XCTAssertNotNil(kept, "a signed-out phone swept another phone's record")
+    }
+
+    /// A sign-out's deletes go before anything the next login saves.
+    func testASignOutDeletesBeforeTheNextLoginSaves() async throws {
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        await database.fail(saves: false, deletes: true)
+        sync.forget()
+        await sync.flush()
+        await database.fail(saves: false, deletes: false)
+        _ = try write("tides")
+        sync.changed(slot: "tides")
+        await sync.flush()
+        let weather = await stored("weather"), tides = await stored("tides")
+        XCTAssertNil(weather)
+        XCTAssertNotNil(tides, "the sign-out's owed delete took the next login's record")
+    }
+
     /// A write landing after the running pass's last look for more, before the loop lets go, gets
     /// a pass of its own rather than waiting on the one that has ended.
     func testAWriteAtTheEndOfAPassIsNotLeftWaiting() async throws {
@@ -258,5 +381,35 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertEqual(sync.pending, [])
         let none = await stored("weather")
         XCTAssertNil(none)
+    }
+}
+
+/// Holds a save until opened; `open` is synchronous, so a test can open it and keep the main
+/// actor busy while the save's answer queues.
+private final class Gate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var opened = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    var isWaiting: Bool { lock.withLock { waiter != nil } }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock { () -> Bool in
+                if opened { return true }
+                waiter = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+
+    func open() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            opened = true
+            defer { waiter = nil }
+            return waiter
+        }
+        waiting?.resume()
     }
 }

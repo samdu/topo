@@ -196,6 +196,10 @@ struct TopoApp: App {
                 // behind its file.
                 Task { await SurfaceSync.shared.flush() }
             }
+            // The primary, signed in, takes what other phones' records left on the watch.
+            .onChange(of: roleSelector.role == .primary && signIn.phase == .signedIn, initial: true) { _, owner in
+                if owner { SurfaceSync.shared.sweep() }
+            }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)
                 if phase == .active {

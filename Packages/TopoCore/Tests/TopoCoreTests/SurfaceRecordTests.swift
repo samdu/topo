@@ -8,9 +8,9 @@ import TopoCoreTesting
     let db = InMemoryRecordDatabase()
     var records: SurfaceRecords { SurfaceRecords(database: db) }
 
-    func surface(_ slot: String = "weather", revision: Int, images: [String: Data] = [:]) -> SurfaceRecord {
+    func surface(_ slot: String = "weather", revision: Int, images: [String: Data] = [:], runner: String = "phone-1") -> SurfaceRecord {
         SurfaceRecord(slot: slot, document: #"{"revision": \#(revision)}"#, revision: revision,
-                      updated: Date(timeIntervalSince1970: TimeInterval(revision)), runner: "phone-1", images: images)
+                      updated: Date(timeIntervalSince1970: TimeInterval(revision)), runner: runner, images: images)
     }
 
     @Test func aSlotIsReplacedUnderItsTagAndNeverDuplicated() async throws {
@@ -29,6 +29,28 @@ import TopoCoreTesting
         #expect(try await records.save(surface(revision: 4)) == .newerKept(revision: 5))
         #expect(await db.current(SurfaceRecord.id(slot: "weather"))?.int("revision") == 5)
         #expect(try await records.save(surface(revision: 5)) == .saved, "the same revision is a toggle's state, and replaces")
+    }
+
+    /// Revisions are each phone's own: another runner's record, at any revision, is replaced.
+    @Test func anotherRunnersRecordIsReplacedWhateverItsRevision() async throws {
+        try await records.save(surface(revision: 9, runner: "phone-0"))
+        #expect(try await records.save(surface(revision: 1)) == .saved)
+        let kept = try await records.fetch(slot: "weather")
+        guard case .surface(let surface) = kept else { Issue.record("\(kept)"); return }
+        #expect(surface.revision == 1)
+        #expect(surface.runner == "phone-1")
+    }
+
+    /// A sign-out takes its own records and no one else's; the primary's sweep takes the rest.
+    @Test func eachRunnerDeletesItsOwn() async throws {
+        try await records.save(surface("a", revision: 1, runner: "phone-A"))
+        try await records.save(surface("b", revision: 1, runner: "phone-B"))
+        try await records.save(surface("c", revision: 1, runner: "phone-A"))
+        try await records.deleteAll(of: "phone-A")
+        #expect(try await db.records(ofType: SurfaceRecord.type).map(\.id) == [SurfaceRecord.id(slot: "b")])
+        try await records.save(surface("d", revision: 1, runner: "phone-0"))
+        try await records.deleteAll(except: "phone-B")
+        #expect(try await db.records(ofType: SurfaceRecord.type).map(\.id) == [SurfaceRecord.id(slot: "b")])
     }
 
     /// Another writer lands between this save's fetch and its save: the stale tag is refused, and
@@ -67,7 +89,7 @@ import TopoCoreTesting
         try await records.delete(slot: "a")
         #expect(try await records.fetch(slot: "a") == .gone)
         guard case .surface = try await records.fetch(slot: "b") else { Issue.record("b went too"); return }
-        try await records.deleteAll()
+        try await records.deleteAll(of: "phone-1")
         #expect(try await db.records(ofType: SurfaceRecord.type).isEmpty)
     }
 

@@ -14,9 +14,13 @@ import TopoCore
 /// cannot be read just now leaves the save owed for the next try, never a record missing what the
 /// file holds and never a record deleted; a save owed for a slot whose document is gone deletes
 /// the record, since the record mirrors the file. Each pass makes sure the zone is there first,
-/// since a fresh account has none until something writes one. A sign-out deletes
-/// every `Surface` record in the zone; one it could not delete is deleted at the next sign-in,
-/// before anything else is saved.
+/// since a fresh account has none until something writes one. A record belongs to the phone that
+/// saved it (`runner`): a sign-out deletes this phone's records and no other's, and one it could
+/// not delete is deleted at the next sign-in, before anything else is saved. The primary sweeps
+/// the rest — at launch and at each sign-in it deletes every record another runner saved, the
+/// leftovers of an earlier primary or of an earlier install of this one — once its own role
+/// record, read then, does not say viewer: a takeover writes the old primary's as viewer in the
+/// batch that claims the lease, so a demoted phone whose cached role is stale sweeps nothing.
 @MainActor
 final class SurfaceSync {
     static let shared = SurfaceSync()
@@ -24,6 +28,11 @@ final class SurfaceSync {
     /// Nil where the process cannot reach CloudKit.
     private let records: @MainActor () -> SurfaceRecords?
     private let ensureZone: @Sendable () async throws -> Void
+    /// Whether this phone may sweep other runners' records: its role record, read now, is not a
+    /// viewer's.
+    private let mayOwn: @Sendable () async throws -> Bool
+    /// A sweep asked for and not yet done.
+    private var sweeping = false
     private let store: @MainActor () -> SurfaceStore?
     private let runner: String
     private let defaults: UserDefaults
@@ -45,11 +54,15 @@ final class SurfaceSync {
 
     init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: TopoCloudKit.database()) },
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
+         mayOwn: @escaping @Sendable () async throws -> Bool = {
+             try await DeviceRole.read(DeviceIdentity.current, from: TopoCloudKit.database())?.role != .viewer
+         },
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          runner: String = DeviceIdentity.current.rawValue, defaults: UserDefaults = .standard,
          reloader: SurfaceReloader = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
         self.records = records
         self.ensureZone = ensureZone
+        self.mayOwn = mayOwn
         self.store = store
         self.runner = runner
         self.defaults = defaults
@@ -79,17 +92,39 @@ final class SurfaceSync {
         owe(.delete, slot: slot)
     }
 
-    private func owe(_ what: Owed, slot: String) {
+    /// The slot is about to be written: its record is owed a save before the write, so a process
+    /// ended between the write and `changed` still owes it. A save owed for a document the write
+    /// never made sends the file as it is, or deletes the record if there is none. Sends nothing
+    /// now; `changed` or `cleared` follows the write.
+    func expect(slot: String) {
+        owe(.save, slot: slot, flushing: false)
+    }
+
+    private func owe(_ what: Owed, slot: String, flushing: Bool = true) {
         var owed = owed
         owed[slot] = what
         setOwed(owed)
+        // Seen by a pass in flight in this same job, so it settles nothing it read before this
+        // write and goes round again; the flush below may run only after that pass's next step.
+        if running != nil { again = true }
+        if flushing { Task { await flush() } }
+    }
+
+    /// This phone is primary and signed in (at launch, at a sign-in, at a takeover): every record
+    /// another runner saved is to go, once the role record confirms it.
+    func sweep() {
+        sweeping = true
+        if running != nil { again = true }
         Task { await flush() }
     }
 
-    /// A login ended: nothing it owed is saved, and every `Surface` record is to go.
+    /// A login ended: nothing it owed is saved, and every `Surface` record this phone saved is to go.
     func forget() {
         setOwed([:])
         defaults.set(true, forKey: Self.forgetKey)
+        // A signed-out phone owns nothing, so takes nothing of another's.
+        sweeping = false
+        if running != nil { again = true }
         Task { await flush() }
     }
 
@@ -120,7 +155,7 @@ final class SurfaceSync {
     }
 
     private func pass() async {
-        guard let records = records(), owesForget || !owed.isEmpty else { return }
+        guard let records = records(), owesForget || sweeping || !owed.isEmpty else { return }
         do {
             try await ensureZone()
         } catch {
@@ -128,10 +163,19 @@ final class SurfaceSync {
         }
         if owesForget {
             do {
-                try await records.deleteAll()
+                try await records.deleteAll(of: runner)
                 defaults.set(false, forKey: Self.forgetKey)
             } catch {
                 return
+            }
+        }
+        // Not after a sign-out this pass has not finished, which the guard above returns from.
+        if sweeping {
+            do {
+                if try await mayOwn() { try await records.deleteAll(except: runner) }
+                sweeping = false
+            } catch {
+                // Asked again at the next pass.
             }
         }
         guard let store = store() else { return }

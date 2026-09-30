@@ -10,12 +10,16 @@ actor Zone: ZoneDatabase {
     let wrapped: InMemoryRecordDatabase
     private var omitted: Set<String> = []
     private var feedFails = false
+    private var garbled: Set<String> = []
     private var fetchFails = false
 
     init(_ wrapped: InMemoryRecordDatabase) { self.wrapped = wrapped }
 
     func omit(_ slots: Set<String>) { omitted = slots }
     func fail(feed: Bool, fetch: Bool) { feedFails = feed; fetchFails = fetch }
+    /// The next feed read hands these slots' records without their images, as a read whose
+    /// assets did not load does.
+    func garble(_ slots: Set<String>) { garbled = slots }
 
     private static let offline = RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet))
 
@@ -31,6 +35,10 @@ actor Zone: ZoneDatabase {
         if feedFails { throw Self.offline }
         var changes = try await wrapped.changes(ofType: type, since: token)
         changes.changed.removeAll { SurfaceRecord.slot(of: $0.id).map(omitted.contains) ?? false }
+        for index in changes.changed.indices where SurfaceRecord.slot(of: changes.changed[index].id).map(garbled.contains) ?? false {
+            changes.changed[index].fields["images"] = nil
+        }
+        garbled = []
         return changes
     }
 }
@@ -168,6 +176,23 @@ final class WatchSurfaceCacheTests: XCTestCase {
         await cache.fetch()
         XCTAssertFalse(FileManager.default.fileExists(atPath: path), "a deleted slot stayed because it could not be read")
         XCTAssertEqual(store.slots(), [])
+    }
+
+    /// A record the feed hands unreadable once is not skipped for good: it is asked for by name
+    /// at the next fetch, though the token has moved past it.
+    func testARecordUnreadableOnceIsReadAgain() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3, images: ["sky": Data([1])])
+        await cache.fetch()
+        try await phoneSets("weather", Self.document("snow"), revision: 4, images: ["sky": Data([2])])
+        // Unreadable in the feed and not fetched by name either: the next fetch asks again.
+        await zone.garble(["weather"])
+        await zone.fail(feed: false, fetch: true)
+        await cache.fetch()
+        XCTAssertEqual(store.read(slot: "weather")?.document.revision, 3)
+        await zone.fail(feed: false, fetch: false)
+        await cache.fetch()
+        XCTAssertEqual(store.read(slot: "weather")?.document.revision, 4, "a record read unreadable once was skipped for good")
+        XCTAssertEqual(store.imageData(slot: "weather", name: "sky"), Data([2]))
     }
 
     /// Runs `body` with the store's folder read-only, so every write and removal in it fails.

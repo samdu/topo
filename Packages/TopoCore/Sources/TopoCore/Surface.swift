@@ -61,8 +61,10 @@ public struct SurfaceRecord: Equatable, Sendable {
     }
 }
 
-/// The `Surface` records: saved with a compare-and-set, the newer revision winning, deleted on a
-/// clear and a sign-out, and read from the change feed.
+/// The `Surface` records: saved with a compare-and-set, deleted on a clear and a sign-out, and
+/// read from the change feed. A record belongs to its `runner`, the phone that saved it: the newer
+/// revision wins between two saves of one runner, a save over another runner's record replaces it,
+/// and a sign-out deletes only the signing-out phone's own.
 public struct SurfaceRecords: Sendable {
     public let database: any ZoneDatabase
 
@@ -72,12 +74,15 @@ public struct SurfaceRecords: Sendable {
 
     public enum Saved: Equatable, Sendable {
         case saved
-        /// The server holds a later revision than this one, which is kept.
+        /// The server holds a later revision of this runner's than this one, which is kept.
         case newerKept(revision: Int)
     }
 
     /// Saves `surface` over the slot's record under its change tag. An older revision never
-    /// overwrites a newer one; the same revision does, since a toggle's state changes under one.
+    /// overwrites a newer one of the same runner; the same revision does, since a toggle's state
+    /// changes under one. Another runner's record is replaced whatever its revision: the counters
+    /// are each phone's own, so its revision says nothing of this one's, and it is left over from
+    /// a phone (or an install) that no longer writes the slots.
     /// A save refused for its tag — another writer between the fetch and the save — is judged
     /// again against the record the refusal carries and tried once more; a second refusal throws.
     @discardableResult
@@ -86,7 +91,8 @@ public struct SurfaceRecords: Sendable {
         var current = try await database.fetch(id)
         var attempt = 0
         while true {
-            if let current, let revision = current.int("revision"), Int(revision) > surface.revision {
+            if let current, current.string("runner") == surface.runner,
+               let revision = current.int("revision"), Int(revision) > surface.revision {
                 return .newerKept(revision: Int(revision))
             }
             var record = current ?? Record(type: SurfaceRecord.type, id: id)
@@ -109,10 +115,18 @@ public struct SurfaceRecords: Sendable {
         try await database.delete([SurfaceRecord.id(slot: slot)])
     }
 
-    /// Deletes every surface record in the zone, found from the change feed, which sees every
-    /// record whether or not an index has caught up with it.
-    public func deleteAll() async throws {
-        let ids = try await database.records(ofType: SurfaceRecord.type).map(\.id)
+    /// Deletes every surface record `runner` saved: a sign-out's, which leaves another phone's
+    /// alone. Found from the change feed, which sees every record whether or not an index has
+    /// caught up with it.
+    public func deleteAll(of runner: String) async throws {
+        let ids = try await database.records(ofType: SurfaceRecord.type).filter { $0.string("runner") == runner }.map(\.id)
+        try await database.delete(ids)
+    }
+
+    /// Deletes every surface record not saved by `runner`, one with no runner included: what an
+    /// earlier primary, or an earlier install of this one, left behind.
+    public func deleteAll(except runner: String) async throws {
+        let ids = try await database.records(ofType: SurfaceRecord.type).filter { $0.string("runner") != runner }.map(\.id)
         try await database.delete(ids)
     }
 

@@ -16,6 +16,8 @@ import WidgetKit
 @MainActor
 final class WatchSurfaceCache {
     static let tokenKey = "topo.surfaces.token"
+    /// The slots whose record the feed listed and a read could not take whole.
+    static let recheckKey = "topo.surfaces.recheck"
 
     let records: SurfaceRecords
     let store: SurfaceStore
@@ -73,6 +75,28 @@ final class WatchSurfaceCache {
         for slot in changes.deleted where WidgetDocument.isSlot(slot) && holds(slot) {
             removed(slot)
         }
+        // A record the feed listed that this read could not take whole (an asset that did not
+        // load) is asked for by name at each fetch until it reads or is gone. The token moves on
+        // without it: a record malformed for good would otherwise hold the token for good, and
+        // every other slot behind it.
+        var recheck = Set(defaults.stringArray(forKey: Self.recheckKey) ?? [])
+        recheck.formUnion(changes.unreadable.filter { WidgetDocument.isSlot($0) })
+        recheck.subtract(changes.saved.map(\.slot))
+        recheck.subtract(changes.deleted)
+        for slot in recheck.sorted() {
+            switch try? await records.fetch(slot: slot) {
+            case .surface(let surface)?:
+                let outcome = apply(surface)
+                kept(outcome)
+                if outcome != .failed { recheck.remove(slot) }
+            case .gone?:
+                if holds(slot) { removed(slot) }
+                recheck.remove(slot)
+            case .unreadable?, nil:
+                break
+            }
+        }
+        defaults.set(recheck.sorted(), forKey: Self.recheckKey)
         if whole {
             // A feed read from the start lists what exists; a cached slot it does not list is
             // asked for by name, and goes only when the answer is that no record is there.

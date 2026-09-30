@@ -25,22 +25,30 @@ final class WatchSurfaceSyncTests: XCTestCase {
     }
 
     /// A push landing while a fetch runs is one more fetch after it, never a second at once.
+    /// Two fetches asked for while one runs make exactly one more after it: never two at once,
+    /// and never none.
     func testFetchesAreSingleFlight() async {
         var running = 0
         var most = 0
         var fetches = 0
+        var release: CheckedContinuation<Void, Never>?
         let sync = WatchSurfaceSync(fetch: {
             running += 1
             most = max(most, running)
             fetches += 1
-            await Task.yield()
+            if fetches == 1 { await withCheckedContinuation { release = $0 } }
             running -= 1
         }, schedule: { _ in })
-        async let a: Void = sync.pushed()
-        async let b: Void = sync.pushed()
-        async let c: Void = sync.opened()
-        _ = await (a, b, c)
+        let first = Task { await sync.pushed() }
+        while release == nil { await Task.yield() }
+        let second = Task { await sync.pushed() }
+        let third = Task { await sync.opened() }
+        for _ in 0..<50 { await Task.yield() }
+        release?.resume()
+        await first.value
+        await second.value
+        await third.value
         XCTAssertEqual(most, 1)
-        XCTAssertLessThanOrEqual(fetches, 2)
+        XCTAssertEqual(fetches, 2, "fetches asked for during one ran none after it, or more than one")
     }
 }
