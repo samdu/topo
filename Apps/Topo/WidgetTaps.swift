@@ -345,9 +345,6 @@ final class WidgetActions {
         // asked for. A run that fails puts it back to its confirmed one.
         let key = "\(slot)/\(id)"
         let state = "\(key)/\(revision)"
-        sequence += 1
-        let tap = sequence
-        latest[key] = tap
         var was: Bool?
         var now: Bool?
         if tapped.isToggle {
@@ -365,13 +362,19 @@ final class WidgetActions {
             guard let stored else { return record("stale") }
             was = stored
             now = (control == nil ? nil : turningOn) ?? !stored
-            if chains[key] == nil { confirmed[state] = stored }
+            // The state before the first tap at this revision, whatever chain an older revision's
+            // tap left running.
+            if confirmed[state] == nil { confirmed[state] = stored }
         }
         let argv = tapped.argv(now)
         let form = tapped.request(now)
         guard argv != nil || form != nil else { return record(String(ToolReply.refused)) }
         // After the control's last run, whatever it answered, so two quick taps' writes land in
         // the order they were flipped and a failed one holds up none after it.
+        // Numbered only once the tap has a run, so a tap refused above never stands as the latest.
+        sequence += 1
+        let tap = sequence
+        latest[key] = tap
         let previous = chains[key]
         let (table, bound, perform) = (table, bound, perform)
         let task = Task { @MainActor in
@@ -392,9 +395,11 @@ final class WidgetActions {
             // that took. A success is that state until a later one takes; a failure puts the toggle
             // back to it only when no later tap stands, since a later tap drew its own state and its
             // run will settle it.
-            if let was, let now {
+            if let was, let now, latest[key] == tap || status == 0 {
                 if status == 0 { confirmed[state] = now }
-                if status != 0, latest[key] == tap {
+                if latest[key] == tap {
+                    // The last tap settles the toggle at what the device took last: its own state on
+                    // success, over a `topo control state` written while it ran; else the last success.
                     try? store.setOn(confirmed[state] ?? was, slot: slot, control: id, revision: revision)
                 }
             }
@@ -407,7 +412,7 @@ final class WidgetActions {
         running[token] = nil
         if chains[key] == task {
             chains[key] = nil
-            confirmed[state] = nil
+            confirmed = confirmed.filter { !$0.key.hasPrefix(key + "/") }
             latest[key] = nil
         }
     }

@@ -227,6 +227,57 @@ final class ControlActionTests: XCTestCase {
         XCTAssertEqual(store.readControl(slot: "toggle-6")?.document.on, true)
     }
 
+    /// A slot written anew while an older revision's run is in flight: the new revision's taps,
+    /// both failing, put the toggle back to the new revision's own state, not to a tap's.
+    func testANewRevisionsFailuresGoBackToItsOwnState() async throws {
+        let home = ScriptedTool([(.milliseconds(300), .ok("done\n")),
+                                 (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n")),
+                                 (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n"))])
+        let first = try set("toggle-1", ["home", "set", "LAMP", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-1")
+        async let old: Void = actions.run(slot: slot, control: ControlSlot.control, revision: first, turningOn: true)
+        try await Task.sleep(for: .milliseconds(50))
+        let second = try set("toggle-1", ["home", "set", "LAMP", "power"], on: false)
+        async let on: Void = actions.run(slot: slot, control: ControlSlot.control, revision: second, turningOn: true)
+        try await Task.sleep(for: .milliseconds(20))
+        async let off: Void = actions.run(slot: slot, control: ControlSlot.control, revision: second, turningOn: false)
+        _ = await (old, on, off)
+        XCTAssertEqual(store.readControl(slot: "toggle-1")?.document.on, false, "both runs failed and the toggle shows on")
+    }
+
+    /// A second tap whose state could not be written stands as no tap: the first tap's failure
+    /// still puts the toggle back.
+    func testATapThatCouldNotBeWrittenDoesNotHoldUpARestore() async throws {
+        let home = ScriptedTool([(.milliseconds(300), ToolReply(status: ToolReply.failed, text: "no\n"))])
+        let revision = try set("toggle-2", ["home", "set", "LAMP", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-2")
+        async let first: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: true)
+        try await Task.sleep(for: .milliseconds(50))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        await actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: false)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+        await first
+        XCTAssertEqual(home.calls.count, 1)
+        XCTAssertEqual(store.readControl(slot: "toggle-2")?.document.on, false, "the failed run left the toggle on")
+    }
+
+    /// `topo control state` while a run is in flight, then the run takes: the toggle shows the
+    /// state the run put the device in.
+    func testASuccessAfterTheMindsStateShowsTheRunsState() async throws {
+        let home = ScriptedTool([(.milliseconds(200), .ok("done\n"))])
+        let revision = try set("toggle-3", ["home", "set", "LAMP", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-3")
+        async let tapped: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: true)
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try store.setControl(false, slot: "toggle-3", revision: revision)
+        actions.confirm(false, slot: slot, control: ControlSlot.control, revision: revision)
+        await tapped
+        XCTAssertEqual(store.readControl(slot: "toggle-3")?.document.on, true)
+    }
+
     /// `topo control state` while a toggle's run is in flight: a failure after it goes back to
     /// what the mind said.
     func testAConfirmedStateIsWhatAFailureGoesBackTo() async throws {

@@ -62,7 +62,8 @@ struct ControlTool: Tool {
         A request to the home network needs local network access, asked for when Topo is in front.
         Limits: a control shows what the system last read of it, and the system decides when it reads again.
         A press on the lock screen or the Action button needs no Face ID. On iOS 18 to 25 a turn or open
-        control cannot bring Topo forward; its turn is still sent.
+        control cannot bring Topo forward; its turn is still sent, or when Topo is next opened if iCloud
+        cannot be read then.
         """
     }
 
