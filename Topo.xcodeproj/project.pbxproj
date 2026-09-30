@@ -26,6 +26,7 @@
 		095680D4B174FA43431D2FDD /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */; };
 		095AA2E26A94E478E1E1679E /* MascotRoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6904A480352F2D00E38BFD6F /* MascotRoost.swift */; };
 		0976D124684A18961E33D414 /* ModelHousekeeping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */; };
+		09D03775629325E5961A91C5 /* TopoControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90EBB1BE1833BA552EC766A5 /* TopoControls.swift */; };
 		0A67EE7A352872D7F853A84C /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */; };
 		0BA91C2ED87F6B3412705304 /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 456A652A469857DACC9DA2C9 /* TopoCoreTesting */; };
 		0BB1FC3236EA16193196ED7B /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
@@ -592,6 +593,7 @@
 		8D1F9ED3E5644D6B2C499B31 /* TopoTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		8D9560A4BB990698B0D1E786 /* capital-of-france.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = "capital-of-france.wav"; sourceTree = "<group>"; };
 		8F25015F931190C1B4C01A00 /* Userland.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Userland.swift; sourceTree = "<group>"; };
+		90EBB1BE1833BA552EC766A5 /* TopoControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoControls.swift; sourceTree = "<group>"; };
 		91354032F5443E868316550B /* MicrophonePressTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MicrophonePressTests.swift; sourceTree = "<group>"; };
 		9217F79B47B4554A5839E32D /* SpokenTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpokenTurnTests.swift; sourceTree = "<group>"; };
 		92C808A89F2FD3CA7D08AB81 /* MemoryBrakeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryBrakeTests.swift; sourceTree = "<group>"; };
@@ -819,6 +821,7 @@
 			children = (
 				06A2FA216D752FD653BA35F6 /* Info.plist */,
 				297C1A9489C88545BA87293C /* SurfaceProvider.swift */,
+				90EBB1BE1833BA552EC766A5 /* TopoControls.swift */,
 				9E773E285B12C717E7007D29 /* TopoWidgets.entitlements */,
 				C273B9B05389AA1C5777F528 /* TopoWidgets.swift */,
 				5AE5605E998B30A3C3841A2D /* WidgetIntents.swift */,
@@ -1998,6 +2001,7 @@
 				8D68671CC764D16A596405E9 /* SurfaceProvider.swift in Sources */,
 				32830F67E46628FB06BD9EC0 /* SurfaceStore.swift in Sources */,
 				B726E5CF08D5C371DF03508F /* Theme.swift in Sources */,
+				09D03775629325E5961A91C5 /* TopoControls.swift in Sources */,
 				3AD1BB89870BB3C677E7F2E4 /* TopoWidgets.swift in Sources */,
 				9159730FA383EFB432E87A8E /* WidgetDocument.swift in Sources */,
 				DDC009CA5DA492EDD4FA67BB /* WidgetIntents.swift in Sources */,
