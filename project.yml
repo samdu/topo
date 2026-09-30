@@ -157,6 +157,7 @@ targets:
     sources:
       - Apps/Widgets
       - Apps/Shared/WidgetDocument.swift
+      - Apps/Shared/ControlDocument.swift
       - Apps/Shared/WidgetNodeView.swift
       - Apps/Shared/SurfaceStore.swift
       - Apps/Shared/Theme.swift

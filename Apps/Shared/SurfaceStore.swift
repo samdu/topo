@@ -7,6 +7,8 @@ import Foundation
 /// - `<slot>.json`, one document per slot, as the app kept it (`WidgetDocument.text`), and
 ///   `_default.json`, the app's own (`DefaultSurface`);
 /// - `<slot>/<name>.png`, a slot's images, re-encoded by `topo widget image`;
+/// - `_control-<slot>.json`, a control slot's document (`ControlDocument`), one for each of the
+///   twelve while signed in;
 /// - `_revisions.json`, the last revision given each slot, which outlives a slot's clearing, and
 ///   a sign-out as `_floor`, the highest given, so no revision is issued twice to any slot of any
 ///   login and an old timeline's tap never matches a document written since;
@@ -199,6 +201,26 @@ struct SurfaceStore: Sendable {
             guard let data, let revisions = try? JSONDecoder().decode([String: Int].self, from: data) else { return data }
             return try JSONEncoder().encode([Self.floor: revisions.values.max() ?? 0])
         }
+    }
+
+    // MARK: Controls
+
+    /// A control slot's kept document, `slot` one of `ControlSlot.all`, read under a coordinated
+    /// read. Nil is no file.
+    func readControl(slot: String) -> ControlDocument.Reading? {
+        guard ControlSlot.kind(of: slot) != nil, let data = coordinatedRead(url(slot: ControlSlot.stored(slot))) else { return nil }
+        return ControlDocument.read(String(decoding: data, as: UTF8.self), slot: slot, from: .store)
+    }
+
+    /// Keeps `document` as the control slot's, under the next revision, and answers that revision.
+    /// The revision counts under the slot's store name, above the same `_floor` as a widget's.
+    @discardableResult
+    func writeControl(_ document: ControlDocument, slot: String) throws -> Int {
+        guard ControlSlot.kind(of: slot) == document.kind else { throw CocoaError(.fileWriteInvalidFileName) }
+        var kept = document
+        kept.revision = try nextRevision(slot: ControlSlot.stored(slot))
+        try coordinatedWrite(url(slot: ControlSlot.stored(slot))) { _ in Data(kept.text.utf8) }
+        return kept.revision
     }
 
     // MARK: Revisions
