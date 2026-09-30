@@ -59,7 +59,7 @@ The board reads the ledgers too (`wiki/team-pane.md`): the stage, the plan-revie
 
 ## The fix loop
 
-The shape the loop aims at is Sam's: most PRs are good first try (one review) or pass after one round of changes (two reviews), with a long tail out to a hard cap of four. Four Codex verdicts is that cap: `review_cap` in `pr-validate.yaml` counts them as `scripts/review-prompt.sh` counts the round, the reviewer does not run a fifth time, one comment on the PR says the cap is reached, and `review_gate` stays red, so nothing merges it by itself. It merges on Sam's word, or goes back to draft for a replan; the count is the PR's, so a replanned change is reviewed as a new PR.
+The shape the loop aims at is Sam's: most PRs are good first try (one review) or pass after one round of changes (two reviews), with a long tail out to a hard cap of four. Four Codex verdicts is that cap: `scripts/review-cap.sh` counts them as `scripts/review-prompt.sh` counts the round, at the start of a run and again immediately before a verdict is posted, the reviewer does not run a fifth time and no fifth verdict is posted, one comment on the PR says the cap is reached, and `review_gate` stays red, so nothing merges it by itself. It merges on Sam's word, or goes back to draft for a replan; the count is the PR's, so a replanned change is reviewed as a new PR.
 
 Findings are Critical, Important or Minor, and the severity decides whether the loop spends a round on them.
 
