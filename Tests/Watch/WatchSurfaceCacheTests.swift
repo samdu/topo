@@ -76,11 +76,13 @@ final class WatchSurfaceCacheTests: XCTestCase {
     /// The phone's save, as `SurfaceSync` makes it.
     private func phoneSets(_ slot: String, _ text: String, revision: Int, images: [String: Data] = [:]) async throws {
         let surface = SurfaceRecord(slot: slot, document: text, revision: revision, updated: Date(), runner: "phone-1", images: images)
-        _ = try await SurfaceRecords(database: database).save(surface)
+        let records = SurfaceRecords(database: database)
+        try await records.save(surface, over: records.read(slot: slot))
     }
 
     private func phoneClears(_ slot: String) async throws {
-        try await SurfaceRecords(database: database).delete(slot: slot)
+        let records = SurfaceRecords(database: database)
+        try await records.clear(slot: slot, runner: "phone-1", at: Date(), over: records.read(slot: slot))
     }
 
     func testEmptyCacheListsFromTheFeed() async throws {
@@ -116,6 +118,18 @@ final class WatchSurfaceCacheTests: XCTestCase {
         try store.keep(old, slot: "old")
         await cache.fetch()
         XCTAssertEqual(store.slots(), ["lamp"], "a slot whose record is gone stayed cached")
+    }
+
+    /// A clear is a tombstone, which a feed read from the start reports as a removal too, so the
+    /// watch confirms it without a fetch by name.
+    func testATombstoneReadFromTheStartDropsTheSlot() async throws {
+        try await phoneSets("weather", Self.document("rain"), revision: 3)
+        await cache.fetch()
+        try await phoneClears("weather")
+        await database.expireChangeTokens()
+        await zone.fail(feed: false, fetch: true)
+        await cache.fetch()
+        XCTAssertEqual(store.slots(), [], "a cleared slot stayed on the watch")
     }
 
     /// The group refusing a write (full, or its folder locked): the feed's token stays, so the
@@ -226,9 +240,10 @@ final class WatchSurfaceCacheTests: XCTestCase {
         XCTAssertEqual(store.read(slot: "weather"), before)
 
         // The feed read afresh, the fetch by name failing: an answer that is not "gone" keeps it,
-        // though the record went before the read, which a feed from the start does not report.
+        // though the record went before the read. The phone clears with a tombstone, which any
+        // feed reports; a record gone outright (the zone reset, say) a feed from the start does not.
         await database.expireChangeTokens()
-        try await phoneClears("weather")
+        try await database.delete([SurfaceRecord.id(slot: "weather")])
         await zone.fail(feed: false, fetch: true)
         await cache.fetch()
         XCTAssertEqual(store.read(slot: "weather"), before, "a failed fetch was taken for a missing record")

@@ -103,7 +103,7 @@ final class WidgetToolTests: XCTestCase {
         let home = home!
         let records = InMemoryRecordDatabase()
         self.records = records
-        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, ensureZone: {}, store: { store },
+        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, ensureZone: {}, mayOwn: { true }, store: { store },
                                runner: "phone-test",
                                defaults: UserDefaults(suiteName: "widget-tool-\(UUID().uuidString)")!, reloader: reloader)
         self.sync = sync
@@ -266,7 +266,7 @@ final class WidgetToolTests: XCTestCase {
 
     // MARK: The slot's record (widgets B, Review Focus 2)
 
-    /// Each write is followed by the slot's record, and a clear by its delete; a slot whose
+    /// Each write is followed by the slot's record, and a clear by its clear; a slot whose
     /// record has not gone is one `topo widget` says is behind.
     func testTheRecordFollowsTheSlotAndIsReportedBehind() async throws {
         let offline = try await tool(loaded: true, iCloud: false)
@@ -286,7 +286,7 @@ final class WidgetToolTests: XCTestCase {
         _ = await tool.run(["clear", "demo"])
         await sync.flush()
         let gone = await records.current(SurfaceRecord.id(slot: "demo"))
-        XCTAssertNil(gone)
+        XCTAssertFalse(SurfaceRecords.Read(gone).holds, "the record outlived its slot")
     }
 
     /// The last slot cleared while its record's delete cannot go: the list says the watch still

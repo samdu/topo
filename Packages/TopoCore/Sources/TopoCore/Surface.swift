@@ -4,9 +4,15 @@ import Foundation
 /// phone — the watch — can draw it: the document as the phone kept it, its revision, and its
 /// images. Record name `surface-<slot>`, type `Surface`, in the one zone.
 ///
-/// The phone saves it beside its own file write and deletes it when the slot is cleared; the
+/// The phone saves it beside its own file write and clears it when the slot is cleared; the
 /// watch reads it from the zone's change feed and judges the document itself, since nothing in a
 /// record is trusted to have been read.
+///
+/// A slot is never physically deleted by the phone. CloudKit's deletes take record ids alone —
+/// `savePolicy` governs saves, never `recordIDsToDelete` — so a delete cannot be made conditional
+/// on what the deleting phone read, and another phone's newer record would go with it. A clear is
+/// a save instead: a tombstone (`cleared`, the slot, the runner, `updated`, no document and no
+/// images) under the change tag of the read it acted on, which the feed reports as a deletion.
 public struct SurfaceRecord: Equatable, Sendable {
     public static let type = "Surface"
 
@@ -61,10 +67,11 @@ public struct SurfaceRecord: Equatable, Sendable {
     }
 }
 
-/// The `Surface` records: saved with a compare-and-set, deleted on a clear and a sign-out, and
-/// read from the change feed. A record belongs to its `runner`, the phone that saved it: the newer
-/// revision wins between two saves of one runner, a save over another runner's record replaces it,
-/// and a sign-out deletes only the signing-out phone's own.
+/// The `Surface` records, as single compare-and-set steps: each write carries the change tag of
+/// the read it acted on, so a record another phone wrote since that read refuses it with
+/// `serverRecordChanged`, and what to do then — read again, ask whose it is, drop it — is the
+/// caller's, which knows its role. A record belongs to its `runner`: the newer revision wins
+/// between two saves of one runner, and a save over another runner's record replaces it.
 public struct SurfaceRecords: Sendable {
     public let database: any ZoneDatabase
 
@@ -72,69 +79,101 @@ public struct SurfaceRecords: Sendable {
         self.database = database
     }
 
+    /// A slot's record as one read found it, the change tag with it.
+    public enum Read: Equatable, Sendable {
+        /// No record.
+        case none
+        case live(SurfaceRecord, Record)
+        /// A tombstone: the slot was cleared by `runner`.
+        case cleared(runner: String?, Record)
+        /// There, but not a whole surface or a tombstone.
+        case unreadable(Record)
+
+        public init(_ record: Record?) {
+            guard let record else { self = .none; return }
+            if record.int("cleared") == 1 {
+                self = .cleared(runner: record.string("runner"), record)
+            } else if let surface = SurfaceRecord(record) {
+                self = .live(surface, record)
+            } else {
+                self = .unreadable(record)
+            }
+        }
+
+        /// The record read, with its change tag; nil when there was none.
+        public var record: Record? {
+            switch self {
+            case .none: nil
+            case .live(_, let record), .cleared(_, let record), .unreadable(let record): record
+            }
+        }
+
+        /// Who saved it, as far as the record says.
+        public var runner: String? { record?.string("runner") }
+
+        /// Whether it holds a slot: a whole surface, or a record that is not a tombstone.
+        public var holds: Bool {
+            switch self {
+            case .live, .unreadable: true
+            case .none, .cleared: false
+            }
+        }
+
+        public var slot: String? { record.flatMap { SurfaceRecord.slot(of: $0.id) } }
+    }
+
     public enum Saved: Equatable, Sendable {
         case saved
-        /// The server holds a later revision of this runner's than this one, which is kept.
+        /// The read found a later revision of this runner's than this one, which is kept.
         case newerKept(revision: Int)
     }
 
-    /// Saves `surface` over the slot's record under its change tag. An older revision never
-    /// overwrites a newer one of the same runner; the same revision does, since a toggle's state
-    /// changes under one. Another runner's record is replaced whatever its revision: the counters
-    /// are each phone's own, so its revision says nothing of this one's, and it is left over from
-    /// a phone (or an install) that no longer writes the slots.
-    /// A save refused for its tag — another writer between the fetch and the save — is judged
-    /// again against the record the refusal carries and tried once more; a second refusal throws.
+    public func read(slot: String) async throws -> Read {
+        Read(try await database.fetch(SurfaceRecord.id(slot: slot)))
+    }
+
+    /// Every surface record in the zone, found from the change feed, which sees every record
+    /// whether or not an index has caught up with it.
+    public func all() async throws -> [Read] {
+        try await database.records(ofType: SurfaceRecord.type).map(Read.init)
+    }
+
+    /// Saves `surface` over what `read` found, under its change tag: one attempt, refused with
+    /// `serverRecordChanged` if the record moved since. An older revision never overwrites a newer
+    /// one of the same runner; the same revision does, since a toggle's state changes under one.
+    /// Another runner's record, and a tombstone, are replaced whatever they held.
     @discardableResult
-    public func save(_ surface: SurfaceRecord) async throws -> Saved {
-        let id = SurfaceRecord.id(slot: surface.slot)
-        var current = try await database.fetch(id)
-        var attempt = 0
-        while true {
-            if let current, current.string("runner") == surface.runner,
-               let revision = current.int("revision"), Int(revision) > surface.revision {
-                return .newerKept(revision: Int(revision))
-            }
-            var record = current ?? Record(type: SurfaceRecord.type, id: id)
-            record.fields = surface.fields
-            do {
-                _ = try await database.save(record)
-                return .saved
-            } catch RecordDatabaseError.serverRecordChanged(_, let server) where attempt == 0 {
-                current = server
-            } catch RecordDatabaseError.unknownItem where attempt == 0 {
-                // Deleted between the fetch and the save: this save creates it.
-                current = nil
-            }
-            attempt += 1
+    public func save(_ surface: SurfaceRecord, over read: Read) async throws -> Saved {
+        if case .live(let current, _) = read, current.runner == surface.runner, current.revision > surface.revision {
+            return .newerKept(revision: current.revision)
         }
+        var record = read.record ?? Record(type: SurfaceRecord.type, id: SurfaceRecord.id(slot: surface.slot))
+        record.fields = surface.fields
+        _ = try await database.save(record)
+        return .saved
     }
 
-    /// Deletes the slot's record; one already gone is not an error.
-    public func delete(slot: String) async throws {
-        try await database.delete([SurfaceRecord.id(slot: slot)])
-    }
-
-    /// Deletes every surface record `runner` saved: a sign-out's, which leaves another phone's
-    /// alone. Found from the change feed, which sees every record whether or not an index has
-    /// caught up with it.
-    public func deleteAll(of runner: String) async throws {
-        let ids = try await database.records(ofType: SurfaceRecord.type).filter { $0.string("runner") == runner }.map(\.id)
-        try await database.delete(ids)
-    }
-
-    /// Deletes every surface record not saved by `runner`, one with no runner included: what an
-    /// earlier primary, or an earlier install of this one, left behind.
-    public func deleteAll(except runner: String) async throws {
-        let ids = try await database.records(ofType: SurfaceRecord.type).filter { $0.string("runner") != runner }.map(\.id)
-        try await database.delete(ids)
+    /// Clears the slot over what `read` found, under its change tag: a tombstone saved by
+    /// `runner`, refused with `serverRecordChanged` if the record moved since. Nothing is written
+    /// where the read found no record or a tombstone. Answers the tombstone's record, with its tag.
+    @discardableResult
+    public func clear(slot: String, runner: String, at updated: Date, over read: Read) async throws -> Record? {
+        guard read.holds, var record = read.record else { return nil }
+        // The empty lists are written as nils, which takes the images off even where the record
+        // read held assets that could not be loaded.
+        record.fields = ["slot": .string(slot), "runner": .string(runner), "updated": .date(updated), "cleared": .int(1),
+                         "imageNames": .strings([]), "images": .assets([])]
+        return try await database.save(record)
     }
 
     /// Whether the slot's record is there now. `.gone` only when the store answered that there is
     /// none, which is the one answer that confirms a slot removed; a failure to ask throws.
     public func fetch(slot: String) async throws -> Fetched {
-        guard let record = try await database.fetch(SurfaceRecord.id(slot: slot)) else { return .gone }
-        return SurfaceRecord(record).map(Fetched.surface) ?? .unreadable
+        switch try await read(slot: slot) {
+        case .none, .cleared: return .gone
+        case .live(let surface, _): return .surface(surface)
+        case .unreadable: return .unreadable
+        }
     }
 
     public enum Fetched: Equatable, Sendable {
@@ -145,17 +184,22 @@ public struct SurfaceRecords: Sendable {
     }
 
     /// What changed since `token`: the surfaces saved (a record that is not a whole surface is
-    /// listed by slot in `unreadable`), the slots deleted, and the next token.
+    /// listed by slot in `unreadable`), the slots cleared or deleted, and the next token.
     public func changes(since token: Data?) async throws -> Changes {
         let changes = try await database.changes(ofType: SurfaceRecord.type, since: token)
         var surfaces: [SurfaceRecord] = []
         var unreadable: [String] = []
+        var deleted = changes.deleted.compactMap(SurfaceRecord.slot(of:))
         for record in changes.changed {
-            if let surface = SurfaceRecord(record) { surfaces.append(surface) }
-            else if let slot = SurfaceRecord.slot(of: record.id) { unreadable.append(slot) }
+            guard let slot = SurfaceRecord.slot(of: record.id) else { continue }
+            switch Read(record) {
+            case .live(let surface, _): surfaces.append(surface)
+            case .cleared: deleted.append(slot)
+            case .unreadable: unreadable.append(slot)
+            case .none: break
+            }
         }
-        return Changes(saved: surfaces, unreadable: unreadable, deleted: changes.deleted.compactMap(SurfaceRecord.slot(of:)),
-                       token: changes.token)
+        return Changes(saved: surfaces, unreadable: unreadable, deleted: deleted, token: changes.token)
     }
 
     public struct Changes: Sendable {

@@ -68,16 +68,16 @@ final class SignOutTests: XCTestCase {
                                        schedule: { _, _ in })
         // The slots' records, which the watch draws, go with the files.
         let records = InMemoryRecordDatabase()
-        let sync = SurfaceSync(records: { SurfaceRecords(database: records) }, ensureZone: {}, store: { store }, runner: "phone",
+        let sync = SurfaceSync(records: { SurfaceRecords(database: records) }, ensureZone: {}, mayOwn: { true }, store: { store }, runner: "phone",
                                defaults: UserDefaults(suiteName: "signout-\(UUID().uuidString)")!, reloader: reloader)
         guard case .record(let demo) = sync.snapshot(slot: "demo", store) else { return XCTFail("demo is not readable") }
-        try await SurfaceRecords(database: records).save(demo)
+        try await SurfaceRecords(database: records).save(demo, over: .none)
         let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
                               forgetConnections: {}, forgetLogin: {})
         await signOut.act()
         await sync.flush()
         let surfaces = try await records.records(ofType: SurfaceRecord.type)
-        XCTAssertEqual(surfaces.map(\.id), [], "a slot's record outlived the login")
+        XCTAssertEqual(surfaces.filter { SurfaceRecords.Read($0).holds }.map(\.id), [], "a slot's record outlived the login")
         XCTAssertFalse(sync.owesForget)
         let left = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         XCTAssertEqual(left, ["_revisions.json"], "the app group kept \(left)")

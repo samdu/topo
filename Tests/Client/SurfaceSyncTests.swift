@@ -4,7 +4,8 @@ import XCTest
 
 @testable import Topo
 
-/// The in-memory store, refusing saves or deletes while told to, as iCloud does with no network.
+/// The in-memory store, refusing saves or clears while told to, as iCloud does with no network. A
+/// clear is a save of a tombstone, so `deletes` refuses those.
 private actor Outage: ZoneDatabase {
     let inner = InMemoryRecordDatabase()
     var saves = false
@@ -26,7 +27,10 @@ private actor Outage: ZoneDatabase {
         if failing { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try check(saves); return try await inner.save(records) }
+    func save(_ records: [Record]) async throws -> [Record] {
+        try check(records.contains { $0.fields["cleared"] != nil } ? deletes : saves)
+        return try await inner.save(records)
+    }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
@@ -70,8 +74,16 @@ final class SurfaceSyncTests: XCTestCase {
         try store.write(WidgetDocument.read(#"{"families": {"default": {"kind": "text", "text": "\#(text)"}}}"#).document, slot: slot)
     }
 
+    /// The slot's record while it holds the slot; a tombstone is no record.
     private func stored(_ slot: String) async -> Record? {
-        await database.inner.current(SurfaceRecord.id(slot: slot))
+        let record = await database.inner.current(SurfaceRecord.id(slot: slot))
+        return SurfaceRecords.Read(record).holds ? record : nil
+    }
+
+    /// Another phone's save, as its `SurfaceSync` makes it: over what it read.
+    private func save(_ surface: SurfaceRecord) async throws {
+        let records = SurfaceRecords(database: database)
+        try await records.save(surface, over: records.read(slot: surface.slot))
     }
 
     func testAWriteSavesTheSlotsRecord() async throws {
@@ -124,7 +136,7 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertNotNil(saved)
     }
 
-    func testAClearDeletesTheRecord() async throws {
+    func testAClearTombstonesTheRecord() async throws {
         _ = try write("weather")
         sync.changed(slot: "weather")
         await sync.flush()
@@ -183,7 +195,7 @@ final class SurfaceSyncTests: XCTestCase {
     }
 
     /// The record mirrors the file: a save owed for a slot whose document has gone deletes it.
-    func testASaveForAGoneDocumentDeletesTheRecord() async throws {
+    func testASaveForAGoneDocumentClearsTheRecord() async throws {
         _ = try write("weather")
         sync.changed(slot: "weather")
         await sync.flush()
@@ -245,7 +257,7 @@ final class SurfaceSyncTests: XCTestCase {
     /// replaced, not kept over this phone's document.
     func testAnotherRunnersHigherRevisionIsReplaced() async throws {
         let old = SurfaceRecord(slot: "weather", document: "{}", revision: 5, updated: Date(), runner: "phone-0")
-        _ = try await SurfaceRecords(database: database).save(old)
+        try await save(old)
         let revision = try write("weather", "new")
         sync.changed(slot: "weather")
         await sync.flush()
@@ -260,14 +272,16 @@ final class SurfaceSyncTests: XCTestCase {
     func testADemotedPhonesSignOutLeavesTheNewPrimarysRecords() async throws {
         let storeB = SurfaceStore(folder: folder.appendingPathComponent("b"))
         defer { try? FileManager.default.removeItem(at: storeB.folder) }
+        let role = Role()
         let a = makeSync(defaults: UserDefaults(suiteName: "surface-sync-a-\(UUID().uuidString)")!, runner: "phone-A",
-                         mayOwn: { false })
+                         mayOwn: { role.primary })
         let b = makeSync(defaults: UserDefaults(suiteName: "surface-sync-b-\(UUID().uuidString)")!, runner: "phone-B", store: storeB)
         _ = try write("weather")
         _ = try write("lamp")
         a.changed(slot: "weather")
         a.changed(slot: "lamp")
         await a.flush()
+        role.primary = false
         _ = try storeB.write(WidgetDocument.read(#"{"families": {"default": {"kind": "text", "text": "B"}}}"#).document, slot: "tides")
         b.changed(slot: "tides")
         await b.flush()
@@ -291,7 +305,7 @@ final class SurfaceSyncTests: XCTestCase {
 
         // A leaves a record behind it never signs out of: B's sweep takes it.
         let left = SurfaceRecord(slot: "left", document: "{}", revision: 1, updated: Date(), runner: "phone-A")
-        _ = try await SurfaceRecords(database: database).save(left)
+        try await save(left)
         b.sweep()
         await b.flush()
         let gone = await stored("left"), kept = await stored("tides")
@@ -303,7 +317,7 @@ final class SurfaceSyncTests: XCTestCase {
     /// owns nothing.
     func testASignOutCancelsASweep() async throws {
         let other = SurfaceRecord(slot: "tides", document: "{}", revision: 1, updated: Date(), runner: "phone-B")
-        _ = try await SurfaceRecords(database: database).save(other)
+        try await save(other)
         sync.sweep()
         sync.forget()
         await sync.flush()
@@ -382,6 +396,196 @@ final class SurfaceSyncTests: XCTestCase {
         let none = await stored("weather")
         XCTAssertNil(none)
     }
+
+    // MARK: A takeover landing between a read and the write made from it
+
+    /// The first save of this phone's (runner phone-1) that `matches` runs `meanwhile` before its
+    /// tag is checked: another phone's write, or a takeover, landing between the read the pass
+    /// made and its compare-and-set.
+    private func interleave(when matches: @escaping @Sendable (Record) -> Bool,
+                            _ meanwhile: @escaping @Sendable (SurfaceRecords) async -> Void) async {
+        let once = Once()
+        let records = SurfaceRecords(database: database.inner)
+        await database.inner.setBeforeSave { saving in
+            guard saving.contains(where: { $0.fields["runner"] == .string("phone-1") && matches($0) }), once.first() else { return }
+            await meanwhile(records)
+        }
+    }
+
+    private nonisolated static func tombstone(_ record: Record) -> Bool { record.fields["cleared"] != nil }
+
+    /// The new primary's save, over what it read.
+    private nonisolated static func primarySaves(_ slot: String, _ records: SurfaceRecords) async {
+        let surface = SurfaceRecord(slot: slot, document: "{B}", revision: 1, updated: Date(), runner: "phone-B")
+        _ = try? await records.save(surface, over: records.read(slot: slot))
+    }
+
+    private func assertThePrimarys(_ slot: String, file: StaticString = #filePath, line: UInt = #line) async {
+        let surface = await stored(slot).flatMap(SurfaceRecord.init)
+        XCTAssertEqual(surface?.runner, "phone-B", "the new primary's record did not survive", file: file, line: line)
+        XCTAssertEqual(surface?.document, "{B}", file: file, line: line)
+    }
+
+    /// A sign-out read its own record, and the new primary saved the slot before the clear: the
+    /// clear is refused for its tag and dropped, since the record is no longer this phone's.
+    func testASignOutLeavesARecordSavedSinceItsRead() async throws {
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        await interleave(when: Self.tombstone) { await Self.primarySaves("weather", $0) }
+        sync.forget()
+        await sync.flush()
+        await assertThePrimarys("weather")
+        XCTAssertFalse(sync.owesForget)
+    }
+
+    /// The sweep read a leftover record and its role, and the new primary saved the slot before
+    /// the clear: the clear is refused and dropped.
+    func testASweepLeavesARecordSavedSinceItsRead() async throws {
+        try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-0"))
+        await interleave(when: Self.tombstone) { await Self.primarySaves("tides", $0) }
+        sync.sweep()
+        await sync.flush()
+        await assertThePrimarys("tides")
+    }
+
+    /// An owed save in flight when a takeover demotes this phone and the new primary saves the
+    /// slot: the save is refused for its tag, the role read again says viewer, and it is dropped.
+    func testAnOwedSaveInFlightLeavesTheNewPrimarysRecord() async throws {
+        let role = Role()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { role.primary })
+        _ = try write("weather")
+        await interleave(when: { !Self.tombstone($0) }) {
+            role.primary = false
+            await Self.primarySaves("weather", $0)
+        }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        await assertThePrimarys("weather")
+        XCTAssertEqual(sync.pending, [], "a demoted phone kept a save owed over another phone's record")
+    }
+
+    /// An owed clear in flight when a takeover demotes this phone and the new primary saves the
+    /// slot: the clear is refused for its tag and dropped.
+    func testAnOwedClearInFlightLeavesTheNewPrimarysRecord() async throws {
+        let role = Role()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { role.primary })
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        try store.remove(slot: "weather")
+        await interleave(when: Self.tombstone) {
+            role.primary = false
+            await Self.primarySaves("weather", $0)
+        }
+        sync.cleared(slot: "weather")
+        await sync.flush()
+        await assertThePrimarys("weather")
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// The other way round: this phone is the primary, and a demoted phone's stale save lands
+    /// between the primary's read and its save. The primary's save is refused, read again and
+    /// made again, and the primary's record is the one left.
+    func testThePrimaryWinsOverAStaleSaveBetweenItsReadAndItsWrite() async throws {
+        let revision = try write("weather")
+        await interleave(when: { _ in true }) { records in
+            let stale = SurfaceRecord(slot: "weather", document: "{A}", revision: 9, updated: Date(), runner: "phone-0")
+            _ = try? await records.save(stale, over: records.read(slot: "weather"))
+        }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let surface = await stored("weather").flatMap(SurfaceRecord.init)
+        XCTAssertEqual(surface?.runner, "phone-1")
+        XCTAssertEqual(surface?.revision, revision)
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// A takeover landing between the role read and the save: the save lands, the role read after
+    /// it says viewer, and the phone clears its own write under that write's tag.
+    func testASaveMadeAsTheRoleFlippedIsUndone() async throws {
+        let role = Role()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { role.primary })
+        _ = try write("weather")
+        await interleave(when: { !Self.tombstone($0) }) { _ in role.primary = false }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let left = await stored("weather")
+        XCTAssertNil(left, "a demoted phone's save outlived the takeover")
+        let cleared = await database.inner.current(SurfaceRecord.id(slot: "weather"))
+        XCTAssertEqual(cleared?.fields["runner"], .string("phone-1"))
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// The same, with the new primary's save landing between that save and its undo: the undo is
+    /// refused for its tag and dropped, and the new primary's record stays.
+    func testAnUndoLeavesTheNewPrimarysRecord() async throws {
+        let role = Role()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { role.primary })
+        _ = try write("weather")
+        let once = Once(), records = SurfaceRecords(database: database.inner)
+        await database.inner.setBeforeSave { saving in
+            guard let mine = saving.first(where: { $0.fields["runner"] == .string("phone-1") }) else { return }
+            if !Self.tombstone(mine) {
+                role.primary = false
+            } else if once.first() {
+                await Self.primarySaves("weather", records)
+            }
+        }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        await assertThePrimarys("weather")
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// This phone's own newer save lands between a pass's read and its write (another pass of the
+    /// same install): the write is refused, and judged again against what the server holds, which
+    /// keeps the newer.
+    func testASaveRefusedForItsTagIsJudgedAgainstTheServersRevision() async throws {
+        let revision = try write("weather")
+        await interleave(when: { _ in true }) { records in
+            let newer = SurfaceRecord(slot: "weather", document: "{newer}", revision: revision + 5, updated: Date(), runner: "phone-1")
+            _ = try? await records.save(newer, over: records.read(slot: "weather"))
+        }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let surface = await stored("weather").flatMap(SurfaceRecord.init)
+        XCTAssertEqual(surface?.revision, revision + 5, "an older save replaced the newer one it raced")
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// An older save of its own lands between the read and the write: the write is refused, read
+    /// again, and made over it.
+    func testARaceWithAnOlderWriterStillSaves() async throws {
+        _ = try write("weather")
+        let revision = try write("weather", "later")
+        await interleave(when: { _ in true }) { records in
+            let older = SurfaceRecord(slot: "weather", document: "{older}", revision: revision - 1, updated: Date(), runner: "phone-1")
+            _ = try? await records.save(older, over: records.read(slot: "weather"))
+        }
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let surface = await stored("weather").flatMap(SurfaceRecord.init)
+        XCTAssertEqual(surface?.revision, revision)
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    // MARK: The role gate as the app wires it
+
+    /// The gate the app's `SurfaceSync` is made with, read from a store: a viewer's role record
+    /// refuses, a primary's allows, and no record (a phone never taken over from) allows.
+    func testTheRoleGateReadsTheDevicesRoleRecord() async throws {
+        let roles = InMemoryRecordDatabase()
+        let device = DeviceID("phone-A")
+        let none = try await SurfaceSync.roleAllows(device: device, database: roles)
+        XCTAssertTrue(none)
+        _ = try await roles.save(DeviceRole(device: device, role: .viewer, setBy: DeviceID("phone-B"), at: Date()).record(over: roles))
+        let viewer = try await SurfaceSync.roleAllows(device: device, database: roles)
+        XCTAssertFalse(viewer, "a demoted phone's role record let it write")
+        _ = try await roles.save(DeviceRole(device: device, role: .primary, setBy: device, at: Date()).record(over: roles))
+        let primary = try await SurfaceSync.roleAllows(device: device, database: roles)
+        XCTAssertTrue(primary)
+    }
 }
 
 /// Holds a save until opened; `open` is synchronous, so a test can open it and keep the main
@@ -412,4 +616,21 @@ private final class Gate: @unchecked Sendable {
         }
         waiting?.resume()
     }
+}
+
+/// The role a test's phone reads, flipped by the test as a takeover would.
+private final class Role: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = true
+    var primary: Bool {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}
+
+/// True the first time only.
+private final class Once: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
 }

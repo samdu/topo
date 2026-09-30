@@ -5,22 +5,32 @@ import TopoCore
 /// watch, with no app group in common with the phone, gets the mind's widgets.
 ///
 /// Every write `topo widget` makes to a slot is followed by a save of the slot's record, and a
-/// clear by a delete; the file is written first and the record after, so the phone's own widgets
-/// never wait on iCloud. What has not reached the record yet is kept in the defaults — outside
-/// `Surfaces/`, which a sign-out empties — and tried again on the next write and whenever the
-/// phone is signed in (at launch, after signing in): a slot waiting there is one `topo widget`
+/// clear by a clear of it; the file is written first and the record after, so the phone's own
+/// widgets never wait on iCloud. What has not reached the record yet is kept in the defaults —
+/// outside `Surfaces/`, which a sign-out empties — and tried again on the next write and whenever
+/// the phone is signed in (at launch, after signing in): a slot waiting there is one `topo widget`
 /// reports as behind. Each waiting slot remembers what it owes: a save, for a set or an image, or
-/// a delete, for a clear. A save is of the whole slot or nothing: a document or an image that
-/// cannot be read just now leaves the save owed for the next try, never a record missing what the
-/// file holds and never a record deleted; a save owed for a slot whose document is gone deletes
-/// the record, since the record mirrors the file. Each pass makes sure the zone is there first,
-/// since a fresh account has none until something writes one. A record belongs to the phone that
-/// saved it (`runner`): a sign-out deletes this phone's records and no other's, and one it could
-/// not delete is deleted at the next sign-in, before anything else is saved. The primary sweeps
-/// the rest — at launch and at each sign-in it deletes every record another runner saved, the
-/// leftovers of an earlier primary or of an earlier install of this one — once its own role
-/// record, read then, does not say viewer: a takeover writes the old primary's as viewer in the
-/// batch that claims the lease, so a demoted phone whose cached role is stale sweeps nothing.
+/// a clear. A save is of the whole slot or nothing: a document or an image that cannot be read
+/// just now leaves the save owed, never a record missing what the file holds and never a record
+/// cleared; a save owed for a slot whose document is gone clears the record, which mirrors the
+/// file. Each pass makes sure the zone is there first, since a fresh account has none until
+/// something writes one.
+///
+/// A record belongs to the phone that saved it (`runner`), and more than one phone can be writing
+/// at once while a takeover lands, so no write here trusts a check made before the read it acts
+/// on. Every write is one compare-and-set on the change tag of a read taken for it, and the role is
+/// read after that read: a takeover saves the old primary's role record as viewer with its first
+/// heartbeat, before the new primary is primary and writes any slot, so a read that saw the new
+/// primary's record is followed by a role read that sees the demotion. A write refused because the record moved is read again and judged
+/// again, and a phone whose role record says viewer drops what it owed. A save this phone made
+/// whose role flipped between its check and the save is undone by a clear under that save's own
+/// tag, dropped if the new primary has written since. Nothing is ever physically deleted: a clear
+/// is a tombstone (`SurfaceRecords.clear`), since CloudKit's deletes carry no tag to check.
+///
+/// A sign-out clears this phone's own records and no other's; one it could not clear is cleared at
+/// the next sign-in, before anything else is saved. The primary sweeps the rest — at launch, at
+/// each sign-in and at a takeover it clears every record another runner saved, the leftovers of an
+/// earlier primary or of an earlier install of this one.
 @MainActor
 final class SurfaceSync {
     static let shared = SurfaceSync()
@@ -52,10 +62,16 @@ final class SurfaceSync {
         case save, delete
     }
 
+    /// Whether `device` may write records another phone saved: its role record, read now, is not
+    /// a viewer's. No record is a phone never taken over from.
+    nonisolated static func roleAllows(device: DeviceID, database: any RecordDatabase) async throws -> Bool {
+        try await DeviceRole.read(device, from: database)?.role != .viewer
+    }
+
     init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: TopoCloudKit.database()) },
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
          mayOwn: @escaping @Sendable () async throws -> Bool = {
-             try await DeviceRole.read(DeviceIdentity.current, from: TopoCloudKit.database())?.role != .viewer
+             try await SurfaceSync.roleAllows(device: DeviceIdentity.current, database: TopoCloudKit.database())
          },
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          runner: String = DeviceIdentity.current.rawValue, defaults: UserDefaults = .standard,
@@ -163,7 +179,7 @@ final class SurfaceSync {
         }
         if owesForget {
             do {
-                try await records.deleteAll(of: runner)
+                try await forgetOwn(records)
                 defaults.set(false, forKey: Self.forgetKey)
             } catch {
                 return
@@ -172,7 +188,7 @@ final class SurfaceSync {
         // Not after a sign-out this pass has not finished, which the guard above returns from.
         if sweeping {
             do {
-                if try await mayOwn() { try await records.deleteAll(except: runner) }
+                try await sweepOthers(records)
                 sweeping = false
             } catch {
                 // Asked again at the next pass.
@@ -180,26 +196,82 @@ final class SurfaceSync {
         }
         guard let store = store() else { return }
         for (slot, what) in owed.sorted(by: { $0.key < $1.key }) {
-            do {
-                switch what {
-                case .delete:
-                    try await records.delete(slot: slot)
-                case .save:
-                    switch snapshot(slot: slot, store) {
-                    case .record(let surface):
-                        try await records.save(surface)
-                    case .gone:
-                        // The record mirrors the file, and the file is gone.
-                        try await records.delete(slot: slot)
-                    case .unreadable:
-                        // Tried again at the next pass, never saved in part and never deleted.
-                        continue
-                    }
+            let target: SurfaceRecord?
+            switch what {
+            case .delete:
+                target = nil
+            case .save:
+                switch snapshot(slot: slot, store) {
+                case .record(let surface): target = surface
+                // The record mirrors the file, and the file is gone.
+                case .gone: target = nil
+                // Tried again at the next pass, never saved in part and never cleared.
+                case .unreadable: continue
                 }
-                settle(slot, what)
+            }
+            do {
+                if try await write(target, slot: slot, records) { settle(slot, what) }
             } catch {
                 continue
             }
+        }
+    }
+
+    /// The slot's record made `target` (cleared when nil), one compare-and-set at a time. Answers
+    /// whether the slot owes nothing more: written, kept as a newer save of this phone's, or
+    /// dropped because this phone may no longer write it.
+    private func write(_ target: SurfaceRecord?, slot: String, _ records: SurfaceRecords) async throws -> Bool {
+        for _ in 0..<3 {
+            let current = try await records.read(slot: slot)
+            // Whether this phone may write at all, asked after the read it acts on: a demoted
+            // phone owes nothing, a tombstone the new primary left included.
+            guard try await mayOwn() else { return true }
+            do {
+                guard let target else {
+                    try await records.clear(slot: slot, runner: runner, at: now(), over: current)
+                    return true
+                }
+                guard try await records.save(target, over: current) == .saved else { return true }
+            } catch RecordDatabaseError.serverRecordChanged {
+                continue
+            }
+            // Saved. A takeover that landed between the role read and the save leaves this
+            // phone's write over a slot the new primary has not written: undone under the
+            // save's own tag, and left alone if the new primary has written since.
+            if try await !mayOwn() {
+                let mine = try await records.read(slot: slot)
+                if case .live(let surface, _) = mine, surface.runner == runner {
+                    do {
+                        try await records.clear(slot: slot, runner: runner, at: now(), over: mine)
+                    } catch RecordDatabaseError.serverRecordChanged {}
+                }
+            }
+            return true
+        }
+        return false
+    }
+
+    /// A sign-out: each record this phone saved and that still holds a slot is cleared under the
+    /// tag it was read with; one another phone has written since is that phone's, and left.
+    private func forgetOwn(_ records: SurfaceRecords) async throws {
+        for read in try await records.all() where read.holds && read.runner == runner {
+            guard let slot = read.slot else { continue }
+            do {
+                try await records.clear(slot: slot, runner: runner, at: now(), over: read)
+            } catch RecordDatabaseError.serverRecordChanged {}
+        }
+    }
+
+    /// The primary's sweep: every record another runner saved that still holds a slot is cleared
+    /// under the tag it was read with, once the role, read after them, allows it.
+    private func sweepOthers(_ records: SurfaceRecords) async throws {
+        let others = try await records.all().filter { $0.holds && $0.runner != runner }
+        guard !others.isEmpty, try await mayOwn() else { return }
+        for read in others {
+            guard let slot = read.slot else { continue }
+            do {
+                try await records.clear(slot: slot, runner: runner, at: now(), over: read)
+            } catch RecordDatabaseError.serverRecordChanged {}
         }
     }
 
