@@ -106,11 +106,12 @@ final class GuestDNSTests: XCTestCase {
         XCTAssertEqual(stub.queries, 0)
     }
 
-    /// With no port set, the stub is an address nothing answers on, and the port that would have
-    /// been the forwarder's is reported as itself.
+    /// With the port cleared, the stub is an address nothing answers on, and the port that was
+    /// the forwarder's is reported as itself.
     func testNoRewriteWithoutPort() async throws {
         let stub = try StubDNS(address: [10, 1, 2, 3])
         defer { stub.stop() }
+        Guest.shared.setDNSPort(stub.port)
         Guest.shared.setDNSPort(nil)
         let stubbed = try await addresses("4", "127.0.0.53", 53)
         XCTAssertEqual(stubbed["recvfrom"], "none")
