@@ -1,0 +1,501 @@
+import Foundation
+import Network
+import os
+
+/// The guest's name server: plain DNS in on `127.0.0.1`, over UDP and TCP at one port picked at
+/// start, each question asked of the system resolver (`RecordResolver`, dnssd on the phone) and
+/// the answer written back as a DNS reply. The guest reaches it at `127.0.0.53` port 53, which its
+/// socket layer carries here. Whatever the phone's own lookups get — Private Relay, a VPN's
+/// resolver and split DNS, a DNS profile — the guest gets; nothing is cached, and there is no
+/// other upstream.
+///
+/// Loopback is not private — any process on the device can reach `127.0.0.1` — so what it answers
+/// is only what the system resolver would answer that process itself, and everything is bounded:
+/// a message over 512 bytes is dropped (a TCP connection closed) before it is read; at most 64
+/// questions are in flight, and one past that is answered `SERVFAIL` without being asked; every
+/// question is answered within 4 s of its arrival, `SERVFAIL` at the bound; at most 16 TCP
+/// connections, each closed 10 s from its accept, and at most 64 UDP flows, each closed once idle
+/// and 10 s from its accept at the latest; a reply that does not fit 512 bytes over UDP (or the
+/// query's EDNS size, at most 1232) goes back truncated with `TC` set, so the client asks again
+/// over TCP, where a reply is at most 65,535. Only a query of one question, opcode `QUERY`, class
+/// IN is asked; anything else is `FORMERR` or `NOTIMP`, asked of nobody.
+///
+/// It logs counts and nothing else — at most one line every 60 s while there is traffic — never a
+/// name, a type, an address, an answer or a client's port.
+///
+/// The actor runs on a serial queue of its own, which is also where the listeners, their
+/// connections and dnssd call back, so every query is started, answered and deallocated there and
+/// nothing blocks the cooperative pool.
+public actor DNSForwarder {
+    public typealias Log = @Sendable (String) -> Void
+
+    public static let messageLimit = 512
+    public static let inFlightLimit = 64
+    public static let tcpConnectionLimit = 16
+    public static let udpFlowLimit = 64
+    public static let ednsLimit: UInt16 = 1232
+    public static let tcpReplyLimit = 65_535
+    public static let defaultQueryBound: Duration = .seconds(4)
+    public static let defaultConnectionBound: Duration = .seconds(10)
+    public static let defaultLogInterval: Duration = .seconds(60)
+    /// How long a UDP flow stays open with nothing in flight.
+    static let udpIdle: Duration = .seconds(1)
+
+    public static let defaultLog: Log = { line in
+        Logger(subsystem: "zone.hexagon.topo", category: "dns").info("\(line, privacy: .public)")
+    }
+
+    private let queue: DispatchSerialQueue
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
+
+    private let resolver: any RecordResolver
+    private let log: Log
+    private let queryBound: Duration
+    private let connectionBound: Duration
+    private let logInterval: Duration
+
+    private var tcp: NWListener?
+    private var udp: NWListener?
+    /// Bumped by every start and stop, so a listener's late callback acts on nothing newer.
+    private var generation = 0
+    public private(set) var port: UInt16?
+    private var observer: (@Sendable (UInt16?) -> Void)?
+
+    private var connections: [ObjectIdentifier: NWConnection] = [:]
+    private var flows: [ObjectIdentifier: Flow] = [:]
+    private var pending: [ObjectIdentifier: Pending] = [:]
+
+    private var counts = Counts()
+    private var lastLog = ContinuousClock.now
+    private var flushScheduled = false
+
+    public init(resolver: any RecordResolver = SystemRecordResolver(), queryBound: Duration = DNSForwarder.defaultQueryBound,
+                connectionBound: Duration = DNSForwarder.defaultConnectionBound,
+                logInterval: Duration = DNSForwarder.defaultLogInterval, log: @escaping Log = DNSForwarder.defaultLog) {
+        queue = DispatchSerialQueue(label: "zone.hexagon.topo.dns")
+        self.resolver = resolver
+        self.queryBound = queryBound
+        self.connectionBound = connectionBound
+        self.logInterval = logInterval
+        self.log = log
+    }
+
+    /// Calls `observer` with the port each time the forwarder is ready and with nil each time it
+    /// goes down — stopped, or its listener failed or taken away (iOS reclaims a suspended app's).
+    /// Called on the forwarder's queue.
+    public func observe(_ observer: @escaping @Sendable (UInt16?) -> Void) {
+        self.observer = observer
+    }
+
+    /// Starts both listeners on one port and returns it; the port it has when already running.
+    /// TCP is bound first at a port the system picks and UDP at the same number; when that is
+    /// taken, both are tried again.
+    public func start() async throws -> UInt16 {
+        if let port { return port }
+        var failure: (any Error)?
+        for _ in 0..<5 {
+            generation += 1
+            let current = generation
+            let tcp = try NWListener(using: Self.loopback(.tcp, port: .any))
+            self.tcp = tcp
+            do {
+                let bound = try await ready(tcp, generation: current, accept: { $0.acceptTCP($1) })
+                let udp = try NWListener(using: Self.loopback(.udp, port: NWEndpoint.Port(rawValue: bound)!))
+                self.udp = udp
+                _ = try await ready(udp, generation: current, accept: { $0.acceptUDP($1) })
+                guard generation == current else { throw CancellationError() }
+                port = bound
+                observer?(bound)
+                return bound
+            } catch {
+                failure = error
+                tcp.cancel()
+                udp?.cancel()
+                self.tcp = nil
+                udp = nil
+                if error is CancellationError { throw error }
+            }
+        }
+        throw failure ?? CancellationError()
+    }
+
+    /// Stops listening, closes every connection and abandons every question in flight.
+    public func stop() {
+        guard tcp != nil || udp != nil || port != nil else { return }
+        down()
+    }
+
+    /// Parameters for a listener on `127.0.0.1` alone: no other interface, and no LAN peer,
+    /// reaches it.
+    static func loopback(_ parameters: NWParameters, port: NWEndpoint.Port) -> NWParameters {
+        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: port)
+        parameters.allowLocalEndpointReuse = false
+        return parameters
+    }
+
+    private func ready(_ listener: NWListener, generation current: Int,
+                       accept: @escaping @Sendable (isolated DNSForwarder, NWConnection) -> Void) async throws -> UInt16 {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<UInt16, any Error>) in
+            let waiting = Waiting(continuation)
+            listener.newConnectionHandler = { [weak self] connection in
+                guard let self else { connection.cancel(); return }
+                self.assumeIsolated { forwarder in
+                    guard forwarder.generation == current else { connection.cancel(); return }
+                    accept(forwarder, connection)
+                }
+            }
+            listener.stateUpdateHandler = { [weak self] state in
+                guard let self else { return }
+                self.assumeIsolated { forwarder in
+                    switch state {
+                    case .ready:
+                        waiting.resume(.success(listener.port?.rawValue ?? 0))
+                    case .waiting(let error):
+                        // A port that cannot be bound waits for one that can; a start takes it as failed.
+                        waiting.resume(.failure(error))
+                    case .failed(let error):
+                        if !waiting.resume(.failure(error)) { forwarder.lost(current) }
+                    case .cancelled:
+                        if !waiting.resume(.failure(CancellationError())) { forwarder.lost(current) }
+                    default:
+                        break
+                    }
+                }
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    /// A start's wait for its listener, resumed once, on the forwarder's queue.
+    private final class Waiting: @unchecked Sendable {
+        private var continuation: CheckedContinuation<UInt16, any Error>?
+        init(_ continuation: CheckedContinuation<UInt16, any Error>) { self.continuation = continuation }
+        /// Whether this was the resumption.
+        @discardableResult func resume(_ result: Result<UInt16, any Error>) -> Bool {
+            guard let continuation else { return false }
+            self.continuation = nil
+            continuation.resume(with: result)
+            return true
+        }
+    }
+
+    /// A listener of the running generation went away without being stopped.
+    private func lost(_ current: Int) {
+        guard current == generation, port != nil else { return }
+        down()
+    }
+
+    private func down() {
+        generation += 1
+        tcp?.cancel()
+        udp?.cancel()
+        tcp = nil
+        udp = nil
+        for connection in connections.values { connection.cancel() }
+        connections = [:]
+        for flow in flows.values { flow.connection.cancel() }
+        flows = [:]
+        for question in pending.values { question.abandon() }
+        pending = [:]
+        let wasUp = port != nil
+        port = nil
+        if wasUp { observer?(nil) }
+    }
+
+    // MARK: TCP
+
+    private func acceptTCP(_ connection: NWConnection) {
+        guard connections.count < Self.tcpConnectionLimit else {
+            count(\.refused)
+            connection.cancel()
+            return
+        }
+        let id = ObjectIdentifier(connection)
+        connections[id] = connection
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed: self?.assumeIsolated { $0.connections[id] = nil }
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        let current = generation
+        queue.asyncAfter(deadline: .now() + connectionBound.timeInterval) { [weak self] in
+            self?.assumeIsolated { forwarder in
+                guard forwarder.generation == current else { return }
+                connection.cancel()
+            }
+        }
+        readLength(connection)
+    }
+
+    /// One length-prefixed message, then the next: a length over the limit closes the connection
+    /// before the message is read.
+    private func readLength(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 2, maximumLength: 2) { [weak self] data, _, complete, error in
+            guard let self else { return }
+            self.assumeIsolated { forwarder in
+                guard let data, data.count == 2, error == nil else { connection.cancel(); return }
+                let length = Int(data[data.startIndex]) << 8 | Int(data[data.startIndex + 1])
+                guard length > 0, length <= Self.messageLimit else {
+                    forwarder.count(\.dropped)
+                    connection.cancel()
+                    return
+                }
+                forwarder.readMessage(connection, length: length, closing: complete)
+            }
+        }
+    }
+
+    private func readMessage(_ connection: NWConnection, length: Int, closing: Bool) {
+        connection.receive(minimumIncompleteLength: length, maximumLength: length) { [weak self] data, _, complete, error in
+            guard let self else { return }
+            self.assumeIsolated { forwarder in
+                guard let data, data.count == length, error == nil else { connection.cancel(); return }
+                forwarder.received(Array(data), limit: Self.tcpReplyLimit, over: .tcp) { reply in
+                    let prefix = [UInt8(reply.count >> 8), UInt8(reply.count & 0xff)]
+                    connection.send(content: Data(prefix + reply), completion: .idempotent)
+                }
+                if !complete { forwarder.readLength(connection) }
+            }
+        }
+    }
+
+    // MARK: UDP
+
+    /// Touched only on the forwarder's queue.
+    private final class Flow: @unchecked Sendable {
+        let connection: NWConnection
+        var inFlight = 0
+        /// Bumped by every datagram, so an idle timer set before it closes nothing.
+        var activity = 0
+        init(_ connection: NWConnection) { self.connection = connection }
+    }
+
+    private func acceptUDP(_ connection: NWConnection) {
+        guard flows.count < Self.udpFlowLimit else {
+            count(\.refused)
+            connection.cancel()
+            return
+        }
+        let id = ObjectIdentifier(connection)
+        let flow = Flow(connection)
+        flows[id] = flow
+        connection.stateUpdateHandler = { [weak self] state in
+            switch state {
+            case .cancelled, .failed: self?.assumeIsolated { $0.flows[id] = nil }
+            default: break
+            }
+        }
+        connection.start(queue: queue)
+        let current = generation
+        queue.asyncAfter(deadline: .now() + connectionBound.timeInterval) { [weak self] in
+            self?.assumeIsolated { forwarder in
+                guard forwarder.generation == current else { return }
+                connection.cancel()
+            }
+        }
+        readDatagram(flow)
+    }
+
+    private func readDatagram(_ flow: Flow) {
+        flow.connection.receiveMessage { [weak self] data, _, _, error in
+            guard let self else { return }
+            self.assumeIsolated { forwarder in
+                guard error == nil else { flow.connection.cancel(); return }
+                if let data {
+                    flow.activity += 1
+                    if data.count > Self.messageLimit {
+                        forwarder.count(\.dropped)
+                    } else {
+                        flow.inFlight += 1
+                        forwarder.received(Array(data), limit: nil, over: .udp) { reply in
+                            flow.connection.send(content: Data(reply), completion: .idempotent)
+                        } done: {
+                            flow.inFlight -= 1
+                            forwarder.idle(flow)
+                        }
+                    }
+                }
+                forwarder.readDatagram(flow)
+            }
+        }
+    }
+
+    /// Closes a flow that has nothing in flight and has heard nothing for `udpIdle`.
+    private func idle(_ flow: Flow) {
+        guard flow.inFlight == 0 else { return }
+        let activity = flow.activity
+        queue.asyncAfter(deadline: .now() + Self.udpIdle.timeInterval) { [weak self] in
+            self?.assumeIsolated { _ in
+                guard flow.inFlight == 0, flow.activity == activity else { return }
+                flow.connection.cancel()
+            }
+        }
+    }
+
+    // MARK: Questions
+
+    enum Transport { case udp, tcp }
+
+    /// One question from arrival to its one reply.
+    /// Touched only on the forwarder's queue.
+    private final class Pending: @unchecked Sendable {
+        let query: DNSQuery
+        let limit: Int
+        let transport: Transport
+        let send: ([UInt8]) -> Void
+        let done: () -> Void
+        var handle: (any ResolverQuery)?
+        var records: [DNSRecord] = []
+        /// A record of the type asked for has arrived (for a CNAME question, the CNAME).
+        var answered = false
+
+        init(query: DNSQuery, limit: Int, transport: Transport, send: @escaping ([UInt8]) -> Void,
+             done: @escaping () -> Void) {
+            self.query = query
+            self.limit = limit
+            self.transport = transport
+            self.send = send
+            self.done = done
+        }
+
+        func abandon() {
+            handle?.cancel()
+            handle = nil
+            done()
+        }
+    }
+
+    private func received(_ bytes: [UInt8], limit: Int?, over transport: Transport, send: @escaping ([UInt8]) -> Void,
+                          done: @escaping () -> Void = {}) {
+        count(\.queries)
+        let query: DNSQuery
+        do {
+            query = try DNSQuery.read(bytes)
+        } catch {
+            switch error {
+            case .unanswerable:
+                count(\.dropped)
+            case .reply(let id, let rd, let rcode, let question):
+                count(\.malformed)
+                send(DNSReply.refusal(id: id, rd: rd, rcode: rcode, question: question))
+            }
+            done()
+            return
+        }
+        // Over UDP, 512 bytes or what the client's EDNS offers, never more than 1232.
+        let udpLimit = Int(min(max(query.ednsSize ?? 512, 512), Self.ednsLimit))
+        guard pending.count < Self.inFlightLimit else {
+            count(\.refused)
+            count(\.servfail)
+            send(DNSReply.make(to: query, rcode: DNSReply.servFail, answers: [], limit: udpLimit, ednsSize: Self.ednsLimit).bytes)
+            done()
+            return
+        }
+        let question = Pending(query: query, limit: limit ?? udpLimit, transport: transport, send: send, done: done)
+        let id = ObjectIdentifier(question)
+        pending[id] = question
+        question.handle = resolver.query(name: query.presentationName, type: query.type, queue: queue) { [weak self] answer in
+            self?.assumeIsolated { $0.answer(id, answer) }
+        }
+        let current = generation
+        queue.asyncAfter(deadline: .now() + queryBound.timeInterval) { [weak self] in
+            self?.assumeIsolated { forwarder in
+                guard forwarder.generation == current else { return }
+                forwarder.finish(id, rcode: DNSReply.servFail, keep: false)
+            }
+        }
+    }
+
+    /// One callback of a question's query. The question is complete when a record of the type
+    /// asked for has arrived and its batch has ended (a callback without `MoreComing`), or when a
+    /// negative or an error arrives; a batch of CNAMEs alone is not complete, since the target's
+    /// records can come in a later one.
+    private func answer(_ id: ObjectIdentifier, _ answer: RecordAnswer) {
+        guard let question = pending[id] else { return }
+        switch answer.outcome {
+        case .noSuchName:
+            finish(id, rcode: DNSReply.nxDomain, keep: true)
+        case .noSuchRecord:
+            finish(id, rcode: DNSReply.noError, keep: true)
+        case .failed:
+            finish(id, rcode: DNSReply.servFail, keep: false)
+        case .record:
+            if let labels = DNSRecord.labels(presentation: answer.name) {
+                let record = DNSRecord(labels: labels, type: answer.type, ttl: answer.ttl, rdata: answer.rdata)
+                let same: (DNSRecord) -> Bool = {
+                    $0.type == record.type && $0.rdata == record.rdata && Self.sameName($0.labels, record.labels)
+                }
+                if answer.add {
+                    if !question.records.contains(where: same) { question.records.append(record) }
+                    if answer.type == question.query.type || question.query.type == DNSQuery.typeANY {
+                        question.answered = true
+                    }
+                } else {
+                    question.records.removeAll(where: same)
+                }
+            }
+            if !answer.moreComing, question.answered {
+                finish(id, rcode: DNSReply.noError, keep: true)
+            }
+        }
+    }
+
+    private static func sameName(_ a: [[UInt8]], _ b: [[UInt8]]) -> Bool {
+        a.count == b.count && zip(a, b).allSatisfy { $0.lowercased() == $1.lowercased() }
+    }
+
+    /// Answers a question once: with what was gathered when `keep`, and with no records otherwise.
+    private func finish(_ id: ObjectIdentifier, rcode: UInt8, keep: Bool) {
+        guard let question = pending.removeValue(forKey: id) else { return }
+        question.handle?.cancel()
+        question.handle = nil
+        let reply = DNSReply.make(to: question.query, rcode: rcode, answers: keep ? question.records : [],
+                                  limit: question.limit, ednsSize: Self.ednsLimit)
+        count(rcode == DNSReply.servFail ? \.servfail : \.answered)
+        if reply.truncated { count(\.truncated) }
+        question.send(reply.bytes)
+        question.done()
+    }
+
+    // MARK: The count log
+
+    struct Counts: Equatable {
+        var queries = 0, answered = 0, servfail = 0, truncated = 0, dropped = 0, malformed = 0, refused = 0
+        var isEmpty: Bool { self == Counts() }
+        var line: String {
+            "dns: \(queries) queries, \(answered) answered, \(servfail) servfail, \(truncated) truncated, "
+                + "\(dropped) dropped, \(malformed) malformed, \(refused) refused at a cap"
+        }
+    }
+
+    private func count(_ field: WritableKeyPath<Counts, Int>) {
+        counts[keyPath: field] += 1
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        let due = max(lastLog + logInterval - ContinuousClock.now, .zero)
+        queue.asyncAfter(deadline: .now() + due.timeInterval) { [weak self] in
+            self?.assumeIsolated { $0.flush() }
+        }
+    }
+
+    private func flush() {
+        flushScheduled = false
+        guard !counts.isEmpty else { return }
+        log(counts.line)
+        counts = Counts()
+        lastLog = .now
+    }
+}
+
+private extension [UInt8] {
+    func lowercased() -> [UInt8] { map { (0x41...0x5a).contains($0) ? $0 | 0x20 : $0 } }
+}
+
+extension Duration {
+    var timeInterval: TimeInterval {
+        let (seconds, attoseconds) = components
+        return TimeInterval(seconds) + TimeInterval(attoseconds) / 1e18
+    }
+}
