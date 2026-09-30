@@ -786,6 +786,10 @@ jobs:
             [.devices[$rt] // [] | .[] | select(.name | startswith("Apple Watch"))]
             | sort_by(.name) | .[0] | if . then .udid else empty end')"
           [ -n "$udid" ] || { echo "::error::No Apple Watch simulator for $WATCHOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
+          # Booted and finished booting before the run: a watch simulator
+          # xcodebuild boots itself can still be coming up when it installs the
+          # host, which then fails to launch as an unknown application.
+          xcrun simctl bootstatus "$udid" -b >/dev/null
           xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
             -destination "platform=watchOS Simulator,id=$udid" \
             -derivedDataPath build/watch \
