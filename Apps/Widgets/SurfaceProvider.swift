@@ -4,7 +4,7 @@ import WidgetKit
 
 /// What the extension draws for a placed widget, compiled into the app as well so the suites can
 /// hold what an entry carries.
-struct SurfaceEntry: TimelineEntry {
+struct SurfaceEntry: TimelineEntry, Sendable {
     let date: Date
     let surface: Surface
 
@@ -36,6 +36,24 @@ struct SurfaceProvider: AppIntentTimelineProvider {
     func timeline(for configuration: SurfaceConfiguration, in context: Context) async -> Timeline<SurfaceEntry> {
         Self.timeline(slot: configuration.slot, family: WidgetFamilyName(context.family), now: Date())
     }
+
+    #if os(watchOS)
+    /// A watch face has no configuration sheet, so each slot the watch holds is offered as a
+    /// widget of its own, the app's default first.
+    func recommendations() -> [AppIntentRecommendation<SurfaceConfiguration>] {
+        let slots = SurfaceStore.shared()?.slots() ?? []
+        return [AppIntentRecommendation(intent: SurfaceConfiguration(), description: "Topo")]
+            + slots.map { AppIntentRecommendation(intent: SurfaceConfiguration(slot: $0), description: $0) }
+    }
+
+    /// A placed `TopoSurface` rises in the Smart Stack when a context its slot names holds.
+    @available(watchOS 11, *)
+    func relevance() async -> WidgetRelevance<SurfaceConfiguration> {
+        WidgetRelevance(WatchRelevance.contexts().map {
+            WidgetRelevanceAttribute(configuration: SurfaceConfiguration(slot: $0.slot), context: $0.context.context)
+        })
+    }
+    #endif
 
     /// One entry now, and one at the slot's `until` when it has one, after which the default is
     /// drawn. A document with no date is read again only when the app reloads it.

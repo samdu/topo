@@ -14,7 +14,12 @@ struct WatchRootView: View {
     /// between. Slower than the television's, for the battery's sake.
     private static let refreshInterval = Duration.seconds(20)
 
-    @State private var store = TranscriptStore(database: TopoCloudKit.database())
+    @State private var store: TranscriptStore
+    @State private var standing = WatchDefaultSurface()
+
+    init(store: TranscriptStore = TranscriptStore(database: TopoCloudKit.database())) {
+        _store = State(initialValue: store)
+    }
 
     var body: some View {
         NavigationStack {
@@ -23,6 +28,20 @@ struct WatchRootView: View {
                 .safeAreaInset(edge: .bottom) { talkButton }
         }
         .task { await store.refreshing(every: Self.refreshInterval) }
+        // The slots on the same beat while the app is open: one of the watch's three fetches.
+        .task {
+            while !Task.isCancelled {
+                await WatchSurfaceSync.shared.opened()
+                do { try await Task.sleep(for: Self.refreshInterval) } catch { return }
+            }
+        }
+        // The watch's own default follows the newest reply, once the log has been read.
+        .onChange(of: store.turns.last?.ref) { followReply() }
+        .onChange(of: store.hasRead) { followReply() }
+    }
+
+    private func followReply() {
+        if store.hasRead { standing.follow(store.turns) }
     }
 
     @ViewBuilder

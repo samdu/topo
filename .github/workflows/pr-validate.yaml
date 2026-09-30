@@ -140,6 +140,7 @@ env:
   # the release zip is checked against its hash so a replaced asset fails.
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
   IOS_SIMULATOR_RUNTIME: com.apple.CoreSimulator.SimRuntime.iOS-26-5
+  WATCHOS_SIMULATOR_RUNTIME: com.apple.CoreSimulator.SimRuntime.watchOS-26-5
   XCODEGEN_VERSION: 2.46.0
   XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
   RESULTS: ${{ github.workspace }}/ci-results
@@ -264,9 +265,11 @@ jobs:
           # matches needs all three, so the list only ever has to name what
           # may be skipped. The app target compiles Apps/Client, Apps/Shared,
           # Apps/Topo and every package but TopoLink (project.yml), so those
-          # stay `all`; the hub, watch and TV targets, Womble and TopoLink are
-          # built and tested only in `others`, as is the janitor, whose test
-          # runs there.
+          # stay `all`; the hub, watch and TV targets (the watch's widgets and
+          # suite included), Womble and TopoLink are built and tested only in
+          # `others`, as is the janitor, whose test runs there. The watch's suite
+          # also builds Apps/Widgets, Apps/Shared, Apps/Client and TopoCore,
+          # which `all` already sends to `others`.
           SUITE_RULES: |
             .github/workflows/pr-validate.yaml all
             .github/actions/* all
@@ -274,9 +277,11 @@ jobs:
             Apps/TopoHub/* others
             Apps/TopoTV/* others
             Apps/TopoWatch/* others
+            Apps/TopoWatchWidgets/* others
             Apps/* all
             Packages/TopoLink/* others
             Packages/* all
+            Tests/Watch/* others
             Tests/* all
             Womble/* others
             docs/* none
@@ -750,12 +755,41 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
+          # At the watch's deployment target, watchOS 10.0: every path above it is
+          # behind an availability check, and this is where one left out fails.
           xcodebuild build -project Topo.xcodeproj -scheme TopoWatch \
             -destination 'generic/platform=watchOS Simulator' \
+            -derivedDataPath build/watch \
             2>&1 | tee "$RESULTS/TopoWatch-build.log"
+          # The complications are an extension embedded in the product, and the push
+          # a background mode no setting generates: both read off the built app.
+          scripts/check-built-plist.sh --watch build/watch/Build/Products/Debug-watchsimulator/TopoWatch.app
           xcodebuild build -project Topo.xcodeproj -scheme TopoTV \
             -destination 'generic/platform=tvOS Simulator' \
             2>&1 | tee "$RESULTS/TopoTV-build.log"
+
+      # The watch's own suite (TopoWatchTests: the slots' cache and fetch, the
+      # cue drain, the watch's default, the shared reader built for watchOS),
+      # hosted by the watch app on a watch simulator from the pinned runtime.
+      # Its own bound, inside the job's, so a hung watch simulator fails here
+      # with a log rather than at the job's cap.
+      - name: xcodebuild test (TopoWatch)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          udid="$(xcrun simctl list devices available --json | jq -r --arg rt "$WATCHOS_SIMULATOR_RUNTIME" '
+            [.devices[$rt] // [] | .[] | select(.name | startswith("Apple Watch"))]
+            | sort_by(.name) | .[0] | if . then .udid else empty end')"
+          [ -n "$udid" ] || { echo "::error::No Apple Watch simulator for $WATCHOS_SIMULATOR_RUNTIME on this runner."; xcrun simctl list runtimes; exit 1; }
+          xcodebuild test -project Topo.xcodeproj -scheme TopoWatch \
+            -destination "platform=watchOS Simulator,id=$udid" \
+            -resultBundlePath "$RESULTS/TopoWatch.xcresult" \
+            2>&1 | tee "$RESULTS/TopoWatch-test.log"
+
+      - name: Require the watch's tests ran and passed
+        if: ${{ !cancelled() }}
+        run: scripts/ci-require-tests.sh xcresult "$RESULTS/TopoWatch.xcresult" TopoWatchTests
 
       # Compilation only, with signing off. The simulator builds never compile
       # code excluded from the simulator — the Pocket engine and its model

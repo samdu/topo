@@ -6,12 +6,25 @@ import WidgetKit
 /// the person picked when they placed it — or the app's default where none is picked, the slot is
 /// gone, or its `until` has passed. It reads the app group and nothing else: never the tool
 /// service, the guest or the network.
+#if os(watchOS)
+/// The watch's extension, `TopoWatchWidgets`: the placeable `TopoSurface` for the face's
+/// complications, and `TopoMoment`, which the Smart Stack shows unplaced when a slot says it
+/// matters. It reads the watch's group, which the watch app fills from the slots' records, and
+/// fetches nothing.
+@main
+struct TopoWatchWidgetBundle: WidgetBundle {
+    var body: some Widget {
+        TopoSurfaceWidget()
+    }
+}
+#else
 @main
 struct TopoWidgetBundle: WidgetBundle {
     var body: some Widget {
         TopoSurfaceWidget()
     }
 }
+#endif
 
 struct TopoSurfaceWidget: Widget {
     var body: some WidgetConfiguration {
@@ -20,9 +33,15 @@ struct TopoSurfaceWidget: Widget {
         }
         .configurationDisplayName("Topo")
         .description("A widget Topo made for you, or what Topo last said.")
-        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge,
-                            .accessoryCircular, .accessoryRectangular, .accessoryInline])
+        .supportedFamilies(Self.families)
     }
+
+    #if os(watchOS)
+    static let families: [WidgetFamily] = [.accessoryCircular, .accessoryRectangular, .accessoryInline, .accessoryCorner]
+    #else
+    static let families: [WidgetFamily] = [.systemSmall, .systemMedium, .systemLarge,
+                                           .accessoryCircular, .accessoryRectangular, .accessoryInline]
+    #endif
 }
 
 struct SurfaceEntryView: View {
@@ -37,11 +56,19 @@ struct SurfaceEntryView: View {
         case .signedOut:
             VStack(spacing: 6) {
                 OctopusMark().frame(maxWidth: 44, maxHeight: 44)
-                Text("Sign in on your phone").font(.caption).multilineTextAlignment(.center)
+                Text(Self.signedOut).font(.caption).multilineTextAlignment(.center)
             }
             .containerBackground(for: .widget) { Theme.surface }
         }
     }
+
+    /// What a widget says with nothing to draw: on the phone, no login; on the watch, an app never
+    /// opened to fetch anything.
+    #if os(watchOS)
+    static let signedOut = "Open Topo"
+    #else
+    static let signedOut = "Sign in on your phone"
+    #endif
 
     static func url(_ action: WidgetAction, _ context: WidgetContext) -> URL? {
         switch action {

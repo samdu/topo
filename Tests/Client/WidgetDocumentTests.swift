@@ -1,6 +1,11 @@
 import XCTest
 
+// Built into the watch's suite as well, since the watch reads every record through this reader.
+#if os(watchOS)
+@testable import TopoWatch
+#else
 @testable import Topo
+#endif
 
 /// The widget document as `topo widget set` reads it: each value checked where it is read, a bad
 /// field costing that field and no more, a bad node costing that node and no more, and the

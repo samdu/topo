@@ -1,4 +1,4 @@
-#if os(iOS)
+#if os(iOS) || os(watchOS)
 import AppIntents
 import SwiftUI
 #if canImport(TopoMascot)
@@ -172,8 +172,44 @@ struct WidgetNodeView: View {
         }
     }
 
-    @ViewBuilder
     private func controlView(_ control: WidgetControl) -> some View {
+        controlBody(control)
+            .tint(Theme.primary)
+            .overlay(alignment: .topTrailing) {
+                if context.failed.contains(control.id) {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Theme.signal)
+                        .accessibilityLabel("the last tap failed")
+                }
+            }
+            .accessibilityIdentifier("widget-control-\(control.id)")
+    }
+
+    @ViewBuilder
+    private func controlBody(_ control: WidgetControl) -> some View {
+#if os(watchOS)
+        Group {
+            // A watch widget has no link and runs no intent in the app without opening it, so
+            // every control is an intent button: a turn cues and opens Topo, and anything else
+            // opens it.
+            switch (control.kind, control.action) {
+            case (.toggle, .turn):
+                Toggle(isOn: control.on, intent: WatchCueIntent(slot: context.slot, control: control.id, revision: context.revision,
+                                                               turningOn: !control.on)) { label(control) }
+                    .toggleStyle(WidgetSwitch())
+            case (_, .turn):
+                Button(intent: WatchCueIntent(slot: context.slot, control: control.id, revision: context.revision)) {
+                    label(control)
+                }
+            case (.toggle, _):
+                Toggle(isOn: control.on, intent: WatchOpenIntent()) { label(control) }
+                    .toggleStyle(WidgetSwitch())
+            case (_, .open), (_, .run):
+                Button(intent: WatchOpenIntent()) { label(control) }
+            }
+        }
+#else
         Group {
             switch (control.kind, control.action) {
             case (_, .open):
@@ -200,16 +236,7 @@ struct WidgetNodeView: View {
                 }
             }
         }
-        .tint(Theme.primary)
-        .overlay(alignment: .topTrailing) {
-            if context.failed.contains(control.id) {
-                Image(systemName: "exclamationmark.circle.fill")
-                    .font(.caption2)
-                    .foregroundStyle(Theme.signal)
-                    .accessibilityLabel("the last tap failed")
-            }
-        }
-        .accessibilityIdentifier("widget-control-\(control.id)")
+#endif
     }
 }
 

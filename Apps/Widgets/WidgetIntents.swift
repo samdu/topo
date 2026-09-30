@@ -13,6 +13,58 @@ import WidgetKit
 /// is where the tool table, HomeKit's manager and EventKit's store are. Measured on the simulator
 /// (the ledger's first ruling): a plain `AppIntent` from a widget runs in the extension, and
 /// `ForegroundContinuableIntent` is unavailable in an extension at all.
+#if os(watchOS)
+/// What a tap on the watch's widgets hands on. The watch runs no widget intent in the app without
+/// bringing it forward (`LiveActivityIntent` is not on watchOS), so both of these open `TopoWatch`.
+enum WatchIntents {
+    /// Set by `TopoWatchApp` at launch: puts what the cue intent recorded on the line.
+    @MainActor static var drain: (@MainActor () async -> Void)?
+}
+
+/// A `turn` control on the watch: records the cue in the watch's group under a nonce minted here
+/// and brings Topo forward, whose drain sends it (`WatchCues`).
+struct WatchCueIntent: AppIntent {
+    static let title: LocalizedStringResource = "Tell Topo"
+    static let openAppWhenRun = true
+    static let isDiscoverable = false
+
+    @Parameter(title: "Slot") var slot: String
+    @Parameter(title: "Control") var control: String
+    @Parameter(title: "Revision") var revision: Int
+    @Parameter(title: "Turning on") var turningOn: Bool?
+
+    init() {}
+
+    init(slot: String, control: String, revision: Int, turningOn: Bool? = nil) {
+        self.slot = slot
+        self.control = control
+        self.revision = revision
+        self.turningOn = turningOn
+    }
+
+    func cue(nonce: String = UUID().uuidString, at time: Date = Date()) -> SurfaceStore.Cue {
+        SurfaceStore.Cue(nonce: nonce, slot: slot, id: control, revision: revision, turningOn: turningOn, time: time)
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        if let store = SurfaceStore.shared() { _ = try store.recordCue(cue()) }
+        await WatchIntents.drain?()
+        return .result()
+    }
+}
+
+/// Every other control on the watch: opens Topo, and nothing else.
+struct WatchOpenIntent: AppIntent {
+    static let title: LocalizedStringResource = "Open Topo"
+    static let openAppWhenRun = true
+    static let isDiscoverable = false
+
+    init() {}
+
+    func perform() async throws -> some IntentResult { .result() }
+}
+#else
 enum WidgetIntents {
     /// What a tap does in the app, set by `TopoApp` at launch, which the system finishes before an
     /// intent it launched the app for runs. Nil in the extension, which never runs either intent.
@@ -92,6 +144,7 @@ struct WidgetRunIntent: LiveActivityIntent {
         return .result()
     }
 }
+#endif
 
 /// The URLs the widgets open: `topo://open`, and `topo://cue?…` for a `link` whose action is a
 /// turn, since a `Link` hands on a URL and no intent.
@@ -129,6 +182,10 @@ struct SurfaceConfiguration: WidgetConfigurationIntent {
     var slot: String?
 
     init() {}
+
+    init(slot: String) {
+        self.slot = slot
+    }
 }
 
 /// The slots in the app group, listed as the person places a widget.
@@ -147,6 +204,9 @@ extension WidgetFamilyName {
         case .accessoryCircular: self = .accessoryCircular
         case .accessoryRectangular: self = .accessoryRectangular
         case .accessoryInline: self = .accessoryInline
+        #if os(watchOS)
+        case .accessoryCorner: self = .accessoryCorner
+        #endif
         default: self = .default
         }
     }

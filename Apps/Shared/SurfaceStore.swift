@@ -1,8 +1,10 @@
-#if os(iOS)
+#if os(iOS) || os(watchOS)
 import Foundation
 
 /// The mind's widgets on disk: the `Surfaces` folder in the app group `group.zone.hexagon.topo`,
-/// which the app writes and the widget extension reads.
+/// which the app writes and the widget extension reads. On the watch the same layout is kept in
+/// the watch's own group, `group.zone.hexagon.topo.watch`, by the watch app from the slots'
+/// records (`WatchSurfaces`), and read by the watch's extension.
 ///
 /// - `<slot>.json`, one document per slot, as the app kept it (`WidgetDocument.text`), and
 ///   `_default.json`, the app's own (`DefaultSurface`);
@@ -21,8 +23,12 @@ import Foundation
 /// coordinated read, so the extension never reads half a document. The files are
 /// `completeUntilFirstUserAuthentication`: a lock-screen widget draws after the first unlock.
 struct SurfaceStore: Sendable {
+    #if os(watchOS)
+    static let appGroup = "group.zone.hexagon.topo.watch"
+    #else
     static let appGroup = "group.zone.hexagon.topo"
-    /// The one widget kind, `TopoSurface`, which `SurfaceReloader` reloads.
+    #endif
+    /// The placeable widget kind, `TopoSurface`, which `SurfaceReloader` reloads.
     static let kind = "TopoSurface"
     static let defaultSlot = "_default"
     static let tapsKept = 50
@@ -105,6 +111,23 @@ struct SurfaceStore: Sendable {
         kept.revision = try nextRevision(slot: slot)
         try coordinatedWrite(url(slot: slot)) { _ in Data(kept.text.utf8) }
         return kept.revision
+    }
+
+    /// A document the phone kept, kept here at the phone's revision: the watch's copy of a slot,
+    /// which never mints a revision of its own, so a cue drawn from it names the phone's.
+    func keep(_ document: WidgetDocument, slot: String) throws {
+        guard WidgetDocument.isSlot(slot) else { throw CocoaError(.fileWriteInvalidFileName) }
+        try coordinatedWrite(url(slot: slot)) { _ in Data(document.text.utf8) }
+    }
+
+    /// The slot's images made exactly `images`: each written, and any other taken away.
+    func keepImages(_ images: [String: Data], slot: String) throws {
+        for name in imageNames(slot: slot) where images[name] == nil {
+            try coordinatedWrite(image(slot: slot, name: name)) { _ in nil }
+        }
+        for (name, png) in images.sorted(by: { $0.key < $1.key }) where WidgetDocument.isName(name) {
+            if imageData(slot: slot, name: name) != png { try writeImage(png, slot: slot, name: name) }
+        }
     }
 
     /// The app's own default, written whole. It keeps the revision it was first given in this

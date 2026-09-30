@@ -26,6 +26,9 @@ final class TranscriptStore {
     /// line: turns missing from the read, a fork, a refresh that failed.
     private(set) var notice: String?
     private(set) var isSending = false
+    /// Whether the last read of the log succeeded, so `turns` is what the log held then: only
+    /// then does a nonce missing from them mean a turn that never landed.
+    private(set) var hasRead = false
     /// What the person has said that is not in the log yet, oldest first.
     /// Nothing said is dropped: a turn that fails stays here, and anything
     /// said after it queues behind it so the log keeps the order it was
@@ -73,7 +76,9 @@ final class TranscriptStore {
             turns = transcript.ordered
             notice = TranscriptStore.notice(for: transcript)
             phase = .ready
+            hasRead = true
         } catch {
+            hasRead = false
             guard turns.isEmpty else {
                 // Keep what is on screen; say the refresh did not land.
                 notice = "Could not read just now. Showing the last read."
