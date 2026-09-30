@@ -18,6 +18,10 @@
 # commits left out, each shown with its own patch: the base's commits and the merges that brought
 # them in are absent, and so is any conflict resolution a merge made, which the prompt says.
 #
+# A re-review is round 2 or later, and is scoped to the fix (docs/process.md, *The fix loop*): it
+# verifies each earlier finding, then reviews the change since, and a finding in code the change
+# since does not touch is reported as not blocking.
+#
 # The round is one more than the codex verdicts already on the PR. From round 3 on the prompt ends
 # with the convergence rule (docs/process.md, *The fix loop*): only a bug a real user would hit
 # blocks, and everything else is reported non-blocking for the coordinator to file as an issue. That holds on
@@ -205,14 +209,13 @@ gone or no longer does what the finding described). Put that list in
 \`summary\`, one short line per earlier finding. A finding the change
 closes is not raised again.
 
-Then read the whole PR again, not only the change since: the change
-since is not the whole PR, and the review before this one missed what
-it missed. Report every new finding under the same evidence rule. A new
-finding in code the change since does not touch blocks only if it loses
-or corrupts a record, splits the primary, leaks a secret, or makes the
-description untrue at runtime; anything below that bar is reported, says
-in its text that it is not blocking, and does not by itself set
-\`blocking\`. A new finding in the change since, and an earlier finding
-still open, block by the ordinary rule.
+Then review the change since, reading the rest of the PR only as far
+as the change since needs. Report every new finding under the same
+evidence rule. A new finding in the change since, and an earlier
+finding still open, block by the ordinary rule. A finding in code the
+change since does not touch does not block, whatever it is: it is
+reported, says in its text that it is not blocking, and does not by
+itself set \`blocking\`. The coordinator writes it to the ledger as
+deferred, and it does not extend the loop.
 EOF
 round_rule
