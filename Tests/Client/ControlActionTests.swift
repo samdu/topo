@@ -27,6 +27,26 @@ private final class CountingTool: Tool, @unchecked Sendable {
     }
 }
 
+/// `home` answering each call in turn with its scripted delay and reply.
+private final class ScriptedTool: Tool, @unchecked Sendable {
+    let name = "home"
+    let summary = "a home the test scripts call by call"
+    let usage = "anything"
+    private let lock = NSLock()
+    private var script: [(Duration, ToolReply)]
+    private var _calls: [[String]] = []
+    var calls: [[String]] { lock.withLock { _calls } }
+    init(_ script: [(Duration, ToolReply)]) { self.script = script }
+    func run(_ arguments: [String]) async -> ToolReply {
+        let (delay, reply) = lock.withLock { () -> (Duration, ToolReply) in
+            _calls.append(arguments)
+            return script.isEmpty ? (.zero, .ok("done\n")) : script.removeFirst()
+        }
+        try? await Task.sleep(for: delay)
+        return reply
+    }
+}
+
 /// `home` whose `on` is slow and `off` quick, recording each effect as it lands.
 private final class EffectTool: Tool, @unchecked Sendable {
     let name = "home"
@@ -173,6 +193,38 @@ final class ControlActionTests: XCTestCase {
         _ = await (first, second)
         XCTAssertEqual(home.effects, ["on", "off"])
         XCTAssertEqual(store.readControl(slot: "toggle-3")?.document.on, false)
+    }
+
+    /// On, off, on in quick succession, the first failing and the others taking: the device ends
+    /// on, and so does the toggle — the first failure does not put back a state a later tap drew.
+    func testAnEarlyFailureDoesNotUndoALaterSuccess() async throws {
+        let home = ScriptedTool([(.milliseconds(200), ToolReply(status: ToolReply.failed, text: "no\n")),
+                                 (.milliseconds(10), .ok("done\n")), (.milliseconds(10), .ok("done\n"))])
+        let revision = try set("toggle-5", ["home", "set", "LAMP", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-5")
+        async let first: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: true)
+        try await Task.sleep(for: .milliseconds(20))
+        async let second: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: false)
+        try await Task.sleep(for: .milliseconds(20))
+        async let third: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: true)
+        _ = await (first, second, third)
+        XCTAssertEqual(home.calls.map { $0.last }, ["on", "off", "on"])
+        XCTAssertEqual(store.readControl(slot: "toggle-5")?.document.on, true, "the toggle shows a state the device is not in")
+    }
+
+    /// On then off, the on taking and the off failing: the toggle goes back to on, the state the
+    /// device is in, not to the off it started from.
+    func testALastFailureGoesBackToTheLastSuccess() async throws {
+        let home = ScriptedTool([(.milliseconds(100), .ok("done\n")), (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n"))])
+        let revision = try set("toggle-6", ["home", "set", "LAMP", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-6")
+        async let first: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: true)
+        try await Task.sleep(for: .milliseconds(20))
+        async let second: Void = actions.run(slot: slot, control: ControlSlot.control, revision: revision, turningOn: false)
+        _ = await (first, second)
+        XCTAssertEqual(store.readControl(slot: "toggle-6")?.document.on, true)
     }
 
     /// `topo control state` while a toggle's run is in flight: a failure after it goes back to

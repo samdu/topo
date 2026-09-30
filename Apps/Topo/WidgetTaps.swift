@@ -15,11 +15,47 @@ final class WidgetTaps: WidgetTapHandler {
     /// How long a held tap waits on its drain: a read and a write of the log, inside the time the
     /// system gives an intent.
     static let drainBound: Duration = .seconds(20)
+    let drainBound: Duration
 
-    init(cues: WidgetCues, actions: WidgetActions, holdsForTheDrain: Bool = WidgetTaps.drainIsHeld) {
+    init(cues: WidgetCues, actions: WidgetActions, holdsForTheDrain: Bool = WidgetTaps.drainIsHeld,
+         drainBound: Duration = WidgetTaps.drainBound) {
         self.cues = cues
         self.actions = actions
         self.holdsForTheDrain = holdsForTheDrain
+        self.drainBound = drainBound
+    }
+
+    /// Returns when `task` ends or `bound` has passed, whichever is first, and leaves `task`
+    /// running: a race on a continuation, since a task group waits for every child, and a child
+    /// awaiting another task's value does not end when cancelled.
+    static func wait(for task: Task<Void, Never>, atMost bound: Duration) async {
+        let once = Once()
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            once.set(continuation)
+            let timer = Task {
+                try? await Task.sleep(for: bound)
+                once.resume()
+            }
+            Task {
+                await task.value
+                timer.cancel()
+                once.resume()
+            }
+        }
+    }
+
+    /// A continuation resumed by the first of two racers and never again.
+    private final class Once: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+        func set(_ continuation: CheckedContinuation<Void, Never>) { lock.withLock { self.continuation = continuation } }
+        func resume() {
+            let taken = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+                defer { continuation = nil }
+                return continuation
+            }
+            taken?.resume()
+        }
     }
 
     static var drainIsHeld: Bool {
@@ -56,15 +92,7 @@ final class WidgetTaps: WidgetTapHandler {
                                        turningOn: turningOn, time: Date())
             guard (try? store.recordCue(cue)) == true else { return .foreground }
             let draining = Task { await cues.drain() }
-            if holdsForTheDrain {
-                // The drain runs on past the bound if it must; the intent stops waiting for it.
-                await withTaskGroup(of: Void.self) { group in
-                    group.addTask { await draining.value }
-                    group.addTask { try? await Task.sleep(for: Self.drainBound) }
-                    await group.next()
-                    group.cancelAll()
-                }
-            }
+            if holdsForTheDrain { await Self.wait(for: draining, atMost: drainBound) }
             return .foreground
         case .open:
             return .foreground
@@ -244,6 +272,10 @@ final class WidgetActions {
     /// one before its chain began. A failed run puts the toggle back to it, not to the state the
     /// failed tap flipped from, which another failed tap may have flipped already.
     private var confirmed: [String: Bool] = [:]
+    /// Each tap's number, and each control's latest, so a failed run knows whether a later tap
+    /// stands to settle the toggle.
+    private var sequence = 0
+    private var latest: [String: Int] = [:]
 
     init(table: ToolTable, store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          reloader: SurfaceReloader = .shared, bound: Duration = ToolService.defaultBound,
@@ -313,6 +345,9 @@ final class WidgetActions {
         // asked for. A run that fails puts it back to its confirmed one.
         let key = "\(slot)/\(id)"
         let state = "\(key)/\(revision)"
+        sequence += 1
+        let tap = sequence
+        latest[key] = tap
         var was: Bool?
         var now: Bool?
         if tapped.isToggle {
@@ -353,10 +388,13 @@ final class WidgetActions {
             // the slot was written anew — writes nothing, so the next login sees no tap of this
             // one's controls.
             guard !Task.isCancelled, find()?.revision == revision else { return }
+            // The effects land in the taps' order, so the device ends in the state of the last one
+            // that took. A success is that state until a later one takes; a failure puts the toggle
+            // back to it only when no later tap stands, since a later tap drew its own state and its
+            // run will settle it.
             if let was, let now {
-                if status == 0 {
-                    confirmed[state] = now
-                } else {
+                if status == 0 { confirmed[state] = now }
+                if status != 0, latest[key] == tap {
                     try? store.setOn(confirmed[state] ?? was, slot: slot, control: id, revision: revision)
                 }
             }
@@ -370,6 +408,7 @@ final class WidgetActions {
         if chains[key] == task {
             chains[key] = nil
             confirmed[state] = nil
+            latest[key] = nil
         }
     }
 }

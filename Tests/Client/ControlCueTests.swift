@@ -27,13 +27,14 @@ final class ControlCueTests: XCTestCase {
 
     private var store: SurfaceStore { SurfaceStore(folder: folder) }
 
-    private func taps(_ harness: Harness, tools: [any Tool] = [], holdsForTheDrain: Bool = false) -> WidgetTaps {
+    private func taps(_ harness: Harness, tools: [any Tool] = [], holdsForTheDrain: Bool = false,
+                      drainBound: Duration = WidgetTaps.drainBound) -> WidgetTaps {
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                        reloadEveryControl: {}, schedule: { _, _ in })
         return WidgetTaps(cues: WidgetCues(harness: harness, store: { store }, reloader: reloader),
                           actions: WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: .seconds(5)),
-                          holdsForTheDrain: holdsForTheDrain)
+                          holdsForTheDrain: holdsForTheDrain, drainBound: drainBound)
     }
 
     @discardableResult
@@ -152,6 +153,34 @@ final class ControlCueTests: XCTestCase {
         XCTAssertEqual(store.readControl(slot: "button-2")?.document.revision, written)
         XCTAssertEqual(store.readControl(slot: "button-2")?.document.title, "Lamp")
         XCTAssertEqual(ControlSlot.all.map { store.readControl(slot: $0)?.document.revision }, others, "a relaunch rewrote a slot")
+    }
+
+    /// A turn tap held for its drain returns at the bound when the log will not take the turn in
+    /// time, leaving the drain running. The cue's words are in the harness's outbox under the cue's
+    /// nonce by then (`Harness.pending`, kept in the defaults), so a later launch's harness sends
+    /// them once, and the cue, gone from the app group, is not said a second time.
+    func testAHeldTapReturnsAtTheBoundAndTheTurnOutlivesIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let stalled = harness(db, defaults: defaults, transport: ScriptedTransport(),
+                              ensureZone: { try await Task.sleep(for: .seconds(3600)) })
+        let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
+        let taps = taps(stalled, holdsForTheDrain: true, drainBound: .milliseconds(300))
+        let started = ContinuousClock.now
+        let answer = await taps.controlTapped(slot: "button-1", revision: revision, turningOn: nil)
+        XCTAssertEqual(answer, .foreground)
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3), "the tap waited on the drain past its bound")
+        XCTAssertEqual(store.cues(), [], "the cue outlived its place on the line")
+        let nonce = try XCTUnwrap(stalled.owed.first?.nonce)
+
+        // The process ends here; the next launch's harness reads the same defaults.
+        let relaunched = harness(db, defaults: defaults, transport: ScriptedTransport())
+        XCTAssertEqual(relaunched.owed.map(\.nonce), [nonce], "the outbox did not keep the turn")
+        await relaunched.refresh()
+        await relaunched.retry()
+        await self.taps(relaunched).cues.drain()
+        let said = (try await TurnLog(database: db).read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.text), ["control button-1: lights please"], "the turn was lost or said twice")
     }
 
     /// A new login — the phase coming to signed in from anything else — keeps no slot an earlier
