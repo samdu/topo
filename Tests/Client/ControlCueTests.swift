@@ -27,12 +27,13 @@ final class ControlCueTests: XCTestCase {
 
     private var store: SurfaceStore { SurfaceStore(folder: folder) }
 
-    private func taps(_ harness: Harness, tools: [any Tool] = []) -> WidgetTaps {
+    private func taps(_ harness: Harness, tools: [any Tool] = [], holdsForTheDrain: Bool = false) -> WidgetTaps {
         let store = store
         let reloader = SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, reloadControlKind: { _ in },
                                        reloadEveryControl: {}, schedule: { _, _ in })
         return WidgetTaps(cues: WidgetCues(harness: harness, store: { store }, reloader: reloader),
-                          actions: WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: .seconds(5)))
+                          actions: WidgetActions(table: ToolTable(tools), store: { store }, reloader: reloader, bound: .seconds(5)),
+                          holdsForTheDrain: holdsForTheDrain)
     }
 
     @discardableResult
@@ -195,17 +196,13 @@ final class ControlCueTests: XCTestCase {
         let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
         XCTAssertFalse(harness.hasRead)
         let revision = try set("button-1", #"{"title": "Lights", "action": {"kind": "turn", "say": "lights please"}}"#)
-        let answer = await taps(harness).controlTapped(slot: "button-1", revision: revision, turningOn: nil)
+        // The intent is held open for the drain, as before iOS 26: the turn is in the log by the
+        // time the tap answers, with nothing polled for.
+        let answer = await taps(harness, holdsForTheDrain: true).controlTapped(slot: "button-1", revision: revision, turningOn: nil)
         XCTAssertEqual(answer, .foreground)
-        let words = "control button-1: lights please"
-        func landed() async -> Bool {
-            let log = TurnLog(database: db)
-            return ((try? await log.read())?.ordered ?? []).contains { $0.role == .person && $0.text == words }
-        }
-        for _ in 0..<200 { if await landed() { break }; try await Task.sleep(for: .milliseconds(20)) }
         XCTAssertTrue(harness.hasRead)
-        let sent = await landed()
-        XCTAssertTrue(sent, "the turn waited for a screen to read the log")
+        let said = (try await TurnLog(database: db).read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.text), ["control button-1: lights please"], "the tap answered before its turn was sent")
         XCTAssertEqual(store.cues(), [])
     }
 
