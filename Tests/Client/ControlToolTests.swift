@@ -233,7 +233,7 @@ final class ControlToolTests: XCTestCase {
     /// header's value, the query or the body.
     func testTheListingSaysNothingARequestCarried() async throws {
         let tool = try await tool()
-        let document = #"{"title": "Go", "action": {"kind": "request", "url": "https://hooks.example.com/run?token=SENTINEL-QUERY", "headers": {"X-Key": "SENTINEL-HEADER", "Authorization": "Bearer ${secret:ha}"}, "body": "SENTINEL-BODY"}}"#
+        let document = #"{"title": "Go", "action": {"kind": "request", "url": "https://hooks.example.com/run?token=SENTINEL-QUERY", "headers": {"X-Key": "SENTINEL-HEADER", "Authorization": "${secret:ha}"}, "body": "SENTINEL-BODY"}}"#
         let set = await tool.run(["set", "button-6", document])
         XCTAssertEqual(set.status, ToolReply.ok, set.text)
         try store.appendTap(SurfaceStore.Tap(time: Date(), slot: ControlSlot.stored("button-6"), id: ControlSlot.control, revision: 3,
@@ -245,7 +245,19 @@ final class ControlToolTests: XCTestCase {
         }
         XCTAssertTrue(listed.text.contains("request POST https://hooks.example.com/run headers Authorization, X-Key with a body"), listed.text)
         XCTAssertTrue(taps.text.contains("button-6 | revision 3 | request | 1 | HTTP 503"), taps.text)
-        XCTAssertTrue(asked.isEmpty, "an internet host asked for local network access")
+        XCTAssertEqual(asked.map(\.host), ["hooks.example.com"], "a name, which may resolve to the home network, was not asked for")
+    }
+
+    /// A named home server (`homeassistant.lan`) is asked for at the set, as an address on the
+    /// home network is; a public address never is.
+    func testANamedLocalHostIsAskedForAtTheSet() async throws {
+        let tool = try await tool()
+        let named = await tool.run(["set", "button-4", #"{"title": "Go", "action": {"kind": "request", "url": "http://homeassistant.lan:8123/api/services/script/treat", "method": "POST"}}"#])
+        XCTAssertEqual(named.status, ToolReply.ok, named.text)
+        XCTAssertEqual(asked.map(\.host), ["homeassistant.lan"])
+        let bare = await tool.run(["set", "button-5", #"{"title": "Go", "action": {"kind": "request", "url": "http://8.8.8.8/x"}}"#])
+        XCTAssertEqual(bare.status, ToolReply.ok, bare.text)
+        XCTAssertEqual(asked.map(\.host), ["homeassistant.lan"], "a public address asked for local network access")
     }
 
     /// Each verb lists its own taps from the one log.

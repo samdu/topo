@@ -85,10 +85,17 @@ enum ControlRequest: Equatable, Sendable {
     /// A header's name or value, in bytes.
     static let headerByteLimit = 1024
     static let bodyByteLimit = 8 * 1024
-    /// The headers that carry a credential, whose value has to name a secret rather than hold it.
-    static let credentialHeaders: Set<String> = ["authorization", "cookie", "proxy-authorization"]
+    /// The headers that carry a credential, whose whole value has to be one secret's reference,
+    /// the secret holding all of it (`Bearer <token>` included), so nothing literal sits beside it.
+    static let credentialHeaders: Set<String> = ["authorization", "cookie", "proxy-authorization", "x-api-key", "x-auth-token", "api-key"]
     /// `${secret:<name>}`, a reference to a control secret the app resolves at the tap.
     static var reference: Regex<(Substring, Substring)> { /\$\{secret:([A-Za-z0-9_.-]{1,64})\}/ }
+
+    /// Whether `url` carries userinfo (`user:password@host`, or an empty `@` before the host).
+    static func hasUserinfo(_ url: String) -> Bool {
+        guard let components = URLComponents(string: url) else { return false }
+        return components.user != nil || components.password != nil
+    }
 
     struct Form: Equatable, Sendable {
         var method: String
@@ -468,6 +475,9 @@ final class ControlReader {
             return refuse("url", "is not an http or https URL")
         }
         guard let host = parsed.host(), !host.isEmpty else { return refuse("url", "names no host") }
+        guard !ControlRequest.hasUserinfo(url) else {
+            return refuse("url", "carries a user or password, which the document would keep; name a secret in a header instead")
+        }
         var body: String?
         if let raw = object["body"] {
             guard let text = raw as? String else { return refuse("body", "is not text") }
@@ -501,8 +511,8 @@ final class ControlReader {
                       value.utf8.count <= ControlRequest.headerByteLimit else {
                     return refuse("headers.\(name)", "holds a line break or is over \(ControlRequest.headerByteLimit) bytes")
                 }
-                if ControlRequest.credentialHeaders.contains(name.lowercased()), !value.contains(ControlRequest.reference) {
-                    return refuse("headers.\(name)", "carries a credential, which is named as ${secret:<name>} and never written in")
+                if ControlRequest.credentialHeaders.contains(name.lowercased()), value.wholeMatch(of: ControlRequest.reference) == nil {
+                    return refuse("headers.\(name)", "carries a credential, whose whole value is one ${secret:<name>} and nothing else; the secret holds all of it, Bearer and the token included")
                 }
                 headers.append(ControlRequest.Header(name: name, value: value))
             }

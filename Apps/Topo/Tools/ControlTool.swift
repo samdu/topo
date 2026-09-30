@@ -55,8 +55,10 @@ struct ControlTool: Tool {
         any URL, with no turn and nothing opened: GET without a body, POST with one; a toggle's is
         {"kind": "request", "on": {…}, "off": {…}}. A request is answered within \(Int(ControlRequest.deadline.components.seconds)) s, follows no redirect and
         is never retried by Topo, but a GET may reach the server up to three times when the connection
-        drops, so an effect that must not happen twice is a POST. Authorization, Cookie and
-        Proxy-Authorization name a secret (Bearer ${secret:NAME}); any header or body may.
+        drops, so an effect that must not happen twice is a POST. The whole value of Authorization,
+        Cookie, Proxy-Authorization, X-Api-Key, X-Auth-Token and Api-Key is one ${secret:NAME} and nothing
+        else, the secret holding all of it (topo control secret set ha 'Bearer <token>'); any other
+        header or the body may name one among other text. A URL carries no user or password.
         A request to the home network needs local network access, asked for when Topo is in front.
         Limits: a control shows what the system last read of it, and the system decides when it reads again.
         A press on the lock screen or the Action button needs no Face ID. On iOS 18 to 25 a turn or open
@@ -193,7 +195,7 @@ struct ControlTool: Tool {
         }
         await MainActor.run {
             reloader().reloadControls(kind: document.kind.controlKind)
-            urls.filter(LocalNetworkAccess.isLocal).forEach(askLocal)
+            urls.filter(LocalNetworkAccess.mayBeLocal).forEach(askLocal)
         }
         var lines = ["set: \(slot), revision \(revision)"]
         lines += notes.map { "refused: \($0)" }
@@ -288,10 +290,10 @@ struct ControlTool: Tool {
      "on": false, "hint": "Music",
      "action": {"kind": "request",
                 "on": {"url": "http://192.168.1.214/api/services/media_player/media_play",
-                       "headers": {"Authorization": "Bearer ${secret:ha}", "Content-Type": "application/json"},
+                       "headers": {"Authorization": "${secret:ha}", "Content-Type": "application/json"},
                        "body": "{\"entity_id\": \"media_player.kitchen\"}"},
                 "off": {"url": "http://192.168.1.214/api/services/media_player/media_pause",
-                        "headers": {"Authorization": "Bearer ${secret:ha}", "Content-Type": "application/json"},
+                        "headers": {"Authorization": "${secret:ha}", "Content-Type": "application/json"},
                         "body": "{\"entity_id\": \"media_player.kitchen\"}"}}}
     """#
 }

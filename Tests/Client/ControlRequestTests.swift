@@ -18,6 +18,9 @@ private final class LoopbackServer: @unchecked Sendable {
         case trickle
         /// Reads the request and never answers.
         case stall
+        /// Sends a 200's status line and headers promising a long body, a first piece of it, and
+        /// then nothing, holding the connection until the client closes it.
+        case stallBody(String, type: String = "application/json")
     }
 
     private let listener: NWListener
@@ -30,6 +33,9 @@ private final class LoopbackServer: @unchecked Sendable {
 
     /// Every request received, whole, in the order received.
     var requests: [String] { lock.withLock { _requests } }
+    private var _closed = 0
+    /// How many connections the client has closed after the server answered.
+    var closed: Int { lock.withLock { _closed } }
 
     init(_ behaviour: Behaviour) async throws {
         self.behaviour = behaviour
@@ -95,6 +101,21 @@ private final class LoopbackServer: @unchecked Sendable {
             trickle(connection, Array("HTTP/1.1 200 OK\r\nX-Slow: ".utf8) + Array(repeating: UInt8(ascii: "a"), count: 60))
         case .stall:
             break
+        case .stallBody(let first, let type):
+            let head = "HTTP/1.1 200 OK\r\nContent-Length: 100000\r\nContent-Type: \(type)\r\n\r\n" + first
+            connection.send(content: Data(head.utf8), completion: .contentProcessed { [self] _ in awaitClose(connection) })
+        }
+    }
+
+    /// Reads until the client closes the connection, and counts it.
+    private func awaitClose(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [self] _, _, done, error in
+            if done || error != nil {
+                lock.withLock { _closed += 1 }
+                connection.cancel()
+            } else {
+                awaitClose(connection)
+            }
         }
     }
 
@@ -192,22 +213,28 @@ final class ControlRequestTests: XCTestCase {
                                                                           body: method == "GET" ? nil : "{}"),
                                                       secrets: secrets)
             try await Task.sleep(for: .milliseconds(500))
-            XCTAssertTrue((1...most).contains(server.requests.count), "\(server.requests.count) \(method)s for one tap")
+            // Measured: a GET is resent twice on a dropped connection, three received; the rest once.
+            let expected = method == "GET" ? 2...most : 1...most
+            XCTAssertTrue(expected.contains(server.requests.count), "\(server.requests.count) \(method)s for one tap")
             XCTAssertEqual(answer.status, ToolReply.failed)
         }
     }
 
-    /// The hosts `LocalNetworkAccess` asks for: private and link-local addresses and `.local`
-    /// names, and nothing on the internet.
-    func testWhatIsLocal() {
+    /// The hosts `LocalNetworkAccess` asks for: private and link-local addresses and every name,
+    /// since a name like `homeassistant.lan` resolves to the home network; never a public address.
+    func testWhatMayBeLocal() {
         for url in ["http://192.168.1.214/api", "http://10.0.0.5", "http://172.16.0.1", "http://172.31.255.1", "http://169.254.1.1",
-                    "http://hub.local:8123/x", "http://[fe80::1]/", "http://[fd12:3456::1]:8080/"] {
-            XCTAssertTrue(LocalNetworkAccess.isLocal(URL(string: url)!), url)
+                    "http://hub.local:8123/x", "http://[fe80::1]/", "http://[fd12:3456::1]:8080/", "http://homeassistant.lan:8123/api",
+                    "http://homeassistant/api", "https://local.example.com"] {
+            XCTAssertTrue(LocalNetworkAccess.mayBeLocal(URL(string: url)!), url)
         }
-        for url in ["https://example.com", "http://172.32.0.1", "http://8.8.8.8", "http://[2001:db8::1]/", "http://192.169.0.1",
-                    "https://local.example.com"] {
-            XCTAssertFalse(LocalNetworkAccess.isLocal(URL(string: url)!), url)
+        for url in ["http://172.32.0.1", "http://8.8.8.8", "http://[2001:db8::1]/", "http://192.169.0.1"] {
+            XCTAssertFalse(LocalNetworkAccess.mayBeLocal(URL(string: url)!), url)
         }
+        // A probe that reached a public address says nothing about local network access.
+        XCTAssertTrue(LocalNetworkAccess.landedLocal(.hostPort(host: .ipv4(IPv4Address("192.168.1.214")!), port: 8123)))
+        XCTAssertFalse(LocalNetworkAccess.landedLocal(.hostPort(host: .ipv4(IPv4Address("93.184.216.34")!), port: 443)))
+        XCTAssertFalse(LocalNetworkAccess.landedLocal(nil))
     }
 
     /// A server sending a byte a second never trips an inactivity timeout: the deadline is from
@@ -246,14 +273,14 @@ final class ControlRequestTests: XCTestCase {
     /// The server receives the secret's value; the document in the app group holds its name.
     func testSecretResolvedAtTheTap() async throws {
         let server = try await server(.answer(200))
-        try secrets.set("tok-7Q2X", name: "ha")
-        let revision = try set(["url": server.url("/api"), "headers": ["Authorization": "Bearer ${secret:ha}"],
+        try secrets.set("Bearer tok-7Q2X", name: "ha")
+        let revision = try set(["url": server.url("/api"), "headers": ["Authorization": "${secret:ha}"],
                                 "body": #"{"key": "${secret:ha}"}"#])
         await tap(actions(), revision: revision)
         XCTAssertEqual(server.requests.count, 1)
         let received = server.requests[0]
         XCTAssertTrue(received.lowercased().contains("authorization: bearer tok-7q2x"), received)
-        XCTAssertTrue(received.hasSuffix(#"{"key": "tok-7Q2X"}"#), received)
+        XCTAssertTrue(received.hasSuffix(#"{"key": "Bearer tok-7Q2X"}"#), received)
         let file = try String(contentsOf: folder.appendingPathComponent("_control-button-1.json"), encoding: .utf8)
         XCTAssertTrue(file.contains("${secret:ha}"))
         XCTAssertFalse(file.contains("tok-7Q2X"))
@@ -262,7 +289,7 @@ final class ControlRequestTests: XCTestCase {
 
     func testMissingSecretSendsNothing() async throws {
         let server = try await server(.answer(200))
-        let revision = try set(["url": server.url("/api"), "headers": ["Authorization": "Bearer ${secret:gone}"]])
+        let revision = try set(["url": server.url("/api"), "headers": ["Authorization": "${secret:gone}"]])
         await tap(actions(), revision: revision)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.requests.count, 0)
@@ -276,7 +303,7 @@ final class ControlRequestTests: XCTestCase {
         let server = try await server(.answer(204))
         try secrets.set("earlier", name: "ha")
         leftBehind.controlSecrets = "the controls' secrets could not be removed"
-        let named = try set(["url": server.url("/api"), "headers": ["Authorization": "Bearer ${secret:ha}"]])
+        let named = try set(["url": server.url("/api"), "headers": ["Authorization": "${secret:ha}"]])
         await tap(actions(), revision: named)
         try await Task.sleep(for: .milliseconds(300))
         XCTAssertEqual(server.requests.count, 0, "a secret left behind at a sign-out was sent")
@@ -288,6 +315,42 @@ final class ControlRequestTests: XCTestCase {
         XCTAssertEqual(last?.status, "0")
     }
 
+    /// A response whose headers arrive and whose body stalls: the status is the answer, at once,
+    /// the body is never waited for, and the connection is closed rather than left open.
+    func testTheBodyIsNeverRead() async throws {
+        let server = try await server(.stallBody("SENTINEL-BODY"))
+        let started = ContinuousClock.now
+        let answer = await ControlRequest.perform(ControlRequest.Form(method: "GET", url: server.url("/api")), secrets: secrets,
+                                                  leftBehind: leftBehind)
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(3), "the answer waited on the body")
+        XCTAssertEqual(answer, ControlRequest.Answer(status: 0, code: 200))
+        for _ in 0..<20 where server.closed == 0 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(server.closed, 1, "the connection was left open with its body unread")
+
+        // URLSession holds a text/plain response back to sniff its type until 512 bytes or the
+        // body's end, which no public setting turns off: a stalled one is answered at the
+        // deadline, and its connection closed all the same.
+        let sniffed = try await self.server(.stallBody("SENTINEL-BODY", type: "text/plain"))
+        let plain = await ControlRequest.perform(ControlRequest.Form(method: "GET", url: sniffed.url("/api")), secrets: secrets,
+                                                 leftBehind: leftBehind, deadline: .seconds(1))
+        XCTAssertEqual(plain, ControlRequest.Answer(status: ToolReply.timedOut))
+        for _ in 0..<20 where sniffed.closed == 0 { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertEqual(sniffed.closed, 1, "the connection was left open past the deadline")
+    }
+
+    /// A URL with userinfo sends nothing, though a document written before the reader refused it
+    /// reached the tap.
+    func testUserinfoSendsNothing() async throws {
+        let server = try await server(.answer(204))
+        for url in ["http://alice:static-token@127.0.0.1:\(server.port)/api", "http://static-token@127.0.0.1:\(server.port)/api"] {
+            let answer = await ControlRequest.perform(ControlRequest.Form(method: "POST", url: url, body: "{}"), secrets: secrets,
+                                                      leftBehind: leftBehind)
+            XCTAssertEqual(answer.status, ToolReply.failed, url)
+        }
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(server.requests.count, 0, "a URL's userinfo was sent")
+    }
+
     /// A sentinel in a header's value, a secret, the query, the body and the response: in no line
     /// of the tap log and no line this process logged.
     func testNothingItCarriedIsRecorded() async throws {
@@ -296,7 +359,7 @@ final class ControlRequestTests: XCTestCase {
         try secrets.set("SENTINEL-SECRET", name: "ha")
         let started = Date()
         let revision = try set(["url": server.url("/api?token=SENTINEL-QUERY"),
-                                "headers": ["X-Key": "SENTINEL-HEADER", "Authorization": "Bearer ${secret:ha}"],
+                                "headers": ["X-Key": "SENTINEL-HEADER", "Authorization": "${secret:ha}"],
                                 "body": "SENTINEL-BODY"])
         await tap(actions(), revision: revision)
         XCTAssertEqual(last?.status, "0")

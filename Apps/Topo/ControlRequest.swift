@@ -73,7 +73,7 @@ extension ControlRequest.Answer {
 
 extension ControlRequest.Form {
     /// The request this form sends, each `${secret:<name>}` replaced by `secret`'s value, or nil
-    /// when one names a secret the keychain does not hold.
+    /// when one names a secret the keychain does not hold or the URL carries userinfo.
     func urlRequest(secret: (String) -> String?) -> URLRequest? {
         var values: [String: String] = [:]
         for name in secrets {
@@ -83,7 +83,7 @@ extension ControlRequest.Form {
         func resolve(_ text: String) -> String {
             text.replacing(ControlRequest.reference) { values[String($0.output.1)] ?? "" }
         }
-        guard let url = URL(string: self.url) else { return nil }
+        guard let url = URL(string: self.url), !ControlRequest.hasUserinfo(self.url) else { return nil }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData)
         request.httpMethod = method
         request.httpShouldHandleCookies = false
@@ -170,28 +170,45 @@ final class LocalNetworkAccess {
 
     var state: State { defaults.string(forKey: Self.key).flatMap(State.init(rawValue:)) ?? .notAsked }
 
-    /// Whether `url`'s host is on the local network: a private or link-local address, or a
-    /// `.local` name.
-    nonisolated static func isLocal(_ url: URL) -> Bool {
+    /// Whether `url`'s host may be on the local network, and so is asked for: every name, since
+    /// what a name resolves to (`homeassistant.lan`, a split-horizon name) is known only where and
+    /// when it is resolved, and a private or link-local address; never a public address. The
+    /// probe resolves the name itself, and the system raises its prompt only when that connection
+    /// lands on a local address, so a name that is public costs one connection cancelled unsent.
+    nonisolated static func mayBeLocal(_ url: URL) -> Bool {
         guard let host = url.host()?.lowercased(), !host.isEmpty else { return false }
-        if host.hasSuffix(".local") || host.hasSuffix(".local.") { return true }
-        if let v4 = IPv4Address(host) {
-            let b = [UInt8](v4.rawValue)
-            return b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
-                || (b[0] == 169 && b[1] == 254)
-        }
         let bare = host.hasPrefix("[") && host.hasSuffix("]") ? String(host.dropFirst().dropLast()) : host
-        if let v6 = IPv6Address(bare) {
-            let b = [UInt8](v6.rawValue)
-            return (b[0] == 0xfe && b[1] & 0xc0 == 0x80) || b[0] & 0xfe == 0xfc
-        }
-        return false
+        if let v4 = IPv4Address(bare) { return isPrivate(v4) }
+        if let v6 = IPv6Address(bare) { return isPrivate(v6) }
+        return true
     }
 
-    /// Asks for access to `url`'s host if it is local: now when the app is in front, else at the
-    /// next foreground.
+    nonisolated static func isPrivate(_ address: IPv4Address) -> Bool {
+        let b = [UInt8](address.rawValue)
+        return b[0] == 10 || (b[0] == 172 && (16...31).contains(b[1])) || (b[0] == 192 && b[1] == 168)
+            || (b[0] == 169 && b[1] == 254)
+    }
+
+    nonisolated static func isPrivate(_ address: IPv6Address) -> Bool {
+        let b = [UInt8](address.rawValue)
+        return (b[0] == 0xfe && b[1] & 0xc0 == 0x80) || b[0] & 0xfe == 0xfc
+    }
+
+    /// Whether a probe's connection landed on a local address, which is all its being ready says
+    /// about local network access.
+    nonisolated static func landedLocal(_ endpoint: NWEndpoint?) -> Bool {
+        guard case .hostPort(let host, _) = endpoint else { return false }
+        switch host {
+        case .ipv4(let address): return isPrivate(address)
+        case .ipv6(let address): return isPrivate(address)
+        default: return false
+        }
+    }
+
+    /// Asks for access to `url`'s host if it may be local: now when the app is in front, else at
+    /// the next foreground.
     func ask(for url: URL) {
-        guard Self.isLocal(url), let host = url.host() else { return }
+        guard Self.mayBeLocal(url), let host = url.host() else { return }
         let port = url.port ?? (url.scheme?.lowercased() == "https" ? 443 : 80)
         guard let endpointPort = NWEndpoint.Port(rawValue: UInt16(clamping: port)) else { return }
         let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(host), port: endpointPort)
@@ -217,7 +234,7 @@ final class LocalNetworkAccess {
         connection.stateUpdateHandler = { @Sendable state in
             let found: State?
             switch state {
-            case .ready: found = .allowed
+            case .ready: found = Self.landedLocal(connection.currentPath?.remoteEndpoint) ? .allowed : nil
             case .waiting, .failed:
                 found = connection.currentPath?.unsatisfiedReason == .localNetworkDenied ? .denied : nil
             default: return

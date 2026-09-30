@@ -136,7 +136,7 @@ final class ControlDocumentTests: XCTestCase {
     // MARK: request
 
     static var play: [String: Any] { ["kind": "request", "url": "http://192.168.1.214/api/services/media_player/play_media",
-                                      "headers": ["Authorization": "Bearer ${secret:ha}", "Content-Type": "application/json"],
+                                      "headers": ["Authorization": "${secret:ha}", "Content-Type": "application/json"],
                                       "body": #"{"entity_id": "media_player.kitchen"}"#] }
 
     /// A request with a body is a POST unless it says otherwise, one without is a GET, and what
@@ -176,6 +176,9 @@ final class ControlDocumentTests: XCTestCase {
             ("action.url", with { $0["url"] = "http:///nohost" }),
             ("action.url", with { $0["url"] = "https://example.com/" + String(repeating: "a", count: 2048) }),
             ("action.url", with { $0["url"] = 5 }),
+            ("action.url", with { $0["url"] = "https://alice:static-token@example.com/run" }),
+            ("action.url", with { $0["url"] = "https://static-token@example.com/run" }),
+            ("action.url", with { $0["url"] = "https://:static-token@example.com/run" }),
             ("action.method", with { $0["method"] = "TRACE" }),
             ("action.method", with { $0["method"] = "get" }),
             ("action.headers", with { $0["headers"] = many }),
@@ -233,15 +236,19 @@ final class ControlDocumentTests: XCTestCase {
     /// Review Focus 14: a header carrying a credential names a secret; one holding it is refused,
     /// whatever the case of its name.
     func testCredentialHeaderMustBeAReference() {
-        for name in ["Authorization", "authorization", "Cookie", "PROXY-AUTHORIZATION"] {
-            let written = ControlDocument.read(Self.button { $0["action"] = ["kind": "request", "url": "https://example.com",
-                                                                            "headers": [name: "Bearer abc123"]] }, slot: "button-1")
-            XCTAssertEqual(written.notes.count, 1, name)
-            XCTAssertTrue(written.notes.first?.hasPrefix("action.headers.\(name) ") == true, "\(written.notes)")
-            XCTAssertEqual(written.document.action, .turn(say: nil))
-            XCTAssertFalse(written.document.text.contains("abc123"), "the refused value was kept")
+        for name in ["Authorization", "authorization", "Cookie", "PROXY-AUTHORIZATION", "X-Api-Key", "x-auth-token", "Api-Key"] {
+            // A literal, and a literal beside a reference: the value is one reference and nothing else.
+            for value in ["Bearer abc123", "Bearer ${secret:ha} abc123", "${secret:ha} abc123", "abc123${secret:ha}",
+                          "Bearer ${secret:ha}", "${secret:ha}${secret:hb}", " ${secret:ha}"] {
+                let written = ControlDocument.read(Self.button { $0["action"] = ["kind": "request", "url": "https://example.com",
+                                                                                "headers": [name: value]] }, slot: "button-1")
+                XCTAssertEqual(written.notes.count, 1, "\(name): \(value)")
+                XCTAssertTrue(written.notes.first?.hasPrefix("action.headers.\(name) ") == true, "\(written.notes)")
+                XCTAssertEqual(written.document.action, .turn(say: nil))
+                XCTAssertFalse(written.document.text.contains("abc123"), "the refused value was kept")
+            }
             let named = ControlDocument.read(Self.button { $0["action"] = ["kind": "request", "url": "https://example.com",
-                                                                          "headers": [name: "Bearer ${secret:ha}"]] }, slot: "button-1")
+                                                                          "headers": [name: "${secret:ha}"]] }, slot: "button-1")
             XCTAssertEqual(named.notes, [], name)
             let malformed = ControlDocument.read(Self.button { $0["action"] = ["kind": "request", "url": "https://example.com",
                                                                               "headers": [name: "${secret:has space}"]] }, slot: "button-1")
