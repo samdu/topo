@@ -141,6 +141,11 @@ public actor DNSForwarder {
                 failure = error
                 tcp.cancel()
                 self.tcp = nil
+                // What the failed attempt's listener accepted between its ready and this goes with it.
+                if generation == current {
+                    for connection in connections.values { connection.cancel() }
+                    connections = [:]
+                }
                 if error is CancellationError { throw error }
             }
         }
@@ -259,12 +264,10 @@ public actor DNSForwarder {
             }
         }
         connection.start(queue: queue)
-        let current = generation
-        queue.asyncAfter(deadline: .now() + connectionBound.timeInterval) { [weak self] in
-            self?.assumeIsolated { forwarder in
-                guard forwarder.generation == current else { return }
-                connection.cancel()
-            }
+        // Whatever happens to the listener that accepted it: cancelling one already cancelled is
+        // nothing, and holding it weakly keeps a closed connection from waiting out the bound.
+        queue.asyncAfter(deadline: .now() + connectionBound.timeInterval) { [weak connection] in
+            connection?.cancel()
         }
         readLength(connection)
     }

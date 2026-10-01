@@ -441,6 +441,42 @@ import Testing
         #expect(reply.answers.isEmpty)
     }
 
+    /// A cached NoSuchName waits as a cached NoSuchRecord does and, with nothing after it, is
+    /// NXDOMAIN with the CNAMEs gathered; a CNAME from the network ends the wait without answering.
+    @Test func aCachedNegativeKeepsItsCodeAndTheChain() async throws {
+        let resolver = ScriptedResolver { name, _ in
+            switch name {
+            case "nx.example.":
+                return [.now([cname("nx.example.", to: "t.example", more: true),
+                              RecordAnswer(outcome: .noSuchName, fromCache: true, name: "t.example.", type: 1)])]
+            default:
+                return [.now([RecordAnswer(outcome: .noSuchRecord, fromCache: true, name: name, type: 1)]),
+                        .after(.milliseconds(50), [cname(name, to: "u.example")]),
+                        .after(.milliseconds(400), [a("u.example.", [10, 0, 0, 7])])]
+            }
+        }
+        let (forwarder, port) = try await started(resolver)
+        defer { Task { await forwarder.stop() } }
+        let negative = Reply(try #require(try udp(port: port, query(1, "nx.example"))))
+        #expect(negative.rcode == DNSReply.nxDomain)
+        #expect(negative.answers.map(\.type) == [5])
+        let chained = Reply(try #require(try udp(port: port, query(2, "chain.example"))))
+        #expect(chained.rcode == DNSReply.noError)
+        #expect(chained.answers.map(\.type) == [5, 1])
+    }
+
+    /// Stopping abandons every question in flight, its dnssd query with it.
+    @Test func stoppingDeallocatesEveryQuery() async throws {
+        let resolver = ScriptedResolver { _, _ in [] }
+        let (forwarder, port) = try await started(resolver, queryBound: .seconds(30))
+        let client = try UDPClient(port: port)
+        defer { client.close() }
+        for id in 0..<5 { try client.send(query(UInt16(id), "q\(id).example")) }
+        try await eventually { resolver.live == 5 }
+        await forwarder.stop()
+        #expect(resolver.live == 0)
+    }
+
     @Test func otherErrorIsServfail() async throws {
         let resolver = ScriptedResolver { _, _ in [.now([.init(outcome: .failed(-65569))])] }
         let (forwarder, port) = try await started(resolver)
@@ -490,7 +526,8 @@ import Testing
         #expect(a == b)
         await forwarder.stop()
         #expect(seen.all == ["up \(a)", "down"])
-        #expect(tcpConnect(host: "127.0.0.1", port: a) == ECONNREFUSED, "a listener outlived the stop")
+        // The listener's cancel completes on the forwarder's queue, after `stop` answers.
+        try await eventually { tcpConnect(host: "127.0.0.1", port: a) == ECONNREFUSED }
     }
 
     /// A client that goes before its reply takes nothing down: the next client is answered.
