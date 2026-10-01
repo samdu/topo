@@ -141,11 +141,6 @@ public actor DNSForwarder {
                 failure = error
                 tcp.cancel()
                 self.tcp = nil
-                // What the failed attempt's listener accepted between its ready and this goes with it.
-                if generation == current {
-                    for connection in connections.values { connection.cancel() }
-                    connections = [:]
-                }
                 if error is CancellationError { throw error }
             }
         }
@@ -173,7 +168,10 @@ public actor DNSForwarder {
             listener.newConnectionHandler = { [weak self] connection in
                 guard let self else { connection.cancel(); return }
                 self.assumeIsolated { forwarder in
-                    guard forwarder.generation == current else { connection.cancel(); return }
+                    // Nothing before the start has finished: a connection that lands between the
+                    // listener's ready and a UDP bind that fails would outlive the attempt, and
+                    // nothing the guest sends can arrive before it is told the port.
+                    guard forwarder.generation == current, forwarder.port != nil else { connection.cancel(); return }
                     forwarder.acceptTCP(connection)
                 }
             }

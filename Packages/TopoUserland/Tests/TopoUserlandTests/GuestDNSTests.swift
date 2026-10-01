@@ -106,6 +106,17 @@ final class GuestDNSTests: XCTestCase {
         XCTAssertEqual(stub.queries, 0)
     }
 
+    /// The forwarder's own port, addressed directly, reads back as the stub on any socket: the
+    /// rewrite in keys on the address a reply came from, not on what the socket sent to.
+    func testTheForwardersPortReadsAsTheStub() async throws {
+        let stub = try StubDNS(address: [10, 1, 2, 3])
+        defer { stub.stop() }
+        Guest.shared.setDNSPort(stub.port)
+        let seen = try await addresses("4", "127.0.0.1", stub.port)
+        XCTAssertEqual(seen["recvfrom"], "4 127.0.0.53 53")
+        XCTAssertEqual(seen["reply"], "1")
+    }
+
     /// With the port cleared, the stub is an address nothing answers on, and the port that was
     /// the forwarder's is reported as itself.
     func testNoRewriteWithoutPort() async throws {

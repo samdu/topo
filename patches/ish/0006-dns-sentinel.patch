@@ -17,8 +17,8 @@ index 788bbf7..d722d74 100644
 +// The guest's DNS stub. The guest's resolv.conf names 127.0.0.53, which nothing on the host listens
 +// on, and musl can name no port; while the host has set a port here (0 is off), a connect or send
 +// to 127.0.0.53:53 (or ::ffff:127.0.0.53 port 53) goes to 127.0.0.1 at that port instead, and
-+// that address comes back to recvfrom, recvmsg and getpeername as 127.0.0.53:53, since musl drops
-+// a reply from an address it did not send to. No other address, port or family is touched.
++// 127.0.0.1 at that port comes back to recvfrom, recvmsg and getpeername as 127.0.0.53:53 on any
++// socket, since musl drops a reply from an address it did not send to. Nothing else is touched.
 +_Atomic uint16_t ish_dns_sentinel_port = 0;
 +
 +#define DNS_SENTINEL_V4 0x7f000035 // 127.0.0.53

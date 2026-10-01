@@ -95,11 +95,10 @@ final class GuestResolverTests: XCTestCase {
         XCTAssertEqual(events.all, ["port cleared", "write 192.168.1.1"])
     }
 
-    /// A write that fails is tried again, reading the state afresh, and logged; one that fails
-    /// every time is logged as given up.
-    func testAFailedWriteIsTriedAgain() async {
+    /// A write that fails is logged and tried again until it is made, however many tries it takes.
+    func testAFailedWriteIsTriedUntilItIsMade() async {
         let events = Events()
-        let failures = Failures(2)
+        let failures = Failures(8)
         let logged = LoggedLines()
         let resolver = GuestResolver(changes: FakePathChanges(), forwarder: FakeForwarder(5353), servers: { ["192.168.1.1"] },
                                      setPort: events.port,
@@ -107,19 +106,31 @@ final class GuestResolverTests: XCTestCase {
                                          if failures.take() { throw POSIXError(.EIO) }
                                          events.write(servers)
                                      },
-                                     retryDelay: .milliseconds(10), log: logged.add)
+                                     retryDelay: .milliseconds(1), log: logged.add)
         await resolver.start()
         XCTAssertEqual(events.all, ["port 5353", "write 127.0.0.53"])
-        XCTAssertEqual(logged.all.count, 2)
+        XCTAssertEqual(logged.all.count, 8)
+    }
 
-        let never = Failures(100)
-        let neverLogged = LoggedLines()
-        let failing = GuestResolver(changes: FakePathChanges(), forwarder: FakeForwarder(nil), servers: { ["192.168.1.1"] },
-                                    setPort: { _ in }, write: { _ in if never.take() { throw POSIXError(.EIO) } },
-                                    retryDelay: .milliseconds(10), log: neverLogged.add)
-        await failing.start()
-        XCTAssertEqual(neverLogged.all.count, GuestResolver.writeTries + 1)
-        XCTAssertTrue(neverLogged.all.last?.contains("not written") == true)
+    /// The stub's write failing and the forwarder going down before the next try: what is written
+    /// is the phone's servers, read as the try starts, never the stub.
+    func testARetryWritesTheStateAsItIsThen() async {
+        let events = Events()
+        let forwarder = FakeForwarder(5353)
+        let failures = Failures(1)
+        let resolver = GuestResolver(changes: FakePathChanges(), forwarder: forwarder, servers: { ["192.168.1.1"] },
+                                     setPort: events.port,
+                                     write: { servers in
+                                         if failures.take() {
+                                             forwarder.emit(nil)
+                                             throw POSIXError(.EIO)
+                                         }
+                                         events.write(servers)
+                                     },
+                                     retryDelay: .milliseconds(50), log: { _ in })
+        await resolver.start()
+        await resolver.settle()
+        XCTAssertEqual(events.all, ["port 5353", "port cleared", "write 192.168.1.1"])
     }
 
     private func waitFor(_ count: Int, _ events: Events) async {

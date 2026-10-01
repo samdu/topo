@@ -57,6 +57,8 @@ extension DNSForwarder: ForwarderChanges {
     private let retryDelay: Duration
     private let log: @Sendable (String) -> Void
     private var last: Task<Void, Never>?
+    /// Bumped by every refresh, so a write still being tried gives way to a newer one.
+    private var refreshes = 0
     private var started = false
     /// The forwarder's changes are applied as they come rather than gathered for the first write.
     private var ready = false
@@ -78,12 +80,13 @@ extension DNSForwarder: ForwarderChanges {
         self.log = log
     }
 
-    /// Tries of one write before it is given up, a `retryDelay` apart.
-    static let writeTries = 5
+    /// The longest wait between two tries of a write that keeps failing.
+    static let retryCeiling: Duration = .seconds(30)
 
     /// Writes the resolver now and on every path change and forwarder change after. Answers once
-    /// the first write has been made. A write that fails is tried again, and one that fails every
-    /// time is logged: it leaves a guest in which no name resolves, which is not the caller's.
+    /// the first write has been made. A write that fails is logged and tried again, waiting twice as
+    /// long each time up to `retryCeiling`, until it is made or a newer write takes its place; while
+    /// it fails the guest may have no name resolving, which is not the caller's.
     func start() async {
         guard !started else { return }
         started = true
@@ -126,20 +129,28 @@ extension DNSForwarder: ForwarderChanges {
         let before = last
         let servers = servers
         let write = write
+        refreshes += 1
+        let mine = refreshes
         let task = Task { @MainActor in
             await before?.value
-            for attempt in 1...Self.writeTries {
-                // What the state says as each try starts: a change meanwhile is written by its own refresh too.
+            var delay = self.retryDelay
+            var failures = 0
+            // Until it is written, or tried again only while no later refresh has taken over: a file
+            // left naming the stub with no forwarder behind it is a guest in which no name resolves.
+            while true {
+                // What the state says as each try starts.
                 let chosen = self.port == nil ? servers() : [Guest.dnsStub]
                 do {
                     try await write(chosen)
                     return
                 } catch {
-                    self.log("dns: resolv.conf write failed, try \(attempt) of \(Self.writeTries): \(error)")
+                    failures += 1
+                    self.log("dns: resolv.conf write failed (\(failures) so far), trying again in \(delay): \(error)")
                 }
-                if attempt < Self.writeTries { try? await Task.sleep(for: self.retryDelay) }
+                try? await Task.sleep(for: delay)
+                delay = min(delay * 2, Self.retryCeiling)
+                guard self.refreshes == mine else { return }
             }
-            self.log("dns: resolv.conf not written; the guest's lookups may have nothing to answer them")
         }
         last = task
         return task
