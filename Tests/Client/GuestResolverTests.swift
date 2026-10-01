@@ -108,8 +108,40 @@ final class GuestResolverTests: XCTestCase {
                                      },
                                      retryDelay: .milliseconds(1), log: logged.add)
         await resolver.start()
+        await resolver.settle()
         XCTAssertEqual(events.all, ["port 5353", "write 127.0.0.53"])
         XCTAssertEqual(logged.all.count, 8)
+    }
+
+    /// A first write that keeps failing does not hold the boot: the start answers after its first try.
+    func testABootIsNotHeldByAWriteThatKeepsFailing() async {
+        let never = Failures(1_000_000)
+        let resolver = GuestResolver(changes: FakePathChanges(), forwarder: FakeForwarder(5353), servers: { ["192.168.1.1"] },
+                                     setPort: { _ in }, write: { _ in if never.take() { throw POSIXError(.ENOSPC) } },
+                                     retryDelay: .seconds(60), log: { _ in })
+        let started = expectation(description: "the start answered")
+        Task { await resolver.start(); started.fulfill() }
+        await fulfillment(of: [started], timeout: 2)
+    }
+
+    /// A newer write does not wait out the backoff of one that failed before it.
+    func testANewerWriteDoesNotWaitOutABackoff() async {
+        let events = Events()
+        let forwarder = FakeForwarder(5353)
+        let failures = Failures(1)
+        let resolver = GuestResolver(changes: FakePathChanges(), forwarder: forwarder, servers: { ["192.168.1.1"] },
+                                     setPort: events.port,
+                                     write: { servers in
+                                         if failures.take() { throw POSIXError(.EIO) }
+                                         events.write(servers)
+                                     },
+                                     retryDelay: .seconds(60), log: { _ in })
+        await resolver.start()
+        forwarder.emit(nil)
+        let settled = expectation(description: "the newer write was made")
+        Task { await resolver.settle(); settled.fulfill() }
+        await fulfillment(of: [settled], timeout: 2)
+        XCTAssertEqual(events.all, ["port 5353", "port cleared", "write 192.168.1.1"])
     }
 
     /// The stub's write failing and the forwarder going down before the next try: what is written

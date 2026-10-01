@@ -59,6 +59,8 @@ extension DNSForwarder: ForwarderChanges {
     private var last: Task<Void, Never>?
     /// Bumped by every refresh, so a write still being tried gives way to a newer one.
     private var refreshes = 0
+    /// The wait of a write that failed, before it tries again.
+    private var napping: Task<Void, Never>?
     private var started = false
     /// The forwarder's changes are applied as they come rather than gathered for the first write.
     private var ready = false
@@ -84,7 +86,7 @@ extension DNSForwarder: ForwarderChanges {
     static let retryCeiling: Duration = .seconds(30)
 
     /// Writes the resolver now and on every path change and forwarder change after. Answers once
-    /// the first write has been made. A write that fails is logged and tried again, waiting twice as
+    /// the first write has been tried, made or not. A write that fails is logged and tried again, waiting twice as
     /// long each time up to `retryCeiling`, until it is made or a newer write takes its place; while
     /// it fails the guest may have no name resolving, which is not the caller's.
     func start() async {
@@ -100,7 +102,8 @@ extension DNSForwarder: ForwarderChanges {
             setPort(port)
         }
         ready = true
-        await refresh().value
+        // The first try, not the retries: a write that keeps failing must not hold the boot.
+        await withCheckedContinuation { continuation in refresh(afterFirstTry: { continuation.resume() }) }
         changes.start { [weak self] in
             Task { @MainActor in _ = self?.refresh() }
         }
@@ -123,16 +126,21 @@ extension DNSForwarder: ForwarderChanges {
         await last?.value
     }
 
-    /// One write, after the one before it: the task that makes it.
+    /// One write, after the one before it: the task that makes it. `afterFirstTry` is called once
+    /// its first try has been made, written or not.
     @discardableResult
-    func refresh() -> Task<Void, Never> {
+    func refresh(afterFirstTry: (@MainActor () -> Void)? = nil) -> Task<Void, Never> {
         let before = last
         let servers = servers
         let write = write
         refreshes += 1
         let mine = refreshes
+        // A write waiting to try again gives way at once rather than at the end of its wait.
+        napping?.cancel()
         let task = Task { @MainActor in
             await before?.value
+            var afterFirstTry = afterFirstTry
+            defer { afterFirstTry?() }
             var delay = self.retryDelay
             var failures = 0
             // Until it is written, or tried again only while no later refresh has taken over: a file
@@ -147,7 +155,12 @@ extension DNSForwarder: ForwarderChanges {
                     failures += 1
                     self.log("dns: resolv.conf write failed (\(failures) so far), trying again in \(delay): \(error)")
                 }
-                try? await Task.sleep(for: delay)
+                afterFirstTry?()
+                afterFirstTry = nil
+                guard self.refreshes == mine else { return }
+                let nap = Task { _ = try? await Task.sleep(for: delay) }
+                self.napping = nap
+                await nap.value
                 delay = min(delay * 2, Self.retryCeiling)
                 guard self.refreshes == mine else { return }
             }
