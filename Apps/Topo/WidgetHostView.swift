@@ -66,5 +66,10 @@ final class WidgetHostRecorder: WidgetTapHandler {
         let argv = document.controls[control]?.argv(turningOn: turningOn) ?? []
         handed.append("run: " + argv.joined(separator: " "))
     }
+
+    func controlTapped(slot: String, revision: Int, turningOn: Bool?) async -> ControlTap {
+        handed.append("control: \(slot)" + (turningOn.map { $0 ? " on" : " off" } ?? ""))
+        return .background
+    }
 }
 #endif

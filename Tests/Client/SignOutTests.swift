@@ -1,3 +1,4 @@
+import TopoAuth
 import XCTest
 
 @testable import Topo
@@ -60,9 +61,13 @@ final class SignOutTests: XCTestCase {
         try store.writeDefault(DefaultSurface.document(nil))
         try store.writeImage(Data([0x89]), slot: "demo", name: "photo")
         try store.appendCue(SurfaceStore.Cue(nonce: "N", slot: "demo", id: "hi", revision: 1, time: Date()))
+        ControlDefaults.fill(store)
+        try store.writeNotes(["unchecked: x"], slot: ControlSlot.stored("button-1"))
         var everything = 0
         var kinds = 0
+        var everyControl = 0
         let reloader = SurfaceReloader(reloadKind: { _ in kinds += 1 }, reloadEverything: { everything += 1 },
+                                       reloadControlKind: { _ in kinds += 1 }, reloadEveryControl: { everyControl += 1 },
                                        schedule: { _, _ in })
         let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: { reloader.forget(store) },
                               forgetConnections: {}, forgetLogin: {})
@@ -72,9 +77,26 @@ final class SignOutTests: XCTestCase {
         let counters = try JSONDecoder().decode([String: Int].self, from: Data(contentsOf: store.revisionsURL))
         XCTAssertEqual(Array(counters.keys), [SurfaceStore.floor], "a slot's name outlived the login")
         XCTAssertEqual(everything, 1, "WidgetCenter was not told to reload every timeline")
+        XCTAssertEqual(everyControl, 1, "ControlCenter was not told to reload every control")
+        XCTAssertTrue(ControlSlot.all.allSatisfy { ControlValue.read(slot: $0, store: store).signedOut }, "a control outlived the login")
         guard case .signedOut = SurfaceProvider.surface(slot: "demo", family: .systemSmall, at: Date(), store: store) else {
             return XCTFail("a placed widget still draws something after the sign-out")
         }
+    }
+
+    /// Every control secret goes with the connections, at a sign-out, a takeover or a demotion.
+    func testClearsControlSecrets() async throws {
+        let secrets = ControlSecrets(service: "zone.hexagon.topo.control-secret.tests.\(UUID().uuidString)")
+        defer { try? secrets.clearAll() }
+        let connections = Connections(store: InMemoryConnectionStore(), leftBehind: .isolated(),
+                                      clearControlSecrets: { try secrets.clearAll() })
+        try secrets.set("tok", name: "ha")
+        try secrets.set("other", name: "webhook")
+        let signOut = SignOut(stopSpeaking: {}, forgetHarness: {}, forgetMemory: {}, forgetSurfaces: {},
+                              forgetConnections: { connections.forget() }, forgetLogin: {})
+        await signOut.act()
+        XCTAssertEqual(try secrets.names(), [], "a control secret outlived the login")
+        XCTAssertNil(connections.unforgotten)
     }
 
     /// Nothing is ended by building the value: the button's press is what ends them.
@@ -90,32 +112,35 @@ final class SignOutTests: XCTestCase {
                                 acceptDemotion: { calls.ended.append("role") },
                                 stopSpeaking: { calls.ended.append("speaker") },
                                 forgetMemory: { calls.ended.append("memory") },
+                                forgetSurfaces: { calls.ended.append("surfaces") },
                                 forgetConnections: { calls.ended.append("connections") },
                                 forgetLogin: { calls.ended.append("login") })
         await takeover.act()
-        XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["harness", "role", "speaker", "memory", "surfaces", "connections", "login"])
     }
 
     /// A phone found a viewer at launch with a login or something waiting demotes, forgets the
-    /// memory and the connections, and the login last.
+    /// memory, the surfaces and the connections, and the login last.
     func testAViewerWithALoginEndsItAllTheLoginLast() async {
         let calls = Calls()
         await arrival(calls, holdsLogin: true).act()
-        XCTAssertEqual(calls.ended, ["harness", "memory", "connections", "login"])
+        XCTAssertEqual(calls.ended, ["harness", "memory", "surfaces", "connections", "login"])
     }
 
-    /// One with no login and nothing waiting still forgets a connection's token, whose keychain
+    /// One with no login and nothing waiting still forgets the surfaces and a connection's token,
+    /// whose app group and keychain
     /// item outlives the login's.
     func testAViewerWithNoLoginStillForgetsItsConnections() async {
         let calls = Calls()
         await arrival(calls, holdsLogin: false).act()
-        XCTAssertEqual(calls.ended, ["connections"])
+        XCTAssertEqual(calls.ended, ["surfaces", "connections"])
     }
 
     private func arrival(_ calls: Calls, holdsLogin: Bool) -> ViewerArrival {
         ViewerArrival(holdsLogin: { holdsLogin },
                       demoteHarness: { calls.ended.append("harness") },
                       forgetMemory: { calls.ended.append("memory") },
+                      forgetSurfaces: { calls.ended.append("surfaces") },
                       forgetConnections: { calls.ended.append("connections") },
                       forgetLogin: { calls.ended.append("login") })
     }
