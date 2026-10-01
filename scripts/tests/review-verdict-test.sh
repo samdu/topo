@@ -4,7 +4,8 @@
 # step name rather than copied, so a break in the workflow's snippets turns this red — against
 # fake verdicts carrying a fake secret's value. It holds that no secret value survives into the
 # file that is uploaded, that sanitising changes nothing the gate decides, and that every way the
-# file can be absent or unusable fails closed. No network, no runner, no real secret: every value
+# file can be absent or unusable fails closed, and that the review cap holds the merge with the cap
+# as its reason. No network, no runner, no real secret: every value
 # here is invented.
 #
 #   scripts/tests/review-verdict-test.sh
@@ -230,6 +231,12 @@ gate no-file true "$work/absent/verdict.json" block
 gate empty-file true "$work/empty.json" block
 # has_verdict false: the gate downloads nothing and fails closed, as an empty output does.
 gate no-flag false "$work/blocking/verdict.json" block
+# The review cap: no verdict, and the gate holds the merge with the cap as its reason rather than
+# passing or reading as a missing verdict. A passing verdict beside it does not open the gate.
+CAPPED=true gate review-cap false "$work/absent/verdict.json" block \
+  "review cap reached: four Codex verdicts; merges on Sam's word or goes back to draft for a replan"
+CAPPED=true gate review-cap-beside-a-pass true "$work/passing-scoped.json" block
+CAPPED=false gate not-capped true "$work/passing-scoped.json" pass
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $workflow"

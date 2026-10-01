@@ -18,12 +18,16 @@
 # commits left out, each shown with its own patch: the base's commits and the merges that brought
 # them in are absent, and so is any conflict resolution a merge made, which the prompt says.
 #
+# A re-review is round 2 or later, and is scoped to the fix (docs/process.md, *The fix loop*): it
+# verifies each earlier finding, then reviews the change since, and a finding in code the change
+# since does not touch is reported as not blocking.
+#
 # The round is one more than the codex verdicts already on the PR. From round 3 on the prompt ends
 # with the convergence rule (docs/process.md, *The fix loop*): only a bug a real user would hit
 # blocks, and everything else is reported non-blocking for the coordinator to file as an issue. That holds on
-# every path below, a first review included. The count comes from `gh`, tried REVIEW_GH_ATTEMPTS
-# times (4) with a linear backoff of REVIEW_GH_BACKOFF seconds (5, then 10, then 15); a `gh` that
-# still fails exits 1 with an `::error::`, because a guessed round is a review under the wrong rule.
+# every path below, a first review included. The count comes from scripts/review-verdicts.sh, which
+# retries `gh` (REVIEW_GH_ATTEMPTS, REVIEW_GH_BACKOFF); a `gh` that still fails exits 1 with an
+# `::error::`, because a guessed round is a review under the wrong rule.
 #
 # Every other way the previous review can be missing or unusable is a first review, said on stderr
 # and never a failure: no codex comment, a newest codex comment with no SHA marker, a SHA that
@@ -44,9 +48,8 @@ PR_BODY="${PR_BODY:-}"
 REMOTE="${REVIEW_REMOTE:-origin}"
 VERDICT_LIMIT="${REVIEW_VERDICT_LIMIT:-32768}"
 DIFF_LIMIT="${REVIEW_DIFF_LIMIT:-204800}"
-GH_ATTEMPTS="${REVIEW_GH_ATTEMPTS:-4}"
-GH_BACKOFF="${REVIEW_GH_BACKOFF:-5}"
 MARKER='<!-- agent-review: codex -->'
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 log() { echo "review-prompt: $*" >&2; }
 
@@ -111,21 +114,12 @@ first_only() {
   exit 0
 }
 
-# Every codex verdict's body, one JSON string per line, oldest first. The round and so the rule the
-# reviewer works under rest on this count, so a `gh` that keeps failing is fatal rather than a
-# first review: the step errors and the job is re-run, instead of reviewing under the wrong rule.
+# Every codex verdict's body, one JSON string per line, oldest first (scripts/review-verdicts.sh,
+# which scripts/review-cap.sh counts the cap with too). The round and so the rule the reviewer works
+# under rest on this count, so a `gh` that keeps failing is fatal rather than a first review: the
+# step errors and the job is re-run, instead of reviewing under the wrong rule.
 previous=""
-attempt=1
-until bodies="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/comments" \
-    --jq ".[] | select(.user.login == \"github-actions[bot]\" and (.body | startswith(\"$MARKER\"))) | .body | @json" 2>&1)"; do
-  if [ "$attempt" -ge "$GH_ATTEMPTS" ]; then
-    log "::error::could not read this PR's comments after $GH_ATTEMPTS attempts, so the review round is unknown; re-run the job: $(head -n 1 <<<"$bodies")"
-    exit 1
-  fi
-  log "could not read this PR's comments (attempt $attempt of $GH_ATTEMPTS), retrying in $(( GH_BACKOFF * attempt ))s: $(head -n 1 <<<"$bodies")"
-  sleep "$(( GH_BACKOFF * attempt ))"
-  attempt=$(( attempt + 1 ))
-done
+bodies="$("$here/review-verdicts.sh" "$MARKER")" || exit 1
 if [ -n "$bodies" ]; then
   previous="$(tail -n 1 <<<"$bodies" | jq -r .)"
   round=$(( $(grep -c . <<<"$bodies") + 1 ))
@@ -205,14 +199,13 @@ gone or no longer does what the finding described). Put that list in
 \`summary\`, one short line per earlier finding. A finding the change
 closes is not raised again.
 
-Then read the whole PR again, not only the change since: the change
-since is not the whole PR, and the review before this one missed what
-it missed. Report every new finding under the same evidence rule. A new
-finding in code the change since does not touch blocks only if it loses
-or corrupts a record, splits the primary, leaks a secret, or makes the
-description untrue at runtime; anything below that bar is reported, says
-in its text that it is not blocking, and does not by itself set
-\`blocking\`. A new finding in the change since, and an earlier finding
-still open, block by the ordinary rule.
+Then review the change since, reading the rest of the PR only as far
+as the change since needs. Report every new finding under the same
+evidence rule. A new finding in the change since, and an earlier
+finding still open, block by the ordinary rule. A finding in code the
+change since does not touch does not block, whatever it is: it is
+reported, says in its text that it is not blocking, and does not by
+itself set \`blocking\`. The coordinator writes it to the ledger as
+deferred, and it does not extend the loop.
 EOF
 round_rule
