@@ -269,8 +269,15 @@ final class WidgetActions {
     /// Every run in flight, the ones a chain waits behind included, which a sign-out cancels.
     private var running: [UUID: Task<Void, Never>] = [:]
     /// Each toggle's state as the device took it last while its runs are chained: the last run
-    /// that succeeded, whatever revision drew it, or the mind's word since (`confirm`).
-    private var settled: [String: Bool] = [:]
+    /// that succeeded, whatever revision drew it, with the call it made, or the mind's word since
+    /// (`confirm`, no call).
+    private var settled: [String: Settled] = [:]
+    private struct Settled {
+        var on: Bool
+        var argv: [String]?
+        var form: ControlRequest.Form?
+        var isMinds: Bool { argv == nil && form == nil }
+    }
     /// Each toggle's stored state at a revision before that revision's first tap: what a failure
     /// goes back to when no run has taken.
     private var baseline: [String: Bool] = [:]
@@ -305,7 +312,7 @@ final class WidgetActions {
     /// it was before.
     func confirm(_ on: Bool, slot: String, control id: String, revision: Int) {
         let key = "\(slot)/\(id)"
-        if chains[key] != nil { settled[key] = on }
+        if chains[key] != nil { settled[key] = Settled(on: on) }
     }
 
     /// The widgets' tool table: the guest's tools, with `home` refusing a lock's and a door's
@@ -398,11 +405,17 @@ final class WidgetActions {
             // and its run settles it: at that state, or, when no run has taken, at the state before
             // its revision's first tap — and a slot written anew since, with nothing taken, keeps
             // the state the rewrite gave it.
+            // A success is the slot's state only while the slot still makes the call that took: a
+            // rewrite that points the control at something else draws nothing of it.
             if let was, let now {
-                if status == 0 { settled[key] = now }
+                if status == 0 { settled[key] = Settled(on: now, argv: argv, form: form) }
                 if latest[key] == tap {
                     let own = current.revision == revision ? baseline[state] ?? was : nil
-                    if let on = settled[key] ?? own {
+                    let took = settled[key].flatMap { taken in
+                        taken.isMinds || (current.argv(taken.on) == taken.argv && current.request(taken.on) == taken.form)
+                            ? taken.on : nil
+                    }
+                    if let on = took ?? own {
                         try? store.setOn(on, slot: slot, control: id, revision: current.revision)
                     }
                 }

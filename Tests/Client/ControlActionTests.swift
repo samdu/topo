@@ -262,6 +262,27 @@ final class ControlActionTests: XCTestCase {
         }
     }
 
+    /// A rewrite that points the toggle at another device: the old device's success is not drawn
+    /// on the new one, whether the rewrite's own tap comes after or not.
+    func testARetargetedToggleDrawsNothingOfTheOldTarget() async throws {
+        for tapsAfter in [false, true] {
+            let home = ScriptedTool([(.milliseconds(300), .ok("done\n")),
+                                     (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n"))])
+            let first = try set("toggle-6", ["home", "set", "LAMP-X", "power"], on: false)
+            let actions = actions([home])
+            let slot = ControlSlot.stored("toggle-6")
+            async let old: Void = actions.run(slot: slot, control: ControlSlot.control, revision: first, turningOn: true)
+            try await Task.sleep(for: .milliseconds(50))
+            let second = try set("toggle-6", ["home", "set", "LAMP-Y", "power"], on: false)
+            if tapsAfter {
+                await actions.run(slot: slot, control: ControlSlot.control, revision: second, turningOn: true)
+            }
+            await old
+            XCTAssertEqual(home.calls.first, ["set", "LAMP-X", "power", "on"])
+            XCTAssertEqual(store.readControl(slot: "toggle-6")?.document.on, false, "LAMP-X's success drawn on LAMP-Y (tap after: \(tapsAfter))")
+        }
+    }
+
     /// A slot written anew while an older revision's run is in flight: every run failing, the new
     /// revision's taps put the toggle back to the new revision's own state, not to a tap's.
     func testANewRevisionsFailuresGoBackToItsOwnState() async throws {
