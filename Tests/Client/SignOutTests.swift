@@ -68,7 +68,7 @@ final class SignOutTests: XCTestCase {
                                        schedule: { _, _ in })
         // The slots' records, which the watch draws, go with the files.
         let records = InMemoryRecordDatabase()
-        let sync = SurfaceSync(records: { SurfaceRecords(database: records) }, ensureZone: {}, mayOwn: { true }, store: { store }, runner: "phone",
+        let sync = SurfaceSync(records: { SurfaceRecords(database: records) }, ensureZone: {}, mayOwn: { true }, demoted: { _ in true }, store: { store }, runner: "phone",
                                defaults: UserDefaults(suiteName: "signout-\(UUID().uuidString)")!, reloader: reloader)
         guard case .record(let demo) = sync.snapshot(slot: "demo", store) else { return XCTFail("demo is not readable") }
         try await SurfaceRecords(database: records).save(demo, over: .none)

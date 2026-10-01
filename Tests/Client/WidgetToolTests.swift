@@ -103,7 +103,7 @@ final class WidgetToolTests: XCTestCase {
         let home = home!
         let records = InMemoryRecordDatabase()
         self.records = records
-        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, ensureZone: {}, mayOwn: { true }, store: { store },
+        let sync = SurfaceSync(records: { iCloud ? SurfaceRecords(database: records) : nil }, ensureZone: {}, mayOwn: { true }, demoted: { _ in true }, store: { store },
                                runner: "phone-test",
                                defaults: UserDefaults(suiteName: "widget-tool-\(UUID().uuidString)")!, reloader: reloader)
         self.sync = sync

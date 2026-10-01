@@ -18,19 +18,22 @@ import TopoCore
 ///
 /// A record belongs to the phone that saved it (`runner`), and more than one phone can be writing
 /// at once while a takeover lands, so no write here trusts a check made before the read it acts
-/// on. Every write is one compare-and-set on the change tag of a read taken for it, and the role is
-/// read after that read: a takeover saves the old primary's role record as viewer with its first
-/// heartbeat, before the new primary is primary and writes any slot, so a read that saw the new
-/// primary's record is followed by a role read that sees the demotion. A write refused because the record moved is read again and judged
-/// again, and a phone whose role record says viewer drops what it owed. A save this phone made
-/// whose role flipped between its check and the save is undone by a clear under that save's own
-/// tag, dropped if the new primary has written since. Nothing is ever physically deleted: a clear
-/// is a tombstone (`SurfaceRecords.clear`), since CloudKit's deletes carry no tag to check.
+/// on. Every write is one compare-and-set on the change tag of a read taken for it, and the role
+/// is read after that read: a takeover saves the old primary's role record as viewer with its
+/// first heartbeat, before the new primary is primary and writes any slot, so a read that saw the
+/// new primary's record is followed by a role read that sees the demotion. A write refused because
+/// the record moved is read again and judged again, and a phone whose role record says viewer
+/// drops what it owed, save for a record of its own still on the slot, which it clears under that
+/// record's tag. A save this phone made whose role flipped between its check and the save is
+/// undone by a clear under that save's own tag, dropped if the new primary has written since.
+/// Nothing is ever physically deleted: a clear is a tombstone (`SurfaceRecords.clear`), since
+/// CloudKit's deletes carry no tag to check.
 ///
 /// A sign-out clears this phone's own records and no other's; one it could not clear is cleared at
 /// the next sign-in, before anything else is saved. The primary sweeps the rest — at launch, at
 /// each sign-in and at a takeover it clears every record another runner saved, the leftovers of an
-/// earlier primary or of an earlier install of this one.
+/// earlier primary or of an earlier install of this one; a save found there since its read is
+/// cleared only when its runner's role record says viewer.
 @MainActor
 final class SurfaceSync {
     static let shared = SurfaceSync()
