@@ -316,10 +316,12 @@ final class SurfaceSync {
             guard let slot = listed.slot else { continue }
             for _ in 0..<3 {
                 let read = try await records.read(slot: slot)
-                guard read.holds, let other = read.runner, other != runner else { break }
-                // Moved since the listing that the role was read after: judged again.
+                guard read.holds, read.runner != runner else { break }
+                // Moved since the listing that the role was read after: judged again, by the role
+                // records of both phones; a save naming no phone is no phone's to keep.
                 if read.record?.changeTag != listed.record?.changeTag {
-                    guard try await mayOwn(), try await demoted(other) else { break }
+                    guard try await mayOwn() else { break }
+                    if let other = read.runner { guard try await demoted(other) else { break } }
                 }
                 guard signOuts == login else { return }
                 do {

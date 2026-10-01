@@ -852,6 +852,30 @@ final class SurfaceSyncTests: XCTestCase {
         again.sweep()
         await again.flush()
         await assertThePrimarys("lamp")
+
+        // And a demoted phone's, its role record a viewer's, is cleared.
+        try await save(SurfaceRecord(slot: "fan", document: "{}", revision: 3, updated: Date(), runner: "phone-0"))
+        _ = try await roles.save(DeviceRole(device: DeviceID("phone-C"), role: .viewer, setBy: DeviceID("phone-A"), at: Date()).record(over: roles))
+        await interleave(of: "phone-A", when: Self.tombstone) { records in
+            let late = SurfaceRecord(slot: "fan", document: "{C}", revision: 1, updated: Date(), runner: "phone-C")
+            _ = try? await records.save(late, over: records.read(slot: "fan"))
+        }
+        let last = make()
+        last.sweep()
+        await last.flush()
+        let fan = await stored("fan")
+        XCTAssertNil(fan, "a demoted phone's save in the sweep's gap was left")
+    }
+
+    /// A record that holds a slot and names no phone (written by nothing on this branch) is swept
+    /// as another's.
+    func testASweepTakesARecordNamingNoPhone() async throws {
+        _ = try await database.inner.save([Record(type: SurfaceRecord.type, id: SurfaceRecord.id(slot: "odd"),
+                                                  fields: ["slot": .string("odd")])])
+        sync.sweep()
+        await sync.flush()
+        let odd = await database.inner.current(SurfaceRecord.id(slot: "odd"))
+        XCTAssertFalse(SurfaceRecords.Read(odd).holds, "a record naming no phone was left by the sweep")
     }
 
 
