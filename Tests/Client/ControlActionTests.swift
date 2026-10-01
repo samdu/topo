@@ -227,9 +227,43 @@ final class ControlActionTests: XCTestCase {
         XCTAssertEqual(store.readControl(slot: "toggle-6")?.document.on, true)
     }
 
+    /// Issue #274: a slot written anew (`topo control set`) while an older revision's run is in
+    /// flight, the old run taking and the new revision's tap failing: the device is on, and so is
+    /// the toggle — a success counts whatever revision drew it.
+    func testAnOldRevisionsSuccessOutlivesARewrite() async throws {
+        let home = ScriptedTool([(.milliseconds(300), .ok("done\n")),
+                                 (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n"))])
+        let first = try set("toggle-4", ["home", "set", "LAMP", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-4")
+        async let old: Void = actions.run(slot: slot, control: ControlSlot.control, revision: first, turningOn: true)
+        try await Task.sleep(for: .milliseconds(50))
+        let second = try set("toggle-4", ["home", "set", "LAMP", "power"], on: false)
+        async let new: Void = actions.run(slot: slot, control: ControlSlot.control, revision: second, turningOn: true)
+        _ = await (old, new)
+        XCTAssertEqual(home.calls.map { $0.last }, ["on", "on"])
+        XCTAssertEqual(store.readControl(slot: "toggle-4")?.document.revision, second)
+        XCTAssertEqual(store.readControl(slot: "toggle-4")?.document.on, true, "the device is on and the toggle shows off")
+    }
+
+    /// The old revision's run the last of all, taking after the rewrite: the rewritten slot shows
+    /// the state the device took; failing, it keeps the state the rewrite gave it.
+    func testTheLastRunSettlesARewrittenSlot() async throws {
+        for (reply, expected) in [(ToolReply.ok("done\n"), true), (ToolReply(status: ToolReply.failed, text: "no\n"), false)] {
+            let home = ScriptedTool([(.milliseconds(200), reply)])
+            let first = try set("toggle-5", ["home", "set", "LAMP", "power"], on: false)
+            let actions = actions([home])
+            async let old: Void = actions.run(slot: ControlSlot.stored("toggle-5"), control: ControlSlot.control, revision: first,
+                                              turningOn: true)
+            try await Task.sleep(for: .milliseconds(50))
+            try set("toggle-5", ["home", "set", "LAMP", "power"], on: false)
+            await old
+            XCTAssertEqual(store.readControl(slot: "toggle-5")?.document.on, expected, "\(reply.status)")
+        }
+    }
+
     /// A slot written anew while an older revision's run is in flight: every run failing, the new
-    /// revision's taps put the toggle back to the new revision's own state, not to a tap's. (A run
-    /// that outlives its revision writes nothing, succeeding or not: the rewrite's state stands.)
+    /// revision's taps put the toggle back to the new revision's own state, not to a tap's.
     func testANewRevisionsFailuresGoBackToItsOwnState() async throws {
         let home = ScriptedTool([(.milliseconds(300), ToolReply(status: ToolReply.failed, text: "no\n")),
                                  (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n")),

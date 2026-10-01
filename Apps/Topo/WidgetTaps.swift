@@ -268,10 +268,12 @@ final class WidgetActions {
     private var chains: [String: Task<Void, Never>] = [:]
     /// Every run in flight, the ones a chain waits behind included, which a sign-out cancels.
     private var running: [UUID: Task<Void, Never>] = [:]
-    /// Each toggle's confirmed state at a revision: the last its run succeeded at, or the stored
-    /// one before its chain began. A failed run puts the toggle back to it, not to the state the
-    /// failed tap flipped from, which another failed tap may have flipped already.
-    private var confirmed: [String: Bool] = [:]
+    /// Each toggle's state as the device took it last while its runs are chained: the last run
+    /// that succeeded, whatever revision drew it, or the mind's word since (`confirm`).
+    private var settled: [String: Bool] = [:]
+    /// Each toggle's stored state at a revision before that revision's first tap: what a failure
+    /// goes back to when no run has taken.
+    private var baseline: [String: Bool] = [:]
     /// Each tap's number, and each control's latest, so a failed run knows whether a later tap
     /// stands to settle the toggle.
     private var sequence = 0
@@ -303,7 +305,7 @@ final class WidgetActions {
     /// it was before.
     func confirm(_ on: Bool, slot: String, control id: String, revision: Int) {
         let key = "\(slot)/\(id)"
-        if chains[key] != nil { confirmed["\(key)/\(revision)"] = on }
+        if chains[key] != nil { settled[key] = on }
     }
 
     /// The widgets' tool table: the guest's tools, with `home` refusing a lock's and a door's
@@ -342,7 +344,7 @@ final class WidgetActions {
         }
         // A widget's toggle turns to the opposite of its stored state, flipped as the tap is
         // handled, not of the state the tapped entry drew; a control's to the state the person
-        // asked for. A run that fails puts it back to its confirmed one.
+        // asked for. The last tap's run settles it at the state the device took last.
         let key = "\(slot)/\(id)"
         let state = "\(key)/\(revision)"
         var was: Bool?
@@ -364,7 +366,7 @@ final class WidgetActions {
             now = (control == nil ? nil : turningOn) ?? !stored
             // The state before the first tap at this revision, whatever chain an older revision's
             // tap left running.
-            if confirmed[state] == nil { confirmed[state] = stored }
+            if baseline[state] == nil { baseline[state] = stored }
         }
         let argv = tapped.argv(now)
         let form = tapped.request(now)
@@ -387,22 +389,26 @@ final class WidgetActions {
             } else {
                 status = await ToolService.bounded(argv ?? [], table: table, until: .now + bound, bound: bound).status
             }
-            // A run that outlived its slot's document at this revision — a sign-out cleared it, or
-            // the slot was written anew — writes nothing, so the next login sees no tap of this
-            // one's controls.
-            guard !Task.isCancelled, find()?.revision == revision else { return }
-            // The effects land in the taps' order, so the device ends in the state of the last one
-            // that took. A success is that state until a later one takes; a failure puts the toggle
-            // back to it only when no later tap stands, since a later tap drew its own state and its
-            // run will settle it.
-            if let was, let now, latest[key] == tap || status == 0 {
-                if status == 0 { confirmed[state] = now }
+            // A run that outlived its slot's document — a sign-out cleared it — writes nothing, so
+            // the next login sees no tap of this one's controls.
+            guard !Task.isCancelled, let current = find() else { return }
+            // The runs end in the taps' order, so the device is in the state of the last one that
+            // took, whatever revision drew it, or the mind's word since. Only the last tap writes
+            // the toggle, at the revision the slot holds now, since a later tap drew its own state
+            // and its run settles it: at that state, or, when no run has taken, at the state before
+            // its revision's first tap — and a slot written anew since, with nothing taken, keeps
+            // the state the rewrite gave it.
+            if let was, let now {
+                if status == 0 { settled[key] = now }
                 if latest[key] == tap {
-                    // The last tap settles the toggle at what the device took last: its own state on
-                    // success, over a `topo control state` written while it ran; else the last success.
-                    try? store.setOn(confirmed[state] ?? was, slot: slot, control: id, revision: revision)
+                    let own = current.revision == revision ? baseline[state] ?? was : nil
+                    if let on = settled[key] ?? own {
+                        try? store.setOn(on, slot: slot, control: id, revision: current.revision)
+                    }
                 }
             }
+            // A slot written anew since keeps no tap of the revision it replaced.
+            guard current.revision == revision else { return reload() }
             record(String(status), kind: form == nil ? "run" : "request", code: code)
         }
         chains[key] = task
@@ -412,7 +418,8 @@ final class WidgetActions {
         running[token] = nil
         if chains[key] == task {
             chains[key] = nil
-            confirmed = confirmed.filter { !$0.key.hasPrefix(key + "/") }
+            settled[key] = nil
+            baseline = baseline.filter { !$0.key.hasPrefix(key + "/") }
             latest[key] = nil
         }
     }
