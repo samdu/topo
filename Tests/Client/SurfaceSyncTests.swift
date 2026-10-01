@@ -672,7 +672,144 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertEqual(sync.pending, [])
     }
 
+    // MARK: A sign-out landing while a pass runs
+
+    /// The sweep has read another phone's record and its role, and the login ends before the
+    /// clear: no clear is sent, and the record stays.
+    func testASignOutDuringASweepClearsNothingAfterIt() async throws {
+        let box = SyncBox()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: {
+            await MainActor.run { box.sync?.forget() }
+            return true
+        })
+        box.sync = sync
+        try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-B"))
+        sync.sweep()
+        await sync.flush()
+        let kept = await stored("tides")
+        XCTAssertEqual(kept.flatMap(SurfaceRecord.init)?.runner, "phone-B", "a sweep cleared another phone's record after the sign-out")
+    }
+
+    /// One clear of the sweep in flight when the login ends: it lands, ordered before the
+    /// sign-out, and the sweep sends no clear after it.
+    func testASignOutDuringASweepsClearStopsTheRest() async throws {
+        try await save(SurfaceRecord(slot: "alpha", document: "{}", revision: 3, updated: Date(), runner: "phone-B"))
+        try await save(SurfaceRecord(slot: "beta", document: "{}", revision: 3, updated: Date(), runner: "phone-B"))
+        let gate = Gate(), once = Once()
+        await database.inner.setBeforeSave { saving in
+            guard saving.contains(where: { $0.fields["runner"] == .string("phone-1") }), once.first() else { return }
+            await gate.wait()
+        }
+        sync.sweep()
+        let flushing = Task { await sync.flush() }
+        for _ in 0..<10_000 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertTrue(gate.isWaiting)
+        sync.forget()
+        gate.open()
+        await flushing.value
+        await sync.flush()
+        let alpha = await stored("alpha"), beta = await stored("beta")
+        XCTAssertEqual([alpha, beta].compactMap { $0 }.count, 1, "the sweep went on clearing after the sign-out")
+    }
+
+    /// An owed save whose read is answered after the login ended is not made.
+    func testASignOutDuringAnOwedWriteSavesNothing() async throws {
+        let box = SyncBox()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: {
+            await MainActor.run { box.sync?.forget() }
+            return true
+        })
+        box.sync = sync
+        let saved = Flag()
+        await database.inner.setBeforeSave { saving in
+            if saving.contains(where: { $0.fields["cleared"] == nil }) { saved.set() }
+        }
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        XCTAssertFalse(saved.isSet, "a save the ended login owed was made after its sign-out")
+        let none = await stored("weather")
+        XCTAssertNil(none)
+        XCTAssertEqual(sync.pending, [])
+    }
+
+    /// A second sign-out landing while the first's clears run: its records are cleared too,
+    /// rather than the first's finish marking the sign-out done.
+    func testASecondSignOutDuringTheFirstsClearsIsNotSettledAway() async throws {
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let gate = Gate(), once = Once()
+        await database.inner.setBeforeSave { saving in
+            guard saving.contains(where: { $0.fields["cleared"] != nil }), once.first() else { return }
+            await gate.wait()
+        }
+        sync.forget()
+        for _ in 0..<10_000 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertTrue(gate.isWaiting)
+        // The next login saved a slot, and has ended too.
+        try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 9, updated: Date(), runner: "phone-1"))
+        sync.forget()
+        gate.open()
+        await sync.flush()
+        let weather = await stored("weather"), tides = await stored("tides")
+        XCTAssertNil(weather)
+        XCTAssertNil(tides, "the second sign-out's clear was settled by the first's")
+        XCTAssertFalse(sync.owesForget)
+    }
+
+    /// A sweep asked for again while one is running is not answered by the one running.
+    func testASweepAskedDuringASweepRunsAgain() async throws {
+        let box = SyncBox(), once = Once(), inner = database.inner
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: {
+            if once.first() {
+                await MainActor.run {
+                    box.sync?.sweep()
+                }
+                let records = SurfaceRecords(database: inner)
+                _ = try? await records.save(SurfaceRecord(slot: "late", document: "{}", revision: 1, updated: Date(), runner: "phone-0"),
+                                            over: records.read(slot: "late"))
+            }
+            return true
+        })
+        box.sync = sync
+        try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-0"))
+        sync.sweep()
+        await sync.flush()
+        let late = await stored("late"), tides = await stored("tides")
+        XCTAssertNil(tides)
+        XCTAssertNil(late, "a sweep asked during a sweep was answered by the one running")
+    }
+
     // MARK: The role gate as the app wires it
+
+    /// `SurfaceSync` made with no role answers of a test's reads the role records itself: a
+    /// viewer's sweeps nothing and a primary's sweeps.
+    func testTheDefaultGateReadsThisPhonesRoleRecord() async throws {
+        let roles = InMemoryRecordDatabase()
+        let database = database!, store = store!
+        let make = { [reloader] in
+            SurfaceSync(records: { SurfaceRecords(database: database) }, ensureZone: {}, roles: { roles },
+                        store: { store }, runner: "phone-A",
+                        defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, reloader: reloader!)
+        }
+        try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-B"))
+        _ = try await roles.save(DeviceRole(device: DeviceID("phone-A"), role: .viewer, setBy: DeviceID("phone-B"), at: Date()).record(over: roles))
+        let viewer = make()
+        viewer.sweep()
+        await viewer.flush()
+        let kept = await stored("tides")
+        XCTAssertNotNil(kept, "a phone whose role record says viewer swept")
+
+        _ = try await roles.save(DeviceRole(device: DeviceID("phone-A"), role: .primary, setBy: DeviceID("phone-A"), at: Date()).record(over: roles))
+        let primary = make()
+        primary.sweep()
+        await primary.flush()
+        let swept = await stored("tides")
+        XCTAssertNil(swept, "a primary's sweep left another phone's record")
+    }
+
+
 
     /// The gate the app's `SurfaceSync` is made with, read from a store: a viewer's role record
     /// refuses, a primary's allows, and no record (a phone never taken over from) allows.
@@ -753,4 +890,17 @@ private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     func bump() -> Int { lock.withLock { count += 1; return count } }
+}
+
+/// A test's hold on the sync its closures act on, made after them.
+@MainActor
+private final class SyncBox {
+    var sync: SurfaceSync?
+}
+
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    var isSet: Bool { lock.withLock { value } }
+    func set() { lock.withLock { value = true } }
 }

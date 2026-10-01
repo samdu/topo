@@ -48,6 +48,12 @@ final class SurfaceSync {
     private let demoted: @Sendable (String) async throws -> Bool
     /// A sweep asked for and not yet done.
     private var sweeping = false
+    /// Counts sweeps asked for, so a sweep that was running when another was asked does not
+    /// answer for it.
+    private var sweepsAsked = 0
+    /// Counts the logins ended here. A pass reads it at its start and before each write, so that
+    /// nothing it read before a sign-out is acted on after it: a signed-out phone owns nothing.
+    private var signOuts = 0
     private let store: @MainActor () -> SurfaceStore?
     private let runner: String
     private let defaults: UserDefaults
@@ -76,19 +82,18 @@ final class SurfaceSync {
 
     init(records: @escaping @MainActor () -> SurfaceRecords? = { SurfaceRecords(database: TopoCloudKit.database()) },
          ensureZone: @escaping @Sendable () async throws -> Void = { try await TopoCloudKit.ensureZone() },
-         mayOwn: @escaping @Sendable () async throws -> Bool = {
-             try await SurfaceSync.roleAllows(device: DeviceIdentity.current, database: TopoCloudKit.database())
-         },
-         demoted: @escaping @Sendable (String) async throws -> Bool = {
-             try await !SurfaceSync.roleAllows(device: DeviceID($0), database: TopoCloudKit.database())
-         },
+         roles: @escaping @Sendable () -> any RecordDatabase = { TopoCloudKit.database() },
+         mayOwn: (@Sendable () async throws -> Bool)? = nil,
+         demoted: (@Sendable (String) async throws -> Bool)? = nil,
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          runner: String = DeviceIdentity.current.rawValue, defaults: UserDefaults = .standard,
          reloader: SurfaceReloader = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
         self.records = records
         self.ensureZone = ensureZone
-        self.mayOwn = mayOwn
-        self.demoted = demoted
+        // The role records are read from `roles` unless a test answers for them: this phone's own
+        // under its runner, and another phone's under the runner its record names.
+        self.mayOwn = mayOwn ?? { try await SurfaceSync.roleAllows(device: DeviceID(runner), database: roles()) }
+        self.demoted = demoted ?? { try await !SurfaceSync.roleAllows(device: DeviceID($0), database: roles()) }
         self.store = store
         self.runner = runner
         self.defaults = defaults
@@ -140,6 +145,7 @@ final class SurfaceSync {
     /// another runner saved is to go, once the role record confirms it.
     func sweep() {
         sweeping = true
+        sweepsAsked += 1
         if running != nil { again = true }
         Task { await flush() }
     }
@@ -148,8 +154,9 @@ final class SurfaceSync {
     func forget() {
         setOwed([:])
         defaults.set(true, forKey: Self.forgetKey)
-        // A signed-out phone owns nothing, so takes nothing of another's.
+        // A signed-out phone owns nothing, so takes nothing of another's, a sweep in flight included.
         sweeping = false
+        signOuts += 1
         if running != nil { again = true }
         Task { await flush() }
     }
@@ -182,6 +189,7 @@ final class SurfaceSync {
 
     private func pass() async {
         guard let records = records(), owesForget || sweeping || !owed.isEmpty else { return }
+        let login = signOuts
         do {
             try await ensureZone()
         } catch {
@@ -190,6 +198,8 @@ final class SurfaceSync {
         if owesForget {
             do {
                 try await forgetOwn(records)
+                // A sign-out landing while this one ran owes its own pass.
+                guard signOuts == login else { return }
                 defaults.set(false, forKey: Self.forgetKey)
             } catch {
                 return
@@ -197,9 +207,10 @@ final class SurfaceSync {
         }
         // Not after a sign-out this pass has not finished, which the guard above returns from.
         if sweeping {
+            let asked = sweepsAsked
             do {
-                try await sweepOthers(records)
-                sweeping = false
+                try await sweepOthers(records, login: login)
+                if sweepsAsked == asked, signOuts == login { sweeping = false }
             } catch {
                 // Asked again at the next pass.
             }
@@ -219,8 +230,9 @@ final class SurfaceSync {
                 case .unreadable: continue
                 }
             }
+            guard signOuts == login else { return }
             do {
-                if try await write(target, slot: slot, records) { settle(slot, what) }
+                if try await write(target, slot: slot, records, login: login) { settle(slot, what) }
             } catch {
                 continue
             }
@@ -230,7 +242,7 @@ final class SurfaceSync {
     /// The slot's record made `target` (cleared when nil), one compare-and-set at a time. Answers
     /// whether the slot owes nothing more: written, kept as a newer save of this phone's, or
     /// dropped because this phone may no longer write it.
-    private func write(_ target: SurfaceRecord?, slot: String, _ records: SurfaceRecords) async throws -> Bool {
+    private func write(_ target: SurfaceRecord?, slot: String, _ records: SurfaceRecords, login: Int) async throws -> Bool {
         for _ in 0..<3 {
             let current = try await records.read(slot: slot)
             // Whether this phone may write at all, asked after the read it acts on. A demoted
@@ -245,6 +257,8 @@ final class SurfaceSync {
                     continue
                 }
             }
+            // What the ended login owed is owed no more.
+            guard signOuts == login else { return true }
             do {
                 guard let target else {
                     try await records.clear(slot: slot, runner: runner, at: now(), over: current)
@@ -287,13 +301,16 @@ final class SurfaceSync {
     /// only when that runner's role record says viewer (a demoted phone's save, landing as the
     /// sweep read), so a phone that still reads itself primary never clears a save made since
     /// by one that is not demoted either; this phone's own is left.
-    private func sweepOthers(_ records: SurfaceRecords) async throws {
+    /// Every clear is made only while the login the sweep began in stands: one a sign-out lands
+    /// before is never sent.
+    private func sweepOthers(_ records: SurfaceRecords, login: Int) async throws {
         let others = try await records.all().filter { $0.holds && $0.runner != runner }
         guard !others.isEmpty, try await mayOwn() else { return }
         for first in others {
             guard let slot = first.slot else { continue }
             var read = first
             for _ in 0..<3 {
+                guard signOuts == login else { return }
                 do {
                     try await records.clear(slot: slot, runner: runner, at: now(), over: read)
                     break
