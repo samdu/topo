@@ -41,6 +41,8 @@ final class SurfaceSync {
     /// Whether this phone may sweep other runners' records: its role record, read now, is not a
     /// viewer's.
     private let mayOwn: @Sendable () async throws -> Bool
+    /// Whether the phone a runner names has a viewer's role record, read now.
+    private let demoted: @Sendable (String) async throws -> Bool
     /// A sweep asked for and not yet done.
     private var sweeping = false
     private let store: @MainActor () -> SurfaceStore?
@@ -74,12 +76,16 @@ final class SurfaceSync {
          mayOwn: @escaping @Sendable () async throws -> Bool = {
              try await SurfaceSync.roleAllows(device: DeviceIdentity.current, database: TopoCloudKit.database())
          },
+         demoted: @escaping @Sendable (String) async throws -> Bool = {
+             try await !SurfaceSync.roleAllows(device: DeviceID($0), database: TopoCloudKit.database())
+         },
          store: @escaping @MainActor () -> SurfaceStore? = { SurfaceStore.shared() },
          runner: String = DeviceIdentity.current.rawValue, defaults: UserDefaults = .standard,
          reloader: SurfaceReloader = .shared, now: @escaping @MainActor () -> Date = { Date() }) {
         self.records = records
         self.ensureZone = ensureZone
         self.mayOwn = mayOwn
+        self.demoted = demoted
         self.store = store
         self.runner = runner
         self.defaults = defaults
@@ -228,7 +234,7 @@ final class SurfaceSync {
             // phone owes nothing but the slot back: a save of its own still on it (one whose undo
             // never ran) is cleared under its tag, and anything else is left.
             guard try await mayOwn() else {
-                guard case .live(let surface, _) = current, surface.runner == runner else { return true }
+                guard current.holds, current.runner == runner else { return true }
                 do {
                     try await records.clear(slot: slot, runner: runner, at: now(), over: current)
                     return true
@@ -250,7 +256,7 @@ final class SurfaceSync {
             // save's own tag, and left alone if the new primary has written since.
             if try await !mayOwn() {
                 let mine = try await records.read(slot: slot)
-                if case .live(let surface, _) = mine, surface.runner == runner {
+                if mine.holds, mine.runner == runner {
                     do {
                         try await records.clear(slot: slot, runner: runner, at: now(), over: mine)
                     } catch RecordDatabaseError.serverRecordChanged {}
@@ -274,8 +280,10 @@ final class SurfaceSync {
 
     /// The primary's sweep: every record another runner saved that still holds a slot is cleared
     /// under the tag it was read with, once the role, read after them, allows it. A clear refused
-    /// because the record moved is read again: another runner's save there (a demoted phone's,
-    /// landing as the sweep read) is cleared in turn, and this phone's own is left.
+    /// because the record moved is read again: another runner's save there is cleared in turn
+    /// only when that runner's role record says viewer (a demoted phone's save, landing as the
+    /// sweep read), so a phone that still reads itself primary never clears a save made since
+    /// by one that is not demoted either; this phone's own is left.
     private func sweepOthers(_ records: SurfaceRecords) async throws {
         let others = try await records.all().filter { $0.holds && $0.runner != runner }
         guard !others.isEmpty, try await mayOwn() else { return }
@@ -288,7 +296,8 @@ final class SurfaceSync {
                     break
                 } catch RecordDatabaseError.serverRecordChanged {
                     read = try await records.read(slot: slot)
-                    guard read.holds, read.runner != runner, try await mayOwn() else { break }
+                    guard read.holds, let other = read.runner, other != runner, try await mayOwn(),
+                          try await demoted(other) else { break }
                 }
             }
         }

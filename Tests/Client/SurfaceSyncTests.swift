@@ -63,10 +63,11 @@ final class SurfaceSyncTests: XCTestCase {
     }
 
     private func makeSync(defaults: UserDefaults, runner: String = "phone-1", store: SurfaceStore? = nil,
-                          mayOwn: @escaping @Sendable () async throws -> Bool = { true }) -> SurfaceSync {
+                          mayOwn: @escaping @Sendable () async throws -> Bool = { true },
+                          demoted: @escaping @Sendable (String) async throws -> Bool = { _ in true }) -> SurfaceSync {
         let database = database!, store = store ?? self.store!
         return SurfaceSync(records: { SurfaceRecords(database: database) }, ensureZone: { await database.makeZone() },
-                           mayOwn: mayOwn, store: { store }, runner: runner,
+                           mayOwn: mayOwn, demoted: demoted, store: { store }, runner: runner,
                            defaults: defaults, reloader: reloader, now: { Date(timeIntervalSince1970: 100) })
     }
 
@@ -620,6 +621,38 @@ final class SurfaceSyncTests: XCTestCase {
         let swept = await stored("weather")
         XCTAssertNil(swept, "the sweep left a save that landed between its read and its clear")
         XCTAssertEqual(b.pending, [])
+    }
+
+    /// A sweep's refused clear finds a save made since by a phone that is not demoted (two
+    /// devices both reading themselves primary, which no takeover should leave): it is left, not
+    /// cleared on this phone's word alone.
+    func testASweepLeavesASaveSinceByAPhoneNotDemoted() async throws {
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, demoted: { _ in false })
+        try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-0"))
+        await interleave(when: Self.tombstone) { await Self.primarySaves("tides", $0) }
+        sync.sweep()
+        await sync.flush()
+        await assertThePrimarys("tides")
+    }
+
+    /// A demoted phone's own record that cannot be read whole just now (an asset that did not
+    /// load) is still its own: the next pass clears it rather than settling the slot with it.
+    func testADemotedPhoneTakesBackItsOwnUnreadableRecord() async throws {
+        let role = Role()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { role.primary })
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let saved = await database.inner.current(SurfaceRecord.id(slot: "weather"))
+        var record = try XCTUnwrap(saved)
+        record.fields["document"] = nil
+        _ = try await database.inner.save([record])
+        role.primary = false
+        sync.changed(slot: "weather")
+        await sync.flush()
+        let left = await database.inner.current(SurfaceRecord.id(slot: "weather"))
+        XCTAssertFalse(SurfaceRecords.Read(left).holds, "a demoted phone left its own unreadable record on the slot")
+        XCTAssertEqual(sync.pending, [])
     }
 
     /// The new primary saves the slot after the old phone's save and before the role read that
