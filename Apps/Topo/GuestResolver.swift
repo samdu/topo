@@ -158,7 +158,7 @@ extension DNSForwarder: ForwarderChanges {
                 afterFirstTry?()
                 afterFirstTry = nil
                 guard self.refreshes == mine else { return }
-                let nap = Task { _ = try? await Task.sleep(for: delay) }
+                let nap = Task { [delay] in _ = try? await Task.sleep(for: delay) }
                 self.napping = nap
                 await nap.value
                 delay = min(delay * 2, Self.retryCeiling)
