@@ -97,7 +97,7 @@ enum ControlRequest: Equatable, Sendable {
         return components.user != nil || components.password != nil
     }
 
-    struct Form: Equatable, Sendable {
+    struct Form: Hashable, Sendable {
         var method: String
         var url: String
         /// In the order the reader sorted them, which is the order they are sent in.
@@ -119,7 +119,7 @@ enum ControlRequest: Equatable, Sendable {
         }
     }
 
-    struct Header: Equatable, Sendable {
+    struct Header: Hashable, Sendable {
         var name: String
         var value: String
     }

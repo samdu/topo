@@ -121,6 +121,17 @@ private struct Tapped {
     /// Asks for what shows the slot to be drawn again.
     var reload: @MainActor (SurfaceReloader) -> Void
 
+    /// What a toggle's taps act on: its calls for on and for off. Two revisions of a slot with
+    /// the same target act on the same device; a rewrite that changes it points the toggle at
+    /// another.
+    struct Target: Hashable {
+        var on: [String]?
+        var off: [String]?
+        var requestOn: ControlRequest.Form?
+        var requestOff: ControlRequest.Form?
+    }
+    var target: Target { Target(on: argv(true), off: argv(false), requestOn: request(true), requestOff: request(false)) }
+
     /// The tapped control `id` of the document in `slot`, as `read` or the store holds it now.
     @MainActor
     static func find(_ store: SurfaceStore, slot: String, id: String,
@@ -158,7 +169,7 @@ private struct Tapped {
 /// row's one path to the outbox — each under the nonce the intent minted with it. A record goes
 /// only once its nonce is on the line or in the log, and `Harness.willSend(_:nonce:)` does
 /// nothing for a nonce already there, so a drain run twice (before a removal, after a crash) is
-/// one turn. It waits for the harness's first read of the log, since before it the harness
+/// one turn. A harness that has not read the log reads it first, since before it the harness
 /// cannot know what the log holds. A cue carries no words: they are the slot's document's.
 @MainActor
 final class WidgetCues {
@@ -268,16 +279,10 @@ final class WidgetActions {
     private var chains: [String: Task<Void, Never>] = [:]
     /// Every run in flight, the ones a chain waits behind included, which a sign-out cancels.
     private var running: [UUID: Task<Void, Never>] = [:]
-    /// Each toggle's state as the device took it last while its runs are chained: the last run
-    /// that succeeded, whatever revision drew it, with the call it made, or the mind's word since
-    /// (`confirm`, no call).
-    private var settled: [String: Settled] = [:]
-    private struct Settled {
-        var on: Bool
-        var argv: [String]?
-        var form: ControlRequest.Form?
-        var isMinds: Bool { argv == nil && form == nil }
-    }
+    /// Each toggle's state as its device took it last while its runs are chained, kept per target,
+    /// since a rewrite can point the toggle at another device: the last run that succeeded on it,
+    /// whatever revision drew it, or the mind's word about it since (`confirm`).
+    private var settled: [String: [Tapped.Target: Bool]] = [:]
     /// Each toggle's stored state at a revision before that revision's first tap: what a failure
     /// goes back to when no run has taken.
     private var baseline: [String: Bool] = [:]
@@ -312,7 +317,10 @@ final class WidgetActions {
     /// it was before.
     func confirm(_ on: Bool, slot: String, control id: String, revision: Int) {
         let key = "\(slot)/\(id)"
-        if chains[key] != nil { settled[key] = Settled(on: on) }
+        // A state written at a stale revision wrote nothing, and settles nothing.
+        guard chains[key] != nil, let store = store(),
+              let current = Tapped.find(store, slot: slot, id: id, read: read), current.revision == revision else { return }
+        settled[key, default: [:]][current.target] = on
     }
 
     /// The widgets' tool table: the guest's tools, with `home` refusing a lock's and a door's
@@ -377,6 +385,7 @@ final class WidgetActions {
         }
         let argv = tapped.argv(now)
         let form = tapped.request(now)
+        let target = tapped.target
         guard argv != nil || form != nil else { return record(String(ToolReply.refused)) }
         // After the control's last run, whatever it answered, so two quick taps' writes land in
         // the order they were flipped and a failed one holds up none after it.
@@ -405,17 +414,14 @@ final class WidgetActions {
             // and its run settles it: at that state, or, when no run has taken, at the state before
             // its revision's first tap — and a slot written anew since, with nothing taken, keeps
             // the state the rewrite gave it.
-            // A success is the slot's state only while the slot still makes the call that took: a
-            // rewrite that points the control at something else draws nothing of it.
+            // A success settles the target the tap's document named, which is the device the run
+            // touched; the slot draws what its own target took, so a rewrite that points the
+            // toggle at another device draws nothing of the old one's.
             if let was, let now {
-                if status == 0 { settled[key] = Settled(on: now, argv: argv, form: form) }
+                if status == 0 { settled[key, default: [:]][target] = now }
                 if latest[key] == tap {
                     let own = current.revision == revision ? baseline[state] ?? was : nil
-                    let took = settled[key].flatMap { taken in
-                        taken.isMinds || (current.argv(taken.on) == taken.argv && current.request(taken.on) == taken.form)
-                            ? taken.on : nil
-                    }
-                    if let on = took ?? own {
+                    if let on = settled[key]?[current.target] ?? own {
                         try? store.setOn(on, slot: slot, control: id, revision: current.revision)
                     }
                 }

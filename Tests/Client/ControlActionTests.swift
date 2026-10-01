@@ -283,6 +283,48 @@ final class ControlActionTests: XCTestCase {
         }
     }
 
+    /// The mind's `state` about the old target, then a rewrite that points the toggle at another:
+    /// the new target shows nothing of it, whether the old run or a new tap is the last to end.
+    func testAStateAboutTheOldTargetIsNotDrawnOnTheNew() async throws {
+        for tapsAfter in [false, true] {
+            let fail = ToolReply(status: ToolReply.failed, text: "no\n")
+            let home = ScriptedTool([(.milliseconds(300), fail), (.milliseconds(10), fail)])
+            let first = try set("toggle-1", ["home", "set", "LAMP-X", "power"], on: false)
+            let actions = actions([home])
+            let slot = ControlSlot.stored("toggle-1")
+            async let old: Void = actions.run(slot: slot, control: ControlSlot.control, revision: first, turningOn: true)
+            try await Task.sleep(for: .milliseconds(50))
+            _ = try store.setControl(true, slot: "toggle-1", revision: first)
+            actions.confirm(true, slot: slot, control: ControlSlot.control, revision: first)
+            try await Task.sleep(for: .milliseconds(50))
+            let second = try set("toggle-1", ["home", "set", "LAMP-Y", "power"], on: false)
+            if tapsAfter {
+                await actions.run(slot: slot, control: ControlSlot.control, revision: second, turningOn: true)
+            }
+            await old
+            XCTAssertEqual(store.readControl(slot: "toggle-1")?.document.on, false, "LAMP-X's state drawn on LAMP-Y (tap after: \(tapsAfter))")
+        }
+    }
+
+    /// The old target's run taking after the mind has said the new target's state: the mind's
+    /// word about the new target stands.
+    func testAnOldTargetsSuccessLeavesTheMindsWordOnTheNew() async throws {
+        let home = ScriptedTool([(.milliseconds(300), .ok("done\n")), (.milliseconds(10), ToolReply(status: ToolReply.failed, text: "no\n"))])
+        let first = try set("toggle-2", ["home", "set", "LAMP-X", "power"], on: false)
+        let actions = actions([home])
+        let slot = ControlSlot.stored("toggle-2")
+        async let old: Void = actions.run(slot: slot, control: ControlSlot.control, revision: first, turningOn: true)
+        try await Task.sleep(for: .milliseconds(50))
+        let second = try set("toggle-2", ["home", "set", "LAMP-Y", "power"], on: false)
+        async let new: Void = actions.run(slot: slot, control: ControlSlot.control, revision: second, turningOn: false)
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try store.setControl(true, slot: "toggle-2", revision: second)
+        actions.confirm(true, slot: slot, control: ControlSlot.control, revision: second)
+        _ = await (old, new)
+        XCTAssertEqual(home.calls.map { $0[1] }, ["LAMP-X", "LAMP-Y"])
+        XCTAssertEqual(store.readControl(slot: "toggle-2")?.document.on, true, "the mind's word about LAMP-Y was lost to LAMP-X's run")
+    }
+
     /// A slot written anew while an older revision's run is in flight: every run failing, the new
     /// revision's taps put the toggle back to the new revision's own state, not to a tap's.
     func testANewRevisionsFailuresGoBackToItsOwnState() async throws {
