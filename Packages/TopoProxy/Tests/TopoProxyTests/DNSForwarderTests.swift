@@ -67,6 +67,7 @@ import Testing
         #expect(DNSForwarder.ednsLimit == 1232)
         #expect(DNSForwarder.tcpReplyLimit == 65_535)
         #expect(DNSForwarder.defaultQueryBound == .seconds(4))
+        #expect(DNSForwarder.cachedNegativeGrace == .milliseconds(250))
         #expect(DNSForwarder.defaultConnectionBound == .seconds(10))
         #expect(DNSForwarder.defaultLogInterval == .seconds(60))
     }
@@ -381,6 +382,49 @@ import Testing
         let reply = Reply(try #require(try udp(port: port, query(1, "www.example", type: 28))))
         #expect(reply.rcode == DNSReply.noError)
         #expect(reply.answers.map(\.type) == [5])
+    }
+
+    /// The phone after a VPN comes up: dnssd's cache answers first with the old configuration's
+    /// negative, the network's address after it. The address is the reply.
+    @Test func aCachedNegativeYieldsToTheNetworksAnswer() async throws {
+        let resolver = ScriptedResolver { name, _ in
+            [.now([RecordAnswer(outcome: .noSuchRecord, fromCache: true, name: name, type: 1)]),
+             .after(.milliseconds(60), [a(name, [100, 83, 238, 58])])]
+        }
+        let (forwarder, port) = try await started(resolver)
+        defer { Task { await forwarder.stop() } }
+        let reply = Reply(try #require(try udp(port: port, query(1, "pane.example"))))
+        #expect(reply.rcode == DNSReply.noError)
+        #expect(reply.answers.map(\.rdata) == [[100, 83, 238, 58]])
+        // NXDOMAIN from the cache yields the same way.
+        let named = ScriptedResolver { name, _ in
+            [.now([RecordAnswer(outcome: .noSuchName, fromCache: true, name: name, type: 1)]),
+             .after(.milliseconds(60), [a(name, [10, 0, 0, 9])])]
+        }
+        let (other, otherPort) = try await started(named)
+        defer { Task { await other.stop() } }
+        #expect(Reply(try #require(try udp(port: otherPort, query(2, "x.example")))).answers.count == 1)
+    }
+
+    /// A cached negative nothing follows is the reply once the grace has run, not at the bound;
+    /// a negative from the network is the reply at once.
+    @Test func aCachedNegativeAloneIsTheReplyAfterTheGrace() async throws {
+        let resolver = ScriptedResolver { name, _ in
+            [.now([RecordAnswer(outcome: name.hasPrefix("cached") ? .noSuchRecord : .noSuchName,
+                                fromCache: name.hasPrefix("cached"), name: name, type: 1)])]
+        }
+        let (forwarder, port) = try await started(resolver)
+        defer { Task { await forwarder.stop() } }
+        var asked = Date()
+        let cached = Reply(try #require(try udp(port: port, query(1, "cached.example"))))
+        let waited = Date().timeIntervalSince(asked)
+        #expect(cached.rcode == DNSReply.noError && cached.answers.isEmpty)
+        #expect(waited >= 0.2 && waited < 1, "answered after \(waited) s")
+        asked = Date()
+        let fresh = Reply(try #require(try udp(port: port, query(2, "fresh.example"))))
+        #expect(fresh.rcode == DNSReply.nxDomain)
+        #expect(Date().timeIntervalSince(asked) < 0.15)
+        #expect(resolver.live == 0)
     }
 
     @Test func otherErrorIsServfail() async throws {

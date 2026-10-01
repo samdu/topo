@@ -38,6 +38,8 @@ public actor DNSForwarder {
     public static let ednsLimit: UInt16 = 1232
     public static let tcpReplyLimit = 65_535
     public static let defaultQueryBound: Duration = .seconds(4)
+    /// How long a negative dnssd answered from its cache waits for one from the network.
+    public static let cachedNegativeGrace: Duration = .milliseconds(250)
     public static let defaultConnectionBound: Duration = .seconds(10)
     public static let defaultLogInterval: Duration = .seconds(60)
 
@@ -374,7 +376,12 @@ public actor DNSForwarder {
         let done: () -> Void
         var handle: (any ResolverQuery)?
         /// When the question is answered `SERVFAIL` if nothing has answered it.
+        var bound = ContinuousClock.now
+        /// When the sweep answers it: its bound, or sooner while a cached negative waits.
         var deadline = ContinuousClock.now
+        /// A negative dnssd answered from its cache, answered at `deadline` unless the network's
+        /// answer comes first.
+        var cachedNegative: UInt8?
         var records: [DNSRecord] = []
         /// A record of the type asked for has arrived (for a CNAME question, the CNAME).
         var answered = false
@@ -428,11 +435,12 @@ public actor DNSForwarder {
         question.handle = resolver.query(name: query.presentationName, type: query.type, queue: queue) { [weak self] answer in
             self?.assumeIsolated { $0.answer(id, answer) }
         }
-        question.deadline = .now + queryBound
+        question.bound = .now + queryBound
+        question.deadline = question.bound
         if !sweepArmed { arm() }
     }
 
-    /// Sets the sweep for the earliest bound among the questions in flight.
+    /// Sets the sweep for the earliest deadline among the questions in flight.
     private func arm() {
         guard let earliest = pending.values.map(\.deadline).min() else {
             sweepArmed = false
@@ -449,21 +457,43 @@ public actor DNSForwarder {
         sweep?.schedule(deadline: .now() + wait.timeInterval, leeway: .milliseconds(10))
     }
 
-    /// Every question past its bound answered `SERVFAIL`, its query deallocated.
+    /// Every question past its deadline answered — with its cached negative when one was waiting,
+    /// `SERVFAIL` at its bound otherwise — and its query deallocated.
     private func expire() {
         let now = ContinuousClock.now
         for (id, question) in pending where question.deadline <= now {
-            finish(id, rcode: DNSReply.servFail, keep: false)
+            if let rcode = question.cachedNegative {
+                finish(id, rcode: rcode, keep: true)
+            } else {
+                finish(id, rcode: DNSReply.servFail, keep: false)
+            }
         }
         arm()
     }
 
     /// One callback of a question's query. The question is complete when a record of the type
     /// asked for has arrived and its batch has ended (a callback without `MoreComing`), or when a
-    /// negative or an error arrives; a batch of CNAMEs alone is not complete, since the target's
+    /// negative or an error arrives — a negative from dnssd's cache only once the grace has passed
+    /// with nothing from the network; a batch of CNAMEs alone is not complete, since the target's
     /// records can come in a later one.
     private func answer(_ id: UInt64, _ answer: RecordAnswer) {
         guard let question = pending[id] else { return }
+        switch answer.outcome {
+        case .noSuchName where answer.fromCache, .noSuchRecord where answer.fromCache:
+            // Possibly the cache of a DNS configuration just replaced, with the network's answer
+            // behind it: it waits a moment for that answer before it is the reply.
+            guard question.cachedNegative == nil else { return }
+            question.cachedNegative = answer.outcome == .noSuchName ? DNSReply.nxDomain : DNSReply.noError
+            question.deadline = min(question.bound, .now + Self.cachedNegativeGrace)
+            arm()
+            return
+        default:
+            if question.cachedNegative != nil {
+                // The network answered: what the cache said is not the reply.
+                question.cachedNegative = nil
+                question.deadline = question.bound
+            }
+        }
         switch answer.outcome {
         case .noSuchName:
             finish(id, rcode: DNSReply.nxDomain, keep: true)

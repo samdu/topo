@@ -19,28 +19,34 @@ public struct RecordAnswer: Sendable, Equatable {
     public let moreComing: Bool
     /// `kDNSServiceFlagsAdd`: the record is there (clear, it went away).
     public let add: Bool
+    /// `kDNSServiceFlagAnsweredFromCache`: dnssd answered from its cache. On a change of DNS
+    /// configuration (a VPN coming up) it can answer from the old configuration's cache first and
+    /// the network's answer after it, with nothing removing the first.
+    public let fromCache: Bool
     /// The record's name in dnssd's text form, as bytes.
     public let name: [UInt8]
     public let type: UInt16
     public let ttl: UInt32
     public let rdata: [UInt8]
 
-    public init(outcome: Outcome, moreComing: Bool, add: Bool, nameBytes: [UInt8], type: UInt16, ttl: UInt32,
-                rdata: [UInt8]) {
+    public init(outcome: Outcome, moreComing: Bool, add: Bool, fromCache: Bool = false, nameBytes: [UInt8], type: UInt16,
+                ttl: UInt32, rdata: [UInt8]) {
         self.outcome = outcome
         self.moreComing = moreComing
         self.add = add
+        self.fromCache = fromCache
         self.name = nameBytes
         self.type = type
         self.ttl = ttl
         self.rdata = rdata
     }
 
-    public init(outcome: Outcome, moreComing: Bool = false, add: Bool = true, name: String = "", type: UInt16 = 0,
-                ttl: UInt32 = 0, rdata: [UInt8] = []) {
+    public init(outcome: Outcome, moreComing: Bool = false, add: Bool = true, fromCache: Bool = false, name: String = "",
+                type: UInt16 = 0, ttl: UInt32 = 0, rdata: [UInt8] = []) {
         self.outcome = outcome
         self.moreComing = moreComing
         self.add = add
+        self.fromCache = fromCache
         self.name = Array(name.utf8)
         self.type = type
         self.ttl = ttl
@@ -122,5 +128,6 @@ private let systemQueryReply: DNSServiceQueryRecordReply = { _, flags, _, error,
     let name = fullname.map { Array(UnsafeRawBufferPointer(start: $0, count: strlen($0))) } ?? []
     query.answer(RecordAnswer(outcome: outcome, moreComing: flags & DNSServiceFlags(kDNSServiceFlagsMoreComing) != 0,
                               add: flags & DNSServiceFlags(kDNSServiceFlagsAdd) != 0,
+                              fromCache: flags & DNSServiceFlags(kDNSServiceFlagAnsweredFromCache) != 0,
                               nameBytes: name, type: rrtype, ttl: ttl, rdata: bytes))
 }
