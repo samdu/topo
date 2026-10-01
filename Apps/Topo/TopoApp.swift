@@ -19,6 +19,7 @@ struct TopoApp: App {
     @State private var mascot: Mascot
     @State private var widgetCues: WidgetCues
     @State private var defaultSurface: DefaultSurface
+    @State private var controlDefaults = ControlDefaults()
     private let tokens: StoredTokenProvider
     @Environment(\.scenePhase) private var scenePhase
 
@@ -78,7 +79,12 @@ struct TopoApp: App {
                          broker: broker),
             homeTool,
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
+            ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
+                        leftBehind: connections.leftBehind),
         ]
+        // A control's request to the home network asks for local network access in the
+        // foreground only, since a background one while it is undetermined is denied unasked.
+        LocalNetworkAccess.shared.isActive = { UIApplication.shared.applicationState == .active }
         // A widget's run control reaches the same tools, with `home` refusing a lock's and a
         // door's target; a turn control's cue goes on this harness's line.
         let widgetTable = WidgetActions.table(GuestResident.shared.toolTable)
@@ -188,6 +194,7 @@ struct TopoApp: App {
             .onChange(of: signIn.phase, initial: true) { was, phase in
                 MemoryWake.follow(signedIn: phase == .signedIn, memory: memory)
                 defaultSurface.follow(from: was, to: phase, latest: harness.turns.last { $0.role == .assistant })
+                controlDefaults.follow(from: was, to: phase)
                 guard phase == .signedIn else { return }
                 Task { try? await NotePush.ensureSubscription() }
             }
@@ -195,6 +202,7 @@ struct TopoApp: App {
                 audio.warmRecord(phase == .active)
                 if phase == .active {
                     Task { await widgetCues.drain() }
+                    LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
                     speaker.prepare()
                     // The guest's rootfs and Claude Code, fetched (and the rootfs imported)
