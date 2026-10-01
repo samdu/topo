@@ -4,9 +4,10 @@
 //
 //   dnsaddr udp 4|6 HOST PORT   a query for a.example sent three ways to HOST:PORT, on an AF_INET
 //                               or AF_INET6 socket: "recvfrom=<from> recvmsg=<from>
-//                               getpeername=<peer> reply=<1|none>" — the source recvfrom and
-//                               recvmsg returned for the reply to an unconnected send, the peer of
-//                               a connected socket and whether its reply came
+//                               getpeername=<peer> reply=<1|none>" — the source recvfrom
+//                               returned for the reply to a sendto, the source recvmsg returned
+//                               for the reply to a sendmsg, the peer of a connected socket and
+//                               whether its reply came
 //   dnsaddr tcp 4|6 HOST PORT   a connect: "getpeername=<peer>", or "connect=<-errno>"
 //
 // An address prints as "<4|6> <address> <port>", and "none" when nothing came within 2 s.
@@ -107,7 +108,9 @@ int main(int argc, char **argv) {
     close(fd);
 
     fd = open_socket(family, SOCK_DGRAM);
-    sendto(fd, query, sizeof query, 0, (void *) &to, to_length);
+    struct iovec out = {(void *) query, sizeof query};
+    struct msghdr sent = {.msg_name = &to, .msg_namelen = to_length, .msg_iov = &out, .msg_iovlen = 1};
+    sendmsg(fd, &sent, 0);
     struct iovec iov = {reply, sizeof reply};
     struct msghdr msg = {.msg_name = &from, .msg_namelen = sizeof from, .msg_iov = &iov, .msg_iovlen = 1};
     put(" recvmsg=");

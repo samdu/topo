@@ -38,13 +38,34 @@ private final class FakeForwarder: ForwarderChanges, @unchecked Sendable {
     private let lock = NSLock()
     private var changed: (@Sendable (UInt16?) -> Void)?
     private let initial: UInt16?
+    private let duringStart: [UInt16?]
 
-    init(_ initial: UInt16?) { self.initial = initial }
-    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async -> UInt16? {
+    /// `duringStart`: changes the forwarder makes after the port now and before the start answers.
+    init(_ initial: UInt16?, duringStart: [UInt16?] = []) {
+        self.initial = initial
+        self.duringStart = duringStart
+    }
+    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async {
         lock.withLock { self.changed = changed }
-        return initial
+        changed(initial)
+        for port in duringStart { changed(port) }
     }
     func emit(_ port: UInt16?) { lock.withLock { changed }?(port) }
+}
+
+/// Fails the first `count` writes.
+private final class Failures: @unchecked Sendable {
+    private let lock = NSLock()
+    private var left: Int
+    init(_ count: Int) { left = count }
+    func take() -> Bool { lock.withLock { guard left > 0 else { return false }; left -= 1; return true } }
+}
+
+private final class LoggedLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var lines: [String] = []
+    func add(_ line: String) { lock.withLock { lines.append(line) } }
+    var all: [String] { lock.withLock { lines } }
 }
 
 /// Every port handed to the guest's rewrite and every list written, in one order.
@@ -61,7 +82,44 @@ final class GuestResolverTests: XCTestCase {
     private func resolver(_ forwarder: FakeForwarder, _ events: Events, changes: FakePathChanges = FakePathChanges(),
                           servers: [String] = ["192.168.1.1"]) -> GuestResolver {
         GuestResolver(changes: changes, forwarder: forwarder, servers: { servers },
-                      setPort: events.port, write: { events.write($0) })
+                      setPort: events.port, write: { events.write($0) }, log: { _ in })
+    }
+
+    /// The forwarder going down while the boot's start is under way: the first write is the
+    /// phone's servers with the rewrite cleared, never the stub over a stopped forwarder.
+    func testAForwarderDownDuringTheStartIsTheFirstWrite() async {
+        let events = Events()
+        let resolver = resolver(FakeForwarder(5353, duringStart: [nil]), events)
+        await resolver.start()
+        await resolver.settle()
+        XCTAssertEqual(events.all, ["port cleared", "write 192.168.1.1"])
+    }
+
+    /// A write that fails is tried again, reading the state afresh, and logged; one that fails
+    /// every time is logged as given up.
+    func testAFailedWriteIsTriedAgain() async {
+        let events = Events()
+        let failures = Failures(2)
+        let logged = LoggedLines()
+        let resolver = GuestResolver(changes: FakePathChanges(), forwarder: FakeForwarder(5353), servers: { ["192.168.1.1"] },
+                                     setPort: events.port,
+                                     write: { servers in
+                                         if failures.take() { throw POSIXError(.EIO) }
+                                         events.write(servers)
+                                     },
+                                     retryDelay: .milliseconds(10), log: logged.add)
+        await resolver.start()
+        XCTAssertEqual(events.all, ["port 5353", "write 127.0.0.53"])
+        XCTAssertEqual(logged.all.count, 2)
+
+        let never = Failures(100)
+        let neverLogged = LoggedLines()
+        let failing = GuestResolver(changes: FakePathChanges(), forwarder: FakeForwarder(nil), servers: { ["192.168.1.1"] },
+                                    setPort: { _ in }, write: { _ in if never.take() { throw POSIXError(.EIO) } },
+                                    retryDelay: .milliseconds(10), log: neverLogged.add)
+        await failing.start()
+        XCTAssertEqual(neverLogged.all.count, GuestResolver.writeTries + 1)
+        XCTAssertTrue(neverLogged.all.last?.contains("not written") == true)
     }
 
     private func waitFor(_ count: Int, _ events: Events) async {

@@ -427,6 +427,20 @@ import Testing
         #expect(resolver.live == 0)
     }
 
+    /// A record added and removed again in one batch is not an answer: with nothing else, the
+    /// question waits for its bound rather than being told it has no records.
+    @Test func aRecordAddedAndRemovedAnswersNothing() async throws {
+        let resolver = ScriptedResolver { name, _ in
+            [.now([a(name, [10, 0, 0, 1], more: true),
+                   RecordAnswer(outcome: .record, add: false, name: name, type: 1, ttl: 60, rdata: [10, 0, 0, 1])])]
+        }
+        let (forwarder, port) = try await started(resolver, queryBound: .milliseconds(400))
+        defer { Task { await forwarder.stop() } }
+        let reply = Reply(try #require(try udp(port: port, query(1, "gone.example"))))
+        #expect(reply.rcode == DNSReply.servFail)
+        #expect(reply.answers.isEmpty)
+    }
+
     @Test func otherErrorIsServfail() async throws {
         let resolver = ScriptedResolver { _, _ in [.now([.init(outcome: .failed(-65569))])] }
         let (forwarder, port) = try await started(resolver)

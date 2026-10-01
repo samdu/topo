@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import os
 import TopoProxy
 import TopoUserland
 
@@ -25,14 +26,16 @@ final class NetworkPathChanges: PathChanges {
 /// What tells the resolver the guest's DNS forwarder came up or went down: the forwarder itself
 /// on the phone, a fake in the tests.
 protocol ForwarderChanges: Sendable {
-    /// Calls `changed` with the forwarder's port each time it is ready and nil each time it goes
-    /// down, in order, and answers with its port now (nil while it is down).
-    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async -> UInt16?
+    /// Calls `changed` with the forwarder's port now (nil while it is down), then with its port
+    /// each time it is ready and nil each time it goes down, all in order; answers once the first
+    /// call has been made.
+    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async
 }
 
 extension DNSForwarder: ForwarderChanges {
-    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async -> UInt16? {
-        observe(changed)
+    func start(_ changed: @escaping @Sendable (UInt16?) -> Void) async {
+        // On the forwarder's queue, so no change can be called back ahead of the port now.
+        changed(observe(changed))
     }
 }
 
@@ -51,36 +54,49 @@ extension DNSForwarder: ForwarderChanges {
     private let servers: @Sendable () -> [String]
     private let setPort: @Sendable (UInt16?) -> Void
     private let write: @Sendable ([String]) async throws -> Void
+    private let retryDelay: Duration
+    private let log: @Sendable (String) -> Void
     private var last: Task<Void, Never>?
     private var started = false
+    /// The forwarder's changes are applied as they come rather than gathered for the first write.
+    private var ready = false
     /// The forwarder's port while it is up.
     private var port: UInt16?
 
     init(changes: PathChanges = NetworkPathChanges(), forwarder: ForwarderChanges? = nil,
          servers: @escaping @Sendable () -> [String] = Guest.systemNameservers,
          setPort: @escaping @Sendable (UInt16?) -> Void = { Guest.shared.setDNSPort($0) },
-         write: @escaping @Sendable ([String]) async throws -> Void = { try await Guest.shared.writeResolver(servers: $0) }) {
+         write: @escaping @Sendable ([String]) async throws -> Void = { try await Guest.shared.writeResolver(servers: $0) },
+         retryDelay: Duration = .seconds(1),
+         log: @escaping @Sendable (String) -> Void = { Logger(subsystem: "zone.hexagon.topo", category: "dns").error("\($0, privacy: .public)") }) {
         self.changes = changes
         self.forwarder = forwarder
         self.servers = servers
         self.setPort = setPort
         self.write = write
+        self.retryDelay = retryDelay
+        self.log = log
     }
 
+    /// Tries of one write before it is given up, a `retryDelay` apart.
+    static let writeTries = 5
+
     /// Writes the resolver now and on every path change and forwarder change after. Answers once
-    /// the first write has been made; a failed write leaves a guest in which no name resolves and
-    /// is not the caller's.
+    /// the first write has been made. A write that fails is tried again, and one that fails every
+    /// time is logged: it leaves a guest in which no name resolves, which is not the caller's.
     func start() async {
         guard !started else { return }
         started = true
         if let forwarder {
-            // In order, on the main queue: an up and a down in quick succession are applied as they came.
-            let now = await forwarder.start { port in
+            // In order, on the main queue: the port now and every change after it are applied as
+            // they came, and all of them before this start resumes there, so a change landing
+            // during the start is never overtaken by the port it started with.
+            await forwarder.start { port in
                 DispatchQueue.main.async { MainActor.assumeIsolated { [weak self] in self?.forwarderChanged(port) } }
             }
-            port = now
-            setPort(now)
+            setPort(port)
         }
+        ready = true
         await refresh().value
         changes.start { [weak self] in
             Task { @MainActor in _ = self?.refresh() }
@@ -88,6 +104,10 @@ extension DNSForwarder: ForwarderChanges {
     }
 
     private func forwarderChanged(_ port: UInt16?) {
+        guard ready else {
+            self.port = port
+            return
+        }
         guard port != self.port else { return }
         self.port = port
         setPort(port)
@@ -108,8 +128,18 @@ extension DNSForwarder: ForwarderChanges {
         let write = write
         let task = Task { @MainActor in
             await before?.value
-            let chosen = self.port == nil ? servers() : [Guest.dnsStub]
-            try? await write(chosen)
+            for attempt in 1...Self.writeTries {
+                // What the state says as each try starts: a change meanwhile is written by its own refresh too.
+                let chosen = self.port == nil ? servers() : [Guest.dnsStub]
+                do {
+                    try await write(chosen)
+                    return
+                } catch {
+                    self.log("dns: resolv.conf write failed, try \(attempt) of \(Self.writeTries): \(error)")
+                }
+                if attempt < Self.writeTries { try? await Task.sleep(for: self.retryDelay) }
+            }
+            self.log("dns: resolv.conf not written; the guest's lookups may have nothing to answer them")
         }
         last = task
         return task

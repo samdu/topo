@@ -121,7 +121,13 @@ public actor DNSForwarder {
         for _ in 0..<5 {
             generation += 1
             let current = generation
-            let tcp = try NWListener(using: Self.loopback(.tcp, port: .any))
+            let tcp: NWListener
+            do {
+                tcp = try NWListener(using: Self.loopback(.tcp, port: .any))
+            } catch {
+                failure = error
+                continue
+            }
             self.tcp = tcp
             do {
                 let bound = try await ready(tcp, generation: current)
@@ -383,7 +389,7 @@ public actor DNSForwarder {
         /// answer comes first.
         var cachedNegative: UInt8?
         var records: [DNSRecord] = []
-        /// A record of the type asked for has arrived (for a CNAME question, the CNAME).
+        /// A record of the type asked for is held (for a CNAME question, the CNAME).
         var answered = false
 
         init(query: DNSQuery, limit: Int, transport: Transport, send: @escaping ([UInt8]) -> Void,
@@ -509,11 +515,12 @@ public actor DNSForwarder {
                 }
                 if answer.add {
                     if !question.records.contains(where: same) { question.records.append(record) }
-                    if answer.type == question.query.type || question.query.type == DNSQuery.typeANY {
-                        question.answered = true
-                    }
                 } else {
                     question.records.removeAll(where: same)
+                }
+                // From what is held now, so a record added and removed again answers nothing.
+                question.answered = question.records.contains {
+                    $0.type == question.query.type || question.query.type == DNSQuery.typeANY
                 }
             }
             if !answer.moreComing, question.answered {
