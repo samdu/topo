@@ -81,6 +81,74 @@ protocol WidgetTapHandler: AnyObject {
     func cued(_ cue: SurfaceStore.Cue, recorded: Bool) async
     /// A `run` control's tap: judge the revision, run the call, record the status.
     func run(slot: String, control: String, revision: Int, turningOn: Bool?) async
+    /// A placed control's tap on control slot `slot` (`button-3`), drawn at `revision`; a
+    /// toggle's carries the state asked for. What it does is the slot's document's at that
+    /// revision. Answers whether Topo is to come forward.
+    func controlTapped(slot: String, revision: Int, turningOn: Bool?) async -> ControlTap
+}
+
+/// Where a control's tap leaves Topo: a `run` or a `request` in the background, a turn, an
+/// `open` or a signed-out phone's tap in front.
+enum ControlTap: Sendable {
+    case background, foreground
+}
+
+/// A placed Topo Button's tap. One intent type serves every action, because a control's template
+/// takes one intent type whatever its value (`ControlWidgetTemplateBuilder` has no `if`): the app
+/// reads what the tap does from the slot's document at the revision the value carried. A
+/// `LiveActivityIntent`, so it runs in the app's process, launched into the background when it is
+/// not running (measured from Control Center, backgrounded and killed); on iOS 26 it continues
+/// in the foreground when the app answers so, with no prompt. It keeps the default
+/// authentication policy: no Face ID is asked for a press on the lock screen or the Action button.
+struct ControlButtonIntent: LiveActivityIntent {
+    static let title: LocalizedStringResource = "Press Topo's button"
+    static let isDiscoverable = false
+    @available(iOS 26, *)
+    static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
+
+    @Parameter(title: "Slot") var slot: String
+    @Parameter(title: "Revision") var revision: Int
+
+    init() {}
+
+    init(slot: String, revision: Int) {
+        self.slot = slot
+        self.revision = revision
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let tap = await WidgetIntents.handler?.controlTapped(slot: slot, revision: revision, turningOn: nil) ?? .foreground
+        if tap == .foreground, #available(iOS 26, *) { try await continueInForeground(alwaysConfirm: false) }
+        return .result()
+    }
+}
+
+/// A placed Topo Toggle's tap: `ControlButtonIntent`'s, with the state the person asked for,
+/// which the system sets as `value` having already drawn it.
+struct ControlToggleIntent: SetValueIntent, LiveActivityIntent {
+    static let title: LocalizedStringResource = "Switch Topo's toggle"
+    static let isDiscoverable = false
+    @available(iOS 26, *)
+    static var supportedModes: IntentModes { [.background, .foreground(.dynamic)] }
+
+    @Parameter(title: "Slot") var slot: String
+    @Parameter(title: "Revision") var revision: Int
+    @Parameter(title: "On") var value: Bool
+
+    init() {}
+
+    init(slot: String, revision: Int) {
+        self.slot = slot
+        self.revision = revision
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        let tap = await WidgetIntents.handler?.controlTapped(slot: slot, revision: revision, turningOn: value) ?? .foreground
+        if tap == .foreground, #available(iOS 26, *) { try await continueInForeground(alwaysConfirm: false) }
+        return .result()
+    }
 }
 
 /// A `turn` control: records the cue in the app group under a nonce minted here and brings Topo

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key; so does one without the topo URL scheme or the widget extension. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme, NSAllowsArbitraryLoads or the widget extension. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -14,7 +14,8 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription
-      NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription)
+      NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription
+      NSLocalNetworkUsageDescription)
 
 # A product with everything the check reads.
 make_app() {
@@ -28,6 +29,7 @@ make_app() {
     for usage in "${keys[@]}"; do
         plutil -insert "$usage" -string "Topo uses this when you ask it to." "$app/Info.plist"
     done
+    plutil -insert NSAppTransportSecurity -json '{"NSAllowsArbitraryLoads":true}' "$app/Info.plist"
     plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo","CFBundleURLSchemes":["topo"]}]' "$app/Info.plist"
     mkdir -p "$app/PlugIns/TopoWidgets.appex"
     plutil -create xml1 "$app/PlugIns/TopoWidgets.appex/Info.plist"
@@ -65,6 +67,14 @@ if errors="$("$check" "$work/no-scheme/Topo.app" 2>&1 >/dev/null)"; then
     fail "a product without the topo URL scheme passed"
 elif [[ "$errors" != *"CFBundleURLTypes"* ]]; then
     fail "the refusal of a product without the topo URL scheme does not name it: $errors"
+fi
+
+make_app "$work/no-loads/Topo.app"
+plutil -remove NSAppTransportSecurity "$work/no-loads/Topo.app/Info.plist"
+if errors="$("$check" "$work/no-loads/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product without NSAllowsArbitraryLoads passed"
+elif [[ "$errors" != *"NSAllowsArbitraryLoads"* ]]; then
+    fail "the refusal of a product without NSAllowsArbitraryLoads does not name it: $errors"
 fi
 
 make_app "$work/no-widgets/Topo.app"
@@ -156,4 +166,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme or without TopoWidgets.appex fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads or TopoWidgets.appex fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"

@@ -99,13 +99,23 @@ final class WidgetCueTests: XCTestCase {
         XCTAssertEqual(row.text, "call Helen", "the row took the cue's words")
     }
 
+    /// Nothing is drained before the harness has read the log: a harness that has not — the app
+    /// launched in the background for a tap — reads it first, so a cue whose turn is already in
+    /// the log (drained before a crash took its record's removal) is not said a second time.
     func testNothingIsDrainedBeforeTheFirstRead() async throws {
         let db = InMemoryRecordDatabase()
-        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
-        _ = try cue()
-        await cues(harness).drain()
-        XCTAssertEqual(harness.owed.count, 0)
-        XCTAssertEqual(store.cues().count, 1, "a cue went before the harness knew what the log holds")
+        let cue = try cue()
+        let earlier = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        await earlier.refresh()
+        XCTAssertTrue(earlier.willSend("widget demo: hi from the widget", nonce: cue.nonce))
+        await earlier.retry()
+        let cold = harness(db, defaults: makeDefaults(), transport: ScriptedTransport())
+        XCTAssertFalse(cold.hasRead)
+        await cues(cold).drain()
+        XCTAssertTrue(cold.hasRead, "the drain did not read the log first")
+        XCTAssertEqual(store.cues(), [])
+        let said = (try await TurnLog(database: db).read()).ordered.filter { $0.role == .person }
+        XCTAssertEqual(said.map(\.text), ["widget demo: hi from the widget"], "a cue went before the harness knew what the log holds")
     }
 
     /// A cue outlives no layout: the slot written anew since, it is dropped with no record.

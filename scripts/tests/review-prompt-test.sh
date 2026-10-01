@@ -23,6 +23,9 @@
 #     exactly the two fix commits, each with its patch: never the base's advances, the merge that
 #     brought one into the branch, the merge ref, or the reviewed commit;
 #   - text in the verdict cannot close its fence, and both bounds truncate with a marker;
+#   - a re-review, from round 2, is scoped to the fix: a finding in code the change since does not
+#     touch does not block, and the prompt no longer asks for a whole-PR reread; a round-1 review
+#     carries no such rule;
 #   - the round is one more than the codex verdicts on the PR, and from round 3 on, and only then,
 #     the prompt ends with the convergence rule, on a first review as on a re-review.
 #
@@ -249,6 +252,32 @@ round_is() {
   fi
 }
 
+# scoped_is <case> <yes|no> — the prompt carries the fix-round scoping rule, every clause of it, or
+# none of it. A clause dropped from it is code the fix did not touch going back to blocking.
+scoped_is() {
+  local name="$1" want="$2" text clause missing="" present=""
+  text="$(tr '\n' ' ' < "$work/$name.out" | tr -s ' ')"
+  for clause in \
+    "Then review the change since, reading the rest of the PR only as far as the change since needs." \
+    "A new finding in the change since, and an earlier finding still open, block by the ordinary rule." \
+    "A finding in code the change since does not touch does not block, whatever it is" \
+    "reported, says in its text that it is not blocking, and does not by itself set \`blocking\`." \
+    "The coordinator writes it to the ledger as deferred, and it does not extend the loop."; do
+    if grep -qF -- "$clause" <<<"$text"; then present="$present [$clause]"; else missing="$missing [$clause]"; fi
+  done
+  if grep -qF -- "read the whole PR again" <<<"$text"; then
+    fail "$name: asks for a whole-PR reread"
+  elif [ "$want" = yes ] && [ -n "$missing" ]; then
+    fail "$name: the fix-round scoping rule is missing:$missing"
+  elif [ "$want" = no ] && [ -n "$present" ]; then
+    fail "$name: carries the fix-round scoping rule in round 1:$present"
+  elif [ "$want" = yes ]; then
+    pass "$name: scoped to the fix, every clause of the rule"
+  else
+    pass "$name: no fix-round scoping in round 1"
+  fi
+}
+
 # first_review <case> <reason pattern> [round] — the case produced the first-review prompt, exactly,
 # said why on stderr, and carries the round section for [round] or none.
 first_review() {
@@ -334,6 +363,7 @@ fi
 echo '[]' > "$work/none.json"
 run none "$work/none.json"
 first_review none "no previous Codex review"
+scoped_is none no
 # The whole paragraph, word for word: a sentence taken out of it is an instruction the reviewer no
 # longer gets.
 exhaustive='Be exhaustive. This is the one read the PR gets before it merges:
@@ -424,7 +454,7 @@ round_is flaky 3
 
 # --- a re-review ------------------------------------------------------------------------------
 
-# Round 2: one verdict before it, so no round section.
+# Round 2: one verdict before it, so no round section, and scoped to the fix.
 { echo "["; comment 'github-actions[bot]' "$body"; echo "]"; } > "$work/second.json"
 run second "$work/second.json"
 if [ "$(cat "$work/second.status")" != 0 ]; then
@@ -437,6 +467,7 @@ else
   pass "second: exited 0 with a re-review prompt"
 fi
 round_is second ""
+scoped_is second yes
 
 # Two pages, the newest verdict last on the second, an older one and a human's between.
 {
@@ -478,11 +509,12 @@ else
     grep -qF -- "$present" <<<"$since" || fail "rereview: the change since is missing '$present'"
   done
   if grep -q "whether it is closed" "$work/rereview.out" && grep -q "open (cite why" "$work/rereview.out" \
-    && grep -q "or moot" "$work/rereview.out" && grep -q "Then read the whole PR again" "$work/rereview.out"; then
-    pass "rereview: asks for each earlier finding's state, then a full read"
+    && grep -q "or moot" "$work/rereview.out"; then
+    pass "rereview: asks for each earlier finding's state"
   else
-    fail "rereview: the instruction to verify earlier findings and read again is missing"
+    fail "rereview: the instruction to verify earlier findings is missing"
   fi
+  scoped_is rereview yes
   round_is rereview 3
   if grep -q "re-review: previous review of $reviewed" "$work/rereview.err"; then
     pass "rereview: says on stderr which review it builds on"

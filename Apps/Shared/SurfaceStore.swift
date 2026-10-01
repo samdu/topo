@@ -9,6 +9,8 @@ import Foundation
 /// - `<slot>.json`, one document per slot, as the app kept it (`WidgetDocument.text`), and
 ///   `_default.json`, the app's own (`DefaultSurface`);
 /// - `<slot>/<name>.png`, a slot's images, re-encoded by `topo widget image`;
+/// - `_control-<slot>.json`, a control slot's document (`ControlDocument`), one for each of the
+///   twelve while signed in;
 /// - `_revisions.json`, the last revision given each slot, which outlives a slot's clearing, and
 ///   a sign-out as `_floor`, the highest given, so no revision is issued twice to any slot of any
 ///   login and an old timeline's tap never matches a document written since;
@@ -148,6 +150,7 @@ struct SurfaceStore: Sendable {
     /// slot is at another revision or holds no such toggle. The state is the stored one, not the
     /// one the tapped entry drew, so two taps before a reload are on and then off.
     func flip(slot: String, control: String, revision: Int) throws -> Bool? {
+        if let toggle = ControlSlot.slot(stored: slot) { return try setControl(nil, slot: toggle, revision: revision) }
         var was: Bool?
         try setting(slot: slot, control: control, revision: revision) { was = $0; return !$0 }
         return was
@@ -156,6 +159,7 @@ struct SurfaceStore: Sendable {
     /// Sets toggle `control` to `on`, whatever it is now: a cue's resolved state, set again as
     /// often as a drain is, or a run's confirmed state after one failed.
     func setOn(_ on: Bool, slot: String, control: String, revision: Int) throws {
+        if let toggle = ControlSlot.slot(stored: slot) { _ = try setControl(on, slot: toggle, revision: revision); return }
         try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
     }
 
@@ -222,6 +226,54 @@ struct SurfaceStore: Sendable {
             guard let data, let revisions = try? JSONDecoder().decode([String: Int].self, from: data) else { return data }
             return try JSONEncoder().encode([Self.floor: revisions.values.max() ?? 0])
         }
+    }
+
+    // MARK: Controls
+
+    /// A control slot's kept document, `slot` one of `ControlSlot.all`, read under a coordinated
+    /// read. Nil is no file.
+    func readControl(slot: String) -> ControlDocument.Reading? {
+        guard ControlSlot.kind(of: slot) != nil, let data = coordinatedRead(url(slot: ControlSlot.stored(slot))) else { return nil }
+        return ControlDocument.read(String(decoding: data, as: UTF8.self), slot: slot, from: .store)
+    }
+
+    /// Keeps `document` as the control slot's, under the next revision, and answers that revision.
+    /// The revision counts under the slot's store name, above the same `_floor` as a widget's.
+    @discardableResult
+    func writeControl(_ document: ControlDocument, slot: String) throws -> Int {
+        guard ControlSlot.kind(of: slot) == document.kind else { throw CocoaError(.fileWriteInvalidFileName) }
+        var kept = document
+        kept.revision = try nextRevision(slot: ControlSlot.stored(slot))
+        try coordinatedWrite(url(slot: ControlSlot.stored(slot))) { _ in Data(kept.text.utf8) }
+        return kept.revision
+    }
+
+    /// A control toggle's tap, handled: under one coordinated write, the slot's document, if still
+    /// at `revision`, is kept with its state set to `on` — flipped when `on` is nil — at the same
+    /// revision. Answers the state it was in, or nil when the slot is at another revision or is
+    /// not a toggle. Control Center has drawn the new state by the time the tap is handled, so a
+    /// toggle's tap carries the state asked for rather than flipping the stored one.
+    func setControl(_ on: Bool?, slot: String, revision: Int) throws -> Bool? {
+        guard ControlSlot.kind(of: slot) == .toggle else { return nil }
+        var was: Bool?
+        try coordinatedWrite(url(slot: ControlSlot.stored(slot))) { data in
+            guard let data else { return nil }
+            var document = ControlDocument.read(String(decoding: data, as: UTF8.self), slot: slot, from: .store).document
+            guard document.revision == revision else { return data }
+            was = document.on
+            let next = on ?? !document.on
+            guard next != document.on else { return data }
+            document.on = next
+            return Data(document.text.utf8)
+        }
+        return was
+    }
+
+    /// The revision the document in `slot` — a widget's, the default, or a control's by its store
+    /// name — is at now, or nil when it holds none.
+    func heldRevision(slot: String) -> Int? {
+        if let control = ControlSlot.slot(stored: slot) { return readControl(slot: control)?.document.revision }
+        return read(slot: slot)?.document.revision
     }
 
     // MARK: Revisions
@@ -300,7 +352,7 @@ struct SurfaceStore: Sendable {
     /// tap on a widget still drawn after a sign-out, or on an old timeline, is not kept for a
     /// drain, which could be the next login's. Answers whether it was kept.
     func recordCue(_ cue: Cue) throws -> Bool {
-        guard read(slot: cue.slot)?.document.revision == cue.revision else { return false }
+        guard heldRevision(slot: cue.slot) == cue.revision else { return false }
         try appendCue(cue)
         return true
     }
@@ -337,6 +389,8 @@ struct SurfaceStore: Sendable {
         var kind: String
         /// The call's exit status, `stale` for a tap on an old revision, `cued` for a turn.
         var status: String
+        /// A control's request's HTTP status, when it answered one.
+        var code: Int?
     }
 
     func appendTap(_ tap: Tap) throws {
@@ -345,7 +399,7 @@ struct SurfaceStore: Sendable {
         }
         // A stale tap is logged but says nothing of the control's last run, and a tap drawn from
         // an older revision never replaces the outcome of a newer one.
-        guard tap.kind == "run", tap.status != "stale" else { return }
+        guard ["run", "request"].contains(tap.kind), tap.status != "stale" else { return }
         try coordinatedWrite(outcomesURL) { data in
             var outcomes = data.flatMap { try? JSONDecoder().decode([String: [String: Outcome]].self, from: $0) } ?? [:]
             if let last = outcomes[tap.slot]?[tap.id], last.revision > tap.revision { return data }

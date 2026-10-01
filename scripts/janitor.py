@@ -94,7 +94,7 @@ PENDING_MAX = 200                  # report lines kept for a later delivery
 
 UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)   # automerge.yaml's own test
 SUITE_JOBS = ("topo_unit", "topo_ui", "others")
-REVIEW_CHAIN = ("codex_wait", "codex", "post_feedback", "reviewer_ran", "review_gate")
+REVIEW_CHAIN = ("review_cap", "codex_wait", "codex", "post_feedback", "reviewer_ran", "review_gate")
 # A suite job red at one of these steps, and no other, is the runner's own
 # machinery failing around the PR's code: the simulator, the audio lane, a
 # cache, a checkout or upload action. A red anywhere else in the job — the
@@ -252,8 +252,20 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     suite_red = [j for j in red if j["name"] in SUITE_JOBS]
     # The verdict first, whatever else is red: the reviewer ran beside the
     # suites, so a blocking review and a suite red arrive on the same run.
+    # The review cap is the one way review_gate is red beside a green
+    # reviewer_ran with no verdict posted this run — codex skipped, or
+    # post_feedback's recount holding the post: no finding to fix, a
+    # decision to make.
+    capped = any((j["name"] == "codex" and j.get("conclusion") == "skipped")
+                 or (j["name"] == "post_feedback" and j.get("conclusion") == "success"
+                     and any(s.get("name") == "Report Codex feedback" and s.get("conclusion") == "skipped"
+                             for s in j.get("steps") or []))
+                 for j in jobs)
     if "review_gate" in red_names and "reviewer_ran" not in red_names:
-        report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
+        if capped:
+            report("cap", f"{title}: the review cap is reached on {short}, four Codex verdicts; it merges on Sam's word or goes back to draft for a replan.")
+        else:
+            report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
     # No verdict: the reviewer chain is red and nothing outside it is — a red
     # `select`, `test` or suite job is the run's own failure, not the reviewer's.
     no_verdict = ("reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)

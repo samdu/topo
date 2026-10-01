@@ -32,6 +32,7 @@ struct RootView: View {
                 await ViewerArrival(holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
                                     demoteHarness: { await harness.demote() },
                                     forgetMemory: { memory.forget() },
+                                    forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                                     forgetConnections: { connections.forget() },
                                     forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) }).act()
             }

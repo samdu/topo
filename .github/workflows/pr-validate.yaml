@@ -60,10 +60,10 @@
 # between the two PR heads, each with its patch, after the description:
 # commits the base also has and merge commits are left out, so a base merged
 # into the branch is not shown as the fix. The re-review verifies
-# each earlier finding as closed, still open or moot in `summary`, then reads
-# the whole PR again; a new finding in code the diff since does not touch
-# blocks only if it loses or corrupts a record, splits the primary, leaks a
-# secret, or makes the description untrue at runtime. No earlier verdict, one
+# each earlier finding as closed, still open or moot in `summary`, then
+# reviews the change since; a finding in code the change since does not touch
+# is reported and does not block. Four verdicts is the cap, and `review_cap`
+# holds the reviewer from a fifth. No earlier verdict, one
 # with no SHA marker, or a SHA that is not an ancestor is a first review,
 # said in the prompt step's log; a `gh` that still fails after its retries
 # fails the step, since the review round rests on what it reads.
@@ -689,6 +689,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/review-prompt-test.sh
 
+      # scripts/review-cap.sh against a fake gh: capped only at four verdicts
+      # by the bot, the cap comment posted once, and a failed read or post
+      # fails with no `capped` line.
+      - name: The review cap counts the bot's verdicts and says so once
+        if: ${{ !cancelled() }}
+        run: scripts/tests/review-cap-test.sh
+
       # scripts/janitor.py's decisions over scripted readings and one whole
       # pass against a fake gh, git, tmux and curl: a merge pinned to the head
       # the green run was read for, one rerun per head, the install page from
@@ -894,6 +901,48 @@ jobs:
           done
           exit "$status"
 
+  # The review cap (docs/process.md, *The fix loop*): four Codex verdicts on a
+  # PR and the reviewer does not run again. scripts/review-cap.sh counts them
+  # the way scripts/review-prompt.sh counts the round (both read
+  # scripts/review-verdicts.sh) and at four sets `capped`: codex_wait, and
+  # with it codex, does not run, and reviewer_ran and review_gate read the cap
+  # as neither a missing verdict nor a blocking one. review_gate stays red, so
+  # automerge does not merge a capped PR: it merges on Sam's word, or goes
+  # back to draft for a replan. The script posts one comment saying so, under
+  # its own marker and never the codex one. A count it cannot read or a
+  # comment it cannot post fails this job, so codex_wait does not run and
+  # reviewer_ran reports it as re-runnable. post_feedback runs the same script
+  # again immediately before it posts, which is the guard on the write side.
+  #
+  # This job and post_feedback check out `scripts/` alone to run the script,
+  # with a token that can comment and no persisted credential: the PR's own
+  # script runs with that token, which is the same-repo trust the header
+  # accepts.
+  review_cap:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    outputs:
+      capped: ${{ steps.count.outputs.capped }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Count the Codex verdicts on this PR
+        id: count
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: scripts/review-cap.sh >> "$GITHUB_OUTPUT"
+
   # Codex runs the CLI in the runner with the repo checked out, so unlike a
   # single-shot reviewer it can open the file the diff only mentions. Its
   # verdict is a step exit code in review_gate below, which is what makes it a
@@ -920,12 +969,13 @@ jobs:
   # and after 25 minutes it warns and lets the review go ahead. An API error
   # counts as busy and is retried within the same bound.
   codex_wait:
-    needs: [select, topo_unit, others]
+    needs: [select, topo_unit, others, review_cap]
     if: >-
       !cancelled() &&
       needs.select.result == 'success' &&
       (needs.topo_unit.result == 'success' || (needs.topo_unit.result == 'skipped' && needs.select.outputs.topo_unit == 'false')) &&
       (needs.others.result == 'success' || (needs.others.result == 'skipped' && needs.select.outputs.others == 'false')) &&
+      needs.review_cap.outputs.capped == 'false' &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
@@ -1039,8 +1089,9 @@ jobs:
             || echo "::warning::status pane unreachable"
 
       # This job holds read permissions and nothing more: the persisted token
-      # is repo-scoped and cannot push, comment or merge. The job that comments
-      # is a separate one, with no checkout.
+      # is repo-scoped and cannot push, comment or merge. The jobs that comment
+      # are separate ones, checking out scripts/ alone with no persisted
+      # credential (review_cap, above).
       - uses: actions/checkout@v5
         with:
           ref: refs/pull/${{ github.event.pull_request.number }}/merge
@@ -1420,15 +1471,35 @@ jobs:
     permissions:
       # Read-only on Actions, for the verdict artifact from this same run.
       actions: read
+      # Read-only, to check out scripts/ for the recount.
+      contents: read
       issues: write
       pull-requests: write
+    outputs:
+      capped: ${{ steps.recount.outputs.capped }}
     steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      # The cap again, immediately before the write: review_cap counted at the
+      # start of the run, and a run in flight — one cancelled mid-post among
+      # them — can have landed a verdict since. At the cap this run's verdict
+      # is not posted; the cap comment is, and reviewer_ran and review_gate
+      # read this job's `capped` as they read review_cap's.
+      - name: Recount the Codex verdicts before posting
+        id: recount
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: scripts/review-cap.sh >> "$GITHUB_OUTPUT"
       - name: Download the verdict
         uses: actions/download-artifact@v4
         with:
           name: codex-verdict
           path: ${{ runner.temp }}/codex-verdict
       - name: Report Codex feedback
+        if: ${{ steps.recount.outputs.capped == 'false' }}
         uses: actions/github-script@v7
         env:
           CODEX_VERDICT_PATH: ${{ runner.temp }}/codex-verdict/verdict.json
@@ -1469,6 +1540,9 @@ jobs:
   #                         Re-runnable; not a statement about the code.
   #   review_gate    red  ⇒ the reviewer ran and its verdict blocks, or it
   #                         answered with nothing usable. A review decision.
+  #                         Or, with reviewer_ran green and no verdict posted
+  #                         this run, the review cap: Sam's word or a replan,
+  #                         not a fix round.
   #
   # Readable without opening a log:
   #   gh api repos/OWNER/REPO/actions/runs/RUNID/jobs \
@@ -1483,7 +1557,7 @@ jobs:
   # Neither runs outside a pull request: a nightly or dispatched run has no PR
   # to review, and its conclusion is the suite's.
   reviewer_ran:
-    needs: [select, topo_unit, topo_ui, others, test, codex, post_feedback]
+    needs: [select, topo_unit, topo_ui, others, test, review_cap, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     steps:
@@ -1500,6 +1574,8 @@ jobs:
             topo_unit=${{ needs.select.outputs.topo_unit }}
             topo_ui=${{ needs.select.outputs.topo_ui }}
             others=${{ needs.select.outputs.others }}
+          CAP_RESULT: ${{ needs.review_cap.result }}
+          CAPPED: ${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}
           CODEX_RESULT: ${{ needs.codex.result }}
           FEEDBACK_RESULT: ${{ needs.post_feedback.result }}
         run: |
@@ -1508,6 +1584,22 @@ jobs:
           if [ "$IS_DRAFT" = "true" ]; then
             echo "::error::No verdict: this PR is a draft, so the reviewer was deliberately skipped. Mark it ready for review — nothing here is a review decision."
             exit 1
+          fi
+          # A count that failed is no verdict: the cap may or may not stand,
+          # and its comment may not be on the PR. A fork PR skips review_cap
+          # as it skips codex, and the reviewer's own line below says that.
+          case "${CAP_RESULT:-}" in
+            failure | cancelled)
+              echo "::error::No verdict: the Codex verdicts on this PR could not be counted, or the cap comment not posted (review_cap: $CAP_RESULT), so the reviewer did not run. Re-run the failed jobs — nothing here is a review decision."
+              exit 1
+              ;;
+          esac
+          # The cap is a review state, not a missing verdict: review_gate holds
+          # the merge on it, and a red here would have the janitor rerun it.
+          # The suite's own reds stay on `test`.
+          if [ "${CAPPED:-}" = "true" ]; then
+            echo "The review cap is reached, so the reviewer was deliberately not run; review_gate holds the merge for Sam's word or a replan."
+            exit 0
           fi
           # Named before the reviewer's own result, because a red fast job is
           # why the reviewer did not run and "the reviewer job did not
@@ -1568,7 +1660,7 @@ jobs:
   #
   # This is the required status check on main.
   review_gate:
-    needs: [reviewer_ran, select, topo_unit, topo_ui, others, test, codex, post_feedback]
+    needs: [reviewer_ran, select, topo_unit, topo_ui, others, test, review_cap, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
@@ -1589,6 +1681,7 @@ jobs:
         id: verdict
         env:
           PRECHECK_RESULT: ${{ needs.reviewer_ran.result }}
+          CAPPED: ${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}
           CODEX_RESULT: ${{ needs.codex.result }}
           HAS_VERDICT: ${{ needs.codex.outputs.has_verdict }}
           VERDICT_FILE: ${{ runner.temp }}/codex-verdict/verdict.json
@@ -1622,6 +1715,15 @@ jobs:
             { echo "state=$1"; echo "summary<<$eom"; echo "$2"; echo "$eom"; } >> "$GITHUB_OUTPUT"
             exit "$3"
           }
+
+          # The review cap: four verdicts, and the reviewer deliberately not run
+          # again. Not a pass, so the merge is held; not a fresh block, so
+          # nothing here is a finding to fix. The status pane has no state for
+          # it, so it reads as block with the cap for its summary.
+          if [ "${CAPPED:-}" = "true" ]; then
+            echo "::error::Review cap reached: this PR carries four Codex verdicts and is not reviewed again. It merges on Sam's word, or goes back to draft for a replan — not a new review decision."
+            finish block "review cap reached: four Codex verdicts; merges on Sam's word or goes back to draft for a replan" 1
+          fi
 
           if [ "$CODEX_RESULT" != "success" ]; then
             # No verdict exists, so there is no review decision to report and
