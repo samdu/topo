@@ -403,12 +403,12 @@ final class SurfaceSyncTests: XCTestCase {
     /// The first save of this phone's (runner phone-1) that `matches` runs `meanwhile` before its
     /// tag is checked: another phone's write, or a takeover, landing between the read the pass
     /// made and its compare-and-set.
-    private func interleave(when matches: @escaping @Sendable (Record) -> Bool,
+    private func interleave(of runner: String = "phone-1", when matches: @escaping @Sendable (Record) -> Bool,
                             _ meanwhile: @escaping @Sendable (SurfaceRecords) async -> Void) async {
         let once = Once()
         let records = SurfaceRecords(database: database.inner)
         await database.inner.setBeforeSave { saving in
-            guard saving.contains(where: { $0.fields["runner"] == .string("phone-1") && matches($0) }), once.first() else { return }
+            guard saving.contains(where: { $0.fields["runner"] == .string(runner) && matches($0) }), once.first() else { return }
             await meanwhile(records)
         }
     }
@@ -712,7 +712,41 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertEqual([alpha, beta].compactMap { $0 }.count, 1, "the sweep went on clearing after the sign-out")
     }
 
-    /// An owed save whose read is answered after the login ended is not made.
+    /// The same against a store that writes as CloudKit's adapter does: a save over a record it
+    /// was not handed by a fetch or a save fetches that record first and only then sends the
+    /// compare-and-set. The listing is a change-feed read, so whatever trip to the server stands
+    /// between it and the clear — the sweep's own read of the slot, or the store's fetch before
+    /// a save — a sign-out landing in it sends nothing.
+    func testASignOutDuringTheStoresFetchBeforeAClearSendsNothing() async throws {
+        let cloud = FetchBeforeSave()
+        let records = SurfaceRecords(database: cloud.inner)
+        try await records.save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-B"),
+                               over: .none)
+        let gate = Gate(), once = Once()
+        await cloud.setPreRead { _ in
+            guard once.first() else { return }
+            await gate.wait()
+        }
+        let store = store!
+        let sync = SurfaceSync(records: { SurfaceRecords(database: cloud) }, ensureZone: {}, mayOwn: { true },
+                               demoted: { _ in true }, store: { store }, runner: "phone-1",
+                               defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, reloader: reloader,
+                               now: { Date(timeIntervalSince1970: 100) })
+        sync.sweep()
+        let flushing = Task { await sync.flush() }
+        for _ in 0..<10_000 where !gate.isWaiting { try await Task.sleep(for: .milliseconds(1)) }
+        XCTAssertTrue(gate.isWaiting)
+        await cloud.log("sign-out")
+        sync.forget()
+        gate.open()
+        await flushing.value
+        await sync.flush()
+        let left = await cloud.inner.current(SurfaceRecord.id(slot: "tides")).flatMap(SurfaceRecord.init)
+        let events = await cloud.events
+        XCTAssertEqual(left?.runner, "phone-B", "a clear was sent after the sign-out: \(events)")
+    }
+
+    /// An owed save whose role read is answered after the login ended is not made.
     func testASignOutDuringAnOwedWriteSavesNothing() async throws {
         let box = SyncBox()
         let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: {
@@ -784,7 +818,8 @@ final class SurfaceSyncTests: XCTestCase {
     // MARK: The role gate as the app wires it
 
     /// `SurfaceSync` made with no role answers of a test's reads the role records itself: a
-    /// viewer's sweeps nothing and a primary's sweeps.
+    /// viewer's sweeps nothing and a primary's sweeps, and a save made in its gap by a phone whose
+    /// own role record is a primary's is left.
     func testTheDefaultGateReadsThisPhonesRoleRecord() async throws {
         let roles = InMemoryRecordDatabase()
         let database = database!, store = store!
@@ -807,6 +842,16 @@ final class SurfaceSyncTests: XCTestCase {
         await primary.flush()
         let swept = await stored("tides")
         XCTAssertNil(swept, "a primary's sweep left another phone's record")
+
+        // Another phone's save landing in the sweep's gap is judged by that phone's own role
+        // record: a primary's is left.
+        try await save(SurfaceRecord(slot: "lamp", document: "{}", revision: 3, updated: Date(), runner: "phone-0"))
+        _ = try await roles.save(DeviceRole(device: DeviceID("phone-B"), role: .primary, setBy: DeviceID("phone-B"), at: Date()).record(over: roles))
+        await interleave(of: "phone-A", when: Self.tombstone) { await Self.primarySaves("lamp", $0) }
+        let again = make()
+        again.sweep()
+        await again.flush()
+        await assertThePrimarys("lamp")
     }
 
 
@@ -903,4 +948,44 @@ private final class Flag: @unchecked Sendable {
     private var value = false
     var isSet: Bool { lock.withLock { value } }
     func set() { lock.withLock { value = true } }
+}
+
+/// Writes as `CloudKitRecordDatabase` does: records handed out by a fetch or a save are kept,
+/// a feed's are not, and a tagged save over one not kept fetches it and checks its tag before
+/// the compare-and-set is sent. `preRead` runs at every trip to the server short of the save
+/// itself: a fetch, or the fetch a save makes first.
+private actor FetchBeforeSave: ZoneDatabase {
+    let inner = InMemoryRecordDatabase()
+    private var kept: [RecordID: String] = [:]
+    private var preRead: (@Sendable (RecordID) async -> Void)?
+    private(set) var events: [String] = []
+
+    func setPreRead(_ hook: (@Sendable (RecordID) async -> Void)?) { preRead = hook }
+    func log(_ event: String) { events.append(event) }
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        for record in records {
+            guard let tag = record.changeTag, kept[record.id] != tag else { continue }
+            await preRead?(record.id)
+            guard let server = try await inner.fetch([record.id])[record.id] else { throw RecordDatabaseError.unknownItem(record.id) }
+            guard server.changeTag == tag else { throw RecordDatabaseError.serverRecordChanged(record.id, server: server) }
+            kept[record.id] = tag
+        }
+        events.append("save " + records.map(\.id.name).joined(separator: ","))
+        let saved = try await inner.save(records)
+        for record in saved { kept[record.id] = record.changeTag }
+        return saved
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        for id in ids { await preRead?(id) }
+        let found = try await inner.fetch(ids)
+        for (id, record) in found { kept[id] = record.changeTag }
+        return found
+    }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func delete(_ ids: [RecordID]) async throws { try await inner.delete(ids) }
+    func changes(ofType type: String, since token: Data?) async throws -> RecordChanges {
+        try await inner.changes(ofType: type, since: token)
+    }
 }

@@ -242,8 +242,8 @@ targets:
     platform: watchOS
     sources:
       - path: Apps/Widgets
-        # The phone extension's own.
-        excludes: [Info.plist, TopoWidgets.entitlements]
+        # The phone extension's own, and the controls, which the watch has none of.
+        excludes: [Info.plist, TopoWidgets.entitlements, TopoControls.swift]
       - Apps/Shared/WidgetDocument.swift
       - Apps/Shared/WidgetNodeView.swift
       - Apps/Shared/SurfaceStore.swift

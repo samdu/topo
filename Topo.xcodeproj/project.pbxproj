@@ -294,7 +294,6 @@
 		A84F4654C8C62B71D6789CF7 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		A861E04568B9169AD4FC67B0 /* MemoryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCD2D48725224C0E601F432D /* MemoryTests.swift */; };
 		A8807AF0D00F928C12D256FA /* Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */; };
-		A8EC89DB4540373124B05744 /* TopoControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90EBB1BE1833BA552EC766A5 /* TopoControls.swift */; };
 		A95359D2B28EF0C108A6537D /* TopoTools in Frameworks */ = {isa = PBXBuildFile; productRef = 7C767439B30ED0E6848AC6D4 /* TopoTools */; };
 		A963316842B3A8C8BC02AF69 /* MicrophonePressTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91354032F5443E868316550B /* MicrophonePressTests.swift */; };
 		A976187A8375E84B67FD0E1E /* StopWhileSpeakingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88BFBBC5F6FD505DCD58B15 /* StopWhileSpeakingTests.swift */; };
@@ -1977,7 +1976,6 @@
 				C46683AB0F3051385E66FCE9 /* SurfaceProvider.swift in Sources */,
 				E816EA6D1AF56F9EE47927CE /* SurfaceStore.swift in Sources */,
 				E81D3B01992F870C1F684790 /* Theme.swift in Sources */,
-				A8EC89DB4540373124B05744 /* TopoControls.swift in Sources */,
 				F75D792DC2DD86483B13581A /* TopoMoment.swift in Sources */,
 				AD4A6EEB4D4C51B787EDB813 /* TopoWidgets.swift in Sources */,
 				7C378AC1792F1B90CA47F507 /* WatchRelevance.swift in Sources */,

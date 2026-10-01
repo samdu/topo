@@ -150,7 +150,9 @@ struct SurfaceStore: Sendable {
     /// slot is at another revision or holds no such toggle. The state is the stored one, not the
     /// one the tapped entry drew, so two taps before a reload are on and then off.
     func flip(slot: String, control: String, revision: Int) throws -> Bool? {
+        #if os(iOS)
         if let toggle = ControlSlot.slot(stored: slot) { return try setControl(nil, slot: toggle, revision: revision) }
+        #endif
         var was: Bool?
         try setting(slot: slot, control: control, revision: revision) { was = $0; return !$0 }
         return was
@@ -159,7 +161,9 @@ struct SurfaceStore: Sendable {
     /// Sets toggle `control` to `on`, whatever it is now: a cue's resolved state, set again as
     /// often as a drain is, or a run's confirmed state after one failed.
     func setOn(_ on: Bool, slot: String, control: String, revision: Int) throws {
+        #if os(iOS)
         if let toggle = ControlSlot.slot(stored: slot) { _ = try setControl(on, slot: toggle, revision: revision); return }
+        #endif
         try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
     }
 
@@ -228,7 +232,9 @@ struct SurfaceStore: Sendable {
         }
     }
 
-    // MARK: Controls
+    // MARK: Controls (the phone's alone: the watch has no controls)
+
+    #if os(iOS)
 
     /// A control slot's kept document, `slot` one of `ControlSlot.all`, read under a coordinated
     /// read. Nil is no file.
@@ -268,11 +274,14 @@ struct SurfaceStore: Sendable {
         }
         return was
     }
+    #endif
 
     /// The revision the document in `slot` — a widget's, the default, or a control's by its store
     /// name — is at now, or nil when it holds none.
     func heldRevision(slot: String) -> Int? {
+        #if os(iOS)
         if let control = ControlSlot.slot(stored: slot) { return readControl(slot: control)?.document.revision }
+        #endif
         return read(slot: slot)?.document.revision
     }
 

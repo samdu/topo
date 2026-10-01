@@ -51,8 +51,10 @@ final class SurfaceSync {
     /// Counts sweeps asked for, so a sweep that was running when another was asked does not
     /// answer for it.
     private var sweepsAsked = 0
-    /// Counts the logins ended here. A pass reads it at its start and before each write, so that
-    /// nothing it read before a sign-out is acted on after it: a signed-out phone owns nothing.
+    /// Counts the logins ended here. A pass reads it at its start and before each save of an owed
+    /// slot and each clear of another phone's record, so that nothing it read before a sign-out is
+    /// acted on after it: a signed-out phone owns nothing. A clear of this phone's own record
+    /// under its own tag is not checked, since a sign-out asks for that clear itself.
     private var signOuts = 0
     private let store: @MainActor () -> SurfaceStore?
     private let runner: String
@@ -152,8 +154,10 @@ final class SurfaceSync {
 
     /// A login ended: nothing it owed is saved, and every `Surface` record this phone saved is to go.
     func forget() {
-        setOwed([:])
+        // The sign-out recorded before what was owed is dropped, so no ending between the two
+        // leaves neither.
         defaults.set(true, forKey: Self.forgetKey)
+        setOwed([:])
         // A signed-out phone owns nothing, so takes nothing of another's, a sweep in flight included.
         sweeping = false
         signOuts += 1
@@ -301,23 +305,28 @@ final class SurfaceSync {
     /// only when that runner's role record says viewer (a demoted phone's save, landing as the
     /// sweep read), so a phone that still reads itself primary never clears a save made since
     /// by one that is not demoted either; this phone's own is left.
-    /// Every clear is made only while the login the sweep began in stands: one a sign-out lands
-    /// before is never sent.
+    /// Each clear is made over a read of the slot itself, not the listing: the listing's records
+    /// carry no record the database can write through, so a clear over one would fetch it first,
+    /// after the check below. The check that the login the sweep began in still stands is the
+    /// last step before the clear is sent, so a sign-out landing before it sends none.
     private func sweepOthers(_ records: SurfaceRecords, login: Int) async throws {
         let others = try await records.all().filter { $0.holds && $0.runner != runner }
         guard !others.isEmpty, try await mayOwn() else { return }
-        for first in others {
-            guard let slot = first.slot else { continue }
-            var read = first
+        for listed in others {
+            guard let slot = listed.slot else { continue }
             for _ in 0..<3 {
+                let read = try await records.read(slot: slot)
+                guard read.holds, let other = read.runner, other != runner else { break }
+                // Moved since the listing that the role was read after: judged again.
+                if read.record?.changeTag != listed.record?.changeTag {
+                    guard try await mayOwn(), try await demoted(other) else { break }
+                }
                 guard signOuts == login else { return }
                 do {
                     try await records.clear(slot: slot, runner: runner, at: now(), over: read)
                     break
                 } catch RecordDatabaseError.serverRecordChanged {
-                    read = try await records.read(slot: slot)
-                    guard read.holds, let other = read.runner, other != runner, try await mayOwn(),
-                          try await demoted(other) else { break }
+                    continue
                 }
             }
         }
