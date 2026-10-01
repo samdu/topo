@@ -63,7 +63,8 @@ final class SurfaceSync {
     }
 
     /// Whether `device` may write records another phone saved: its role record, read now, is not
-    /// a viewer's. No record is a phone never taken over from.
+    /// a viewer's. A device with no role record may; a takeover writes one for each device it
+    /// finds primary (`RoleSelector.primariesToDemote`).
     nonisolated static func roleAllows(device: DeviceID, database: any RecordDatabase) async throws -> Bool {
         try await DeviceRole.read(device, from: database)?.role != .viewer
     }
@@ -223,9 +224,18 @@ final class SurfaceSync {
     private func write(_ target: SurfaceRecord?, slot: String, _ records: SurfaceRecords) async throws -> Bool {
         for _ in 0..<3 {
             let current = try await records.read(slot: slot)
-            // Whether this phone may write at all, asked after the read it acts on: a demoted
-            // phone owes nothing, a tombstone the new primary left included.
-            guard try await mayOwn() else { return true }
+            // Whether this phone may write at all, asked after the read it acts on. A demoted
+            // phone owes nothing but the slot back: a save of its own still on it (one whose undo
+            // never ran) is cleared under its tag, and anything else is left.
+            guard try await mayOwn() else {
+                guard case .live(let surface, _) = current, surface.runner == runner else { return true }
+                do {
+                    try await records.clear(slot: slot, runner: runner, at: now(), over: current)
+                    return true
+                } catch RecordDatabaseError.serverRecordChanged {
+                    continue
+                }
+            }
             do {
                 guard let target else {
                     try await records.clear(slot: slot, runner: runner, at: now(), over: current)
@@ -263,15 +273,24 @@ final class SurfaceSync {
     }
 
     /// The primary's sweep: every record another runner saved that still holds a slot is cleared
-    /// under the tag it was read with, once the role, read after them, allows it.
+    /// under the tag it was read with, once the role, read after them, allows it. A clear refused
+    /// because the record moved is read again: another runner's save there (a demoted phone's,
+    /// landing as the sweep read) is cleared in turn, and this phone's own is left.
     private func sweepOthers(_ records: SurfaceRecords) async throws {
         let others = try await records.all().filter { $0.holds && $0.runner != runner }
         guard !others.isEmpty, try await mayOwn() else { return }
-        for read in others {
-            guard let slot = read.slot else { continue }
-            do {
-                try await records.clear(slot: slot, runner: runner, at: now(), over: read)
-            } catch RecordDatabaseError.serverRecordChanged {}
+        for first in others {
+            guard let slot = first.slot else { continue }
+            var read = first
+            for _ in 0..<3 {
+                do {
+                    try await records.clear(slot: slot, runner: runner, at: now(), over: read)
+                    break
+                } catch RecordDatabaseError.serverRecordChanged {
+                    read = try await records.read(slot: slot)
+                    guard read.holds, read.runner != runner, try await mayOwn() else { break }
+                }
+            }
         }
     }
 

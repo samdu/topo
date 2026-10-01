@@ -439,11 +439,17 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertFalse(sync.owesForget)
     }
 
-    /// The sweep read a leftover record and its role, and the new primary saved the slot before
-    /// the clear: the clear is refused and dropped.
+    /// The sweep read a leftover record and its role, and a takeover demoted this phone and the
+    /// new primary saved the slot before the clear: the clear is refused, the record read again
+    /// is another phone's, and the role read after it says viewer, so it is left.
     func testASweepLeavesARecordSavedSinceItsRead() async throws {
+        let role = Role()
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { role.primary })
         try await save(SurfaceRecord(slot: "tides", document: "{}", revision: 3, updated: Date(), runner: "phone-0"))
-        await interleave(when: Self.tombstone) { await Self.primarySaves("tides", $0) }
+        await interleave(when: Self.tombstone) {
+            role.primary = false
+            await Self.primarySaves("tides", $0)
+        }
         sync.sweep()
         await sync.flush()
         await assertThePrimarys("tides")
@@ -570,6 +576,69 @@ final class SurfaceSyncTests: XCTestCase {
         XCTAssertEqual(sync.pending, [])
     }
 
+    /// A save of this phone's lands across a takeover and the role read after it fails, so the
+    /// undo never runs: the next pass, the role now a viewer's, clears that save under its tag
+    /// rather than settling the slot with it standing.
+    func testADemotedPhoneTakesBackASaveWhoseUndoNeverRan() async throws {
+        let role = ScriptedRole([true, nil, false])
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: { try role.next() })
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        XCTAssertEqual(sync.pending, ["weather"])
+        await sync.flush()
+        XCTAssertEqual(sync.pending, [])
+        let standing = await stored("weather")
+        XCTAssertNil(standing, "a demoted phone settled the slot with its own save on it")
+    }
+
+    /// The same across two phones: the new primary's sweep reads the old one's record, the old
+    /// one's save lands in the gap, and the old phone reads no role again (off the network, or
+    /// never run again). The sweep's refused clear is read again and made over the save.
+    func testASaveLandingInTheSweepsGapIsSweptToo() async throws {
+        let storeB = SurfaceStore(folder: folder.appendingPathComponent("b"))
+        defer { try? FileManager.default.removeItem(at: storeB.folder) }
+        let a = makeSync(defaults: UserDefaults(suiteName: "surface-sync-a-\(UUID().uuidString)")!, runner: "phone-A")
+        let b = makeSync(defaults: UserDefaults(suiteName: "surface-sync-b-\(UUID().uuidString)")!, runner: "phone-B", store: storeB)
+        _ = try write("weather", "A1")
+        a.changed(slot: "weather")
+        await a.flush()
+        let role = ScriptedRole([true, nil])
+        let late = makeSync(defaults: UserDefaults(suiteName: "surface-sync-a2-\(UUID().uuidString)")!, runner: "phone-A",
+                            mayOwn: { try role.next() })
+        _ = try write("weather", "A2")
+        let once = Once()
+        await database.inner.setBeforeSave { saving in
+            guard saving.contains(where: { $0.fields["runner"] == .string("phone-B") && $0.fields["cleared"] != nil }),
+                  once.first() else { return }
+            await MainActor.run { late.changed(slot: "weather") }
+            await late.flush()
+        }
+        b.sweep()
+        await b.flush()
+        await database.inner.setBeforeSave(nil)
+        let swept = await stored("weather")
+        XCTAssertNil(swept, "the sweep left a save that landed between its read and its clear")
+        XCTAssertEqual(b.pending, [])
+    }
+
+    /// The new primary saves the slot after the old phone's save and before the role read that
+    /// would undo it: the undo reads a record that is not its own and leaves it.
+    func testAnUndoLeavesARecordNotItsOwn() async throws {
+        let calls = Counter(), inner = database.inner
+        let sync = makeSync(defaults: UserDefaults(suiteName: "surface-sync-\(UUID().uuidString)")!, mayOwn: {
+            let n = calls.bump()
+            if n == 1 { return true }
+            if n == 2 { await Self.primarySaves("weather", SurfaceRecords(database: inner)) }
+            return false
+        })
+        _ = try write("weather")
+        sync.changed(slot: "weather")
+        await sync.flush()
+        await assertThePrimarys("weather")
+        XCTAssertEqual(sync.pending, [])
+    }
+
     // MARK: The role gate as the app wires it
 
     /// The gate the app's `SurfaceSync` is made with, read from a store: a viewer's role record
@@ -633,4 +702,22 @@ private final class Once: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
     func first() -> Bool { lock.withLock { defer { done = true }; return !done } }
+}
+
+/// Answers a role from a script, the last answer repeating; nil is a read that fails.
+private final class ScriptedRole: @unchecked Sendable {
+    private let lock = NSLock()
+    private var script: [Bool?]
+    init(_ script: [Bool?]) { self.script = script }
+    func next() throws -> Bool {
+        let answer: Bool? = lock.withLock { script.count > 1 ? script.removeFirst() : script[0] }
+        guard let answer else { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+        return answer
+    }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func bump() -> Int { lock.withLock { count += 1; return count } }
 }
