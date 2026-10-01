@@ -36,8 +36,43 @@
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
 #
+# With `--watch`, it reads the watch app instead: `PlugIns/TopoWatchWidgets.appex` embedded, a
+# WidgetKit extension, since the complications are nothing without it; and `WKBackgroundModes`
+# declaring `remote-notification`, which no setting generates, for the `Surface` push that wakes
+# the watch to fetch the slots; and the topo URL scheme, which a whole watch widget's tap opens.
+#
 #   scripts/check-built-plist.sh <path to Topo.app> [expected CFBundleVersion]
+#   scripts/check-built-plist.sh --watch <path to TopoWatch.app>
 set -euo pipefail
+
+if [ "${1:-}" = --watch ]; then
+    watch="${2:?usage: check-built-plist.sh --watch <TopoWatch.app>}"
+    status=0
+    extension="$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
+    point="$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - -- "$extension" 2>/dev/null || true)"
+    if [ "$point" != com.apple.widgetkit-extension ]; then
+        echo "$watch does not embed PlugIns/TopoWatchWidgets.appex as a WidgetKit extension (${point:-no extension}); there would be no complications" >&2
+        status=1
+    fi
+    modes="$(plutil -extract WKBackgroundModes json -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+    case "$modes" in
+        *'"remote-notification"'*) ;;
+        *)
+            echo "$watch/Info.plist does not declare the 'remote-notification' background mode (WKBackgroundModes: ${modes:-absent})" >&2
+            status=1
+            ;;
+    esac
+    schemes="$(plutil -extract CFBundleURLTypes json -o - -- "$watch/Info.plist" 2>/dev/null || true)"
+    case "$schemes" in
+        *'"CFBundleURLSchemes":["topo"]'*) ;;
+        *)
+            echo "$watch/Info.plist does not declare the topo URL scheme (CFBundleURLTypes: ${schemes:-absent}); a watch widget's tap would open nothing" >&2
+            status=1
+            ;;
+    esac
+    [ "$status" -eq 0 ] && echo "$watch embeds TopoWatchWidgets.appex, declares WKBackgroundModes $modes and the topo URL scheme"
+    exit "$status"
+fi
 
 app="${1:?usage: check-built-plist.sh <Topo.app> [expected CFBundleVersion]}"
 build="${2:-}"

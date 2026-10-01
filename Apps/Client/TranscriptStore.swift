@@ -26,6 +26,9 @@ final class TranscriptStore {
     /// line: turns missing from the read, a fork, a refresh that failed.
     private(set) var notice: String?
     private(set) var isSending = false
+    /// Whether the last read of the log succeeded, so `turns` is what the log held then: only
+    /// then does a nonce missing from them mean a turn that never landed.
+    private(set) var hasRead = false
     /// What the person has said that is not in the log yet, oldest first.
     /// Nothing said is dropped: a turn that fails stays here, and anything
     /// said after it queues behind it so the log keeps the order it was
@@ -73,7 +76,9 @@ final class TranscriptStore {
             turns = transcript.ordered
             notice = TranscriptStore.notice(for: transcript)
             phase = .ready
+            hasRead = true
         } catch {
+            hasRead = false
             guard turns.isEmpty else {
                 // Keep what is on screen; say the refresh did not land.
                 notice = "Could not read just now. Showing the last read."
@@ -116,6 +121,25 @@ final class TranscriptStore {
         pending.append(Outgoing(text: text, nonce: UUID().uuidString))
         save(pending)
         await flush()
+    }
+
+    /// Puts `text` on the line under a nonce minted elsewhere — a watch widget's cue, recorded in
+    /// the watch's group under it before this app saw it — unless that nonce is already queued or
+    /// already in the log as last read, so a cue drained twice is one turn. Answers whether the
+    /// nonce is queued or in the log now, which is when the cue's record may go. Only a store
+    /// whose last read succeeded (`hasRead`) knows what the log holds, so without one it answers
+    /// false and queues nothing.
+    @discardableResult
+    func send(_ text: String, nonce: String) async -> Bool {
+        if pending.contains(where: { $0.nonce == nonce }) { return true }
+        guard hasRead else { return false }
+        if turns.contains(where: { $0.nonce == nonce }) { return true }
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        pending.append(Outgoing(text: text, nonce: nonce))
+        save(pending)
+        await flush()
+        return true
     }
 
     /// Sends whatever is queued, oldest first. Stops at the first one that

@@ -122,6 +122,62 @@ final class TranscriptStoreTests: XCTestCase {
         XCTAssertTrue(store.outbox.isEmpty)
     }
 
+    /// A watch cue drained twice is one turn: a nonce already queued, or already in the log, is
+    /// answered as sent and queues nothing, and a store that has not read the log queues nothing.
+    func testSendWithNonceDeduplicates() async throws {
+        let database = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let unread = store(database, defaults: defaults)
+        let refusedUnread = await unread.send("widget lamp: on", nonce: "cue-1")
+        XCTAssertFalse(refusedUnread, "a store that has not read the log answered for it")
+        XCTAssertTrue(unread.outbox.isEmpty)
+
+        let first = store(database, defaults: defaults)
+        await first.refresh()
+        let queued = await first.send("widget lamp: on", nonce: "cue-1")
+        XCTAssertTrue(queued)
+        let again = await first.send("widget lamp: on", nonce: "cue-1")
+        XCTAssertTrue(again)
+        await first.refresh()
+        XCTAssertEqual(first.turns.filter { $0.nonce == "cue-1" }.count, 1)
+
+        // Landed: a relaunch that drains the same cue finds the nonce in the log.
+        let relaunched = store(database, defaults: makeDefaults())
+        await relaunched.refresh()
+        let landed = await relaunched.send("widget lamp: on", nonce: "cue-1")
+        XCTAssertTrue(landed)
+        XCTAssertTrue(relaunched.outbox.isEmpty, "a nonce in the log was queued again")
+        await relaunched.refresh()
+        XCTAssertEqual(relaunched.turns.filter { $0.nonce == "cue-1" }.count, 1)
+    }
+
+    /// Pending: with the nonce still on the line (every save refused), the same cue answers as
+    /// queued without a second entry, and a relaunch holding that outbox does too; a store whose
+    /// read failed answers for nothing.
+    func testSendWithNoncePendingIsNotQueuedTwice() async throws {
+        let database = FailingDatabase(InMemoryRecordDatabase())
+        let defaults = makeDefaults()
+        let first = store(database, defaults: defaults)
+        await first.refresh()
+        await database.setFailure(RecordDatabaseError.unavailable(underlying: CancellationError()))
+        let queued = await first.send("widget lamp: on", nonce: "cue-2")
+        XCTAssertTrue(queued)
+        let again = await first.send("widget lamp: on", nonce: "cue-2")
+        XCTAssertTrue(again)
+        XCTAssertEqual(first.outbox, ["widget lamp: on"])
+
+        let relaunched = store(database, defaults: defaults)
+        let pending = await relaunched.send("widget lamp: on", nonce: "cue-2")
+        XCTAssertTrue(pending, "a nonce on the line was not answered as queued")
+        XCTAssertEqual(relaunched.outbox, ["widget lamp: on"])
+
+        let unread = store(database, defaults: makeDefaults())
+        await unread.refresh()
+        let refused = await unread.send("widget lamp: on", nonce: "cue-3")
+        XCTAssertFalse(refused, "a store whose read failed answered for the log")
+        XCTAssertTrue(unread.outbox.isEmpty)
+    }
+
     func testDifferentWordsAreADifferentTurn() async throws {
         let database = FailingDatabase(InMemoryRecordDatabase())
         let store = store(database)

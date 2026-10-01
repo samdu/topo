@@ -1,8 +1,10 @@
-#if os(iOS)
+#if os(iOS) || os(watchOS)
 import Foundation
 
 /// The mind's widgets on disk: the `Surfaces` folder in the app group `group.zone.hexagon.topo`,
-/// which the app writes and the widget extension reads.
+/// which the app writes and the widget extension reads. On the watch the same layout is kept in
+/// the watch's own group, `group.zone.hexagon.topo.watch`, by the watch app from the slots'
+/// records (`WatchSurfaces`), and read by the watch's extension.
 ///
 /// - `<slot>.json`, one document per slot, as the app kept it (`WidgetDocument.text`), and
 ///   `_default.json`, the app's own (`DefaultSurface`);
@@ -23,8 +25,12 @@ import Foundation
 /// coordinated read, so the extension never reads half a document. The files are
 /// `completeUntilFirstUserAuthentication`: a lock-screen widget draws after the first unlock.
 struct SurfaceStore: Sendable {
+    #if os(watchOS)
+    static let appGroup = "group.zone.hexagon.topo.watch"
+    #else
     static let appGroup = "group.zone.hexagon.topo"
-    /// The one widget kind, `TopoSurface`, which `SurfaceReloader` reloads.
+    #endif
+    /// The placeable widget kind, `TopoSurface`, which `SurfaceReloader` reloads.
     static let kind = "TopoSurface"
     static let defaultSlot = "_default"
     static let tapsKept = 50
@@ -109,6 +115,23 @@ struct SurfaceStore: Sendable {
         return kept.revision
     }
 
+    /// A document the phone kept, kept here at the phone's revision: the watch's copy of a slot,
+    /// which never mints a revision of its own, so a cue drawn from it names the phone's.
+    func keep(_ document: WidgetDocument, slot: String) throws {
+        guard WidgetDocument.isSlot(slot) else { throw CocoaError(.fileWriteInvalidFileName) }
+        try coordinatedWrite(url(slot: slot)) { _ in Data(document.text.utf8) }
+    }
+
+    /// The slot's images made exactly `images`: each written, and any other taken away.
+    func keepImages(_ images: [String: Data], slot: String) throws {
+        for name in imageNames(slot: slot) where images[name] == nil {
+            try coordinatedWrite(image(slot: slot, name: name)) { _ in nil }
+        }
+        for (name, png) in images.sorted(by: { $0.key < $1.key }) where WidgetDocument.isName(name) {
+            if imageData(slot: slot, name: name) != png { try writeImage(png, slot: slot, name: name) }
+        }
+    }
+
     /// The app's own default, written whole. It keeps the revision it was first given in this
     /// login, so a tap on the default drawn a reply ago still lands, and a login's first takes the
     /// next, so a tap from an earlier login's default does not.
@@ -127,7 +150,9 @@ struct SurfaceStore: Sendable {
     /// slot is at another revision or holds no such toggle. The state is the stored one, not the
     /// one the tapped entry drew, so two taps before a reload are on and then off.
     func flip(slot: String, control: String, revision: Int) throws -> Bool? {
+        #if os(iOS)
         if let toggle = ControlSlot.slot(stored: slot) { return try setControl(nil, slot: toggle, revision: revision) }
+        #endif
         var was: Bool?
         try setting(slot: slot, control: control, revision: revision) { was = $0; return !$0 }
         return was
@@ -136,7 +161,9 @@ struct SurfaceStore: Sendable {
     /// Sets toggle `control` to `on`, whatever it is now: a cue's resolved state, set again as
     /// often as a drain is, or a run's confirmed state after one failed.
     func setOn(_ on: Bool, slot: String, control: String, revision: Int) throws {
+        #if os(iOS)
         if let toggle = ControlSlot.slot(stored: slot) { _ = try setControl(on, slot: toggle, revision: revision); return }
+        #endif
         try setting(slot: slot, control: control, revision: revision) { $0 == on ? nil : on }
     }
 
@@ -205,7 +232,9 @@ struct SurfaceStore: Sendable {
         }
     }
 
-    // MARK: Controls
+    // MARK: Controls (the phone's alone: the watch has no controls)
+
+    #if os(iOS)
 
     /// A control slot's kept document, `slot` one of `ControlSlot.all`, read under a coordinated
     /// read. Nil is no file.
@@ -245,11 +274,14 @@ struct SurfaceStore: Sendable {
         }
         return was
     }
+    #endif
 
     /// The revision the document in `slot` — a widget's, the default, or a control's by its store
     /// name — is at now, or nil when it holds none.
     func heldRevision(slot: String) -> Int? {
+        #if os(iOS)
         if let control = ControlSlot.slot(stored: slot) { return readControl(slot: control)?.document.revision }
+        #endif
         return read(slot: slot)?.document.revision
     }
 

@@ -120,8 +120,50 @@ out="$("$check" "$work/whole/Topo.app" 2>&1)"
 [[ "$out" == *"entitlements not read: the product is unsigned"* ]] \
     || fail "an unsigned product's pass does not say its entitlements were not read: $out"
 
+# The watch app: whole, it passes; without the widget extension, with one that is not WidgetKit's,
+# or without the push's background mode, it fails.
+make_watch() {
+    local watch="$1"
+    mkdir -p "$watch/PlugIns/TopoWatchWidgets.appex"
+    plutil -create xml1 "$watch/Info.plist"
+    plutil -insert WKBackgroundModes -json '["remote-notification"]' "$watch/Info.plist"
+    plutil -insert CFBundleURLTypes -json '[{"CFBundleURLName":"zone.hexagon.topo.watch","CFBundleURLSchemes":["topo"]}]' "$watch/Info.plist"
+    plutil -create xml1 "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
+    plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.widgetkit-extension"}' \
+        "$watch/PlugIns/TopoWatchWidgets.appex/Info.plist"
+}
+make_watch "$work/watch-whole/TopoWatch.app"
+"$check" --watch "$work/watch-whole/TopoWatch.app" >/dev/null 2>&1 || fail "a whole watch product was refused"
+make_watch "$work/watch-no-appex/TopoWatch.app"
+rm -rf "$work/watch-no-appex/TopoWatch.app/PlugIns"
+if errors="$("$check" --watch "$work/watch-no-appex/TopoWatch.app" 2>&1 >/dev/null)"; then
+    fail "a watch product without TopoWatchWidgets.appex passed"
+elif [[ "$errors" != *TopoWatchWidgets.appex* ]]; then
+    fail "the refusal of a watch product without its widgets does not name them: $errors"
+fi
+make_watch "$work/watch-not-widgets/TopoWatch.app"
+plutil -replace NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.intents-service"}' \
+    "$work/watch-not-widgets/TopoWatch.app/PlugIns/TopoWatchWidgets.appex/Info.plist"
+"$check" --watch "$work/watch-not-widgets/TopoWatch.app" >/dev/null 2>&1 && fail "a watch product whose extension is not WidgetKit's passed"
+make_watch "$work/watch-no-mode/TopoWatch.app"
+plutil -remove WKBackgroundModes "$work/watch-no-mode/TopoWatch.app/Info.plist"
+if errors="$("$check" --watch "$work/watch-no-mode/TopoWatch.app" 2>&1 >/dev/null)"; then
+    fail "a watch product without the remote-notification background mode passed"
+elif [[ "$errors" != *remote-notification* ]]; then
+    fail "the refusal of a watch product without its background mode does not name it: $errors"
+fi
+
+make_watch "$work/watch-no-scheme/TopoWatch.app"
+plutil -remove CFBundleURLTypes "$work/watch-no-scheme/TopoWatch.app/Info.plist"
+if errors="$("$check" --watch "$work/watch-no-scheme/TopoWatch.app" 2>&1 >/dev/null)"; then
+    fail "a watch product without the topo URL scheme passed"
+elif [[ "$errors" != *"URL scheme"* ]]; then
+    fail "the refusal of a watch product without the topo URL scheme does not name it: $errors"
+fi
+
 if [ "$failures" -gt 0 ]; then
     echo "$failures failure(s)" >&2
     exit 1
 fi
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads or TopoWidgets.appex fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read"
+
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads or TopoWidgets.appex fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"

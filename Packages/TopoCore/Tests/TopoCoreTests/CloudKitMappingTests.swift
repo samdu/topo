@@ -21,6 +21,17 @@ import Testing
         #expect(back.changeTag == nil)
     }
 
+    /// A widget's images go as `CKAsset`s, one file each, and come back as the same bytes in the
+    /// same order; an empty list stays off the wire, as an empty string list does.
+    @Test func assetsRoundTripThroughACKRecord() throws {
+        let files = [Data([1, 2, 3]), Data([0x89, 0x50])]
+        let ck = CloudKitRecordDatabase.applying(["images": .assets(files), "none": .assets([])],
+                                                 to: CKRecord(recordType: "Surface", recordID: CKRecord.ID(recordName: "surface-a", zoneID: zone)))
+        #expect((ck["images"] as? [CKAsset])?.count == 2)
+        #expect(ck["none"] == nil)
+        #expect(CloudKitRecordDatabase.record(from: ck).assets("images") == files)
+    }
+
     @Test func applyingLeavesTheCachedRecordAloneAndKeepsUnmappedFields() throws {
         let cached = CKRecord(recordType: "PrimaryLease", recordID: CKRecord.ID(recordName: "primary", zoneID: zone))
         cached["holder"] = "hub" as NSString

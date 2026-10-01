@@ -13,6 +13,8 @@ public enum FieldValue: Hashable, Sendable {
     case int(Int64)
     case date(Date)
     case strings([String])
+    /// Files carried beside the record rather than in it (a `CKAsset` each), in order.
+    case assets([Data])
 }
 
 /// A record as the package sees it: a type, a name, fields, and the server's
@@ -48,6 +50,11 @@ public struct Record: Hashable, Sendable {
 
     public func date(_ field: String) -> Date? {
         if case let .date(v)? = fields[field] { return v }
+        return nil
+    }
+
+    public func assets(_ field: String) -> [Data]? {
+        if case let .assets(v)? = fields[field] { return v }
         return nil
     }
 

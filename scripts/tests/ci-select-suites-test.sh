@@ -36,9 +36,11 @@ expected=(
   'Apps/TopoHub/* others'
   'Apps/TopoTV/* others'
   'Apps/TopoWatch/* others'
+  'Apps/TopoWatchWidgets/* others'
   'Apps/* all'
   'Packages/TopoLink/* others'
   'Packages/* all'
+  'Tests/Watch/* others'
   'Tests/* all'
   'Womble/* others'
   'docs/* none'
@@ -101,12 +103,14 @@ selects false false false "agent hooks and TestFlight tooling" $'.claude/hooks/p
 # `others` alone: what only the hub, watch, TV, Womble and TopoLink compile.
 selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.swift\ndocs/pairing.md\n'
 selects false false true "the hub, the watch and the TV" $'Apps/TopoHub/HubApp.swift\nApps/TopoWatch/WatchApp.swift\nApps/TopoTV/TVApp.swift\n'
+selects false false true "the watch's widgets and its suite" $'Apps/TopoWatchWidgets/Info.plist\nApps/TopoWatch/WatchSurfaces.swift\nTests/Watch/WatchCueTests.swift\n'
 selects false false true "the janitor and its test" $'scripts/janitor.py\nscripts/tests/janitor_test.py\nscripts/tests/janitor-test.sh\ndocs/janitor.md\n'
 selects false false true "Womble, its README and its web page included" $'Womble/Sources/App/AppDelegate.swift\nWomble/README.md\nWomble/Web/index.html\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
 selects true true true "the app's client code" $'Apps/Client/SettingsView.swift\n'
 selects true true true "the shared code" $'Apps/Shared/LookDocument.swift\n'
+selects true true true "the widgets, which the phone and the watch both build" $'Apps/Widgets/TopoMoment.swift\n'
 selects true true true "the iOS target's glue" $'Apps/Topo/TopoApp.swift\n'
 selects true true true "a markdown file the app bundles" $'Apps/Topo/Resources/skill.md\n'
 for package in TopoAuth TopoCore TopoMascot TopoProxy TopoTurn TopoUserland; do

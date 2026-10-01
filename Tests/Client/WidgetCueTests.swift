@@ -26,11 +26,14 @@ final class WidgetCueTests: XCTestCase {
     }
 
     private var store: SurfaceStore { SurfaceStore(folder: folder) }
+    /// The slots whose record a drain owed a save.
+    private var owedSaves: [String] = []
 
     private func cues(_ harness: Harness) -> WidgetCues {
         let store = store
         return WidgetCues(harness: harness, store: { store },
-                          reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }))
+                          reloader: SurfaceReloader(reloadKind: { _ in }, reloadEverything: {}, schedule: { _, _ in }),
+                          changed: { [unowned self] in owedSaves.append($0) })
     }
 
     /// A cue on the slot's current revision.
@@ -220,6 +223,7 @@ final class WidgetCueTests: XCTestCase {
         try store.appendCue(SurfaceStore.Cue(nonce: "T", slot: "demo", id: "fan", revision: revision, turningOn: true, time: Date()))
         await cues(harness).drain()
         XCTAssertEqual(harness.owed.map(\.text), ["widget demo: fan on"])
+        XCTAssertEqual(owedSaves, ["demo"], "the toggle's new state owed its record nothing")
     }
 
     /// A turn toggle's words are the opposite of its stored state, flipped as each cue is drained:

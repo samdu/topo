@@ -1,6 +1,11 @@
 import XCTest
 
+// Built into the watch's suite as well, since the watch reads every record through this reader.
+#if os(watchOS)
+@testable import TopoWatch
+#else
 @testable import Topo
+#endif
 
 /// The widget document as `topo widget set` reads it: each value checked where it is read, a bad
 /// field costing that field and no more, a bad node costing that node and no more, and the
@@ -305,8 +310,60 @@ final class WidgetDocumentTests: XCTestCase {
         XCTAssertEqual(again.document, kept)
     }
 
+    // MARK: Review Focus 4 (widgets B): relevant
+
+    private func relevant(_ contexts: String) -> WidgetDocument.Reading {
+        WidgetDocument.read(#"{"version": 1, "relevant": \#(contexts), "families": {"default": {"kind": "divider"}}}"#)
+    }
+
+    /// Each lie a context can tell drops that context with a note naming it and why.
+    func testRelevantRefusesEach() {
+        let cases: [(String, String, String)] = [
+            ("end before start", #"{"from": "2030-01-01T09:00:00Z", "to": "2030-01-01T08:00:00Z"}"#, "relevant.0 ends at or before it starts"),
+            ("end at start", #"{"from": "2030-01-01T09:00:00Z", "to": "2030-01-01T09:00:00Z"}"#, "relevant.0 ends at or before it starts"),
+            ("date not a date", #"{"from": "soon", "to": "2030-01-01T09:00:00Z"}"#, "relevant.0 has a from or to that is not an ISO 8601"),
+            ("from alone", #"{"from": "2030-01-01T09:00:00Z"}"#, "relevant.0 is not a context"),
+            ("radius too small", #"{"near": {"lat": 37, "lon": -122, "radius": 49}}"#, "relevant.0 has a radius outside 50–50000 m"),
+            ("radius too large", #"{"near": {"lat": 37, "lon": -122, "radius": 50001}}"#, "relevant.0 has a radius outside 50–50000 m"),
+            ("latitude off the Earth", #"{"near": {"lat": 91, "lon": 0, "radius": 100}}"#, "relevant.0 is not a place on the Earth"),
+            ("longitude off the Earth", #"{"near": {"lat": 0, "lon": -181, "radius": 100}}"#, "relevant.0 is not a place on the Earth"),
+            ("near not numbers", #"{"near": {"lat": "north", "lon": 0, "radius": 100}}"#, "relevant.0 is not {\"lat\", \"lon\", \"radius\"} in numbers"),
+            ("near a boolean", #"{"near": {"lat": true, "lon": 0, "radius": 100}}"#, "relevant.0 is not {\"lat\", \"lon\", \"radius\"} in numbers"),
+            ("unknown place", #"{"place": "gym"}"#, "relevant.0 is not a place: home, work, school, commute"),
+            ("unknown sleep", #"{"sleep": "nap"}"#, "relevant.0 is not a sleep: bedtime, wakeup"),
+            ("headphones false", #"{"headphones": false}"#, "relevant.0 is only ever true"),
+            ("headphones a number", #"{"headphones": 1}"#, "relevant.0 is only ever true"),
+            ("unknown context", #"{"fitness": "workout"}"#, "relevant.0 is not a context"),
+            ("two keys", #"{"place": "home", "sleep": "bedtime"}"#, "relevant.0 is not a context"),
+            ("not an object", #""bedtime""#, "relevant.0 is not a context"),
+        ]
+        for (rule, context, expected) in cases {
+            let reading = relevant("[\(context)]")
+            XCTAssertEqual(reading.document.relevant, [], "\(rule): kept a context that lies")
+            XCTAssertTrue(reading.notes.contains { $0.contains(expected) }, "\(rule): expected a note with “\(expected)”, got \(reading.notes)")
+            XCTAssertNotNil(reading.document.families[.default], "\(rule): a bad context took the tree with it")
+        }
+        let notAList = relevant(#"{"place": "home"}"#)
+        XCTAssertEqual(notAList.document.relevant, [])
+        XCTAssertTrue(notAList.notes.contains("relevant is not a list of contexts"), "\(notAList.notes)")
+    }
+
+    /// A bad context costs itself: the ones either side of it stand, in order, and past four the
+    /// rest are dropped with a note.
+    func testRelevantBadContextKeepsTheRest() throws {
+        let reading = relevant(#"[{"place": "home"}, {"sleep": "nap"}, {"headphones": true}, {"near": {"lat": 1, "lon": 2, "radius": 50000}}, {"sleep": "wakeup"}, {"place": "work"}]"#)
+        XCTAssertEqual(reading.document.relevant, [.place(.home), .headphones, .near(latitude: 1, longitude: 2, radius: 50000)])
+        XCTAssertTrue(reading.notes.contains { $0.contains("relevant.1 is not a sleep") }, "\(reading.notes)")
+        XCTAssertTrue(reading.notes.contains("relevant has 6 contexts, and a slot takes 4; the rest were dropped"), "\(reading.notes)")
+        let dates = relevant(#"[{"from": "2030-01-01T08:00:00Z", "to": "2030-01-01T08:00:01Z"}]"#)
+        XCTAssertEqual(dates.notes.filter { $0.hasPrefix("relevant") }, [])
+        XCTAssertEqual(dates.document.relevant.count, 1)
+    }
+
     static let everyKind = #"""
     {"version": 1, "tint": "primary", "until": "2030-01-01T00:00:00Z", "relevance": 0.5,
+     "relevant": [{"from": "2030-01-01T08:00:00Z", "to": "2030-01-01T09:00:00Z"}, {"place": "commute"},
+                  {"near": {"lat": 37.76, "lon": -122.42, "radius": 200}}, {"sleep": "bedtime"}],
      "tap": {"kind": "open"},
      "families": {"systemMedium": {"kind": "hstack", "spacing": 8, "alignment": "top", "children": [
        {"kind": "topo", "pose": "thinking"},
