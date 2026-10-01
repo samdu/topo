@@ -123,6 +123,11 @@ void topo_ish_memory_refresh(void);
 /// Topo's patch to kernel/mmap.c). NULL fails closed at once, as the unpatched fork does.
 void topo_ish_set_memory_refresh(void (*hook)(void));
 
+/// Carries the guest's DNS stub, `127.0.0.53` port 53, to the forwarder at `127.0.0.1:port` and
+/// reports that address back as the stub (`ish_dns_sentinel_port`, Topo's patch to fs/sock.c);
+/// 0 turns it off, and the stub is then an address nothing answers on.
+void topo_ish_set_dns_port(uint16_t port);
+
 /// The brake's admission decision for `bytes` of new anonymous memory (`ish_mem_commit_ok`),
 /// the one choke point every guest `mmap` and `brk` passes through.
 bool topo_ish_memory_admits(uint64_t bytes);

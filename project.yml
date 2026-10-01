@@ -264,9 +264,11 @@ targets:
       - Packages/TopoUserland/Tests/Support
     dependencies:
       - package: TopoUserland
-      # The `topo` script run in the booted guest against the tool service it calls.
+      # The `topo` script run in the booted guest against the tool service it calls, and the
+      # guest's names resolved through the DNS forwarder.
       - package: TopoProxy
         product: TopoTools
+      - package: TopoProxy
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.userlandtests

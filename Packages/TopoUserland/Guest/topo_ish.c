@@ -714,6 +714,10 @@ void topo_ish_set_memory_refresh(void (*hook)(void)) {
     ish_mem_refresh_hook = hook;
 }
 
+void topo_ish_set_dns_port(uint16_t port) {
+    atomic_store(&ish_dns_sentinel_port, port);
+}
+
 bool topo_ish_memory_admits(uint64_t bytes) {
     return ish_mem_commit_ok(bytes);
 }

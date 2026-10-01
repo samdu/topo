@@ -108,11 +108,14 @@ runs:
         set -euo pipefail
         brew install meson ninja llvm lld
         scripts/build-ish.sh
-        # The memory brake's refresh is what the patch adds and the app sets:
-        # a library without it is a kernel built from the fork unpatched.
+        # The memory brake's refresh and the DNS stub's port are what the patches
+        # add and the app sets: a library without them is a kernel built from the
+        # fork unpatched.
         for slice in Packages/TopoUserland/Frameworks/TopoIsh.xcframework/*/libTopoIsh.a; do
           symbols="$(nm -gU "$slice")"
-          grep -q ' _ish_mem_refresh_hook$' <<< "$symbols" \
-            || { echo "::error::$slice does not export ish_mem_refresh_hook."; exit 1; }
-          echo "$slice exports ish_mem_refresh_hook"
+          for symbol in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do
+            grep -q " _$symbol\$" <<< "$symbols" \
+              || { echo "::error::$slice does not export $symbol."; exit 1; }
+            echo "$slice exports $symbol"
+          done
         done

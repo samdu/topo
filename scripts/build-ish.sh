@@ -17,7 +17,8 @@
 #   - a meson configuration whose guest_arch, kernel and engine are not arm64, ish and asbestos;
 #   - a populated deps/linux or deps/libapps: the Linux-kernel build and the terminal are GPL code
 #     iSH's App Store waiver (LICENSE.IOS) does not cover, so neither submodule is ever fetched;
-#   - a library that does not export `ish_mem_refresh_hook`, the brake patch's symbol.
+#   - a library that does not export `ish_mem_refresh_hook`, the brake patch's symbol, or
+#     `ish_dns_sentinel_port` and `topo_ish_set_dns_port`, the DNS stub patch's and the glue's.
 #
 # The fork's libish, libish_emu and libfakefs come from its own meson build, cross-compiled per
 # slice. libarchive (deps/libarchive, BSD) is compiled here with the fork's deps/config.h less
@@ -199,6 +200,10 @@ EOF
   symbols="$(nm -gU "$dir/libTopoIsh.a" 2>/dev/null)"
   grep -q ' _ish_mem_refresh_hook$' <<< "$symbols" \
     || fail "$slice: the library does not export ish_mem_refresh_hook; the brake patch is not in it"
+  grep -q ' _ish_dns_sentinel_port$' <<< "$symbols" \
+    || fail "$slice: the library does not export ish_dns_sentinel_port; the DNS stub patch is not in it"
+  grep -q ' _topo_ish_set_dns_port$' <<< "$symbols" \
+    || fail "$slice: the library does not export topo_ish_set_dns_port"
   libraries+=(-library "$dir/libTopoIsh.a" -headers "$work/slices/headers")
 done
 
