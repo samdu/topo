@@ -244,6 +244,19 @@ final class MapsToolTests: XCTestCase {
         XCTAssertEqual(rig.locator.asked, 2)
     }
 
+    /// `here` at either end is what needs Location, the destination as much as the origin.
+    func testHereAtEitherEndNeedsLocation() async {
+        for arguments in [["route", "--to", "37.8080,-122.4177"], ["route", "--from", "37.8080,-122.4177", "--to", "here"],
+                          ["eta", "--to", "37.8080,-122.4177", "--from", "here"], ["eta", "--from", "37.8080,-122.4177", "--to", "here"]] {
+            let rig = rig(.denied)
+            let reply = await rig.tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.denied, "\(arguments): \(reply.text)")
+            XCTAssertEqual(rig.permission.reads, 1, "\(arguments)")
+            XCTAssertEqual(rig.locator.asked, 0, "\(arguments)")
+            XCTAssertEqual(rig.maps.requests, [], "\(arguments)")
+        }
+    }
+
     // MARK: Review Focus 3: cancelled while the prompt is up
 
     func testACallCancelledWhileLocationIsAskedDoesNothing() async throws {
@@ -355,7 +368,9 @@ final class MapsToolTests: XCTestCase {
     func testRefusesAnUnknownMode() async {
         await assertRefused(["walk", "car", "Walking", "bike", "cycling", ""].flatMap { mode in
             ["route", "eta"].map { [$0, "--to", "37.8080,-122.4177", "--by=\(mode)"] }
-        }, saying: "it takes walking, driving or transit")
+        }, saying: "is not a way to travel; it takes walking")
+        await assertRefused([["route", "--to", "37.8080,-122.4177", "--by", "bike"]], saying: "it takes walking or driving\n")
+        await assertRefused([["eta", "--to", "37.8080,-122.4177", "--by", "bike"]], saying: "it takes walking, driving or transit\n")
     }
 
     func testRefusesADepartureWithNoTime() async {
@@ -434,11 +449,25 @@ final class MapsToolTests: XCTestCase {
     func testTransitUnavailableSaysSoAndSuggestsAnotherMode() async {
         let (tool, _) = adapted(routing: MKError(.directionsNotFound), timing: FakeRequests.noETA)
         let now = await tool.run(["eta", "--by", "transit"] + Self.ocean)
-        XCTAssertEqual(now, .failed("topo: no transit route from 37.75990,-122.41480 to 21.30690,-157.85830 at \(ToolDates.write(Self.noon)); try --by walking or --by driving\n"))
+        XCTAssertEqual(now, .failed("topo: no transit route from 37.75990,-122.41480 to 21.30690,-157.85830 at \(ToolDates.write(Self.noon)) (Apple Maps: A route could not be determined between these locations.); try --by walking or --by driving\n"))
         let later = await tool.run(["eta", "--by", "transit", "--depart", "2026-09-27T03:00:00Z"] + Self.ocean)
         let three = ToolDates.write(ISO8601DateFormatter().date(from: "2026-09-27T03:00:00Z")!)
-        XCTAssertTrue(later.text.contains(" at \(three); try --by walking or --by driving"), later.text)
+        XCTAssertTrue(later.text.contains(" at \(three) (Apple Maps: "), later.text)
+        XCTAssertTrue(later.text.hasSuffix("; try --by walking or --by driving\n"), later.text)
         XCTAssertEqual(later.status, ToolReply.failed)
+    }
+
+    /// Apple Maps having no answer for now (a directions code that is not one for no route) is
+    /// said in its own words by every mode, and never as "no route" with advice to try another.
+    func testAppleMapsHavingNoAnswerIsNotSaidAsNoRoute() async {
+        for code in [MKError.Code.serverFailure, .directionsNotFound, .placemarkNotFound] {
+            let (tool, _) = adapted(routing: FakeRequests.unavailable(code), timing: FakeRequests.unavailable(code))
+            for arguments in [["route"], ["route", "--by", "driving"], ["eta"], ["eta", "--by", "transit"]] {
+                let reply = await tool.run(arguments + Self.ocean)
+                XCTAssertEqual(reply, .failed("topo: Apple Maps could not answer: Route information is not available at this moment.\n"),
+                               "\(code.rawValue) \(arguments)")
+            }
+        }
     }
 
     func testRouteByTransitIsRefusedBeforeAnyPermissionOrRequest() async {
@@ -605,6 +634,32 @@ final class MapsToolTests: XCTestCase {
             XCTAssertLessThanOrEqual(line.utf8.count, MapsTool.lastLineRoom)
         }
         XCTAssertEqual(MapsTool.fit(header: ["h"], records: ["r"], more: Int.max - 1, unit: "results", advice: ""), "h\nr\n… \(Int.max - 1) more results\n")
+    }
+
+    /// The budget at its edge: a record that ends exactly at the budget less the last line's room
+    /// is kept, one a byte longer is not, and either way the answer with its last line is within
+    /// the budget.
+    func testTheByteBudgetIsHeldAtItsEdge() {
+        let room = MapsTool.budget - MapsTool.lastLineRoom
+        let advice = "; narrow the search or lower --limit"
+        // "h\n" is two bytes and each record's line break one.
+        let fits = String(repeating: "x", count: room - 3)
+        let kept = MapsTool.fit(header: ["h"], records: [fits, "next"], more: Int.max - 2, unit: "results", advice: advice)
+        XCTAssertTrue(kept.hasPrefix("h\n" + fits + "\n… \(Int.max - 1) more results, cut at 24 KB"), String(kept.suffix(100)))
+        XCTAssertLessThanOrEqual(kept.utf8.count, MapsTool.budget)
+        let over = MapsTool.fit(header: ["h"], records: [fits + "x"], more: 0, unit: "results", advice: advice)
+        XCTAssertEqual(over, "h\n… 1 more results, cut at 24 KB; narrow the search or lower --limit\n")
+        let whole = MapsTool.fit(header: ["h"], records: [fits], more: 0, unit: "results", advice: advice)
+        XCTAssertEqual(whole, "h\n" + fits + "\n")
+        XCTAssertEqual(whole.utf8.count, room)
+    }
+
+    /// A number too large to be a whole number of metres or seconds is written at the cap.
+    func testAHugeNumberIsWrittenAndDoesNotTrap() {
+        XCTAssertEqual(MapsTool.whole(1e300), "1000000000000000")
+        XCTAssertEqual(MapsTool.whole(.greatestFiniteMagnitude), "1000000000000000")
+        XCTAssertEqual(MapsTool.whole(6144.6), "6145")
+        XCTAssertEqual(MapsTool.whole(-0.5), "")
     }
 
     func testAnEmptySearchIsAnAnswerWithItsRegion() async {

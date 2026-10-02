@@ -53,6 +53,16 @@ final class FakeRequests: MapRequestRunner {
         NSLocalizedDescriptionKey: "Directions Not Available",
         NSLocalizedFailureReasonErrorKey: "A route could not be determined between these locations.",
     ])
+    /// What MapKit gave a routable pair asked for a departure it has no data for (the year 9999),
+    /// and what its own mapping makes of a directions request the server could not serve: a
+    /// directions code that is not one of the two for points nothing joins.
+    static func unavailable(_ code: MKError.Code) -> NSError {
+        NSError(domain: MKErrorDomain, code: Int(code.rawValue), userInfo: [
+            "MKDirectionsErrorCode": 3,
+            NSLocalizedDescriptionKey: "Directions Not Available",
+            NSLocalizedFailureReasonErrorKey: "Route information is not available at this moment.",
+        ])
+    }
     /// A search that found nothing.
     static let nothingFound = NSError(domain: MKErrorDomain, code: Int(MKError.Code.placemarkNotFound.rawValue),
                                       userInfo: ["MKErrorGEOError": -8])
@@ -285,6 +295,79 @@ final class MapKitMapsTests: XCTestCase {
         }
     }
 
+    /// `MKLocalSearch.cancel()` does call its handler, with an error, after the wait has ended:
+    /// that late answer reaches nothing.
+    func testAHandlerCalledAfterCancelReachesNothing() async throws {
+        final class Kept {
+            var done: MapKitRequest<Int>.Done?
+        }
+        let kept = Kept()
+        let request = MapKitRequest<Int>(begin: { kept.done = $0 }, stop: {})
+        let call = Task { try await request.start() }
+        try await wait { kept.done != nil }
+        request.cancel()
+        kept.done?(.init(nil, MKError(.unknown)))
+        kept.done?(.init(.success(7)))
+        try await Task.sleep(for: .milliseconds(100))
+        let result = await call.result
+        XCTAssertThrowsError(try result.get()) { XCTAssertTrue($0 is CancellationError, "\($0)") }
+    }
+
+    func testAHandlersArgumentsAreItsAnswerOrItsError() {
+        XCTAssertEqual(try MapKitRequest<Int>.Handed(7, nil).result.get(), 7)
+        XCTAssertEqual(try MapKitRequest<Int>.Handed(7, MKError(.unknown)).result.get(), 7)
+        XCTAssertThrowsError(try MapKitRequest<Int>.Handed(nil, MKError(.loadingThrottled)).result.get()) {
+            XCTAssertEqual(($0 as? MKError)?.code, .loadingThrottled)
+        }
+        XCTAssertThrowsError(try MapKitRequest<Int>.Handed(nil, nil).result.get()) {
+            XCTAssertEqual(($0 as? MKError)?.code, .unknown)
+        }
+    }
+
+    // MARK: The wait
+
+    /// Work that was not first is cancelled, at the bound and at the caller's cancellation: a fix
+    /// nobody waits for any more is not left running.
+    func testWorkThatWasNotFirstIsCancelled() async throws {
+        final class Seen: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _started = 0, _cancelled = 0
+            var started: Int { lock.withLock { _started } }
+            var cancelled: Int { lock.withLock { _cancelled } }
+            func work() async throws -> Int {
+                lock.withLock { _started += 1 }
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    lock.withLock { _cancelled += 1 }
+                    throw error
+                }
+                return 1
+            }
+        }
+        let seen = Seen()
+        guard case .unanswered = await MapsWait.first(within: .milliseconds(100), { try await seen.work() }) else {
+            return XCTFail("work that never answers was not left at the bound")
+        }
+        try await wait { seen.cancelled == 1 }
+        XCTAssertEqual(seen.cancelled, 1, "work left at the bound ran on")
+        let call = Task { await MapsWait.first(within: .seconds(60)) { try await seen.work() } }
+        try await wait { seen.started == 2 }
+        call.cancel()
+        guard case .cancelled = await call.value else { return XCTFail("a cancelled wait did not end as cancelled") }
+        try await wait { seen.cancelled == 2 }
+        XCTAssertEqual(seen.cancelled, 2, "work left at the caller's cancellation ran on")
+        // A caller already cancelled begins no work at all.
+        let late = Task {
+            try? await Task.sleep(for: .seconds(60))
+            return await MapsWait.first(within: .seconds(60)) { try await seen.work() }
+        }
+        late.cancel()
+        guard case .cancelled = await late.value else { return XCTFail("a cancelled caller's wait did not end as cancelled") }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(seen.started, 2)
+    }
+
     func testARequestGivesWhatItsHandlerIsCalledWith() async throws {
         let answered = MapKitRequest<Int>(begin: { done in done(.init(.success(7))) }, stop: {})
         let seven = try await answered.start()
@@ -338,6 +421,16 @@ final class MapKitMapsTests: XCTestCase {
         XCTAssertEqual(route.steps.map(\.instruction), ["Start on Folsom St", "Take a left onto 13th St"])
     }
 
+    /// A result that is an address alone has the address for its name: it is said once.
+    func testAnAddressThatIsTheNameIsNotSaidTwice() throws {
+        let item = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: 37.7955, longitude: -122.3937)))
+        let title = try XCTUnwrap(item.placemark.title)
+        item.name = title
+        let place = try XCTUnwrap(MapKitMaps.place(item))
+        XCTAssertEqual(place.name, title)
+        XCTAssertNil(place.address)
+    }
+
     func testAnItemThatIsNoPlaceOnTheMapIsLeftOut() {
         let nowhere = MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: .nan, longitude: 0)))
         XCTAssertNil(MapKitMaps.place(nowhere))
@@ -369,6 +462,8 @@ final class MapKitMapsTests: XCTestCase {
         XCTAssertEqual(near.region.center.longitude, -122.4148, accuracy: 1e-6)
         // 10 km of latitude, a little under a tenth of a degree.
         XCTAssertEqual(near.region.span.latitudeDelta, 0.09, accuracy: 0.005)
+        // And 10 km of longitude at this latitude.
+        XCTAssertEqual(near.region.span.longitudeDelta, 0.1136, accuracy: 0.005)
         if #available(iOS 18.0, *) {
             XCTAssertEqual(near.regionPriority, .required)
             XCTAssertEqual(requests.searches.last?.regionPriority, .default)
@@ -409,11 +504,20 @@ final class MapKitMapsTests: XCTestCase {
             (FakeRequests.unroutable, .noRoute(apple)),
             (FakeRequests.noETA, .noRoute("A route could not be determined between these locations.")),
             (MKError(.directionsNotFound), .noRoute(nil)),
+            (MKError(.placemarkNotFound), .noRoute(nil)),
             (MKError(.serverFailure), .server(nil)),
             (NSError(domain: MKErrorDomain, code: Int(MKError.Code.serverFailure.rawValue),
                      userInfo: [NSLocalizedDescriptionKey: "Server Error"]), .server("Server Error")),
             (MKError(.loadingThrottled), .throttled),
             (MapsFailure.unanswered(.seconds(20)), .unanswered(.seconds(20))),
+            // A directions code other than the two for no route is Apple's own words, whatever
+            // the MKError code beside it: never "no route", never "the server failed".
+            (FakeRequests.unavailable(.serverFailure), .other("Route information is not available at this moment.")),
+            (FakeRequests.unavailable(.directionsNotFound), .other("Route information is not available at this moment.")),
+            (FakeRequests.unavailable(.placemarkNotFound), .other("Route information is not available at this moment.")),
+            (NSError(domain: MKErrorDomain, code: Int(MKError.Code.unknown.rawValue),
+                     userInfo: [NSLocalizedFailureReasonErrorKey: "An internet connection is required."]),
+             .other("An internet connection is required.")),
         ]
         for (error, said) in cases {
             XCTAssertEqual(MapKitMaps.failure(error) as? MapsFailure, said, "\(error)")
@@ -422,6 +526,19 @@ final class MapKitMapsTests: XCTestCase {
         guard case .other? = MapKitMaps.failure(MKError(.unknown)) as? MapsFailure else { return XCTFail("unknown was not said as itself") }
         guard case .other? = MapKitMaps.failure(URLError(.notConnectedToInternet)) as? MapsFailure else {
             return XCTFail("another framework's error was not said as itself")
+        }
+    }
+
+    /// A search that fails as a directions request with no route does is a failure in MapKit's
+    /// words, not "nothing found" and not an empty list.
+    func testASearchFailingAsNotFoundOfAnotherKindIsNotAnEmptyList() async {
+        let requests = FakeRequests()
+        requests.searching = .fail(MKError(.directionsNotFound))
+        do {
+            _ = try await MapKitMaps(runner: requests).search(query: "coffee", region: nil)
+            XCTFail("a failed search answered")
+        } catch {
+            guard case .other? = error as? MapsFailure else { return XCTFail("\(error)") }
         }
     }
 

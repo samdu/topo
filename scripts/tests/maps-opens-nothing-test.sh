@@ -14,11 +14,17 @@ trap 'rm -rf "$work"' EXIT
 
 words=(openInMaps openMaps UIApplication 'maps://' 'maps.apple.com' MKMapView MKLookAroundScene)
 
-# found <file...>: prints every line holding one of the words, and succeeds when there is one.
+# found <file...>: prints every line holding one of the words, and succeeds when there is one. A
+# file that cannot be read is said as found, so it fails the check rather than passing it.
 found() {
-  local arguments=() word
+  local arguments=() word status
   for word in "${words[@]}"; do arguments+=(-e "$word"); done
-  grep -nF "${arguments[@]}" -- "$@"
+  grep -nF "${arguments[@]}" -- "$@" && status=0 || status=$?
+  if [ "$status" -gt 1 ]; then
+    echo "grep could not read: $*"
+    return 0
+  fi
+  return "$status"
 }
 
 failures=0
@@ -34,6 +40,10 @@ done
 printf 'import MapKit\nlet search = MKLocalSearch(request: request)\nlet directions = MKDirections(request: route)\n' > "$work/clean.swift"
 if found "$work/clean.swift" > /dev/null; then
   echo "FAIL: a fixture holding none of the words was refused"
+  failures=$((failures + 1))
+fi
+if ! found "$work/absent.swift" > /dev/null 2>&1; then
+  echo "FAIL: a file that cannot be read was passed"
   failures=$((failures + 1))
 fi
 

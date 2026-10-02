@@ -97,8 +97,8 @@ struct LocationAuthorizer: Authorizer {
     func request() async -> Bool { await permission.request() }
 }
 
-/// The first fix `CLLocationUpdate.liveUpdates()` gives, and its place from `CLGeocoder` if that
-/// answers within five seconds.
+/// The first fix `CLLocationUpdate.liveUpdates()` gives, and, when `named`, its place from
+/// `CLGeocoder` if that answers within five seconds.
 struct CoreLocationLocator: Locator {
     let permission: LocationPermission
     /// False for a caller that wants the fix alone (`topo maps`): the geocoder is not asked.

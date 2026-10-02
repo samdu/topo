@@ -132,6 +132,8 @@ enum MapsWait {
         guard !Task.isCancelled else { return .cancelled }
         let first = FirstAnswer<MapsWaited<Value>>()
         let working = Task {
+            // The wait may have ended before this ran: then the work is never begun.
+            guard !first.given else { return }
             do {
                 first.give(.answered(.success(try await work())))
             } catch {
@@ -180,6 +182,8 @@ private final class FirstAnswer<Value: Sendable>: Sendable {
         waiting?.resume(returning: value)
     }
 
+    var given: Bool { state.withLock { $0.value != nil } }
+
     func value() async -> Value {
         await withCheckedContinuation { continuation in
             let given = state.withLock { state -> Value? in
@@ -191,9 +195,10 @@ private final class FirstAnswer<Value: Sendable>: Sendable {
     }
 }
 
-/// `topo maps`: places, a route and a travel time from Apple Maps, through MapKit. It reads and
-/// changes nothing of the person's, and what it sends goes to Apple's servers alone: the search
-/// text and its region, both ends of a route, and for `here` where the phone is.
+/// `topo maps`: places, a route and a travel time from Apple Maps, through MapKit. It changes
+/// nothing of the person's and reads only where the phone is, and what it sends goes to Apple's
+/// servers alone: the search text and its region, both ends of a route, and for `here` where the
+/// phone is.
 struct MapsTool: Tool {
     let maps: any MapsStore
     let locator: any Locator
@@ -222,8 +227,9 @@ struct MapsTool: Tool {
     let usage = """
     topo maps search QUERY [--near LAT,LON] [--radius M] [--anywhere] [--limit N]
                                         places matching QUERY (one argument: quote several words), near the phone
-                                        unless --near gives a point or --anywhere lifts the region; M is 100 to
-                                        50000 metres (5000 unless given), N is 1 to 25 (10 unless given)
+                                        unless --near gives a point or --anywhere lifts the region, which is a
+                                        square reaching M metres each way: M is 100 to 50000 (5000 unless
+                                        given), N is 1 to 25 (10 unless given)
     topo maps route --to LAT,LON|here [--from LAT,LON|here] [--by walking|driving] [--depart DATE]
                                         one route and its steps
     topo maps eta --to LAT,LON|here [--from LAT,LON|here] [--by walking|driving|transit] [--depart DATE]
@@ -355,7 +361,7 @@ struct MapsTool: Tool {
             let mode: MapMode
             if let by = read.options["by"] {
                 guard let named = MapMode(rawValue: by) else {
-                    throw Misuse("--by \(Self.field(by)) is not a way to travel; it takes walking, driving or transit")
+                    throw Misuse("--by \(Self.field(by)) is not a way to travel; it takes walking\(verb == "route" ? " or driving" : ", driving or transit")")
                 }
                 mode = named
             } else {
@@ -538,9 +544,10 @@ struct MapsTool: Tool {
                                  depart: Date? = nil) -> String {
         switch failure {
         case .noRoute(let words):
-            guard let mode, let from, let to else { return "Apple Maps found nothing" + said(words) }
+            guard let mode, let from, let to else { return "Apple Maps could not answer" + said(words) }
             if mode == .transit, let depart {
-                return "no transit route from \(from.text) to \(to.text) at \(ToolDates.write(depart)); try --by walking or --by driving"
+                return "no transit route from \(from.text) to \(to.text) at \(ToolDates.write(depart))" + said(words)
+                    + "; try --by walking or --by driving"
             }
             return "no \(mode.rawValue) route from \(from.text) to \(to.text)" + said(words)
         case .throttled:
@@ -608,6 +615,10 @@ final class MapKitMaps: MapsStore {
             // How MapKit says a search found nothing.
             return []
         } catch {
+            // Any other failure of a search is said as itself, never as nothing found.
+            if case .noRoute(let words)? = Self.failure(error) as? MapsFailure {
+                throw MapsFailure.other(words ?? error.localizedDescription)
+            }
             throw Self.failure(error)
         }
     }
@@ -689,23 +700,31 @@ final class MapKitMaps: MapsStore {
                         notices: route.advisoryNotices, steps: steps)
     }
 
-    /// MapKit's error as `MapsTool` says it. Between two points nothing joins, `calculate()` fails
-    /// as a server failure carrying a directions code and `calculateETA()` as a placemark not
-    /// found; a server failure with no directions code is the server's own.
+    /// The directions codes MapKit gives, under `MKDirectionsErrorCode`, for two points nothing
+    /// joins: 16 from `calculate()` and 1 from `calculateETA()`.
+    static let unroutable: Set<Int> = [1, 16]
+
+    /// MapKit's error as `MapsTool` says it. Every directions error carries a directions code
+    /// whatever its `MKError` code is, so the directions code is what tells two points nothing
+    /// joins from Apple Maps having no answer for now, which is said in Apple's own words. With no
+    /// directions code the `MKError` code is all there is.
     static func failure(_ error: any Error) -> any Error {
         if error is CancellationError || error is MapsFailure { return error }
         guard let failure = error as? MKError else { return MapsFailure.other(error.localizedDescription) }
         let info = (error as NSError).userInfo
         let words = info[NSLocalizedFailureReasonErrorKey] as? String ?? info[NSLocalizedDescriptionKey] as? String
+        if let directions = (info["MKDirectionsErrorCode"] as? NSNumber)?.intValue {
+            return unroutable.contains(directions) ? MapsFailure.noRoute(words) : MapsFailure.other(words ?? error.localizedDescription)
+        }
         switch failure.code {
         case .directionsNotFound, .placemarkNotFound:
             return MapsFailure.noRoute(words)
         case .serverFailure:
-            return info["MKDirectionsErrorCode"] == nil ? MapsFailure.server(words) : MapsFailure.noRoute(words)
+            return MapsFailure.server(words)
         case .loadingThrottled:
             return MapsFailure.throttled
         default:
-            return MapsFailure.other(error.localizedDescription)
+            return MapsFailure.other(words ?? error.localizedDescription)
         }
     }
 }
