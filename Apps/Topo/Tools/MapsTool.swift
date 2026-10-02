@@ -212,6 +212,9 @@ struct MapsTool: Tool {
     static let limits = 1...25
     static let defaultRadius = 5000
     static let radii = 100...50_000
+    /// The latitude, north or south, past which a region is refused: nearer a pole than this a
+    /// span of longitude no longer makes the square the region is said to be.
+    static let squareLatitude = 85.0
     static let stepCap = 40
     static let noticeCap = 5
     /// A text field's cap, in characters and in bytes of UTF-8: four bytes a character at most.
@@ -222,14 +225,23 @@ struct MapsTool: Tool {
     /// The room kept for the last line, which says what was cut.
     static let lastLineRoom = 128
 
+    /// The tool on the phone: Apple Maps through MapKit, and the phone's fix with no place asked
+    /// of the geocoder, since no answer carries one.
+    @MainActor
+    static func standard(permission: LocationPermission, broker: PermissionBroker) -> MapsTool {
+        MapsTool(maps: MapKitMaps(), locator: CoreLocationLocator(permission: permission, named: false),
+                 authorizer: LocationAuthorizer(permission: permission), broker: broker)
+    }
+
     let name = "maps"
     let summary = "places, routes and travel times (Apple Maps)"
     let usage = """
     topo maps search QUERY [--near LAT,LON] [--radius M] [--anywhere] [--limit N]
                                         places matching QUERY (one argument: quote several words), near the phone
                                         unless --near gives a point or --anywhere lifts the region, which is a
-                                        square reaching M metres each way: M is 100 to 50000 (5000 unless
-                                        given), N is 1 to 25 (10 unless given)
+                                        square reaching M metres each way round a centre between latitudes
+                                        -85 and 85 (nearer a pole, only --anywhere): M is 100 to 50000 (5000
+                                        unless given), N is 1 to 25 (10 unless given)
     topo maps route --to LAT,LON|here [--from LAT,LON|here] [--by walking|driving] [--depart DATE]
                                         one route and its steps
     topo maps eta --to LAT,LON|here [--from LAT,LON|here] [--by walking|driving|transit] [--depart DATE]
@@ -337,6 +349,9 @@ struct MapsTool: Tool {
                 guard let point = MapPoint(text) else {
                     throw Misuse("--near \(Self.field(text)) is not a point; it takes LAT,LON, as 37.7599,-122.4148 (latitude -90 to 90, longitude -180 to 180)")
                 }
+                guard abs(point.latitude) <= Self.squareLatitude else {
+                    throw Misuse("--near \(Self.field(text)) is too near a pole for a square region; use --anywhere")
+                }
                 return point
             }
             let area: Area
@@ -403,8 +418,9 @@ struct MapsTool: Tool {
     // MARK: Where the phone is
 
     /// The phone's fix, waited on to the bound. Only a call whose `needsHere` is true reaches it,
-    /// after its permission.
-    private func here() async throws -> (point: MapPoint, precise: Bool) {
+    /// after its permission. `instead` is what the same verb takes in place of a fix, said when
+    /// none comes.
+    private func here(instead: String) async throws -> (point: MapPoint, precise: Bool) {
         let locator = locator
         switch await MapsWait.first(within: fixBound, { try await locator.fix() }) {
         case .answered(let result):
@@ -414,14 +430,14 @@ struct MapsTool: Tool {
             }
             return (point, fix.precise)
         case .unanswered:
-            throw ToolFailure("no location fix within \(MapsWait.written(fixBound)); give --near LAT,LON (or --from LAT,LON) instead")
+            throw ToolFailure("no location fix within \(MapsWait.written(fixBound)); give \(instead) instead")
         case .cancelled:
             throw CancellationError()
         }
     }
 
     private func ends(_ from: End, _ to: End) async throws -> (MapPoint, MapPoint) {
-        let fix = from == .here || to == .here ? try await here().point : nil
+        let fix = from == .here || to == .here ? try await here(instead: "--from LAT,LON and a coordinate --to").point : nil
         // A call cancelled while the fix was waited on asks Apple Maps nothing.
         try Task.checkCancellation()
         func point(_ end: End) -> MapPoint? {
@@ -446,7 +462,10 @@ struct MapsTool: Tool {
             source = "near"
             precision = "exact"
         case let .here(radius):
-            let fix = try await here()
+            let fix = try await here(instead: "--near LAT,LON or --anywhere")
+            guard abs(fix.point.latitude) <= Self.squareLatitude else {
+                throw ToolFailure("the phone is too near a pole for a square region; use --anywhere")
+            }
             region = MapRegion(centre: fix.point, radius: radius)
             source = "here"
             // An approximate fix is a few kilometres wide, so "near here" is near somewhere else.
@@ -611,8 +630,9 @@ final class MapKitMaps: MapsStore {
         }
         do {
             return try await answer(runner.search(request)) { $0.compactMap(Self.place) }
-        } catch let error as MKError where error.code == .placemarkNotFound {
-            // How MapKit says a search found nothing.
+        } catch let error as MKError where error.code == .placemarkNotFound && Self.directionsCode(error) == nil {
+            // How MapKit says a search found nothing. The same code beside a directions code is
+            // Apple Maps having no answer, which is a failure below.
             return []
         } catch {
             // Any other failure of a search is said as itself, never as nothing found.
@@ -704,6 +724,11 @@ final class MapKitMaps: MapsStore {
     /// joins: 16 from `calculate()` and 1 from `calculateETA()`.
     static let unroutable: Set<Int> = [1, 16]
 
+    /// The directions code an error of MapKit's carries, if it carries one.
+    static func directionsCode(_ error: any Error) -> Int? {
+        ((error as NSError).userInfo["MKDirectionsErrorCode"] as? NSNumber)?.intValue
+    }
+
     /// MapKit's error as `MapsTool` says it. Every directions error carries a directions code
     /// whatever its `MKError` code is, so the directions code is what tells two points nothing
     /// joins from Apple Maps having no answer for now, which is said in Apple's own words. With no
@@ -713,7 +738,7 @@ final class MapKitMaps: MapsStore {
         guard let failure = error as? MKError else { return MapsFailure.other(error.localizedDescription) }
         let info = (error as NSError).userInfo
         let words = info[NSLocalizedFailureReasonErrorKey] as? String ?? info[NSLocalizedDescriptionKey] as? String
-        if let directions = (info["MKDirectionsErrorCode"] as? NSNumber)?.intValue {
+        if let directions = directionsCode(error) {
             return unroutable.contains(directions) ? MapsFailure.noRoute(words) : MapsFailure.other(words ?? error.localizedDescription)
         }
         switch failure.code {

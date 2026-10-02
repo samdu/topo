@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Holds that `topo maps` opens no other app and draws no map: no file of it
-# (Apps/Topo/Tools/Maps*.swift) names a way to open Maps, to open a URL, or a map view. The check
-# is first held against fixtures of its own, so a word it stopped finding fails here rather than
-# passing every file.
+# Holds that no file of `topo maps` (Apps/Topo/Tools/Maps*.swift) holds any of the words below:
+# the ways to open Maps or a URL, and the map views. It reads for those words and nothing else, so
+# a way out of the app spelt otherwise passes it. The check is first held against fixtures of its
+# own, so a word it stopped finding fails here rather than passing every file.
 #
 #   scripts/tests/maps-opens-nothing-test.sh
 set -uo pipefail
@@ -12,7 +12,7 @@ root="$here/../.."
 work="$(mktemp -d -t maps-opens-nothing-test)"
 trap 'rm -rf "$work"' EXIT
 
-words=(openInMaps openMaps UIApplication 'maps://' 'maps.apple.com' MKMapView MKLookAroundScene)
+words=(openInMaps openMaps UIApplication 'UIApplication.shared.open' openURL 'maps://' 'maps.apple.com' MKMapView MKLookAroundScene)
 
 # found <file...>: prints every line holding one of the words, and succeeds when there is one. A
 # file that cannot be read is said as found, so it fails the check rather than passing it.

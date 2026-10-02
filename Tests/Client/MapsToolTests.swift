@@ -1,4 +1,5 @@
 import MapKit
+import os
 import TopoTools
 import XCTest
 
@@ -273,6 +274,37 @@ final class MapsToolTests: XCTestCase {
         XCTAssertEqual(locator.asked, 0)
     }
 
+    /// A call through `PhoneTool.run` alone, whose work answers at once and counts being reached.
+    private nonisolated static func gated(_ prompt: HeldLocationPrompt, _ broker: PermissionBroker,
+                                          _ reached: OSAllocatedUnfairLock<Int>) async -> ToolReply {
+        await PhoneTool.run({ (needs: Bool) -> (any Authorizer)? in needs ? prompt : nil }, broker: broker, usage: "",
+                            parse: { true }, perform: { _ in
+                                reached.withLock { $0 += 1 }
+                                return .ok("answered\n")
+                            })
+    }
+
+    /// `PhoneTool.run`'s own check after the prompt, with nothing of the tool's behind it: a call
+    /// cancelled while the prompt was up never reaches the tool's work, which here would answer
+    /// at once. Through `MapsTool` the wait for the fix refuses a cancelled call too, so the test
+    /// above passes on either.
+    func testACallCancelledWhileItsPromptIsUpNeverReachesTheWork() async throws {
+        let prompt = HeldLocationPrompt(), broker = PermissionBroker()
+        let reached = OSAllocatedUnfairLock(initialState: 0)
+        let call = Task { await Self.gated(prompt, broker, reached) }
+        for _ in 0..<500 where !prompt.isUp { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertTrue(prompt.isUp)
+        call.cancel()
+        prompt.allow()
+        let reply = await call.value
+        XCTAssertEqual(reply, PhoneTool.late)
+        XCTAssertEqual(reached.withLock { $0 }, 0, "the work ran for a call cancelled while its prompt was up")
+        // The same run, not cancelled, does reach the work.
+        let kept = await Self.gated(prompt, broker, reached)
+        XCTAssertEqual(kept, .ok("answered\n"))
+        XCTAssertEqual(reached.withLock { $0 }, 1)
+    }
+
     // MARK: Review Focus 4: cancelled while the fix is pending
 
     func testCancelledWhileTheFixIsPendingMakesNoRequest() async throws {
@@ -296,8 +328,30 @@ final class MapsToolTests: XCTestCase {
         let rig = rig()
         rig.locator.held = true
         let reply = await PhoneTool.within(.seconds(1)) { await rig.tool.run(["search", "coffee"]) }
-        XCTAssertEqual(reply, .failed("topo: no location fix within 200 ms; give --near LAT,LON (or --from LAT,LON) instead\n"))
+        XCTAssertEqual(reply, .failed("topo: no location fix within 200 ms; give --near LAT,LON or --anywhere instead\n"))
         XCTAssertEqual(rig.maps.requests, [])
+    }
+
+    /// What is offered in place of a fix is what the verb takes: `--near` is a search's alone.
+    func testAFixPastItsBoundOffersWhatTheVerbTakes() async {
+        let rig = rig()
+        rig.locator.held = true
+        for arguments in [["route", "--to", "37.8080,-122.4177"], ["eta", "--to", "37.8080,-122.4177"],
+                          ["route", "--from", "37.7599,-122.4148", "--to", "here"], ["eta", "--from", "37.7599,-122.4148", "--to", "here"]] {
+            let reply = await PhoneTool.within(.seconds(1)) { await rig.tool.run(arguments) }
+            XCTAssertEqual(reply, .failed("topo: no location fix within 200 ms; give --from LAT,LON and a coordinate --to instead\n"),
+                           "\(arguments)")
+        }
+        XCTAssertEqual(rig.maps.requests, [])
+        // And each sentence's advice is a call its verb takes.
+        rig.locator.held = false
+        for arguments in [["search", "coffee", "--near", "37.7599,-122.4148"], ["search", "coffee", "--anywhere"],
+                          ["route", "--from", "37.7599,-122.4148", "--to", "37.8080,-122.4177"],
+                          ["eta", "--from", "37.7599,-122.4148", "--to", "37.8080,-122.4177"]] {
+            let reply = await rig.tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.ok, "\(arguments): \(reply.text)")
+        }
+        XCTAssertEqual(rig.locator.asked, 4, "only the four held calls asked where the phone is")
     }
 
     func testTheProductionFixBoundIsTenSeconds() {
@@ -348,6 +402,35 @@ final class MapsToolTests: XCTestCase {
         for good in ["90,180", "-90,-180", "0,0", "37.7599,-122.4148", "-33.86,151.21"] {
             XCTAssertNotNil(MapPoint(good), good)
         }
+    }
+
+    /// A region is a square only away from the poles: past latitude 85 `--near` is refused, and
+    /// at 85 it is taken.
+    func testRefusesARegionTooNearAPole() async {
+        await assertRefused(["85.0001,0", "-85.0001,0", "90,0", "-90,180", "86,-122.4148"].map { ["search", "coffee", "--near=\($0)"] },
+                            saying: "is too near a pole for a square region; use --anywhere")
+        let rig = rig()
+        for (index, latitude) in ["85,0", "-85,0", "85.0,10"].enumerated() {
+            let reply = await rig.tool.run(["search", "coffee", "--near=\(latitude)"])
+            XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+            XCTAssertEqual(rig.maps.requests.count, index + 1)
+        }
+        // A route's ends are points and no region, so a pole is an end like any other.
+        let route = await rig.tool.run(["eta", "--from", "89,0", "--to", "90,0"])
+        XCTAssertEqual(route.status, ToolReply.ok, route.text)
+    }
+
+    /// The same for a search near a phone that is there: a failure pointing at `--anywhere`, and
+    /// nothing asked of Apple Maps.
+    func testAPhoneTooNearAPoleIsAFailureAndNoSearch() async {
+        let rig = rig()
+        rig.locator.latitude = 85.5
+        let reply = await rig.tool.run(["search", "coffee"])
+        XCTAssertEqual(reply, .failed("topo: the phone is too near a pole for a square region; use --anywhere\n"))
+        XCTAssertEqual(rig.maps.requests, [])
+        rig.locator.latitude = 85
+        let edge = await rig.tool.run(["search", "coffee"])
+        XCTAssertEqual(edge.status, ToolReply.ok, edge.text)
     }
 
     func testRefusesLimitOutsideOneToTwentyFive() async {
@@ -621,7 +704,7 @@ final class MapsToolTests: XCTestCase {
         for wide in widest {
             XCTAssertLessThanOrEqual(MapsTool.field(wide).utf8.count, MapsTool.fieldBytes)
             let rig = rig()
-            let region = await rig.tool.run(["search", wide, "--near", "-89.99999,-179.99999", "--radius", "50000"])
+            let region = await rig.tool.run(["search", wide, "--near", "-84.99999,-179.99999", "--radius", "50000"])
             XCTAssertEqual(records(region.text).count, 1)
             XCTAssertLessThanOrEqual(region.text.utf8.count, room)
             rig.maps.route = MapRoute(name: wide, distance: 1e15, expected: 1e15, notices: Array(repeating: wide, count: 9), steps: [])
@@ -731,6 +814,22 @@ final class MapsToolTests: XCTestCase {
         for point in written {
             XCTAssertEqual(shape.numberOfMatches(in: point, range: NSRange(point.startIndex..., in: point)), 1, point)
         }
+    }
+
+    // MARK: The tool the app registers
+
+    /// The app's own tool, from the table `TopoApp` made at this test host's launch: Apple Maps
+    /// through MapKit, and a locator that asks the geocoder for no place.
+    func testTheAppsToolAsksTheGeocoderForNoPlace() throws {
+        let registered = GuestResident.shared.toolTable.compactMap { $0 as? MapsTool }
+        XCTAssertEqual(registered.count, 1, "the app's table holds \(registered.count) maps tools")
+        let tool = try XCTUnwrap(registered.first)
+        XCTAssertTrue(tool.maps is MapKitMaps)
+        let locator = try XCTUnwrap(tool.locator as? CoreLocationLocator)
+        XCTAssertFalse(locator.named, "topo maps asks the geocoder for a place no answer carries")
+        // `topo location` beside it does ask.
+        let location = try XCTUnwrap(GuestResident.shared.toolTable.compactMap { $0 as? LocationTool }.first)
+        XCTAssertEqual((location.locator as? CoreLocationLocator)?.named, true)
     }
 
     // MARK: Review Focus 14: the table

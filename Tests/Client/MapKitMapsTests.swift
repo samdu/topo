@@ -153,6 +153,17 @@ final class CannedETA: MKDirections.ETAResponse {
 /// `MapKitMaps` over `FakeRequests`: its bound, its cancel, and what it makes of MapKit's answers
 /// and errors. That `MKLocalSearch` and `MKDirections` themselves stop at `cancel()` is Apple's and
 /// is not shown here.
+/// A locator and a permission for a call that needs neither.
+private struct NoLocator: Locator {
+    func fix() async throws -> LocationFix { throw ToolFailure("asked where the phone is") }
+}
+
+private struct NoPermission: Authorizer {
+    let name = "Location"
+    func access() async -> Access { .denied }
+    func request() async -> Bool { false }
+}
+
 @MainActor
 final class MapKitMapsTests: XCTestCase {
     private static let mission = MapPoint(latitude: 37.7599, longitude: -122.4148)!
@@ -496,6 +507,32 @@ final class MapKitMapsTests: XCTestCase {
         requests.searching = .fail(FakeRequests.nothingFound)
         let places = try await MapKitMaps(runner: requests).search(query: "zxqvjwkpfy", region: nil)
         XCTAssertEqual(places, [])
+        requests.searching = .fail(MKError(.placemarkNotFound))
+        let none = try await MapKitMaps(runner: requests).search(query: "zxqvjwkpfy", region: nil)
+        XCTAssertEqual(none, [])
+    }
+
+    /// The same `MKError` code beside a directions code is Apple Maps having no answer, in its
+    /// own words, and not a search that found nothing.
+    func testASearchNotFoundBesideADirectionsCodeIsAFailureAndNotAnEmptyList() async {
+        for code in [3, 1, 16] {
+            let requests = FakeRequests()
+            requests.searching = .fail(NSError(domain: MKErrorDomain, code: Int(MKError.Code.placemarkNotFound.rawValue), userInfo: [
+                "MKDirectionsErrorCode": code,
+                NSLocalizedFailureReasonErrorKey: "Route information is not available at this moment.",
+            ]))
+            do {
+                let places = try await MapKitMaps(runner: requests).search(query: "coffee", region: nil)
+                XCTFail("a failed search answered \(places) (directions code \(code))")
+            } catch {
+                XCTAssertEqual(error as? MapsFailure, .other("Route information is not available at this moment."), "\(code)")
+            }
+        }
+        let requests = FakeRequests()
+        requests.searching = .fail(FakeRequests.unavailable(.placemarkNotFound))
+        let tool = MapsTool(maps: MapKitMaps(runner: requests), locator: NoLocator(), authorizer: NoPermission(), broker: PermissionBroker())
+        let reply = await tool.run(["search", "coffee", "--anywhere"])
+        XCTAssertEqual(reply, .failed("topo: Apple Maps could not answer: Route information is not available at this moment.\n"))
     }
 
     func testEachErrorIsWhatMapsToolSays() {
