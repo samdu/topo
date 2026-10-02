@@ -134,6 +134,7 @@ final class WidgetToolTests: XCTestCase {
             ("lock-by-id", ["home", "set", Self.lockID, "D-target", "1"]),
             ("calendar", ["calendar", "add", "Dinner"]),
             ("widget", ["widget", "clear"]),
+            ("maps", ["maps", "search", "x", "--anywhere"]),
         ]
         for (id, argv) in cases {
             let reply = await tool.run(["set", "demo", Self.document(Self.button(id, argv))])

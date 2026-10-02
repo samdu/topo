@@ -77,6 +77,7 @@ struct TopoApp: App {
                        requests: connections.secrets),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
                          broker: broker),
+            MapsTool.standard(permission: location, broker: broker),
             homeTool,
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),

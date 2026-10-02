@@ -97,10 +97,12 @@ struct LocationAuthorizer: Authorizer {
     func request() async -> Bool { await permission.request() }
 }
 
-/// The first fix `CLLocationUpdate.liveUpdates()` gives, and its place from `CLGeocoder` if that
-/// answers within five seconds.
+/// The first fix `CLLocationUpdate.liveUpdates()` gives, and, when `named`, its place from
+/// `CLGeocoder` if that answers within five seconds.
 struct CoreLocationLocator: Locator {
     let permission: LocationPermission
+    /// False for a caller that wants the fix alone (`topo maps`): the geocoder is not asked.
+    var named = true
 
     func fix() async throws -> LocationFix {
         var found: CLLocation?
@@ -111,7 +113,7 @@ struct CoreLocationLocator: Locator {
             }
         }
         guard let location = found else { throw ToolFailure("Core Location gave no fix") }
-        let place = await Self.place(of: location)
+        let place = named ? await Self.place(of: location) : nil
         return LocationFix(latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
                            accuracy: location.horizontalAccuracy, at: location.timestamp,
                            precise: await permission.precise, place: place)

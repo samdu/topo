@@ -26,13 +26,21 @@ struct Misuse: Error {
 enum PhoneTool {
     static func run<Call>(_ authorizer: any Authorizer, broker: PermissionBroker, usage: String,
                           parse: () throws -> Call, perform: (Call) async throws -> ToolReply) async -> ToolReply {
+        await run({ _ in authorizer }, broker: broker, usage: usage, parse: parse, perform: perform)
+    }
+
+    /// The same run for a tool whose calls do not all need its permission: `authorizer` answers
+    /// the one the parsed call needs, or nil for a call that needs none, which then neither reads
+    /// the permission nor asks for it.
+    static func run<Call>(_ authorizer: (Call) -> (any Authorizer)?, broker: PermissionBroker, usage: String,
+                          parse: () throws -> Call, perform: (Call) async throws -> ToolReply) async -> ToolReply {
         let call: Call
         do {
             call = try parse()
         } catch {
             return reply(to: error, usage: usage)
         }
-        if let refusal = await broker.admit(authorizer) { return refusal }
+        if let authorizer = authorizer(call), let refusal = await broker.admit(authorizer) { return refusal }
         // Cancelled is the service's bound passed while the prompt was up: the caller has been
         // told the call timed out, so it does nothing now, whatever the person chose. The choice
         // stands for the next call.
