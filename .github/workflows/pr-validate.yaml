@@ -652,6 +652,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/check-built-plist-test.sh
 
+      # `topo maps` opens no other app and draws no map: its sources name no
+      # way to open Maps or a URL and no map view, and the check is held
+      # against fixtures of its own first.
+      - name: topo maps names no way out of the app
+        if: ${{ !cancelled() }}
+        run: scripts/tests/maps-opens-nothing-test.sh
+
       # scripts/build-ish.sh's refusals: a checkout that is not the pin, a
       # patch that does not apply, a populated deps/linux, and options that are
       # not arm64/ish/asbestos each fail.
