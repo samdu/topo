@@ -3,6 +3,7 @@
 # console per case, and holds that the script exits non-zero on every way a run can fail and zero
 # only on a turn that finished and was answered under this run's id. No simulator, no build, no
 # token, no network: CLAUDE_SETUP_TOKEN is a placeholder and `op-item` is a fake that fails.
+# With --talk and a fake audio lane, it holds that a `start` that refuses is never followed by `stop`.
 #
 #   scripts/tests/simulator-run-test.sh
 #   SCRIPT=/path/to/other/simulator-run.sh scripts/tests/simulator-run-test.sh
@@ -234,6 +235,37 @@ case_ guest-turn-bash-ok-only-in-prefix    fail guest-bash-ok-only-in-prefix 5 -
 case_ guest-turn-bash-reply-prefix-only    fail guest-bash-in-reply-prefix-only 5 --guest-turn "a" --expect-bash answered
 case_ guest-turn-bash-result-echoed-in-sent fail guest-bash-result-echoed-in-sent 5 --guest-turn "a" --expect-bash topo-42
 case_ guest-turns-times-out-silent         fail silent               12 --guest-turn "a || b"
+
+# --talk and the audio lane, against fakes of the lane and the two model fetches; the lane's fake
+# writes what it was called with to a file. A start that refuses (exit 3) found another run's
+# lane: the script exits 3 and never calls stop. A start that fails any other way is this run's
+# to stop.
+for fake in fetch-ear-models.sh fetch-voice-models.sh; do printf '#!/bin/sh\nexit 0\n' > "$work/root/scripts/$fake"; done
+cat >"$work/root/scripts/ci-audio-lane.sh" <<EOF
+#!/bin/sh
+echo "\$1" >> "$work/lane-calls"
+[ "\$1" != start ] || exit "\$FAKE_LANE_START"
+EOF
+chmod +x "$work/root/scripts/"*.sh
+
+# talk_case <name> <start's exit> <the lane calls expected, space-separated>
+talk_case() {
+  local name="$1" start_exit="$2" want="$3" out="$work/$1.out" status calls
+  rm -f "$work/lane-calls"
+  PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder FAKE_LAUNCH=silent FAKE_LANE_START="$start_exit" \
+    "$work/root/scripts/simulator-run.sh" --no-build --talk >"$out" 2>&1 </dev/null
+  status=$?
+  calls="$(tr '\n' ' ' < "$work/lane-calls" | sed 's/ $//')"
+  if [ "$status" = "$start_exit" ] && [ "$calls" = "$want" ]; then
+    echo "ok   $name: exited $status, the lane was called with: $calls"
+  else
+    echo "FAIL $name: wanted exit $start_exit and the lane calls '$want'; got exit $status and '$calls'"
+    sed 's/^/    | /' "$out"
+    failures=$((failures + 1))
+  fi
+}
+talk_case talk-start-refused-leaves-the-lane 3 "start"
+talk_case talk-start-failed-stops-the-lane   1 "start stop"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"

@@ -625,8 +625,9 @@ jobs:
         run: scripts/tests/ci-select-lane-test.sh
 
       # scripts/ci-audio-lane.sh against a fake brew, swiftc and SwitchAudioSource:
-      # a second start refuses and leaves the first lane running, of two starts
-      # at once one wins, and stop names a lane it did not start by pid.
+      # a second start refuses and leaves the first lane as it was, a start
+      # that overlaps another refuses, and stop names a feeder it did not
+      # start, and its supervisor, by pid.
       - name: The audio lane is one lane at a time
         if: ${{ !cancelled() }}
         run: scripts/tests/ci-audio-lane-test.sh
