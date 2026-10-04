@@ -62,7 +62,7 @@ def jobs(**concl):
 
 
 def issue(number, title="x", age=timedelta(hours=1), labels=(), comments=0, **kw):
-    d = {"number": number, "title": title, "createdAt": ago(age),
+    d = {"number": number, "title": title, "createdAt": ago(age), "updatedAt": ago(age),
          "labels": {"nodes": [{"name": l} for l in labels], "pageInfo": {"hasNextPage": False}}, "comments": {"totalCount": comments}}
     d.update(kw)
     return d
@@ -98,10 +98,58 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(), run(), [], {}, NOW, require_label=None)
         self.assertEqual(kinds(w), ["report:label"])
 
-    def test_a_draft_is_reported_after_the_grace_and_nothing_else(self):
+    def test_a_draft_wants_nothing_however_old_and_whatever_its_run(self):
         self.assertEqual(janitor.decide_pr(pr(isDraft=True, updatedAt=ago(timedelta(minutes=5))), None, [], {}, NOW), [])
-        w = janitor.decide_pr(pr(isDraft=True), run(), jobs(test="success"), {}, NOW)
-        self.assertEqual(kinds(w), ["report:draft"])
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True, updatedAt=ago(timedelta(days=3))), None, [], {}, NOW), [])
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run(), jobs(test="success"), {}, NOW), [])
+        j = jobs(test="success", reviewer_ran="failure", review_gate="failure")
+        self.assertEqual(janitor.decide_pr(pr(isDraft=True), run("failure"), j, {}, NOW), [], "a draft's missing verdict is not rerun")
+
+    def test_a_pr_fingerprint_moves_with_the_pr_and_not_with_time_or_a_comment(self):
+        j = jobs(test="success", reviewer_ran="success", review_gate="failure")
+        fp = lambda p=None, r=None, jj=None, conds=("verdict",): janitor.pr_fingerprint(p or pr(), r or run("failure"), j if jj is None else jj, conds)
+        same = fp()
+        self.assertEqual(fp(pr(updatedAt=ago(timedelta(days=2)), title="renamed")), same, "a comment, an age and a title move nothing")
+        self.assertEqual(fp(r=run("failure", since=timedelta(days=2))), same)
+        self.assertEqual(fp(conds=("verdict", "idle")), same, "having sat is not a change")
+        for what, other in (("a new commit", fp(pr(headRefOid="fffffff0000"))),
+                            ("the draft flag", fp(pr(isDraft=True))),
+                            ("a box ticked", fp(pr(body="- [x] suite\n- [ ] device: phone"))),
+                            ("a label", fp(pr(labels=[{"name": "automerge"}]))),
+                            ("the review decision", fp(pr(reviewDecision="APPROVED"))),
+                            ("the run's conclusion", fp(r=run("cancelled"))),
+                            ("a check flipped", fp(jj=jobs(test="failure", reviewer_ran="success", review_gate="failure"))),
+                            ("another condition", fp(conds=("verdict", "red")))):
+            self.assertNotEqual(other, same, what)
+
+    def test_an_issue_fingerprint_is_its_labels_and_its_updated_at(self):
+        fp = lambda **kw: janitor.decide_issues([issue(1, **kw)], NOW)[0][0]["fp"]
+        same = fp()
+        self.assertEqual(fp(title="renamed", createdAt=ago(timedelta(hours=1))), same)
+        self.assertNotEqual(fp(labels=["bug"]), same)
+        self.assertNotEqual(fp(updatedAt=ago(timedelta(minutes=1))), same)
+        wants, keep, bad = janitor.decide_issues([dict(issue(2), updatedAt=None), {k: v for k, v in issue(3).items() if k != "updatedAt"}], NOW)
+        self.assertEqual((wants, bad), ([], ["#2", "#3"]), "an issue with no updated-at is malformed")
+
+    def test_the_digest_names_prs_with_what_holds_and_issues_by_number(self):
+        line = janitor.digest_line({"pr:12": "boxes", "pr:7": "verdict, idle", "issue:40": "", "issue:9": ""})
+        self.assertEqual(line, "still standing, unchanged since it was said: #7 (verdict, idle), #12 (boxes); untriaged issues #9, #40.")
+        self.assertEqual(janitor.digest_line({"issue:9": ""}, first=True),
+                         "first pass with no record of what was said; standing now: untriaged issue #9.")
+        many = janitor.digest_line({f"issue:{i}": "" for i in range(janitor.DIGEST_NAMES + 3)})
+        self.assertIn(" and 3 more.", many)
+
+    def test_a_state_file_of_the_wrong_shape_is_a_first_run(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "state.json")
+            self.assertEqual(janitor.load_state(p), {})
+            for text in ("{not json", "[1, 2]", "null", '"x"'):
+                with open(p, "w") as f:
+                    f.write(text)
+                self.assertEqual(janitor.load_state(p), {}, text)
+            with open(p, "w") as f:
+                json.dump({"reported": {"pr:7": "abc"}, "seeded": {"prs": True}, "rerun": {"7:h": {}}, "fired": [], "pending": "x"}, f)
+            self.assertEqual(janitor.load_state(p), {"rerun": {"7:h": {}}}, "a record that is not whole goes, and what was done stays")
 
     def test_a_run_in_progress_wants_nothing(self):
         self.assertEqual(janitor.decide_pr(pr(), run(None, status="in_progress"), [], {}, NOW), [])
@@ -241,6 +289,7 @@ class Decisions(unittest.TestCase):
         self.assertEqual(kinds(janitor.decide_pr(pr(), None, [], {}, NOW)), ["report:norun"])
 
     def test_report_keys_repeat_only_after_the_repeat_window(self):
+        self.assertGreaterEqual(janitor.REPEAT, timedelta(hours=24))
         state = {"fired": {"k": (NOW - timedelta(minutes=30)).isoformat()}}
         self.assertFalse(janitor.due(state, "k", NOW))
         state = {"fired": {"k": (NOW - janitor.REPEAT).isoformat()}}
@@ -357,6 +406,8 @@ class Decisions(unittest.TestCase):
                 janitor.deliver(Sh(), state, NOW, log=lambda s: None, warn=lambda s: None)
                 self.assertEqual(len(sent), 2, "the newest PENDING_MAX lines, then a message saying what was dropped")
                 lines = sent[0].splitlines()[1:]
+                self.assertTrue(all(janitor.NO_REPLY in t.splitlines()[0] for t in sent), "every message says no reply is read")
+                self.assertNotIn("SendMessage", "".join(sent))
                 self.assertEqual(len(lines), janitor.PENDING_MAX)
                 self.assertNotIn("line 0\n", sent[0])
                 self.assertIn(f"line {janitor.PENDING_MAX + 29}", lines[-1])
@@ -507,6 +558,10 @@ class WholePass(unittest.TestCase):
             f.write("export BRIDGE_PEER_TOKEN=tok-buddybox\n")
         self.wt = os.path.join(self.work, "wt", "topo-old")
         os.makedirs(self.wt)
+        # Not a first run: both scopes read before, nothing said yet, and a digest just sent.
+        self.seed = {"reported": {}, "seeded": {"prs": True, "issues": True}, "digest_at": datetime.now(timezone.utc).isoformat()}
+        with open(self.state, "w") as f:
+            json.dump(self.seed, f)
         self.env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE_LOG=self.log,
                         FAKE_SCRIPT=self.script, HOME=self.work, TOPO_JANITOR_DELIVER_URL=self.url,
                         TOPO_JANITOR_MESH_ENV=self.mesh_env, JANITOR_STATE=self.state)
@@ -659,13 +714,23 @@ class WholePass(unittest.TestCase):
         self.assertIn("tmux kill-session -t =deep", calls)
         self.assertNotIn("=topo-older", calls)
 
-    def backdate(self, hours=4):
-        """Every fired key as if said `hours` ago: the next pass is past REPEAT."""
+    def backdate(self, hours=25, digest=True):
+        """Everything said, and the digest when `digest`, as if `hours` ago:
+        the next pass is past REPEAT and past DIGEST."""
         state = self.state_file()
         at = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-        state["fired"] = {k: at for k in state["fired"]}
+        state["fired"] = {k: at for k in state.get("fired", {})}
+        state["reported"] = {k: dict(v, at=at) for k, v in state.get("reported", {}).items()}
+        if digest:
+            state["digest_at"] = at
         with open(self.state, "w") as f:
             json.dump(state, f)
+
+    def said(self, prefix):
+        return {k for k in self.state_file()["reported"] if k.startswith(prefix)}
+
+    def digests(self, since=0):
+        return [l for m in Bridge.received[since:] for l in m["body"]["text"].splitlines() if "standing" in l]
 
     def issue_lines(self, since=None):
         """The issue lines of the last message, or of every message from `since` on."""
@@ -688,20 +753,139 @@ class WholePass(unittest.TestCase):
         text = Bridge.received[-1]["body"]["text"]
         self.assertNotIn("SECRET-MARKER", text)
         self.assertNotIn("issue: #7", text, "the open PR is not an issue")
-        self.assertEqual({k for k in self.state_file()["fired"] if k.startswith("issue")}, {"issue:40", "issue:41"})
+        self.assertEqual(self.said("issue"), {"issue:40", "issue:41"})
+        self.assertIn(janitor.NO_REPLY, text.splitlines()[0])
 
-    def test_an_untriaged_issue_is_said_again_only_after_the_repeat_window(self):
-        s = self.scripted(prs=[], issues=[issue(40, "Stands")])
+    QUIET = "worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"
+
+    def test_an_unchanged_issue_is_said_once_however_old_and_again_when_it_changes(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Stands")])
         self.run_pass(s)
         self.assertEqual(len(self.issue_lines()), 1)
         n = len(Bridge.received)
         self.run_pass(s)
-        self.assertEqual(self.issue_lines(since=n), [], "said once inside REPEAT")
-        n = len(Bridge.received)
-        self.backdate()
+        self.backdate(hours=24 * 9, digest=False)
         self.run_pass(s)
-        self.assertEqual(len(self.issue_lines(since=n)), 1)
-        self.assertIn("#40 Stands", self.issue_lines(since=n)[0])
+        self.assertEqual(Bridge.received[n:], [], "a pass with nothing new sends nothing, nine days on")
+        self.run_pass(self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Stands", labels=["bug"])]))
+        self.assertEqual(len(self.issue_lines(since=n)), 1, "a label is a change")
+        n = len(Bridge.received)
+        self.run_pass(self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Stands", labels=["bug"], updatedAt=ago(timedelta(minutes=1)))]))
+        self.assertEqual(len(self.issue_lines(since=n)), 1, "so is its updated-at")
+
+    def test_an_unchanged_pr_is_said_once_and_again_only_when_it_changes(self):
+        boxes = pr(body="- [ ] device: phone")
+        s = self.scripted(prs=[boxes], worktrees=self.QUIET)
+        self.run_pass(s)
+        self.assertEqual(sum("Proof box" in r["body"]["text"] for r in Bridge.received), 1)
+        n = len(Bridge.received)
+        for hours in (3, 24, 48):
+            self.backdate(hours=hours, digest=False)
+            self.run_pass(self.scripted(prs=[dict(boxes, updatedAt=ago(timedelta(minutes=1)), title="a comment landed")], worktrees=self.QUIET))
+        self.assertEqual(Bridge.received[n:], [], "three passes over two days, nothing changed, nothing sent")
+        # A new commit; then a box ticked on it; then a check flipped.
+        pushed = dict(boxes, headRefOid="feedface0")
+        self.run_pass(self.scripted(prs=[pushed], runs={"feedface0": [run()]}, worktrees=self.QUIET))
+        two = dict(pushed, body="- [ ] device: phone\n- [ ] device: watch")
+        self.run_pass(self.scripted(prs=[two], runs={"feedface0": [run()]}, worktrees=self.QUIET))
+        self.assertEqual([m["body"]["text"].count("Proof box") for m in Bridge.received[n:]], [1, 1])
+        n = len(Bridge.received)
+        red = self.scripted(prs=[two], runs={"feedface0": [run("failure")]}, worktrees=self.QUIET,
+                            jobs=jobs(test="success", reviewer_ran="success", review_gate="failure"))
+        self.run_pass(red)
+        self.assertIn("the reviewer blocked", Bridge.received[-1]["body"]["text"])
+        self.run_pass(red)
+        self.assertEqual(len(Bridge.received), n + 1)
+        self.assertEqual(self.said("pr:"), {"pr:7"})
+        self.run_pass(self.scripted(prs=[], worktrees=self.QUIET))
+        self.assertEqual(self.said("pr:"), set(), "a PR no longer open is forgotten")
+
+    def test_a_pr_between_two_reports_is_not_said_again_for_the_same_state(self):
+        j = jobs(test="success", reviewer_ran="success", review_gate="failure")
+        red = self.scripted(runs={HEAD: [run("failure")]}, jobs=j, worktrees=self.QUIET)
+        self.run_pass(red)
+        n = len(Bridge.received)
+        self.run_pass(self.scripted(runs={HEAD: [run(None, status="in_progress")]}, jobs=j, worktrees=self.QUIET))
+        self.assertIn("pr:7", self.said("pr:"), "a run in progress forgets nothing")
+        self.run_pass(red)
+        self.assertEqual(Bridge.received[n:], [], "red, rerun by hand, red the same: said once")
+
+    def test_a_draft_is_never_read_or_said(self):
+        s = self.scripted(prs=[pr(isDraft=True, updatedAt=ago(timedelta(days=2)))], worktrees=self.QUIET)
+        p, calls = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("head_sha", calls, "a draft's runs are not read")
+        self.assertEqual(Bridge.received, [])
+        self.assertEqual(self.said("pr:"), set())
+
+    def test_one_digest_a_day_names_what_still_stands_and_none_when_nothing_does(self):
+        s = self.scripted(prs=[pr(body="- [ ] device: phone")], worktrees=self.QUIET, issues=[issue(40, "Stands")])
+        self.run_pass(s)
+        n = len(Bridge.received)
+        self.backdate(hours=23)
+        self.run_pass(s)
+        self.assertEqual(Bridge.received[n:], [], "inside the day, nothing")
+        self.backdate(hours=25)
+        self.run_pass(s)
+        self.run_pass(s)
+        self.assertEqual(len(Bridge.received), n + 1, "one message, and the pass after it is quiet")
+        self.assertEqual(Bridge.received[-1]["body"]["text"].splitlines()[1:],
+                         ["- still standing, unchanged since it was said: #7 (boxes); untriaged issue #40."])
+        n = len(Bridge.received)
+        self.backdate(hours=25)
+        self.run_pass(self.scripted(prs=[pr(body="- [ ] device: phone", headRefOid="feedface0")], runs={"feedface0": [run()]},
+                                    worktrees=self.QUIET, issues=[issue(40, "Stands")]))
+        lines = Bridge.received[-1]["body"]["text"].splitlines()[1:]
+        self.assertEqual(len(lines), 2, "the PR's own line, and a digest that leaves out what was just said")
+        self.assertIn("still standing, unchanged since it was said: untriaged issue #40.", lines[1])
+        n = len(Bridge.received)
+        self.backdate(hours=25)
+        self.run_pass(self.scripted(prs=[], worktrees=self.QUIET))
+        self.assertEqual(Bridge.received[n:], [], "nothing stands, no digest")
+
+    def first_run(self, write):
+        s = self.scripted(prs=[pr(body="- [ ] device: phone"), pr(number=8, headRefName="buddy/y", headRefOid="feedface0")],
+                          worktrees=self.QUIET, issues=[issue(40 + i, f"t{i}") for i in range(70)])
+        write()
+        p, _ = self.run_pass(s)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(len(Bridge.received), 1)
+        lines = Bridge.received[0]["body"]["text"].splitlines()[1:]
+        self.assertEqual(len(lines), 1, "a first run is one digest line, whatever it finds")
+        self.assertTrue(lines[0].startswith("- first pass with no record of what was said; standing now: #7 (boxes), #8 (norun); untriaged issues #40, #41,"))
+        self.assertIn(" and 30 more.", lines[0])
+        self.assertEqual(len(self.said("issue:")), 70, "every one is recorded, past the cap of a pass's issue lines")
+        self.assertEqual(self.said("pr:"), {"pr:7", "pr:8"})
+        self.run_pass(s)
+        self.assertEqual(len(Bridge.received), 1, "and the pass after it is quiet")
+
+    def test_a_missing_state_file_is_a_first_run_capped_at_a_digest(self):
+        self.first_run(lambda: os.remove(self.state))
+
+    def test_a_corrupt_state_file_is_a_first_run_capped_at_a_digest(self):
+        def garbage():
+            with open(self.state, "w") as f:
+                f.write('{"reported": {"pr:7": {"fp": "tr')
+        self.first_run(garbage)
+
+    def test_a_state_file_from_before_the_record_keeps_what_was_done_and_is_a_first_run(self):
+        def old():
+            with open(self.state, "w") as f:
+                json.dump({"fired": {f"7:boxes:{HEAD}": ago(timedelta(hours=1)), "issue:40": ago(timedelta(hours=1))},
+                           "rerun": {f"7:{HEAD}": {"run": 99}}, "publish": {}, "pending": [], "undelivered": []}, f)
+        self.first_run(old)
+        self.assertIn(f"7:{HEAD}", self.state_file()["rerun"])
+        self.assertNotIn("issue:40", self.state_file()["fired"])
+
+    def test_a_first_run_whose_issue_read_failed_caps_the_issues_when_they_are_read(self):
+        os.remove(self.state)
+        issues = [issue(40, "A"), issue(41, "B")]
+        self.run_pass(self.scripted(prs=[], worktrees=self.QUIET, issues=issues, issues_error="HTTP 502"))
+        self.assertEqual(self.issue_lines(), [])
+        n = len(Bridge.received)
+        self.run_pass(self.scripted(prs=[], worktrees=self.QUIET, issues=issues))
+        self.assertEqual(self.issue_lines(since=n), [])
+        self.assertEqual(self.digests(since=n), ["- first pass with no record of what was said; standing now: untriaged issues #40, #41."])
 
     def test_a_triaged_issue_goes_quiet_and_stays_quiet_past_the_repeat_window(self):
         for how in ({"labels": ["triaged"]}, {"comments": 1}):
@@ -713,7 +897,7 @@ class WholePass(unittest.TestCase):
                 triaged = self.scripted(prs=[], issues=[issue(40, "Later", **{k: v for k, v in how.items() if k == "comments"},
                                                               labels=how.get("labels", ()))])
                 self.run_pass(triaged)
-                self.assertNotIn("issue:40", self.state_file()["fired"], "a triaged issue's key is forgotten")
+                self.assertNotIn("issue:40", self.said("issue"), "a triaged issue's record is forgotten")
                 self.backdate()
                 p, _ = self.run_pass(triaged)
                 self.assertEqual(p.returncode, 0, p.stderr)
@@ -721,17 +905,17 @@ class WholePass(unittest.TestCase):
 
     def test_a_closed_issue_is_forgotten_only_on_a_pass_that_read_the_list(self):
         self.run_pass(self.scripted(prs=[], issues=[issue(40, "Closing")]))
-        self.assertIn("issue:40", self.state_file()["fired"])
+        self.assertIn("issue:40", self.said("issue"))
         p, _ = self.run_pass(self.scripted(prs=[], issues_error="HTTP 502: Bad Gateway"))
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("issue:40", self.state_file()["fired"], "an unread list is not an empty one")
+        self.assertIn("issue:40", self.said("issue"), "an unread list is not an empty one")
         self.assertIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
         self.run_pass(self.scripted(prs=[], issues=[]))
-        self.assertNotIn("issue:40", self.state_file()["fired"])
+        self.assertNotIn("issue:40", self.said("issue"))
 
     def test_a_failed_or_page_filling_issue_read_reports_nothing_off_it_and_the_pr_cleanup_keeps_issue_keys(self):
         self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
-        fired = {k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue")}
+        fired = {k: v for k, v in self.state_file()["reported"].items() if k.startswith("issue:")}
         self.assertEqual(list(fired), ["issue:40"])
 
         p, calls = self.run_pass(self.scripted(issues=[issue(40, "Kept"), issue(44, "New")], issues_error="HTTP 502"))
@@ -739,7 +923,7 @@ class WholePass(unittest.TestCase):
         self.assertIn("pr merge 7", calls, "the PR list was read whole")
         self.assertEqual(self.issue_lines(), [])
         self.assertIn("could not read the open issues: gh api graphql", Bridge.received[-1]["body"]["text"])
-        self.assertEqual({k: v for k, v in self.state_file()["fired"].items() if k.startswith("issue:")}, fired)
+        self.assertEqual({k: v for k, v in self.state_file()["reported"].items() if k.startswith("issue:")}, fired)
 
         many = [issue(1000 + i, f"t{i}") for i in range(501)]
         p, calls = self.run_pass(self.scripted(issues=many))
@@ -748,16 +932,15 @@ class WholePass(unittest.TestCase):
         self.assertEqual(self.issue_lines(), [])
         self.assertIn("the open issue list runs past 5 pages of 100", Bridge.received[-1]["body"]["text"])
         self.assertEqual(calls.count("gh api graphql"), 5, "no sixth page is read")
-        after = self.state_file()["fired"]
-        self.assertEqual({k: v for k, v in after.items() if k.startswith("issue:")}, fired)
-        self.assertIn("issues:page", after)
+        self.assertEqual({k: v for k, v in self.state_file()["reported"].items() if k.startswith("issue:")}, fired)
+        self.assertIn("issues:page", self.state_file()["fired"])
 
         p, calls = self.run_pass(self.scripted(issues=many))
         self.assertIn("issues:page", self.state_file()["fired"], "a PR read does not drop the page key")
 
         self.run_pass(self.scripted(issues=[issue(40, "Kept")]))
         self.assertNotIn("issues:page", self.state_file()["fired"], "a whole read ends the page condition")
-        self.assertIn("issue:40", self.state_file()["fired"])
+        self.assertIn("issue:40", self.said("issue"))
 
     def test_the_issue_list_is_read_page_by_page_on_the_cursor(self):
         issues = [issue(1000 + i, f"t{i}", comments=1 if 0 < i < 100 else 0) for i in range(150)]
@@ -778,11 +961,11 @@ class WholePass(unittest.TestCase):
         self.assertEqual(len(self.issue_lines()), janitor.ISSUE_LINES)
         self.assertIn("440 more untriaged issues wait for the next pass.", Bridge.received[-1]["body"]["text"])
         self.assertNotIn("issues:page", self.state_file()["fired"])
-        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES)
+        self.assertEqual(len(self.said("issue:")), janitor.ISSUE_LINES)
         p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(1000 + i) for i in range(501)]))
         self.assertEqual(calls.count("gh api graphql"), 5)
         self.assertIn("issues:page", self.state_file()["fired"])
-        self.assertEqual(sum(k.startswith("issue:") for k in self.state_file()["fired"]), janitor.ISSUE_LINES, "no key dropped off an unwhole read")
+        self.assertEqual(len(self.said("issue:")), janitor.ISSUE_LINES, "no record dropped off an unwhole read")
 
     def test_the_paged_read_returns_every_issue_on_both_pages(self):
         from unittest import mock
@@ -795,20 +978,24 @@ class WholePass(unittest.TestCase):
         self.assertEqual(self.calls().count("gh api graphql"), 2)
 
     def test_a_report_the_other_lines_fill_takes_no_issue_line_and_no_notice(self):
-        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(199)]
+        drafts = [pr(number=100 + i, headRefOid=f"{i:040d}") for i in range(199)]
         p, calls = self.run_pass(self.scripted(prs=drafts, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")]))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(len(Bridge.received), 1)
         text = Bridge.received[-1]["body"]["text"].splitlines()[1:]
         self.assertEqual(len(text), janitor.PENDING_MAX)
-        self.assertEqual(sum("a draft, untouched" in l for l in text), 199, "every PR line is kept")
+        self.assertEqual(sum("ready with no validate run" in l for l in text), 199, "every PR line is kept")
         self.assertIn("swept worktree topo-old", "\n".join(text))
         self.assertEqual(self.issue_lines(), [])
         self.assertNotIn("wait for the next pass", "\n".join(text))
         self.assertNotIn("dropped", "\n".join(text))
-        self.assertFalse([k for k in self.state_file()["fired"] if k.startswith("issue:")], "said on a pass with room")
-        self.backdate()
-        p, _ = self.run_pass(self.scripted(prs=drafts, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")], issues_error="HTTP 502"))
+        self.assertFalse(self.said("issue:"), "said on a pass with room")
+        again = [dict(d, body="- [x] suite\n- [ ] device: phone") for d in drafts]   # every PR changed: 199 lines again
+        gone = self.scripted(prs=again, issues=[issue(40, "One"), issue(41, "Two"), issue(42, "Three")], issues_error="HTTP 502")
+        gone["worktrees"] = ("worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n"
+                             f"worktree {self.work}/wt/gone\nHEAD 2222\nbranch refs/heads/buddy/gone\n\n")   # the 200th line
+        gone["history"] = {"buddy/gone": [{"number": 5, "state": "MERGED", "mergedAt": ago(timedelta(hours=30)), "headRefOid": "2222"}]}
+        p, _ = self.run_pass(gone)
         self.assertEqual(len(Bridge.received[-1]["body"]["text"].splitlines()[1:]), janitor.PENDING_MAX)
         self.assertNotIn("could not read the open issues", Bridge.received[-1]["body"]["text"])
         self.assertNotIn("issues:read", self.state_file()["fired"])
@@ -853,17 +1040,20 @@ class WholePass(unittest.TestCase):
         with open(self.state, "w") as f:
             json.dump(state, f)
         Bridge.status = 503
-        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(49)]
-        s = self.scripted(prs=drafts, issues_error="HTTP 502", worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n")
+        state.update(self.seed)
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        s = None
         for i in range(4):
-            if i:
-                self.backdate()
+            # Each pass the PRs have a new head, so each pass has its PR lines to queue.
+            drafts = [pr(number=100 + j, headRefOid=f"{i}{j:039d}") for j in range(49)]
+            s = self.scripted(prs=drafts, issues_error="HTTP 502", worktrees="worktree /r/topo\nHEAD 1111\nbranch refs/heads/main\n\n")
             p, _ = self.run_pass(s)
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn("issues:read: waits for the undelivered reports", p.stderr)
         queued = self.undelivered()
         self.assertEqual(queued[0], "an earlier line", "nothing dropped")
-        self.assertEqual(sum("a draft, untouched" in l for l in queued), 4 * 49, "every PR line is queued")
+        self.assertEqual(sum("ready with no validate run" in l for l in queued), 4 * 49, "every PR line is queued")
         self.assertFalse([l for l in queued if "issue" in l or "dropped" in l], "no step-6 line is queued")
         self.assertNotIn("issues:read", self.state_file()["fired"])
         Bridge.status = 200
@@ -883,8 +1073,7 @@ class WholePass(unittest.TestCase):
         first = self.issue_lines()
         self.assertEqual(len(first), janitor.ISSUE_LINES)
         self.assertIn("10 more untriaged issues wait for the next pass.", Bridge.received[-1]["body"]["text"])
-        fired = {k for k in self.state_file()["fired"] if k.startswith("issue:")}
-        self.assertEqual(fired, {f"issue:{1000 + i}" for i in range(janitor.ISSUE_LINES)}, "a line cut is not fired")
+        self.assertEqual(self.said("issue:"), {f"issue:{1000 + i}" for i in range(janitor.ISSUE_LINES)}, "a line cut is not recorded")
         self.run_pass(s)
         second = self.issue_lines()
         self.assertEqual(len(second), 10)
@@ -892,19 +1081,18 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("wait for the next pass", Bridge.received[-1]["body"]["text"])
 
     def test_a_pass_over_the_line_cap_cuts_issue_lines_and_keeps_every_pr_line(self):
-        drafts = [pr(number=100 + i, isDraft=True, headRefOid=f"{i:040d}") for i in range(195)]
+        drafts = [pr(number=100 + i, headRefOid=f"{i:040d}") for i in range(195)]
         p, calls = self.run_pass(self.scripted(prs=drafts, issues=[issue(1000 + i, f"t{i}") for i in range(20)]))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertEqual(len(Bridge.received), 1, "one message, nothing dropped")
         text = Bridge.received[-1]["body"]["text"].splitlines()[1:]
-        self.assertEqual(sum("a draft, untouched" in l for l in text), 195, "every PR line is kept")
+        self.assertEqual(sum("ready with no validate run" in l for l in text), 195, "every PR line is kept")
         self.assertIn("swept worktree topo-old", "\n".join(text))
         said = self.issue_lines()
         self.assertEqual(len(text), janitor.PENDING_MAX)
         self.assertEqual(len(said), janitor.PENDING_MAX - 195 - 2)
         self.assertEqual(text[-1], f"- {20 - len(said)} more untriaged issues wait for the next pass.")
-        fired = {k for k in self.state_file()["fired"] if k.startswith("issue:")}
-        self.assertEqual(fired, {f"issue:{1000 + i}" for i in range(len(said))}, "a line cut is not fired")
+        self.assertEqual(self.said("issue:"), {f"issue:{1000 + i}" for i in range(len(said))}, "a line cut is not recorded")
         self.assertNotIn("dropped", Bridge.received[-1]["body"]["text"])
 
     def test_no_issue_line_joins_a_queue_that_waits_on_the_bridge(self):
@@ -913,11 +1101,13 @@ class WholePass(unittest.TestCase):
         self.run_pass(s)
         queued = lambda: [l for l in self.undelivered() if l.startswith("issue:")]
         self.assertEqual(len(queued()), 2, "an empty queue takes the pass's issue lines")
-        for _ in range(3):
-            self.backdate()
+        for i in range(3):
+            s = self.scripted(prs=[pr(body="- [ ] device: phone", headRefOid=f"feedface{i}")], runs={f"feedface{i}": [run()]},
+                              issues=[issue(40, "A"), issue(41, "B"), issue(42, "C"), issue(43, "D")])
             p, _ = self.run_pass(s)
             self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(len(queued()), 2, "a standing queue gains no issue line, past REPEAT or not")
+        self.assertEqual(len(queued()), 2, "a standing queue gains no issue line")
+        self.assertEqual(self.said("issue:"), {"issue:40", "issue:41"}, "and nothing is recorded of an issue not said")
         self.assertEqual(sum("Proof box" in l for l in self.undelivered()), 4, "PR lines still join it")
         self.assertIn("issue line(s) wait for the undelivered reports", p.stderr)
         Bridge.status = 200
@@ -927,19 +1117,20 @@ class WholePass(unittest.TestCase):
         self.assertEqual(len(self.issue_lines(since=n)), 2, "the queue's own two, delivered; none added on the pass that emptied it")
         n = len(Bridge.received)
         self.run_pass(s)
-        self.assertEqual(len(self.issue_lines(since=n)), 2, "the two held since are said once the queue is clear")
+        self.assertEqual([l.split(",")[0] for l in self.issue_lines(since=n)], ["- issue: #42 C", "- issue: #43 D"],
+                         "the two held since are said once the queue is clear")
 
     def test_a_malformed_issue_node_is_noted_and_the_pass_still_cleans_up(self):
         self.run_pass(self.scripted(prs=[], issues=[issue(39, "Closing"), issue(40, "Good")]))
-        self.assertIn("issue:39", self.state_file()["fired"])
+        self.assertIn("issue:39", self.said("issue:"))
         p, _ = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good"), dict(issue(41), title=None)]))
         self.assertEqual(p.returncode, 0, p.stderr)
         text = Bridge.received[-1]["body"]["text"]
         self.assertIn("1 open issue node came back malformed and was skipped: #41.", text)
         self.assertNotIn("stopped early", text)
         fired = self.state_file()["fired"]
-        self.assertNotIn("issue:39", fired, "cleanup ran: the closed issue is forgotten")
-        self.assertIn("issue:40", fired)
+        self.assertNotIn("issue:39", self.said("issue:"), "cleanup ran: the closed issue is forgotten")
+        self.assertIn("issue:40", self.said("issue:"))
         self.assertIn("issues:node", fired)
         self.run_pass(self.scripted(prs=[], issues=[issue(39, "Back"), issue(40, "Good")]))
         self.backdate()
@@ -947,17 +1138,17 @@ class WholePass(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("skipped: node 2.", Bridge.received[-1]["body"]["text"])
         self.assertNotIn("stopped early", Bridge.received[-1]["body"]["text"])
-        self.assertIn("issue:39", self.state_file()["fired"], "a node with no number may be #39: its key stays")
+        self.assertIn("issue:39", self.said("issue:"), "a node with no number may be #39: its record stays")
         self.run_pass(self.scripted(prs=[], issues=[issue(40, "Good")]))
         self.assertNotIn("issues:node", self.state_file()["fired"])
-        self.assertNotIn("issue:39", self.state_file()["fired"])
+        self.assertNotIn("issue:39", self.said("issue:"))
 
     def test_a_dry_run_prints_the_issue_lines_and_writes_no_state(self):
         p, calls = self.run_pass(self.scripted(prs=[], issues=[issue(40, "Dry")]), extra=["--dry-run"])
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertRegex(p.stdout, r"- issue: #40 Dry, opened \d+ h ago, untriaged\.")
         self.assertEqual(Bridge.received, [])
-        self.assertFalse(os.path.exists(self.state))
+        self.assertEqual(self.state_file(), self.seed, "a dry run writes no state")
 
     def test_a_dry_run_runs_nothing_and_prints_the_report(self):
         p, calls = self.run_pass(self.scripted(published="abc1234"), extra=["--dry-run"])
@@ -968,7 +1159,7 @@ class WholePass(unittest.TestCase):
         self.assertIn("merged #7", p.stdout)
         self.assertIn("republished the install page", p.stdout)
         self.assertEqual(Bridge.received, [])
-        self.assertFalse(os.path.exists(self.state))
+        self.assertEqual(self.state_file(), self.seed, "a dry run writes no state")
         fresh = os.path.join(self.work, "never", "state.json")
         self.state = fresh
         p, calls = self.run_pass(self.scripted(published="abc1234"), extra=["--dry-run"])
