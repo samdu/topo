@@ -515,7 +515,7 @@ public actor GuestSession {
             } catch {
                 result = .failure(error)
             }
-            Perf.mark("resident.spawned")
+            if case .success = result { Perf.mark("resident.spawned") } else { Perf.mark("resident.launch.failed") }
             await self.launched(result, resume: resume, model: model, memory: memory, conversation: conversation)
         }
     }

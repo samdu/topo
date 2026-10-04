@@ -1,6 +1,6 @@
 # Timing a launch and a turn
 
-Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`Packages/TopoCore/Sources/TopoCore/Perf.swift`) logs one `notice` line per named moment under subsystem `zone.hexagon.topo`, category `perf`: `mark t=<epoch ms> <name> [detail]`. A mark carries a name and nothing of the person's: no words, no tokens, a request's method, path and byte count at most.
+Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`Packages/TopoCore/Sources/TopoCore/Perf.swift`) logs one `notice` line per named moment under subsystem `zone.hexagon.topo`, category `perf`: `mark t=<epoch ms> <name> [detail]`. A mark carries a name and nothing of the person's: no words, no tokens, a request's method, route and byte count at most. The route is the path with any segment that is not a short word or a version replaced by `*` and no query (`Forwarder.routeForMark`), since the path is the guest's to choose. `turn.reply.shown` is the reply handed to the view, a frame before it is drawn; `resident.spawned` is a launch that succeeded, and one that failed is `resident.launch.failed`.
 
 ## The marks
 
@@ -13,7 +13,7 @@ Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`P
 
 ## A run with nobody at the phone
 
-`scripts/perf-run.sh --device <id> [--build | --app <Topo.app>] "question" ["question" …]` installs a build, launches it cold with `TOPO_PERF_SEND` in its environment, and copies the marks off when the run is done. `PerfRun` (`Apps/Topo/PerfRun.swift`) is what reads the variable: it starts `tmp/topo-perf.log` in the app's container empty, has every mark written there as well as to the log, sends the first question as soon as the scene is up and each next `TOPO_PERF_GAP` seconds (5) after the last reply was drawn, through the same `Harness.send` the composer calls, and marks `perf.run.done`. The script polls the file with `devicectl device copy from` until that mark is in it.
+`scripts/perf-run.sh --device <id> [--build | --app <Topo.app>] "question" ["question" …]` installs a build, launches it cold with `TOPO_PERF_SEND` in its environment, and copies the marks off when the run is done. `PerfRun` (`Apps/Topo/PerfRun.swift`) is what reads the variable: it starts `tmp/topo-perf.log` in the app's container empty, has every mark written there as well as to the log, sends the first question as soon as the scene is up and each next `TOPO_PERF_GAP` seconds (5) after the last turn is over, through the harness's own line (`willSend`, `retry`) as the composer does, and marks `perf.run.done answered=<n>/<m>`: a question counts as answered when its reply is in the transcript. `TOPO_PERF_SEND` is a JSON array of strings, which the script makes from its arguments. One launch is one run, however many windows it restores. The script polls the file with `devicectl device copy from` until that mark is in it, and exits 4 when fewer questions were answered than asked.
 
 With `--spoken` (`TOPO_PERF_SPOKEN=1`) the questions are sent as spoken turns once the voice is resident, their replies are read aloud from the phone, and the next question waits for the reading to end.
 
