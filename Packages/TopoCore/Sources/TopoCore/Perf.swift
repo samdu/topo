@@ -2,13 +2,13 @@ import Foundation
 import OSLog
 
 /// Where the time goes, in the unified log: one `notice` line per named moment, under the `perf`
-/// category, so a launch's or a turn's timeline is read off a device with `log collect` and the
-/// log's own clock. A mark carries a name and nothing of the person's.
+/// category, so a launch's or a turn's timeline is read off a device's log; each line carries
+/// the wall clock in milliseconds, since a syslog relay keeps whole seconds. A mark carries a name and nothing of the person's.
 public enum Perf {
     private static let log = Logger(subsystem: "zone.hexagon.topo", category: "perf")
 
     public static func mark(_ name: String) {
-        log.notice("mark \(name, privacy: .public)")
+        log.notice("mark t=\(Int64(Date().timeIntervalSince1970 * 1000)) \(name, privacy: .public)")
     }
 
     /// Milliseconds since the process was started, from the kernel's own record of it: what a
