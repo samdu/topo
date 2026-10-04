@@ -81,6 +81,11 @@ final class Speaker {
     private var chain: Task<Void, Never>?
     /// Sentences of the current reply not yet made.
     private var making = 0
+    /// The reply being read while the guest is still writing it (`speak(writing:answering:)`):
+    /// the spoken turn it answers, what of the message had settled into sentences at the last
+    /// call and how many of those are queued, and whether it is still being read. One that was
+    /// stopped keeps its turn, so what is written after the stop is not read from the top.
+    private var written: (nonce: String, settled: String, queued: Int, live: Bool)?
     /// A reply that landed while a microphone was open, to be read once it closes. Its wait stands
     /// until then, and the turn it is, whose code blocks it cues when it is read. One at most:
     /// each reply cuts off the one before it anyway.
@@ -298,6 +303,57 @@ final class Speaker {
     /// session that is not active is the crash, not a silence.
     @discardableResult
     func speak(_ text: String, answering nonce: String? = nil, reply: TurnRef? = nil) -> Bool {
+        // The reply to a turn whose reading began while it was written: what is not yet queued
+        // of it is queued behind what is, and nothing is read twice. One stopped meanwhile was
+        // stopped, and is not read again.
+        if let written, let nonce, written.nonce == nonce {
+            self.written = nil
+            guard written.live else { return true }
+            self.reply = reply
+            enqueue(Array(Self.spoken(text).dropFirst(written.queued)))
+            if making == 0, queue.isIdle { finished() }
+            return true
+        }
+        written = nil
+        return begin(text, answering: nonce, reply: reply, reading: true)
+    }
+
+    /// What the guest has written so far of the message that answers the spoken turn `nonce`.
+    /// The sentences that have settled (`settled`) are read as they come, behind one another,
+    /// so the voice starts at the first sentence rather than once the reply is whole and in the
+    /// log; `speak` is still called with the reply when it lands, and reads what is left. A
+    /// message begun again from its start — the guest's next message of the turn — is read from
+    /// its first sentence, behind what was read of the last. Nothing begins while a microphone
+    /// is open or the voice is not resident: the reply is offered whole when it lands, as ever.
+    func speak(writing text: String, answering nonce: String) {
+        let settled = Self.settled(text)
+        if written?.nonce != nonce {
+            guard !settled.isEmpty, !microphoneBusy, voice.ready,
+                  begin(settled, answering: nonce, reply: nil, reading: false) else { return }
+            written = (nonce, "", 0, true)
+        }
+        guard var reading = written, reading.live else { return }
+        if !settled.hasPrefix(reading.settled) { reading.queued = 0 }
+        let sentences = Self.spoken(settled)
+        reading.settled = settled
+        if sentences.count > reading.queued {
+            enqueue(Array(sentences.dropFirst(reading.queued)))
+            reading.queued = sentences.count
+        }
+        written = reading
+    }
+
+    /// The turn `nonce` is being answered no longer and no reply landed: what is queued is read
+    /// out, and nothing more is waited for.
+    func writingEnded(_ nonce: String) {
+        guard let reading = written, reading.nonce == nonce else { return }
+        written = nil
+        if reading.live, making == 0, queue.isIdle { finished() }
+    }
+
+    /// A reply taken to be read: the session, the queue and the holds, as `speak` documents.
+    /// `reading` reads `text` from here; without it the caller queues the sentences itself.
+    private func begin(_ text: String, answering nonce: String?, reply: TurnRef?, reading: Bool) -> Bool {
         cancel()
         guard voice.ready else {
             #if DEBUG
@@ -341,6 +397,7 @@ final class Speaker {
             return false
         }
         speaking = true
+        Perf.mark("speak.begin")
         // Taken before the wait is let go, so the keeper never stops between the two.
         audio.wantAlive(true, for: .speaking)
         // And a hold that could not be honoured is a refused reply, like a rebuild that refuses:
@@ -363,7 +420,7 @@ final class Speaker {
         DebugRun.say("speak: session ok, pocket")
         #endif
         self.reply = reply
-        speakLocally(text)
+        if reading { speakLocally(text) }
         return true
     }
 
@@ -447,6 +504,7 @@ final class Speaker {
             endAwaiting(dropped, "its reply will not be read")
         }
         deferred = nil
+        written?.live = false
         generation += 1
         reply = nil
         chain = nil
@@ -461,12 +519,41 @@ final class Speaker {
     /// A code block's line is one sentence, and it carries the block it stands for from
     /// `Speakable`, so a sentence of prose with the same words is never a cue.
     private func speakLocally(_ text: String) {
-        let sentences = Speakable.lines(from: text).flatMap { line in
-            Self.sentences(of: line.text).map { (text: $0, block: line.codeBlock) }
-        }
+        let sentences = Self.spoken(text)
         guard !sentences.isEmpty else { done(); return }
+        enqueue(sentences)
+    }
+
+    /// The sentences a text is read as, each with the code block it stands for, if it does.
+    static func spoken(_ text: String) -> [(text: String, block: Int?)] {
+        Speakable.lines(from: text).flatMap { line in
+            sentences(of: line.text).map { (text: $0, block: line.codeBlock) }
+        }
+    }
+
+    /// As much of a message still being written as will not change in the reading: up to its
+    /// last line break, or its last sentence-final punctuation followed by whitespace, and no
+    /// further than the opening of a code fence that has not closed, since what a block is read
+    /// as is decided by the whole of it.
+    static func settled(_ text: String) -> String {
+        var end = text.startIndex
+        var previous: Character?
+        for index in text.indices {
+            let character = text[index]
+            if character.isNewline || (character.isWhitespace && previous.map { ".!?".contains($0) } == true) {
+                end = text.index(after: index)
+            }
+            previous = character
+        }
+        var settled = String(text[..<end])
+        let fences = settled.components(separatedBy: "```")
+        if fences.count % 2 == 0 { settled = fences.dropLast().joined(separator: "```") }
+        return settled
+    }
+
+    private func enqueue(_ sentences: [(text: String, block: Int?)]) {
         let mine = generation
-        making = sentences.count
+        making += sentences.count
         for sentence in sentences {
             let previous = chain
             chain = Task { [weak self] in
@@ -507,6 +594,7 @@ final class Speaker {
                 progressed()
                 if first == nil {
                     first = now() - started
+                    Perf.mark("speak.firstFrame")
                     #if DEBUG
                     report.started = true
                     // The reply's first frame, timed from `speak` and written once.
@@ -557,11 +645,11 @@ final class Speaker {
     /// two sentences and the last sentence is made while the queue is still full.
     private func made() {
         making -= 1
-        if making == 0, queue.isIdle { finished() }
+        if making == 0, queue.isIdle, written?.live != true { finished() }
     }
 
     private func drained() {
-        if making == 0 { finished() }
+        if making == 0, written?.live != true { finished() }
     }
 
     /// A frame was scheduled or heard: the reply is getting somewhere, so its bound starts again.

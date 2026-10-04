@@ -37,6 +37,9 @@ final class Harness {
     /// before it is whole and before it is in the log. It is not a turn: it goes when the reply
     /// lands in the transcript, when the guest starts another message, and when the turn fails.
     private(set) var writing: String?
+    /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
+    /// whose reply the speaker may begin reading as it is written.
+    private(set) var writingSpoken: String?
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
     private(set) var unfinished: Turn?
@@ -60,6 +63,10 @@ final class Harness {
     /// refused it, a call still holding the session — is not recorded, so the next pass offers it
     /// again; every other reply, read aloud or not this screen's to read, is recorded and offered
     /// once.
+    /// Told the reply to a spoken turn as the guest writes it: the message so far and the turn's
+    /// nonce, then nil for the text once nothing more of it is coming — the reply landed (after
+    /// `onReply` was offered it), or the turn failed.
+    var onWriting: (@MainActor (String?, String) -> Void)?
     var onReply: (@MainActor (Turn) -> Bool)? {
         didSet {
             guard onReply != nil else { return }
@@ -290,7 +297,7 @@ final class Harness {
         notice = nil
         failure = nil
         status = nil
-        writing = nil
+        dropWriting()
         busy = false
         context = nil
         unfinished = nil
@@ -565,7 +572,7 @@ final class Harness {
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
-            writing = nil
+            dropWriting()
             failure = Failure(words: Self.describe(underlying))
             onTurnFailed?(attempt.nonce)
             await refresh()
@@ -622,22 +629,36 @@ final class Harness {
     /// Keeps `writing` to what the guest has written of the message it is on.
     private func follow(_ activity: GuestActivity) {
         switch activity {
-        case .began, .update(.event(.writingBegan)):
+        case .began(_, let answering):
             writing = nil
+            writingSpoken = turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
+        case .update(.event(.writingBegan)):
+            // Empty rather than nil: the turn is still being answered, by a new message.
+            writing = writing == nil ? nil : ""
         case .update(.event(.writing(let more))):
             if writing == nil { Perf.mark("turn.text.first") }
             writing = (writing ?? "") + more
+            if let writingSpoken { onWriting?(writing, writingSpoken) }
         case .update(.ended(let end)):
             // A turn that ended with no reply leaves nothing to land; one that answered is
             // replaced by its turn when that is shown.
-            if case .answered = end {} else { writing = nil }
+            if case .answered = end {} else { dropWriting() }
         case .update, .gone:
             break
         }
     }
 
+    /// What was drawn of a reply goes, and whoever was reading it aloud is told no more comes.
+    private func dropWriting() {
+        writing = nil
+        if let writingSpoken { onWriting?(nil, writingSpoken) }
+        writingSpoken = nil
+    }
+
     private func show(_ turn: Turn) {
+        // The row gives way to the turn; the reader hears of the end after the reply was offered.
         if turn.role == .assistant { writing = nil }
+        defer { if turn.role == .assistant { dropWriting() } }
         guard !turns.contains(where: { $0.ref == turn.ref }) else { return }
         turns.append(turn)
         seen(turn)
@@ -755,12 +776,12 @@ final class Harness {
             // Another device holds the lease and this one has yielded to it; that device answers.
         } catch TurnRunnerError.displaced {
             // Another device took the lease as the reply was ready; it answers.
-            writing = nil
+            dropWriting()
         } catch is CancellationError {
             return
         } catch {
             guard self.login == login else { return }
-            writing = nil
+            dropWriting()
             failure = Failure(words: Self.describe(error))
             await refreshUnfinished()
         }

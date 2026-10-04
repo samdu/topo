@@ -3,9 +3,10 @@
 # TOPO_PERF_SEND (Apps/Topo/PerfRun.swift), waits for the app to say the run is done, and copies
 # its marks off the phone. The phone must be unlocked: devicectl refuses to launch on a locked one.
 #
-#   scripts/perf-run.sh [--device <id>] [--app <Topo.app>] [--build] [--gap <seconds>]
+#   scripts/perf-run.sh [--device <id>] [--app <Topo.app>] [--build] [--gap <seconds>] [--spoken]
 #                       [--timeout <seconds>] [--out <marks.txt>] "question" ["question" ...]
 #
+# --spoken sends the questions as spoken turns, so the replies are read aloud from the phone.
 # --build makes the Release build first (build/dd, signed for TOPO_DEVELOPMENT_TEAM if set); --app installs that bundle; with neither the
 # build already on the phone is the one timed. The marks land in --out (default
 # build/perf/<UTC stamp>.txt), one `mark t=<epoch ms> <name>` a line, which is what
@@ -15,13 +16,14 @@ cd "$(dirname "$0")/.."
 
 bundle=zone.hexagon.topo
 device="${TOPO_PERF_DEVICE:-}"
-app="" build=no gap=5 timeout=600 out=""
+app="" build=no gap=5 timeout=600 out="" spoken=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --device) device="$2"; shift 2 ;;
     --app) app="$2"; shift 2 ;;
     --build) build=yes; shift ;;
     --gap) gap="$2"; shift 2 ;;
+    --spoken) spoken=1; shift ;;
     --timeout) timeout="$2"; shift 2 ;;
     --out) out="$2"; shift 2 ;;
     --) shift; break ;;
@@ -54,7 +56,7 @@ fi
 
 # The marks file is started empty by the app at launch, so a file read back with this run's
 # first question in it is this run's.
-environment="$(python3 -c 'import json,sys; print(json.dumps({"TOPO_PERF_SEND": sys.argv[1], "TOPO_PERF_GAP": sys.argv[2]}))' "$send" "$gap")"
+environment="$(python3 -c 'import json,sys; print(json.dumps({"TOPO_PERF_SEND": sys.argv[1], "TOPO_PERF_GAP": sys.argv[2], "TOPO_PERF_SPOKEN": sys.argv[3]}))' "$send" "$gap" "$spoken")"
 echo "==> launching"
 if ! launched="$(xcrun devicectl device process launch --device "$device" --terminate-existing \
      --environment-variables "$environment" "$bundle" 2>&1)"; then

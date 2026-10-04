@@ -217,6 +217,10 @@ struct ChatView: View {
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
             harness.onReply = { reply in SpokenReply.read(reply, harness: harness, speaker: speaker) }
+            // And before it lands: the reply to a spoken turn is read as the guest writes it.
+            harness.onWriting = { text, nonce in
+                if let text { speaker.speak(writing: text, answering: nonce) } else { speaker.writingEnded(nonce) }
+            }
             speaker.settled = { nonce in harness.answeredAloud(nonce) }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
@@ -224,6 +228,7 @@ struct ChatView: View {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
                 harness.onReply = nil
+                harness.onWriting = nil
                 harness.onTurnFailed = nil
                 speaker.settled = nil
                 speaker.endAllWaits("the chat stopped answering")

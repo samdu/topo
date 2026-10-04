@@ -13,6 +13,9 @@ import TopoCore
 enum PerfRun {
     static let sendVariable = "TOPO_PERF_SEND"
     static let gapVariable = "TOPO_PERF_GAP"
+    /// `TOPO_PERF_SPOKEN=1`: the questions are sent as spoken turns, so their replies are read
+    /// aloud and the voice's marks (`speak.begin`, `speak.firstFrame`) are in the run.
+    static let spokenVariable = "TOPO_PERF_SPOKEN"
     /// What separates the questions in `TOPO_PERF_SEND`.
     static let separator = "||"
 
@@ -35,13 +38,26 @@ enum PerfRun {
 
     /// Sends the questions, then marks `perf.run.done`, which is what the script waits for.
     @MainActor
-    static func run(with harness: Harness) async {
-        let questions = questions()
+    static func run(with harness: Harness, speaker: Speaker,
+                    environment: [String: String] = ProcessInfo.processInfo.environment) async {
+        let questions = questions(environment)
         guard !questions.isEmpty else { return }
+        let spoken = environment[spokenVariable] == "1"
+        // A spoken turn needs the voice resident at the send, as a press of the microphone does.
+        if spoken { for _ in 0..<300 where !speaker.voice.ready { try? await Task.sleep(for: .milliseconds(100)) } }
         for (index, question) in questions.enumerated() {
-            if index > 0 { try? await Task.sleep(for: .seconds(gap())) }
+            if index > 0 { try? await Task.sleep(for: .seconds(gap(environment))) }
             Perf.mark("perf.question \(index + 1)/\(questions.count)")
-            await harness.send(question)
+            if spoken {
+                // As `ChatView.sendSpoken` sends what the ear heard.
+                let nonce = harness.willSend(question)
+                if speaker.awaitReply(nonce, readAloud: true).spoken { harness.markSpoken(nonce) }
+                await harness.retry()
+                // The next question waits for the reading to end, not only the reply.
+                while speaker.speaking { try? await Task.sleep(for: .milliseconds(200)) }
+            } else {
+                await harness.send(question)
+            }
         }
         Perf.mark("perf.run.done")
     }
