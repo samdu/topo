@@ -123,6 +123,9 @@ public actor TurnRunner {
             await brain.landed(assistant, nonce: replyNonce)
             return Result(person: person, assistant: assistant, reply: reply)
         } catch {
+            // The kind of failure and nothing it carries.
+            if case TurnRunnerError.displaced = error { Perf.mark("turn.reply.failed displaced") }
+            else { Perf.mark("turn.reply.failed \(type(of: error))") }
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
         }
     }
