@@ -55,7 +55,15 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 The process — who plans, who builds, who reviews, and in what order — is `docs/process.md`. The short form:
 
 - Every change lands as a PR on a `buddy/<topic>` branch from its own worktree, opened as a draft. The description is the contract: what was done, and a **Proof** section as a checklist of what was verified. A test only a physical device can show is an unchecked `- [ ] device: …` box; auto-merge waits until it is ticked.
-- Never force push. One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
+- One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
+- **Other engineer sessions share this Mac and this repo**, so:
+    - Kill only pids you started, never by name (`pgrep`, `pkill`, `killall`): an `xcodebuild` matched by pattern is as likely a sibling session's run as yours. `scripts/simulator-run.sh` records its own in `build/sim/simulator-run.pids`.
+    - Never quit Simulator.app: quitting it shuts down every booted simulator on the Mac. One device is stopped with `xcrun simctl shutdown <udid>`, and a tap goes through XCUITest, not the GUI.
+    - Run `TopoUITests` on a simulator no other worktree is using, named by udid: two runs on one device share the bundle id and its container, and each fails on the other's state.
+    - Re-read a PR's body right before `gh pr edit --body` and edit what you read: the coordinator ticks Proof boxes in it, and a body written from an older copy unticks them.
+    - Retarget a stacked PR to `main` (`gh pr edit <n> --base main`) before its base merges: automerge deletes the merged head branch, and GitHub closes a PR whose base branch is gone.
+    - Name a scratch file for its PR or branch (`body-<topic>.md`): sessions can share a scratch directory, and a generic name is overwritten between your write and the command that reads it.
+    - Never force push: a re-review reads the commits pushed since the last one, and a rewritten branch has none to read. Bring a branch up to date with a merge.
 - Prefer what exists: stdlib, then a platform framework, then an already-linked dependency, before new code or a new dependency. Nothing GPL from others ships in a bundle unless its holders waive the App Store conflict, as iSH's do; the fork is the one such piece. Every borrowed piece is attributed in `THIRD-PARTY`.
 - Docs describe what **is**, never what was or what is planned. When you change behaviour, change the doc to match; do not narrate the change.
 - **Ask the advisor at three moments.** Engineer sessions carry a Fable advisor beside the Opus model that does the work. Consult it once a plan is drafted and before anyone else reads it, and fix what it catches first; the second time a CI job fails the same way or a reviewer raises the same finding again, before pushing a third attempt; and at a task boundary, before reporting, to ask what was missed, with the answer in the report. The advisor advises and you still write the code; a consult is not an escalation, so nothing waits on anyone after it.

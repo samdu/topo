@@ -69,6 +69,13 @@
 # Building runs scripts/build-ish.sh first: the guest's framework is built from the fork's pin and
 # is not in the repository.
 #
+# Every run writes two files under build/sim and prints their paths first. simulator-run.log is
+# everything the run prints, kept after it, so a run started in the background can be read once
+# it is over. simulator-run.pids is the pids the run started, the script's own first and then
+# each xcodebuild and the launcher; it is removed when the run ends. Ending a run is
+# `kill $(head -1 build/sim/simulator-run.pids)`: the script ends what that file names and
+# nothing else, so a sibling worktree's xcodebuild is never touched.
+#
 # On buddybox xcodebuild needs the login keychain, so run this from the GUI session:
 #   ssh buddybox 'sudo launchctl asuser $(id -u) sudo -u buddy bash -lc "cd ~/github/topo && scripts/simulator-run.sh --send hello"'
 set -euo pipefail
@@ -110,7 +117,7 @@ while [ $# -gt 0 ]; do
     --expect-claude) expect_claude="$2"; shift 2 ;;
     --expect-bash) expect_bash="$2"; shift 2 ;;
     --fresh) fresh=yes; shift ;;
-    -h|--help) sed -n '2,67p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,77p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -118,9 +125,9 @@ done
 udid="$(xcrun simctl list devices available -j \
   | /usr/bin/python3 -c 'import json,sys;n=sys.argv[1];print(next((d["udid"] for ds in json.load(sys.stdin)["devices"].values() for d in ds if n in (d["name"],d["udid"])),""))' "$device")"
 [ -n "$udid" ] || { echo "no available simulator named '$device'; xcrun simctl list devices available" >&2; exit 1; }
-echo "==> $device ($udid)"
 
 if [ "$erase" = yes ]; then
+  echo "==> $device ($udid)"
   xcrun simctl shutdown "$udid" 2>/dev/null || true
   xcrun simctl erase "$udid"
   echo "==> erased; the token is no longer in that simulator's keychain"
@@ -146,6 +153,62 @@ case "$expect_claude" in
   *) echo "--expect-claude takes fetched or reused, not '$expect_claude'" >&2; exit 2 ;;
 esac
 
+# What this run started, and nothing else on the Mac: the pids file names the script and every
+# xcodebuild and launcher it starts, and `cleanup` ends those. An xcodebuild runs in the
+# background under `wait`, so a signal to the script reaches the trap at once rather than after
+# the build.
+mkdir -p "$derived"
+pids="$derived/simulator-run.pids"
+runlog="$derived/simulator-run.log"
+started=""
+lane=no
+log=""
+echo "$$" >"$pids"
+
+# Everything printed from here goes to the run's log as well as to where it was going. tee reads
+# a fifo rather than a process substitution, so its pid is known and `cleanup` can wait for the
+# last line to be written; it ignores SIGPIPE and SIGINT, so a caller that has gone, or a ^C,
+# leaves the file whole.
+fifo="$derived/simulator-run.$$.fifo"
+rm -f "$fifo"
+mkfifo "$fifo"
+(trap '' PIPE; exec tee -i "$runlog") <"$fifo" &
+tee_pid=$!
+exec >"$fifo" 2>&1
+rm -f "$fifo"
+echo "==> $device ($udid)"
+echo "==> log: $runlog"
+echo "==> pids: $pids"
+
+cleanup() {
+  # Only a recorded pid that is still this shell's running child is signalled: one already
+  # reaped is a number the system may have handed to somebody else's process.
+  local pid live
+  live=" $(jobs -pr | tr '\n' ' ')"
+  for pid in $started; do
+    case "$live" in *" $pid "*) kill "$pid" 2>/dev/null || true ;; esac
+  done
+  [ "$lane" = no ] || scripts/ci-audio-lane.sh stop || true
+  [ -z "$log" ] || rm -f "$log"
+  # A newer run in this worktree has its own pids file under the same name.
+  [ "$(head -1 "$pids" 2>/dev/null)" != "$$" ] || rm -f "$pids"
+  exec >&- 2>&-
+  wait "$tee_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# Runs a command as a recorded child and waits for it, returning its status.
+tracked() {
+  "$@" &
+  local pid=$! status=0
+  echo "$pid" >>"$pids"
+  started="$started $pid"
+  wait "$pid" || status=$?
+  return "$status"
+}
+
 if [ "$build" = yes ]; then
   scripts/build-ish.sh
 fi
@@ -156,7 +219,7 @@ if [ "$talk" = yes ]; then
   voice_models="${VOICE_MODELS:-$root/build/voice-models}"
   scripts/fetch-ear-models.sh "$models"
   scripts/fetch-voice-models.sh "$voice_models"
-  trap 'scripts/ci-audio-lane.sh stop' EXIT
+  lane=yes
   scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav"
   # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
   # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input.
@@ -172,7 +235,7 @@ if [ "$talk" = yes ]; then
   status=0
   TEST_RUNNER_TOPO_TALK_SETUP_TOKEN="$token" TEST_RUNNER_TOPO_UITEST_EAR_MODELS="$models" \
   TEST_RUNNER_TOPO_UITEST_VOICE_MODELS="$voice_models" \
-    xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
+    tracked xcodebuild test -project Topo.xcodeproj -scheme TopoTalk -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -resultBundlePath "$results" || status=$?
   scripts/ci-audio-lane.sh check after || status=1
@@ -184,7 +247,7 @@ fi
 
 if [ "$build" = yes ]; then
   echo "==> building"
-  xcodebuild -project Topo.xcodeproj -scheme Topo -configuration Debug \
+  tracked xcodebuild -project Topo.xcodeproj -scheme Topo -configuration Debug \
     -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
     build
 fi
@@ -202,7 +265,7 @@ if [ "$pressmic" = yes ]; then
   xcrun simctl bootstatus "$udid" -b >/dev/null
   xcrun simctl privacy "$udid" reset all "$bundle"
   TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1 \
-    xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
+    tracked xcodebuild test -project Topo.xcodeproj -scheme Topo -configuration Debug \
       -destination "platform=iOS Simulator,id=$udid" -derivedDataPath "$derived" \
       -only-testing:TopoUITests
 fi
@@ -221,7 +284,13 @@ xcrun simctl install "$udid" "$app"
 
 log="$(mktemp -t topo-sim)"
 launcher=""
-trap '[ -z "$launcher" ] || kill "$launcher" 2>/dev/null; rm -f "$log"' EXIT
+# The launcher stays attached to the app's console only when there is a closing line to wait for.
+# An attached launcher never exits, since the app never does, so a run with nothing to wait for
+# launches detached: simctl returns once the app is up, and the run ends there.
+attach=""
+if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
+  attach=--console-pty
+fi
 # This run's id: the app prints it on the reply to the turn it sent, so neither a line from an
 # earlier launch nor a reply to some other turn can stand in for this run's answer.
 run="$(uuidgen)"
@@ -231,8 +300,10 @@ SIMCTL_CHILD_TOPO_DEBUG_SEND="$send" \
 SIMCTL_CHILD_TOPO_DEBUG_USERLAND="$userland" \
 SIMCTL_CHILD_TOPO_DEBUG_GUEST_TURN="$guestturn" \
 SIMCTL_CHILD_TOPO_DEBUG_RUN="$run" \
-  xcrun simctl launch --console-pty --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
+  xcrun simctl launch $attach --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
 launcher=$!
+echo "$launcher" >>"$pids"
+started="$started $launcher"
 
 fail() {
   grep '\[topo-debug\]' "$log" || cat "$log"
@@ -359,4 +430,5 @@ if [ -n "$send" ] || [ -n "$userland" ] || [ -n "$guestturn" ]; then
 else
   wait "$launcher" && status=0 || status=$?; launcher=""
   [ "$status" = 0 ] || fail "the launcher exited ($status)"
+  echo "==> launched signed in"
 fi
