@@ -1,6 +1,7 @@
 #if canImport(CloudKit)
 @preconcurrency import CloudKit
 import Foundation
+import os
 
 /// `RecordDatabase` over a `CKDatabase` and one record zone.
 ///
@@ -130,34 +131,59 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
         return out
     }
 
-    /// The zone's change feed from the beginning, kept to the one type. A
-    /// match-all query would do the same only with a queryable index on the
-    /// record name, which the development schema never builds.
+    /// Every record of the type, from the process's mirror of the zone (`ZoneMirror`): the zone's
+    /// change feed, walked from the beginning by the first read and from where the last one
+    /// stopped by every read after, whichever object over this zone asks. A match-all query
+    /// would do the same only with a queryable index on the record name, which the development
+    /// schema never builds.
     public func records(ofType type: String) async throws -> [Record] {
-        var out: [Record] = []
-        var token: CKServerChangeToken?
-        var more = true
-        while more {
-            let page: (modificationResultsByID: [CKRecord.ID: Result<CKDatabase.RecordZoneChange.Modification, any Error>],
-                       deletions: [CKDatabase.RecordZoneChange.Deletion],
-                       changeToken: CKServerChangeToken, moreComing: Bool)
-            do {
-                page = try await database.recordZoneChanges(inZoneWith: zoneID, since: token)
-            } catch {
-                throw Self.mapped(error, recordIDs: [])
+        Perf.mark("zone.read.begin \(type)")
+        defer { Perf.mark("zone.read.end \(type)") }
+        return try await mirror.records(ofType: type)
+    }
+
+    /// One mirror per zone for the process, since every reader makes its own database object.
+    private static let mirrors = OSAllocatedUnfairLock<[String: ZoneMirror]>(initialState: [:])
+
+    private var mirror: ZoneMirror {
+        let key = "\(database.databaseScope.rawValue)/\(zoneID.ownerName)/\(zoneID.zoneName)"
+        return Self.mirrors.withLock { mirrors in
+            if let mirror = mirrors[key] { return mirror }
+            let mirror = ZoneMirror { [database, zoneID] token in
+                try await Self.page(of: database, zoneID: zoneID, since: token)
             }
-            for (id, result) in page.modificationResultsByID {
-                switch result {
-                case .success(let change):
-                    if change.record.recordType == type { out.append(Self.record(from: change.record)) }
-                case .failure(let e):
-                    throw Self.mapped(e, recordIDs: [id])
-                }
-            }
-            token = page.changeToken
-            more = page.moreComing
+            mirrors[key] = mirror
+            return mirror
         }
-        return out
+    }
+
+    /// One page of the zone's change feed, every type.
+    private static func page(of database: CKDatabase, zoneID: CKRecordZone.ID, since token: Data?) async throws -> ZoneFeedPage {
+        var server: CKServerChangeToken?
+        if let token {
+            server = try? NSKeyedUnarchiver.unarchivedObject(ofClass: CKServerChangeToken.self, from: token)
+            guard server != nil else { throw RecordChangesError.tokenExpired }
+        }
+        let page: (modificationResultsByID: [CKRecord.ID: Result<CKDatabase.RecordZoneChange.Modification, any Error>],
+                   deletions: [CKDatabase.RecordZoneChange.Deletion],
+                   changeToken: CKServerChangeToken, moreComing: Bool)
+        do {
+            page = try await database.recordZoneChanges(inZoneWith: zoneID, since: server)
+        } catch {
+            if let ck = error as? CKError, ck.code == .changeTokenExpired { throw RecordChangesError.tokenExpired }
+            throw mapped(error, recordIDs: [])
+        }
+        var changed: [Record] = []
+        for (id, result) in page.modificationResultsByID {
+            switch result {
+            case .success(let change): changed.append(record(from: change.record))
+            case .failure(let e): throw mapped(e, recordIDs: [id])
+            }
+        }
+        Perf.mark("zone.page records=\(changed.count) deleted=\(page.deletions.count)")
+        return ZoneFeedPage(changed: changed, deleted: page.deletions.map { RecordID($0.recordID.recordName) },
+                            token: try NSKeyedArchiver.archivedData(withRootObject: page.changeToken, requiringSecureCoding: true),
+                            moreComing: page.moreComing)
     }
 
     public func delete(_ ids: [RecordID]) async throws {
