@@ -473,8 +473,14 @@ struct ChatView: View {
         #if DEBUG
         if let fixture = DebugRun.transcript() { return fixture }
         #endif
-        return harness.turns
+        guard let writing = harness.writing, !writing.isEmpty else { return harness.turns }
+        return harness.turns + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
+                                     nonce: "writing")]
     }
+
+    /// The row the reply is drawn in while the guest writes it (`Harness.writing`): no turn of
+    /// the log's, so no device's sequence can name it.
+    private static let writingRef = TurnRef(device: DeviceID("writing"), sequence: 0)
 
     /// Where Topo stands, into the badge's debug report, off the view update it arrives in. Nil in
     /// a release build, which reports nothing.

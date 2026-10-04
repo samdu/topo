@@ -51,11 +51,12 @@ public struct ClaudeLauncher: ResidentLauncher {
     }
 
     /// Claude Code's arguments: stream-json both ways (`--verbose` is what stream-json output
-    /// requires), permissions bypassed, the model when one is given, and the session to resume
+    /// requires), a message's text as it is written (`--include-partial-messages`), permissions bypassed, the model when one is given, and the session to resume
     /// when there is one. Bypassed because the guest is the sandbox: what the mind can reach is
     /// decided by the holes poked in it (the mounts, the proxy), and nothing inside it prompts.
     public static func arguments(model: String?, resume: String?, memory: Bool? = nil) -> [String] {
         var arguments = ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
+                         "--include-partial-messages",
                          "--dangerously-skip-permissions"]
         if let model { arguments += ["--model", model] }
         if let memory { arguments += ["--append-system-prompt", memoryPrompt(mounted: memory)] }
