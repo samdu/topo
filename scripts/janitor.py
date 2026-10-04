@@ -30,15 +30,22 @@ judgement:
      and deletes the branch ref only if it still names that merged head
      (`update-ref -d` with the old value), so a commit landing at any point
      is never dropped;
-  5. reports, once per condition per head and again every `REPEAT` while it
-     holds: a verdict that blocks, a draft untouched for `GRACE`, a green PR
-     with Proof boxes unticked, a ready PR with no validate run, a run
-     cancelled with nothing after it, and a PR nothing has touched for
-     `IDLE` while no run is in progress;
+  5. reports a ready PR that needs a person, once, and again only when the
+     PR itself changes: a verdict that blocks, a green PR with Proof boxes
+     unticked, a ready PR with no validate run, a run cancelled with nothing
+     after it, and a PR nothing has touched for `IDLE` while no run is in
+     progress. A draft is gate one's and is never read or reported;
   6. reports each open issue that is untriaged — no `triaged` label and no
-     comment — once it is older than `GRACE`, again every `REPEAT` while it
-     stays so. A paged GraphQL read (at most `ISSUES_PAGES` pages) gives the
-     title, the labels and a comment count; the body is never read.
+     comment — once it is older than `GRACE`, and again only when its labels
+     or its updated-at change. A paged GraphQL read (at most `ISSUES_PAGES`
+     pages) gives the title, the labels, the dates and a comment count; the
+     body is never read.
+
+What was last said of each PR and issue is kept as a fingerprint in the state
+file (`reported`), and an item whose fingerprint has not moved is silent
+however old it gets; once per `DIGEST` one line names what still stands. A
+state file that is missing, corrupt or without that record is a first run:
+what stands is recorded and named in that one line, never said item by item.
 
 Everything it decides is a function of what it read; everything it does is a
 `gh`, `git`, `tmux` or shell call behind `Shell`, so `--dry-run` prints the
@@ -46,7 +53,8 @@ pass instead. The report, when there is one, is posted to buddy-prime's mesh
 bridge over the fleet's authenticated `/deliver` route with this host's own
 peer token, as `topo-janitor` on the host `buddy-janitor`; a report the far
 bridge does not take is kept in the state file and sent with the next. A
-quiet pass sends nothing. Nothing here reads a review, merges over a red or
+pass with nothing new sends nothing, and no report wants an answer: its
+first line says nothing reads one. Nothing here reads a review, merges over a red or
 missing verdict, or edits code. One pass at a time: the state directory
 holds a lock, and a pass that finds it held exits. The state file is written
 after every action that changes the world — a merge, a rerun, a publish begun,
@@ -59,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -82,11 +91,17 @@ MESH_ENV = os.environ.get("TOPO_JANITOR_MESH_ENV", "~/.mesh-bridge-env")
 MESH_SELF = "buddy-janitor"   # this host's verified mesh name; the sender below is the janitor's
 REPORT_TO = "buddy-prime"
 FROM = "topo-janitor"
+# The receiving bridge ends every relayed message by asking for a reply. One
+# sent to a script is addressed to no session: buddybox's bridge refuses it,
+# and it holds buddy-prime's queue to this host until it expires.
+NO_REPLY = "No reply is read: topo-janitor is a script with no session, so do not answer this."
 
-GRACE = timedelta(minutes=15)      # automerge's chance, a draft's, a box's
+GRACE = timedelta(minutes=15)      # automerge's chance, a box's
 SETTLE = timedelta(minutes=10)     # a red run is left this long before a rerun
 IDLE = timedelta(minutes=45)       # nothing moving, nothing running
-REPEAT = timedelta(minutes=180)    # a standing condition is said again after this
+REPEAT = timedelta(hours=24)       # a failed read, a refusal, a worktree left: said again after this
+DIGEST = timedelta(hours=24)       # one line naming what still stands, no oftener than this
+DIGEST_NAMES = 40                  # PRs, and issues, the digest names before it counts the rest
 SWEEP = timedelta(hours=24)        # a merged branch's worktree lives this long
 PUBLISH_RETRY = timedelta(hours=2)  # a publish is not tried again for one commit inside this
 PUBLISH_KEEP = timedelta(days=7)   # publish records older than this are forgotten
@@ -117,7 +132,7 @@ ISSUES_QUERY = f"""query($owner: String!, $name: String!, $after: String) {{
   repository(owner: $owner, name: $name) {{
     issues(states: OPEN, first: {ISSUES_PAGE}, after: $after) {{
       pageInfo {{ hasNextPage endCursor }}
-      nodes {{ number title createdAt labels(first: 100) {{ nodes {{ name }} pageInfo {{ hasNextPage }} }} comments {{ totalCount }} }}
+      nodes {{ number title createdAt updatedAt labels(first: 100) {{ nodes {{ name }} pageInfo {{ hasNextPage }} }} comments {{ totalCount }} }}
     }}
   }}
 }}"""
@@ -190,6 +205,24 @@ def infra_red(job):
     return all(n in SETUP_STEPS or n.startswith(SETUP_PREFIXES) for n in failed)
 
 
+def fingerprint(*parts):
+    return hashlib.sha256(json.dumps(parts, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def pr_fingerprint(pr, run, jobs, conds):
+    """What a PR's lines were said of: its head, the unticked boxes, its labels, base and review decision, the run's status and
+    conclusion, every job's conclusion, and which conditions hold. No age and
+    no updated-at, so time passing and a comment move nothing; `idle` is age
+    alone and is left out, so a PR already reported is not said again for
+    having sat."""
+    run = run or {}
+    return fingerprint(pr["headRefOid"], unchecked_boxes(pr.get("body")),
+                       sorted(l["name"] for l in pr.get("labels") or []), pr.get("baseRefName"),
+                       pr.get("reviewDecision") or "", run.get("status"), run.get("conclusion"),
+                       sorted((j["name"], j.get("conclusion") or "") for j in jobs),
+                       sorted(set(conds) - {"idle"}))
+
+
 def decide_pr(pr, run, jobs, state, now, require_label=False):
     """What one open PR wants from this pass.
 
@@ -206,9 +239,9 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     def report(cond, text):
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
+    # A draft is at gate one, the coordinator's: its suites run, the reviewer
+    # waits for ready, and nothing about it is the janitor's to say.
     if pr["isDraft"]:
-        if age > GRACE:
-            report("draft", f"{title}: a draft, untouched for {minutes(age)}; CI and the reviewer never run on a draft.")
         return out
 
     if run is None:
@@ -300,7 +333,8 @@ def decide_issues(issues, now):
     `issues` is the GraphQL read's nodes. An issue is untriaged while it has
     no `triaged` label and no comment; one is reported once it is older than
     GRACE. Returns (reports, keep, bad): a report is
-    {"kind": "report", "key": "issue:N", "text": ...}; `keep` the numbers whose
+    {"kind": "report", "key": "issue:N", "fp": ..., "text": ...}, `fp` the
+    fingerprint of its labels and updated-at; `keep` the numbers whose
     keys stand (the untriaged, and a malformed node's when it has a number),
     or None when a malformed node has no number to keep, so no issue key may
     be dropped; `bad` names each malformed node, which is skipped. Pure.
@@ -319,8 +353,9 @@ def decide_issues(issues, now):
             comments = i["comments"]["totalCount"]
             title = i["title"]
             created = parse_time(i["createdAt"])
+            updated = parse_time(i["updatedAt"])
             if (n is None or not isinstance(title, str) or isinstance(comments, bool)
-                    or not isinstance(comments, int) or created is None):
+                    or not isinstance(comments, int) or created is None or updated is None):
                 raise ValueError
         except (KeyError, TypeError, ValueError, AttributeError):
             bad.append(f"#{n}" if n is not None else f"node {at}")
@@ -337,7 +372,7 @@ def decide_issues(issues, now):
         if age <= GRACE:
             continue
         by = " (filed by Topo)" if FROM_TOPO in labels else ""
-        out.append({"kind": "report", "key": f"issue:{n}",
+        out.append({"kind": "report", "key": f"issue:{n}", "fp": fingerprint(sorted(labels), updated.isoformat()),
                     "text": f"issue: #{n} {title}{by}, opened {minutes(age)} ago, untriaged."})
     return out, keep, bad
 
@@ -385,6 +420,24 @@ def due(state, key, now):
     """A report key is due when it has not fired inside REPEAT."""
     last = parse_time(state.get("fired", {}).get(key))
     return last is None or now - last >= REPEAT
+
+
+def digest_line(standing, first=False):
+    """The one line naming what stands and was not said this pass. `standing`
+    maps `pr:N` to the conditions that hold and `issue:N` to nothing."""
+    def some(names):
+        more = f" and {len(names) - DIGEST_NAMES} more" if len(names) > DIGEST_NAMES else ""
+        return ", ".join(names[:DIGEST_NAMES]) + more
+
+    def number(item):
+        return int(item.split(":", 1)[1])
+
+    prs = [f"#{number(i)} ({standing[i]})" for i in sorted((i for i in standing if i.startswith("pr:")), key=number)]
+    issues = [f"#{number(i)}" for i in sorted((i for i in standing if i.startswith("issue:")), key=number)]
+    parts = ([some(prs)] if prs else []) + ([f"untriaged issue{'s' if len(issues) > 1 else ''} {some(issues)}"] if issues else [])
+    lead = ("first pass with no record of what was said; standing now" if first
+            else "still standing, unchanged since it was said")
+    return f"{lead}: {'; '.join(parts)}."
 
 
 # --- the shell -------------------------------------------------------------
@@ -436,7 +489,7 @@ class Shell:
 
     def open_prs(self):
         return self.listed(200, "--state", "open", "--json",
-                           "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels")
+                           "number,title,isDraft,headRefName,headRefOid,updatedAt,body,baseRefName,labels,reviewDecision")
 
     def require_label(self):
         """automerge.yaml's label rule: True, False, or None when it cannot be read
@@ -473,8 +526,8 @@ class Shell:
         self.run(["gh", "run", "rerun", str(run_id), "--repo", REPO, "--failed"], mutating=True)
 
     def open_issues(self):
-        """The open issues, as GraphQL nodes: number, title, createdAt, labels and a
-        comment count, never a body. Read a page at a time on `endCursor`, at
+        """The open issues, as GraphQL nodes: number, title, the two dates, labels
+        and a comment count, never a body. Read a page at a time on `endCursor`, at
         most ISSUES_PAGES pages; answers (nodes, whole), `whole` False when a
         next page still stands after the last one read."""
         owner, name = REPO.split("/")
@@ -622,7 +675,7 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
         return
     while queue:
         m = queue[0]
-        text = f"[{FROM}] pass at {m['at']}\n" + "\n".join(f"- {l}" for l in m["lines"])
+        text = f"[{FROM}] pass at {m['at']}. {NO_REPLY}\n" + "\n".join(f"- {l}" for l in m["lines"])
         if dry:
             log(text)
             queue.pop(0)
@@ -646,12 +699,27 @@ def deliver(sh, state, now, dry=False, log=print, warn=None):
 
 # --- one pass --------------------------------------------------------------
 
+STATE_SHAPE = {"fired": dict, "rerun": dict, "publish": dict, "reported": dict, "seeded": dict,
+               "pending": list, "undelivered": list}
+
+
 def load_state(path):
+    """The state, or {} when the file is missing or is not JSON. A key of the
+    wrong shape is dropped, and the record of what was said with it when that
+    record is not whole, so a damaged file is a first run and never a crash."""
     try:
         with open(path) as f:
-            return json.load(f)
+            state = json.load(f)
     except (OSError, ValueError):
         return {}
+    if not isinstance(state, dict):
+        return {}
+    state = {k: v for k, v in state.items() if isinstance(v, STATE_SHAPE.get(k, object))}
+    said = state.get("reported")
+    if said is None or not all(isinstance(v, dict) for v in said.values()):
+        state.pop("reported", None)
+        state.pop("seeded", None)
+    return state
 
 
 def save_state(path, state):
@@ -674,6 +742,26 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     state.setdefault("publish", {})
     state.setdefault("pending", [])
     lines = state["pending"]
+    reported = state.setdefault("reported", {})
+    seeded = state.setdefault("seeded", {})   # the scopes, prs and issues, a pass has read whole
+    standing, said, first = {}, set(), set()
+
+    def changed(item, fp):
+        return reported.get(item, {}).get("fp") != fp
+
+    def tell(item, fp, texts, scope):
+        """An item's lines, once per fingerprint. In a scope no pass has read
+        whole the fingerprint is recorded and the lines are not said: the
+        digest names the item instead."""
+        if not changed(item, fp):
+            quiet.append(f"{item}: unchanged since it was said")
+            return
+        reported[item] = {"fp": fp, "at": now.isoformat()}
+        if seeded.get(scope):
+            lines.extend(texts)
+            said.add(item)
+        else:
+            first.add(item)
 
     def say(key, text):
         """A line that stands while its condition does: once per REPEAT."""
@@ -688,10 +776,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     try:
         prs = sh.open_prs()
         prs_ok = True
+        state["fired"].pop("prs:read", None)   # a read that answered ends the failure
         require_label = sh.require_label()
     except RuntimeError as ex:
         say("prs:read", f"could not read the open PRs: {ex}")
         require_label = None
+    prs_whole = prs_ok
     for pr in prs:
         n, head = pr["number"], pr["headRefOid"]
         try:
@@ -704,6 +794,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
             say(f"{n}:read:{head}", f"#{n}: could not read its runs: {ex}")
             if "rate limit" in str(ex).lower():
                 lines.append("GitHub is rate limiting; the rest of the PRs wait for the next pass.")
+                prs_whole = False
                 break
             continue
         if not wants:
@@ -724,24 +815,33 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
                     persist()
                 except RuntimeError as ex:
                     say(f"{n}:rerun-refused:{head}", f"#{n}: rerun refused: {ex}")
-            else:
-                text = w["text"]
-                if ":red:" in w["key"] and due(state, w["key"], now):
-                    names = []
-                    for j in jobs or []:
-                        if j.get("conclusion") == "failure" and j["name"] in SUITE_JOBS:
-                            try:
-                                names += failing_tests(sh.job_log(j["id"]))
-                            except RuntimeError:
-                                pass
-                    if names:
-                        text += " Failing: " + "; ".join(dict.fromkeys(names)) + "."
-                say(w["key"], text)
+        reports = [w for w in wants if w["kind"] == "report"]
+        if reports:
+            item = f"pr:{n}"
+            conds = [w["key"].split(":")[1] for w in reports]
+            standing[item] = ", ".join(conds)
+            fp = pr_fingerprint(pr, run, jobs or [], conds)
+            texts = [w["text"] for w in reports]
+            if "red" in conds and changed(item, fp) and seeded.get("prs"):
+                names = []
+                for j in jobs or []:
+                    if j.get("conclusion") == "failure" and j["name"] in SUITE_JOBS:
+                        try:
+                            names += failing_tests(sh.job_log(j["id"]))
+                        except RuntimeError:
+                            pass
+                if names:
+                    at = conds.index("red")
+                    texts[at] += " Failing: " + "; ".join(dict.fromkeys(names)) + "."
+            tell(item, fp, texts, "prs")
+    if prs_whole:
+        seeded["prs"] = True
 
     # 3: the install page.
     try:
         main_sha = sh.main_sha()
         published = sh.published_commit()
+        state["fired"].pop("publish:read", None)
         why = decide_publish(published, main_sha, state, now)
         if why:
             # Recorded before it runs: a publish that times out, or a pass that
@@ -772,6 +872,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
             return seen[branch]
 
         worktrees = sh.worktrees(checkout)
+        state["fired"].pop("sweep:read", None)
         candidates = []
         for wt in worktrees:
             try:
@@ -825,11 +926,10 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
     # Issue lines are the first cut: the pass's PR lines come first, a pass
     # says at most ISSUE_LINES of them inside PENDING_MAX, and none while an
     # earlier report is undelivered, so a queue that waits on the bridge holds
-    # PR lines rather than issue lines that are said again anyway. A line not
-    # said leaves its key unfired, and it is said on a later pass.
-    # No line of this step joins a report while an earlier one is undelivered,
-    # or takes a place the pass's other lines left full: such a line is not
-    # said, and its key not fired, so a later pass says it.
+    # PR lines rather than issue lines. No line of this step joins a report
+    # while an earlier one is undelivered, or takes a place the pass's other
+    # lines left full: such a line is not said, and nothing is recorded of
+    # its issue, so a later pass says it.
     untriaged = None   # the keys that stand, known only off a whole read
     malformed = read = False
 
@@ -852,17 +952,22 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
                 malformed = True
                 more = f" and {len(bad) - 10} more" if len(bad) > 10 else ""
                 say_issue("issues:node", f"{len(bad)} open issue node{'s' if len(bad) > 1 else ''} came back malformed and {'were' if len(bad) > 1 else 'was'} skipped: {', '.join(bad[:10])}{more}.")
-            owed = [w for w in wants if due(state, w["key"], now)]
-            quiet += [f"{w['key']}: said within the last {minutes(REPEAT)}" for w in wants if w not in owed]
+            for w in wants:
+                standing[w["key"]] = ""
+            owed = [w for w in wants if changed(w["key"], w["fp"])]
+            quiet += [f"{w['key']}: unchanged since it was said" for w in wants if w not in owed]
             free = PENDING_MAX - len(lines)
-            if state.get("undelivered") or free <= 0:
+            if not seeded.get("issues"):
+                room = len(owed)   # recorded, not said: no line to make room for
+            elif state.get("undelivered") or free <= 0:
                 room = 0
             elif len(owed) <= min(ISSUE_LINES, free):
                 room = len(owed)
             else:
                 room = min(ISSUE_LINES, free - 1)   # and one line saying how many wait
             for w in owed[:room]:
-                say(w["key"], w["text"])
+                tell(w["key"], w["fp"], [w["text"]], "issues")
+            seeded["issues"] = True
             held = len(owed) - room
             if held > 0 and (state.get("undelivered") or free <= 0):
                 quiet.append(f"{held} issue line(s) wait for the undelivered reports or a report with room")
@@ -872,24 +977,46 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False):
         say_issue("issues:read", f"could not read the open issues: {ex}")
 
     # Forget what no open PR carries, so the file does not grow — but only on a
-    # pass that read the PRs, since an unread list is not an empty one. Issue
-    # keys likewise, only on a pass that read the whole issue list; a read that
+    # pass that read the PRs, since an unread list is not an empty one. Issues
+    # likewise, only on a pass that read the whole issue list; a read that
     # answered at all ends the read failure, so the next one is said.
     if read:
         state["fired"].pop("issues:read", None)
     if untriaged is not None or malformed:
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if not (k == "issues:page" or (k == "issues:node" and not malformed)
-                                  or (untriaged is not None and k.startswith("issue:") and int(k[len("issue:"):]) not in untriaged))}
+                          if not (k == "issues:page" or (k == "issues:node" and not malformed))}
+    if untriaged is not None:
+        keep = {f"issue:{n}" for n in untriaged}
+        state["reported"] = reported = {k: v for k, v in reported.items() if not k.startswith("issue:") or k in keep}
     if prs_ok:
         live = {pr["headRefOid"] for pr in prs}
+        opened = {f"pr:{pr['number']}" for pr in prs}
         state["fired"] = {k: v for k, v in state["fired"].items()
-                          if k.startswith(("issue:", "issues:"))
+                          if k.startswith("issues:")
                           or (k.startswith("sweep:") and os.path.exists(k[len("sweep:"):]))
                           or k.endswith(":read") or k.rsplit(":", 1)[-1] in live}
         state["rerun"] = {k: v for k, v in state["rerun"].items() if k.rsplit(":", 1)[-1] in live}
+        state["reported"] = reported = {k: v for k, v in reported.items() if not k.startswith("pr:") or k in opened}
     state["publish"] = {k: v for k, v in state["publish"].items()
                         if (t := parse_time(v.get("at"))) and now - t < PUBLISH_KEEP}
+
+    # The digest: what stands and was not said this pass, in one line. A first
+    # run's is said at once and is all it says of what it found; after that,
+    # one no oftener than DIGEST, and none while nothing stands.
+    try:
+        last = parse_time(state.get("digest_at"))
+    except (ValueError, TypeError, AttributeError):
+        last = None
+    unsaid = {i: standing[i] for i in standing if i not in said}
+    if first:
+        lines.append(digest_line(unsaid, first=True))
+        state["digest_at"] = now.isoformat()
+    elif last is None:
+        state["digest_at"] = now.isoformat()
+    elif standing and now - last >= DIGEST:
+        if unsaid:
+            lines.append(digest_line(unsaid))
+        state["digest_at"] = now.isoformat()
 
     if verbose:
         for q in quiet:
