@@ -149,11 +149,33 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
         let key = "\(database.databaseScope.rawValue)/\(zoneID.ownerName)/\(zoneID.zoneName)"
         return Self.mirrors.withLock { mirrors in
             if let mirror = mirrors[key] { return mirror }
-            let mirror = ZoneMirror { [database, zoneID] token in
+            let mirror = ZoneMirror(store: Self.store(named: key)) { [database, zoneID] token in
                 try await Self.page(of: database, zoneID: zoneID, since: token)
             }
             mirrors[key] = mirror
             return mirror
+        }
+    }
+
+    /// Where a zone's copy is kept between launches: the caches directory, which the system may
+    /// empty (a launch after that walks the feed), under the iCloud account it was read as. With
+    /// no account to name, nothing is kept.
+    private static func store(named key: String) -> ZoneMirror.Store? {
+        guard let identity = FileManager.default.ubiquityIdentityToken,
+              let owner = try? NSKeyedArchiver.archivedData(withRootObject: identity, requiringSecureCoding: true),
+              let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return nil }
+        return ZoneMirror.Store(file: mirrorDirectory(in: caches).appendingPathComponent(key.replacingOccurrences(of: "/", with: "-") + ".plist"),
+                                owner: owner)
+    }
+
+    private static func mirrorDirectory(in caches: URL) -> URL { caches.appendingPathComponent("zone-mirror", isDirectory: true) }
+
+    /// Forgets every zone this process has read and removes their copies from disk, whichever
+    /// process wrote them: what a sign-out leaves on the device of the log is nothing.
+    public static func forgetMirrors() async {
+        for mirror in mirrors.withLock({ Array($0.values) }) { await mirror.forget() }
+        if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
+            try? FileManager.default.removeItem(at: mirrorDirectory(in: caches))
         }
     }
 

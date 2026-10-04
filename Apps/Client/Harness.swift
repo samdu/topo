@@ -272,7 +272,8 @@ final class Harness {
     /// nothing more, the answering loop ends, the runner and screen are cleared, and the next
     /// sign-in starts at the first question. Returns once the brain has forgotten the login's
     /// conversation, so what the guest kept of it is gone before the login is. The log itself
-    /// stays where it is, in the person's own iCloud; nothing of it is on this device to remove.
+    /// stays where it is, in the person's own iCloud; the copy of the zone this device keeps to
+    /// read it quickly (`ZoneMirror`) is removed.
     func forget() async {
         stopAnswering()
         runner = nil
@@ -295,6 +296,9 @@ final class Harness {
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
         // What the guest kept of the last login's conversation goes with it.
         await brain.forget()
+        #if canImport(CloudKit)
+        await CloudKitRecordDatabase.forgetMirrors()
+        #endif
     }
 
     /// Ends everything under way for this login: the turn in flight, every answering pass and

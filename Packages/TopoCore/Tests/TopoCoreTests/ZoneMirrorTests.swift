@@ -111,4 +111,63 @@ private actor Feed {
         #expect(one.count == 3 && two.count == 3)
         #expect(await feed.pulls.filter { $0 == nil }.count == 1)
     }
+
+    // MARK: - Kept on disk
+
+    private func file() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("zone-mirror-\(UUID().uuidString)/zone.plist")
+    }
+
+    private func mirror(at file: URL, owner: String = "sam") -> ZoneMirror {
+        ZoneMirror(store: .init(file: file, owner: Data(owner.utf8))) { [feed] in try await feed.page(since: $0) }
+    }
+
+    @Test func aLaunchAfterAReadAsksOnlyFromWhereItStopped() async throws {
+        let file = file()
+        for name in ["a", "b", "c"] { await feed.save("Turn", name) }
+        _ = try await mirror(at: file).records(ofType: "Turn")
+        await feed.save("Turn", "d")
+        let read = try await mirror(at: file).records(ofType: "Turn")
+        #expect(read.map(\.id.name) == ["a", "b", "c", "d"])
+        #expect(await feed.pulls == [nil, 2, 3])
+    }
+
+    @Test func aCopyKeptUnderAnotherOwnerIsNotRead() async throws {
+        let file = file()
+        await feed.save("Turn", "a")
+        _ = try await mirror(at: file).records(ofType: "Turn")
+        _ = try await mirror(at: file, owner: "someone else").records(ofType: "Turn")
+        #expect(await feed.pulls == [nil, nil])
+    }
+
+    @Test func aFileThatIsNotACopyIsAWalkFromTheBeginning() async throws {
+        let file = file()
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("not a plist".utf8).write(to: file)
+        await feed.save("Turn", "a")
+        let read = try await mirror(at: file).records(ofType: "Turn")
+        #expect(read.map(\.id.name) == ["a"])
+        #expect(await feed.pulls == [nil])
+    }
+
+    @Test func forgettingRemovesTheCopy() async throws {
+        let file = file()
+        await feed.save("Turn", "a")
+        let mirror = mirror(at: file)
+        _ = try await mirror.records(ofType: "Turn")
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        await mirror.forget()
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        _ = try await mirror.records(ofType: "Turn")
+        #expect(await feed.pulls == [nil, nil])
+    }
+
+    @Test func anExpiredTokenFromACopyIsAWalkAndTheCopyIsReplaced() async throws {
+        let file = file()
+        await feed.save("Turn", "a"); await feed.save("Turn", "b")
+        _ = try await mirror(at: file).records(ofType: "Turn")
+        await feed.delete("b"); await feed.expire()
+        #expect(try await mirror(at: file).records(ofType: "Turn").map(\.id.name) == ["a"])
+        #expect(try await mirror(at: file).records(ofType: "Turn").map(\.id.name) == ["a"])
+    }
 }
