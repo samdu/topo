@@ -301,6 +301,51 @@ import TopoCoreTesting
 }
 
 @Suite struct TurnWriterRecoveryTests {
+    @Test func aJustReadTranscriptIsNotAskedForTheWritersNextRecordAgain() async throws {
+        let db = CountingFetchDatabase(inner: InMemoryRecordDatabase())
+        let log = TurnLog(database: db)
+        let w = try await log.writer(for: phone)
+        let first = try await w.append(.person, "one", parents: [], at: tA)
+        let read = try await log.read()
+        #expect(read.free == [.ref("phone", 2)])
+
+        var before = db.fetches
+        _ = try await w.append(.assistant, "two", continuing: read, at: tA + 1, justRead: true)
+        #expect(db.fetches == before)
+
+        // A transcript held for longer is checked against the log as it stands.
+        let later = try await log.read()
+        before = db.fetches
+        let third = try await w.append(.person, "three", continuing: later, at: tA + 2)
+        #expect(db.fetches == before + 1)
+        #expect(third.parents == [.ref("phone", 2)])
+        #expect(first.ref == .ref("phone", 1))
+    }
+
+    @Test func aJustReadTranscriptLackingTheWritersNewestTurnIsStillRefused() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: inner)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "one", parents: [], at: tA)
+        let stale = try await log.read()
+        _ = try await w.append(.person, "two", parents: stale.heads, at: tA + 1)
+        await #expect(throws: TurnLogError.self) {
+            _ = try await w.append(.person, "three", continuing: stale, at: tA + 2, justRead: true)
+        }
+    }
+
+    @Test func aRecordWrittenSinceAJustReadTranscriptIsSteppedPastByTheSave() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: inner)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "one", parents: [], at: tA)
+        let read = try await log.read()
+        // Another writer for this device lands on the sequence the read found free.
+        _ = try await inner.save(turnRecord(device: "phone", seq: 2, parents: ["phone/1"]))
+        let mine = try await w.append(.person, "mine", continuing: read, at: tA + 1, justRead: true)
+        #expect(mine.ref == .ref("phone", 3))
+    }
+
     @Test func coldQueryIndexIsCorrectedByIDBeforeTheFirstAppend() async throws {
         let inner = InMemoryRecordDatabase()
         for i in Int64(1)...5 { _ = try await inner.save(turnRecord(device: "phone", seq: i, parents: [])) }

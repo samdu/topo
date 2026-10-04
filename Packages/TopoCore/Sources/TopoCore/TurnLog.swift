@@ -147,6 +147,11 @@ public struct Transcript: Sendable {
     /// 1 or more. Nothing can be said about them.
     public let unreadable: [RecordID]
 
+    /// Refs this read fetched by ID, which is read-your-writes, and found no record at: each
+    /// known device's next sequence number. A writer whose next append is one of them has
+    /// nothing of its own in the log that the read does not hold.
+    public internal(set) var free: Set<TurnRef> = []
+
     public init(turns: [Turn], missing: Set<TurnRef> = [], unreadable: [RecordID] = []) {
         var byRef: [TurnRef: Turn] = [:]
         for t in turns { byRef[t.ref] = t }
@@ -260,8 +265,10 @@ public struct TurnLog: Sendable {
         guard !probes.isEmpty else { return seen }
         let present = try await database.fetch(probes.map(Turn.recordID(for:)))
         let hidden = probes.filter { present[Turn.recordID(for: $0)] != nil }
-        guard !hidden.isEmpty else { return seen }
-        return Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
+        var read = hidden.isEmpty ? seen
+            : Transcript(turns: Array(seen.turns.values), missing: seen.missing.union(hidden), unreadable: seen.unreadable)
+        read.free = Set(probes).subtracting(hidden)
+        return read
     }
 
     /// The turn an append under `nonce` wrote, if that append went through:
@@ -389,9 +396,14 @@ public actor TurnWriter {
     /// parents are chosen the writer checks by ID, which is read-your-
     /// writes, whether the log holds turns of this device beyond what it
     /// knows, and then whether the transcript holds the newest of them.
+    ///
+    /// `justRead` says the transcript is a read made for this append, moments ago: the read has
+    /// then already asked the log, by ID, for this writer's next record (`Transcript.free`), and
+    /// the writer does not ask a second time. A record written there since is the save's to
+    /// find, as it is whenever one lands between the check and the save.
     public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
-                       nonce: String = UUID().uuidString) async throws -> Turn {
-        try await checkContinuable(transcript)
+                       nonce: String = UUID().uuidString, justRead: Bool = false) async throws -> Turn {
+        try await checkContinuable(transcript, justRead: justRead)
         return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce)
     }
 
@@ -404,8 +416,9 @@ public actor TurnWriter {
         return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce, renewing: lease)
     }
 
-    private func checkContinuable(_ transcript: Transcript) async throws {
-        try await syncWithLog()
+    private func checkContinuable(_ transcript: Transcript, justRead: Bool = false) async throws {
+        let asked = await nextRef
+        if !(justRead && transcript.free.contains(asked)) { try await syncWithLog() }
         var missing = transcript.missing
         let next = await appender.nextSequence
         if next > 1 {
@@ -415,6 +428,7 @@ public actor TurnWriter {
         guard missing.isEmpty, transcript.unreadable.isEmpty else {
             throw TurnLogError.incompleteTranscript(missing: missing, unreadable: transcript.unreadable)
         }
+        Perf.mark("log.append.checked")
     }
 
     /// Moves past any turn of this device the log already holds at or after

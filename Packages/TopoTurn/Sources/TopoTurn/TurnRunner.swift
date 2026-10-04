@@ -81,18 +81,22 @@ public actor TurnRunner {
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
         Perf.mark("turn.begin")
         await progress?(.takingLease)
+        // The log is read while the lease is taken: the read asks nothing of the lease, and
+        // nothing is done with it unless this device holds it.
+        async let reading = log.read()
         let outcome = try await lease.acquire()
         Perf.mark("turn.lease.acquired")
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
 
         await progress?(.saving)
-        try await settleOwed()
-        let before = try await log.read()
+        var before = try await reading
+        // An owed reply moved the log; what the turn continues from is read again.
+        if try await settleOwed() { before = try await log.read() }
         Perf.mark("turn.log.read")
         // A caller that stopped before the person's turn is in the log writes nothing at all.
         try Task.checkCancellation()
         let at = Date()
-        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
+        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce, justRead: true)
         Perf.mark("turn.person.saved")
         await progress?(.asking(person: person))
         let replyNonce = Self.replyNonce(for: [person.ref])
