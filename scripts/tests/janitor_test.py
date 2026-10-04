@@ -113,7 +113,6 @@ class Decisions(unittest.TestCase):
         self.assertEqual(fp(r=run("failure", since=timedelta(days=2))), same)
         self.assertEqual(fp(conds=("verdict", "idle")), same, "having sat is not a change")
         for what, other in (("a new commit", fp(pr(headRefOid="fffffff0000"))),
-                            ("the draft flag", fp(pr(isDraft=True))),
                             ("a box ticked", fp(pr(body="- [x] suite\n- [ ] device: phone"))),
                             ("a label", fp(pr(labels=[{"name": "automerge"}]))),
                             ("the review decision", fp(pr(reviewDecision="APPROVED"))),

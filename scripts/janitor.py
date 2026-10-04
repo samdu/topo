@@ -210,14 +210,13 @@ def fingerprint(*parts):
 
 
 def pr_fingerprint(pr, run, jobs, conds):
-    """What a PR's lines were said of: its head, the draft flag, the unticked
-    boxes, its labels, base and review decision, the run's status and
+    """What a PR's lines were said of: its head, the unticked boxes, its labels, base and review decision, the run's status and
     conclusion, every job's conclusion, and which conditions hold. No age and
     no updated-at, so time passing and a comment move nothing; `idle` is age
     alone and is left out, so a PR already reported is not said again for
     having sat."""
     run = run or {}
-    return fingerprint(pr["headRefOid"], pr["isDraft"], unchecked_boxes(pr.get("body")),
+    return fingerprint(pr["headRefOid"], unchecked_boxes(pr.get("body")),
                        sorted(l["name"] for l in pr.get("labels") or []), pr.get("baseRefName"),
                        pr.get("reviewDecision") or "", run.get("status"), run.get("conclusion"),
                        sorted((j["name"], j.get("conclusion") or "") for j in jobs),
