@@ -6,9 +6,11 @@
 # buddybox's for `scripts/simulator-run.sh --talk`, which stops it after the run.
 #
 #   scripts/ci-audio-lane.sh start [fixture]  # install, pin, and start the supervised feeder
-#                                             # (default Tests/Fixtures/purple-elephants.wav)
+#                                             # (default Tests/Fixtures/purple-elephants.wav);
+#                                             # refuses (exit 3) while a started lane still runs
 #   scripts/ci-audio-lane.sh check <when>     # fail, naming what died, unless the lane still holds
-#   scripts/ci-audio-lane.sh stop             # stop the feeder, restore the defaults start found
+#   scripts/ci-audio-lane.sh stop             # stop the feeder, restore the defaults start found,
+#                                             # and warn of any lane process it did not start
 #
 # The feeder (scripts/ci-audio-feeder.swift) is one long-lived engine that loops the fixture
 # into the default output and listens to the default input in the same process; it restarts
@@ -50,9 +52,30 @@ supervise() {
   done
 }
 
+# Every supervisor and feeder of this lane that is running, one "pid role" per line. A
+# supervisor is this script run as `supervise`, from any checkout; a feeder is the lane's binary.
+lane_processes() {
+  supervisor='^([^ ]+ )?[^ ]*ci-audio-lane\.sh supervise '
+  ps -axo pid=,command= | while read -r pid command; do
+    if [[ "$command" =~ $supervisor ]]; then
+      echo "$pid supervisor"
+    elif [[ "$command" == "$feeder "* ]]; then
+      echo "$pid feeder"
+    fi
+  done
+}
+
 start() {
   fixture="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
   [ -f "$fixture" ] || { echo "no fixture at $1" >&2; exit 1; }
+  # Before anything is touched: a second supervisor would orphan the first and its feeder, and
+  # two feeders double the level on the device. Exit 3 tells the caller the running lane is not
+  # the one it asked for, and so not its to stop.
+  # (Matched in a here-string: under pipefail, grep -q closing a pipe early fails the pipeline.)
+  if [ -s "$pidfile" ] && grep -qx "$(cat "$pidfile") supervisor" <<< "$(lane_processes)"; then
+    echo "::error::audio lane already started: supervisor $(cat "$pidfile") is running ($pidfile); run \`$0 stop\` first" >&2
+    exit 3
+  fi
   mkdir -p "$state"
   : > "$log"
   brew install --quiet blackhole-2ch switchaudio-osx
@@ -126,6 +149,8 @@ check() {
 }
 
 # The supervisor first, so it restarts nothing, then the feeder; then the defaults start found.
+# Whatever of the lane is still running after that was started by something else, a start whose
+# pid files were lost or another session on this Mac: it is named, and left alone.
 stop() {
   for file in "$pidfile" "$feederpid"; do
     [ -s "$file" ] || continue
@@ -143,6 +168,9 @@ stop() {
     if [ -n "$output" ]; then SwitchAudioSource -t output -s "$output"; else echo "no default output to restore"; fi
     rm -f "$previous"
   fi
+  lane_processes | while read -r pid role; do
+    echo "::warning::audio lane: $role $pid is still running and is not in $state's pid files; it was left alone, and a feeder still plays into $device"
+  done
   echo "audio lane stopped: input \"$(SwitchAudioSource -c -t input 2>&1 || true)\", output \"$(SwitchAudioSource -c -t output 2>&1 || true)\""
 }
 
