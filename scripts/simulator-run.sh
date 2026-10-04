@@ -156,8 +156,14 @@ if [ "$talk" = yes ]; then
   voice_models="${VOICE_MODELS:-$root/build/voice-models}"
   scripts/fetch-ear-models.sh "$models"
   scripts/fetch-voice-models.sh "$voice_models"
-  trap 'scripts/ci-audio-lane.sh stop' EXIT
-  scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav"
+  # A start that refuses (exit 3) found another run's lane, which is not this run's to stop.
+  lane=ours
+  trap '[ "$lane" = ours ] && scripts/ci-audio-lane.sh stop' EXIT
+  scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav" || {
+    status=$?
+    [ "$status" = 3 ] && lane=theirs
+    exit "$status"
+  }
   # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
   # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input.
   # Booting it again after the lane is up binds it to the loopback; its iCloud account and
