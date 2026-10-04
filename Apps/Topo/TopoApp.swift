@@ -25,6 +25,7 @@ struct TopoApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        PerfRun.begin()
         Perf.mark("app.init.begin sinceProcessStart=\(Perf.sinceProcessStart() ?? -1)ms")
         // Before anything reads the store: a debug build launched with a setup token in its
         // environment is signed in by it, so the simulator comes up past the sign-in screen.
@@ -240,6 +241,8 @@ struct TopoApp: App {
             // Nothing unless a debug build was launched asking for a turn; the screen
             // behaves as it always does either way.
             .task { await debugTurn() }
+            // Nothing unless the launch was a timed run from a Mac (`PerfRun`).
+            .task { await PerfRun.run(with: harness) }
             .task { await debugUserland() }
             .task { await debugGuestTurn() }
             .task { await debugConnections() }

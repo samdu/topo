@@ -2,6 +2,7 @@ import Foundation
 import Network
 import os
 import TopoAuth
+import TopoCore
 
 /// The loopback relay Claude Code in the guest reaches the API through: plain HTTP/1.1 in on
 /// `127.0.0.1` at a port picked at start, every request forwarded to the one upstream

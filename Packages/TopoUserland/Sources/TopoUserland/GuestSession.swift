@@ -1,4 +1,5 @@
 import Foundation
+import TopoCore
 
 /// A process the session talks to: the resident Claude Code in the guest, or a test's scripted one.
 public protocol ResidentProcess: AnyObject, Sendable {

@@ -353,6 +353,7 @@
 		C4C29C331E4637FB8D17A037 /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		C5D141FD093286CD2123E766 /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = 70AA9F21281788848492B29F /* TopoCoreTesting */; };
 		C6533550A01BE60476257107 /* MascotGeometryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1EB8233D6C5D8507C7D34F2 /* MascotGeometryTests.swift */; };
+		C66ECBF53D8F849FA6442A18 /* PerfRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9821C547C8C88D0A2C6D265A /* PerfRun.swift */; };
 		C692650BD02929FBC5ED0563 /* Speakable.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF519B4570159A5CED371583 /* Speakable.swift */; };
 		C7B7F92C7AAC8A7B931060AF /* GuestVaultMountTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 055408BFEC002888603D7515 /* GuestVaultMountTests.swift */; };
 		C8541D133A3FFF3D9B476D06 /* WidgetTaps.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97C54B7B9BC536CF0E22E7A6 /* WidgetTaps.swift */; };
@@ -674,6 +675,7 @@
 		94DA9AB030655FE57E305922 /* TopoCloudKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoCloudKit.swift; sourceTree = "<group>"; };
 		9595FA9BE88E06B2220A262C /* MascotCrossingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotCrossingTests.swift; sourceTree = "<group>"; };
 		97C54B7B9BC536CF0E22E7A6 /* WidgetTaps.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTaps.swift; sourceTree = "<group>"; };
+		9821C547C8C88D0A2C6D265A /* PerfRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfRun.swift; sourceTree = "<group>"; };
 		98D3BE114E74EF949FD68B7B /* AudioLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLog.swift; sourceTree = "<group>"; };
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		999383D4C5743811758B9CEF /* MarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTests.swift; sourceTree = "<group>"; };
@@ -938,6 +940,7 @@
 				1DABB17BCD6602885282D24F /* Info.plist */,
 				7A4CB88ED3E53A495B415761 /* NotePush.swift */,
 				D5D8E5964C0B2E93432931EE /* OnePassword.swift */,
+				9821C547C8C88D0A2C6D265A /* PerfRun.swift */,
 				DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */,
 				26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
@@ -2285,6 +2288,7 @@
 				813D801D420DE7D86179932D /* NotifyTool.swift in Sources */,
 				885E163C66AC4D7A380BB634 /* OctopusMark.swift in Sources */,
 				571D43A8EC3AE36CAF726E6F /* OnePassword.swift in Sources */,
+				C66ECBF53D8F849FA6442A18 /* PerfRun.swift in Sources */,
 				9294C1318A365C25A2DD50C4 /* PhoneTool.swift in Sources */,
 				CB95DF525A42DFB75D528726 /* PrimaryReader.swift in Sources */,
 				815C061D9BB10A6B9FFCEB3B /* RoleSelector.swift in Sources */,

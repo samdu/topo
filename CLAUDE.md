@@ -37,6 +37,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 | The harness, the outbox and the row, the push that wakes the loop | `docs/harness.md` |
 | Push to talk, the ear, the voice, the audio session, model downloads | `docs/voice.md` |
 | The guest: userland, API proxy, tool service and `topo`, resident Claude Code, the bridge | `docs/guest.md` |
+| Timing a launch and a turn: the marks, the hands-free run | `docs/perf.md` |
 | Transcript, draft row, badge, settings sheet, composer | `docs/chat.md` |
 | Topo on the glass | `docs/mascot.md` |
 | The vault on the phone, the mirror, `look.json`, moving homes | `docs/memory.md` |

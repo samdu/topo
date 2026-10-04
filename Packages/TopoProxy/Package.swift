@@ -14,9 +14,10 @@ let package = Package(
     ],
     dependencies: [
         .package(path: "../TopoAuth"),
+        .package(path: "../TopoCore"),
     ],
     targets: [
-        .target(name: "TopoProxy", dependencies: ["TopoAuth"]),
+        .target(name: "TopoProxy", dependencies: ["TopoAuth", .product(name: "TopoCore", package: "TopoCore")]),
         .target(name: "TopoTools", dependencies: ["TopoProxy"]),
         .testTarget(name: "TopoProxyTests", dependencies: ["TopoProxy", "TopoAuth"]),
         .testTarget(name: "TopoToolsTests", dependencies: ["TopoTools", "TopoProxy"]),
