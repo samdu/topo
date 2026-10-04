@@ -19,6 +19,9 @@ public enum Perf {
         file.withLock { $0?.write(Data((line + "\n").utf8)) }
     }
 
+    /// Whether a run is being timed, for a mark that costs something to make.
+    public static var recording: Bool { file.withLock { $0 != nil } }
+
     /// Starts `url` empty and writes every mark from here on to it as well.
     public static func record(to url: URL) {
         FileManager.default.createFile(atPath: url.path, contents: nil)
