@@ -363,6 +363,8 @@ final class Harness {
     func refresh() async -> Bool {
         do {
             let transcript = try await log.read()
+            let dropped = turns.filter { transcript[$0.ref] == nil }.count
+            if dropped > 0 { Perf.mark("chat.refresh.dropped \(dropped)") }
             turns = transcript.ordered
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)

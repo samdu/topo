@@ -32,6 +32,10 @@ while [ $# -gt 0 ]; do
   esac
 done
 [ $# -gt 0 ] || { echo "no questions given" >&2; exit 2; }
+# The app drops a blank question, so the count of answers would never match the count asked.
+for question in "$@"; do
+  [ -n "${question//[[:space:]]/}" ] || { echo "a question is blank" >&2; exit 2; }
+done
 [ -n "$device" ] || { echo "no device: pass --device or set TOPO_PERF_DEVICE (xcrun devicectl list devices)" >&2; exit 2; }
 
 asked=$#

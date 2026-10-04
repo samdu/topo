@@ -23,4 +23,27 @@ final class PerfRunTests: XCTestCase {
         XCTAssertEqual(PerfRun.gap([:]), 5)
         XCTAssertEqual(PerfRun.gap(["TOPO_PERF_GAP": "0.5"]), 0.5)
     }
+
+    @MainActor
+    func testEachQuestionIsAskedAfterTheReplyToTheLast() async {
+        var asked: [String] = []
+        let answered = await PerfRun.ask(["one", "two", "three"], gap: .zero) { index, question in
+            XCTAssertEqual(asked.count, index)
+            asked.append(question)
+            return true
+        }
+        XCTAssertEqual(answered, 3)
+        XCTAssertEqual(asked, ["one", "two", "three"])
+    }
+
+    @MainActor
+    func testTheRunEndsAtTheFirstQuestionWithNoReply() async {
+        var asked: [String] = []
+        let answered = await PerfRun.ask(["one", "two", "three"], gap: .zero) { _, question in
+            asked.append(question)
+            return question != "two"
+        }
+        XCTAssertEqual(answered, 1)
+        XCTAssertEqual(asked, ["one", "two"])
+    }
 }

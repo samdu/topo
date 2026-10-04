@@ -11,9 +11,12 @@ final class RouteForMarkTests: XCTestCase {
     }
 
     func testASegmentThatCouldBeASecretOrAnIDIsNotWritten() {
-        XCTAssertEqual(Forwarder.routeForMark("/v1/secret/sk-ant-api03-example"), "/v1/secret/*")
+        XCTAssertEqual(Forwarder.routeForMark("/v1/secret/sk-ant-api03-example"), "/v1/*/*")
         XCTAssertEqual(Forwarder.routeForMark("/v1/files/file_011cabc123"), "/v1/files/*")
         XCTAssertEqual(Forwarder.routeForMark("/v1/abcdefghijklmnopqrstuvwxyz"), "/v1/*")
+        // A secret that reads like a word is no more a route than one that does not.
+        XCTAssertEqual(Forwarder.routeForMark("/v1/files/password"), "/v1/files/*")
+        XCTAssertEqual(Forwarder.routeForMark("/hunter/v1"), "/*/v1")
     }
 
     func testAQueryIsNotPartOfIt() {
