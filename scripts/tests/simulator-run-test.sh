@@ -39,6 +39,8 @@ say() { echo "[topo-debug] $*"; }
 case "$2" in
   list) echo '{"devices":{"iOS":[{"name":"iPhone 17","udid":"FAKE-UDID"}]}}' ;;
   launch)
+    # The launcher's pid, for the test to hold that no run leaves one behind.
+    echo "$$" >"$FAKE_LAUNCHER_PID"
     case "$FAKE_LAUNCH" in
       exits-42) echo "launch failed"; exit 42 ;;
       stale-reply-exits-42) say "reply: stale unrelated reply"; exit 42 ;;
@@ -156,6 +158,7 @@ EOF
 # has a child of its own holding its output, as a build service outliving xcodebuild would.
 cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
+echo "$*" >>"$FAKE_XCODEBUILD_CALLS"
 if [ "${FAKE_XCODEBUILD:-}" = hangs ]; then
   sleep 30 &
   exec sleep 31
@@ -165,18 +168,32 @@ EOF
 chmod +x "$work/bin/xcrun" "$work/bin/op-item" "$work/bin/xcodebuild"
 
 failures=0
+export FAKE_LAUNCHER_PID="$work/launcher.pid" FAKE_XCODEBUILD_CALLS="$work/xcodebuild.calls"
 
 # case <name> <expected: pass|fail> <scenario> <max seconds> [script args...]
 case_() {
   local name="$1" want="$2" scenario="$3" limit="$4"; shift 4
-  local out="$work/$name.out" start status elapsed got
+  local out="$work/$name.out" start status elapsed got left=""
+  rm -f "$FAKE_LAUNCHER_PID"
   start=$SECONDS
   PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT="$wait" FAKE_LAUNCH="$scenario" \
     "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null
   status=$?
   elapsed=$((SECONDS - start))
   if [ "$status" = 0 ]; then got=pass; else got=fail; fi
-  if [ "$got" != "$want" ]; then
+  # Whatever way a run ends, it leaves no launcher running and no pids file.
+  if [ -s "$FAKE_LAUNCHER_PID" ] && kill -0 "$(cat "$FAKE_LAUNCHER_PID")" 2>/dev/null; then
+    left="its launcher running"
+    kill "$(cat "$FAKE_LAUNCHER_PID")"
+  elif [ -e "$work/root/build/sim/simulator-run.pids" ]; then
+    left="its pids file behind"
+    rm -f "$work/root/build/sim/simulator-run.pids"
+  fi
+  if [ -n "$left" ]; then
+    echo "FAIL $name: the script exited $status and left $left"
+    sed 's/^/    | /' "$out"
+    failures=$((failures + 1))
+  elif [ "$got" != "$want" ]; then
     echo "FAIL $name: wanted the script to $want, it exited $status"
     sed 's/^/    | /' "$out"
     failures=$((failures + 1))
@@ -226,6 +243,13 @@ case_ send-answered-mascot-other-turn      fail answered-other-mascot "$quick" -
 case_ send-answered-no-provenance          fail answered-old-format  "$quick"  --send hello
 case_ no-send-launched                     pass launched             "$quick"
 case_ press-mic-no-send-exits              pass launched             "$quick" --press-mic
+# The suite ran, and before the launch: its line is in the run's output above the launch's.
+if ! grep -q -- '-only-testing:TopoUITests' "$FAKE_XCODEBUILD_CALLS" 2>/dev/null \
+  || [ "$(grep -n -m1 'TEST SUCCEEDED' "$work/press-mic-no-send-exits.out" | cut -d: -f1)" -ge \
+       "$(grep -n -m1 '==> launching' "$work/press-mic-no-send-exits.out" | cut -d: -f1)" ] 2>/dev/null; then
+  echo "FAIL press-mic-no-send-exits: the suite did not run before the launch"
+  failures=$((failures + 1))
+fi
 case_ userland-ran                         pass userland-fetched     "$quick"  --userland "echo hi" --expect hi
 case_ userland-fetched-as-expected         pass userland-fetched     "$quick"  --userland "echo hi" --expect-rootfs fetched
 case_ userland-reused-as-expected          pass userland-reused      "$quick"  --userland "echo hi" --expect-rootfs reused

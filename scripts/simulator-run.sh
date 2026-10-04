@@ -160,7 +160,7 @@ esac
 mkdir -p "$derived"
 pids="$derived/simulator-run.pids"
 runlog="$derived/simulator-run.log"
-started=""
+started_pids=""
 lane=no
 log=""
 echo "$$" >"$pids"
@@ -186,7 +186,7 @@ cleanup() {
   # reaped is a number the system may have handed to somebody else's process.
   local pid live
   live=" $(jobs -pr | tr '\n' ' ')"
-  for pid in $started; do
+  for pid in $started_pids; do
     case "$live" in *" $pid "*) kill "$pid" 2>/dev/null || true ;; esac
   done
   [ "$lane" = no ] || scripts/ci-audio-lane.sh stop || true
@@ -210,7 +210,7 @@ tracked() {
   "$@" &
   local pid=$! status=0
   echo "$pid" >>"$pids"
-  started="$started $pid"
+  started_pids="$started_pids $pid"
   wait "$pid" || status=$?
   return "$status"
 }
@@ -309,7 +309,7 @@ SIMCTL_CHILD_TOPO_DEBUG_RUN="$run" \
   xcrun simctl launch $attach --terminate-running-process "$udid" "$bundle" >"$log" 2>&1 &
 launcher=$!
 echo "$launcher" >>"$pids"
-started="$started $launcher"
+started_pids="$started_pids $launcher"
 
 fail() {
   grep '\[topo-debug\]' "$log" || cat "$log"
