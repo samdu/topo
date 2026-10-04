@@ -52,7 +52,11 @@ enum PerfRun {
         began = true
         let spoken = environment[spokenVariable] == "1"
         // A spoken turn needs the voice resident at the send, as a press of the microphone does.
-        if spoken { for _ in 0..<300 where !speaker.voice.ready { try? await Task.sleep(for: .milliseconds(100)) } }
+        // A fresh install compiles the voice's model on its first load, which has taken 44 s.
+        if spoken {
+            for _ in 0..<1200 where !speaker.voice.ready { try? await Task.sleep(for: .milliseconds(100)) }
+            if !speaker.voice.ready { Perf.mark("perf.voice.unready") }
+        }
         var answered = 0
         for (index, question) in questions.enumerated() {
             if index > 0 { try? await Task.sleep(for: .seconds(gap(environment))) }
