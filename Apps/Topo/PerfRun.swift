@@ -37,25 +37,41 @@ enum PerfRun {
     /// windows has two.
     @MainActor private static var began = false
 
+    /// How long a question's reply is waited for once its turn has ended without one in the
+    /// transcript: a turn saved as a limb's is answered by another device, in its own time.
+    static let replyWait: Duration = .seconds(60)
+
     /// Sends the questions one at a time, then marks `perf.run.done answered=<n>/<m>`, which is
-    /// what the script waits for and checks. A question goes only once the harness has nothing
-    /// in flight and nothing waiting, and counts as answered when its reply is in the transcript
-    /// the harness shows; one whose turn failed is left behind and the run goes on.
+    /// what the script waits for and checks. A question goes only after the reply to the one
+    /// before it, and the run ends at the first that gets none; nothing is sent at all when the
+    /// harness already has words waiting, since a question would only queue behind them.
     @MainActor
     static func run(with harness: Harness, environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let questions = questions(environment)
         guard !questions.isEmpty, !began else { return }
         began = true
-        var answered = 0
-        for (index, question) in questions.enumerated() {
-            if index > 0 { try? await Task.sleep(for: .seconds(gap(environment))) }
-            while harness.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        while harness.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        let answered = harness.hasWaiting ? 0 : await ask(questions, gap: .seconds(gap(environment))) { index, question in
             Perf.mark("perf.question \(index + 1)/\(questions.count)")
             let nonce = harness.willSend(question)
             await harness.retry()
-            while harness.busy { try? await Task.sleep(for: .milliseconds(100)) }
-            if harness.answered(nonce) { answered += 1 }
+            let deadline = ContinuousClock.now + replyWait
+            while harness.busy || (!harness.answered(nonce) && !harness.hasWaiting && ContinuousClock.now < deadline) {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            return harness.answered(nonce)
         }
         Perf.mark("perf.run.done answered=\(answered)/\(questions.count)")
+    }
+
+    /// Asks each question in turn with `gap` between a reply and the next, stopping at the first
+    /// `one` answers false for, and answers how many were answered.
+    @MainActor
+    static func ask(_ questions: [String], gap: Duration, one: (Int, String) async -> Bool) async -> Int {
+        for (index, question) in questions.enumerated() {
+            if index > 0 { try? await Task.sleep(for: gap) }
+            guard await one(index, question) else { return index }
+        }
+        return questions.count
     }
 }

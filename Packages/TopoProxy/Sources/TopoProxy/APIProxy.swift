@@ -160,17 +160,18 @@ struct Forwarder: Sendable {
         }
     }
 
-    /// A request's path as a mark names it: the path is the guest's to choose, so only what
-    /// reads as a route is kept — a segment of up to 16 lowercase letters and `_`, or a version
-    /// (`v1`) — and any other segment, which could be an id or a secret, is a `*`. A query is
-    /// not part of it.
+    /// The path segments a mark may name: the routes Claude Code is known to ask for. The path is
+    /// the guest's to choose, so a segment is written only when it is one of these.
+    static let routeSegments: Set<String> = ["v1", "api", "messages", "count_tokens", "batches", "models", "hello",
+                                             "oauth", "claude_cli", "claude_code", "organizations", "files"]
+
+    /// A request's path as a mark names it: each segment that is one of `routeSegments`, and a
+    /// `*` for any other, which could be an id or a secret however much it reads like a word. A
+    /// query is not part of it.
     static func routeForMark(_ path: String?) -> String {
         guard let path = path?.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first else { return "?" }
-        let letters = Set("abcdefghijklmnopqrstuvwxyz_")
         return path.split(separator: "/", omittingEmptySubsequences: false).map { segment in
-            let word = segment.count <= 16 && segment.allSatisfy(letters.contains)
-            let version = segment.first == "v" && segment.count <= 3 && segment.dropFirst().allSatisfy(\.isNumber)
-            return word || version ? String(segment) : "*"
+            segment.isEmpty || routeSegments.contains(String(segment)) ? String(segment) : "*"
         }.joined(separator: "/")
     }
 

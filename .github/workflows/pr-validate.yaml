@@ -611,6 +611,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/simulator-run-test.sh
 
+      # scripts/perf-run.sh refuses a run it could not count before it reaches a phone.
+      - name: perf-run.sh refuses a blank question
+        if: ${{ !cancelled() }}
+        run: scripts/tests/perf-run-test.sh
+
       # This workflow's own sanitise and gate snippets against fake verdicts and
       # a fake secret: no secret value survives into the uploaded file, and no
       # missing file reads as a pass.
