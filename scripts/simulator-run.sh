@@ -168,7 +168,8 @@ echo "$$" >"$pids"
 # Everything printed from here goes to the run's log as well as to where it was going. tee reads
 # a fifo rather than a process substitution, so its pid is known and `cleanup` can wait for the
 # last line to be written; it ignores SIGPIPE and SIGINT, so a caller that has gone, or a ^C,
-# leaves the file whole.
+# leaves the file whole. That wait is bounded: tee ends when the last writer of the fifo does,
+# and a process an ended xcodebuild left behind may still hold it.
 fifo="$derived/simulator-run.$$.fifo"
 rm -f "$fifo"
 mkfifo "$fifo"
@@ -193,7 +194,12 @@ cleanup() {
   # A newer run in this worktree has its own pids file under the same name.
   [ "$(head -1 "$pids" 2>/dev/null)" != "$$" ] || rm -f "$pids"
   exec >&- 2>&-
-  wait "$tee_pid" 2>/dev/null || true
+  local tenths=0
+  while [ "$tenths" -lt 20 ]; do
+    case " $(jobs -pr | tr '\n' ' ')" in *" $tee_pid "*) ;; *) break ;; esac
+    sleep 0.1
+    tenths=$((tenths + 1))
+  done
 }
 trap cleanup EXIT
 trap 'exit 130' INT

@@ -66,7 +66,7 @@ case "$2" in
                           say "done"; exec sleep 600 ;;
       answered-old-format) say "sending: hello"; say "mascot: turn began for phone/2, process 7, idle"; say "mascot: turn gone for phone/2, idle"
                            say "reply to phone/2 in run $run: hi"; say "done"; exec sleep 600 ;;
-      launched) case " $* " in *" --console-pty "*) exec sleep 600 ;; esac; exit 0 ;;
+      launched) case " $* " in *" --console-pty "*) exec sleep 30 ;; esac; exit 0 ;;
       userland-fetched) say "userland: downloading"; say "userland: rootfs fetched and imported"
                         say "userland: claude code 2.1.278 fetched"; say "userland: booted"
                         say "userland: claude code 2.1.278 verified in 310 ms, mounted at /usr/local/bin/claude"
@@ -152,9 +152,14 @@ case "$2" in
 esac
 EOF
 
-# The suite `--press-mic` runs, as a pass.
+# The suite `--press-mic` runs: a pass, or with FAKE_XCODEBUILD=hangs one that never finishes and
+# has a child of its own holding its output, as a build service outliving xcodebuild would.
 cat >"$work/bin/xcodebuild" <<'EOF'
 #!/bin/bash
+if [ "${FAKE_XCODEBUILD:-}" = hangs ]; then
+  sleep 30 &
+  exec sleep 31
+fi
 echo "** TEST SUCCEEDED **"
 EOF
 chmod +x "$work/bin/xcrun" "$work/bin/op-item" "$work/bin/xcodebuild"
@@ -256,50 +261,60 @@ case_ guest-turn-bash-reply-prefix-only    fail guest-bash-in-reply-prefix-only 
 case_ guest-turn-bash-result-echoed-in-sent fail guest-bash-result-echoed-in-sent "$quick" --guest-turn "a" --expect-bash topo-42
 case_ guest-turns-times-out-silent         fail silent               "$slow" --guest-turn "a || b"
 
-# The pids file names what a run started and the script ends exactly those: a run left waiting on
-# a silent launcher is ended by its first pid, and takes the launcher, the second, with it. The
-# log is the run's whole output, kept after it.
-sim="$work/root/build/sim"
-PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=60 FAKE_LAUNCH=silent \
-  "$work/root/scripts/simulator-run.sh" --no-build --send hello >"$work/pids.out" 2>&1 </dev/null &
-runner=$!
-waited=0
-until [ "$(cat "$sim/simulator-run.pids" 2>/dev/null | wc -l)" -ge 2 ] || [ "$waited" -ge $((10 + overhead)) ]; do
-  sleep 1
-  waited=$((waited + 1))
-done
-script_pid="$(sed -n 1p "$sim/simulator-run.pids" 2>/dev/null)"
-launcher_pid="$(sed -n 2p "$sim/simulator-run.pids" 2>/dev/null)"
-problem=""
-if [ -z "$script_pid" ] || [ -z "$launcher_pid" ]; then
-  problem="the pids file did not name the script and the launcher"
-  kill "$runner" 2>/dev/null
-elif [ "$script_pid" != "$runner" ]; then
-  problem="the pids file's first line is $script_pid, and the script is $runner"
-  kill "$runner" 2>/dev/null
-elif [ "$(ps -o command= -p "$launcher_pid")" != "sleep 600" ]; then
-  problem="the pids file's second line is not the launcher"
-  kill "$runner" 2>/dev/null
-else
-  kill "$script_pid"
-fi
-wait "$runner"; status=$?
-if [ -z "$problem" ]; then
-  if [ "$status" != 143 ]; then problem="the script exited $status on SIGTERM, not 143"
-  elif kill -0 "$launcher_pid" 2>/dev/null; then problem="the launcher outlived the script"; kill "$launcher_pid"
-  elif [ -e "$sim/simulator-run.pids" ]; then problem="the pids file outlived the run"
-  elif ! grep -Fxq "==> pids: $sim/simulator-run.pids" "$work/pids.out"; then problem="the run did not print where its pids are"
-  elif ! grep -Fxq "==> log: $sim/simulator-run.log" "$work/pids.out"; then problem="the run did not print where its log is"
-  elif ! cmp -s "$work/pids.out" "$sim/simulator-run.log"; then problem="the log is not what the run printed"
+# The pids file names what a run started and the script ends exactly those. A run left waiting
+# is ended by SIGTERM to its first pid, the script's own, and takes its second, the child it was
+# waiting on, with it, within the `quick` limit; the log is the run's whole output, kept after it.
+#
+# ended <name> <the child's command> <whole log: yes|no> [script args...]
+ended() {
+  local name="$1" child="$2" whole="$3"; shift 3
+  local sim="$work/root/build/sim" out="$work/$name.out" runner waited=0 script_pid child_pid problem="" start status
+  PATH="$work/bin:$PATH" CLAUDE_SETUP_TOKEN=placeholder TIMEOUT=60 FAKE_LAUNCH=silent FAKE_XCODEBUILD=hangs \
+    "$work/root/scripts/simulator-run.sh" --no-build "$@" >"$out" 2>&1 </dev/null &
+  runner=$!
+  until [ "$(cat "$sim/simulator-run.pids" 2>/dev/null | wc -l)" -ge 2 ] || [ "$waited" -ge $((10 + overhead)) ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  script_pid="$(sed -n 1p "$sim/simulator-run.pids" 2>/dev/null)"
+  child_pid="$(sed -n 2p "$sim/simulator-run.pids" 2>/dev/null)"
+  start=$SECONDS
+  if [ -z "$script_pid" ] || [ -z "$child_pid" ]; then
+    problem="the pids file did not name the script and its child"
+    kill "$runner" 2>/dev/null
+  elif [ "$script_pid" != "$runner" ]; then
+    problem="the pids file's first line is $script_pid, and the script is $runner"
+    kill "$runner" 2>/dev/null
+  elif [ "$(ps -o command= -p "$child_pid")" != "$child" ]; then
+    problem="the pids file's second line is not '$child'"
+    kill "$runner" 2>/dev/null
+  else
+    kill "$script_pid"
   fi
-fi
-if [ -n "$problem" ]; then
-  echo "FAIL pids-and-log: $problem"
-  sed 's/^/    | /' "$work/pids.out"
-  failures=$((failures + 1))
-else
-  echo "ok   pids-and-log: SIGTERM to the script's recorded pid ended it and its launcher; the log holds the run"
-fi
+  wait "$runner"; status=$?
+  if [ -z "$problem" ]; then
+    if [ "$status" != 143 ]; then problem="the script exited $status on SIGTERM, not 143"
+    elif [ $((SECONDS - start)) -gt "$quick" ]; then problem="the script took $((SECONDS - start))s to end (limit ${quick}s)"
+    elif kill -0 "$child_pid" 2>/dev/null; then problem="'$child' outlived the script"; kill "$child_pid"
+    elif [ -e "$sim/simulator-run.pids" ]; then problem="the pids file outlived the run"
+    elif ! grep -Fxq "==> pids: $sim/simulator-run.pids" "$out"; then problem="the run did not print where its pids are"
+    elif ! grep -Fxq "==> log: $sim/simulator-run.log" "$out"; then problem="the run did not print where its log is"
+    elif [ "$whole" = yes ] && ! cmp -s "$out" "$sim/simulator-run.log"; then problem="the log is not what the run printed"
+    fi
+  fi
+  if [ -n "$problem" ]; then
+    echo "FAIL $name: $problem"
+    sed 's/^/    | /' "$out"
+    failures=$((failures + 1))
+  else
+    echo "ok   $name: SIGTERM to the script's recorded pid ended it and '$child'"
+  fi
+}
+
+ended ended-waiting-on-the-launcher "sleep 600" yes --send hello
+# The suite's own child still holds the run's output when the script ends, so the script's exit is
+# what is held here and not that the log is whole yet.
+ended ended-during-the-suite        "sleep 31"  no  --press-mic
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures case(s) failed against $script"
