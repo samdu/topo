@@ -189,7 +189,7 @@ cleanup() {
   for pid in $started_pids; do
     case "$live" in *" $pid "*) kill "$pid" 2>/dev/null || true ;; esac
   done
-  [ "$lane" = no ] || scripts/ci-audio-lane.sh stop || true
+  [ "$lane" != ours ] || scripts/ci-audio-lane.sh stop || true
   [ -z "$log" ] || rm -f "$log"
   # A newer run in this worktree has its own pids file under the same name.
   [ "$(head -1 "$pids" 2>/dev/null)" != "$$" ] || rm -f "$pids"
@@ -225,8 +225,13 @@ if [ "$talk" = yes ]; then
   voice_models="${VOICE_MODELS:-$root/build/voice-models}"
   scripts/fetch-ear-models.sh "$models"
   scripts/fetch-voice-models.sh "$voice_models"
-  lane=yes
-  scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav"
+  # A start that refuses (exit 3) found another run's lane, which is not this run's to stop.
+  lane=ours
+  scripts/ci-audio-lane.sh start "$root/Tests/Fixtures/capital-of-france.wav" || {
+    status=$?
+    [ "$status" = 3 ] && lane=theirs
+    exit "$status"
+  }
   # A simulator's audio is served by a host process bound to the coreaudiod it booted against,
   # so one booted before the lane installed BlackHole (which restarts coreaudiod) has no input.
   # Booting it again after the lane is up binds it to the loopback; its iCloud account and
