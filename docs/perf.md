@@ -8,7 +8,7 @@ Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`P
 | ---- | ---- |
 | Launch | `app.init.begin sinceProcessStart=<ms>`, `app.housekeeping.begin`/`.end`, `app.init.end`, `chat.appear`, `scene.active`, `chat.log.read`, `ear.load.begin`/`.end`, `voice.load.begin`/`.end` |
 | Guest start | `guest.boot.begin`, `guest.downloads.present`, `guest.kernel.booted`, `guest.dns.up`, `guest.tmp.zone.done`, `guest.claude.verified`, `guest.tools.ready`, `guest.proxy.up`, `resident.launch.begin fresh\|resume`, `resident.spawned` |
-| Turn | `turn.send`, `turn.runner.made`, `turn.begin`, `turn.lease.acquired`, `turn.log.read`, `turn.person.saved`, `turn.bridge.begin`, `turn.bridge.guestReady`, `turn.guest.write`, `turn.guest.firstLine`, `turn.guest.init`, `turn.guest.text`, `turn.guest.toolUse`, `turn.guest.result`, `turn.brain.answered`, `turn.reply.saved` (or `turn.reply.failed <kind>`), `turn.reply.shown` |
+| Turn | `turn.send`, `turn.runner.made`, `turn.begin`, `turn.lease.acquired`, `turn.log.read`, `turn.person.saved`, `turn.bridge.begin`, `turn.bridge.guestReady`, `turn.guest.write`, `turn.guest.firstLine`, `turn.guest.init`, `turn.text.first` (the first words drawn), `turn.guest.text`, `turn.guest.toolUse`, `turn.guest.result`, `turn.brain.answered`, `turn.reply.saved` (or `turn.reply.failed <kind>`), `turn.reply.shown` |
 | The guest's requests | `proxy.request <METHOD> <path> bytes=<n>`, `proxy.head … <status>`, `proxy.firstByte`, `proxy.done` |
 
 ## A run with nobody at the phone
