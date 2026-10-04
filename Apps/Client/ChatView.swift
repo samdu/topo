@@ -179,6 +179,10 @@ struct ChatView: View {
             harness.onPass = { [memory] in await memory.sync() }
             defer { harness.onPass = nil }
             Perf.mark("chat.appear")
+            // The guest and its resident Claude Code are started beside the first read of the log
+            // rather than after it: Claude Code takes longer to come up than the log takes to
+            // read, and a question asked into a cold app waits for both. This waits for nothing.
+            if let guest = harness.guest { Task { await guest.warm() } }
             await harness.refresh()
             Perf.mark("chat.log.read")
             // The row comes back before anything is sent from it: words on their way when the
