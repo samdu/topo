@@ -60,6 +60,14 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
         } catch {
             throw Self.mapped(error, recordIDs: ckRecords.map(\.recordID))
         }
+        // An atomic batch that fails fails every record, and all but the one at fault say only
+        // that the batch failed (`batchRequestFailed`): the one at fault is the error, so a
+        // caller that retries a conflict on its own record is told of the conflict.
+        for ck in ckRecords {
+            if case .failure(let e)? = result.saveResults[ck.recordID], (e as? CKError)?.code != .batchRequestFailed {
+                throw Self.mapped(e, recordIDs: [ck.recordID])
+            }
+        }
         var saved: [Record] = []
         for ck in ckRecords {
             switch result.saveResults[ck.recordID] {
