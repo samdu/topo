@@ -68,6 +68,7 @@ enum PerfRun {
             await harness.retry()
             while harness.busy { try? await Task.sleep(for: .milliseconds(100)) }
             if harness.answered(nonce) { answered += 1 }
+            else { Perf.mark("perf.unanswered said=\(harness.said(nonce)) turns=\(harness.turns.count) waiting=\(harness.hasWaiting)") }
             // The next question waits for the reading to end, not only the reply.
             while spoken, speaker.speaking { try? await Task.sleep(for: .milliseconds(200)) }
         }
