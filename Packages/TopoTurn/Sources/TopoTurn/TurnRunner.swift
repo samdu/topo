@@ -125,8 +125,21 @@ public actor TurnRunner {
         } catch {
             // The kind of failure and nothing it carries.
             if case TurnRunnerError.displaced = error { Perf.mark("turn.reply.failed displaced") }
-            else { Perf.mark("turn.reply.failed \(type(of: error))") }
+            else { Perf.mark("turn.reply.failed \(Self.kind(of: error))") }
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
+        }
+    }
+
+    /// A failure's kind for a mark: the error's type, a database error's case and the record it
+    /// names, and the underlying error's domain and code. Nothing a record holds.
+    static func kind(of error: any Error) -> String {
+        func code(_ underlying: any Error) -> String { "\((underlying as NSError).domain)/\((underlying as NSError).code)" }
+        switch error {
+        case RecordDatabaseError.serverRecordChanged(let id, _): return "serverRecordChanged \(id.name)"
+        case RecordDatabaseError.unknownItem(let id): return "unknownItem \(id.name)"
+        case RecordDatabaseError.unavailable(let underlying): return "unavailable \(code(underlying))"
+        case RecordDatabaseError.rejected(let underlying): return "rejected \(code(underlying))"
+        default: return "\(type(of: error))"
         }
     }
 
