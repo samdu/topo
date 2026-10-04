@@ -330,7 +330,9 @@ actor GuestBridge: Brain {
         }
 
         await conversation.use(model: ClaudeModel.effective(request.model).rawValue)
+        Perf.mark("turn.bridge.begin")
         try await conversation.ready()
+        Perf.mark("turn.bridge.guestReady")
         let session = await conversation.sessionID()
         let fresh = session == nil || session != ledger.session
         if fresh {

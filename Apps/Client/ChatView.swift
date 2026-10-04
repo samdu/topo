@@ -178,7 +178,9 @@ struct ChatView: View {
             // this screen (`MemoryWake`, from `TopoApp`).
             harness.onPass = { [memory] in await memory.sync() }
             defer { harness.onPass = nil }
+            Perf.mark("chat.appear")
             await harness.refresh()
+            Perf.mark("chat.log.read")
             // The row comes back before anything is sent from it: words on their way when the
             // app last went away are the row's again, under the nonce they were first said with,
             // so the way back from a turn that never landed is where it always is.

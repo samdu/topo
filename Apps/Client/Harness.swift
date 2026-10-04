@@ -522,10 +522,12 @@ final class Harness {
         let generation = inFlight
         let text = attempt.text
         do {
+            Perf.mark("turn.send")
             if runner == nil {
                 status = "Reaching iCloud…"
                 try await ensureZone()
                 runner = try await makeRunner()
+                Perf.mark("turn.runner.made")
             }
             guard let runner else { return false }
             #if DEBUG
@@ -538,6 +540,7 @@ final class Harness {
             guard inFlight == generation, !Task.isCancelled else { return false }
             show(result.person)
             show(result.assistant)
+            Perf.mark("turn.reply.shown")
             if result.reply.context > 0 { context = result.reply.context }
             status = nil
             await refreshUnfinished()

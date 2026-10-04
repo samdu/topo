@@ -455,6 +455,7 @@ public actor GuestSession {
         resident.turn = turn
         turn.watchdog = watch(turn, of: resident)
         do {
+            Perf.mark("turn.guest.write")
             try await resident.process.write(StreamJSON.userTurn(text, id: id))
         } catch {
             if resident.turn === turn {
@@ -503,6 +504,7 @@ public actor GuestSession {
         }
         let resume = store.load()
         phase = .starting
+        Perf.mark(resume == nil ? "resident.launch.begin fresh" : "resident.launch.begin resume")
         log(resume.map { "starting Claude Code, resuming \($0)" } ?? "starting Claude Code, a fresh session")
         let launcher = launcher, model = model, memory = memory, conversation = conversation
         startTask = Task {
@@ -512,6 +514,7 @@ public actor GuestSession {
             } catch {
                 result = .failure(error)
             }
+            Perf.mark("resident.spawned")
             await self.launched(result, resume: resume, model: model, memory: memory, conversation: conversation)
         }
     }
@@ -574,9 +577,17 @@ public actor GuestSession {
         // A process that is no longer the resident one — ended, or being ended — speaks to nobody.
         guard case .resident(let current) = phase, current === resident else { return }
         resident.turn?.ticks += 1
+        if resident.turn?.ticks == 1 { Perf.mark("turn.guest.firstLine") }
         for event in StreamJSON.events(in: line) {
             switch event {
+            case .text: Perf.mark("turn.guest.text")
+            case .toolUse: Perf.mark("turn.guest.toolUse")
+            case .result: Perf.mark("turn.guest.result")
+            default: break
+            }
+            switch event {
             case .started(let session, _):
+                Perf.mark("turn.guest.init")
                 resident.began = true
                 keep(session, of: resident)
             case .result(let result):

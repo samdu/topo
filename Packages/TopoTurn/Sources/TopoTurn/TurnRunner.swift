@@ -79,17 +79,21 @@ public actor TurnRunner {
     /// `progress` is called at each step, on no particular actor.
     public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString,
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
+        Perf.mark("turn.begin")
         await progress?(.takingLease)
         let outcome = try await lease.acquire()
+        Perf.mark("turn.lease.acquired")
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
 
         await progress?(.saving)
         try await settleOwed()
         let before = try await log.read()
+        Perf.mark("turn.log.read")
         // A caller that stopped before the person's turn is in the log writes nothing at all.
         try Task.checkCancellation()
         let at = Date()
         let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
+        Perf.mark("turn.person.saved")
         await progress?(.asking(person: person))
         let replyNonce = Self.replyNonce(for: [person.ref])
         if person.at != at {
@@ -105,6 +109,7 @@ public actor TurnRunner {
             let request = BrainRequest(context: before.ordered.filter { $0.ref != person.ref }, answering: [person],
                                        parents: [person.ref], nonce: replyNonce, model: model)
             let reply = try await brain.answer(request)
+            Perf.mark("turn.brain.answered")
             await progress?(.savingReply)
             // A caller that stopped — a sign-out cancels the turn in flight — writes nothing more.
             try Task.checkCancellation()
@@ -114,6 +119,7 @@ public actor TurnRunner {
                                                           nonce: replyNonce, renewing: lease) else {
                 throw TurnRunnerError.displaced
             }
+            Perf.mark("turn.reply.saved")
             await brain.landed(assistant, nonce: replyNonce)
             return Result(person: person, assistant: assistant, reply: reply)
         } catch {

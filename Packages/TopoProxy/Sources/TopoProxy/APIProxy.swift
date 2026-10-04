@@ -217,8 +217,11 @@ struct Forwarder: Sendable {
                                        headers: Self.filter(request.headers, dropping: Self.requestDropped),
                                        body: body.isEmpty ? nil : body)
         let response: UpstreamResponse
+        let route = "\(request.method) \(Self.canonical(request.path) ?? "?")"
+        Perf.mark("proxy.request \(route) bytes=\(body.count)")
         do {
             response = try await upstream.send(outbound)
+            Perf.mark("proxy.head \(route) \(response.status)")
         } catch {
             if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
             // A target that would leave the one origin is the guest's request at fault; anything
@@ -240,7 +243,9 @@ struct Forwarder: Sendable {
         do {
             try await inbound.send(ResponseWriter.head(status: response.status, headers: headers))
             if hasBody {
+                var first = true
                 for try await chunk in response.body where !chunk.isEmpty {
+                    if first { Perf.mark("proxy.firstByte \(route)"); first = false }
                     try await inbound.send(chunkedOut ? ResponseWriter.chunk(chunk) : chunk)
                 }
                 try Task.checkCancellation()
@@ -253,6 +258,7 @@ struct Forwarder: Sendable {
             return false
         }
         log("\(line) \(response.status) in \(Self.elapsed(since: started))")
+        Perf.mark("proxy.done \(route)")
         return keepOpen
     }
 
