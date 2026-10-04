@@ -7,7 +7,7 @@
 #                       [--timeout <seconds>] [--out <marks.txt>] "question" ["question" ...]
 #
 # --build makes the Release build first (build/dd, signed for TOPO_DEVELOPMENT_TEAM if set); --app installs that bundle; with neither the
-# build already on the phone is the one timed. The marks land in --out (default
+# build already on the phone is the one timed. It exits 4 when a question got no reply. The marks land in --out (default
 # build/perf/<UTC stamp>.txt), one `mark t=<epoch ms> <name>` a line, which is what
 # experiments/topo-perf/parse.py reads.
 set -euo pipefail
@@ -32,8 +32,8 @@ done
 [ $# -gt 0 ] || { echo "no questions given" >&2; exit 2; }
 [ -n "$device" ] || { echo "no device: pass --device or set TOPO_PERF_DEVICE (xcrun devicectl list devices)" >&2; exit 2; }
 
-send="$1"; shift
-for question in "$@"; do send="$send || $question"; done
+asked=$#
+send="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1:]))' "$@")"
 out="${out:-build/perf/$(date -u +%Y%m%dT%H%M%SZ).txt}"
 mkdir -p "$(dirname "$out")"
 
@@ -80,4 +80,8 @@ while :; do
   fi
   sleep 5
 done
-echo "==> $(grep -c "turn.reply.shown" "$out") replies, marks in $out"
+# The app's own count of the questions that got a reply: a run that lost one is not a run to
+# read numbers off without knowing it.
+answered="$(sed -n 's/.*perf\.run\.done answered=\([0-9]*\)\/.*/\1/p' "$out" | tail -1)"
+echo "==> ${answered:-0} of $asked questions answered, marks in $out"
+[ "${answered:-0}" = "$asked" ] || exit 4

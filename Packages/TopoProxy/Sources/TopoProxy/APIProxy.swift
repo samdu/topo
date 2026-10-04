@@ -160,6 +160,20 @@ struct Forwarder: Sendable {
         }
     }
 
+    /// A request's path as a mark names it: the path is the guest's to choose, so only what
+    /// reads as a route is kept — a segment of up to 16 lowercase letters and `_`, or a version
+    /// (`v1`) — and any other segment, which could be an id or a secret, is a `*`. A query is
+    /// not part of it.
+    static func routeForMark(_ path: String?) -> String {
+        guard let path = path?.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first else { return "?" }
+        let letters = Set("abcdefghijklmnopqrstuvwxyz_")
+        return path.split(separator: "/", omittingEmptySubsequences: false).map { segment in
+            let word = segment.count <= 16 && segment.allSatisfy(letters.contains)
+            let version = segment.first == "v" && segment.count <= 3 && segment.dropFirst().allSatisfy(\.isNumber)
+            return word || version ? String(segment) : "*"
+        }.joined(separator: "/")
+    }
+
     func serve(_ inbound: Inbound) async {
         while true {
             let request: InboundRequest
@@ -218,7 +232,7 @@ struct Forwarder: Sendable {
                                        headers: Self.filter(request.headers, dropping: Self.requestDropped),
                                        body: body.isEmpty ? nil : body)
         let response: UpstreamResponse
-        let route = "\(request.method) \(Self.canonical(request.path) ?? "?")"
+        let route = "\(request.method) \(Self.routeForMark(Self.canonical(request.path)))"
         Perf.mark("proxy.request \(route) bytes=\(body.count)")
         do {
             response = try await upstream.send(outbound)

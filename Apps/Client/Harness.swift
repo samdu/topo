@@ -437,6 +437,12 @@ final class Harness {
         turns.contains { $0.role == .person && $0.nonce == nonce }
     }
 
+    /// Whether the turn said under `nonce` has a reply in the log, as this device knows it.
+    func answered(_ nonce: String) -> Bool {
+        guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
+        return turns.contains { $0.role == .assistant && $0.parents.contains(person.ref) }
+    }
+
     /// Whether the words said under `nonce` can be taken back: they are still owed on this
     /// device, nothing is attempting them — an attempt is a write that may be landing as this is
     /// asked — and no turn of theirs is known to be in the log. It is what decides whether the
