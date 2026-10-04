@@ -8,12 +8,14 @@ Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`P
 | ---- | ---- |
 | Launch | `app.init.begin sinceProcessStart=<ms>`, `app.housekeeping.begin`/`.end`, `app.init.end`, `chat.appear`, `scene.active`, `chat.log.read`, `ear.load.begin`/`.end`, `voice.load.begin`/`.end` |
 | Guest start | `guest.boot.begin`, `guest.downloads.present`, `guest.kernel.booted`, `guest.dns.up`, `guest.tmp.zone.done`, `guest.claude.verified`, `guest.tools.ready`, `guest.proxy.up`, `resident.launch.begin fresh\|resume`, `resident.spawned` |
-| Turn | `turn.send`, `turn.runner.made`, `turn.begin`, `turn.lease.acquired`, `turn.log.read`, `turn.person.saved`, `turn.bridge.begin`, `turn.bridge.guestReady`, `turn.guest.write`, `turn.guest.firstLine`, `turn.guest.init`, `turn.text.first` (the first words drawn), `turn.guest.text`, `turn.guest.toolUse`, `turn.guest.result`, `turn.brain.answered`, `turn.reply.saved` (or `turn.reply.failed <kind>`), `turn.reply.shown` |
+| Turn | `turn.send`, `turn.runner.made`, `turn.begin`, `turn.lease.acquired`, `turn.log.read`, `turn.person.saved`, `turn.bridge.begin`, `turn.bridge.guestReady`, `turn.guest.write`, `turn.guest.firstLine`, `turn.guest.init`, `turn.text.first` (the first words drawn), `turn.guest.text`, `turn.guest.toolUse`, `turn.guest.result`, `turn.brain.answered`, `turn.reply.saved` (or `turn.reply.failed <kind>`), `turn.reply.shown`, and for a spoken turn `speak.begin`, `speak.firstFrame` |
 | The guest's requests | `proxy.request <METHOD> <path> bytes=<n>`, `proxy.head … <status>`, `proxy.firstByte`, `proxy.done` |
 
 ## A run with nobody at the phone
 
 `scripts/perf-run.sh --device <id> [--build | --app <Topo.app>] "question" ["question" …]` installs a build, launches it cold with `TOPO_PERF_SEND` in its environment, and copies the marks off when the run is done. `PerfRun` (`Apps/Topo/PerfRun.swift`) is what reads the variable: it starts `tmp/topo-perf.log` in the app's container empty, has every mark written there as well as to the log, sends the first question as soon as the scene is up and each next `TOPO_PERF_GAP` seconds (5) after the last reply was drawn, through the same `Harness.send` the composer calls, and marks `perf.run.done`. The script polls the file with `devicectl device copy from` until that mark is in it.
+
+With `--spoken` (`TOPO_PERF_SPOKEN=1`) the questions are sent as spoken turns once the voice is resident, their replies are read aloud from the phone, and the next question waits for the reading to end.
 
 So one run times a cold launch, a question asked into a cold app, and as many warm turns as there are further questions. The questions are sent as the person and land in their transcript.
 
