@@ -8,6 +8,7 @@
 #   scripts/ci-audio-lane.sh start [fixture]  # install, pin, and start the supervised feeder
 #                                             # (default Tests/Fixtures/purple-elephants.wav);
 #                                             # refuses (exit 3) while a started lane still runs
+#                                             # or another start is under way
 #   scripts/ci-audio-lane.sh check <when>     # fail, naming what died, unless the lane still holds
 #   scripts/ci-audio-lane.sh stop             # stop the feeder, restore the defaults start found,
 #                                             # and warn of any lane process it did not start
@@ -25,6 +26,8 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 device="BlackHole 2ch"
 state="${RUNNER_TEMP:-/tmp}/audio-lane"
+# Held by a start for as long as it runs (lockf(1), on descriptor 9).
+lock="$state/start.lock"
 pidfile="$state/supervisor.pid"
 feederpid="$state/feeder.pid"
 # The default input and output before start pinned BlackHole, one per line, for stop.
@@ -53,10 +56,11 @@ supervise() {
 }
 
 # Every supervisor and feeder of this lane that is running, one "pid role" per line. A
-# supervisor is this script run as `supervise`, from any checkout; a feeder is the lane's binary.
+# supervisor is bash running this script as `supervise`, from any checkout, whatever its path; a
+# shell handed the same words after `-c` is not one. A feeder is the lane's binary.
 lane_processes() {
-  supervisor='^([^ ]+ )?[^ ]*ci-audio-lane\.sh supervise '
-  ps -axo pid=,command= | while read -r pid command; do
+  supervisor='^([^ ]*/)?bash [^-].*ci-audio-lane\.sh supervise '
+  ps -axwwo pid=,command= | while read -r pid command; do
     if [[ "$command" =~ $supervisor ]]; then
       echo "$pid supervisor"
     elif [[ "$command" == "$feeder "* ]]; then
@@ -70,13 +74,19 @@ start() {
   [ -f "$fixture" ] || { echo "no fixture at $1" >&2; exit 1; }
   # Before anything is touched: a second supervisor would orphan the first and its feeder, and
   # two feeders double the level on the device. Exit 3 tells the caller the running lane is not
-  # the one it asked for, and so not its to stop.
+  # the one it asked for, and so not its to stop. The lock is held until start exits, so of two
+  # starts that overlap one refuses here; the kernel drops it if start dies.
+  mkdir -p "$state"
+  exec 9> "$lock"
+  if ! lockf -s -t 0 9; then
+    echo "::error::audio lane is being started by another \`$0 start\` ($lock is held), and the lane is that one's" >&2
+    exit 3
+  fi
   # (Matched in a here-string: under pipefail, grep -q closing a pipe early fails the pipeline.)
   if [ -s "$pidfile" ] && grep -qx "$(cat "$pidfile") supervisor" <<< "$(lane_processes)"; then
     echo "::error::audio lane already started: supervisor $(cat "$pidfile") is running ($pidfile); run \`$0 stop\` first" >&2
     exit 3
   fi
-  mkdir -p "$state"
   : > "$log"
   brew install --quiet blackhole-2ch switchaudio-osx
   swiftc -O "$root/scripts/ci-audio-feeder.swift" -o "$feeder"
@@ -92,7 +102,8 @@ start() {
   SwitchAudioSource -t output -s "$device"
   test "$(SwitchAudioSource -c -t input)" = "$device"
   test "$(SwitchAudioSource -c -t output)" = "$device"
-  nohup "$0" supervise "$fixture" >/dev/null 2>&1 &
+  # The supervisor outlives start, so it must not inherit the lock.
+  nohup "$0" supervise "$fixture" >/dev/null 2>&1 9>&- &
   echo $! > "$pidfile"
   for _ in $(seq 20); do
     [ -s "$heartbeat" ] && break
