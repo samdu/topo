@@ -62,6 +62,13 @@ enum PerfRun {
             if !speaker.voice.ready { Perf.mark("perf.voice.unready") }
         }
         // A scene that goes away cancels the run: a cancelled sleep returns at once, so every wait asks.
+        for _ in 0..<600 where !harness.hasRead && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
+        // Words left on the line by the launch before go first, as the chat sends them; the
+        // run is only given up when they are still waiting after that.
+        if harness.hasWaiting {
+            Perf.mark("perf.line.waiting")
+            await harness.retry()
+        }
         while harness.busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
         let answered = harness.hasWaiting ? 0 : await ask(questions, gap: .seconds(gap(environment))) { index, question in
             Perf.mark("perf.question \(index + 1)/\(questions.count)")

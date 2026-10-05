@@ -70,13 +70,14 @@ if ! launched="$(xcrun devicectl device process launch --device "$device" --term
   esac
 fi
 
+# A copy from a phone that has gone to sleep never returns by itself, so each is bounded.
 pulled="$(mktemp -d -t topo-perf)"
 trap 'rm -rf "$pulled"' EXIT
 deadline=$(( $(date +%s) + timeout ))
 while :; do
   if xcrun devicectl device copy from --device "$device" --domain-type appDataContainer \
        --domain-identifier "$bundle" --source tmp/topo-perf.log --destination "$pulled/marks.txt" \
-       --quiet 2>/dev/null; then
+       --timeout 30 --quiet 2>/dev/null; then
     cp "$pulled/marks.txt" "$out"
     if grep -q "perf.run.done" "$out"; then break; fi
   fi

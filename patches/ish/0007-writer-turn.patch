@@ -1,0 +1,71 @@
+diff --git a/kernel/task.c b/kernel/task.c
+index 2248934..8dc5126 100644
+--- a/kernel/task.c
++++ b/kernel/task.c
+@@ -209,7 +209,7 @@ void task_run_current() {
+         if (self->mem == NULL) {
+             pthread_exit(NULL);
+         }
+-        read_wrlock(&self->mem->lock);
++        read_wrlock_yielding(&self->mem->lock);
+         tlb_refresh(tlb, &self->mem->mmu);
+         int interrupt = cpu_run_to_interrupt(cpu, tlb);
+         read_wrunlock(&self->mem->lock);
+diff --git a/util/sync.h b/util/sync.h
+index 6d11329..9018b97 100644
+--- a/util/sync.h
++++ b/util/sync.h
+@@ -155,6 +155,9 @@ typedef struct {
+     // -1: write-locked
+     // >0: read-locked with this many readers
+     atomic_int val;
++    // Writers spinning in write_wrlock. A thread about to take the lock as a
++    // reader for a run of guest code lets them go first (read_wrlock_yielding).
++    atomic_int waiting;
+     const char *file;
+     int line;
+     int pid;
+@@ -169,6 +172,7 @@ static inline void wrlock_init(wrlock_t *lock) {
+ #endif
+     if (pthread_rwlock_init(&lock->l, pattr)) __builtin_trap();
+     lock->val = lock->line = lock->pid = 0;
++    lock->waiting = 0;
+     lock->file = NULL;
+ }
+ 
+@@ -181,6 +185,21 @@ static inline void read_wrlock(wrlock_t *lock) {
+     assert(lock->val >= 0);
+     lock->val++;
+ }
++// read_wrlock for a thread about to run guest code under the lock. Such a
++// thread drops the lock and takes it again within nanoseconds, quantum after
++// quantum, and a writer that only polls (write_wrlock never queues) finds the
++// lock free by luck: a thread that needs one mmap or one page committed waits
++// out most of a CPU-bound sibling's run. So while a writer is spinning this
++// stands aside first. It is bounded and holds nothing while it waits, so it
++// cannot be the blocked reader write_wrlock exists to avoid: a writer that
++// cannot win, because another reader is mid-quantum, costs this thread the
++// bound and no more.
++static inline void read_wrlock_yielding(wrlock_t *lock) {
++    struct timespec ts = {0, 20000};
++    for (int i = 0; i < 100 && atomic_load_explicit(&lock->waiting, memory_order_relaxed) > 0; i++)
++        nanosleep(&ts, NULL);
++    read_wrlock(lock);
++}
+ static inline void read_wrunlock(wrlock_t *lock) {
+     assert(lock->val > 0);
+     lock->val--;
+@@ -219,11 +238,13 @@ static inline void __write_wrlock(wrlock_t *lock, const char *file, int line) {
+     // making progress and releasing until the writer wins a trylock. This keeps
+     // forward progress for readers guaranteed and the writer non-blocking.
+     struct timespec _ts = {0, 1000}; // 1us initial backoff, grows to a steady sleep
++    atomic_fetch_add(&lock->waiting, 1);
+     while (pthread_rwlock_trywrlock(&lock->l) != 0) {
+         nanosleep(&_ts, NULL);
+         if (_ts.tv_nsec < 100000) // ramp up to a 100us steady sleep (yields CPU)
+             _ts.tv_nsec *= 2;
+     }
++    atomic_fetch_sub(&lock->waiting, 1);
+     assert(lock->val == 0);
+     lock->val = -1;
+     lock->file = file;
