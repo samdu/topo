@@ -445,26 +445,47 @@ def read_answer(out):
     except ValueError:
         raise RuntimeError("claude answered something that is not JSON")
     if not isinstance(envelope, dict) or envelope.get("is_error"):
-        said = envelope.get("result") if isinstance(envelope, dict) else envelope
-        raise RuntimeError(f"claude answered an error: {one_line(said, 160)}")
+        said = envelope.get("result") if isinstance(envelope, dict) else ""
+        raise RuntimeError(f"claude answered an error: {claude_error(said)}")
     return envelope.get("structured_output")
 
 
 WITHHELD = "(the model's reason quoted the issue and is withheld)"
+EDGES = ".,;:!?()[]{}<>'\"`/\\=*#|"
+
+
+def private_tokens(private, title):
+    """The pieces of an issue's body and comments that could be a secret: every
+    run of non-space characters, and every run of letters, digits and `_-+.@`
+    inside one, that is sixteen characters or longer or six or longer with a
+    digit in it, and is not in the title, which every line names anyway."""
+    runs = set()
+    for run in private.split():
+        runs.add(run.strip(EDGES))
+        runs.update(re.findall(r"[A-Za-z0-9_+.@-]+", run))
+    return {t for t in runs if t not in title and (len(t) >= 16 or (len(t) >= 6 and any(c.isdigit() for c in t)))}
 
 
 def safe_reason(reason, title, private):
-    """The model's reason, or WITHHELD when it carries a piece of the issue's
-    body or comments (`private`) that could be a secret: a word of sixteen
-    characters or more, or one of six or more with a digit in it, found
-    verbatim there and not in the title, which every line names anyway. The
-    prompt asks the model to quote nothing; this is what holds if it does."""
-    for word in reason.split():
-        word = word.strip(".,;:!?()[]{}<>'\"`")
-        if (word in private and word not in title
-                and (len(word) >= 16 or (len(word) >= 6 and any(c.isdigit() for c in word)))):
-            return WITHHELD
-    return one_line(reason, TRIAGE_REASON)
+    """The model's reason, or WITHHELD when any of the issue's private tokens
+    is anywhere in it, whatever the model wrapped it in. The prompt asks the
+    model to quote nothing; this is what holds where it does. It is the one
+    thing claude printed that reaches a line, an argv or the state."""
+    reason = one_line(reason, len(reason))   # judged as it will be written: a character dropped inside a token rejoins it
+    if any(t in reason for t in private_tokens(private, title)):
+        return WITHHELD
+    return reason[:TRIAGE_REASON]
+
+
+def claude_error(text):
+    """What kind of error claude gave, in the janitor's words and never
+    claude's: its text can carry what it was given."""
+    text = str(text).lower()
+    if "logged in" in text or "login" in text:
+        return "it is not logged in"
+    if any(w in text for w in ("limit", "quota", "credit")):
+        return "it is out of quota"
+    return "an error of its own"
 
 
 def decide_triage(number, title, answer, commits, private=""):
@@ -492,7 +513,7 @@ def decide_triage(number, title, answer, commits, private=""):
         sha = sha.strip() if isinstance(sha, str) else ""
         fix = [(h, s) for h, s in commits if h == sha]
         if len(fix) != 1:
-            return refused(f"the model called it fixed by {one_line(sha, 40) or 'no commit'}, which is not one of main's commits since it was opened")
+            return refused("the model called it fixed by a commit that is not one of main's since it was opened")
         h, subject = fix[0]
         issue[2] = "close"
         return {"action": action, "text": f"triage: closed {name} as fixed by {h} ({one_line(subject, 100)}): {reason}",
@@ -718,7 +739,7 @@ class Shell:
         # A CLI that is logged out or out of quota exits 1 with the reason in
         # the envelope on stdout, which read_answer says; without one, stderr.
         if p.returncode != 0 and not p.stdout.strip():
-            raise RuntimeError(f"claude exited {p.returncode}: {one_line(p.stderr, 200)}")
+            raise RuntimeError(f"claude exited {p.returncode}: {claude_error(p.stderr)}")
         return p.stdout
 
     def triage_act(self, argv):
@@ -1297,6 +1318,8 @@ def main(argv=None):
     ap.add_argument("--triage", type=int, nargs="+", metavar="N",
                     help="triage the issues named and do nothing else")
     a = ap.parse_args(argv)
+    if a.triage and len(a.triage) > TRIAGE_MAX:
+        ap.error(f"--triage takes at most {TRIAGE_MAX} issues; run it again for the rest")
     now = datetime.now(timezone.utc)
     path = os.path.expanduser(a.state)
     if not a.dry_run:   # a dry run writes nothing: no directory, no lock, no state

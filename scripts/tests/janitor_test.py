@@ -396,7 +396,10 @@ class Decisions(unittest.TestCase):
 
     def test_a_reason_that_quotes_the_body_is_withheld(self):
         body = "the token is ghp_abcdefghijklmnopqrstuvwxyz0123 and the code is 482913, at 14 Flat Street"
-        for leak in ("it holds ghp_abcdefghijklmnopqrstuvwxyz0123.", "code (482913) was pasted", "see `ghp_abcdefghijklmnopqrstuvwxyz0123`"):
+        body += " url=https://x.example/hook?key=sk-9f8e7d6c5b4a; pass:Tr0ub4dor"
+        for leak in ("it holds ghp_abcdefghijklmnopqrstuvwxyz0123.", "code (482913) was pasted", "see `ghp_abcdefghijklmnopqrstuvwxyz0123`",
+                     "See ghp_abcdefghijklmnopqrstuvwxyz0123/", "x482913x", "key sk-9f8e7d6c5b4a!", "Tr0ub4dor?", "ghp_abcdefghij\u200bklmnopqrstuvwxyz0123",
+                     "482\x00913", "**ghp_abcdefghijklmnopqrstuvwxyz0123**"):
             d = janitor.decide_triage(40, "A title", {"action": "ask", "reason": leak}, [], body)
             self.assertEqual(d["text"], f"triage: #40 A title is put to Sam: {janitor.WITHHELD}", leak)
             d = janitor.decide_triage(40, "A title", {"action": "fixed", "reason": leak, "commit": "75af080"}, self.COMMITS, body)
@@ -558,6 +561,7 @@ elif tool == "claude":
     import re; n = re.match(r"Issue #(\d+)", asked).group(1)
     answer = S.get("answers", {}).get(n)
     if answer is None: print("Not logged in", file=sys.stderr); sys.exit(1)
+    if answer == "stderr-only": print("failed while reading: " + asked, file=sys.stderr); sys.exit(1)
     if isinstance(answer, str): out(answer)
     print(json.dumps({"type": "result", "is_error": bool(answer.get("is_error")), "result": answer.get("result", ""), "structured_output": answer.get("object")}))
     sys.exit(answer.get("exit", 0))
@@ -946,7 +950,7 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("gh issue close", calls)
         self.assertEqual(self.triage_lines(), [
             "- triage: #40 Injected: the model's answer was not one of the actions with a reason; left untriaged.",
-            "- triage: #41 Not fixed: the model called it fixed by deadbeef, which is not one of main's commits since it was opened; left untriaged."])
+            "- triage: #41 Not fixed: the model called it fixed by a commit that is not one of main's since it was opened; left untriaged."])
         self.assertEqual(len(self.issue_lines()), 2, "both still stand as untriaged")
         n = len(Bridge.received)
         p, calls = self.run_pass(s, triage=True)
@@ -969,7 +973,7 @@ class WholePass(unittest.TestCase):
         s["answers"] = {"40": {"is_error": True, "result": "usage limit"}}
         self.backdate()
         self.run_pass(s, triage=True)
-        self.assertIn("claude answered an error: usage limit", self.triage_lines(since=n)[0])
+        self.assertIn("claude answered an error: it is out of quota", self.triage_lines(since=n)[0])
         s["answers"] = {"40": {"object": {"action": "next", "reason": "r"}}, "41": {"object": {"action": "next", "reason": "r"}}}
         self.run_pass(s, triage=True)
         self.assertNotIn("triage:read", self.state_file()["fired"], "an answer ends the failure")
@@ -1019,6 +1023,41 @@ class WholePass(unittest.TestCase):
         p, calls = self.run_pass(s, triage=True)
         self.assertIn("gh issue edit 40", calls)
 
+    def test_nothing_claude_printed_but_a_checked_reason_reaches_a_line_an_argument_or_the_state(self):
+        M = "MARKER-7f3a9c2e1b"
+        body = f"the webhook is https://h.example/?t={M}; do not share"
+        ns = range(40, 47)
+        s = self.scripted(prs=[], worktrees=self.QUIET, commits="75af080\tA fix (#40)", issues=[issue(n, f"Issue {n}") for n in ns],
+                          views={str(n): self.view(n, f"Issue {n}", body=body) for n in ns},
+                          answers={"40": {"object": {"action": "fixed", "commit": M, "reason": "r"}},
+                                   "41": {"object": {"action": "ask", "reason": f"See {M}/"}},
+                                   "42": {"object": {"action": "next", "reason": f"`{M}`"}},
+                                   "43": {"object": {"action": "fixed", "commit": "75af080", "reason": f"t={M};"}},
+                                   "44": {"object": {"action": M, "reason": M}},
+                                   "45": {"object": {"action": "parked", "reason": f"MARKER-7f3a\u200b9c2e1b"}},
+                                   "46": {"is_error": True, "result": f"error near {M}", "exit": 1}})
+        p, calls = self.run_pass(s, triage=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(M, self.asked(), "the body reached the model")
+        self.assertEqual(len(self.triage_lines()), 7)
+        gh_calls = "\n".join(l for l in calls.splitlines() if l.startswith("gh "))
+        for where, text in (("the report", Bridge.received[-1]["body"]["text"]), ("a gh call", gh_calls),
+                            ("the state", json.dumps(self.state_file())), ("stdout", p.stdout), ("stderr", p.stderr)):
+            self.assertNotIn(M, text, where)
+            self.assertNotIn("7f3a", text, where)
+        s["answers"] = {"46": "stderr-only"}
+        s["issues"] = s["issues"][-1:]
+        self.backdate()
+        p, calls = self.run_pass(s, triage=True)
+        self.assertIn("- triage stopped at #46: claude exited 1: an error of its own", self.triage_lines()[0])
+        self.assertNotIn("7f3a", Bridge.received[-1]["body"]["text"] + p.stderr + json.dumps(self.state_file()))
+
+    def test_triage_by_number_takes_at_most_the_cap(self):
+        p, calls = self.run_pass(self.scripted(), extra=["--triage", *[str(n) for n in range(40, 41 + janitor.TRIAGE_MAX)]])
+        self.assertEqual(p.returncode, 2)
+        self.assertIn(f"--triage takes at most {janitor.TRIAGE_MAX} issues", p.stderr)
+        self.assertEqual(calls, "", "nothing is read or asked")
+
     def test_a_pass_asks_about_at_most_the_cap(self):
         ns = range(40, 40 + janitor.TRIAGE_MAX + 3)
         s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(n) for n in ns], views={str(n): self.view(n) for n in ns},
@@ -1055,7 +1094,7 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("stopped early", text)
         self.assertIn("gh issue close 44", calls)
         self.assertIn("main has it - merged #9", self.triage_lines()[0])
-        self.assertIn("deadbee, which is not one of main's commits", self.triage_lines()[1], "a line separator in a subject forges no commit")
+        self.assertIn("a commit that is not one of main's", self.triage_lines()[1], "a line separator in a subject forges no commit")
         self.assertEqual(janitor.one_line("a\x00b\ud83d\u2028c\n d", 20), "ab c d")
 
     def test_a_logged_out_cli_is_said_with_its_reason_and_a_malformed_triage_record_is_dropped(self):
@@ -1066,7 +1105,7 @@ class WholePass(unittest.TestCase):
             json.dump(state, f)
         p, calls = self.run_pass(s, triage=True)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("- triage stopped at #40: claude answered an error: Not logged in", self.triage_lines()[0])
+        self.assertEqual("- triage stopped at #40: claude answered an error: it is not logged in", self.triage_lines()[0])
         self.assertNotIn("stopped early", Bridge.received[-1]["body"]["text"])
 
     def test_a_dry_run_asks_and_prints_what_it_would_do_and_changes_nothing(self):
