@@ -183,7 +183,16 @@ enum MascotMapping {
 @MainActor
 @Observable
 final class Mascot {
-    private(set) var state: MascotState
+    private(set) var state: MascotState {
+        didSet {
+            #if DEBUG
+            // A debug run's sight of him without the screen: what he is drawn as, and whether
+            // the harness has a turn open, at each change of either.
+            guard state.pose != oldValue.pose || state.turnOpen != oldValue.turnOpen else { return }
+            DebugRun.say("mascot: \(state.pose.rawValue), turn \(state.turnOpen ? "open" : "closed")")
+            #endif
+        }
+    }
 
     init(model: String = ClaudeModel.effective(.default).rawValue) {
         state = MascotState(model: model)
