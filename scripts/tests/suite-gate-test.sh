@@ -5,7 +5,8 @@
 # SUITE_RESULTS exactly the suite jobs; `codex` needs and spells out
 # `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others) and
 # `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; `codex_wait`
-# needs the fast jobs and `review_cap` and runs only on its `false`; and `reviewer_ran` and
+# needs the fast jobs and `review_cap` and runs only on its `false`, for the cap and for `draft`,
+# which `review_cap` reads from the API and no job takes from the event; and `reviewer_ran` and
 # `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
 # reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. The three selectable
 # jobs (topo_unit, topo_ui, others) each need select and run only on its `true` for them; `test`
@@ -75,6 +76,18 @@ check.(needs.("codex_wait").sort == (fast + %w[review_cap]).sort, "codex_wait ne
   check.(capped == ["${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}"], "#{job} reads the cap from review_cap and from post_feedback's recount (#{capped.inspect})")
 end
 check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.capped == 'false' &&"), "codex_wait runs only on review_cap's false")
+# Draft is review_cap's reading of the API as the run starts, never the event's: the run that
+# survives a push and a ready a second apart can be the one whose payload still says draft.
+cap = jobs.fetch("review_cap")
+check.(cap.fetch("outputs")["draft"] == "${{ steps.draft.outputs.draft }}", "review_cap hands on the draft state its own step read")
+check.(!cap.fetch("if").include?("draft"), "review_cap runs on a draft too, to read that it is one")
+check.(cap.fetch("steps").first["id"] == "draft" && cap.fetch("steps").first.fetch("run").include?('gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .draft'), "review_cap's first step reads draft from the API")
+check.(cap.fetch("steps").drop(1).all? { |s| s["if"] == "steps.draft.outputs.draft == 'false'" }, "review_cap counts nothing on a draft")
+check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.draft == 'false' &&"), "codex_wait runs only on review_cap's draft false")
+check.(jobs.fetch("codex").fetch("if").include?("needs.codex_wait.result == 'success' &&"), "codex runs only behind codex_wait, which holds a draft")
+payload = jobs.select { |_, j| [j["if"], *Array(j["steps"]).flat_map { |s| [s["if"], *(s["env"] || {}).values] }].compact.any? { |v| v.to_s.include?("pull_request.draft") } }.keys
+check.(payload == %w[reviewer_ran], "only reviewer_ran reads the event's draft, as the fallback for a fork (#{payload.join(', ')})")
+check.(step.("reviewer_ran", "Assert a verdict was produced and delivered").fetch("env")["IS_DRAFT"] == "${{ needs.review_cap.outputs.draft || github.event.pull_request.draft }}", "reviewer_ran reads review_cap's draft first")
 check.(needs.("reviewer_ran").sort == (suite + %w[test review_cap codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, review_cap, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
 check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test review_cap codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, review_cap, codex and post_feedback (#{needs.('review_gate').join(', ')})")
 
