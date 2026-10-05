@@ -355,6 +355,38 @@ import TopoCoreTesting
         #expect(mine.parents == [.ref("phone", 2)])
     }
 
+    @Test func twoAppendsContinuingTheSameTranscriptAtOnceDoNotForkTheLog() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: inner)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "one", parents: [], at: tA)
+        let read = try await log.read()
+        // Both pass the check before either saves: the first save is held until the second
+        // append has been checked and is waiting behind it.
+        let held = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
+        await inner.setBeforeSave { _ in
+            await inner.setBeforeSave(nil)
+            entered.continuation.yield()
+            for await _ in held.stream { break }
+        }
+        let first = Task { try await w.append(.person, "a", continuing: read, at: tA + 1, nonce: "a", justRead: true) }
+        for await _ in entered.stream { break }
+        let second = Task { try await w.append(.person, "b", continuing: read, at: tA + 2, nonce: "b", justRead: true) }
+        for _ in 0..<1000 { await Task.yield() }
+        held.continuation.yield()
+        #expect(try await first.value.ref == .ref("phone", 2))
+        do {
+            _ = try await second.value
+            Issue.record("expected the second append to be refused")
+        } catch TurnLogError.incompleteTranscript(let missing, _) {
+            #expect(missing == [.ref("phone", 2)])
+        }
+        let again = try await w.append(.person, "b", continuing: try await log.read(), at: tA + 2, nonce: "b", justRead: true)
+        #expect(again.ref == .ref("phone", 3))
+        #expect(again.parents == [.ref("phone", 2)])
+    }
+
     @Test func coldQueryIndexIsCorrectedByIDBeforeTheFirstAppend() async throws {
         let inner = InMemoryRecordDatabase()
         for i in Int64(1)...5 { _ = try await inner.save(turnRecord(device: "phone", seq: i, parents: [])) }

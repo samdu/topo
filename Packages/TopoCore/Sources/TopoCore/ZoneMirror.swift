@@ -59,7 +59,10 @@ public actor ZoneMirror {
     private var token: Data?
     private var last: Task<Void, any Error>?
     private var loaded = false
-    /// Moved by `forget`: a walk begun before it folds nothing in and keeps nothing after.
+    /// How many reads have been asked for.
+    private(set) var asked = 0
+    /// Moved by `forget`: a read asked for before it pulls nothing, folds nothing in and keeps
+    /// nothing after.
     private var forgotten = 0
 
     /// `pull` answers one page of the feed from a token, nil being the beginning, and throws
@@ -70,7 +73,8 @@ public actor ZoneMirror {
     }
 
     /// Forgets the zone, here and on disk: the next read walks the feed from the beginning, and a
-    /// read under way throws `CancellationError` rather than bring back what was forgotten.
+    /// read asked for before this, under way or waiting its turn, throws `CancellationError`
+    /// rather than bring back what was forgotten.
     public func forget() {
         forgotten += 1
         reset()
@@ -106,9 +110,13 @@ public actor ZoneMirror {
     /// Every record of `type` in the zone now, in the order of their names.
     public func records(ofType type: String) async throws -> [Record] {
         let previous = last
+        // Taken as the read is asked for: one queued behind another when the zone is forgotten
+        // is a read of what was forgotten, however late it starts.
+        let began = forgotten
+        asked += 1
         let read = Task {
             _ = await previous?.result
-            try await self.catchUp()
+            try await self.catchUp(began: began)
         }
         last = read
         try await read.value
@@ -120,9 +128,9 @@ public actor ZoneMirror {
         token = nil
     }
 
-    private func catchUp() async throws {
+    private func catchUp(began: Int) async throws {
+        guard began == forgotten else { throw CancellationError() }
         load()
-        let began = forgotten
         var changed = false
         defer { if changed, began == forgotten { keep() } }
         var more = true
