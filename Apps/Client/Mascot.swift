@@ -141,15 +141,22 @@ enum MascotMapping {
         return next
     }
 
-    /// The chat's own harness: the model it asks, the context of the last reply it got, and
-    /// whether it has a turn open. The guest's events say what a turn is doing; the harness says
-    /// only that there is one. No context — no reply answered here yet, or a sign-out since — is
-    /// an empty one: what he wore before was another login's.
-    static func harness(_ state: MascotState, model: String, tokens: Int?, turnOpen: Bool) -> MascotState {
+    /// The chat's own harness: the model it asks and the context of the last reply it got, and
+    /// no pose, since what a turn is doing comes from the guest's events. No context — no reply
+    /// answered here yet, or a sign-out since — is an empty one: what he wore before was another
+    /// login's.
+    static func harness(_ state: MascotState, model: String, tokens: Int?) -> MascotState {
         var next = state
         next.model = model
         next.tokens = tokens ?? 0
-        next.turnOpen = turnOpen
+        return next
+    }
+
+    /// The harness's own turn opened or closed. The guest's events say what a turn is doing; the
+    /// harness says only that there is one.
+    static func turn(_ state: MascotState, open: Bool) -> MascotState {
+        var next = state
+        next.turnOpen = open
         return next
     }
 
@@ -182,10 +189,9 @@ final class Mascot {
         state = MascotState(model: model)
     }
 
-    /// The chat's harness: the model it asks, the context of the last reply it got, and whether
-    /// a turn of its own is open.
-    func harness(model: String, tokens: Int?, turnOpen: Bool) {
-        state = MascotMapping.harness(state, model: model, tokens: tokens, turnOpen: turnOpen)
+    /// The chat's harness: the model it asks, and the context of the last reply it got.
+    func harness(model: String, tokens: Int?) {
+        state = MascotMapping.harness(state, model: model, tokens: tokens)
     }
 
     /// The side of the screen he stands on, as his roost decided it (`MascotRoam.facing`).
@@ -206,9 +212,23 @@ final class Mascot {
     /// doing it now.
     func guestTurnGone() { state = MascotMapping.ended(state) }
 
-    /// Topo follows the chat's guest: every turn the harness's brain sends it moves him.
+    /// Topo follows the chat's harness: every turn its brain sends the guest moves him, and he
+    /// is at work for as long as a turn it sent is open, whatever screen is showing.
     func follow(_ harness: Harness) {
         harness.onGuest = { [self] activity in follow(activity) }
+        watchTurn(of: harness)
+    }
+
+    /// Takes whether the harness has a turn open, now and at each change: the harness is
+    /// observed, so nothing has to be drawn for him to hear of it.
+    private func watchTurn(of harness: Harness) {
+        let open = withObservationTracking { harness.turnOpen } onChange: { [weak self, weak harness] in
+            Task { @MainActor in
+                guard let self, let harness else { return }
+                self.watchTurn(of: harness)
+            }
+        }
+        if state.turnOpen != open { state = MascotMapping.turn(state, open: open) }
     }
 
     /// What the chat's guest is doing, as the harness's brain tells it.

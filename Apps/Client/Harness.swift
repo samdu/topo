@@ -33,11 +33,12 @@ final class Harness {
     }
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
-    /// A turn this device sent is open: from its first step, before iCloud or the guest has
-    /// answered anything, until its reply is in the log, it failed, or its words went into the log
-    /// for another device to answer. It is what Topo on the glass is at work for when the guest
-    /// has nothing to show yet; a line stopped on a failure is not an open turn.
-    var turnOpen: Bool { status != nil }
+    /// A turn this device sent is open: from the moment its attempt begins, before iCloud or the
+    /// guest has answered anything, until its reply is shown, it failed, or its words went into
+    /// the log for another device to answer. It is what Topo on the glass is at work for when the
+    /// guest has nothing to show yet. A failure closes it as the failure is put up, before
+    /// whatever reads follow; a line stopped on a failure is not an open turn.
+    private(set) var turnOpen = false
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
     private(set) var unfinished: Turn?
@@ -289,6 +290,7 @@ final class Harness {
         notice = nil
         failure = nil
         status = nil
+        turnOpen = false
         busy = false
         context = nil
         unfinished = nil
@@ -325,6 +327,7 @@ final class Harness {
         stopAnswering()
         busy = false
         status = nil
+        turnOpen = false
         do {
             let writer: TurnWriter
             if let existing = self.writer { writer = existing } else { writer = try await log.writer(for: device) }
@@ -532,6 +535,10 @@ final class Harness {
     private func run(_ attempt: Outgoing) async -> Bool {
         let generation = inFlight
         let text = attempt.text
+        turnOpen = true
+        // Every way out closes the turn, unless a sign-out or a demotion already has and the
+        // flag is the next login's.
+        defer { if inFlight == generation { turnOpen = false } }
         do {
             Perf.mark("turn.send")
             if runner == nil {
@@ -554,6 +561,7 @@ final class Harness {
             Perf.mark("turn.reply.shown")
             if result.reply.context > 0 { context = result.reply.context }
             status = nil
+            turnOpen = false
             await refreshUnfinished()
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.
@@ -565,6 +573,7 @@ final class Harness {
             // The person's turn is in the log; only the reply is owed, and nothing is going to
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
+            turnOpen = false
             failure = Failure(words: Self.describe(underlying))
             onTurnFailed?(attempt.nonce)
             await refresh()
@@ -587,15 +596,18 @@ final class Harness {
                 return true
             } catch {
                 guard inFlight == generation else { return false }
+                turnOpen = false
                 failure = Failure(words: Self.describe(error))
                 onTurnFailed?(attempt.nonce)
             }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
+            turnOpen = false
             failure = Failure(words: "Signed out. Sign in again to continue.")
             onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
+            turnOpen = false
             failure = Failure(words: Self.describe(error))
             onTurnFailed?(attempt.nonce)
             await refresh()

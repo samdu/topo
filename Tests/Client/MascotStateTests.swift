@@ -167,20 +167,23 @@ final class MascotStateTests: XCTestCase {
     /// word, with nothing from the guest to show: he is thinking for all of it, wears the guest's
     /// pose while there is one, and is idle only once the harness's turn is closed too.
     func testAnOpenHarnessTurnIsNotIdleWithOrWithoutTheGuest() {
-        let mascot = Mascot(model: "claude-sonnet-5")
-        mascot.harness(model: "claude-sonnet-5", tokens: 12, turnOpen: true)
-        XCTAssertEqual(mascot.state.activity, .idle, "the guest has said nothing")
-        XCTAssertEqual(mascot.state.pose, .thinking)
-        XCTAssertEqual(mascot.state.input.activity, "thinking")
-        mascot.guestTurnBegan()
-        mascot.guest(.event(.toolUse(name: "WebSearch")))
-        XCTAssertEqual(mascot.state.input.activity, "searching", "the guest's pose is the one drawn")
+        var state = MascotState(model: "claude-sonnet-5", tokens: 12)
+        state = MascotMapping.turn(state, open: true)
+        XCTAssertEqual(state.activity, .idle, "the guest has said nothing")
+        XCTAssertEqual(state.pose, .thinking)
+        XCTAssertEqual(state.input.activity, "thinking")
+        state = MascotMapping.began(state)
+        state = MascotMapping.next(state, .event(.toolUse(name: "WebSearch")))
+        XCTAssertEqual(state.input.activity, "searching", "the guest's pose is the one drawn")
         // The guest's turn is over and the reply is still being saved.
-        mascot.guest(.ended(.abandoned))
-        XCTAssertEqual(mascot.state.input.activity, "thinking")
-        mascot.harness(model: "claude-sonnet-5", tokens: 12, turnOpen: false)
-        XCTAssertEqual(mascot.state.pose, .idle)
-        XCTAssertEqual(mascot.state.input.activity, "idle")
+        state = MascotMapping.next(state, .ended(.abandoned))
+        XCTAssertEqual(state.input.activity, "thinking")
+        // The harness's model and context change nothing about the turn.
+        state = MascotMapping.harness(state, model: "claude-opus-5", tokens: 40)
+        XCTAssertEqual(state.input.activity, "thinking")
+        state = MascotMapping.turn(state, open: false)
+        XCTAssertEqual(state.pose, .idle)
+        XCTAssertEqual(state.input.activity, "idle")
     }
 
     /// A sign he holds up is drawn over any pose, an open turn's included.
@@ -249,13 +252,13 @@ final class MascotStateTests: XCTestCase {
     /// and no pose: what a turn is doing comes from the guest's events.
     func testTheHarnessSetsTheModelAndTheContextAndNoPose() {
         let mascot = Mascot(model: "claude-sonnet-5")
-        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: nil, turnOpen: false)
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: nil)
         XCTAssertEqual(mascot.state, MascotState(model: "claude-haiku-4-5-20251001", tokens: 0, activity: .idle))
-        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 4_210, turnOpen: false)
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 4_210)
         XCTAssertEqual(mascot.state.tokens, 4_210)
-        mascot.harness(model: "claude-opus-5", tokens: 4_210, turnOpen: false)
+        mascot.harness(model: "claude-opus-5", tokens: 4_210)
         XCTAssertEqual(mascot.state, MascotState(model: "claude-opus-5", tokens: 4_210, activity: .idle))
-        mascot.harness(model: "claude-opus-5", tokens: nil, turnOpen: false)
+        mascot.harness(model: "claude-opus-5", tokens: nil)
         XCTAssertEqual(mascot.state.tokens, 0, "a harness with no context left him wearing the last one")
     }
 
@@ -276,7 +279,7 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(mascot.state.input.facing, "right", "a turn's events turned him")
         mascot.guest(.ended(.abandoned))
         mascot.guestTurnGone()
-        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 12, turnOpen: false)
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 12)
         XCTAssertEqual(mascot.facing, .right, "a turn's end or the harness turned him")
         mascot.facing = .left
         XCTAssertEqual(mascot.state.input.facing, "left")
