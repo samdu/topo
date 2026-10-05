@@ -1004,9 +1004,9 @@ class WholePass(unittest.TestCase):
         text = Bridge.received[-1]["body"]["text"]
         self.assertNotIn("stopped early", text)
         self.assertIn("gh issue close 44", calls)
-        self.assertIn("main has it- merged #9", self.triage_lines()[0])
+        self.assertIn("main has it - merged #9", self.triage_lines()[0])
         self.assertIn("deadbee, which is not one of main's commits", self.triage_lines()[1], "a line separator in a subject forges no commit")
-        self.assertEqual(janitor.one_line("a\x00b\ud83d\u2028c\n d", 20), "abc d")
+        self.assertEqual(janitor.one_line("a\x00b\ud83d\u2028c\n d", 20), "ab c d")
 
     def test_a_logged_out_cli_is_said_with_its_reason_and_a_malformed_triage_record_is_dropped(self):
         s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40)], views={"40": self.view(40)},
