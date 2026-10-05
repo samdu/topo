@@ -80,23 +80,8 @@ public actor TurnRunner {
     public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString,
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
         Perf.mark("turn.begin")
-        await progress?(.takingLease)
-        // The log is read while the lease is taken: the read asks nothing of the lease, and
-        // nothing is done with it unless this device holds it.
-        async let reading = log.read()
-        let outcome = try await lease.acquire()
-        Perf.mark("turn.lease.acquired")
-        guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
-
-        await progress?(.saving)
-        var before = try await reading
-        // An owed reply moved the log; what the turn continues from is read again.
-        if try await settleOwed() { before = try await log.read() }
-        Perf.mark("turn.log.read")
-        // A caller that stopped before the person's turn is in the log writes nothing at all.
-        try Task.checkCancellation()
         let at = Date()
-        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce, justRead: true)
+        let (before, person) = try await said(text, at: at, nonce: nonce, progress: progress)
         Perf.mark("turn.person.saved")
         await progress?(.asking(person: person))
         let replyNonce = Self.replyNonce(for: [person.ref])
@@ -132,6 +117,53 @@ public actor TurnRunner {
             else { Perf.mark("turn.reply.failed \(Self.kind(of: error))") }
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
         }
+    }
+
+    /// The log as the turn found it and the person's turn appended to it, by this device as the
+    /// lease's holder.
+    ///
+    /// A device whose lease is fresh by its own clocks, and whose brain owes the log nothing,
+    /// does not fetch and renew the lease first: it appends the person's turn in one atomic batch
+    /// with the renewal, which is the same compare-and-set on the version it last wrote. A claim
+    /// made since its last heartbeat refuses the batch with nothing written, and the turn then
+    /// goes the long way, as does a lease that has lapsed here or was never held. A turn found
+    /// already in the log (a retry) renewed nothing, so the lease is heartbeated before the turn
+    /// is taken as this device's to answer.
+    private func said(_ text: String, at: Date, nonce: String,
+                      progress: (@Sendable (Progress) async -> Void)?) async throws -> (Transcript, Turn) {
+        if await lease.isPrimary(), await brain.owed() == nil {
+            await progress?(.saving)
+            let before = try await log.read()
+            // A caller that stopped before the person's turn is in the log writes nothing at all.
+            try Task.checkCancellation()
+            if let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce,
+                                                    justRead: true, renewing: lease) {
+                if person.at == at {
+                    Perf.mark("turn.lease.fresh")
+                    return (before, person)
+                }
+                if try await lease.heartbeat() {
+                    Perf.mark("turn.lease.fresh")
+                    return (before, person)
+                }
+            }
+        }
+        await progress?(.takingLease)
+        // The log is read while the lease is taken: the read asks nothing of the lease, and
+        // nothing is done with it unless this device holds it.
+        async let reading = log.read()
+        let outcome = try await lease.acquire()
+        Perf.mark("turn.lease.acquired")
+        guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+
+        await progress?(.saving)
+        var before = try await reading
+        // An owed reply moved the log; what the turn continues from is read again.
+        if try await settleOwed() { before = try await log.read() }
+        Perf.mark("turn.log.read")
+        try Task.checkCancellation()
+        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce, justRead: true)
+        return (before, person)
     }
 
     /// A failure's kind for a mark: the error's type, a database error's case and the record it
