@@ -33,6 +33,11 @@ final class Harness {
     }
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// A turn this device sent is open: from its first step, before iCloud or the guest has
+    /// answered anything, until its reply is in the log, it failed, or its words went into the log
+    /// for another device to answer. It is what Topo on the glass is at work for when the guest
+    /// has nothing to show yet; a line stopped on a failure is not an open turn.
+    var turnOpen: Bool { status != nil }
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
     private(set) var unfinished: Turn?

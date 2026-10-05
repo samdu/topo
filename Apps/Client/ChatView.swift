@@ -240,9 +240,10 @@ struct ChatView: View {
                 do { try await Task.sleep(for: .seconds(5)) } catch { return }
             }
         }
-        // Topo on the glass wears the model the harness asks and the context of its last reply.
+        // Topo on the glass wears the model the harness asks and the context of its last reply,
+        // and is at work for as long as it has a turn open.
         .onChange(of: harnessFacts, initial: true) { _, facts in
-            mascot.harness(model: facts.model, tokens: facts.context)
+            mascot.harness(model: facts.model, tokens: facts.context, turnOpen: facts.turnOpen)
         }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { row.text = text } }
         // The row holds the turn's words until the turn is in the log, and the log is what ends
@@ -446,12 +447,13 @@ struct ChatView: View {
     /// build's pin makes of the setting, since that is the model that answers.
     private var harnessFacts: HarnessFacts {
         HarnessFacts(model: ClaudeModel.effective(ClaudeModel(rawValue: modelSetting) ?? .default).rawValue,
-                     context: harness.context)
+                     context: harness.context, turnOpen: harness.turnOpen)
     }
 
     private struct HarnessFacts: Equatable {
         var model: String
         var context: Int?
+        var turnOpen: Bool
     }
 
     /// Whether what the transcript draws is the log's: once it has been read, or at once for a

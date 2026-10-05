@@ -205,7 +205,7 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNil(harness.error)
         XCTAssertEqual(harness.context, 92_510)
         let mascot = Mascot(model: "claude-haiku-4-5")
-        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context, turnOpen: harness.turnOpen)
         XCTAssertEqual(mascot.state.tokens, 92_510)
     }
 
@@ -219,14 +219,65 @@ final class HarnessIntegrationTests: XCTestCase {
         let mascot = Mascot(model: "claude-haiku-4-5")
 
         await harness.send("When are the bins?")
-        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context, turnOpen: harness.turnOpen)
         XCTAssertEqual(mascot.state.tokens, 259_010)
 
         await harness.forget()
         XCTAssertNil(harness.context, "the last login's context outlived the sign-out")
         // The next sign-in's chat appears and hands Topo what the harness has.
-        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context)
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context, turnOpen: harness.turnOpen)
         XCTAssertEqual(mascot.state.tokens, 0, "Topo wore the last login's load after a sign-out")
+    }
+
+    // MARK: A turn open
+
+    /// A turn is open from its first step, while iCloud is still being reached and the guest has
+    /// been told nothing, through the wait on the model with no word from it, until the reply is
+    /// in the log; Topo, following the harness and its guest, is at work for all of it and idle
+    /// once it is over.
+    func testATurnIsOpenFromItsFirstStepUntilItsReplyAndTopoIsNotIdleMeanwhile() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        let reaching = Answers(), asking = Answers(), posed = Answers()
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            // The model has the turn and has said nothing. The chat hands Topo the harness's
+            // facts as they change; here they are handed over at the moment asked about.
+            await asking.set(await MainActor.run { seen.harness?.turnOpen ?? false })
+            await posed.set(await MainActor.run {
+                mascot.harness(model: "claude-haiku-4-5", tokens: nil, turnOpen: seen.harness?.turnOpen ?? false)
+                return mascot.state.input.activity == "thinking"
+            })
+        }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport, ensureZone: {
+            await reaching.set(await MainActor.run { seen.harness?.turnOpen ?? false })
+        })
+        seen.harness = harness
+        mascot.follow(harness)
+        XCTAssertFalse(harness.turnOpen)
+
+        await harness.send("When are the bins?")
+
+        let (wasReaching, wasAsking, wasPosed) = await (reaching.value, asking.value, posed.value)
+        XCTAssertEqual(wasReaching, true, "no turn was open while iCloud was being reached")
+        XCTAssertEqual(wasAsking, true, "no turn was open while the model had it")
+        XCTAssertEqual(wasPosed, true, "Topo was idle with the turn waiting on the model")
+        XCTAssertFalse(harness.turnOpen, "the turn stayed open after its reply")
+        XCTAssertEqual(mascot.state.activity, .idle)
+        mascot.harness(model: "claude-haiku-4-5", tokens: harness.context, turnOpen: harness.turnOpen)
+        XCTAssertEqual(mascot.state.input.activity, "idle")
+    }
+
+    /// A turn that failed is not open: the line has stopped, and nothing is waiting on a model.
+    func testATurnThatFailedIsNotOpen() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("never"))),
+                              ensureZone: { throw Unexpected() })
+        await harness.send("When are the bins?")
+        XCTAssertNotNil(harness.error)
+        XCTAssertTrue(harness.hasWaiting)
+        XCTAssertFalse(harness.turnOpen)
     }
 
     // MARK: A failed model call

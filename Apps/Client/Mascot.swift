@@ -18,6 +18,10 @@ struct MascotState: Equatable, Sendable {
     /// The tokens of context the last message was written over: input and both cache counts.
     var tokens: Int = 0
     var activity: Activity = .idle
+    /// The chat's harness has a turn open: sent, and not yet answered, failed or handed to another
+    /// device. It is the turn's own life rather than anything the guest wrote, so the wait before
+    /// the guest has the words and the save after its last one are part of the turn he shows.
+    var turnOpen = false
     /// Words on a sign he holds up. Nothing sets it yet; while it is nil he holds none.
     var sign: String?
     /// The side of the screen he stands on, which is the way the whole picture faces: on the right
@@ -27,14 +31,19 @@ struct MascotState: Equatable, Sendable {
 
     /// The poses the engine has for work, and the one for none. A pose that is not idle is shown
     /// only while a turn is in flight: the working animation is the honest sign that work is.
+    /// Thinking is also the wait on the model, with nothing from it yet to say what the work is.
     /// Yoga is not one: it is part of his rest, which the engine runs by itself while he is idle.
     enum Activity: String, CaseIterable, Sendable {
         case idle, thinking, searching, building, writing, calendar
     }
 
+    /// The pose he is drawn in: what the guest's turn is doing, and thinking while a turn is open
+    /// with nothing from the guest to say more. Idle only when no turn is open.
+    var pose: Activity { activity == .idle && turnOpen ? .thinking : activity }
+
     /// What the engine is handed for this state, a frame at a time.
     var input: TopoInput {
-        TopoInput(model: model, tokens: Double(tokens), activity: sign == nil ? activity.rawValue : "sign", sign: sign,
+        TopoInput(model: model, tokens: Double(tokens), activity: sign == nil ? pose.rawValue : "sign", sign: sign,
                   facing: facing.rawValue)
     }
 }
@@ -61,8 +70,9 @@ enum MascotFacing: String, CaseIterable, Sendable {
 ///
 /// The guest's events are Claude Code's stream-json (`StreamEvent`): `system/init` names the model,
 /// each assistant message's usage the context, a thinking block is thinking, and a tool call's
-/// name — and for a tool that writes a file, the file — is the pose. A turn's end, however it
-/// ended, is idle, and so is a turn's start: nothing of one turn's pose is carried into the next.
+/// name — and for a tool that writes a file, the file — is the pose. A turn's start is thinking,
+/// and so is a tool's result going back: the model has the turn and has said nothing yet. A turn's
+/// end, however it ended, is idle, so nothing of one turn's pose is carried into the next.
 enum MascotMapping {
     /// What a turn is doing when it calls `tool`, which for a file tool names `path`; nil for a
     /// tool that says nothing about the work, which leaves the pose as it was.
@@ -97,7 +107,10 @@ enum MascotMapping {
             next.activity = .thinking
         case .toolUse(let name, let path):
             if let activity = activity(tool: name, path: path) { next.activity = activity }
-        case .text, .toolResult, .result, .other, .malformed:
+        case .toolResult:
+            // The tool is done and the model has what it found: the wait is on the model again.
+            next.activity = .thinking
+        case .text, .result, .other, .malformed:
             break
         }
         return next
@@ -113,8 +126,13 @@ enum MascotMapping {
         }
     }
 
-    /// A turn is sent: whatever the last one was doing is not what this one is doing.
-    static func began(_ state: MascotState) -> MascotState { ended(state) }
+    /// A turn is sent: whatever the last one was doing is not what this one is doing, which is
+    /// waiting on the model.
+    static func began(_ state: MascotState) -> MascotState {
+        var next = state
+        next.activity = .thinking
+        return next
+    }
 
     /// A turn is over, or its updates stopped without an end: nothing is in flight.
     static func ended(_ state: MascotState) -> MascotState {
@@ -123,14 +141,15 @@ enum MascotMapping {
         return next
     }
 
-    /// The chat's own harness, when no guest turn runs: the model it asks and the context of the
-    /// last reply it got, and no pose, since poses come from the guest's events. No context — no
-    /// reply answered here yet, or a sign-out since — is an empty one: what he wore before was
-    /// another login's.
-    static func harness(_ state: MascotState, model: String, tokens: Int?) -> MascotState {
+    /// The chat's own harness: the model it asks, the context of the last reply it got, and
+    /// whether it has a turn open. The guest's events say what a turn is doing; the harness says
+    /// only that there is one. No context — no reply answered here yet, or a sign-out since — is
+    /// an empty one: what he wore before was another login's.
+    static func harness(_ state: MascotState, model: String, tokens: Int?, turnOpen: Bool) -> MascotState {
         var next = state
         next.model = model
         next.tokens = tokens ?? 0
+        next.turnOpen = turnOpen
         return next
     }
 
@@ -163,9 +182,10 @@ final class Mascot {
         state = MascotState(model: model)
     }
 
-    /// The chat's harness: the model it asks, and the context of the last reply it got.
-    func harness(model: String, tokens: Int?) {
-        state = MascotMapping.harness(state, model: model, tokens: tokens)
+    /// The chat's harness: the model it asks, the context of the last reply it got, and whether
+    /// a turn of its own is open.
+    func harness(model: String, tokens: Int?, turnOpen: Bool) {
+        state = MascotMapping.harness(state, model: model, tokens: tokens, turnOpen: turnOpen)
     }
 
     /// The side of the screen he stands on, as his roost decided it (`MascotRoam.facing`).

@@ -107,27 +107,88 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(state.model, last.model, "the model that wrote the message is the head")
     }
 
-    /// The two-turn recording, each turn begun and ended as the session delivers it: each thinks
-    /// and the first runs Bash, and each ends idle, the second inheriting nothing.
-    func testTwoRecordedTurnsEachStartAndEndIdle() throws {
+    /// The two-turn recording, each turn begun and ended as the session delivers it: each starts
+    /// waiting on the model, the first runs Bash, each ends idle, and he is idle at no moment
+    /// between a turn's start and its end.
+    func testTwoRecordedTurnsEachStartThinkingAndEndIdle() throws {
         let lines = try recorded("two-turns")
         let split = try XCTUnwrap(lines.firstIndex { if case .result = $0 { true } else { false } })
         let mascot = Mascot()
         for turn in [Array(lines[...split]), Array(lines[(split + 1)...])] {
             mascot.guestTurnBegan()
-            XCTAssertEqual(mascot.state.activity, .idle)
+            XCTAssertEqual(mascot.state.activity, .thinking)
             var seen: Set<MascotState.Activity> = []
             for event in turn {
                 if case .result(let result) = event {
                     mascot.guest(.ended(.answered(result)))
                 } else {
                     mascot.guest(.event(event))
+                    XCTAssertNotEqual(mascot.state.activity, .idle, "idle with the turn still open, after \(event)")
                 }
                 seen.insert(mascot.state.activity)
             }
             XCTAssertTrue(seen.contains(.thinking))
             XCTAssertEqual(mascot.state.activity, .idle, "a turn answered leaves him idle")
         }
+    }
+
+    // MARK: Waiting on the model
+
+    /// A turn opened with nothing from the model yet — no init line, no thinking block, no word —
+    /// is not idle: he is waiting on the model, which is thinking, until the turn ends.
+    func testATurnOpenedWithNoModelOutputIsNotIdle() {
+        let mascot = Mascot()
+        XCTAssertEqual(mascot.state.input.activity, "idle")
+        mascot.guestTurnBegan()
+        XCTAssertEqual(mascot.state.activity, .thinking)
+        XCTAssertEqual(mascot.state.input.activity, "thinking")
+        // What says nothing about the work leaves him waiting, not idle.
+        mascot.guest(.event(.started(session: "s", model: "claude-haiku-4-5-20251001")))
+        mascot.guest(.event(.other("system")))
+        XCTAssertEqual(mascot.state.input.activity, "thinking")
+        mascot.guestTurnGone()
+        XCTAssertEqual(mascot.state.input.activity, "idle")
+    }
+
+    /// A tool's result going back is the wait on the model again, whatever the tool was: the
+    /// tool's pose does not outlast the tool, and the wait is not idle.
+    func testAToolsResultIsTheWaitOnTheModelAgain() {
+        for tool in ["Bash", "WebSearch", "Write", "Read"] {
+            let mascot = Mascot()
+            mascot.guestTurnBegan()
+            mascot.guest(.event(.toolUse(name: tool)))
+            mascot.guest(.event(.toolResult(isError: false, text: "done")))
+            XCTAssertEqual(mascot.state.activity, .thinking, tool)
+            XCTAssertEqual(mascot.state.input.activity, "thinking", tool)
+        }
+    }
+
+    /// The chat's harness has a turn open before the guest has it and after the guest's last
+    /// word, with nothing from the guest to show: he is thinking for all of it, wears the guest's
+    /// pose while there is one, and is idle only once the harness's turn is closed too.
+    func testAnOpenHarnessTurnIsNotIdleWithOrWithoutTheGuest() {
+        let mascot = Mascot(model: "claude-sonnet-5")
+        mascot.harness(model: "claude-sonnet-5", tokens: 12, turnOpen: true)
+        XCTAssertEqual(mascot.state.activity, .idle, "the guest has said nothing")
+        XCTAssertEqual(mascot.state.pose, .thinking)
+        XCTAssertEqual(mascot.state.input.activity, "thinking")
+        mascot.guestTurnBegan()
+        mascot.guest(.event(.toolUse(name: "WebSearch")))
+        XCTAssertEqual(mascot.state.input.activity, "searching", "the guest's pose is the one drawn")
+        // The guest's turn is over and the reply is still being saved.
+        mascot.guest(.ended(.abandoned))
+        XCTAssertEqual(mascot.state.input.activity, "thinking")
+        mascot.harness(model: "claude-sonnet-5", tokens: 12, turnOpen: false)
+        XCTAssertEqual(mascot.state.pose, .idle)
+        XCTAssertEqual(mascot.state.input.activity, "idle")
+    }
+
+    /// A sign he holds up is drawn over any pose, an open turn's included.
+    func testASignIsDrawnOverAnOpenTurn() {
+        var state = MascotState(model: "claude-sonnet-5", turnOpen: true)
+        XCTAssertEqual(state.input.activity, "thinking")
+        state.sign = "hello"
+        XCTAssertEqual(state.input.activity, "sign")
     }
 
     // MARK: Whole turns
@@ -155,7 +216,7 @@ final class MascotStateTests: XCTestCase {
     }
 
     /// A turn abandoned mid-search is followed by one that has done nothing yet: the second turn
-    /// starts idle, and the first turn's pose is nowhere in it.
+    /// starts waiting on the model, and the first turn's pose is nowhere in it.
     func testALaterTurnInheritsNoPose() {
         let mascot = Mascot()
         mascot.guestTurnBegan()
@@ -163,9 +224,9 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(mascot.state.activity, .searching)
         // The stream is cut off without an end, and the next turn is sent.
         mascot.guestTurnBegan()
-        XCTAssertEqual(mascot.state.activity, .idle)
+        XCTAssertEqual(mascot.state.activity, .thinking)
         mascot.guest(.event(.text("hello")))
-        XCTAssertEqual(mascot.state.activity, .idle, "text is not work in a pose")
+        XCTAssertEqual(mascot.state.activity, .thinking, "text is not work in a pose of its own")
         mascot.guest(.event(.thinking))
         XCTAssertEqual(mascot.state.activity, .thinking)
     }
@@ -184,17 +245,17 @@ final class MascotStateTests: XCTestCase {
 
     // MARK: The chat's harness
 
-    /// With no guest turn, he wears the model the harness asks and the context of its last reply,
-    /// and never a pose: poses come from the guest's events.
+    /// With no turn open, he wears the model the harness asks and the context of its last reply,
+    /// and no pose: what a turn is doing comes from the guest's events.
     func testTheHarnessSetsTheModelAndTheContextAndNoPose() {
         let mascot = Mascot(model: "claude-sonnet-5")
-        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: nil)
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: nil, turnOpen: false)
         XCTAssertEqual(mascot.state, MascotState(model: "claude-haiku-4-5-20251001", tokens: 0, activity: .idle))
-        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 4_210)
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 4_210, turnOpen: false)
         XCTAssertEqual(mascot.state.tokens, 4_210)
-        mascot.harness(model: "claude-opus-5", tokens: 4_210)
+        mascot.harness(model: "claude-opus-5", tokens: 4_210, turnOpen: false)
         XCTAssertEqual(mascot.state, MascotState(model: "claude-opus-5", tokens: 4_210, activity: .idle))
-        mascot.harness(model: "claude-opus-5", tokens: nil)
+        mascot.harness(model: "claude-opus-5", tokens: nil, turnOpen: false)
         XCTAssertEqual(mascot.state.tokens, 0, "a harness with no context left him wearing the last one")
     }
 
@@ -215,7 +276,7 @@ final class MascotStateTests: XCTestCase {
         XCTAssertEqual(mascot.state.input.facing, "right", "a turn's events turned him")
         mascot.guest(.ended(.abandoned))
         mascot.guestTurnGone()
-        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 12)
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 12, turnOpen: false)
         XCTAssertEqual(mascot.facing, .right, "a turn's end or the harness turned him")
         mascot.facing = .left
         XCTAssertEqual(mascot.state.input.facing, "left")
