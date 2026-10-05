@@ -313,10 +313,10 @@ public actor PrimaryLease {
         }
     }
 
-    /// Extends the held lease by one duration. Returns false, and forgets
-    /// the lease, when the server holds a different version (another device
-    /// has claimed it) or the lease has already expired locally (this device
-    /// missed its heartbeats and is not primary until it claims again).
+    /// Extends the held lease by one duration. Returns false, the lease no
+    /// longer held, when the server holds a different version (another
+    /// device has claimed it) or the lease has already expired locally (this
+    /// device missed its heartbeats and is not primary until it claims again).
     public func heartbeat() async throws -> Bool {
         guard let record = heldRecord, let lease = Lease(record: record) else { return false }
         if hasLapsed(lease) {
@@ -327,9 +327,9 @@ public actor PrimaryLease {
     }
 
     /// Saves `records` and a heartbeat of the held lease in one atomic batch,
-    /// so the records land only if this device still holds the lease at the
-    /// version it last wrote: a turn appended this way is never the work of
-    /// a displaced brain. Returns the saved records, or nil with nothing
+    /// so the records land only if no other device has claimed the lease
+    /// since this one last wrote it: a turn appended this way is never the
+    /// work of a displaced brain. Returns the saved records, or nil with nothing
     /// applied when the lease is not held: never granted, or taken by
     /// another device (which this device then yields to, as after a failed
     /// heartbeat). A conflict on any record but the lease propagates as the
@@ -349,10 +349,13 @@ public actor PrimaryLease {
                 (over, claim, heartbeatOf) = (record, holder(epoch: lease.epoch), lease)
             } else {
                 if heldRecord != nil { lapse() }
-                guard let lapsed = lapsedRecord.flatMap(Lease.init(record:)) else { return nil }
+                guard lapsedRecord != nil else { return nil }
                 let server = try await database.fetch(Lease.recordID)
                 // Held again while the read was out: the batch goes as a heartbeat of that.
                 if heldRecord != nil { continue }
+                // Judged after the read, not before it: a yield or an abandonment while the
+                // read was out leaves nothing to claim over.
+                guard let lapsed = lapsedRecord.flatMap(Lease.init(record:)) else { return nil }
                 guard let server, let current = Lease(record: server),
                       current.holder == device, current.epoch == lapsed.epoch, current.endpoint == endpoint else {
                     lapsedRecord = nil
@@ -430,6 +433,9 @@ public actor PrimaryLease {
         do {
             let deadline = monotonic() + timing.duration
             let saved = try await database.save(lease.record(changeTag: changeTag))
+            // A late heartbeat's answer arriving after a batch claimed afresh over it: the
+            // lease held is the later one, and this answer is about a version it replaced.
+            if let newer = held, newer.epoch > lease.epoch { return newer }
             heldRecord = lease.record(changeTag: saved.changeTag)
             heldUntil = deadline
             lapsedRecord = nil
@@ -446,6 +452,12 @@ public actor PrimaryLease {
                 // look identical to each other and one must lose.
                 heldRecord = server
                 return winner
+            }
+            if let winner, let newer = held, winner.holder == device, winner.epoch == newer.epoch,
+               winner.epoch > lease.epoch, winner.endpoint == endpoint {
+                // A late heartbeat that lost to this device's own fresh claim, made by a
+                // batch while the heartbeat was out: the lease held is that claim.
+                return newer
             }
             heldRecord = nil
             lapsedRecord = nil

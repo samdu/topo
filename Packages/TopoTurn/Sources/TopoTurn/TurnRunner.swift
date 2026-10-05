@@ -140,8 +140,9 @@ public actor TurnRunner {
     /// only the person asks again. A reply the brain owes the log is written first, and is
     /// written even when no person's turn waits.
     ///
-    /// Returns the reply this pass put in the log: the one it asked for, or, with nothing left
-    /// to ask, the owed one it wrote. Nil when it wrote none.
+    /// Returns the reply this pass brought: the one it asked for, that reply found already in
+    /// the log under its nonce, or, with nothing left to ask, the owed one it wrote. Nil when
+    /// there was none.
     public func answerPending(model: ClaudeModel) async throws -> Turn? {
         var transcript = try await log.read()
         guard transcript.isComplete else { return nil }
