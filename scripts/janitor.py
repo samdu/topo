@@ -514,7 +514,7 @@ def decide_triage(number, title, answer, commits, private=""):
     issue = ["gh", "issue", "{}", str(number), "--repo", REPO]
     if action == "fixed":
         sha = answer.get("commit")
-        sha = sha.strip() if isinstance(sha, str) else ""
+        sha = sha if isinstance(sha, str) else ""
         fix = [(h, s) for h, s in commits if h == sha]
         if len(fix) != 1:
             return refused("the model called it fixed by a commit that is not one of main's since it was opened")
@@ -933,7 +933,7 @@ def save_state(path, state):
     os.replace(tmp, path)
 
 
-def triage_issue(sh, number, checkout):
+def triage_issue(sh, number, checkout, named=False, before=lambda d: None):
     """Triage one issue: read it, ask, and make the one call the answer allows.
     Returns decide_triage's dict with `fp`, the fingerprint of the issue as
     read; an issue that is closed or carries `triaged` by now is `gone`, with
@@ -948,18 +948,25 @@ def triage_issue(sh, number, checkout):
         state_, title, since = i["state"], i["title"], i["createdAt"]
     except (KeyError, TypeError, AttributeError, ValueError):
         raise RuntimeError(f"gh issue view {number} answered without the whole issue")
-    if state_ != "OPEN" or TRIAGED in labels:
-        why = "is not open" if state_ != "OPEN" else "is triaged already"
+    # In a pass, a comment since the list was read is somebody's triage, as it
+    # is to step 6; an issue named by hand is asked about with its comments.
+    commented = not named and bool(i.get("comments"))
+    if state_ != "OPEN" or TRIAGED in labels or commented:
+        why = "is not open" if state_ != "OPEN" else "is triaged already" if TRIAGED in labels else "has a comment now"
         return {"action": "gone", "argv": None, "fp": fp, "text": f"triage: #{number} {why}; nothing done."}
     commits = sh.commits_since(checkout, since)
     private = "\n".join([i.get("body") or ""] + [f"{(c.get('author') or {}).get('login', '')} {c.get('body') or ''}"
                                                  for c in i.get("comments") or [] if isinstance(c, dict)])
     d = decide_triage(number, title, read_answer(sh.ask(triage_prompt(i, commits))), commits, private)
+    d = dict(d, fp=fp)
     if d["argv"]:
+        # Said and saved before it is done, as a publish is: a pass killed
+        # between the call and its record would leave a label nobody was told of.
+        before(d)
         try:
             sh.triage_act(d["argv"])
         except RuntimeError as ex:
-            d = {"action": "refused", "argv": None,
+            d = {"action": "refused", "argv": None, "unsay": True,
                  "text": f"triage: #{number} {one_line(title, 120)}: the model said {d['action']} and the call was refused ({one_line(ex, 200)}); left as it is."}
     return dict(d, fp=fp)
 
@@ -968,15 +975,27 @@ def triage_named(sh, state, numbers, now, checkout, persist=lambda: None):
     """`--triage N…`: the triage step alone, on the issues named, asked
     whatever was recorded of them before."""
     lines = state.setdefault("pending", [])
+    def before(d):
+        lines.append(d["text"])
+        persist()
+
     for n in numbers:
+        # As in a pass: nothing is asked whose line would have no room, or
+        # would join a queue that waits on the bridge.
+        if state.get("undelivered") or len(lines) >= PENDING_MAX:
+            sh.log(f"triage: #{n} and what follows are left: an earlier report is undelivered or the report is full")
+            break
         try:
-            d = triage_issue(sh, n, checkout)
+            d = triage_issue(sh, n, checkout, named=True, before=before)
         except RuntimeError as ex:
             lines.append(f"triage stopped at #{n}: {ex}")
             break
         if d["action"] != "gone":
             state.setdefault("triage", {})[str(n)] = {"fp": d["fp"], "action": d["action"], "at": now.isoformat()}
-        lines.append(d["text"])
+        if d.get("unsay"):
+            lines[-1] = d["text"]
+        elif not d["argv"]:
+            lines.append(d["text"])
         persist()
 
 
@@ -1223,8 +1242,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     quiet.append(f"triage: #{n} and what follows wait for the next pass")
                     break
                 asked += 1
+                def before(d):
+                    lines.append(d["text"])
+                    persist()
+
                 try:
-                    d = triage_issue(sh, n, checkout)
+                    d = triage_issue(sh, n, checkout, before=before)
                 except RuntimeError as ex:
                     say("triage:read", f"triage stopped at #{n}: {ex}")
                     break
@@ -1232,8 +1255,12 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 if d["argv"] or d["action"] == "gone":   # labelled or closed, or already was
                     done.add(w["key"])
                 else:
-                    triaged[str(n)] = {"fp": w["fp"], "action": d["action"], "at": now.isoformat()}
-                if d["action"] != "gone":
+                    # Under the fingerprint of the issue as it was asked about,
+                    # which is the one the next list will show.
+                    triaged[str(n)] = {"fp": d["fp"], "action": d["action"], "at": now.isoformat()}
+                if d.get("unsay"):
+                    lines[-1] = d["text"]
+                elif not d["argv"] and d["action"] != "gone":
                     lines.append(d["text"])
                 persist()
             wants = [w for w in wants if w["key"] not in done]
