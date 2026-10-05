@@ -32,6 +32,8 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case answeredThenExited(String)
         /// Received, and then nothing: the stream never ends, as for an app killed mid-turn.
         case hang
+        /// As `hang`, having begun a message and written these words of it.
+        case hangWriting(String)
         /// Received, and still being answered, with its transcript entry not written yet: the
         /// turn ends when `finishHanging` says.
         case hangUnwritten
@@ -185,6 +187,12 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case .hang:
             write(input: text, id: id, session: session)
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
+            lock.withLock { hanging.append((continuation, id, text, session, true)) }
+        case .hangWriting(let words):
+            write(input: text, id: id, session: session)
+            continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
+            continuation.yield(.event(.writingBegan))
+            continuation.yield(.event(.writing(words)))
             lock.withLock { hanging.append((continuation, id, text, session, true)) }
         case .hangUnwritten:
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))

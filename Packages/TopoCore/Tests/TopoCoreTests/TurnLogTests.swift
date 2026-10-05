@@ -334,7 +334,7 @@ import TopoCoreTesting
         }
     }
 
-    @Test func aRecordWrittenSinceAJustReadTranscriptIsSteppedPastByTheSave() async throws {
+    @Test func aRecordWrittenSinceAJustReadTranscriptRefusesTheAppendUntilItIsRead() async throws {
         let inner = InMemoryRecordDatabase()
         let log = TurnLog(database: inner)
         let w = try await log.writer(for: phone)
@@ -342,8 +342,17 @@ import TopoCoreTesting
         let read = try await log.read()
         // Another writer for this device lands on the sequence the read found free.
         _ = try await inner.save(turnRecord(device: "phone", seq: 2, parents: ["phone/1"]))
-        let mine = try await w.append(.person, "mine", continuing: read, at: tA + 1, justRead: true)
+        do {
+            _ = try await w.append(.person, "mine", continuing: read, at: tA + 1, nonce: "n", justRead: true)
+            Issue.record("expected the stale transcript to be refused")
+        } catch TurnLogError.incompleteTranscript(let missing, _) {
+            #expect(missing == [.ref("phone", 2)])
+        }
+        #expect(try await log.read().ordered.map(\.ref) == [.ref("phone", 1), .ref("phone", 2)])
+        // Read again, the same append continues from the turn that landed.
+        let mine = try await w.append(.person, "mine", continuing: try await log.read(), at: tA + 1, nonce: "n", justRead: true)
         #expect(mine.ref == .ref("phone", 3))
+        #expect(mine.parents == [.ref("phone", 2)])
     }
 
     @Test func coldQueryIndexIsCorrectedByIDBeforeTheFirstAppend() async throws {

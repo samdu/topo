@@ -179,9 +179,14 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
     private static func mirrorDirectory(in caches: URL) -> URL { caches.appendingPathComponent("zone-mirror", isDirectory: true) }
 
     /// Forgets every zone this process has read and removes their copies from disk, whichever
-    /// process wrote them: what a sign-out leaves on the device of the log is nothing.
+    /// process wrote them: what a sign-out leaves on the device of the log is nothing. The next
+    /// read of a zone makes its mirror again, under the iCloud account there is then.
     public static func forgetMirrors() async {
-        for mirror in mirrors.withLock({ Array($0.values) }) { await mirror.forget() }
+        let held = mirrors.withLock { mirrors in
+            defer { mirrors = [:] }
+            return Array(mirrors.values)
+        }
+        for mirror in held { await mirror.forget() }
         if let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first {
             try? FileManager.default.removeItem(at: mirrorDirectory(in: caches))
         }

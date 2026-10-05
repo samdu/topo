@@ -1024,6 +1024,29 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.inputs, ["the word is marmalade"])
     }
 
+    /// A takeover while the guest is part-way through a reply: the row that drew what it had
+    /// written goes with the turn, since nothing the guest says of its ending is followed after.
+    func testADemotionWhileAReplyIsBeingWrittenDropsItsRow() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.hangWriting("Marmalade is")])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!,
+                              brain: bridge, relay: relay, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        let sending = Task { await harness.send("the word is marmalade") }
+        for _ in 0..<500 where harness.writing != "Marmalade is" { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(harness.writing, "Marmalade is", "the reply was never drawn as written")
+
+        await harness.demote()
+        XCTAssertNil(harness.writing, "a viewer kept the row of a reply nobody is writing")
+        guest.finishHanging(with: "Marmalade is a preserve.")
+        await sending.value
+        XCTAssertNil(harness.writing)
+    }
+
     /// Sign-out while a send has not yet written the person's turn — iCloud still being reached:
     /// the outbox went with the login, and so do the words. Nothing reaches the log, and the guest
     /// is asked nothing.

@@ -44,6 +44,9 @@ enum SequenceError: Error, Sendable {
     /// A marker for this nonce exists but the record it names cannot be
     /// fetched. The two are written atomically, so this is damaged data.
     case markerWithoutRecord(nonce: String)
+    /// An append that had to land on the sequence number it expected found another writer's
+    /// record there. Nothing was written.
+    case taken(Int64)
 }
 
 /// Writes create-only records under one device's sequence numbers, one
@@ -87,8 +90,10 @@ actor SequenceAppender {
     /// save; a caller that has to land the record together with something
     /// else of its own — a lease heartbeat, so a displaced device writes
     /// nothing — passes its own, and whatever that throws comes back out
-    /// of here untouched.
-    func append(nonce: String,
+    /// of here untouched. `exact` is for a record built from what the caller knew of this
+    /// device's records: another writer's record on the expected number is one it did not know
+    /// of, so the append throws `taken` with nothing written rather than step past it.
+    func append(nonce: String, exact: Bool = false,
                 save: (@Sendable ([Record]) async throws -> [Record])? = nil,
                 _ make: @escaping @Sendable (Int64, String) -> Record) async throws -> Record {
         let nonce = nonce.isEmpty ? UUID().uuidString : nonce
@@ -97,7 +102,7 @@ actor SequenceAppender {
         let previous = queue
         let task = Task<Record, any Error> {
             _ = try? await previous?.value
-            return try await appendNow(nonce: nonce, save: save, make)
+            return try await appendNow(nonce: nonce, exact: exact, save: save, make)
         }
         queue = task
         return try await task.value
@@ -111,7 +116,7 @@ actor SequenceAppender {
         }
     }
 
-    private func appendNow(nonce: String,
+    private func appendNow(nonce: String, exact: Bool,
                            save: @Sendable ([Record]) async throws -> [Record],
                            _ make: @Sendable (Int64, String) -> Record) async throws -> Record {
         for _ in 0..<32 {
@@ -131,7 +136,9 @@ actor SequenceAppender {
                     next += 1
                     return server
                 }
+                let taken = next
                 next = try await firstFreeSequence(from: next + 1)
+                if exact { throw SequenceError.taken(taken) }
             }
         }
         throw SequenceError.contended(device)
