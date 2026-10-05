@@ -221,6 +221,18 @@ public actor PrimaryLease {
                 continue
             }
 
+            if let mine = heldRecord, mine.changeTag != record.changeTag,
+               lease.holder == device, lease.endpoint == endpoint, let held, lease.epoch <= held.epoch {
+                // This device's own lease at another version than the one held, and no later
+                // an epoch: nobody took anything. A read older than a write made while it was
+                // out is read again. Otherwise the server has a write of this lease whose
+                // answer has not arrived, or never will, and its version is the one to go
+                // over: a read that was only old loses the compare-and-set to the version
+                // held, which is then taken back.
+                if lease.epoch < held.epoch || (lease.isExpired(at: now()) && !hasLapsed(held)) { continue }
+                heldRecord = record
+            }
+
             if let mine = heldRecord {
                 if mine.changeTag == record.changeTag {
                     if !lease.isExpired(at: now()) {
@@ -230,11 +242,6 @@ public actor PrimaryLease {
                         continue
                     }
                     // Our own lease, lapsed without anyone taking it: a fresh claim.
-                } else if lease.holder == device, lease.endpoint == endpoint, let held, lease.epoch <= held.epoch {
-                    // This device's own lease at another version, no later than the one held:
-                    // a read older than a write made while it was out, or a write whose answer
-                    // is still on its way. Nobody took anything; read again.
-                    continue
                 } else {
                     displaced(by: lease)
                 }
@@ -383,8 +390,12 @@ public actor PrimaryLease {
                 guard let lapsed = lapsedRecord.flatMap(Lease.init(record:)) else { return nil }
                 guard let server, let current = Lease(record: server),
                       current.holder == device, current.epoch == lapsed.epoch, current.endpoint == endpoint else {
+                    // This device's own lease at a later epoch is a claim another call made,
+                    // its answer on the way: nothing was given up, and this batch is not its.
+                    let taker = server.flatMap(Lease.init(record:))
+                    if let taker, taker.holder == device, taker.endpoint == endpoint, taker.epoch > lapsed.epoch { return nil }
                     surrender()
-                    if let taker = server.flatMap(Lease.init(record:)), taker.holder != device { yieldedTo = taker }
+                    if let taker, taker.holder != device { yieldedTo = taker }
                     return nil
                 }
                 (over, claim, heartbeatOf) = (server, holder(epoch: current.epoch + 1), nil)
@@ -396,6 +407,8 @@ public actor PrimaryLease {
                 // save wrote is taken as held unless the lease was given up while the save was
                 // out, or the one held by now is a later write than the version this was over.
                 let superseded = held.map { $0.epoch >= claim.epoch && heldRecord?.changeTag != over.changeTag } ?? false
+                // A later write of the same lease is good for at least as long as this one.
+                if surrenders == began, superseded, held?.epoch == claim.epoch { heldUntil = max(heldUntil, deadline) }
                 if surrenders == began, !superseded {
                     let tag = saved.first(where: { $0.id == Lease.recordID })?.changeTag
                     heldRecord = claim.record(changeTag: tag)
@@ -420,9 +433,14 @@ public actor PrimaryLease {
                     }
                     continue
                 }
-                // A fresh claim that lost to a late heartbeat of this device's own, landing
-                // between the read and the save, reads again.
-                if heartbeatOf == nil, heldRecord == nil, lapsedRecord != nil, winner?.holder == device { continue }
+                if let winner, winner.holder == device, winner.endpoint == endpoint {
+                    // This device's own lease and not the one held here: a late heartbeat of
+                    // the lapsed lease, or a claim another call made whose answer is on its
+                    // way. Nothing was given up. With a lapsed lease to judge it by, the batch
+                    // reads again.
+                    if heldRecord == nil, lapsedRecord != nil { continue }
+                    return nil
+                }
                 surrender()
                 yieldedTo = winner
                 return nil
@@ -484,7 +502,11 @@ public actor PrimaryLease {
             guard surrenders == began else { return nil }
             // The lease held moved on from the version this went over, to this epoch or a
             // later one: this answer is about a version already replaced.
-            if let current = held, heldRecord?.changeTag != changeTag, current.epoch >= lease.epoch { return current }
+            if let current = held, heldRecord?.changeTag != changeTag, current.epoch >= lease.epoch {
+                // A later write of the same lease is good for at least as long as this one.
+                if current.epoch == lease.epoch { heldUntil = max(heldUntil, deadline) }
+                return current
+            }
             heldRecord = lease.record(changeTag: saved.changeTag)
             heldUntil = deadline
             lapsedRecord = nil
@@ -494,21 +516,21 @@ public actor PrimaryLease {
         } catch RecordDatabaseError.serverRecordChanged(_, let server) {
             guard surrenders == began else { return nil }
             let winner = Lease(record: server)
-            if let winner, let current = held, winner.holder == device, winner.endpoint == endpoint {
-                if winner.epoch == lease.epoch, current.epoch == lease.epoch {
-                    // A concurrent heartbeat of ours got there first: the lease
-                    // is still this one. Only a holder can say so; two cold
-                    // instances creating the same lease look identical to each
-                    // other and one must lose. The server's version is taken as
-                    // held where the one held is still the version this went over.
-                    if heldRecord?.changeTag == changeTag { heldRecord = server }
-                    return held
+            if let winner, winner.holder == device, winner.endpoint == endpoint {
+                // The winner is this device's own lease, so nothing was given up.
+                guard let current = held else {
+                    // Not held here: two cold instances creating the same lease look
+                    // identical to each other and one must lose, or another call's claim
+                    // won and its answer is on the way.
+                    yieldedTo = winner
+                    return nil
                 }
-                if current.epoch > lease.epoch, winner.epoch <= current.epoch {
-                    // A late heartbeat that lost to a version from before this device's own
-                    // fresh claim, or to that claim: the lease held is the claim.
-                    return current
-                }
+                // A concurrent write of ours got there first. Where the lease held is still
+                // the version this went over, the server's is a later version of it.
+                if winner.epoch == current.epoch, heldRecord?.changeTag == changeTag { heldRecord = server }
+                // Still this lease, or a fresh claim of ours made since: a success. A claim
+                // that lost to a late heartbeat of the lease it was over is not.
+                return current.epoch >= lease.epoch && winner.epoch <= current.epoch ? held : nil
             }
             surrender()
             yieldedTo = winner
