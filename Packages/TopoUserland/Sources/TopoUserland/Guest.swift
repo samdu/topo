@@ -69,12 +69,15 @@ public final class Guest: Sendable {
     /// commands in, and `/bin/bash` is where Alpine's bash package installs it
     /// (`RootfsInstaller` lays it in). The binary is a pin the app fetches (`ClaudeCodeInstaller`),
     /// a bump is a new pin, and the updater's own fetch speaks TLS through a library that never
-    /// completes a handshake under the emulator.
+    /// completes a handshake under the emulator. Claude Code's nonessential traffic (telemetry,
+    /// error reports, its start-up fetches) is off as well: none of it serves a turn, and a
+    /// start under the emulator is about a fifth shorter without it (`docs/perf.md`).
     public static let environment = [
         "HOME": "/root",
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "SHELL": "/bin/bash",
         "DISABLE_AUTOUPDATER": "1",
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     ]
 
     private init() {}

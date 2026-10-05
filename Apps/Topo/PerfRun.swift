@@ -58,10 +58,11 @@ enum PerfRun {
         // A spoken turn needs the voice resident at the send, as a press of the microphone does.
         // A fresh install compiles the voice's model on its first load, which has taken 44 s.
         if spoken {
-            for _ in 0..<1200 where !speaker.voice.ready { try? await Task.sleep(for: .milliseconds(100)) }
+            for _ in 0..<1200 where !speaker.voice.ready && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
             if !speaker.voice.ready { Perf.mark("perf.voice.unready") }
         }
-        while harness.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        // A scene that goes away cancels the run: a cancelled sleep returns at once, so every wait asks.
+        while harness.busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
         let answered = harness.hasWaiting ? 0 : await ask(questions, gap: .seconds(gap(environment))) { index, question in
             Perf.mark("perf.question \(index + 1)/\(questions.count)")
             let nonce = harness.willSend(question)
@@ -69,11 +70,12 @@ enum PerfRun {
             if spoken, speaker.awaitReply(nonce, readAloud: true).spoken { harness.markSpoken(nonce) }
             await harness.retry()
             let deadline = ContinuousClock.now + replyWait
-            while harness.busy || (!harness.answered(nonce) && !harness.hasWaiting && ContinuousClock.now < deadline) {
+            while !Task.isCancelled,
+                  harness.busy || (!harness.answered(nonce) && !harness.hasWaiting && ContinuousClock.now < deadline) {
                 try? await Task.sleep(for: .milliseconds(100))
             }
             // The next question waits for the reading to end, not only the reply.
-            while spoken, speaker.speaking { try? await Task.sleep(for: .milliseconds(200)) }
+            while spoken, speaker.speaking, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(200)) }
             if !harness.answered(nonce) {
                 Perf.mark("perf.unanswered said=\(harness.said(nonce)) turns=\(harness.turns.count) waiting=\(harness.hasWaiting)")
             }
@@ -88,7 +90,7 @@ enum PerfRun {
     static func ask(_ questions: [String], gap: Duration, one: (Int, String) async -> Bool) async -> Int {
         for (index, question) in questions.enumerated() {
             if index > 0 { try? await Task.sleep(for: gap) }
-            guard await one(index, question) else { return index }
+            guard !Task.isCancelled, await one(index, question) else { return index }
         }
         return questions.count
     }

@@ -1,6 +1,6 @@
 # Timing a launch and a turn
 
-Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`Packages/TopoCore/Sources/TopoCore/Perf.swift`) logs one `notice` line per named moment under subsystem `zone.hexagon.topo`, category `perf`: `mark t=<epoch ms> <name> [detail]`. A mark carries a name and nothing of the person's: no words, no tokens, a request's method, route and byte count at most. The route is the path with any segment that is not a short word or a version replaced by `*` and no query (`Forwarder.routeForMark`), since the path is the guest's to choose. `turn.reply.shown` is the reply handed to the view, a frame before it is drawn; `resident.spawned` is a launch that succeeded, and one that failed is `resident.launch.failed`.
+Where the time goes is read off marks the app writes itself. `Perf.mark(_:)` (`Packages/TopoCore/Sources/TopoCore/Perf.swift`) logs one `notice` line per named moment under subsystem `zone.hexagon.topo`, category `perf`: `mark t=<epoch ms> <name> [detail]`. A mark carries a name and nothing of the person's: no words, no tokens, a request's method, route and byte count at most. The route is the path with every segment that is not one of `Forwarder.routeSegments` replaced by `*`, and no query (`Forwarder.routeForMark`). `turn.reply.shown` is the reply handed to the view, a frame before it is drawn; `resident.spawned` is a launch that succeeded, and one that failed is `resident.launch.failed`.
 
 ## The marks
 

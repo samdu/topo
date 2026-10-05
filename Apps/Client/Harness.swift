@@ -572,6 +572,7 @@ final class Harness {
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.
             await onPass?()
+            Perf.mark("turn.pass.done")
             return true
         } catch is CancellationError {
             return false
