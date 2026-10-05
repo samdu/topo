@@ -221,16 +221,21 @@ public actor PrimaryLease {
                 continue
             }
 
-            if let mine = heldRecord, mine.changeTag != record.changeTag,
-               lease.holder == device, lease.endpoint == endpoint, let held, lease.epoch <= held.epoch {
-                // This device's own lease at another version than the one held, and no later
-                // an epoch: nobody took anything. A read older than a write made while it was
-                // out is read again. Otherwise the server has a write of this lease whose
-                // answer has not arrived, or never will, and its version is the one to go
-                // over: a read that was only old loses the compare-and-set to the version
-                // held, which is then taken back.
-                if lease.epoch < held.epoch || (lease.isExpired(at: now()) && !hasLapsed(held)) { continue }
-                heldRecord = record
+            if let mine = heldRecord, mine.changeTag != record.changeTag, let held {
+                // The record is another version than the one held. Epochs only go up, so one
+                // below the epoch held is a read older than a claim made while it was out,
+                // whoever it names: read again.
+                if lease.epoch < held.epoch { continue }
+                if lease.holder == device, lease.endpoint == endpoint {
+                    // This device's own lease, so nobody took anything: the server has a
+                    // write of it whose answer has not arrived, or never will, a later claim
+                    // included. At the epoch held, an expired read against a lease still
+                    // good here is only old, and is read again. Otherwise the server's
+                    // version is the one to go over: a read that was only old loses the
+                    // compare-and-set to the version held, which is then taken back.
+                    if lease.epoch == held.epoch, lease.isExpired(at: now()), !hasLapsed(held) { continue }
+                    heldRecord = record
+                }
             }
 
             if let mine = heldRecord {
@@ -441,6 +446,9 @@ public actor PrimaryLease {
                     if heldRecord == nil, lapsedRecord != nil { continue }
                     return nil
                 }
+                // About a taker from before a claim this device has made since: the batch
+                // was the displaced lease's, and the claim held is not this answer's to clear.
+                if let winner, let mine = held, winner.epoch < mine.epoch { return nil }
                 surrender()
                 yieldedTo = winner
                 return nil
@@ -532,6 +540,9 @@ public actor PrimaryLease {
                 // that lost to a late heartbeat of the lease it was over is not.
                 return current.epoch >= lease.epoch && winner.epoch <= current.epoch ? held : nil
             }
+            // About a taker from before a claim this device has made since: that claim is
+            // not this answer's to clear.
+            if let winner, let current = held, winner.epoch < current.epoch { return nil }
             surrender()
             yieldedTo = winner
             return nil
