@@ -71,7 +71,8 @@ enum PerfRun {
         }
         while harness.busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
         let answered = harness.hasWaiting ? 0 : await ask(questions, gap: .seconds(gap(environment))) { index, question in
-            Perf.mark("perf.question \(index + 1)/\(questions.count)")
+            // The phone's thermal state travels with each question: a hot phone runs the guest slower.
+            Perf.mark("perf.question \(index + 1)/\(questions.count) thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
             let nonce = harness.willSend(question)
             // As `ChatView.sendSpoken` sends what the ear heard.
             if spoken, speaker.awaitReply(nonce, readAloud: true).spoken { harness.markSpoken(nonce) }
