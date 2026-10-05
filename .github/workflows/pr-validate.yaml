@@ -629,6 +629,14 @@ jobs:
         if: ${{ !cancelled() }}
         run: scripts/tests/ci-select-lane-test.sh
 
+      # scripts/ci-audio-lane.sh against a fake brew, swiftc and SwitchAudioSource:
+      # a second start refuses and leaves the first lane as it was, a start
+      # that overlaps another refuses, and stop names a feeder it did not
+      # start, and its supervisor, by pid.
+      - name: The audio lane is one lane at a time
+        if: ${{ !cancelled() }}
+        run: scripts/tests/ci-audio-lane-test.sh
+
       # The suite selection against this workflow's own rules: documentation
       # runs nothing, what only `others` builds runs `others`, and the app,
       # its packages, the tests and the CI itself run all three.
