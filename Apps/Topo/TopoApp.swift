@@ -1,5 +1,6 @@
 import SwiftUI
 import TopoAuth
+import TopoCore
 import TopoTools
 
 @main
@@ -24,6 +25,8 @@ struct TopoApp: App {
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
+        PerfRun.begin()
+        Perf.mark("app.init.begin sinceProcessStart=\(Perf.sinceProcessStart() ?? -1)ms")
         // Before anything reads the store: a debug build launched with a setup token in its
         // environment is signed in by it, so the simulator comes up past the sign-in screen.
         #if DEBUG
@@ -101,6 +104,7 @@ struct TopoApp: App {
         _roleSelector = State(initialValue: RoleSelector(database: TopoCloudKit.database(),
                                                          isSignedIn: { (try? KeychainTokenStore().load()) != nil }))
         let audio = AudioSession()
+        Perf.mark("app.housekeeping.begin")
         _audio = State(initialValue: audio)
         // The compile cache a new install leaves behind is cleared before the ear and the voice
         // exist, so no model is loading while it goes. A debug build launched asking for a stub
@@ -112,6 +116,7 @@ struct TopoApp: App {
         let (ear, spoken) = ModelHousekeeping.launch(clear: ModelHousekeeping.clearCompileCache,
                                                      ear: { Ear() }, voice: { Voice() })
         #endif
+        Perf.mark("app.housekeeping.end")
         let voice = VoiceInput(audio: audio, ear: ear)
         let speaker = Speaker(audio: audio, voice: spoken)
         // A reply is not read into an open microphone: one that lands while it is open waits for
@@ -124,6 +129,7 @@ struct TopoApp: App {
         #if DEBUG
         AudioLog.startHeartbeat()
         #endif
+        Perf.mark("app.init.end")
     }
 
     /// The turn `TOPO_DEBUG_SEND` asks for, in a debug build. Nothing at all in a release one.
@@ -211,6 +217,7 @@ struct TopoApp: App {
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)
                 if phase == .active {
+                    Perf.mark("scene.active")
                     Task { await widgetCues.drain() }
                     LocalNetworkAccess.shared.becameActive()
                     voice.prepare()
@@ -234,6 +241,8 @@ struct TopoApp: App {
             // Nothing unless a debug build was launched asking for a turn; the screen
             // behaves as it always does either way.
             .task { await debugTurn() }
+            // Nothing unless the launch was a timed run from a Mac (`PerfRun`).
+            .task { await PerfRun.run(with: harness) }
             .task { await debugUserland() }
             .task { await debugGuestTurn() }
             .task { await debugConnections() }

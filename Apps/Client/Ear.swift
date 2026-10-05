@@ -1,4 +1,5 @@
 #if os(iOS)
+import TopoCore
 import AVFoundation
 import Observation
 #if canImport(FluidAudio)
@@ -124,11 +125,13 @@ final class Ear {
     /// is `summary`'s to report and not the ear's to fall on.
     func load(parakeet: URL, ctc: URL) {
         state = .loading
+        Perf.mark("ear.load.begin")
         Task {
             do {
                 try await engine.load(parakeet: parakeet, ctc: ctc) { [weak self] line in
                     Task { @MainActor in self?.progress = line }
                 }
+                Perf.mark("ear.load.end")
                 state = .ready
                 progress = ""
                 rebuild()

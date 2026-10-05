@@ -1,4 +1,5 @@
 #if os(iOS)
+import TopoCore
 import Foundation
 import Observation
 #if canImport(FluidAudio)
@@ -128,9 +129,11 @@ final class Voice {
     /// entry fills; a file it cannot find is a load failure here and never a download of its own.
     func load(base: URL) {
         state = .loading
+        Perf.mark("voice.load.begin")
         Task {
             do {
                 try await engine.load(base: base)
+                Perf.mark("voice.load.end")
                 state = .ready
             } catch {
                 state = .failed

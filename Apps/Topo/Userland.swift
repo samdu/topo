@@ -1,3 +1,4 @@
+import TopoCore
 import Foundation
 import Observation
 import TopoAuth
@@ -336,26 +337,33 @@ final class Userland {
     func bootGuest() async throws -> ClaudeCodeInstaller.Installed {
         if let booting { return try await booting.value }
         let task = Task { @MainActor in
+            Perf.mark("guest.boot.begin")
             let fakefs = try await self.ready()
             let claude = try await self.claudeCode()
+            Perf.mark("guest.downloads.present")
             try Guest.shared.boot(fakefs: fakefs)
+            Perf.mark("guest.kernel.booted")
             // The forwarder first, so the resolver's first write is already its stub; one that
             // cannot start leaves the resolver writing the phone's own name servers.
             _ = try? await self.forwarder.start()
             // A guest with no resolver still runs, with no name resolving in it, so a failed write
             // is not the boot's: the boot's answer is kept for the life of the process.
             await self.resolver.start()
+            Perf.mark("guest.dns.up")
             // Nor is a /tmp left full: what it clears is what a killed process left behind.
             try? await Guest.shared.clearTemporary()
             // The same for the zone: the phone's zoneinfo mounted, then the link kept to its zone. With
             // the mount refused the guest is on UTC; with a write refused, on whatever link stood.
             try? Guest.shared.mountZoneinfo()
             await self.clock.start()
-            return try await withCheckedThrowingContinuation { continuation in
+            Perf.mark("guest.tmp.zone.done")
+            let installed = try await withCheckedThrowingContinuation { continuation in
                 DispatchQueue.global(qos: .userInitiated).async {
                     continuation.resume(with: Result { try claude.install(into: Guest.shared) })
                 }
             }
+            Perf.mark("guest.claude.verified")
+            return installed
         }
         booting = task
         return try await task.value

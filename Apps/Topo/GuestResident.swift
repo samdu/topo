@@ -1,5 +1,6 @@
 import Foundation
 import TopoAuth
+import TopoCore
 import TopoProxy
 import TopoTools
 import TopoTurn
@@ -110,6 +111,7 @@ final class GuestResident {
         try await starting.value { @MainActor in
             _ = try await userland.bootGuest()
             let toolsEnvironment = try await self.prepareTools(log: log)
+            Perf.mark("guest.tools.ready")
             let port: UInt16
             if let running = self.proxyPort {
                 port = running
@@ -140,6 +142,7 @@ final class GuestResident {
                                            report: { outcome in log("background: \(outcome)") })
             self.lifecycle = lifecycle
             self.follow(lifecycle)
+            Perf.mark("guest.proxy.up")
             if UIApplication.shared.applicationState != .background { lifecycle.willEnterForeground() }
             return session
         }

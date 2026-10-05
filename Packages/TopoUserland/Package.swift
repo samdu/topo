@@ -12,10 +12,13 @@ let package = Package(
     products: [
         .library(name: "TopoUserland", targets: ["TopoUserland"]),
     ],
+    dependencies: [
+        .package(path: "../TopoCore"),
+    ],
     targets: [
         .binaryTarget(name: "TopoIsh", path: "Frameworks/TopoIsh.xcframework"),
         // The phone's own name servers, read through libresolv for the guest's resolver.
         .target(name: "TopoResolv", linkerSettings: [.linkedLibrary("resolv")]),
-        .target(name: "TopoUserland", dependencies: ["TopoIsh", "TopoResolv"]),
+        .target(name: "TopoUserland", dependencies: ["TopoIsh", "TopoResolv", .product(name: "TopoCore", package: "TopoCore")]),
     ]
 )

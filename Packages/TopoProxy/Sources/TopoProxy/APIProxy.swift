@@ -2,6 +2,7 @@ import Foundation
 import Network
 import os
 import TopoAuth
+import TopoCore
 
 /// The loopback relay Claude Code in the guest reaches the API through: plain HTTP/1.1 in on
 /// `127.0.0.1` at a port picked at start, every request forwarded to the one upstream
@@ -159,6 +160,21 @@ struct Forwarder: Sendable {
         }
     }
 
+    /// The path segments a mark may name: the routes Claude Code is known to ask for. The path is
+    /// the guest's to choose, so a segment is written only when it is one of these.
+    static let routeSegments: Set<String> = ["v1", "api", "messages", "count_tokens", "batches", "models", "hello",
+                                             "oauth", "claude_cli", "claude_code", "organizations", "files"]
+
+    /// A request's path as a mark names it: each segment that is one of `routeSegments`, and a
+    /// `*` for any other, which could be an id or a secret however much it reads like a word. A
+    /// query is not part of it.
+    static func routeForMark(_ path: String?) -> String {
+        guard let path = path?.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first else { return "?" }
+        return path.split(separator: "/", omittingEmptySubsequences: false).map { segment in
+            segment.isEmpty || routeSegments.contains(String(segment)) ? String(segment) : "*"
+        }.joined(separator: "/")
+    }
+
     func serve(_ inbound: Inbound) async {
         while true {
             let request: InboundRequest
@@ -217,8 +233,11 @@ struct Forwarder: Sendable {
                                        headers: Self.filter(request.headers, dropping: Self.requestDropped),
                                        body: body.isEmpty ? nil : body)
         let response: UpstreamResponse
+        let route = "\(request.method) \(Self.routeForMark(Self.canonical(request.path)))"
+        Perf.mark("proxy.request \(route) bytes=\(body.count)")
         do {
             response = try await upstream.send(outbound)
+            Perf.mark("proxy.head \(route) \(response.status)")
         } catch {
             if Task.isCancelled { log("\(line) cancelled: the client went away"); return false }
             // A target that would leave the one origin is the guest's request at fault; anything
@@ -240,7 +259,9 @@ struct Forwarder: Sendable {
         do {
             try await inbound.send(ResponseWriter.head(status: response.status, headers: headers))
             if hasBody {
+                var first = true
                 for try await chunk in response.body where !chunk.isEmpty {
+                    if first { Perf.mark("proxy.firstByte \(route)"); first = false }
                     try await inbound.send(chunkedOut ? ResponseWriter.chunk(chunk) : chunk)
                 }
                 try Task.checkCancellation()
@@ -253,6 +274,7 @@ struct Forwarder: Sendable {
             return false
         }
         log("\(line) \(response.status) in \(Self.elapsed(since: started))")
+        Perf.mark("proxy.done \(route)")
         return keepOpen
     }
 
