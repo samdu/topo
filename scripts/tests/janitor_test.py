@@ -397,11 +397,15 @@ class Decisions(unittest.TestCase):
     def test_a_reason_that_quotes_the_body_is_withheld(self):
         body = "the token is ghp_abcdefghijklmnopqrstuvwxyz0123 and the code is 482913, at 14 Flat Street"
         body += " url=https://x.example/hook?key=sk-9f8e7d6c5b4a; pass:Tr0ub4dor"
+        body += " passphrase correcthorse\u00adbatterystaple pw ab1\u200bcdefghijklmnop key a1b2c\u200b3d4e5\u200bf6a7b\u200b8c9d0 \ufeffp4$$w0rd!x pin is abc12! ok LEAKEDTOKENABCDEFGH"
         for leak in ("it holds ghp_abcdefghijklmnopqrstuvwxyz0123.", "code (482913) was pasted", "see `ghp_abcdefghijklmnopqrstuvwxyz0123`",
                      "See ghp_abcdefghijklmnopqrstuvwxyz0123/", "x482913x", "key sk-9f8e7d6c5b4a!", "Tr0ub4dor?", "ghp_abcdefghij\u200bklmnopqrstuvwxyz0123",
-                     "482\x00913", "**ghp_abcdefghijklmnopqrstuvwxyz0123**"):
-            d = janitor.decide_triage(40, "A title", {"action": "ask", "reason": leak}, [], body)
-            self.assertEqual(d["text"], f"triage: #40 A title is put to Sam: {janitor.WITHHELD}", leak)
+                     "482\x00913", "**ghp_abcdefghijklmnopqrstuvwxyz0123**", "it quotes correcthorsebatterystaple verbatim",
+                     "pw is ab1cdefghijklmnop", "key a1b2c3d4e5f6a7b8c9d0", "the password p4$$w0rd!x is in it", "the pin abc12! is here",
+                     "LEAKEDTOKENABCDEFGH"):
+            long = "A title " + "x" * 120 + " LEAKEDTOKENABCDEFGH"   # past what a line carries of a title
+            d = janitor.decide_triage(40, long, {"action": "ask", "reason": leak}, [], body)
+            self.assertTrue(d["text"].endswith(f" is put to Sam: {janitor.WITHHELD}"), leak)
             d = janitor.decide_triage(40, "A title", {"action": "fixed", "reason": leak, "commit": "75af080"}, self.COMMITS, body)
             self.assertNotIn("ghp_", " ".join(d["argv"]) + d["text"])
             self.assertNotIn("482913", " ".join(d["argv"]) + d["text"])

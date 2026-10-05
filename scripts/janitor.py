@@ -459,10 +459,14 @@ def private_tokens(private, title):
     run of non-space characters, and every run of letters, digits and `_-+.@`
     inside one, that is sixteen characters or longer or six or longer with a
     digit in it, and is not in the title, which every line names anyway."""
+    # Read as the reason is: with the characters one_line drops already gone,
+    # so a token is the same string on both sides of the comparison.
     runs = set()
     for run in private.split():
-        runs.add(run.strip(EDGES))
+        run = "".join(c for c in run if c.isprintable())
+        runs.update((run, run.strip(EDGES)))
         runs.update(re.findall(r"[A-Za-z0-9_+.@-]+", run))
+    title = one_line(title, 120)   # as much of it as a line carries
     return {t for t in runs if t not in title and (len(t) >= 16 or (len(t) >= 6 and any(c.isdigit() for c in t)))}
 
 
@@ -948,7 +952,8 @@ def triage_issue(sh, number, checkout):
         why = "is not open" if state_ != "OPEN" else "is triaged already"
         return {"action": "gone", "argv": None, "fp": fp, "text": f"triage: #{number} {why}; nothing done."}
     commits = sh.commits_since(checkout, since)
-    private = "\n".join([i.get("body") or ""] + [c.get("body") or "" for c in i.get("comments") or [] if isinstance(c, dict)])
+    private = "\n".join([i.get("body") or ""] + [f"{(c.get('author') or {}).get('login', '')} {c.get('body') or ''}"
+                                                 for c in i.get("comments") or [] if isinstance(c, dict)])
     d = decide_triage(number, title, read_answer(sh.ask(triage_prompt(i, commits))), commits, private)
     if d["argv"]:
         try:
