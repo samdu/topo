@@ -369,3 +369,43 @@ actor QueryWatcher: RecordDatabase {
         return try await inner.query(query)
     }
 }
+
+/// A database that holds the answer of the next save, its success or the conflict it threw, after
+/// the store has judged it, or of the next read of the lease after the store has read it: what a
+/// slow network does to an answer, with whatever the test does meanwhile done before it arrives.
+actor LateAnswers: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var holdSave = false, holdFetch = false
+    private var saves: [CheckedContinuation<Void, Never>] = [], fetches: [CheckedContinuation<Void, Never>] = []
+
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func holdNextSaveAnswer() { holdSave = true }
+    func holdNextFetchAnswer() { holdFetch = true }
+    var savesOut: Int { saves.count }
+    var fetchesOut: Int { fetches.count }
+    func releaseSaves() { saves.forEach { $0.resume() }; saves = [] }
+    func releaseFetches() { fetches.forEach { $0.resume() }; fetches = [] }
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        let result: Result<[Record], any Error>
+        do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
+        if holdSave {
+            holdSave = false
+            await withCheckedContinuation { saves.append($0) }
+        }
+        return try result.get()
+    }
+
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        let out = try await inner.fetch(ids)
+        if holdFetch, ids.contains(Lease.recordID) {
+            holdFetch = false
+            await withCheckedContinuation { fetches.append($0) }
+        }
+        return out
+    }
+
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
