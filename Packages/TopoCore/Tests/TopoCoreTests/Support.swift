@@ -126,6 +126,35 @@ actor ReadGate: RecordDatabase {
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
+/// A database that can hold the answer to one save after the store has applied it: a write that
+/// landed and whose acknowledgement is slow.
+actor SlowAnswer: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var holdingNext = false
+    private var held: CheckedContinuation<Void, Never>?
+
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func holdNextAnswer() { holdingNext = true }
+    var waiting: Bool { held != nil }
+    func release() {
+        held?.resume()
+        held = nil
+    }
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        let saved = try await inner.save(records)
+        if holdingNext {
+            holdingNext = false
+            await withCheckedContinuation { held = $0 }
+        }
+        return saved
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
 /// One waiter held until the test opens it.
 actor SaveGate {
     private var waiter: CheckedContinuation<Void, Never>?

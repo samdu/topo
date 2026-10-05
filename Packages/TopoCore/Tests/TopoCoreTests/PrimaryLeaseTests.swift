@@ -415,6 +415,32 @@ import TopoCoreTesting
         #expect(kept.epoch == 2)
     }
 
+    @Test func aLateHeartbeatThatLandedAndAnswersAfterAFreshClaimLeavesTheClaimHeld() async throws {
+        let slow = SlowAnswer(db)
+        let h = PrimaryLease(database: slow, device: hub, endpoint: "hub.local:1", probe: StubProbe.allDead,
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        _ = try await h.acquire()
+        clock.advance(4)
+        // The heartbeat reaches the server and its answer does not come back.
+        await slow.holdNextAnswer()
+        let late = Task { try await h.heartbeat() }
+        #expect(await eventually { await slow.waiting })
+        clock.advance(11)
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        #expect(try await h.heartbeat(saving: [note]) != nil)
+        #expect(await h.held?.epoch == 2)
+        // The answer arrives, about a version the fresh claim has replaced.
+        await slow.release()
+        #expect(try await late.value)
+        #expect(await h.held?.epoch == 2)
+        #expect(await h.isPrimary())
+        // The claim is still the one held: its heartbeat and its next batch go through.
+        #expect(try await h.heartbeat())
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/2"))]) != nil)
+        let record = try #require(await db.current(Lease.recordID))
+        #expect(Lease(record: record)?.epoch == 2)
+    }
+
     @Test func aFreshClaimSlowerThanTheLeaseIsNotPrimaryWhenItLands() async throws {
         let h = lease(hub, probe: .allDead)
         _ = try await h.acquire()
