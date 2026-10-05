@@ -415,7 +415,10 @@ def decide_issues(issues, now):
 
 
 def one_line(s, limit):
-    return " ".join(str(s).split())[:limit]
+    """`s` as one line of printable characters: what a model or an issue wrote
+    goes into an argv and a report, where a NUL, a lone surrogate or a line
+    separator is an error or a forged line."""
+    return "".join(c for c in " ".join(str(s).split()) if c.isprintable())[:limit]
 
 
 def triage_prompt(issue, commits):
@@ -579,10 +582,10 @@ class Shell:
             self.log(f"dry-run: {shlex.join(argv)}")
             return subprocess.CompletedProcess(argv, 0, "", "")
         try:
-            p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, **kw)
+            p = subprocess.run(argv, capture_output=True, text=True, errors="replace", timeout=timeout, **kw)
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"{shlex.join(argv[:3])}… gave no answer in {timeout} s")
-        except OSError as ex:
+        except (OSError, ValueError) as ex:   # ValueError: an argument that cannot be one, a NUL in it
             raise RuntimeError(f"{shlex.join(argv[:1])}: {ex}")
         if check and p.returncode != 0:
             raise RuntimeError(f"{shlex.join(argv[:3])}… exited {p.returncode}: {p.stderr.strip()[-400:]}")
@@ -682,16 +685,22 @@ class Shell:
         """origin/main's commits since `since` as (hash, subject), newest first."""
         out = self.run(["git", "-C", checkout, "log", "origin/main", f"--since={since}", f"-n{TRIAGE_COMMITS}",
                         "--format=%h%x09%s"]).stdout
-        return [tuple(l.split("\t", 1)) for l in out.splitlines() if "\t" in l]
+        rows = [l.split("\t", 1) for l in out.split("\n")]
+        return [(r[0], r[1]) for r in rows if len(r) == 2 and re.fullmatch(r"[0-9a-f]{7,40}", r[0])]
 
     def ask(self, prompt):
         """One question to the model, which has no tools, no settings, no MCP
         server and no session kept: it reads the prompt and answers the schema."""
-        return self.run([CLAUDE, "-p", "--model", TRIAGE_MODEL, "--tools", "", "--strict-mcp-config",
+        p = self.run([CLAUDE, "-p", "--model", TRIAGE_MODEL, "--tools", "", "--strict-mcp-config",
                          "--setting-sources", "", "--disable-slash-commands", "--no-session-persistence",
                          "--output-format", "json", "--system-prompt", TRIAGE_SYSTEM,
                          "--json-schema", json.dumps(TRIAGE_SCHEMA)],
-                        timeout=TRIAGE_TIMEOUT, input=prompt, cwd=tempfile.gettempdir()).stdout
+                     timeout=TRIAGE_TIMEOUT, input=prompt, cwd=tempfile.gettempdir(), check=False)
+        # A CLI that is logged out or out of quota exits 1 with the reason in
+        # the envelope on stdout, which read_answer says; without one, stderr.
+        if p.returncode != 0 and not p.stdout.strip():
+            raise RuntimeError(f"claude exited {p.returncode}: {one_line(p.stderr, 200)}")
+        return p.stdout
 
     def triage_act(self, argv):
         if not allowed(argv):
@@ -862,6 +871,8 @@ def load_state(path):
     if not isinstance(state, dict):
         return {}
     state = {k: v for k, v in state.items() if isinstance(v, STATE_SHAPE.get(k, object))}
+    if "triage" in state:
+        state["triage"] = {k: v for k, v in state["triage"].items() if isinstance(v, dict)}
     said = state.get("reported")
     if said is None or not all(isinstance(v, dict) for v in said.values()):
         state.pop("reported", None)
@@ -882,7 +893,10 @@ def triage_issue(sh, number, checkout):
     """Triage one issue: read it, ask, and make the one call the answer allows.
     Returns decide_triage's dict with `fp`, the fingerprint of the issue as
     read; an issue that is closed or carries `triaged` by now is `gone`, with
-    nothing asked. A read, the model or the call failing is a RuntimeError."""
+    nothing asked. A read or the model failing is a RuntimeError, since the
+    next issue would fail the same way; a call GitHub refuses is `refused`,
+    said and recorded like any other answer not carried out, so it is not
+    asked about again every pass."""
     i = sh.issue(number)
     try:
         labels = sorted(l["name"] for l in i["labels"])
@@ -896,7 +910,11 @@ def triage_issue(sh, number, checkout):
     commits = sh.commits_since(checkout, since)
     d = decide_triage(number, title, read_answer(sh.ask(triage_prompt(i, commits))), commits)
     if d["argv"]:
-        sh.triage_act(d["argv"])
+        try:
+            sh.triage_act(d["argv"])
+        except RuntimeError as ex:
+            d = {"action": "refused", "argv": None,
+                 "text": f"triage: #{number} {one_line(title, 120)}: the model said {d['action']} and the call was refused ({one_line(ex, 200)}); left as it is."}
     return dict(d, fp=fp)
 
 
@@ -1161,7 +1179,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     say("triage:read", f"triage stopped at #{n}: {ex}")
                     break
                 state["fired"].pop("triage:read", None)
-                if d["argv"] or d["action"] == "gone":
+                if d["argv"] or d["action"] == "gone":   # labelled or closed, or already was
                     done.add(w["key"])
                 else:
                     triaged[str(n)] = {"fp": w["fp"], "action": d["action"], "at": now.isoformat()}

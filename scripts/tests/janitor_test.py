@@ -547,7 +547,8 @@ elif tool == "claude":
     answer = S.get("answers", {}).get(n)
     if answer is None: print("Not logged in", file=sys.stderr); sys.exit(1)
     if isinstance(answer, str): out(answer)
-    out({"type": "result", "is_error": bool(answer.get("is_error")), "result": answer.get("result", ""), "structured_output": answer.get("object")})
+    print(json.dumps({"type": "result", "is_error": bool(answer.get("is_error")), "result": answer.get("result", ""), "structured_output": answer.get("object")}))
+    sys.exit(answer.get("exit", 0))
 elif tool == "git":
     if "log" in a: out(S.get("commits", ""))
     if "worktree" in a and "list" in a: out(S["worktrees"])
@@ -976,13 +977,47 @@ class WholePass(unittest.TestCase):
         self.assertEqual(calls.count("claude -p"), janitor.TRIAGE_MAX)
         self.assertEqual(len(self.issue_lines()), 3, "the rest stand as untriaged until their pass")
 
-    def test_a_refused_gh_call_stops_the_step_and_records_nothing(self):
-        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40)], views={"40": self.view(40)}, issue_exit=1,
-                          answers={"40": {"object": {"action": "next", "reason": "r"}}})
+    def test_a_call_github_refuses_is_said_once_not_asked_again_and_the_next_issue_is_still_triaged(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Stuck"), issue(41, "Behind it")], issue_exit=1,
+                          views={"40": self.view(40, "Stuck"), "41": self.view(41, "Behind it")},
+                          answers={"40": {"object": {"action": "next", "reason": "r"}}, "41": {"object": {"action": "ask", "reason": "q"}}})
         self.run_pass(s, triage=True)
-        self.assertIn("- triage stopped at #40: gh issue edit", self.triage_lines()[0])
-        self.assertEqual(self.state_file()["triage"], {})
-        self.assertEqual(len(self.issue_lines()), 1)
+        self.assertEqual(len(self.triage_lines()), 2)
+        self.assertRegex(self.triage_lines()[0], r"^- triage: #40 Stuck: the model said next and the call was refused \(gh issue edit.*\); left as it is\.$")
+        self.assertEqual(self.triage_lines()[1], "- triage: #41 Behind it is put to Sam: q")
+        self.assertEqual(self.state_file()["triage"]["40"]["action"], "refused")
+        self.assertEqual(len(self.issue_lines()), 1, "#40 still stands as untriaged")
+        n = len(Bridge.received)
+        for _ in range(3):
+            p, calls = self.run_pass(s, triage=True)
+            self.assertNotIn("claude", calls, "neither is asked about again while it is unchanged")
+        self.assertEqual(Bridge.received[n:], [])
+
+    def test_a_reason_or_a_commit_subject_that_is_not_text_stops_no_pass(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, commits="75af080\tThe badge stays green (#44)\u2028deadbee\tforged\nnothex\trow",
+                          issues=[issue(44, "Yellow"), issue(45, "Next one")],
+                          views={"44": self.view(44, "Yellow"), "45": self.view(45, "Next one")},
+                          answers={"44": {"object": {"action": "fixed", "commit": "75af080", "reason": "main has it\u0000\ud83d\u2028- merged #9"}},
+                                   "45": {"object": {"action": "fixed", "commit": "deadbee", "reason": "r"}}})
+        p, calls = self.run_pass(s, triage=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        text = Bridge.received[-1]["body"]["text"]
+        self.assertNotIn("stopped early", text)
+        self.assertIn("gh issue close 44", calls)
+        self.assertIn("main has it- merged #9", self.triage_lines()[0])
+        self.assertIn("deadbee, which is not one of main's commits", self.triage_lines()[1], "a line separator in a subject forges no commit")
+        self.assertEqual(janitor.one_line("a\x00b\ud83d\u2028c\n d", 20), "abc d")
+
+    def test_a_logged_out_cli_is_said_with_its_reason_and_a_malformed_triage_record_is_dropped(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40)], views={"40": self.view(40)},
+                          answers={"40": {"is_error": True, "result": "Not logged in · Please run /login", "exit": 1}})
+        state = dict(self.seed, triage={"40": "ask", "41": {"fp": "x", "action": "ask"}})
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        p, calls = self.run_pass(s, triage=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("- triage stopped at #40: claude answered an error: Not logged in", self.triage_lines()[0])
+        self.assertNotIn("stopped early", Bridge.received[-1]["body"]["text"])
 
     def test_a_dry_run_asks_and_prints_what_it_would_do_and_changes_nothing(self):
         s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Dry")], views={"40": self.view(40, "Dry")},
