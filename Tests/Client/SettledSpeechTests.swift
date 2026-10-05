@@ -25,6 +25,31 @@ final class SettledSpeechTests: XCTestCase {
         XCTAssertEqual(Speaker.settled("Run this.\n```sh\nls -l\n```\nThen"), "Run this.\n```sh\nls -l\n```\n")
     }
 
+    func testATableIsNotSettledUntilALineThatIsNoRowFollowsIt() {
+        let table = "Here it is.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n"
+        XCTAssertEqual(Speaker.settled(table), "Here it is.\n\n")
+        XCTAssertEqual(Speaker.settled(table + "| 3 | 4 |\n"), "Here it is.\n\n")
+        XCTAssertEqual(Speaker.settled(table + "| 3 | 4 |\n\nDone. "), table + "| 3 | 4 |\n\nDone. ")
+        XCTAssertEqual(Speaker.settled("| a | b |\n"), "")
+    }
+
+    func testATableWrittenARowAtATimeIsCountedOnce() {
+        let reply = "Two rows.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nThat is all. Really."
+        var queued: [String] = []
+        var written = ""
+        var last = ""
+        for character in reply {
+            written.append(character)
+            let settled = Speaker.settled(written)
+            XCTAssertTrue(settled.hasPrefix(last), "after \(written.debugDescription)")
+            last = settled
+            let sentences = Speaker.spoken(settled).map(\.text)
+            XCTAssertEqual(Array(sentences.prefix(queued.count)), queued, "after \(written.debugDescription)")
+            queued = sentences
+        }
+        XCTAssertEqual(queued, ["Two rows.", "A table with 2 rows.", "That is all."])
+    }
+
     func testReadingAPieceAtATimeComesToTheSentencesOfTheWhole() {
         let reply = """
         A starter is flour and water. Wild yeast lives in it!
@@ -40,9 +65,13 @@ final class SettledSpeechTests: XCTestCase {
         """
         var queued: [String] = []
         var written = ""
+        var last = ""
         for character in reply {
             written.append(character)
-            let sentences = Speaker.spoken(Speaker.settled(written)).map(\.text)
+            let settled = Speaker.settled(written)
+            XCTAssertTrue(settled.hasPrefix(last), "after \(written.debugDescription)")
+            last = settled
+            let sentences = Speaker.spoken(settled).map(\.text)
             XCTAssertEqual(Array(sentences.prefix(queued.count)), queued, "after \(written.debugDescription)")
             queued = sentences
         }

@@ -59,6 +59,8 @@ public actor ZoneMirror {
     private var token: Data?
     private var last: Task<Void, any Error>?
     private var loaded = false
+    /// Moved by `forget`: a walk begun before it folds nothing in and keeps nothing after.
+    private var forgotten = 0
 
     /// `pull` answers one page of the feed from a token, nil being the beginning, and throws
     /// `RecordChangesError.tokenExpired` when the store no longer answers from that token.
@@ -67,8 +69,10 @@ public actor ZoneMirror {
         self.pull = pull
     }
 
-    /// Forgets the zone, here and on disk: the next read walks the feed from the beginning.
+    /// Forgets the zone, here and on disk: the next read walks the feed from the beginning, and a
+    /// read under way throws `CancellationError` rather than bring back what was forgotten.
     public func forget() {
+        forgotten += 1
         reset()
         loaded = true
         if let store { try? FileManager.default.removeItem(at: store.file) }
@@ -118,18 +122,23 @@ public actor ZoneMirror {
 
     private func catchUp() async throws {
         load()
+        let began = forgotten
         var changed = false
-        defer { if changed { keep() } }
+        defer { if changed, began == forgotten { keep() } }
         var more = true
         while more {
             let page: ZoneFeedPage
             do {
                 page = try await pull(token)
             } catch RecordChangesError.tokenExpired where token != nil {
+                guard began == forgotten else { throw CancellationError() }
                 reset()
                 changed = true
                 continue
             }
+            // The zone was forgotten while the page was on its way: it is the page of a token
+            // that is gone, and nothing of it is held or kept.
+            guard began == forgotten else { throw CancellationError() }
             for record in page.changed { records[record.id] = record }
             for id in page.deleted { records[id] = nil }
             if !page.changed.isEmpty || !page.deleted.isEmpty { changed = true }

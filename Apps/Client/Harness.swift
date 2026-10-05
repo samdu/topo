@@ -335,6 +335,8 @@ final class Harness {
     /// the guest's session either.
     func demote() async {
         stopAnswering()
+        // The guest is told to forget below, and what it says of its ending is not followed.
+        dropWriting()
         busy = false
         status = nil
         do {
@@ -644,6 +646,7 @@ final class Harness {
         case .update(.event(.writingBegan)):
             // Empty rather than nil: the turn is still being answered, by a new message.
             writing = writing == nil ? nil : ""
+            if let writing, let writingSpoken { onWriting?(writing, writingSpoken) }
         case .update(.event(.writing(let more))):
             if writing == nil { Perf.mark("turn.text.first") }
             writing = (writing ?? "") + more

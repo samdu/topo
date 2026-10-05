@@ -162,6 +162,28 @@ private actor Feed {
         #expect(await feed.pulls == [nil, nil])
     }
 
+    @Test func aReadUnderWayWhenTheZoneIsForgottenBringsNothingBack() async throws {
+        let file = file()
+        await feed.save("Turn", "a")
+        let gate = PullGate()
+        let feed = feed
+        let mirror = ZoneMirror(store: .init(file: file, owner: Data("owner".utf8))) { token in
+            let page = try await feed.page(since: token)
+            await gate.pass()
+            return page
+        }
+        await gate.hold()
+        let reading = Task { try await mirror.records(ofType: "Turn") }
+        await gate.reached()
+        await mirror.forget()
+        await gate.open()
+        await #expect(throws: CancellationError.self) { _ = try await reading.value }
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        // The next read walks from the beginning and holds the whole zone.
+        #expect(try await mirror.records(ofType: "Turn").map(\.id.name) == ["a"])
+        #expect(await feed.pulls == [nil, nil])
+    }
+
     @Test func anExpiredTokenFromACopyIsAWalkAndTheCopyIsReplaced() async throws {
         let file = file()
         await feed.save("Turn", "a"); await feed.save("Turn", "b")
@@ -169,5 +191,31 @@ private actor Feed {
         await feed.delete("b"); await feed.expire()
         #expect(try await mirror(at: file).records(ofType: "Turn").map(\.id.name) == ["a"])
         #expect(try await mirror(at: file).records(ofType: "Turn").map(\.id.name) == ["a"])
+    }
+}
+
+/// Holds a pull after its page is fetched until the test lets it go.
+private actor PullGate {
+    private var held = false
+    private var arrived: CheckedContinuation<Void, Never>?
+    private var waiting: CheckedContinuation<Void, Never>?
+    private var here = false
+
+    func hold() { held = true }
+    func pass() async {
+        guard held else { return }
+        here = true
+        arrived?.resume()
+        arrived = nil
+        await withCheckedContinuation { waiting = $0 }
+    }
+    func reached() async {
+        if here { return }
+        await withCheckedContinuation { arrived = $0 }
+    }
+    func open() {
+        held = false
+        waiting?.resume()
+        waiting = nil
     }
 }

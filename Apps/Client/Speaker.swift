@@ -321,9 +321,9 @@ final class Speaker {
     /// What the guest has written so far of the message that answers the spoken turn `nonce`.
     /// The sentences that have settled (`settled`) are read as they come, behind one another,
     /// so the voice starts at the first sentence rather than once the reply is whole and in the
-    /// log; `speak` is still called with the reply when it lands, and reads what is left. A
-    /// message begun again from its start — the guest's next message of the turn — is read from
-    /// its first sentence, behind what was read of the last. Nothing begins while a microphone
+    /// log; `speak` is still called with the reply when it lands, and reads what is left. The
+    /// guest's next message of the turn begins with nothing written (the harness says so at
+    /// `writingBegan`), and is read from its first sentence, behind what was read of the last. Nothing begins while a microphone
     /// is open or the voice is not resident: the reply is offered whole when it lands, as ever.
     func speak(writing text: String, answering nonce: String) {
         let settled = Self.settled(text)
@@ -548,7 +548,13 @@ final class Speaker {
         var settled = String(text[..<end])
         let fences = settled.components(separatedBy: "```")
         if fences.count % 2 == 0 { settled = fences.dropLast().joined(separator: "```") }
-        return settled
+        // A table is read as the count of its rows, which every further row changes: none of
+        // it is settled until a line that is no row follows it.
+        var lines = settled.split(separator: "\n", omittingEmptySubsequences: false)
+        var whole = false
+        if lines.last == "" { lines.removeLast(); whole = true }
+        while let last = lines.last, last.contains("|") { lines.removeLast(); whole = true }
+        return lines.isEmpty ? "" : lines.joined(separator: "\n") + (whole ? "\n" : "")
     }
 
     private func enqueue(_ sentences: [(text: String, block: Int?)]) {
