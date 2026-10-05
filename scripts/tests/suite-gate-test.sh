@@ -85,6 +85,8 @@ check.(cap.fetch("steps").first["id"] == "draft" && cap.fetch("steps").first.fet
 check.(cap.fetch("steps").drop(1).all? { |s| s["if"] == "steps.draft.outputs.draft == 'false'" }, "review_cap counts nothing on a draft")
 check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.draft == 'false' &&"), "codex_wait runs only on review_cap's draft false")
 check.(jobs.fetch("codex").fetch("if").include?("needs.codex_wait.result == 'success' &&"), "codex runs only behind codex_wait, which holds a draft")
+# post_feedback sits behind suite jobs select may skip, so it cannot rest on the implicit success().
+check.(jobs.fetch("post_feedback").fetch("if").start_with?("${{ !cancelled() && ") && jobs.fetch("post_feedback").fetch("if").include?("needs.codex.outputs.has_verdict == 'true'"), "post_feedback posts whenever codex gave a verdict, a skipped suite job upstream or not")
 payload = jobs.select { |_, j| [j["if"], *Array(j["steps"]).flat_map { |s| [s["if"], *(s["env"] || {}).values] }].compact.any? { |v| v.to_s.include?("pull_request.draft") } }.keys
 check.(payload == %w[reviewer_ran], "only reviewer_ran reads the event's draft, as the fallback for a fork (#{payload.join(', ')})")
 check.(step.("reviewer_ran", "Assert a verdict was produced and delivered").fetch("env")["IS_DRAFT"] == "${{ needs.review_cap.outputs.draft || github.event.pull_request.draft }}", "reviewer_ran reads review_cap's draft first")

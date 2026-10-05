@@ -1521,7 +1521,11 @@ jobs:
   post_feedback:
     runs-on: ubuntu-latest
     needs: codex
-    if: github.event_name == 'pull_request' && needs.codex.outputs.has_verdict == 'true'
+    # `!cancelled()` in place of the implicit `success()`, as on codex: that
+    # is false whenever any job upstream of codex was skipped, a suite job
+    # select left out included, and the verdict Codex gave would stay in an
+    # artifact with nothing on the PR.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.codex.outputs.has_verdict == 'true' }}
     permissions:
       # Read-only on Actions, for the verdict artifact from this same run.
       actions: read
