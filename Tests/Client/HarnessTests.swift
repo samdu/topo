@@ -667,6 +667,53 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(read13, ["hello", "from the hub"])
     }
 
+    func testAReplyIsSavedWhenTheLeasesHeartbeatsRanLateAndNoOtherDeviceClaimed() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = TestClock()
+        let transport = ScriptedTransport((200, reply("a long answer")))
+        // The answer outlasts the lease and no heartbeat lands: the only primary, late.
+        transport.duringRequest = { clock.advance(34) }
+        let phone = harness(db, defaults: makeDefaults(), transport: transport)
+        phone.adopt(PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: NoSocketProbe(),
+                                 now: { clock.wall }, monotonic: clock.now, sleep: parked))
+
+        await phone.send("hello")
+
+        let read = try await log(db).map(\.text)
+        XCTAssertEqual(read, ["hello", "a long answer"], "the reply is saved under a fresh claim")
+        XCTAssertNil(phone.error)
+        XCTAssertEqual(phone.turns.map(\.text), ["hello", "a long answer"])
+        XCTAssertEqual(transport.sent, [["hello"]])
+    }
+
+    func testADisplacedReplyIsWrittenByTheNextPassWithoutAskingAgainOnceTheTakerIsGone() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = TestClock()
+        let hubLease = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                                    now: { clock.wall }, monotonic: clock.now, sleep: parked)
+        let transport = ScriptedTransport((200, reply("the guest's answer")))
+        transport.duringRequest = { _ = try? await hubLease.acquire() }
+        let phone = harness(db, defaults: makeDefaults(), transport: transport)
+        phone.adopt(PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: NoSocketProbe(),
+                                 now: { clock.wall }, monotonic: clock.now, sleep: parked))
+
+        await phone.send("hello")
+        let displaced = try await log(db).map(\.text)
+        XCTAssertEqual(displaced, ["hello"])
+        XCTAssertEqual(phone.error, Harness.describe(TurnRunnerError.displaced))
+
+        // The taker never answers and its lease lapses: the phone's next pass claims, and writes
+        // the reply its guest already finished rather than asking for another.
+        clock.advance(11)
+        await phone.answerPending()
+
+        let read = try await log(db).map(\.text)
+        XCTAssertEqual(read, ["hello", "the guest's answer"])
+        XCTAssertEqual(phone.turns.map(\.text), ["hello", "the guest's answer"])
+        XCTAssertEqual(transport.sent, [["hello"]], "the guest is not asked a second time")
+        XCTAssertNil(phone.error)
+    }
+
     // MARK: Handover
 
     func testARoleRecordHandsPrimaryToTheTakerAndBack() async throws {

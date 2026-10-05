@@ -5,8 +5,9 @@ import TopoCore
 public enum TurnRunnerError: Error {
     /// This device does not hold the primary lease; the outcome says who does.
     case notPrimary(LeaseOutcome)
-    /// The lease was lost while the model was answering. The person's turn is in the log, the
-    /// reply is not: whoever is primary now answers it.
+    /// Another device took the lease while the model was answering. The person's turn is in the
+    /// log, the reply is not: whoever is primary now answers it. A lease that only lapsed, its
+    /// heartbeats late and nobody else claiming, is not this: the reply's batch claims it afresh.
     case displaced
     /// The person's turn is in the log and the reply is not; `underlying` says why (an API
     /// error, or `displaced`). The caller keeps `person` and owes nothing for it.
@@ -138,6 +139,9 @@ public actor TurnRunner {
     /// A head the brain holds as unresolved is not answered: it was asked once and cut off, and
     /// only the person asks again. A reply the brain owes the log is written first, and is
     /// written even when no person's turn waits.
+    ///
+    /// Returns the reply this pass put in the log: the one it asked for, or, with nothing left
+    /// to ask, the owed one it wrote. Nil when it wrote none.
     public func answerPending(model: ClaudeModel) async throws -> Turn? {
         var transcript = try await log.read()
         guard transcript.isComplete else { return nil }
@@ -149,12 +153,13 @@ public actor TurnRunner {
         }
         let outcome = try await lease.acquire()
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
-        if try await settleOwed() {
+        let settled = try await settleOwed()
+        if settled != nil {
             // The owed reply moved the log; what waits is read again.
             transcript = try await log.read()
         }
         let unresolved = await brain.unresolved()
-        guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return nil }
+        guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return settled }
         let nonce = Self.replyNonce(for: transcript.heads)
         if let answered = try await log.turn(appendedUnder: nonce) {
             await brain.landed(answered, nonce: nonce)
@@ -164,7 +169,7 @@ public actor TurnRunner {
         let answering = transcript.heads.compactMap { transcript[$0] }
             .filter { $0.role == .person && !skipped.contains($0.ref) }
         // Settling what was owed can find the waiting turn cut off: nothing is left to answer.
-        guard !answering.isEmpty else { return nil }
+        guard !answering.isEmpty else { return settled }
         let request = BrainRequest(context: transcript.ordered.filter { turn in !answering.contains { $0.ref == turn.ref } },
                                    answering: answering, parents: transcript.heads, nonce: nonce, model: model)
         let reply = try await brain.answer(request)
@@ -178,15 +183,16 @@ public actor TurnRunner {
         return assistant
     }
 
-    /// Writes the reply the brain owes the log, if it owes one, and answers whether the log moved.
+    /// Writes the reply the brain owes the log, if it owes one, and returns it: the log moved.
     /// Found already there under its nonce — another primary's, or this device's own write whose
-    /// acknowledgement was lost — it is not written again; the brain hears where it is either way.
+    /// acknowledgement was lost — it is not written again and nil is returned; the brain hears
+    /// where it is either way.
     @discardableResult
-    private func settleOwed() async throws -> Bool {
-        guard let owed = await brain.owed() else { return false }
+    private func settleOwed() async throws -> Turn? {
+        guard let owed = await brain.owed() else { return nil }
         if let there = try await log.turn(appendedUnder: owed.nonce) {
             await brain.landed(there, nonce: owed.nonce)
-            return false
+            return nil
         }
         try Task.checkCancellation()
         guard let turn = try await writer.append(.assistant, owed.text, parents: owed.parents,
@@ -194,7 +200,7 @@ public actor TurnRunner {
             throw TurnRunnerError.displaced
         }
         await brain.landed(turn, nonce: owed.nonce)
-        return true
+        return turn
     }
 
     /// True when a head of the transcript is the person's, and not one of `skipping`: words

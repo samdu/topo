@@ -108,6 +108,12 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// claim over a live holder, and one duration after a claim over a
 /// cut-off or suspended one.
 ///
+/// A holder whose heartbeats ran late has lost nothing to anyone: its lease
+/// lapsed with the record still its own. A batch it saves then
+/// (`heartbeat(saving:)`) claims afresh in that same batch, over the record
+/// as the server holds it, and only while that record is still the lease
+/// this device let lapse.
+///
 /// A device that yielded to a lease waits for that lease to lapse before
 /// claiming, one duration, because the probe is exactly what it cannot
 /// trust; any device that has not yielded takes over a dead holder on one
@@ -129,6 +135,11 @@ public actor PrimaryLease {
     /// When the held lease lapses on the monotonic clock: set with every
     /// write, so a wall clock stepped backwards cannot revive a lease.
     private var heldUntil: TimeInterval = 0
+    /// The lease this device held when it lapsed locally, its heartbeats
+    /// late, with no other device known to have claimed: what a batch may
+    /// claim afresh over (`heartbeat(saving:)`). Nil once this device holds
+    /// a lease again, has yielded, or has abandoned its claim.
+    private var lapsedRecord: Record?
     /// The lease that took ours, while it stays fresh.
     private var yieldedTo: Lease?
     private var heartbeatTask: Task<Void, Never>?
@@ -223,6 +234,7 @@ public actor PrimaryLease {
 
             if await probe.confirms(lease) {
                 heldRecord = nil
+                lapsedRecord = nil
                 return .held(by: lease)
             }
 
@@ -281,6 +293,7 @@ public actor PrimaryLease {
     /// renewed forever by nobody, which answers no turns and blocks every other device.
     public func abandon() {
         heldRecord = nil
+        lapsedRecord = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
     }
@@ -307,7 +320,7 @@ public actor PrimaryLease {
     public func heartbeat() async throws -> Bool {
         guard let record = heldRecord, let lease = Lease(record: record) else { return false }
         if hasLapsed(lease) {
-            heldRecord = nil
+            lapse()
             return false
         }
         return try await write(holder(epoch: lease.epoch), over: record.changeTag) != nil
@@ -317,44 +330,77 @@ public actor PrimaryLease {
     /// so the records land only if this device still holds the lease at the
     /// version it last wrote: a turn appended this way is never the work of
     /// a displaced brain. Returns the saved records, or nil with nothing
-    /// applied when the lease is not held: never granted, lapsed locally, or
-    /// taken by another device (which this device then yields to, as after
-    /// a failed heartbeat). A conflict on any record but the lease propagates
-    /// as the database threw it, again with nothing applied.
+    /// applied when the lease is not held: never granted, or taken by
+    /// another device (which this device then yields to, as after a failed
+    /// heartbeat). A conflict on any record but the lease propagates as the
+    /// database threw it, again with nothing applied.
+    ///
+    /// A lease that lapsed locally, its heartbeats late, is not yet anyone
+    /// else's. The record is read, and while it is still that lease (this
+    /// device, the epoch it held) the batch carries a fresh claim over the
+    /// version read, one epoch on, in place of the heartbeat: what a slow
+    /// network cost is the lease's freshness, not the work done under it. A
+    /// claim by another device since, before the read or between it and the
+    /// save, refuses the batch as it refuses a heartbeat.
     public func heartbeat(saving records: [Record]) async throws -> [Record]? {
         for _ in 0..<3 {
-            guard let record = heldRecord, let lease = Lease(record: record) else { return nil }
-            if hasLapsed(lease) {
-                heldRecord = nil
-                return nil
+            let over: Record, claim: Lease, heartbeatOf: Lease?
+            if let record = heldRecord, let lease = Lease(record: record), !hasLapsed(lease) {
+                (over, claim, heartbeatOf) = (record, holder(epoch: lease.epoch), lease)
+            } else {
+                if heldRecord != nil { lapse() }
+                guard let lapsed = lapsedRecord.flatMap(Lease.init(record:)) else { return nil }
+                let server = try await database.fetch(Lease.recordID)
+                // Held again while the read was out: the batch goes as a heartbeat of that.
+                if heldRecord != nil { continue }
+                guard let server, let current = Lease(record: server),
+                      current.holder == device, current.epoch == lapsed.epoch, current.endpoint == endpoint else {
+                    lapsedRecord = nil
+                    if let taker = server.flatMap(Lease.init(record:)), taker.holder != device { yieldedTo = taker }
+                    return nil
+                }
+                (over, claim, heartbeatOf) = (server, holder(epoch: current.epoch + 1), nil)
             }
-            let renewal = holder(epoch: lease.epoch)
             let deadline = monotonic() + timing.duration
             do {
-                let saved = try await database.save(records + [renewal.record(changeTag: record.changeTag)])
+                let saved = try await database.save(records + [claim.record(changeTag: over.changeTag)])
                 let tag = saved.first(where: { $0.id == Lease.recordID })?.changeTag
-                heldRecord = renewal.record(changeTag: tag)
+                heldRecord = claim.record(changeTag: tag)
                 heldUntil = deadline
+                lapsedRecord = nil
                 yieldedTo = nil
                 startHeartbeats()
                 return saved.filter { $0.id != Lease.recordID }
             } catch RecordDatabaseError.serverRecordChanged(let id, let server) where id == Lease.recordID {
                 let winner = Lease(record: server)
-                if let winner, winner.holder == device, winner.epoch == lease.epoch, winner.endpoint == endpoint {
+                if let lease = heartbeatOf, let winner, winner.holder == device, winner.epoch == lease.epoch,
+                   winner.endpoint == endpoint {
                     // An overlapping heartbeat of ours got there first: still
                     // our lease, at the server's version; the batch goes again over it.
                     heldRecord = server
                     continue
                 }
+                // A fresh claim that lost to a write of this device's own — a late heartbeat
+                // landing, or a claim made meanwhile, which holds — goes again from what stands.
+                if heartbeatOf == nil, winner?.holder == device, heldRecord != nil || lapsedRecord != nil { continue }
                 heldRecord = nil
+                lapsedRecord = nil
                 yieldedTo = winner
                 return nil
             } catch RecordDatabaseError.unknownItem(let id) where id == Lease.recordID {
                 heldRecord = nil
+                lapsedRecord = nil
                 return nil
             }
         }
         return nil
+    }
+
+    /// The held lease has lapsed locally. It is kept as the one a batch may
+    /// claim afresh over, since nobody is known to have taken it.
+    private func lapse() {
+        lapsedRecord = heldRecord
+        heldRecord = nil
     }
 
     private func holder(epoch: Int64) -> Lease {
@@ -363,6 +409,7 @@ public actor PrimaryLease {
 
     private func displaced(by lease: Lease) {
         heldRecord = nil
+        lapsedRecord = nil
         yieldedTo = lease
     }
 
@@ -385,6 +432,7 @@ public actor PrimaryLease {
             let saved = try await database.save(lease.record(changeTag: changeTag))
             heldRecord = lease.record(changeTag: saved.changeTag)
             heldUntil = deadline
+            lapsedRecord = nil
             yieldedTo = nil
             startHeartbeats()
             return lease
@@ -400,6 +448,7 @@ public actor PrimaryLease {
                 return winner
             }
             heldRecord = nil
+            lapsedRecord = nil
             yieldedTo = winner
             return nil
         } catch RecordDatabaseError.unknownItem {
