@@ -450,12 +450,31 @@ def read_answer(out):
     return envelope.get("structured_output")
 
 
-def decide_triage(number, title, answer, commits):
+WITHHELD = "(the model's reason quoted the issue and is withheld)"
+
+
+def safe_reason(reason, title, private):
+    """The model's reason, or WITHHELD when it carries a piece of the issue's
+    body or comments (`private`) that could be a secret: a word of sixteen
+    characters or more, or one of six or more with a digit in it, found
+    verbatim there and not in the title, which every line names anyway. The
+    prompt asks the model to quote nothing; this is what holds if it does."""
+    for word in reason.split():
+        word = word.strip(".,;:!?()[]{}<>'\"`")
+        if (word in private and word not in title
+                and (len(word) >= 16 or (len(word) >= 6 and any(c.isdigit() for c in word)))):
+            return WITHHELD
+    return one_line(reason, TRIAGE_REASON)
+
+
+def decide_triage(number, title, answer, commits, private=""):
     """What one answer does to one issue: {"action", "argv", "text"}. `argv`
     is the one `gh` call it makes, or None; `text` the line that says it.
     An answer that is not an object naming one of TRIAGE_ACTIONS with a
-    reason, or a `fixed` whose commit is not among `commits` — the (hash,
-    subject) pairs the model was shown — is `refused`: nothing is done. Pure."""
+    reason, or a `fixed` whose commit is not, character for character, a hash
+    among `commits` — the (hash, subject) pairs the model was shown — is
+    `refused`: nothing is done. `private` is the issue's body and comments,
+    which the reason may not quote (safe_reason). Pure."""
     name = f"#{number} {one_line(title, 120)}"
 
     def refused(why):
@@ -464,14 +483,14 @@ def decide_triage(number, title, answer, commits):
     if (not isinstance(answer, dict) or answer.get("action") not in TRIAGE_ACTIONS
             or not isinstance(answer.get("reason"), str) or not answer["reason"].strip()):
         return refused("the model's answer was not one of the actions with a reason")
-    action, reason = answer["action"], one_line(answer["reason"], TRIAGE_REASON)
+    action, reason = answer["action"], safe_reason(answer["reason"], title, private)
     if action == "ask":
         return {"action": action, "argv": None, "text": f"triage: {name} is put to Sam: {reason}"}
     issue = ["gh", "issue", "{}", str(number), "--repo", REPO]
     if action == "fixed":
         sha = answer.get("commit")
         sha = sha.strip() if isinstance(sha, str) else ""
-        fix = [(h, s) for h, s in commits if len(sha) >= 7 and (h.startswith(sha) or sha.startswith(h))]
+        fix = [(h, s) for h, s in commits if h == sha]
         if len(fix) != 1:
             return refused(f"the model called it fixed by {one_line(sha, 40) or 'no commit'}, which is not one of main's commits since it was opened")
         h, subject = fix[0]
@@ -908,7 +927,8 @@ def triage_issue(sh, number, checkout):
         why = "is not open" if state_ != "OPEN" else "is triaged already"
         return {"action": "gone", "argv": None, "fp": fp, "text": f"triage: #{number} {why}; nothing done."}
     commits = sh.commits_since(checkout, since)
-    d = decide_triage(number, title, read_answer(sh.ask(triage_prompt(i, commits))), commits)
+    private = "\n".join([i.get("body") or ""] + [c.get("body") or "" for c in i.get("comments") or [] if isinstance(c, dict)])
+    d = decide_triage(number, title, read_answer(sh.ask(triage_prompt(i, commits))), commits, private)
     if d["argv"]:
         try:
             sh.triage_act(d["argv"])
@@ -1169,7 +1189,11 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                 if answered(w):
                     quiet.append(f"triage: #{n} answered {answered(w)} and unchanged since")
                     continue
-                if asked >= TRIAGE_MAX:
+                # A triage line is cut like an issue line, and for the same
+                # reason: the pass's PR lines are the ones that carry a merge.
+                # Nothing is asked whose line would have no room, or would
+                # join a queue that waits on the bridge.
+                if asked >= TRIAGE_MAX or state.get("undelivered") or len(lines) >= PENDING_MAX:
                     quiet.append(f"triage: #{n} and what follows wait for the next pass")
                     break
                 asked += 1

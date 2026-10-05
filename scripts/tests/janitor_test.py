@@ -386,13 +386,25 @@ class Decisions(unittest.TestCase):
         self.assertTrue(janitor.allowed(d["argv"]))
 
     def test_fixed_by_a_commit_the_model_was_not_shown_closes_nothing(self):
-        for commit in ("deadbee", "", None, "75af", "7", ["75af080"]):
+        for commit in ("deadbee", "", None, "75af", "7", ["75af080"], "75af080c0ffee", "75af080 "*2, "-75af080"):
             d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r", "commit": commit}, self.COMMITS)
             self.assertEqual((d["action"], d["argv"]), ("refused", None), commit)
         d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r"}, self.COMMITS)
         self.assertEqual(d["action"], "refused")
-        d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r", "commit": "75af080c0ffee"}, self.COMMITS)
-        self.assertEqual(d["action"], "fixed", "a longer form of a listed hash is that commit")
+        d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r", "commit": " 75af080\n"}, self.COMMITS)
+        self.assertEqual(d["action"], "fixed", "the listed hash itself, whatever space is round it")
+
+    def test_a_reason_that_quotes_the_body_is_withheld(self):
+        body = "the token is ghp_abcdefghijklmnopqrstuvwxyz0123 and the code is 482913, at 14 Flat Street"
+        for leak in ("it holds ghp_abcdefghijklmnopqrstuvwxyz0123.", "code (482913) was pasted", "see `ghp_abcdefghijklmnopqrstuvwxyz0123`"):
+            d = janitor.decide_triage(40, "A title", {"action": "ask", "reason": leak}, [], body)
+            self.assertEqual(d["text"], f"triage: #40 A title is put to Sam: {janitor.WITHHELD}", leak)
+            d = janitor.decide_triage(40, "A title", {"action": "fixed", "reason": leak, "commit": "75af080"}, self.COMMITS, body)
+            self.assertNotIn("ghp_", " ".join(d["argv"]) + d["text"])
+            self.assertNotIn("482913", " ".join(d["argv"]) + d["text"])
+        d = janitor.decide_triage(40, "DraftRowTests.testAnAppKilled is flaky", {"action": "flake", "reason": "DraftRowTests.testAnAppKilled fails sometimes, the token is not shown"},
+                                  [], body + " DraftRowTests.testAnAppKilled")
+        self.assertIn("DraftRowTests.testAnAppKilled fails sometimes", d["text"], "a word the title already says, and plain words, are kept")
 
     def test_an_answer_off_the_list_is_refused(self):
         for answer in (None, "close it", [], {}, {"action": "delete", "reason": "r"}, {"action": "flake"},
@@ -951,8 +963,9 @@ class WholePass(unittest.TestCase):
         self.assertIn("- triage stopped at #40:", self.triage_lines()[0])
         self.assertEqual(len(self.issue_lines()), 2)
         n = len(Bridge.received)
-        self.run_pass(s, triage=True)
-        self.assertEqual(Bridge.received[n:], [], "said once per window, and asked again each pass")
+        p, calls = self.run_pass(s, triage=True)
+        self.assertEqual(calls.count("claude -p"), 1, "asked again on the very next pass, one question")
+        self.assertEqual(Bridge.received[n:], [], "and said once per window")
         s["answers"] = {"40": {"is_error": True, "result": "usage limit"}}
         self.backdate()
         self.run_pass(s, triage=True)
@@ -968,6 +981,43 @@ class WholePass(unittest.TestCase):
         self.assertNotIn("claude", calls)
         self.assertNotIn("gh issue edit", calls)
         self.assertEqual(Bridge.received, [], "and is not said as untriaged either")
+
+    def test_the_body_reaches_no_report_when_the_model_quotes_it(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, commits="75af080\tA fix (#40)", issues=[issue(40, "Leaky"), issue(41, "Leaky too")],
+                          views={"40": self.view(40, "Leaky", body="key: SECRET-MARKER-0123456789"), "41": self.view(41, "Leaky too", body="pin 990217")},
+                          answers={"40": {"object": {"action": "fixed", "commit": "75af080", "reason": "the body says SECRET-MARKER-0123456789"}},
+                                   "41": {"object": {"action": "ask", "reason": "its pin is 990217."}}})
+        p, calls = self.run_pass(s, triage=True)
+        text = Bridge.received[-1]["body"]["text"]
+        for secret in ("SECRET-MARKER", "990217"):
+            self.assertNotIn(secret, text)
+            self.assertNotIn(secret, calls.replace(self.asked(), ""))
+            self.assertNotIn(secret, json.dumps(self.state_file()))
+        self.assertEqual(text.count(janitor.WITHHELD), 2)
+        self.assertIn(f"gh issue close 40 --repo samdu/topo --reason completed --comment Closed by the janitor's triage as fixed on main by 75af080 (A fix (#40)). {janitor.WITHHELD}", calls)
+
+    def test_triage_asks_nothing_whose_line_would_have_no_room_or_would_join_a_waiting_queue(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40)], views={"40": self.view(40)},
+                          answers={"40": {"object": {"action": "next", "reason": "r"}}})
+        state = dict(self.seed, pending=[f"pr line {i}" for i in range(janitor.PENDING_MAX)])
+        with open(self.state, "w") as f:
+            json.dump(state, f)
+        p, calls = self.run_pass(s, triage=True)
+        self.assertNotIn("claude", calls)
+        self.assertNotIn("gh issue", calls)
+        lines = Bridge.received[-1]["body"]["text"].splitlines()[1:]
+        self.assertEqual(lines, [f"- pr line {i}" for i in range(janitor.PENDING_MAX)], "every earlier line is delivered, none cut for a triage line")
+        Bridge.status = 503
+        with open(self.state, "w") as f:
+            json.dump(dict(self.seed, pending=["a pr line"]), f)
+        self.run_pass(s, triage=True)
+        p, calls = self.run_pass(s, triage=True)
+        self.assertNotIn("claude", calls, "nothing is asked while a report waits on the bridge")
+        Bridge.status = 200
+        p, calls = self.run_pass(s, triage=True)
+        self.assertNotIn("claude", calls, "nor on the pass that finds the queue still standing as it starts")
+        p, calls = self.run_pass(s, triage=True)
+        self.assertIn("gh issue edit 40", calls)
 
     def test_a_pass_asks_about_at_most_the_cap(self):
         ns = range(40, 40 + janitor.TRIAGE_MAX + 3)
