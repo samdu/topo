@@ -1621,9 +1621,10 @@ jobs:
     steps:
       - name: Assert a verdict was produced and delivered
         env:
-          # review_cap's reading of the PR as the run started. A fork PR
-          # skips review_cap, and only then is the event's own word used.
-          IS_DRAFT: ${{ needs.review_cap.outputs.draft || github.event.pull_request.draft }}
+          # review_cap's reading of the PR as the run started. Only where
+          # review_cap was skipped, a fork PR, is the event's own word used:
+          # a review_cap that failed leaves this empty, and is said first.
+          IS_DRAFT: ${{ needs.review_cap.result == 'skipped' && github.event.pull_request.draft || needs.review_cap.outputs.draft }}
           SUITE_RESULTS: >-
             select=${{ needs.select.result }}
             topo_unit=${{ needs.topo_unit.result }}
@@ -1641,19 +1642,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          # A review_cap that failed is no verdict, and comes first: it may
+          # not have read whether the PR is a draft, and the event's word
+          # for that is not to be believed in its place. Nor is the cap
+          # known, or its comment on the PR. A fork PR skips review_cap as
+          # it skips codex, and the reviewer's own line below says that.
+          case "${CAP_RESULT:-}" in
+            failure | cancelled)
+              echo "::error::No verdict: whether this PR is a draft could not be read, or its Codex verdicts not counted, or the cap comment not posted (review_cap: $CAP_RESULT), so the reviewer did not run. Re-run the failed jobs — nothing here is a review decision."
+              exit 1
+              ;;
+          esac
           if [ "$IS_DRAFT" = "true" ]; then
             echo "::error::No verdict: this PR is a draft, so the reviewer was deliberately skipped. Mark it ready for review — nothing here is a review decision."
             exit 1
           fi
-          # A count that failed is no verdict: the cap may or may not stand,
-          # and its comment may not be on the PR. A fork PR skips review_cap
-          # as it skips codex, and the reviewer's own line below says that.
-          case "${CAP_RESULT:-}" in
-            failure | cancelled)
-              echo "::error::No verdict: the Codex verdicts on this PR could not be counted, or the cap comment not posted (review_cap: $CAP_RESULT), so the reviewer did not run. Re-run the failed jobs — nothing here is a review decision."
-              exit 1
-              ;;
-          esac
           # The cap is a review state, not a missing verdict: review_gate holds
           # the merge on it, and a red here would have the janitor rerun it.
           # The suite's own reds stay on `test`.
