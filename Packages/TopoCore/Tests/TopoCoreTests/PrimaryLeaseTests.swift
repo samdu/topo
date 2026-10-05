@@ -354,6 +354,72 @@ import TopoCoreTesting
         #expect(Lease(record: record)?.epoch == 1)
     }
 
+    @Test func aBatchWhoseClaimWasAbandonedIsNotWrittenUnderALeaseTakenSince() async throws {
+        let reads = ReadGate(db)
+        let h = PrimaryLease(database: reads, device: hub, endpoint: "hub.local:1", probe: StubProbe.allDead,
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        _ = try await h.acquire()
+        clock.advance(11)
+        #expect(try await !h.heartbeat())
+        await reads.hold()
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        let batch = Task { try await h.heartbeat(saving: [note]) }
+        #expect(await eventually { await reads.waiting })
+        // The claim is abandoned and the same device takes the lease again, all while the
+        // batch's read is out.
+        await h.abandon()
+        guard case .primary(let again) = try await h.acquire() else { Issue.record("should claim again"); return }
+        #expect(again.epoch == 2)
+        await reads.release()
+        #expect(try await batch.value == nil)
+        #expect(await db.current(note.id) == nil)
+        // The lease taken since is untouched by the batch that was not its own.
+        #expect(await h.held == again)
+        #expect(await h.isPrimary())
+    }
+
+    @Test func aFreshClaimsAnswerAfterALaterClaimLeavesTheLaterClaimHeld() async throws {
+        let slow = SlowAnswer(db)
+        let h = PrimaryLease(database: slow, device: hub, endpoint: "hub.local:1", probe: StubProbe.allDead,
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        _ = try await h.acquire()
+        clock.advance(11)
+        // The batch's fresh claim lands at epoch 2 and its answer does not come back.
+        await slow.holdNextAnswer()
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        let batch = Task { try await h.heartbeat(saving: [note]) }
+        #expect(await eventually { await slow.waiting })
+        // A turn's `acquire()` reads that claim meanwhile and, holding nothing, claims epoch 3.
+        guard case .primary(let later) = try await h.acquire() else { Issue.record("should claim"); return }
+        #expect(later.epoch == 3)
+        await slow.release()
+        // The records landed, and the answer about epoch 2 replaces nothing.
+        #expect(try await batch.value?.map(\.id) == [note.id])
+        #expect(await h.held == later)
+        #expect(await h.isPrimary())
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/2"))]) != nil)
+        let record = try #require(await db.current(Lease.recordID))
+        #expect(Lease(record: record)?.epoch == 3)
+    }
+
+    @Test func aLateHeartbeatsAnswerAfterTheFreshClaimHasRunOutIsNotPrimary() async throws {
+        let slow = SlowAnswer(db)
+        let h = PrimaryLease(database: slow, device: hub, endpoint: "hub.local:1", probe: StubProbe.allDead,
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        _ = try await h.acquire()
+        clock.advance(4)
+        await slow.holdNextAnswer()
+        let late = Task { try await h.heartbeat() }
+        #expect(await eventually { await slow.waiting })
+        clock.advance(11)
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/1"))]) != nil)
+        // The fresh claim runs out too before the old heartbeat's answer arrives.
+        clock.advance(11)
+        await slow.release()
+        #expect(try await !late.value)
+        #expect(!(await h.isPrimary()))
+    }
+
     @Test func aBatchIsRefusedWhenTheRecordIsThisDevicesAtAnotherEpoch() async throws {
         let h = lease(hub, probe: .allDead)
         _ = try await h.acquire()

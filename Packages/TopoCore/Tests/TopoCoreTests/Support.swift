@@ -100,8 +100,8 @@ actor SlowProbe: LeaseProbe {
     func confirms(_ lease: Lease) async -> Bool { clock.advance(cost); return answer }
 }
 
-/// A database whose fetch of the lease can be held by the test, so something can happen while a
-/// read of the record is out.
+/// A database whose next fetch of the lease can be held by the test, so something can happen
+/// while that read of the record is out. Fetches after it go straight through.
 actor ReadGate: RecordDatabase {
     private let inner: InMemoryRecordDatabase
     private var holding = false
@@ -119,7 +119,10 @@ actor ReadGate: RecordDatabase {
 
     func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
-        if holding, ids.contains(Lease.recordID) { await withCheckedContinuation { held.append($0) } }
+        if holding, ids.contains(Lease.recordID) {
+            holding = false
+            await withCheckedContinuation { held.append($0) }
+        }
         return try await inner.fetch(ids)
     }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
