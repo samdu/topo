@@ -13,6 +13,9 @@ import TopoCore
 enum PerfRun {
     static let sendVariable = "TOPO_PERF_SEND"
     static let gapVariable = "TOPO_PERF_GAP"
+    /// `TOPO_PERF_SPOKEN=1`: the questions are sent as spoken turns, so their replies are read
+    /// aloud and the voice's marks (`speak.begin`, `speak.firstFrame`) are in the run.
+    static let spokenVariable = "TOPO_PERF_SPOKEN"
 
     /// The questions the launch asks for, in order, blank ones dropped: `TOPO_PERF_SEND` is a
     /// JSON array of strings, so a question may hold any character. Anything else is no run.
@@ -46,18 +49,43 @@ enum PerfRun {
     /// before it, and the run ends at the first that gets none; nothing is sent at all when the
     /// harness already has words waiting, since a question would only queue behind them.
     @MainActor
-    static func run(with harness: Harness, environment: [String: String] = ProcessInfo.processInfo.environment) async {
+    static func run(with harness: Harness, speaker: Speaker,
+                    environment: [String: String] = ProcessInfo.processInfo.environment) async {
         let questions = questions(environment)
         guard !questions.isEmpty, !began else { return }
         began = true
-        while harness.busy { try? await Task.sleep(for: .milliseconds(100)) }
+        let spoken = environment[spokenVariable] == "1"
+        // A spoken turn needs the voice resident at the send, as a press of the microphone does.
+        // A fresh install compiles the voice's model on its first load, which has taken 44 s.
+        if spoken {
+            for _ in 0..<1200 where !speaker.voice.ready && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
+            if !speaker.voice.ready { Perf.mark("perf.voice.unready") }
+        }
+        // A scene that goes away cancels the run: a cancelled sleep returns at once, so every wait asks.
+        for _ in 0..<600 where !harness.hasRead && !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
+        // Words left on the line by the launch before go first, as the chat sends them; the
+        // run is only given up when they are still waiting after that.
+        if harness.hasWaiting {
+            Perf.mark("perf.line.waiting")
+            await harness.retry()
+        }
+        while harness.busy, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(100)) }
         let answered = harness.hasWaiting ? 0 : await ask(questions, gap: .seconds(gap(environment))) { index, question in
-            Perf.mark("perf.question \(index + 1)/\(questions.count)")
+            // The phone's thermal state travels with each question: a hot phone runs the guest slower.
+            Perf.mark("perf.question \(index + 1)/\(questions.count) thermal=\(ProcessInfo.processInfo.thermalState.rawValue)")
             let nonce = harness.willSend(question)
+            // As `ChatView.sendSpoken` sends what the ear heard.
+            if spoken, speaker.awaitReply(nonce, readAloud: true).spoken { harness.markSpoken(nonce) }
             await harness.retry()
             let deadline = ContinuousClock.now + replyWait
-            while harness.busy || (!harness.answered(nonce) && !harness.hasWaiting && ContinuousClock.now < deadline) {
+            while !Task.isCancelled,
+                  harness.busy || (!harness.answered(nonce) && !harness.hasWaiting && ContinuousClock.now < deadline) {
                 try? await Task.sleep(for: .milliseconds(100))
+            }
+            // The next question waits for the reading to end, not only the reply.
+            while spoken, speaker.speaking, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(200)) }
+            if !harness.answered(nonce) {
+                Perf.mark("perf.unanswered said=\(harness.said(nonce)) turns=\(harness.turns.count) waiting=\(harness.hasWaiting)")
             }
             return harness.answered(nonce)
         }
@@ -70,7 +98,7 @@ enum PerfRun {
     static func ask(_ questions: [String], gap: Duration, one: (Int, String) async -> Bool) async -> Int {
         for (index, question) in questions.enumerated() {
             if index > 0 { try? await Task.sleep(for: gap) }
-            guard await one(index, question) else { return index }
+            guard !Task.isCancelled, await one(index, question) else { return index }
         }
         return questions.count
     }

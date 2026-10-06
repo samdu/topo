@@ -118,6 +118,18 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(StreamJSON.events(in: long), [.malformed(String(repeating: "x", count: 200) + "…")])
     }
 
+    func testAMessageAsItIsWrittenIsItsTextAPieceAtATime() {
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#),
+                       [.writingBegan])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Twel"}}}"#),
+                       [.writing("Twel")])
+        // A tool's input as it is written, and thinking, are not the reply's text.
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{"}}}"#),
+                       [.other("stream_event")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"content_block_stop","index":0}}"#),
+                       [.other("stream_event")])
+    }
+
     func testAnUnknownEventIsNamedAndNotRead() {
         XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","event":{"type":"content_block_delta"}}"#),
                        [.other("stream_event")])
@@ -146,7 +158,7 @@ final class StreamJSONTests: XCTestCase {
     func testClaudeCodesArguments() {
         XCTAssertEqual(ClaudeLauncher.arguments(model: "claude-haiku-4-5-20251001", resume: nil),
                        ["-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-                        "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001"])
+                        "--include-partial-messages", "--dangerously-skip-permissions", "--model", "claude-haiku-4-5-20251001"])
         XCTAssertEqual(ClaudeLauncher.arguments(model: nil, resume: "S1").suffix(2), ["--resume", "S1"])
         let launcher = ClaudeLauncher { [:] }
         XCTAssertEqual(Array(launcher.commandLine(resume: nil, model: nil).prefix(4)),

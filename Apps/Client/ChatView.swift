@@ -179,6 +179,10 @@ struct ChatView: View {
             harness.onPass = { [memory] in await memory.sync() }
             defer { harness.onPass = nil }
             Perf.mark("chat.appear")
+            // The guest and its resident Claude Code are started beside the first read of the log
+            // rather than after it: Claude Code takes longer to come up than the log takes to
+            // read, and a question asked into a cold app waits for both. This waits for nothing.
+            if let guest = harness.guest { Task { await guest.warm() } }
             await harness.refresh()
             Perf.mark("chat.log.read")
             // The row comes back before anything is sent from it: words on their way when the
@@ -213,6 +217,10 @@ struct ChatView: View {
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
             harness.onReply = { reply in SpokenReply.read(reply, harness: harness, speaker: speaker) }
+            // And before it lands: the reply to a spoken turn is read as the guest writes it.
+            harness.onWriting = { text, nonce in
+                if let text { speaker.speak(writing: text, answering: nonce) } else { speaker.writingEnded(nonce) }
+            }
             speaker.settled = { nonce in harness.answeredAloud(nonce) }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
@@ -220,6 +228,7 @@ struct ChatView: View {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
                 harness.onReply = nil
+                harness.onWriting = nil
                 harness.onTurnFailed = nil
                 speaker.settled = nil
                 speaker.endAllWaits("the chat stopped answering")
@@ -469,8 +478,14 @@ struct ChatView: View {
         #if DEBUG
         if let fixture = DebugRun.transcript() { return fixture }
         #endif
-        return harness.turns
+        guard let writing = harness.writing, !writing.isEmpty else { return harness.turns }
+        return harness.turns + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
+                                     nonce: "writing")]
     }
+
+    /// The row the reply is drawn in while the guest writes it (`Harness.writing`): no turn of
+    /// the log's, so no device's sequence can name it.
+    private static let writingRef = TurnRef(device: DeviceID("writing"), sequence: 0)
 
     /// Where Topo stands, into the badge's debug report, off the view update it arrives in. Nil in
     /// a release build, which reports nothing.

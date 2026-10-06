@@ -8,7 +8,7 @@ public struct RecordID: Hashable, Sendable, Codable, CustomStringConvertible {
 }
 
 /// The field types the package stores. Each maps to one `CKRecordValue`.
-public enum FieldValue: Hashable, Sendable {
+public enum FieldValue: Hashable, Sendable, Codable {
     case string(String)
     case int(Int64)
     case date(Date)
@@ -20,7 +20,7 @@ public enum FieldValue: Hashable, Sendable {
 /// A record as the package sees it: a type, a name, fields, and the server's
 /// opaque version tag. `changeTag == nil` means the record has never been
 /// saved, so saving it is create-only.
-public struct Record: Hashable, Sendable {
+public struct Record: Hashable, Sendable, Codable {
     public var type: String
     public var id: RecordID
     public var fields: [String: FieldValue]
