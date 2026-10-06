@@ -1091,6 +1091,8 @@ class WholePass(unittest.TestCase):
         s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(45, "Moved")], views={"45": dict(self.view(45, "Moved"), updatedAt=later)},
                           answers={"45": {"object": {"action": "ask", "reason": "q"}}})
         self.run_pass(s, triage=True)
+        self.assertEqual(self.triage_lines(), ["- triage: #45 Moved is put to Sam: q"])
+        self.assertEqual(self.issue_lines(), [], "in the pass that asked, its triage line stands in for its untriaged line")
         s["issues"] = [issue(45, "Moved", updatedAt=later)]
         n = len(Bridge.received)
         p, calls = self.run_pass(s, triage=True)

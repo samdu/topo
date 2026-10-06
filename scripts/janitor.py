@@ -1252,6 +1252,9 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     say("triage:read", f"triage stopped at #{n}: {ex}")
                     break
                 state["fired"].pop("triage:read", None)
+                # The issue is, from here on in this pass, the one its own read
+                # showed: what is recorded and said of it is said of that.
+                w["fp"] = d["fp"]
                 if d["argv"] or d["action"] == "gone":   # labelled or closed, or already was
                     done.add(w["key"])
                 else:
