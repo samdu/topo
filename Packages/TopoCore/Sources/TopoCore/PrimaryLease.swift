@@ -383,7 +383,11 @@ public actor PrimaryLease {
                 (over, claim, heartbeatOf) = (record, holder(epoch: lease.epoch), lease)
             } else {
                 if heldRecord != nil { lapse() }
-                guard lapsedRecord != nil else { return nil }
+                guard lapsedRecord != nil else {
+                    Perf.mark("lease.batch.refused notHeld")
+                    return nil
+                }
+                Perf.mark("lease.batch.lapsed")
                 let server = try await database.fetch(Lease.recordID)
                 // Given up while the read was out: the batch was that claim's, and a lease
                 // taken since is not its to write under.
@@ -399,6 +403,7 @@ public actor PrimaryLease {
                     // its answer on the way: nothing was given up, and this batch is not its.
                     let taker = server.flatMap(Lease.init(record:))
                     if let taker, taker.holder == device, taker.endpoint == endpoint, taker.epoch > lapsed.epoch { return nil }
+                    Perf.mark("lease.batch.refused taken")
                     surrender()
                     if let taker, taker.holder != device { yieldedTo = taker }
                     return nil
@@ -449,6 +454,7 @@ public actor PrimaryLease {
                 // About a taker from before a claim this device has made since: the batch
                 // was the displaced lease's, and the claim held is not this answer's to clear.
                 if let winner, let mine = held, winner.epoch < mine.epoch { return nil }
+                Perf.mark("lease.batch.refused taken")
                 surrender()
                 yieldedTo = winner
                 return nil
@@ -566,7 +572,10 @@ public actor PrimaryLease {
             do { try await sleep(timing.heartbeat) } catch { return }
             guard heldRecord != nil else { return }
             // A transport failure is not a lost lease; the local expiry decides.
-            _ = try? await heartbeat()
+            let began = monotonic()
+            let outcome: String
+            do { outcome = try await heartbeat() ? "held" : "lost" } catch { outcome = "failed" }
+            Perf.mark("lease.heartbeat \(outcome) ms=\(Int((monotonic() - began) * 1000))")
         }
     }
 }

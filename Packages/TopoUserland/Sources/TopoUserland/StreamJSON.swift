@@ -11,6 +11,11 @@ public enum StreamEvent: Sendable, Equatable {
     case started(session: String, model: String)
     /// A text block of an assistant message.
     case text(String)
+    /// The next few characters of a text block, as the model writes it (`--include-partial-messages`):
+    /// what the screen draws before the message is whole. The whole block still comes as `text`.
+    case writing(String)
+    /// A message begun: what `writing` gave of the last one is not part of this one.
+    case writingBegan
     /// A tool the assistant called, by name. For a tool that writes a file — `Write`, `Edit`,
     /// `MultiEdit`, `NotebookEdit` (`StreamJSON.fileTools`) — `path` is the file it names, which is
     /// what says whether the turn is writing code, prose or the memory; nothing else of a tool's
@@ -97,6 +102,18 @@ public enum StreamJSON {
             return results.isEmpty ? [.other(subtype.map { "\(type)/\($0)" } ?? type)] : results
         case ("result", _):
             return [.result(result(object, subtype: subtype))]
+        case ("stream_event", _):
+            guard let event = object["event"] as? [String: Any] else { return [.other(type)] }
+            switch event["type"] as? String {
+            case "message_start":
+                return [.writingBegan]
+            case "content_block_delta":
+                guard let delta = event["delta"] as? [String: Any], delta["type"] as? String == "text_delta",
+                      let text = delta["text"] as? String, !text.isEmpty else { return [.other(type)] }
+                return [.writing(text)]
+            default:
+                return [.other(type)]
+            }
         default:
             return [.other(subtype.map { "\(type)/\($0)" } ?? type)]
         }

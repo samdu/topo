@@ -97,7 +97,7 @@ enum MascotMapping {
             next.activity = .thinking
         case .toolUse(let name, let path):
             if let activity = activity(tool: name, path: path) { next.activity = activity }
-        case .text, .toolResult, .result, .other, .malformed:
+        case .text, .writing, .writingBegan, .toolResult, .result, .other, .malformed:
             break
         }
         return next

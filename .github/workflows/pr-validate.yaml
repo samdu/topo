@@ -91,7 +91,8 @@ on:
     # `ready_for_review` is here so the ready transition starts a run at all —
     # without it, a draft marked ready sits on whatever its last draft run
     # concluded until someone pushes. It is not what skips the reviewer on
-    # drafts; the `if` on the codex job does that.
+    # drafts: `review_cap` reads whether the PR is a draft when the run
+    # starts, and the reviewer jobs go by that.
     types: [opened, synchronize, reopened, ready_for_review]
   # The nightly: the full lane on main, real ear included, once a night. A
   # red one is this workflow's failed run on main; the review jobs do not run
@@ -118,6 +119,14 @@ on:
 
 # One run per PR: a superseded push should not keep burning a reviewer. A run
 # outside a pull request is its own group.
+#
+# Which run survives is whichever GitHub created last, not whichever event
+# happened last: a push and a `gh pr ready` a second apart start two runs on
+# one head, and the `synchronize` run, whose payload still says draft, can be
+# the later one and cancel the `ready_for_review` run. So no job reads the
+# payload's `draft`. `review_cap` asks the API as the run starts, and every
+# run created after the PR was marked ready reads it as ready, whichever
+# event started it; a run created before that is the one cancelled.
 concurrency:
   group: pr-validate-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
@@ -938,10 +947,15 @@ jobs:
   # with a token that can comment and no persisted credential: the PR's own
   # script runs with that token, which is the same-repo trust the header
   # accepts.
+  #
+  # It is also where the run learns whether the PR is a draft: read from the
+  # API here, not from the event (see `concurrency` above), and handed on as
+  # `draft`. On a draft nothing is counted, `capped` is empty, and codex_wait,
+  # which runs only on `draft == 'false'` and `capped == 'false'`, is skipped.
+  # A read that fails, or answers neither `true` nor `false`, fails the job.
   review_cap:
     if: >-
       github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -950,14 +964,34 @@ jobs:
       issues: write
       pull-requests: write
     outputs:
+      draft: ${{ steps.draft.outputs.draft }}
       capped: ${{ steps.count.outputs.capped }}
     steps:
+      - name: Read whether the PR is a draft now
+        id: draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          draft="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .draft)"
+          case "$draft" in
+            true | false) ;;
+            *)
+              echo "::error::Could not read whether PR #$PR_NUMBER is a draft (answered: ${draft:-nothing}). Re-run the job."
+              exit 1
+              ;;
+          esac
+          echo "PR #$PR_NUMBER draft: $draft (the event said ${{ github.event.pull_request.draft }})"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v5
+        if: steps.draft.outputs.draft == 'false'
         with:
           persist-credentials: false
           sparse-checkout: scripts
       - name: Count the Codex verdicts on this PR
         id: count
+        if: steps.draft.outputs.draft == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -995,9 +1029,9 @@ jobs:
       needs.select.result == 'success' &&
       (needs.topo_unit.result == 'success' || (needs.topo_unit.result == 'skipped' && needs.select.outputs.topo_unit == 'false')) &&
       (needs.others.result == 'success' || (needs.others.result == 'skipped' && needs.select.outputs.others == 'false')) &&
+      needs.review_cap.outputs.draft == 'false' &&
       needs.review_cap.outputs.capped == 'false' &&
       github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1063,7 +1097,8 @@ jobs:
     # `!cancelled()` in place of the implicit `success()`, which is false
     # beside a skipped prerequisite and would skip this job with it; and so
     # every `needs.<job>.result` is spelled out — without them, a red fast job
-    # would still spend a reviewer round.
+    # would still spend a reviewer round. A draft is held by codex_wait,
+    # which ran only if review_cap read the PR as ready.
     if: >-
       !cancelled() &&
       needs.select.result == 'success' &&
@@ -1071,7 +1106,6 @@ jobs:
       (needs.others.result == 'success' || (needs.others.result == 'skipped' && needs.select.outputs.others == 'false')) &&
       needs.codex_wait.result == 'success' &&
       github.event_name == 'pull_request' &&
-      github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1487,7 +1521,11 @@ jobs:
   post_feedback:
     runs-on: ubuntu-latest
     needs: codex
-    if: github.event_name == 'pull_request' && needs.codex.outputs.has_verdict == 'true'
+    # `!cancelled()` in place of the implicit `success()`, as on codex: that
+    # is false whenever any job upstream of codex was skipped, a suite job
+    # select left out included, and the verdict Codex gave would stay in an
+    # artifact with nothing on the PR.
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && needs.codex.outputs.has_verdict == 'true' }}
     permissions:
       # Read-only on Actions, for the verdict artifact from this same run.
       actions: read
@@ -1583,7 +1621,10 @@ jobs:
     steps:
       - name: Assert a verdict was produced and delivered
         env:
-          IS_DRAFT: ${{ github.event.pull_request.draft }}
+          # review_cap's reading of the PR as the run started. Only where
+          # review_cap was skipped, a fork PR, is the event's own word used:
+          # a review_cap that failed leaves this empty, and is said first.
+          IS_DRAFT: ${{ needs.review_cap.result == 'skipped' && github.event.pull_request.draft || needs.review_cap.outputs.draft }}
           SUITE_RESULTS: >-
             select=${{ needs.select.result }}
             topo_unit=${{ needs.topo_unit.result }}
@@ -1601,19 +1642,21 @@ jobs:
         run: |
           set -euo pipefail
 
+          # A review_cap that failed is no verdict, and comes first: it may
+          # not have read whether the PR is a draft, and the event's word
+          # for that is not to be believed in its place. Nor is the cap
+          # known, or its comment on the PR. A fork PR skips review_cap as
+          # it skips codex, and the reviewer's own line below says that.
+          case "${CAP_RESULT:-}" in
+            failure | cancelled)
+              echo "::error::No verdict: whether this PR is a draft could not be read, or its Codex verdicts not counted, or the cap comment not posted (review_cap: $CAP_RESULT), so the reviewer did not run. Re-run the failed jobs — nothing here is a review decision."
+              exit 1
+              ;;
+          esac
           if [ "$IS_DRAFT" = "true" ]; then
             echo "::error::No verdict: this PR is a draft, so the reviewer was deliberately skipped. Mark it ready for review — nothing here is a review decision."
             exit 1
           fi
-          # A count that failed is no verdict: the cap may or may not stand,
-          # and its comment may not be on the PR. A fork PR skips review_cap
-          # as it skips codex, and the reviewer's own line below says that.
-          case "${CAP_RESULT:-}" in
-            failure | cancelled)
-              echo "::error::No verdict: the Codex verdicts on this PR could not be counted, or the cap comment not posted (review_cap: $CAP_RESULT), so the reviewer did not run. Re-run the failed jobs — nothing here is a review decision."
-              exit 1
-              ;;
-          esac
           # The cap is a review state, not a missing verdict: review_gate holds
           # the merge on it, and a red here would have the janitor rerun it.
           # The suite's own reds stay on `test`.

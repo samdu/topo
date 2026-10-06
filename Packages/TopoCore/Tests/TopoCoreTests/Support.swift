@@ -1,4 +1,5 @@
 import Foundation
+import os
 import TopoCore
 import TopoCoreTesting
 
@@ -221,6 +222,21 @@ struct BlindQueryDatabase: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
     func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
     func query(_ query: RecordQuery) async throws -> [Record] { [] }
+}
+
+/// Counts the fetches by ID that reach the store.
+final class CountingFetchDatabase: RecordDatabase, @unchecked Sendable {
+    let inner: InMemoryRecordDatabase
+    private let count = OSAllocatedUnfairLock(initialState: 0)
+    var fetches: Int { count.withLock { $0 } }
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        count.withLock { $0 += 1 }
+        return try await inner.fetch(ids)
+    }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
 /// A conforming adapter whose `save` echoes a record `Lease` cannot parse.

@@ -160,6 +160,9 @@ struct Forwarder: Sendable {
         }
     }
 
+    /// How much of each end of an answer a timed run keeps a copy of to read the token counts from.
+    static let usageWindow = 8192
+
     /// The path segments a mark may name: the routes Claude Code is known to ask for. The path is
     /// the guest's to choose, so a segment is written only when it is one of these.
     static let routeSegments: Set<String> = ["v1", "api", "messages", "count_tokens", "batches", "models", "hello",
@@ -235,6 +238,9 @@ struct Forwarder: Sendable {
         let response: UpstreamResponse
         let route = "\(request.method) \(Self.routeForMark(Self.canonical(request.path)))"
         Perf.mark("proxy.request \(route) bytes=\(body.count)")
+        // A timed run also reads what the request is made of and what the API counted of it.
+        let counted = Perf.recording && request.method == "POST" && Self.canonical(request.path) == "/v1/messages"
+        if counted, let shape = Self.shapeForMark(body) { Perf.mark("proxy.shape \(shape)") }
         do {
             response = try await upstream.send(outbound)
             Perf.mark("proxy.head \(route) \(response.status)")
@@ -260,9 +266,21 @@ struct Forwarder: Sendable {
             try await inbound.send(ResponseWriter.head(status: response.status, headers: headers))
             if hasBody {
                 var first = true
+                var opening = Data(), closing = Data(), usageMarked = false
                 for try await chunk in response.body where !chunk.isEmpty {
                     if first { Perf.mark("proxy.firstByte \(route)"); first = false }
                     try await inbound.send(chunkedOut ? ResponseWriter.chunk(chunk) : chunk)
+                    // Read after the chunk has gone on, and only a copy of the stream's two ends.
+                    if counted {
+                        if !usageMarked, opening.count < Self.usageWindow {
+                            opening.append(chunk)
+                            if let usage = Self.usageForMark(opening) { Perf.mark("proxy.usage \(usage)"); usageMarked = true }
+                        }
+                        closing = (closing + chunk).suffix(Self.usageWindow)
+                    }
+                }
+                if counted, let out = Self.count("output_tokens", in: String(decoding: closing, as: UTF8.self)) {
+                    Perf.mark("proxy.usage.out \(out)")
                 }
                 try Task.checkCancellation()
                 if chunkedOut { try await inbound.send(ResponseWriter.lastChunk) }

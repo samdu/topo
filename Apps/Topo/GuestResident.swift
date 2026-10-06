@@ -264,7 +264,14 @@ struct ResidentConversation: GuestConversation {
         }
     }
 
+    @MainActor
     func warm() async {
+        // The chat asks as it appears, which is before the launch has looked for the userland on
+        // the phone. A userland already here says so within moments of being looked for; one
+        // still downloading is not waited for, and the chat's loop asks again on every pass.
+        let userland = Userland.shared
+        userland.prepare()
+        for _ in 0..<50 where !userland.isReady { try? await Task.sleep(for: .milliseconds(100)) }
         guard let session = try? await session() else { return }
         try? await session.ready()
     }

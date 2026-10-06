@@ -242,7 +242,7 @@ struct TopoApp: App {
             // behaves as it always does either way.
             .task { await debugTurn() }
             // Nothing unless the launch was a timed run from a Mac (`PerfRun`).
-            .task { await PerfRun.run(with: harness) }
+            .task { await PerfRun.run(with: harness, speaker: speaker) }
             .task { await debugUserland() }
             .task { await debugGuestTurn() }
             .task { await debugConnections() }

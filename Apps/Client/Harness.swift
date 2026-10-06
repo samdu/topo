@@ -33,6 +33,13 @@ final class Harness {
     }
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// The reply the guest is writing now, as far as it has got, drawn under the transcript
+    /// before it is whole and before it is in the log. It is not a turn: it goes when the reply
+    /// lands in the transcript, when the guest starts another message, and when the turn fails.
+    private(set) var writing: String?
+    /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
+    /// whose reply the speaker may begin reading as it is written.
+    private(set) var writingSpoken: String?
     /// The person's turn the guest was cut off answering, which is not asked again unless the
     /// person asks (`askAgain`). Nil when there is none.
     private(set) var unfinished: Turn?
@@ -56,6 +63,10 @@ final class Harness {
     /// refused it, a call still holding the session — is not recorded, so the next pass offers it
     /// again; every other reply, read aloud or not this screen's to read, is recorded and offered
     /// once.
+    /// Told the reply to a spoken turn as the guest writes it: the message so far and the turn's
+    /// nonce, then nil for the text once nothing more of it is coming — the reply landed (after
+    /// `onReply` was offered it), or the turn failed.
+    var onWriting: (@MainActor (String?, String) -> Void)?
     var onReply: (@MainActor (Turn) -> Bool)? {
         didSet {
             guard onReply != nil else { return }
@@ -219,6 +230,7 @@ final class Harness {
         self.pause = pause
         self.now = now
         log = TurnLog(database: self.database)
+        relay.writing = { [weak self] in self?.follow($0) }
         spokenNonces = defaults.stringArray(forKey: Self.spokenKey) ?? []
         if let data = defaults.data(forKey: Self.outboxKey),
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
@@ -272,7 +284,8 @@ final class Harness {
     /// nothing more, the answering loop ends, the runner and screen are cleared, and the next
     /// sign-in starts at the first question. Returns once the brain has forgotten the login's
     /// conversation, so what the guest kept of it is gone before the login is. The log itself
-    /// stays where it is, in the person's own iCloud; nothing of it is on this device to remove.
+    /// stays where it is, in the person's own iCloud; the copy of the zone this device keeps to
+    /// read it quickly (`ZoneMirror`) is removed.
     func forget() async {
         stopAnswering()
         runner = nil
@@ -284,6 +297,7 @@ final class Harness {
         notice = nil
         failure = nil
         status = nil
+        dropWriting()
         busy = false
         context = nil
         unfinished = nil
@@ -295,6 +309,9 @@ final class Harness {
         UserDefaults.standard.removeObject(forKey: "firstRunAnswered")
         // What the guest kept of the last login's conversation goes with it.
         await brain.forget()
+        #if canImport(CloudKit)
+        await CloudKitRecordDatabase.forgetMirrors()
+        #endif
     }
 
     /// Ends everything under way for this login: the turn in flight, every answering pass and
@@ -318,6 +335,8 @@ final class Harness {
     /// the guest's session either.
     func demote() async {
         stopAnswering()
+        // The guest is told to forget below, and what it says of its ending is not followed.
+        dropWriting()
         busy = false
         status = nil
         do {
@@ -346,6 +365,8 @@ final class Harness {
     func refresh() async -> Bool {
         do {
             let transcript = try await log.read()
+            let dropped = turns.filter { transcript[$0.ref] == nil }.count
+            if dropped > 0 { Perf.mark("chat.refresh.dropped \(dropped)") }
             turns = transcript.ordered
             turns.forEach(seen)
             notice = TranscriptStore.notice(for: transcript)
@@ -553,6 +574,7 @@ final class Harness {
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.
             await onPass?()
+            Perf.mark("turn.pass.done")
             return true
         } catch is CancellationError {
             return false
@@ -560,6 +582,8 @@ final class Harness {
             // The person's turn is in the log; only the reply is owed, and nothing is going to
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
+            // What was drawn of the reply is not in the log, and the log is what the screen shows.
+            dropWriting()
             failure = Failure(words: Self.describe(underlying))
             onTurnFailed?(attempt.nonce)
             await refresh()
@@ -613,7 +637,40 @@ final class Harness {
         }
     }
 
+    /// Keeps `writing` to what the guest has written of the message it is on.
+    private func follow(_ activity: GuestActivity) {
+        switch activity {
+        case .began(_, let answering):
+            writing = nil
+            writingSpoken = turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
+        case .update(.event(.writingBegan)):
+            // Empty rather than nil: the turn is still being answered, by a new message.
+            writing = writing == nil ? nil : ""
+            if let writing, let writingSpoken { onWriting?(writing, writingSpoken) }
+        case .update(.event(.writing(let more))):
+            if writing == nil { Perf.mark("turn.text.first") }
+            writing = (writing ?? "") + more
+            if let writingSpoken { onWriting?(writing, writingSpoken) }
+        case .update(.ended(let end)):
+            // A turn that ended with no reply leaves nothing to land; one that answered is
+            // replaced by its turn when that is shown.
+            if case .answered = end {} else { dropWriting() }
+        case .update, .gone:
+            break
+        }
+    }
+
+    /// What was drawn of a reply goes, and whoever was reading it aloud is told no more comes.
+    private func dropWriting() {
+        writing = nil
+        if let writingSpoken { onWriting?(nil, writingSpoken) }
+        writingSpoken = nil
+    }
+
     private func show(_ turn: Turn) {
+        // The row gives way to the turn; the reader hears of the end after the reply was offered.
+        if turn.role == .assistant { writing = nil }
+        defer { if turn.role == .assistant { dropWriting() } }
         guard !turns.contains(where: { $0.ref == turn.ref }) else { return }
         turns.append(turn)
         seen(turn)
@@ -731,10 +788,12 @@ final class Harness {
             // Another device holds the lease and this one has yielded to it; that device answers.
         } catch TurnRunnerError.displaced {
             // Another device took the lease as the reply was ready; it answers.
+            dropWriting()
         } catch is CancellationError {
             return
         } catch {
             guard self.login == login else { return }
+            dropWriting()
             failure = Failure(words: Self.describe(error))
             await refreshUnfinished()
         }
@@ -843,8 +902,13 @@ final class Harness {
 @MainActor
 final class GuestRelay {
     var handler: (@MainActor (GuestActivity) -> Void)?
+    /// The harness's own ear, for the reply as it is written (`Harness.writing`).
+    var writing: (@MainActor (GuestActivity) -> Void)?
     nonisolated init() {}
-    func tell(_ activity: GuestActivity) { handler?(activity) }
+    func tell(_ activity: GuestActivity) {
+        writing?(activity)
+        handler?(activity)
+    }
 }
 
 /// The database with a memory: the last error any call raised and the last time one worked,

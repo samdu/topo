@@ -301,6 +301,92 @@ import TopoCoreTesting
 }
 
 @Suite struct TurnWriterRecoveryTests {
+    @Test func aJustReadTranscriptIsNotAskedForTheWritersNextRecordAgain() async throws {
+        let db = CountingFetchDatabase(inner: InMemoryRecordDatabase())
+        let log = TurnLog(database: db)
+        let w = try await log.writer(for: phone)
+        let first = try await w.append(.person, "one", parents: [], at: tA)
+        let read = try await log.read()
+        #expect(read.free == [.ref("phone", 2)])
+
+        var before = db.fetches
+        _ = try await w.append(.assistant, "two", continuing: read, at: tA + 1, justRead: true)
+        #expect(db.fetches == before)
+
+        // A transcript held for longer is checked against the log as it stands.
+        let later = try await log.read()
+        before = db.fetches
+        let third = try await w.append(.person, "three", continuing: later, at: tA + 2)
+        #expect(db.fetches == before + 1)
+        #expect(third.parents == [.ref("phone", 2)])
+        #expect(first.ref == .ref("phone", 1))
+    }
+
+    @Test func aJustReadTranscriptLackingTheWritersNewestTurnIsStillRefused() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: inner)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "one", parents: [], at: tA)
+        let stale = try await log.read()
+        _ = try await w.append(.person, "two", parents: stale.heads, at: tA + 1)
+        await #expect(throws: TurnLogError.self) {
+            _ = try await w.append(.person, "three", continuing: stale, at: tA + 2, justRead: true)
+        }
+    }
+
+    @Test func aRecordWrittenSinceAJustReadTranscriptRefusesTheAppendUntilItIsRead() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: inner)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "one", parents: [], at: tA)
+        let read = try await log.read()
+        // Another writer for this device lands on the sequence the read found free.
+        _ = try await inner.save(turnRecord(device: "phone", seq: 2, parents: ["phone/1"]))
+        do {
+            _ = try await w.append(.person, "mine", continuing: read, at: tA + 1, nonce: "n", justRead: true)
+            Issue.record("expected the stale transcript to be refused")
+        } catch TurnLogError.incompleteTranscript(let missing, _) {
+            #expect(missing == [.ref("phone", 2)])
+        }
+        #expect(try await log.read().ordered.map(\.ref) == [.ref("phone", 1), .ref("phone", 2)])
+        // Read again, the same append continues from the turn that landed.
+        let mine = try await w.append(.person, "mine", continuing: try await log.read(), at: tA + 1, nonce: "n", justRead: true)
+        #expect(mine.ref == .ref("phone", 3))
+        #expect(mine.parents == [.ref("phone", 2)])
+    }
+
+    @Test func twoAppendsContinuingTheSameTranscriptAtOnceDoNotForkTheLog() async throws {
+        let inner = InMemoryRecordDatabase()
+        let log = TurnLog(database: inner)
+        let w = try await log.writer(for: phone)
+        _ = try await w.append(.person, "one", parents: [], at: tA)
+        let read = try await log.read()
+        // Both pass the check before either saves: the first save is held until the second
+        // append has been checked and is waiting behind it.
+        let held = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
+        await inner.setBeforeSave { _ in
+            await inner.setBeforeSave(nil)
+            entered.continuation.yield()
+            for await _ in held.stream { break }
+        }
+        let first = Task { try await w.append(.person, "a", continuing: read, at: tA + 1, nonce: "a", justRead: true) }
+        for await _ in entered.stream { break }
+        let second = Task { try await w.append(.person, "b", continuing: read, at: tA + 2, nonce: "b", justRead: true) }
+        for _ in 0..<1000 { await Task.yield() }
+        held.continuation.yield()
+        #expect(try await first.value.ref == .ref("phone", 2))
+        do {
+            _ = try await second.value
+            Issue.record("expected the second append to be refused")
+        } catch TurnLogError.incompleteTranscript(let missing, _) {
+            #expect(missing == [.ref("phone", 2)])
+        }
+        let again = try await w.append(.person, "b", continuing: try await log.read(), at: tA + 2, nonce: "b", justRead: true)
+        #expect(again.ref == .ref("phone", 3))
+        #expect(again.parents == [.ref("phone", 2)])
+    }
+
     @Test func coldQueryIndexIsCorrectedByIDBeforeTheFirstAppend() async throws {
         let inner = InMemoryRecordDatabase()
         for i in Int64(1)...5 { _ = try await inner.save(turnRecord(device: "phone", seq: i, parents: [])) }

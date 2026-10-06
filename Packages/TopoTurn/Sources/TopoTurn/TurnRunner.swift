@@ -82,18 +82,22 @@ public actor TurnRunner {
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
         Perf.mark("turn.begin")
         await progress?(.takingLease)
+        // The log is read while the lease is taken: the read asks nothing of the lease, and
+        // nothing is done with it unless this device holds it.
+        async let reading = log.read()
         let outcome = try await lease.acquire()
         Perf.mark("turn.lease.acquired")
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
 
         await progress?(.saving)
-        try await settleOwed()
-        let before = try await log.read()
+        var before = try await reading
+        // An owed reply moved the log; what the turn continues from is read again.
+        if try await settleOwed() != nil { before = try await log.read() }
         Perf.mark("turn.log.read")
         // A caller that stopped before the person's turn is in the log writes nothing at all.
         try Task.checkCancellation()
         let at = Date()
-        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce)
+        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce, justRead: true)
         Perf.mark("turn.person.saved")
         await progress?(.asking(person: person))
         let replyNonce = Self.replyNonce(for: [person.ref])
@@ -126,8 +130,21 @@ public actor TurnRunner {
         } catch {
             // The kind of failure and nothing it carries.
             if case TurnRunnerError.displaced = error { Perf.mark("turn.reply.failed displaced") }
-            else { Perf.mark("turn.reply.failed \(type(of: error))") }
+            else { Perf.mark("turn.reply.failed \(Self.kind(of: error))") }
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
+        }
+    }
+
+    /// A failure's kind for a mark: the error's type, a database error's case and the record it
+    /// names, and the underlying error's domain and code. Nothing a record holds.
+    static func kind(of error: any Error) -> String {
+        func code(_ underlying: any Error) -> String { "\((underlying as NSError).domain)/\((underlying as NSError).code)" }
+        switch error {
+        case RecordDatabaseError.serverRecordChanged(let id, _): return "serverRecordChanged \(id.name)"
+        case RecordDatabaseError.unknownItem(let id): return "unknownItem \(id.name)"
+        case RecordDatabaseError.unavailable(let underlying): return "unavailable \(code(underlying))"
+        case RecordDatabaseError.rejected(let underlying): return "rejected \(code(underlying))"
+        default: return "\(type(of: error))"
         }
     }
 
