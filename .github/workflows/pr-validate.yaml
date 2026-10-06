@@ -1596,7 +1596,12 @@ jobs:
   #
   #   reviewer_ran   red  ⇒ no verdict exists. Infrastructure or a draft.
   #                         Re-runnable; not a statement about the code.
-  #   review_gate    red  ⇒ the reviewer ran and its verdict blocks, or it
+  #                         review_gate is red beside it and adds nothing: it
+  #                         is main's required check, and a check that passed
+  #                         with no verdict would let the PR past branch
+  #                         protection on its own, whatever this run concluded.
+  #   review_gate    red, reviewer_ran green
+  #                       ⇒ the reviewer ran and its verdict blocks, or it
   #                         answered with nothing usable. A review decision.
   #                         Or, with reviewer_ran green and no verdict posted
   #                         this run, the review cap: Sam's word or a replan,
@@ -1713,13 +1718,11 @@ jobs:
   # The verdict, and deliberately after post_feedback: a blocking verdict must
   # still reach the PR (and through it the session) before it fails the run.
   #
-  # `needs: reviewer_ran` is load-bearing beyond ordering. This job exits 0 when
-  # no verdict exists, on the sole grounds that reviewer_ran has already gone
-  # red in exactly those cases — so a copy of this workflow that dropped
-  # reviewer_ran would leave a verdict-free run green and automerge would merge
-  # it unreviewed. Naming the job here makes that copy refuse to parse instead
-  # of silently opening the hole, and the guard below re-checks the invariant at
-  # runtime rather than trusting the comment.
+  # It is red whenever no verdict exists, as reviewer_ran is: this job is the
+  # required check, so it is the one branch protection reads, and it must
+  # never be green on a head nobody reviewed — a reviewer that failed after an
+  # earlier blocking verdict included. reviewer_ran says why there is none;
+  # the guard below fails closed if reviewer_ran passed with no verdict.
   #
   # This is the required status check on main.
   review_gate:
@@ -1798,8 +1801,8 @@ jobs:
               echo "::error::No verdict exists (reviewer: $CODEX_RESULT) but reviewer_ran passed. The gate split is broken; failing closed."
               finish block "gate split broken: no verdict but reviewer_ran passed" 1
             fi
-            echo "No verdict to enforce (reviewer job: $CODEX_RESULT). Not a review decision — see the reviewer_ran check for why."
-            finish block "no verdict: reviewer job $CODEX_RESULT (see reviewer_ran)" 0
+            echo "::error::No verdict exists (reviewer job: $CODEX_RESULT), so this head is not reviewed and does not pass. Not a review decision — see the reviewer_ran check for why."
+            finish block "no verdict: reviewer job $CODEX_RESULT (see reviewer_ran)" 1
           fi
 
           # The CLI's last message is whatever it emitted; nothing checks it
