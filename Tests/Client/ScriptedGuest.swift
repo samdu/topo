@@ -34,6 +34,8 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case hang
         /// As `hang`, having begun a message and written these words of it.
         case hangWriting(String)
+        /// As `hangWriting`, with a second message begun after the first and these words of it.
+        case hangWritingTwice(String, String)
         /// Received, and still being answered, with its transcript entry not written yet: the
         /// turn ends when `finishHanging` says.
         case hangUnwritten
@@ -193,6 +195,14 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
             continuation.yield(.event(.writingBegan))
             continuation.yield(.event(.writing(words)))
+            lock.withLock { hanging.append((continuation, id, text, session, true)) }
+        case .hangWritingTwice(let before, let after):
+            write(input: text, id: id, session: session)
+            continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
+            continuation.yield(.event(.writingBegan))
+            continuation.yield(.event(.writing(before)))
+            continuation.yield(.event(.writingBegan))
+            continuation.yield(.event(.writing(after)))
             lock.withLock { hanging.append((continuation, id, text, session, true)) }
         case .hangUnwritten:
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))

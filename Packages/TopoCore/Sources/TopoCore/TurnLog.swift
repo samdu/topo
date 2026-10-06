@@ -359,11 +359,11 @@ public actor TurnWriter {
     /// a retried nonce included.
     public func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date = Date(),
                        nonce: String = UUID().uuidString, renewing lease: PrimaryLease) async throws -> Turn? {
-        try await append(role, text, parents: parents, at: at, nonce: nonce, exact: false, renewing: lease)
+        try await append(role, text, parents: parents, at: at, nonce: nonce, exact: nil, renewing: lease)
     }
 
     private func append(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String,
-                        exact: Bool, renewing lease: PrimaryLease) async throws -> Turn? {
+                        exact: Int64?, renewing lease: PrimaryLease) async throws -> Turn? {
         do {
             return try await appended(role, text, parents: parents, at: at, nonce: nonce, exact: exact) { records in
                 guard let saved = try await lease.heartbeat(saving: records) else { throw LeaseNotHeld() }
@@ -377,7 +377,7 @@ public actor TurnWriter {
     private struct LeaseNotHeld: Error {}
 
     private func appended(_ role: TurnRole, _ text: String, parents: [TurnRef], at: Date, nonce: String,
-                          exact: Bool = false,
+                          exact: Int64? = nil,
                           save: (@Sendable ([Record]) async throws -> [Record])?) async throws -> Turn {
         let device = self.device
         do {
@@ -409,14 +409,15 @@ public actor TurnWriter {
     /// `justRead` says the transcript is a read made for this append, moments ago: the read has
     /// then already asked the log, by ID, for this writer's next record (`Transcript.free`), and
     /// the writer does not ask a second time. A record written there since is the save's to
-    /// find, as it is whenever one lands between the check and the save: the save is
-    /// create-only, and a turn of this device found on the number it reached for is one the
-    /// transcript lacks, so the append throws `incompleteTranscript` with nothing written
-    /// rather than continue from heads that are not the log's.
+    /// find, as it is whenever one lands between the check and the save: the append has to
+    /// take the number the transcript was checked against, and when that number has gone, to
+    /// another writer's record or to an append of this writer's made meanwhile, there is a
+    /// turn of this device the transcript lacks, so the append throws `incompleteTranscript`
+    /// with nothing written rather than continue from heads that are not the log's.
     public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
                        nonce: String = UUID().uuidString, justRead: Bool = false) async throws -> Turn {
-        try await checkContinuable(transcript, justRead: justRead)
-        return try await appended(role, text, parents: transcript.heads, at: at, nonce: nonce, exact: true, save: nil)
+        let next = try await checkContinuable(transcript, justRead: justRead)
+        return try await appended(role, text, parents: transcript.heads, at: at, nonce: nonce, exact: next, save: nil)
     }
 
     /// `append(_:_:continuing:at:nonce:)` in one atomic batch with a
@@ -425,11 +426,12 @@ public actor TurnWriter {
     public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
                        nonce: String = UUID().uuidString, justRead: Bool = false,
                        renewing lease: PrimaryLease) async throws -> Turn? {
-        try await checkContinuable(transcript, justRead: justRead)
-        return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce, exact: true, renewing: lease)
+        let next = try await checkContinuable(transcript, justRead: justRead)
+        return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce, exact: next, renewing: lease)
     }
 
-    private func checkContinuable(_ transcript: Transcript, justRead: Bool = false) async throws {
+    /// The sequence number the transcript was checked against: the one its append has to take.
+    private func checkContinuable(_ transcript: Transcript, justRead: Bool = false) async throws -> Int64 {
         let asked = await nextRef
         if !(justRead && transcript.free.contains(asked)) { try await syncWithLog() }
         var missing = transcript.missing
@@ -442,6 +444,7 @@ public actor TurnWriter {
             throw TurnLogError.incompleteTranscript(missing: missing, unreadable: transcript.unreadable)
         }
         Perf.mark("log.append.checked")
+        return next
     }
 
     /// Moves past any turn of this device the log already holds at or after

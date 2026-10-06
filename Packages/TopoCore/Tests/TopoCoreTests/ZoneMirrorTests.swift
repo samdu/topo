@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import TopoCore
+@testable import TopoCore
 
 /// A change feed held in memory: an append-only list of saves and deletions, answered a page at
 /// a time from a token that is the position in it.
@@ -175,9 +175,14 @@ private actor Feed {
         await gate.hold()
         let reading = Task { try await mirror.records(ofType: "Turn") }
         await gate.reached()
+        // A second read, asked for before the zone is forgotten and waiting behind the first.
+        let queued = Task { try await mirror.records(ofType: "Turn") }
+        while await mirror.asked < 2 { await Task.yield() }
         await mirror.forget()
         await gate.open()
         await #expect(throws: CancellationError.self) { _ = try await reading.value }
+        await #expect(throws: CancellationError.self) { _ = try await queued.value }
+        #expect(await feed.pulls == [nil])
         #expect(!FileManager.default.fileExists(atPath: file.path))
         // The next read walks from the beginning and holds the whole zone.
         #expect(try await mirror.records(ofType: "Turn").map(\.id.name) == ["a"])

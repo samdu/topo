@@ -1047,6 +1047,33 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertNil(harness.writing)
     }
 
+    /// A spoken turn the guest answers in two messages, a tool call between them: whoever reads
+    /// it aloud is told of the second message's start with nothing written, so the boundary is
+    /// heard even when both messages open with the same words.
+    func testTheReaderIsToldWhenTheGuestBeginsAnotherMessage() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.hangWritingTwice("Let me look. ", "Let me look. It is")])
+        let name = "topo.tests.bridge.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
+        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                              defaults: UserDefaults(suiteName: name)!,
+                              brain: bridge, relay: relay, leaseSleep: parked,
+                              pause: { _ in throw CancellationError() })
+        var heard: [String?] = []
+        let nonce = harness.willSend("where is it?")
+        harness.markSpoken(nonce)
+        harness.onWriting = { text, answering in
+            XCTAssertEqual(answering, nonce)
+            heard.append(text)
+        }
+        let sending = Task { await harness.retry() }
+        for _ in 0..<500 where heard.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(heard, ["Let me look. ", "", "Let me look. It is"])
+        guest.finishHanging(with: "It is on the shelf.")
+        await sending.value
+    }
+
     /// Sign-out while a send has not yet written the person's turn — iCloud still being reached:
     /// the outbox went with the login, and so do the words. Nothing reaches the log, and the guest
     /// is asked nothing.

@@ -58,8 +58,10 @@ if [ -n "$app" ]; then
   xcrun devicectl device install app --device "$device" "$app" --quiet
 fi
 
-# The marks file is started empty by the app at launch, so a file read back with this run's
-# first question in it is this run's.
+# The marks file is started empty by the app at launch, but a copy can reach the phone before
+# the new process does and bring back the last run's file, finished: a file is this run's only
+# when its first mark is no older than this launch (less a few seconds for the clocks).
+launching="$(python3 -c 'import time; print(int(time.time() * 1000) - 5000)')"
 environment="$(python3 -c 'import json,sys; print(json.dumps({"TOPO_PERF_SEND": sys.argv[1], "TOPO_PERF_GAP": sys.argv[2], "TOPO_PERF_SPOKEN": sys.argv[3]}))' "$send" "$gap" "$spoken")"
 echo "==> launching"
 if ! launched="$(xcrun devicectl device process launch --device "$device" --terminate-existing \
@@ -78,8 +80,11 @@ while :; do
   if xcrun devicectl device copy from --device "$device" --domain-type appDataContainer \
        --domain-identifier "$bundle" --source tmp/topo-perf.log --destination "$pulled/marks.txt" \
        --timeout 30 --quiet 2>/dev/null; then
-    cp "$pulled/marks.txt" "$out"
-    if grep -q "perf.run.done" "$out"; then break; fi
+    first="$(sed -n '1s/^mark t=\([0-9]*\) .*/\1/p' "$pulled/marks.txt")"
+    if [ "${first:-0}" -ge "$launching" ]; then
+      cp "$pulled/marks.txt" "$out"
+      if grep -q "perf.run.done" "$out"; then break; fi
+    fi
   fi
   if [ "$(date +%s)" -ge "$deadline" ]; then
     echo "the run did not finish in ${timeout}s; what it marked is in $out" >&2
