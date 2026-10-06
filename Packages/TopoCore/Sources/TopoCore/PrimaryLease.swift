@@ -323,8 +323,12 @@ public actor PrimaryLease {
     /// as the database threw it, again with nothing applied.
     public func heartbeat(saving records: [Record]) async throws -> [Record]? {
         for _ in 0..<3 {
-            guard let record = heldRecord, let lease = Lease(record: record) else { return nil }
+            guard let record = heldRecord, let lease = Lease(record: record) else {
+                Perf.mark("lease.batch.refused notHeld")
+                return nil
+            }
             if hasLapsed(lease) {
+                Perf.mark("lease.batch.refused lapsed")
                 heldRecord = nil
                 return nil
             }
@@ -346,6 +350,7 @@ public actor PrimaryLease {
                     heldRecord = server
                     continue
                 }
+                Perf.mark("lease.batch.refused taken")
                 heldRecord = nil
                 yieldedTo = winner
                 return nil
@@ -419,7 +424,10 @@ public actor PrimaryLease {
             do { try await sleep(timing.heartbeat) } catch { return }
             guard heldRecord != nil else { return }
             // A transport failure is not a lost lease; the local expiry decides.
-            _ = try? await heartbeat()
+            let began = monotonic()
+            let outcome: String
+            do { outcome = try await heartbeat() ? "held" : "lost" } catch { outcome = "failed" }
+            Perf.mark("lease.heartbeat \(outcome) ms=\(Int((monotonic() - began) * 1000))")
         }
     }
 }

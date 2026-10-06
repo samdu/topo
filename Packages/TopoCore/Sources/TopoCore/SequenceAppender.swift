@@ -44,6 +44,9 @@ enum SequenceError: Error, Sendable {
     /// A marker for this nonce exists but the record it names cannot be
     /// fetched. The two are written atomically, so this is damaged data.
     case markerWithoutRecord(nonce: String)
+    /// An append that had to land on the sequence number it expected found that number taken,
+    /// by another writer or by an append ahead of it. Nothing was written.
+    case taken(Int64)
 }
 
 /// Writes create-only records under one device's sequence numbers, one
@@ -87,8 +90,13 @@ actor SequenceAppender {
     /// save; a caller that has to land the record together with something
     /// else of its own — a lease heartbeat, so a displaced device writes
     /// nothing — passes its own, and whatever that throws comes back out
-    /// of here untouched.
-    func append(nonce: String,
+    /// of here untouched. `exact` is for a record built from what the caller knew of this
+    /// device's records, and is the sequence number it took to be next: when the append's turn
+    /// comes and that number is no longer next (an append ahead of it in the queue took it),
+    /// or another writer's record is found on it, there is a record the caller did not know
+    /// of, and the append throws `taken` with nothing written rather than step past it. An
+    /// append that already went through under this nonce is still found and returned.
+    func append(nonce: String, exact: Int64? = nil,
                 save: (@Sendable ([Record]) async throws -> [Record])? = nil,
                 _ make: @escaping @Sendable (Int64, String) -> Record) async throws -> Record {
         let nonce = nonce.isEmpty ? UUID().uuidString : nonce
@@ -97,7 +105,7 @@ actor SequenceAppender {
         let previous = queue
         let task = Task<Record, any Error> {
             _ = try? await previous?.value
-            return try await appendNow(nonce: nonce, save: save, make)
+            return try await appendNow(nonce: nonce, exact: exact, save: save, make)
         }
         queue = task
         return try await task.value
@@ -111,9 +119,15 @@ actor SequenceAppender {
         }
     }
 
-    private func appendNow(nonce: String,
+    private func appendNow(nonce: String, exact: Int64?,
                            save: @Sendable ([Record]) async throws -> [Record],
                            _ make: @Sendable (Int64, String) -> Record) async throws -> Record {
+        if let exact, next != exact {
+            if let marker = try await database.fetch(naming.markerID(nonce: nonce)) {
+                return try await recordNamed(by: marker, nonce: nonce)
+            }
+            throw SequenceError.taken(exact)
+        }
         for _ in 0..<32 {
             let record = make(next, nonce)
             let marker = naming.marker(nonce: nonce, device: device, sequence: next)
@@ -131,7 +145,9 @@ actor SequenceAppender {
                     next += 1
                     return server
                 }
+                let taken = next
                 next = try await firstFreeSequence(from: next + 1)
+                if exact != nil { throw SequenceError.taken(taken) }
             }
         }
         throw SequenceError.contended(device)

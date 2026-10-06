@@ -5,7 +5,8 @@
 # SUITE_RESULTS exactly the suite jobs; `codex` needs and spells out
 # `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others) and
 # `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; `codex_wait`
-# needs the fast jobs and `review_cap` and runs only on its `false`; and `reviewer_ran` and
+# needs the fast jobs and `review_cap` and runs only on its `false`, for the cap and for `draft`,
+# which `review_cap` reads from the API and no job takes from the event; and `reviewer_ran` and
 # `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
 # reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. The three selectable
 # jobs (topo_unit, topo_ui, others) each need select and run only on its `true` for them; `test`
@@ -75,6 +76,20 @@ check.(needs.("codex_wait").sort == (fast + %w[review_cap]).sort, "codex_wait ne
   check.(capped == ["${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}"], "#{job} reads the cap from review_cap and from post_feedback's recount (#{capped.inspect})")
 end
 check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.capped == 'false' &&"), "codex_wait runs only on review_cap's false")
+# Draft is review_cap's reading of the API as the run starts, never the event's: the run that
+# survives a push and a ready a second apart can be the one whose payload still says draft.
+cap = jobs.fetch("review_cap")
+check.(cap.fetch("outputs")["draft"] == "${{ steps.draft.outputs.draft }}", "review_cap hands on the draft state its own step read")
+check.(!cap.fetch("if").include?("draft"), "review_cap runs on a draft too, to read that it is one")
+check.(cap.fetch("steps").first["id"] == "draft" && cap.fetch("steps").first.fetch("run").include?('gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .draft'), "review_cap's first step reads draft from the API")
+check.(cap.fetch("steps").drop(1).all? { |s| s["if"] == "steps.draft.outputs.draft == 'false'" }, "review_cap counts nothing on a draft")
+check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.draft == 'false' &&"), "codex_wait runs only on review_cap's draft false")
+check.(jobs.fetch("codex").fetch("if").include?("needs.codex_wait.result == 'success' &&"), "codex runs only behind codex_wait, which holds a draft")
+# post_feedback sits behind suite jobs select may skip, so it cannot rest on the implicit success().
+check.(jobs.fetch("post_feedback").fetch("if").start_with?("${{ !cancelled() && ") && jobs.fetch("post_feedback").fetch("if").include?("needs.codex.outputs.has_verdict == 'true'"), "post_feedback posts whenever codex gave a verdict, a skipped suite job upstream or not")
+payload = jobs.select { |_, j| [j["if"], *Array(j["steps"]).flat_map { |s| [s["if"], *(s["env"] || {}).values] }].compact.any? { |v| v.to_s.include?("pull_request.draft") } }.keys
+check.(payload == %w[reviewer_ran], "only reviewer_ran reads the event's draft, as the fallback for a fork (#{payload.join(', ')})")
+check.(step.("reviewer_ran", "Assert a verdict was produced and delivered").fetch("env")["IS_DRAFT"] == "${{ needs.review_cap.result == 'skipped' && github.event.pull_request.draft || needs.review_cap.outputs.draft }}", "reviewer_ran reads review_cap's draft, and the event's only where review_cap was skipped")
 check.(needs.("reviewer_ran").sort == (suite + %w[test review_cap codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, review_cap, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
 check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test review_cap codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, review_cap, codex and post_feedback (#{needs.('review_gate').join(', ')})")
 
@@ -125,6 +140,8 @@ rpairs.each { |job, read| check.(job == read, "reviewer_ran's SUITE_RESULTS read
 
 File.write(File.join(work, "gate.sh"), gate.fetch("run"))
 File.write(File.join(work, "ran.sh"), ran.fetch("run"))
+# review_cap's draft step, with the one expression in it set as the runner would.
+File.write(File.join(work, "draft.sh"), cap.fetch("steps").first.fetch("run").gsub("${{ github.event.pull_request.draft }}", "true"))
 File.write(File.join(work, "suite.txt"), suite.join("\n") + "\n")
 exit(bad.zero? ? 0 : 1)
 RUBY
@@ -190,6 +207,36 @@ IS_DRAFT=true CAPPED=true SUITE_RESULTS="$(results none success test)" \
 for cap in failure cancelled; do
   CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success test)" \
     expect fail "reviewer_ran: review_cap $cap" "(review_cap: $cap)" "$work/ran.sh"
+  # A review_cap that failed did not read the draft state: whatever IS_DRAFT holds, it is said as
+  # the failed read it is, never as a draft.
+  for draft in true ""; do
+    IS_DRAFT="$draft" CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success test)" \
+      expect fail "reviewer_ran: review_cap $cap beside IS_DRAFT=${draft:-empty} is the failed read" "could not be read.*(review_cap: $cap)" "$work/ran.sh"
+  done
+done
+
+# review_cap's draft step writes what the API said, the event having said `true`, and fails on
+# anything else, a `gh` that fails included.
+mkdir -p "$work/bin"
+printf '%s\n' '#!/usr/bin/env bash' '[ "$*" = "api repos/samdu/topo/pulls/7 --jq .draft" ] || { echo "unexpected: $*" >&2; exit 64; }' \
+  '[ "$FAKE_DRAFT" = fail ] && exit 1' 'printf "%s\n" "$FAKE_DRAFT"' > "$work/bin/gh"
+chmod +x "$work/bin/gh"
+draft_step() {  # draft_step <what gh answers> — prints the step's GITHUB_OUTPUT, returns its status
+  : > "$work/draft.out"
+  PATH="$work/bin:$PATH" FAKE_DRAFT="$1" GITHUB_REPOSITORY=samdu/topo PR_NUMBER=7 GITHUB_OUTPUT="$work/draft.out" \
+    bash "$work/draft.sh" >/dev/null 2>&1
+  local status=$?
+  cat "$work/draft.out"
+  return "$status"
+}
+for said in true false; do
+  if out="$(draft_step "$said")" && [ "$out" = "draft=$said" ]; then echo "ok   review_cap: the API's $said is the draft output"
+  else fail "review_cap: the API said $said and the step wrote '$out'"; fi
+done
+for said in "" null "true false" fail; do
+  out="$(draft_step "$said")"; status=$?
+  if [ "$status" != 0 ] && [ -z "$out" ]; then echo "ok   review_cap: an API answer of '${said:-nothing}' fails the step and writes no output"
+  else fail "review_cap: an API answer of '${said:-nothing}' exited $status and wrote '$out'"; fi
 done
 
 # Left out by select: a skip beside `false` passes both snippets, and nothing else does.

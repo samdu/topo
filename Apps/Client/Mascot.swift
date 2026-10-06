@@ -110,7 +110,7 @@ enum MascotMapping {
         case .toolResult:
             // The tool is done and the model has what it found: the wait is on the model again.
             next.activity = .thinking
-        case .text, .result, .other, .malformed:
+        case .text, .writing, .writingBegan, .result, .other, .malformed:
             break
         }
         return next
