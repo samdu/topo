@@ -130,51 +130,6 @@ actor ReadGate: RecordDatabase {
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
-/// A database that can hold the answer to one save after the store has applied it: a write that
-/// landed and whose acknowledgement is slow.
-actor SlowAnswer: RecordDatabase {
-    private let inner: InMemoryRecordDatabase
-    private var holdingNext = false
-    private var held: CheckedContinuation<Void, Never>?
-
-    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
-
-    func holdNextAnswer() { holdingNext = true }
-    var waiting: Bool { held != nil }
-    func release() {
-        held?.resume()
-        held = nil
-    }
-
-    func save(_ records: [Record]) async throws -> [Record] {
-        let saved = try await inner.save(records)
-        if holdingNext {
-            holdingNext = false
-            await withCheckedContinuation { held = $0 }
-        }
-        return saved
-    }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
-}
-
-/// One waiter held until the test opens it.
-actor SaveGate {
-    private var waiter: CheckedContinuation<Void, Never>?
-    private var opened = false
-    var isWaiting: Bool { waiter != nil }
-    func wait() async {
-        guard !opened else { return }
-        await withCheckedContinuation { waiter = $0 }
-    }
-    func open() {
-        opened = true
-        waiter?.resume()
-        waiter = nil
-    }
-}
-
 /// Releases every waiter once `parties` have arrived, then stays open.
 actor Barrier {
     private let parties: Int
@@ -400,10 +355,13 @@ actor LateAnswers: RecordDatabase {
     func holdNextFetchAnswer() { holdFetch = true }
     var savesOut: Int { saves.count }
     var fetchesOut: Int { fetches.count }
+    /// Every save and fetch asked of it, answered or not.
+    private(set) var calls = 0
     func releaseSaves() { saves.forEach { $0.resume() }; saves = [] }
     func releaseFetches() { fetches.forEach { $0.resume() }; fetches = [] }
 
     func save(_ records: [Record]) async throws -> [Record] {
+        calls += 1
         let result: Result<[Record], any Error>
         do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
         if holdSave {
@@ -414,11 +372,50 @@ actor LateAnswers: RecordDatabase {
     }
 
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        calls += 1
         let out = try await inner.fetch(ids)
         if holdFetch, ids.contains(Lease.recordID) {
             holdFetch = false
             await withCheckedContinuation { fetches.append($0) }
         }
+        return out
+    }
+
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database whose answers arrive after a number of turns of the scheduler drawn from `seed`,
+/// before and after the store judges each call, so calls made together are answered in an order
+/// the seed picks. Each save moves `clock` on a little, so no two writes of the lease are equal.
+actor Jitter: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private let clock: ManualClock
+    private var random: LCG
+
+    init(_ inner: InMemoryRecordDatabase, seed: UInt64, clock: ManualClock) {
+        self.inner = inner
+        self.clock = clock
+        random = LCG(seed &+ 977)
+    }
+
+    private func wander() async {
+        for _ in 0..<random.int(5) { await Task.yield() }
+    }
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        await wander()
+        clock.advance(0.001)
+        let result: Result<[Record], any Error>
+        do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
+        await wander()
+        return try result.get()
+    }
+
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        await wander()
+        let out = try await inner.fetch(ids)
+        await wander()
         return out
     }
 
