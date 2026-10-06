@@ -15,13 +15,14 @@ judgement:
      the description, the automerge label when the repository requires one —
      and that automerge has left unmerged for `GRACE`, pinned to the head the
      green run was read for;
-  2. reruns the failed jobs of a red validate run once per head when the red
-     is the infrastructure's: a suite job that failed before or after its
-     tests ran (a setup step, an upload, a runner that gave no step), or the
-     reviewer never ran (`reviewer_ran` red with every suite job green). A
-     suite job whose tests, build or scripts failed is never rerun. The run
-     has to be over for `SETTLE` and nothing in progress; red again after
-     the rerun, it is reported with its failing jobs and tests;
+  2. reruns the reviewer once per head when a red validate run has no
+     verdict: `reviewer_ran` red and nothing red outside the reviewer chain.
+     It reruns one job, the first red one in the chain, and with
+     it what waits on that job (`gh run rerun --job`), never the run and
+     never `test`, whose red is a suite status missing or failed on the PR
+     head and is the engineer's to post. The run has to be over for `SETTLE`
+     and nothing in progress; red again after the rerun, it is reported with
+     its red jobs;
   3. republishes the over-the-air install page when the commit it carries is
      not origin/main's;
   4. removes a linked worktree whose tip is exactly the head of a merged PR
@@ -119,20 +120,8 @@ PUBLISH_KEEP = timedelta(days=7)   # publish records older than this are forgott
 PENDING_MAX = 200                  # report lines kept for a later delivery
 
 UNCHECKED = re.compile(r"^\s*[-*] \[ \]", re.M)   # automerge.yaml's own test
-SUITE_JOBS = ("topo_unit", "topo_ui", "others")
+# The reviewer's jobs, in the order they run: each waits on the ones before it.
 REVIEW_CHAIN = ("review_cap", "codex_wait", "codex", "post_feedback", "reviewer_ran", "review_gate")
-# A suite job red at one of these steps, and no other, is the runner's own
-# machinery failing around the PR's code: the simulator, the audio lane, a
-# cache, a checkout or upload action. A red anywhere else in the job — the
-# build, a fetch of pinned inputs, a script test, the tests, the step that
-# counts them — is the code's, and is never rerun.
-SETUP_STEPS = {
-    "Set up job", "Boot the simulator", "Lane", "Audio loopback for the microphone test",
-    "Cache the ear's models", "The ear's models for the microphone test", "Cache the manifest's files",
-    "Clear Topo's privacy grants on the simulator", "Audio lane holds before the microphone test",
-    "Audio lane holds after the microphone test", "Upload logs and result bundles", "Complete job",
-}
-SETUP_PREFIXES = ("Run actions/", "Post Run ", "Join the tailnet")
 NOT_GREEN = ("failure", "cancelled", "timed_out")
 ISSUES_PAGE = 100                  # issues read per GraphQL page
 ISSUES_PAGES = 5                   # pages read before the list is taken as unwhole
@@ -196,20 +185,6 @@ def unchecked_boxes(body):
     return len(UNCHECKED.findall(body or ""))
 
 
-def failing_tests(log, limit=5):
-    """The test names an xcodebuild log says failed, first `limit` of them."""
-    names = []
-    for m in re.finditer(r"Test [Cc]ase '(-\[[^\]]+\]|[^']+)' failed", log):
-        name = m.group(1).strip("-[]").replace(" ", ".")
-        if name not in names:
-            names.append(name)
-    for m in re.finditer(r"^.*\berror: (.+)$", log, re.M):
-        line = m.group(1).strip()
-        if line and line not in names and len(names) < limit:
-            names.append(line[:120])
-    return names[:limit]
-
-
 def parse_worktrees(porcelain):
     """`git worktree list --porcelain` as [{path, head, branch|None}]."""
     out, cur = [], {}
@@ -225,21 +200,6 @@ def parse_worktrees(porcelain):
         elif line.startswith("branch "):
             cur["branch"] = line[len("branch "):].removeprefix("refs/heads/")
     return out
-
-
-def infra_red(job):
-    """Whether a red suite job failed in the infrastructure rather than the code:
-    it concluded `failure` with no step of its own failing (the runner was lost),
-    or every step that did not pass is a setup, lane or upload step. A step
-    cancelled or timed out is not green; a job cancelled or timed out is not a
-    failure of the infrastructure's kind. A failed build, test or script step
-    is the code's."""
-    if job.get("conclusion") != "failure":
-        return False
-    failed = [s["name"] for s in job.get("steps") or [] if s.get("conclusion") in NOT_GREEN]
-    if not failed:
-        return True
-    return all(n in SETUP_STEPS or n.startswith(SETUP_PREFIXES) for n in failed)
 
 
 def fingerprint(*parts):
@@ -319,10 +279,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
 
     red = [j for j in jobs if j.get("conclusion") in NOT_GREEN]
     red_names = [j["name"] for j in red]
-    suite_red = [j for j in red if j["name"] in SUITE_JOBS]
-    # The verdict first, whatever else is red: the reviewer ran beside the
-    # suites, so a blocking review and a suite red arrive on the same run.
-    # The review cap is the one way review_gate is red beside a green
+    # The verdict first. The review cap is the one way review_gate is red beside a green
     # reviewer_ran with no verdict posted this run — codex skipped, or
     # post_feedback's recount holding the post: no finding to fix, a
     # decision to make.
@@ -337,22 +294,23 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
         else:
             report("verdict", f"{title}: the reviewer blocked {short}; the verdict is on the PR.")
     # No verdict: the reviewer chain is red and nothing outside it is — a red
-    # `select`, `test` or suite job is the run's own failure, not the reviewer's.
-    no_verdict = ("reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
-                  and not suite_red)
-    # `test` is the gate and is red whenever a suite job is; the reviewer chain
-    # waits on the suites. Any other red — `select`, a job this script does not
-    # know — is the run's own, and no runner red beside it is rerun.
-    others_red = [j["name"] for j in red if j["name"] not in SUITE_JOBS + ("test",) + REVIEW_CHAIN]
-    infra_suite = bool(suite_red) and not others_red and all(infra_red(j) for j in suite_red)
+    # `select` or `test` is the run's own failure, not the reviewer's, and a
+    # red `test` is a suite status missing or failed on the head, which no
+    # rerun of anything here supplies.
+    no_verdict = "reviewer_ran" in red_names and all(j["name"] in REVIEW_CHAIN for j in red)
     rerun_key = f"{n}:{head}"
-    if infra_suite or no_verdict:
-        why = ("the reviewer never ran (no verdict)" if no_verdict
-               else f"a suite job failed outside its tests ({', '.join(j['name'] for j in suite_red)})")
+    if no_verdict:
+        why = "the reviewer never ran (no verdict)"
         if rerun_key not in state.get("rerun", {}):
             if since > SETTLE:
-                out.append({"kind": "rerun", "key": rerun_key, "run_id": run["id"], "number": n,
-                            "text": f"reran the failed jobs of {title} (run {run['id']}): {why}."})
+                # One job, the first red one of the chain, and what waits on
+                # it: never the run, so nothing before it runs again. A job
+                # skipped by its own `if:` would only skip again.
+                by_name = {j["name"]: j for j in red}
+                first = next(by_name[name] for name in REVIEW_CHAIN if name in by_name)
+                out.append({"kind": "rerun", "key": rerun_key, "run_id": run["id"], "job_id": first["id"],
+                            "job": first["name"], "number": n,
+                            "text": f"reran {first['name']} of {title} (run {run['id']}) and the jobs that wait on it: {why}."})
             return out
         detail = ", ".join(red_names) or conclusion
         report("red", f"{title}: red again on {short} after one rerun ({detail}); {why}.")
@@ -683,16 +641,13 @@ class Shell:
         return self.gh_api(f"repos/{REPO}/actions/runs/{run_id}/jobs?per_page=100",
                            "[.jobs[] | {id, name, conclusion, steps: [.steps[] | {name, conclusion}]}]") or []
 
-    def job_log(self, job_id):
-        p = self.run(["gh", "api", f"repos/{REPO}/actions/jobs/{job_id}/logs"], timeout=120, check=False)
-        return p.stdout or ""
-
     def merge(self, number, head):
         self.run(["gh", "pr", "merge", str(number), "--repo", REPO, "--squash", "--delete-branch",
                   "--match-head-commit", head], mutating=True)
 
-    def rerun(self, run_id):
-        self.run(["gh", "run", "rerun", str(run_id), "--repo", REPO, "--failed"], mutating=True)
+    def rerun(self, job_id):
+        """One job of a run and the jobs that wait on it; never the run."""
+        self.run(["gh", "run", "rerun", "--repo", REPO, "--job", str(job_id)], mutating=True)
 
     def open_issues(self):
         """The open issues, as GraphQL nodes: number, title, the two dates, labels
@@ -1059,8 +1014,8 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     say(f"{n}:merge-refused:{head}", f"#{n}: merge refused: {ex}")
             elif w["kind"] == "rerun":
                 try:
-                    sh.rerun(w["run_id"])
-                    state["rerun"][w["key"]] = {"run": w["run_id"], "at": now.isoformat()}
+                    sh.rerun(w["job_id"])
+                    state["rerun"][w["key"]] = {"run": w["run_id"], "job": w["job"], "at": now.isoformat()}
                     lines.append(w["text"])
                     persist()
                 except RuntimeError as ex:
@@ -1072,17 +1027,6 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             standing[item] = ", ".join(conds)
             fp = pr_fingerprint(pr, run, jobs or [], conds)
             texts = [w["text"] for w in reports]
-            if "red" in conds and changed(item, fp) and seeded.get("prs"):
-                names = []
-                for j in jobs or []:
-                    if j.get("conclusion") == "failure" and j["name"] in SUITE_JOBS:
-                        try:
-                            names += failing_tests(sh.job_log(j["id"]))
-                        except RuntimeError:
-                            pass
-                if names:
-                    at = conds.index("red")
-                    texts[at] += " Failing: " + "; ".join(dict.fromkeys(names)) + "."
             tell(item, fp, texts, "prs")
     if prs_whole:
         seeded["prs"] = True

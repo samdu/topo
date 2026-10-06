@@ -51,7 +51,7 @@ def job(name, conclusion, failed_step=None, i=1, step_conclusion="failure"):
 
 
 def jobs(**concl):
-    """jobs(test="failure", topo_unit=("failure", "xcodebuild test (Topo, unit and userland)"))"""
+    """jobs(test="success", codex=("failure", "Run Codex"), reviewer_ran="failure"): ids count from 1 in the order given."""
     out = []
     for i, (n, c) in enumerate(concl.items(), 1):
         if isinstance(c, tuple):
@@ -72,7 +72,8 @@ def kinds(wants):
     return [w["kind"] + ":" + w["key"].split(":")[1] if w["kind"] == "report" else w["kind"] for w in wants]
 
 
-TEST_STEP = "xcodebuild test (Topo, unit and userland)"
+def job_id(js, name):
+    return next(j["id"] for j in js if j["name"] == name)
 
 
 class Decisions(unittest.TestCase):
@@ -158,80 +159,62 @@ class Decisions(unittest.TestCase):
         j = jobs(test="success", codex=("failure", "Run Codex"), reviewer_ran="failure", review_gate="success")
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), ["rerun"])
-        self.assertEqual(w[0]["run_id"], 99)
+        self.assertEqual((w[0]["run_id"], w[0]["key"]), (99, f"7:{HEAD}"))
         state = {"rerun": {f"7:{HEAD}": {"run": 99}}}
         w = janitor.decide_pr(pr(), run("failure"), j, state, NOW)
         self.assertEqual(kinds(w), ["report:red"])
         self.assertIn("no verdict", w[0]["text"])
+        self.assertIn("(codex, reviewer_ran)", w[0]["text"], "the second red names its red jobs")
 
-    def test_a_suite_job_red_at_a_setup_step_is_rerun_once_then_reported(self):
-        j = jobs(test="failure", topo_ui=("failure", "Boot the simulator"), reviewer_ran="failure")
+    def test_a_red_outside_the_reviewer_chain_holds_the_rerun(self):
+        for outside in ("select", "test", "a_job_nobody_knows"):
+            for how in janitor.NOT_GREEN:
+                j = jobs(**{outside: how}, codex="failure", reviewer_ran="failure", review_gate="failure")
+                self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), ["report:idle"], f"{outside} {how}")
+                self.assertEqual(janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW), [], f"{outside} {how}")
+        j = jobs(select="failure", test="failure")
+        self.assertNotIn("rerun", kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), "nor with the reviewer never reached")
+
+    def test_the_rerun_is_one_job_the_first_of_the_chain_that_did_not_pass(self):
+        j = jobs(select="success", test="success", review_cap="success", codex_wait="success", codex="failure",
+                 post_feedback="skipped", reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
-        self.assertEqual(kinds(w), ["rerun"])
-        w = janitor.decide_pr(pr(), run("failure"), j, {"rerun": {f"7:{HEAD}": {}}}, NOW)
-        self.assertEqual(kinds(w), ["report:red"])
-        self.assertIn("topo_ui", w[0]["text"])
+        self.assertEqual(kinds(w), ["rerun"], "the reviewer chain red on its own is no verdict")
+        self.assertEqual((w[0]["job"], w[0]["job_id"]), ("codex", job_id(j, "codex")))
+        self.assertEqual(set(w[0]), {"kind", "key", "run_id", "job_id", "job", "number", "text"})
+        self.assertIn("reran codex of #7 (buddy/x) (run 99)", w[0]["text"])
+        # The chain's order decides, not the order the jobs were answered in.
+        w = janitor.decide_pr(pr(), run("failure"), j[::-1], {}, NOW)
+        self.assertEqual((w[0]["job"], w[0]["job_id"]), ("codex", job_id(j, "codex")))
 
-    def test_infra_red_is_every_red_step_in_setup_and_only_a_failure(self):
-        setup = job("topo_ui", "failure", "Boot the simulator")
-        self.assertTrue(janitor.infra_red(setup))
-        setup["steps"].append({"name": TEST_STEP, "conclusion": "failure"})
-        self.assertFalse(janitor.infra_red(setup), "one red test step among the setup reds is the code's")
-        self.assertFalse(janitor.infra_red(job("topo_ui", "cancelled", "Boot the simulator")), "a cancelled job is not a lost runner")
-        self.assertFalse(janitor.infra_red(job("topo_ui", "timed_out")))
-        self.assertFalse(janitor.infra_red(job("topo_ui", "failure", TEST_STEP, step_conclusion="cancelled")),
-                         "a test step cancelled by its timeout-minutes is not green")
-        self.assertTrue(janitor.infra_red(job("topo_ui", "failure", "Boot the simulator", step_conclusion="cancelled")),
-                        "a setup step cancelled by its timeout-minutes is the runner's, as its failure is")
-        self.assertFalse(janitor.infra_red(job("topo_ui", "failure", "Run ./.github/actions/prepare")))
-        self.assertTrue(janitor.infra_red(job("topo_ui", "failure", "Run actions/checkout@v4")))
+    def test_a_failed_wait_with_codex_skipped_is_rerun_at_the_wait(self):
+        j = jobs(test="success", review_cap="success", codex_wait="failure", codex="skipped", post_feedback="skipped",
+                 reviewer_ran="failure", review_gate="failure")
+        w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
+        self.assertEqual(kinds(w), ["rerun"], "a skipped codex under a reviewer that never ran is not the cap")
+        self.assertEqual((w[0]["job"], w[0]["job_id"]), ("codex_wait", job_id(j, "codex_wait")))
 
-    def test_reds_at_prepare_the_pinned_fetch_and_the_count_are_the_codes(self):
-        for step in ("Run ./.github/actions/prepare", "The rootfs, bash and Claude Code for the userland suites",
-                     "Every test the lane names ran and passed", "scripts/build-ish.sh"):
-            wants = janitor.decide_pr(pr(), run("failure"), jobs(topo_unit=("failure", step)), {}, NOW)
-            self.assertNotIn("rerun", kinds(wants), step)
-
-    def test_a_cancelled_suite_job_or_a_red_select_is_not_rerun(self):
-        wants = janitor.decide_pr(pr(), run("failure"), jobs(topo_ui="cancelled", reviewer_ran="failure"), {}, NOW)
-        self.assertNotIn("rerun", kinds(wants), "a cancelled suite job beside a missing verdict is the run's own")
-        wants = janitor.decide_pr(pr(), run("failure"), jobs(select="failure", reviewer_ran="failure", review_gate="failure"), {}, NOW)
-        self.assertNotIn("rerun", kinds(wants), "a red select is not the reviewer's doing")
-        wants = janitor.decide_pr(pr(), run("failure"), jobs(codex="failure", reviewer_ran="failure", review_gate="failure"), {}, NOW)
-        self.assertEqual(kinds(wants), ["rerun"], "the reviewer chain red on its own is no verdict")
-
-    def test_a_suite_job_whose_tests_failed_is_never_rerun(self):
-        j = jobs(test="failure", topo_unit=("failure", TEST_STEP), reviewer_ran="failure")
+    def test_a_red_test_is_never_rerun_and_is_reported_idle_in_time(self):
+        # A suite status missing or failed on the head: the reviewer chain is red behind it.
+        j = jobs(select="success", test="failure", reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
         self.assertEqual(w, [])
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), ["report:idle"])
-        for step in ("xcodebuild build-for-testing (Topo)", "swift test (TopoAuth, TopoCore)",
-                     "The janitor merges, reruns, publishes and sweeps as docs/janitor.md says",
-                     "Require every test target ran and passed"):
-            j = jobs(test="failure", others=("failure", step))
-            self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), ["report:idle"], step)
-
-    def test_one_suite_job_red_in_its_tests_holds_the_rerun_even_with_another_red_in_setup(self):
-        j = jobs(test="failure", topo_ui=("failure", "Boot the simulator"), topo_unit=("failure", TEST_STEP))
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), ["report:idle"])
-
-    def test_a_suite_job_red_with_no_failed_step_is_a_lost_runner_and_rerun(self):
-        j = [{"id": 1, "name": "test", "conclusion": "failure", "steps": []},
-             {"id": 2, "name": "topo_unit", "conclusion": "failure", "steps": [{"name": "Set up job", "conclusion": "success"}]}]
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), ["rerun"])
-        self.assertTrue(janitor.infra_red({"name": "topo_unit", "conclusion": "failure"}))
-        self.assertTrue(janitor.infra_red(job("topo_ui", "failure", "Run actions/checkout@v4")))
-        self.assertFalse(janitor.infra_red(job("topo_ui", "failure", "xcodebuild test (Topo, UI)")))
+        self.assertIn("(test, reviewer_ran, review_gate)", w[0]["text"])
+        w = janitor.decide_pr(pr(), run("failure"), jobs(test="failure"), {}, NOW)
+        self.assertEqual(kinds(w), ["report:idle"], "red on its own, the reviewer skipped")
 
     def test_a_red_run_is_left_to_settle_before_a_rerun(self):
-        j = jobs(test="failure", topo_ui=("failure", "Boot the simulator"))
+        j = jobs(test="success", codex="failure", reviewer_ran="failure")
         self.assertEqual(janitor.decide_pr(pr(), run("failure", since=timedelta(minutes=2)), j, {}, NOW), [])
+        self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure", since=janitor.SETTLE + timedelta(minutes=1)), j, {}, NOW)), ["rerun"])
 
     def test_a_new_head_is_rerun_again(self):
-        j = jobs(test="failure", topo_ui=("failure", "Boot the simulator"))
+        j = jobs(test="success", codex="failure", reviewer_ran="failure")
         w = janitor.decide_pr(pr(headRefOid="fffffff0000"), run("failure"), j, {"rerun": {f"7:{HEAD}": {}}}, NOW)
         self.assertEqual(kinds(w), ["rerun"])
+        self.assertEqual(w[0]["key"], "7:fffffff0000")
 
     def test_a_blocking_verdict_is_reported_at_once_never_rerun_and_idle_in_time(self):
         j = jobs(test="success", reviewer_ran="success", review_gate="failure")
@@ -246,9 +229,9 @@ class Decisions(unittest.TestCase):
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), ["report:cap"])
         self.assertIn("review cap", w[0]["text"])
-        j = jobs(topo_ui=("failure", "Boot the simulator"), codex="skipped", reviewer_ran="success", review_gate="failure")
+        j = jobs(test="failure", codex="skipped", reviewer_ran="success", review_gate="failure")
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
-        self.assertEqual(kinds(w), ["report:cap", "rerun"], "the cap is said and the setup red still rerun")
+        self.assertEqual(kinds(w), ["report:cap"], "the cap is said beside a red test, and nothing is rerun")
         # The recount before the post: codex ran, and post_feedback held its verdict.
         j = jobs(test="success", codex="success", reviewer_ran="success", review_gate="failure")
         j.append(job("post_feedback", "success", "Report Codex feedback", 9, step_conclusion="skipped"))
@@ -259,27 +242,19 @@ class Decisions(unittest.TestCase):
         self.assertEqual(kinds(w), ["report:verdict"], "a posted verdict that blocks is a verdict")
 
     def test_a_failed_review_count_is_no_verdict_and_rerun(self):
-        j = jobs(review_cap="failure", reviewer_ran="failure", review_gate="success")
+        j = jobs(test="success", review_cap="failure", codex_wait="skipped", codex="skipped", post_feedback="skipped",
+                 reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), ["rerun"])
+        self.assertEqual((w[0]["job"], w[0]["job_id"]), ("review_cap", job_id(j, "review_cap")))
 
-    def test_a_blocking_verdict_is_reported_beside_a_suite_red_of_either_kind(self):
-        j = jobs(topo_ui=("failure", "Boot the simulator"), reviewer_ran="success", review_gate="failure")
+    def test_a_blocking_verdict_is_reported_beside_a_red_test_and_nothing_is_rerun(self):
+        j = jobs(test="failure", reviewer_ran="success", review_gate="failure")
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
-        self.assertEqual(kinds(w), ["report:verdict", "rerun"], "the verdict is said and the setup red still rerun")
-        j = jobs(topo_ui=("failure", TEST_STEP), reviewer_ran="success", review_gate="failure")
-        w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
-        self.assertEqual(kinds(w), ["report:verdict"], "a test red does not hide the verdict")
-        j = jobs(topo_ui=("failure", TEST_STEP), reviewer_ran="failure", review_gate="failure")
+        self.assertEqual(kinds(w), ["report:verdict"], "a red test does not hide the verdict")
+        j = jobs(test="failure", reviewer_ran="failure", review_gate="failure")
         w = janitor.decide_pr(pr(updatedAt=ago(timedelta(minutes=20))), run("failure"), j, {}, NOW)
         self.assertEqual(kinds(w), [], "a review_gate red under a reviewer that never ran is no verdict")
-
-    def test_a_red_select_beside_a_setup_red_holds_the_rerun_and_a_red_gate_does_not(self):
-        j = jobs(select="failure", topo_ui=("failure", "Boot the simulator"), test="failure")
-        self.assertNotIn("rerun", kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)))
-        j = jobs(topo_ui=("failure", "Boot the simulator"), test="failure", reviewer_ran="failure", review_gate="failure")
-        self.assertEqual(kinds(janitor.decide_pr(pr(), run("failure"), j, {}, NOW)), ["rerun"],
-                         "the gate and the reviewer chain are red because the suite is; that is still a runner red")
 
     def test_a_cancelled_run_with_nothing_after_it_is_reported(self):
         self.assertEqual(kinds(janitor.decide_pr(pr(), run("cancelled"), [], {}, NOW)), ["report:cancelled"])
@@ -450,14 +425,6 @@ class Decisions(unittest.TestCase):
         self.assertEqual(janitor.digest_line({"issue:40": "put to Sam", "issue:41": ""}),
                          "still standing, unchanged since it was said: untriaged issues #40 (put to Sam), #41.")
 
-    def test_failing_tests_are_read_off_an_xcodebuild_log(self):
-        log = ("Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.2 seconds).\n"
-               "Test Case '-[TopoTests.DraftRowTests testARowComesBack]' failed (1.3 seconds).\n"
-               "/x/Ear.swift:12: error: the ear is not resident\n")
-        self.assertEqual(janitor.failing_tests(log),
-                         ["TopoTests.DraftRowTests.testARowComesBack", "the ear is not resident"])
-        self.assertEqual(janitor.failing_tests(""), [])
-
     def test_unchecked_boxes_match_automerges_test(self):
         self.assertEqual(janitor.unchecked_boxes("- [x] a\n  * [ ] b\n- [ ] c"), 2)
         self.assertEqual(janitor.unchecked_boxes(None), 0)
@@ -551,7 +518,6 @@ if tool == "gh":
         head = a[1].split("head_sha=")[1].split("&")[0]
         out([dict({k: v for k, v in r.items() if k != "pull_requests"}, prs=[p["number"] for p in r.get("pull_requests", [])]) for r in S["runs"].get(head, [])])
     if a[0] == "api" and "/jobs?" in a[1]: out(S["jobs"])
-    if a[0] == "api" and a[1].endswith("/logs"): out(S.get("log", ""))
     if a[0] == "api" and a[1].endswith("/commits/main"): out(S["main"])
     if a[:2] == ["pr", "merge"] or a[:2] == ["run", "rerun"]: sys.exit(0)
     if a[:2] == ["issue", "view"]:
@@ -1545,7 +1511,7 @@ class WholePass(unittest.TestCase):
         s = self.scripted(published="abc1234", publish_snapshot=snap,
                           prs=[pr(), pr(number=8, headRefOid="feedface0")],
                           runs={HEAD: [run()], "feedface0": [run("failure", number=8)]},
-                          jobs=jobs(topo_unit="success", others="success", topo_ui="success", reviewer_ran="failure"))
+                          jobs=jobs(test="success", codex="failure", reviewer_ran="failure"))
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("publish-topo", calls)
@@ -1553,7 +1519,7 @@ class WholePass(unittest.TestCase):
             at_publish = json.load(f)
         self.assertIn("8:feedface0", at_publish["rerun"])
         self.assertTrue(any("merged #7" in l for l in at_publish["pending"]))
-        self.assertTrue(any("reran the failed jobs of #8" in l for l in at_publish["pending"]))
+        self.assertTrue(any("reran codex of #8" in l for l in at_publish["pending"]))
         self.assertIsNone(at_publish["publish"][LONG_MAIN]["ok"], "the publish is recorded as begun before it runs")
         self.assertTrue(self.state_file()["publish"][LONG_MAIN]["ok"])
 
@@ -1607,30 +1573,40 @@ class WholePass(unittest.TestCase):
         self.assertIn("the pass stopped early: KeyError", text)
         self.assertEqual((self.state_file()["pending"], self.undelivered()), ([], []))
 
-    def test_no_verdict_is_rerun_once_and_the_second_red_names_the_failing_tests(self):
-        j = jobs(test="failure", topo_unit=("failure", "Boot the simulator"), reviewer_ran="failure")
-        log = "Test Case '-[TopoTests.EarTests testTheEarHears]' failed (0.1 seconds)."
-        s = self.scripted(runs={HEAD: [run("failure")]}, jobs=j, log=log)
+    def test_no_verdict_reruns_one_job_by_its_id_once_and_the_second_red_is_reported(self):
+        j = jobs(select="success", test="success", review_cap="success", codex_wait="success", codex=("failure", "Run Codex"),
+                 post_feedback="skipped", reviewer_ran="failure", review_gate="failure")
+        s = self.scripted(runs={HEAD: [run("failure")]}, jobs=j)
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("gh run rerun 99 --repo samdu/topo --failed", calls)
+        reruns = [l for l in calls.splitlines() if l.startswith("gh run")]
+        self.assertEqual(reruns, [f"gh run rerun --repo samdu/topo --job {job_id(j, 'codex')}"], "one job, never the run")
+        self.assertNotIn("--failed", calls)
+        self.assertNotIn("gh run rerun 99", calls)
         self.assertNotIn("pr merge", calls)
+        done = self.state_file()["rerun"][f"7:{HEAD}"]
+        self.assertEqual((done["run"], done["job"], set(done)), (99, "codex", {"run", "job", "at"}))
+        self.assertIn("reran codex of #7 (buddy/x) (run 99) and the jobs that wait on it", Bridge.received[-1]["body"]["text"])
         p, calls = self.run_pass(s)
         self.assertNotIn("run rerun", calls)
         text = Bridge.received[-1]["body"]["text"]
         self.assertIn("red again", text)
-        self.assertIn("TopoTests.EarTests.testTheEarHears", text)
+        self.assertIn("(codex, reviewer_ran, review_gate)", text)
 
-    def test_a_genuine_test_failure_is_never_rerun(self):
-        j = jobs(test="failure", topo_unit=("failure", TEST_STEP), reviewer_ran="failure")
+    def test_a_red_test_under_a_reviewer_that_never_ran_is_never_rerun(self):
+        j = jobs(select="success", test="failure", reviewer_ran="failure", review_gate="failure")
         s = self.scripted(runs={HEAD: [run("failure")]}, jobs=j)
         for i in range(3):
             p, calls = self.run_pass(s)
+            self.assertEqual(p.returncode, 0, p.stderr)
             self.assertNotIn("run rerun", calls, f"pass {i + 1}")
             self.assertEqual(self.state_file().get("rerun"), {}, f"pass {i + 1}")
+        text = "".join(m["body"]["text"] for m in Bridge.received)
+        self.assertEqual(text.count("nothing has moved"), 1, "said idle, once")
+        self.assertNotIn("reran", text)
 
     def test_a_pr_list_that_cannot_be_read_keeps_the_rerun_state_and_the_pass_still_reports(self):
-        j = jobs(test="failure", topo_unit=("failure", "Boot the simulator"))
+        j = jobs(test="success", codex="failure", reviewer_ran="failure")
         s = self.scripted(runs={HEAD: [run("failure")]}, jobs=j)
         p, calls = self.run_pass(s)
         self.assertEqual(calls.count("run rerun"), 1)

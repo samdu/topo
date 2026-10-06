@@ -19,7 +19,7 @@ The logic is in Swift packages under `Packages/`: `TopoCore` (the log, the lease
 - Building `TopoIsh.xcframework` (`scripts/build-ish.sh`) needs meson, ninja and Homebrew's llvm and lld, since the guest's VDSO is an aarch64 ELF Apple's linker does not make.
 - `swift test` from a package directory runs that package's suite, offline and against an in-memory database; no test needs a signed-in device.
 - Two things in `project.yml` are load-bearing: `EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64` on the iOS target, because FluidAudio's NemoTextProcessing xcframework has an arm64 simulator slice and no x86_64 one; and the iOS target's `info:` block, which writes `Apps/Topo/Info.plist` for the keys that have to be in a file. The rest of that plist is generated from the target's `INFOPLIST_KEY_*` settings, which Xcode merges into it, but `UIBackgroundModes` is not a key Xcode generates: an `INFOPLIST_KEY_UIBackgroundModes` setting reaches the project and no built app, and a background mode the product does not declare is a process iOS suspends. The version keys in that file are `$(MARKETING_VERSION)` and `$(CURRENT_PROJECT_VERSION)`, never literals, because a literal beats the build number `scripts/archive-upload.sh` passes on the command line and every TestFlight upload would carry the same one. `scripts/check-built-plist.sh` reads the modes and the build number off the built app in the PR check, because the settings they are declared by are not proof.
-- A signed-in simulator run, the microphone press and the talk lane are `docs/simulator.md`; the PR check's jobs are `docs/testing.md`.
+- A signed-in simulator run, the microphone press and the talk lane are `docs/simulator.md`; the PR check and its suites, which run on buddybox, are `docs/testing.md`.
 
 ## Invariants
 
@@ -57,6 +57,7 @@ The process — who plans, who builds, who reviews, and in what order — is `do
 
 - Every change lands as a PR on a `buddy/<topic>` branch from its own worktree, opened as a draft. The description is the contract: what was done, and a **Proof** section as a checklist of what was verified. A test only a physical device can show is an unchecked `- [ ] device: …` box; auto-merge waits until it is ticked.
 - One concern per PR; a finding on an open PR is fixed on that branch, never in a second PR.
+- Push with `scripts/validate-and-push.sh`, from a worktree on buddybox: it runs the suites the commit needs, pushes only a green commit, and posts the result to it, which is what the PR's `test` check reads (`docs/testing.md`). A commit pushed with a bare `git push` has no result and holds its PR red.
 - **Other engineer sessions share this Mac and this repo**, so:
     - Kill only pids you started, never by name (`pgrep`, `pkill`, `killall`): an `xcodebuild` matched by pattern is as likely a sibling session's run as yours. `scripts/simulator-run.sh` records its own in `build/sim/simulator-run.pids`.
     - Never quit Simulator.app: quitting it shuts down every booted simulator on the Mac. One device is stopped with `xcrun simctl shutdown <udid>`, and a tap goes through XCUITest, not the GUI.

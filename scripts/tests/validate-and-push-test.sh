@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# Holds scripts/validate-and-push.sh in scratch repositories with a bare `origin`, the real
+# select scripts and workflow, a fake `gh` that logs every call, and a fake scripts/mac-suite.sh
+# committed in the scratch repository, which records the commit and the files it was run in and
+# answers as the case says. No suite runs, nothing leaves the machine.
+#
+# What it holds: the suites and the lane are the ones the commit's paths select; the suite runs
+# in the validation worktree at exactly the commit, without the worktree's uncommitted or
+# untracked files; a green run pushes that commit and then posts `success` for each suite to that
+# commit and no other, with `local/real_ear` only beside a green `topo_ui` on the full lane; a
+# red suite pushes nothing and posts nothing, unless origin's branch was already at the commit,
+# when it posts what happened; a suite that wrote no result is a failure; a push origin refuses
+# and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
+# branch is not at before any suite runs; a held lock is waited on and then given up on; and the
+# `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
+#
+#   scripts/tests/validate-and-push-test.sh
+set -uo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$here/../.."
+work="$(mktemp -d -t validate-and-push-test)"
+trap 'rm -rf "$work"' EXIT
+
+failures=0
+fail() { echo "FAIL $*"; failures=$((failures + 1)); }
+ok() { echo "ok   $*"; }
+g() { git -c user.name=t -c user.email=t@t "$@"; }
+
+mkdir -p "$work/bin"
+cat > "$work/bin/gh" <<'GH'
+#!/usr/bin/env bash
+echo "$*" >> "$GH_CALLS"
+case "$*" in
+  "api --silent -X POST repos/samdu/topo/statuses/"*)
+    [ "${FAKE_POST:-ok}" = ok ] || exit 1
+    # What origin's branch held as the status was posted: GitHub refuses one for a commit it lacks.
+    git ls-remote "$FAKE_ORIGIN" refs/heads/topic | cut -f1 >> "$GH_CALLS.origin"
+    ;;
+  "api repos/samdu/topo/actions/workflows/pr-validate.yaml/runs?head_sha="*) printf '%s\n' "${FAKE_RUN-}" ;;
+  "api repos/samdu/topo/actions/runs/99/jobs?"*) printf '%s\n' "${FAKE_TEST_JOB-}" ;;
+  "run rerun --repo samdu/topo --job 4242") ;;
+  *) echo "unexpected gh call: $*" >&2; exit 64 ;;
+esac
+GH
+chmod +x "$work/bin/gh"
+
+# The fake suite: records where it ran, then writes FAKE_SUITES' lines (`topo_unit=failure …`;
+# a suite it does not name succeeded) unless FAKE_SUITES is `died`.
+fake_suite='#!/usr/bin/env bash
+results=""; suites=()
+while [ $# -gt 0 ]; do
+  case "$1" in --lane) lane="$2"; shift 2 ;; --results) results="$2"; shift 2 ;; --cache) shift 2 ;; *) suites+=("$1"); shift ;; esac
+done
+{ echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=${suites[*]}"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD"
+[ "${FAKE_SUITES-}" != died ] || exit 1
+status=0
+for suite in "${suites[@]}"; do
+  case " ${FAKE_SUITES-} " in *" $suite=failure "*) echo "$suite=failure" >> "$results/suites.txt"; status=1 ;; *) echo "$suite=success" >> "$results/suites.txt" ;; esac
+done
+exit "$status"
+'
+
+# scratch <name> <changed path>... — origin with main, and a worktree on branch `topic` whose one
+# commit adds the paths. Sets $repo, $sha.
+scratch() {
+  local name="$1" path; shift
+  repo="$work/$name/repo"
+  mkdir -p "$repo/scripts" "$repo/.github/workflows"
+  cp "$root/scripts/validate-and-push.sh" "$root/scripts/ci-select-suites.sh" "$root/scripts/ci-select-lane.sh" "$repo/scripts/"
+  cp "$root/.github/workflows/pr-validate.yaml" "$repo/.github/workflows/"
+  printf '%s' "$fake_suite" > "$repo/scripts/mac-suite.sh"
+  chmod +x "$repo/scripts/mac-suite.sh"
+  git -C "$repo" init -q -b main
+  git -C "$repo" config core.hooksPath /dev/null
+  g -C "$repo" add -A && g -C "$repo" commit -qm base
+  git init -q --bare "$work/$name/origin.git"
+  git -C "$repo" remote add origin "$work/$name/origin.git"
+  git -C "$repo" push -q origin main
+  git -C "$repo" checkout -q -b topic
+  for path in "$@"; do mkdir -p "$repo/$(dirname "$path")"; echo x > "$repo/$path"; done
+  g -C "$repo" add -A && g -C "$repo" commit -qm change
+  sha="$(git -C "$repo" rev-parse HEAD)"
+  : > "$work/$name/gh.calls"
+  : > "$work/$name/gh.calls.origin"
+  export GH_CALLS="$work/$name/gh.calls" FAKE_ORIGIN="$work/$name/origin.git" FAKE_RECORD="$work/$name/record" \
+    TOPO_VALIDATE_CACHE="$work/$name/cache" TOPO_VALIDATE_LOGS="$work/$name/logs"
+}
+# validate [args] — runs the script in $repo; its output in $out, its exit in $status.
+validate() {
+  out="$(cd "$repo" && PATH="$work/bin:$PATH" scripts/validate-and-push.sh "$@" 2>&1)" && status=0 || status=$?
+}
+origin_head() { git -C "$repo" ls-remote origin refs/heads/topic | cut -f1; }
+posted() { sed -n "s|^api --silent -X POST repos/samdu/topo/statuses/$sha -f context=\([^ ]*\) -f state=\([^ ]*\) .*|\1=\2|p" "$GH_CALLS" | tr '\n' ' '; }
+posts_elsewhere() { grep 'statuses/' "$GH_CALLS" | grep -vc "statuses/$sha "; }
+recorded() { sed -n "s/^$1=//p" "$FAKE_RECORD" 2>/dev/null; }
+is() {  # is <case> <got> <want>
+  if [ "$2" = "$3" ]; then ok "$1"; else fail "$1: got '$2', wanted '$3': $out"; fi
+}
+
+# A documentation change: no suite, pushed, no status.
+scratch docs docs/design.md
+validate
+is "docs: exits 0" "$status" 0
+is "docs: pushed" "$(origin_head)" "$sha"
+is "docs: no suite ran" "$(recorded head)" ""
+is "docs: no gh call but the look for a red test job" "$(grep -vc 'actions/workflows' "$GH_CALLS")" 0
+
+# An app change off the voice path: every suite, the fast lane, at the commit and nothing else.
+scratch app Apps/Client/SettingsView.swift
+echo dirty > "$repo/Apps/Client/SettingsView.swift"
+echo stray > "$repo/Untracked.swift"
+validate
+is "app: exits 0" "$status" 0
+is "app: the suite ran at the commit" "$(recorded head)" "$sha"
+is "app: every suite, in order" "$(recorded suites)" "topo_unit topo_ui others"
+is "app: the fast lane" "$(recorded lane)" fast
+is "app: the validation worktree is clean" "$(recorded status)" ""
+case " $(recorded files)" in *" Untracked.swift "*) fail "app: the untracked file reached the validation worktree" ;; *) ok "app: no untracked file from the engineer's worktree" ;; esac
+is "app: the engineer's uncommitted change is left alone" "$(cat "$repo/Apps/Client/SettingsView.swift")" dirty
+grep -q 'uncommitted changes or untracked files' <<<"$out" && ok "app: the uncommitted change is said" || fail "app: no warning: $out"
+is "app: pushed the commit" "$(origin_head)" "$sha"
+is "app: one success per suite, on the commit, and no real ear" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
+is "app: no status on another commit" "$(posts_elsewhere)" 0
+is "app: origin's branch was at the commit as each status was posted" "$(sort -u "$GH_CALLS.origin")" "$sha"
+[ -d "$TOPO_VALIDATE_LOGS/$sha" ] && ok "app: the logs are kept under the commit" || fail "app: no $TOPO_VALIDATE_LOGS/$sha"
+# A second commit reuses the worktree, at the new commit.
+git -C "$repo" checkout -q -- Apps/Client/SettingsView.swift
+echo y > "$repo/Apps/Client/Other.swift"; g -C "$repo" add Apps; g -C "$repo" commit -qm more
+sha="$(git -C "$repo" rev-parse HEAD)"
+validate
+is "app, second commit: the suite ran at the new commit" "$(recorded head)" "$sha"
+is "app, second commit: pushed" "$(origin_head)" "$sha"
+
+# The voice path: the full lane, and the real ear's status beside a green topo_ui.
+scratch voice Apps/Client/Ear.swift
+validate
+is "voice: the full lane" "$(recorded lane)" full
+is "voice: the real ear is posted" "$(posted)" "local/topo_unit=success local/topo_ui=success local/real_ear=success local/others=success "
+scratch voice-red Apps/Client/Ear.swift
+git -C "$repo" push -q origin topic
+FAKE_SUITES="topo_ui=failure" validate
+is "voice, topo_ui red on a pushed head: exits 1" "$status" 1
+is "voice, topo_ui red: failure for it, no real ear" "$(posted)" "local/topo_unit=success local/topo_ui=failure local/others=success "
+
+# TopoLink: `others` alone.
+scratch link Packages/TopoLink/Sources/TopoLink/Probe.swift
+validate
+is "link: others alone" "$(recorded suites)" others
+is "link: one status" "$(posted)" "local/others=success "
+# --suites and --lane override the choice.
+scratch override Packages/TopoLink/Sources/TopoLink/Probe.swift
+validate --suites "topo_ui others" --lane full
+is "override: the suites asked for" "$(recorded suites)" "topo_ui others"
+is "override: the lane asked for" "$(recorded lane)" full
+validate --suites bogus
+is "override: a suite that does not exist exits 2" "$status" 2
+
+# A red suite on a commit origin does not have: nothing pushed, nothing posted.
+scratch red Apps/Client/SettingsView.swift
+FAKE_SUITES="others=failure" validate
+is "red: exits 1" "$status" 1
+is "red: nothing pushed" "$(origin_head)" ""
+is "red: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+grep -q 'RED at .*: others' <<<"$out" && ok "red: names the suite" || fail "red: $out"
+# A suite that died without a result is every suite red.
+scratch died Apps/Client/SettingsView.swift
+git -C "$repo" push -q origin topic
+FAKE_SUITES=died validate
+is "died: exits 1" "$status" 1
+is "died: every suite failed" "$(posted)" "local/topo_unit=failure local/topo_ui=failure local/others=failure "
+
+# --no-push: only for a commit origin's branch is at, decided before any suite runs.
+scratch nopush Apps/Client/SettingsView.swift
+validate --no-push
+is "--no-push, origin behind: exits 2" "$status" 2
+is "--no-push, origin behind: no suite ran" "$(recorded head)" ""
+git -C "$repo" push -q origin topic
+validate --no-push
+is "--no-push, origin at the commit: exits 0" "$status" 0
+is "--no-push, origin at the commit: posted" "$(posted)" "local/topo_unit=success local/topo_ui=success local/others=success "
+
+# A push origin refuses (its branch moved on) posts nothing.
+scratch refused Apps/Client/SettingsView.swift
+git clone -q "$work/refused/origin.git" "$work/refused/other"
+git -C "$work/refused/other" config core.hooksPath /dev/null
+g -C "$work/refused/other" checkout -q -b topic && echo z > "$work/refused/other/z" && g -C "$work/refused/other" add -A \
+  && g -C "$work/refused/other" commit -qm theirs && git -C "$work/refused/other" push -q origin topic
+validate
+is "refused push: exits 2" "$status" 2
+is "refused push: nothing posted" "$(grep -c 'statuses/' "$GH_CALLS")" 0
+
+# A status GitHub does not take: exit 2, and it says how to post again.
+scratch nopost Packages/TopoLink/Package.swift
+FAKE_POST=fail POST_RETRY=0 validate
+is "refused status: exits 2" "$status" 2
+grep -q 'run again with --no-push' <<<"$out" && ok "refused status: says how to post again" || fail "refused status: $out"
+
+# The test job is re-run by job, and only when the newest run has concluded with it red.
+scratch rerun Packages/TopoLink/Package.swift
+FAKE_RUN="99 completed" FAKE_TEST_JOB=4242 validate
+is "rerun: exits 0" "$status" 0
+is "rerun: the test job, by job" "$(grep -c '^run rerun --repo samdu/topo --job 4242$' "$GH_CALLS")" 1
+is "rerun: nothing else is re-run" "$(grep -c '^run rerun' "$GH_CALLS")" 1
+for case in "99 in_progress|4242" "99 completed|" "|"; do
+  scratch norerun Packages/TopoLink/Package.swift
+  FAKE_RUN="${case%%|*}" FAKE_TEST_JOB="${case#*|}" validate
+  is "no rerun for run '${case%%|*}', red test job '${case#*|}'" "$(grep -c '^run rerun' "$GH_CALLS")" 0
+  rm -rf "$work/norerun"
+done
+# A red suite re-runs nothing: the test job would only go red again.
+scratch redrerun Packages/TopoLink/Package.swift
+git -C "$repo" push -q origin topic
+FAKE_SUITES="others=failure" FAKE_RUN="99 completed" FAKE_TEST_JOB=4242 validate
+is "red suite: no rerun" "$(grep -c '^run rerun' "$GH_CALLS")" 0
+
+# Another validation holds the Mac: waited on, then given up on, with no suite run.
+scratch locked Apps/Client/SettingsView.swift
+mkdir -p "$TOPO_VALIDATE_CACHE"
+lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "touch '$work/locked/held'; exec sleep 60" &
+holder=$!
+until [ -e "$work/locked/held" ]; do :; done
+LOCK_WAIT=1 validate
+is "locked: exits 2" "$status" 2
+is "locked: no suite ran" "$(recorded head)" ""
+is "locked: nothing pushed" "$(origin_head)" ""
+pkill -P "$holder" 2>/dev/null; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+
+# main is never pushed from here, and a detached HEAD has no branch to push to.
+scratch main docs/design.md
+git -C "$repo" checkout -q main
+validate
+is "on main: exits 2" "$status" 2
+git -C "$repo" checkout -q --detach topic
+validate
+is "detached: exits 2" "$status" 2
+
+if [ "$failures" -ne 0 ]; then
+  echo "$failures failure(s)"
+  exit 1
+fi
+echo "all passed"

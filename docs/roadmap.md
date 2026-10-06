@@ -23,7 +23,7 @@ What is built, what comes next and in what order, what is parked, and the thread
 - The phone's widgets: `topo widget` writes home-screen and lock-screen widgets the mind designs, with controls that cue a turn or run one `topo` call, drawn by a WidgetKit extension from the app group, over a default of the newest reply (`docs/widgets.md`). The watch's widgets and Control Center controls are the plan's PRs B and C.
 - Womble for iOS 12 devices, viewer only.
 - The hub app skeleton (`TopoHub`), holding the lease and showing the pairing code.
-- CI: the three-job PR check with the audio lane, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns an infrastructure red, republishes the install page and sweeps merged worktrees.
+- CI: the three-suite PR check with the audio lane, run on buddybox before each push, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns an infrastructure red, republishes the install page and sweeps merged worktrees.
 
 ## Next, in order
 
