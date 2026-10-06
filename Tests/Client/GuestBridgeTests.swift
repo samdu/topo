@@ -865,10 +865,10 @@ final class GuestBridgeTests: XCTestCase {
 
         await harness.send("hello")
         XCTAssertEqual(seen, [
-            "began 7 for phone/1 -> idle 0",
-            "started -> idle 0",
-            "text -> idle 0",
-            "usage -> idle 1234",
+            "began 7 for phone/1 -> thinking 0",
+            "started -> thinking 0",
+            "text -> thinking 0",
+            "usage -> thinking 1234",
             "ended answered -> idle 1234",
             "gone for phone/1 -> idle 1234",
         ])
@@ -877,8 +877,8 @@ final class GuestBridgeTests: XCTestCase {
         seen = []
         await harness.send("run the report")
         XCTAssertEqual(seen, [
-            "began 7 for phone/3 -> idle 1234",
-            "started -> idle 1234",
+            "began 7 for phone/3 -> thinking 1234",
+            "started -> thinking 1234",
             "tool Bash -> building 1234",
             "ended abandoned -> idle 1234",
             "gone for phone/3 -> idle 1234",

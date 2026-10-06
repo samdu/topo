@@ -229,6 +229,119 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(mascot.state.tokens, 0, "Topo wore the last login's load after a sign-out")
     }
 
+    // MARK: A turn open
+
+    /// A turn is open from its first step, while iCloud is still being reached and the guest has
+    /// been told nothing, through the wait on the model with no word from it, until the reply is
+    /// in the log; Topo, following the harness, is at work for all of it and idle once it is
+    /// over. Nothing is drawn here: he hears of the turn from the harness itself.
+    func testATurnIsOpenFromItsFirstStepUntilItsReplyAndTopoIsNotIdleMeanwhile() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        let reaching = Answers(), posedReaching = Answers(), asking = Answers(), posedAsking = Answers()
+        let pose: @Sendable () async -> Bool = {
+            // The change reaches him a hop behind the harness.
+            for _ in 0..<200 {
+                if await MainActor.run(body: { mascot.state.input.activity == "thinking" }) { return true }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return false
+        }
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            // The model has the turn and has said nothing.
+            await asking.set(await MainActor.run { seen.harness?.turnOpen ?? false })
+            await posedAsking.set(await pose())
+        }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport, ensureZone: {
+            await reaching.set(await MainActor.run { seen.harness?.turnOpen ?? false })
+            await posedReaching.set(await pose())
+        })
+        seen.harness = harness
+        mascot.follow(harness)
+        XCTAssertFalse(harness.turnOpen)
+        XCTAssertEqual(mascot.state.input.activity, "idle")
+
+        await harness.send("When are the bins?")
+
+        let (wasReaching, wasAsking) = await (reaching.value, asking.value)
+        let (topoReaching, topoAsking) = await (posedReaching.value, posedAsking.value)
+        XCTAssertEqual(wasReaching, true, "no turn was open while iCloud was being reached")
+        XCTAssertEqual(topoReaching, true, "Topo was idle while iCloud was being reached")
+        XCTAssertEqual(wasAsking, true, "no turn was open while the model had it")
+        XCTAssertEqual(topoAsking, true, "Topo was idle with the turn waiting on the model")
+        XCTAssertFalse(harness.turnOpen, "the turn stayed open after its reply")
+        try await eventually("Topo idle after the reply") { mascot.state.input.activity == "idle" }
+    }
+
+    /// A second turn, sent over the runner the first one made, is open before any of its steps
+    /// has said where it is: here while a debug launch holds the reply, which is before the
+    /// runner is asked anything.
+    func testALaterTurnIsOpenBeforeItsFirstStep() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("One.")), (200, reply("Two.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        mascot.follow(harness)
+        await harness.send("one")
+        XCTAssertFalse(harness.turnOpen)
+
+        setenv(DebugRun.replyDelayVariable, "0.5", 1)
+        defer { unsetenv(DebugRun.replyDelayVariable) }
+        let second = Task { await harness.send("two") }
+        try await eventually("the second turn open with no step taken") { harness.turnOpen && harness.status == nil }
+        XCTAssertEqual(transport.sent.count, 1, "the model already had the second turn")
+        try await eventually("Topo at work for it") { mascot.state.input.activity == "thinking" }
+        await second.value
+        XCTAssertFalse(harness.turnOpen)
+        let turns = try await log(db).map(\.text)
+        XCTAssertEqual(turns, ["one", "One.", "two", "Two."])
+    }
+
+    /// A turn whose reply failed is closed as the failure is put up, before the reads that
+    /// follow it: no turn is open while the chat is told the turn failed.
+    func testATurnWhoseReplyFailedIsClosedBeforeTheReadsThatFollow() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((500, "{}")))
+        var openWhenFailed: Bool?
+        harness.onTurnFailed = { [weak harness] _ in openWhenFailed = harness?.turnOpen }
+        await harness.send("When are the bins?")
+        XCTAssertNotNil(harness.error)
+        XCTAssertEqual(openWhenFailed, false, "the turn was still open as its failure was told")
+        XCTAssertFalse(harness.turnOpen)
+    }
+
+    /// A turn that never reached the log is not open either: the line has stopped, and nothing
+    /// is waiting on a model.
+    func testATurnThatFailedIsNotOpen() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("never"))),
+                              ensureZone: { throw Unexpected() })
+        var openWhenFailed: Bool?
+        harness.onTurnFailed = { [weak harness] _ in openWhenFailed = harness?.turnOpen }
+        await harness.send("When are the bins?")
+        XCTAssertNotNil(harness.error)
+        XCTAssertTrue(harness.hasWaiting)
+        XCTAssertEqual(openWhenFailed, false)
+        XCTAssertFalse(harness.turnOpen)
+    }
+
+    /// A sign-out during a turn closes it.
+    func testASignOutClosesAnOpenTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let transport = ScriptedTransport((200, reply("never")))
+        transport.duringRequest = { await seen.harness?.forget() }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        seen.harness = harness
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        mascot.follow(harness)
+        await harness.send("When are the bins?")
+        XCTAssertFalse(harness.turnOpen)
+        try await eventually("Topo idle after the sign-out") { mascot.state.input.activity == "idle" }
+    }
+
     // MARK: A failed model call
 
     func testAFailedModelCallLeavesTheTurnInTheLogAndTheNextPassAnswersItOnce() async throws {
