@@ -6,7 +6,7 @@ import TopoUserland
 /// zeroing the upper half for the 64-bit forms, and the unallocated 1D arrangement of each still an
 /// illegal instruction. ugrep's line numbering, which Claude Code's Bash tool runs as `grep`, reaches SQABS.
 ///
-/// SMOV to a general register (`patches/ish/0007-smov.patch`) likewise: a negative and a positive
+/// SMOV to a general register (`patches/ish/0009-smov.patch`) likewise: a negative and a positive
 /// element of every size, from both halves of the vector, sign-extended to Wd with the register's
 /// upper half zeroed and to Xd, and the two unallocated forms (Wd from an S element, Xd from a D)
 /// still illegal instructions. Claude Code's Bun reaches SMOV Wd, Vn.H[0] in a turn.
