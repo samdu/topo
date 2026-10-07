@@ -135,7 +135,8 @@ final class GuestSimdTests: XCTestCase {
     /// SCVTF and UCVTF with fractional bits, on vectors (the same patch): the single- and
     /// double-precision arrangements from one fractional bit to as many as the element has, every
     /// conversion rounding once as the instruction does, and the two unallocated forms (an 8-bit
-    /// element, the 1D arrangement) still illegal instructions. Claude Code reaches both on .2d.
+    /// element, the 1D arrangement) and the half-precision ones (a 16-bit element, which the guest
+    /// does not report) still illegal instructions. Claude Code reaches both on .2d.
     func testSCVTFAndUCVTFFixedPointMatchTheArchitecture() async throws {
         let exit = try await run("cvtf")
         XCTAssertEqual(exit.output, """
@@ -162,15 +163,17 @@ final class GuestSimdTests: XCTestCase {
             ucvtf 2d #33 0000c0ffffffcf41000040000000d041
             ucvtf 2d #64 0000c0ffffffdf3f000040000000e03f
             scvtf 8b SIGILL
+            scvtf 4h SIGILL
+            ucvtf 8h SIGILL
 
             """)
-        // SCVTF with an 8-bit element killed its child with SIGILL (the last line), and the last
-        // instruction is UCVTF on 1D, both unallocated: 128 + SIGILL.
+        // The 8-bit and 16-bit forms each killed a child with SIGILL (the last lines), and the last
+        // instruction is UCVTF on 1D, unallocated: 128 + SIGILL.
         XCTAssertEqual(exit.status, 132, "the unallocated 1D arrangement did not trap")
     }
 
     /// UDOT (the same patch): both arrangements, a sum that wraps, the destination also a source,
-    /// and the encoding's two unallocated sizes still illegal instructions. The guest does not
+    /// and the encoding's three unallocated sizes still illegal instructions. The guest does not
     /// report the dot-product feature, which Claude Code's Adler-32 has UDOT behind.
     func testUDOTMatchesTheArchitecture() async throws {
         let exit = try await run("udot")
@@ -182,10 +185,11 @@ final class GuestSimdTests: XCTestCase {
             udot 4s onto n 03f80300470203047d427ffff10b0200
             udot 4s onto m 03f803004b0607087d410301f10c0111
             udot size 0 SIGILL
+            udot size 1 SIGILL
 
             """)
-        // The encoding with 8-bit sums killed its child with SIGILL (the last line), and the last
-        // instruction is the one with 64-bit sums, both unallocated: 128 + SIGILL.
+        // The encodings with 8-bit and 16-bit sums each killed a child with SIGILL (the last
+        // lines), and the last instruction is the one with 64-bit sums, unallocated too: 128 + SIGILL.
         XCTAssertEqual(exit.status, 132, "the unallocated 64-bit size did not trap")
     }
 

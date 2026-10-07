@@ -2,9 +2,9 @@
 // gains the sum of four byte products. The inputs hold 0xff against 0xff, the
 // largest product, in both halves, and the destination starts at 0xaa in every
 // byte, then at all ones, so a sum wraps, then as one of the sources. Claude
-// Code's Adler-32 has UDOT .4s behind the dot-product feature. Then a child
-// runs the encoding with 8-bit sums, which is unallocated, and the parent
-// prints the signal it died of; last the parent runs the one with 64-bit sums,
+// Code's Adler-32 has UDOT .4s behind the dot-product feature. Then children
+// run the encoding with 8-bit and with 16-bit sums, which are unallocated, and
+// the parent prints the signal each died of; last the parent runs the one with 64-bit sums,
 // unallocated too, so the program ends with status 132. The build and the host
 // build are in simd.h.
 
@@ -38,6 +38,7 @@ static void report(void) { LINES(cases, a, b); }
 #ifndef HOST
 static void traps(void) {
     TRAP("udot size 0", 0x6e029420);      // udot's encoding with size 00
+    TRAP("udot size 1", 0x6e429420);      // with size 01
     __asm__ volatile(".inst 0x6ec29420"); // and with size 11: unallocated
 }
 #endif

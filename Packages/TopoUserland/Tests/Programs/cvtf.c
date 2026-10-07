@@ -3,9 +3,10 @@
 // the element has bits. The input's elements each take more bits than their
 // result's mantissa holds, so every conversion rounds, and they are positive
 // and negative at both sizes, so the two instructions differ. Claude Code
-// reaches SCVTF .2d #15 and UCVTF .2d #16. Then a child runs SCVTF with an
-// 8-bit element, which is unallocated, and the parent prints the signal it
-// died of; last the parent runs UCVTF on the 1D arrangement, unallocated too,
+// reaches SCVTF .2d #15 and UCVTF .2d #16. Then children run SCVTF with an
+// 8-bit element, which is unallocated, and each instruction with a 16-bit
+// one, which is half-precision and the guest does not report, and the parent
+// prints the signal each died of; last the parent runs UCVTF on the 1D arrangement, unallocated too,
 // so the program ends with status 132. The build and the host build are in
 // simd.h.
 
@@ -34,6 +35,8 @@ static void report(void) { LINES(cases, input, input); }
 #ifndef HOST
 static void traps(void) {
     TRAP("scvtf 8b", 0x0f0fe400);          // immh 0001: no 8-bit floating point
+    TRAP("scvtf 4h", 0x0f1fe420);          // scvtf v0.4h, v1.4h, #1
+    TRAP("ucvtf 8h", 0x6f1fe420);          // ucvtf v0.8h, v1.8h, #1
     __asm__ volatile(".inst 0x2f40e400"); // ucvtf v0.1d, v0.1d, #64: unallocated
 }
 #endif
