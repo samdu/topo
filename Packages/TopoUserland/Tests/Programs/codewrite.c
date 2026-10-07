@@ -50,14 +50,15 @@ static void num(L v) {
     put(b + i);
 }
 
-// The region's address, in hex on stderr: the test reads it to see that the
-// chains sit below 4 GB, which is where this fork's emulator chains blocks.
-static void region_line(U64 v) {
+// `<name>=0x<v>` on stderr: the region's first and one-past-last addresses, which the test
+// reads to see that every chain sits below 4 GB, where this fork's emulator chains blocks.
+static void hex_line(const char *name, U64 v) {
     char b[32]; int i = 31; b[i] = 0;
     do { b[--i] = "0123456789abcdef"[v & 15]; v >>= 4; } while (v);
-    b[--i] = 'x'; b[--i] = '0';
+    b[--i] = 'x'; b[--i] = '0'; b[--i] = '=';
     const char *s = b + i; L n = 0; while (s[n]) n++;
-    sc(WRITE, 2, (L)"region=", 7, 0, 0, 0); sc(WRITE, 2, (L)s, n, 0, 0, 0); sc(WRITE, 2, (L)"\n", 1, 0, 0, 0);
+    L m = 0; while (name[m]) m++;
+    sc(WRITE, 2, (L)name, m, 0, 0, 0); sc(WRITE, 2, (L)s, n, 0, 0, 0); sc(WRITE, 2, (L)"\n", 1, 0, 0, 0);
 }
 
 enum { PAGE = 4096, LANES = 4, THREADS = 4, COPIES = 2, APART = 1024, ROUNDS = 20000 };
@@ -126,7 +127,8 @@ void _start(void) {
     L pages = (L)(chains - 1) * APART + LANES;
     region = (char *)sc(MMAP, 0, pages * PAGE, 7 /* RWX */, 0x22 /* private, anonymous */, -1, 0);
     if ((L)region < 0 && (L)region > -4096) { put("mmap failed\n"); sc(EXIT_GROUP, 2, 0, 0, 0, 0, 0); }
-    region_line((U64)region);
+    hex_line("region", (U64)region);
+    hex_line("end", (U64)region + (U64)pages * PAGE);
     for (int chain = 0; chain < chains; chain++) {
         for (int lane = 0; lane < LANES; lane++) {
             *word(chain, lane, 0) = movk(lane, 1);
