@@ -1438,6 +1438,31 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs, ["capital of France?", "and Germany?"])
     }
 
+    /// Every reply whose turn is saved is one this device owes: the one in `pending`, and one
+    /// bound and waiting behind it. The screen keeps both until the log has them.
+    func testAReplyBoundAndWaitingBehindAnotherIsOwedToo() async throws {
+        let first = TurnRef(device: phone, sequence: 1), second = TurnRef(device: phone, sequence: 2)
+        func owed(_ input: String, _ ref: TurnRef, _ person: String, _ text: String) -> GuestLedger.Pending {
+            GuestLedger.Pending(input: input, nonce: TurnRunner.replyNonce(for: [ref]), parents: [ref], answering: [ref],
+                                covers: Coverage(), session: "S1", sentAt: Date(), state: .answered, text: text,
+                                person: person, said: [person])
+        }
+        var ledger = GuestLedger()
+        ledger.session = "S1"
+        ledger.pending = owed("in-1", first, "n1", "Paris.")
+        ledger.early = [GuestLedger.Early(person: "n2", input: "in-2", covers: Coverage(), session: "S1", sentAt: Date(),
+                                          state: .answered, text: "Berlin.", bound: owed("in-2", second, "n2", "Berlin.")),
+                        GuestLedger.Early(person: "n3", input: "in-3", covers: Coverage(), session: "S1", sentAt: Date(),
+                                          state: .answered, text: "Rome.")]
+        try FileManager.default.createDirectory(at: ledgerFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(ledger).write(to: ledgerFile)
+        let (_, bridge, _) = try await launch(InMemoryRecordDatabase())
+        let owedAhead = await bridge.owedAhead()
+        XCTAssertEqual(owedAhead, ["n1", "n2"])
+        let unsaved = await bridge.unsaved()
+        XCTAssertEqual(unsaved, ["n1": "Paris.", "n2": "Berlin.", "n3": "Rome."])
+    }
+
     func testNothingIsGivenAheadOverAnInputCutOff() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .cutOff)

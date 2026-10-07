@@ -860,8 +860,11 @@ actor GuestBridge: Brain {
     /// The nonces among `unsaved()` whose turns are saved and whose replies this device owes
     /// the log: written by the next pass whatever the log has gone on to hold.
     func owedAhead() -> Set<String> {
-        guard readLedger(), let pending = ledger.pending, pending.state == .answered, let person = pending.person else { return [] }
-        return [person]
+        guard readLedger() else { return [] }
+        // The one in `pending`, and those bound and waiting behind it.
+        var owed = Set((ledger.early ?? []).filter { $0.bound != nil && $0.state == .answered }.map(\.person))
+        if let pending = ledger.pending, pending.state == .answered, let person = pending.person { owed.insert(person) }
+        return owed
     }
 
     func unsaved() -> [String: String] {
