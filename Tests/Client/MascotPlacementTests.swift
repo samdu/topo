@@ -57,7 +57,7 @@ final class MascotPlacementTests: XCTestCase {
 
     // MARK: Glass
 
-    /// On the glass he stands in the empty flank — the trailing one, the keyboard's control being
+    /// On the glass he stands in the trailing flank — the keyboard's control and the mute being
     /// the leading one's — his body in the middle of it and the engine's shelf on the pane's top
     /// edge, over an empty chat, a full one, and on the short pane with the keyboard up. Once
     /// placed, he is put at once as the pane moves: he rides it, with no glide and no settle.
@@ -522,7 +522,7 @@ final class MascotPlacementTests: XCTestCase {
     }
 
     /// On the glass the picture is drawn in the stage SwiftUI places from the pane: inside the
-    /// empty flank only, nothing of it over the well, and at the same place in the stage as the
+    /// trailing flank only, nothing of it over the well, and at the same place in the stage as the
     /// pane moves, so the stage carries him wherever it is drawn.
     func testOnTheGlassHeIsDrawnInTheStageThePaneCarries() throws {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
@@ -570,7 +570,7 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertFalse(canvas.onGlassStage, "gliding off the glass, still in its stage")
     }
 
-    /// With no stage from SwiftUI, on the glass the picture is still drawn inside the empty flank
+    /// With no stage from SwiftUI, on the glass the picture is still drawn inside the trailing flank
     /// only: nothing of it over the well.
     func testOnTheGlassNothingOfHimIsDrawnOverTheWell() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 402, height: 874))

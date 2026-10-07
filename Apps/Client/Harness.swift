@@ -275,14 +275,25 @@ final class Harness {
     /// The guest, when it is what answers.
     var guest: GuestBridge? { brain as? GuestBridge }
 
+    /// What the look calls the models (`Look.Mind`), handed over by the chat as the look changes.
+    var mind = Look.Mind()
+
+    /// What `model` is called: the look's name for it, or its family's where the look has none.
+    func name(of model: ClaudeModel) -> String { mind.name(model.rawValue) ?? model.displayName }
+
     /// The model setting. A change reaches the brain at once, which for the guest replaces the
-    /// resident process at its next idle moment, never in the middle of a turn.
+    /// resident process at its next idle moment, never in the middle of a turn. What the brain is
+    /// told is the setting as it is when the telling runs, not as it was set: a finger drawn
+    /// along the slider sets it twice in a moment, and the last of them is what must stand.
     var model: ClaudeModel {
-        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
+        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default }
         set {
             defaults.set(newValue.rawValue, forKey: Self.modelKey)
             let brain = brain
-            Task { await brain.use(model: newValue) }
+            Task { [weak self] in
+                guard let self else { return }
+                await brain.use(model: self.model)
+            }
         }
     }
 
@@ -649,7 +660,7 @@ final class Harness {
         case .saving: status = "Saving what you said…"
         case .asking(let person):
             show(person)
-            status = "Asking \(model.displayName)…"
+            status = "Asking \(name(of: model))…"
         case .savingReply: status = "Saving the reply…"
         }
     }
@@ -883,7 +894,7 @@ final class Harness {
         rows.append(("Brain", await brain.describe()))
         rows.append(("Unfinished turn", unfinished.map { "\($0.ref): \($0.text)" } ?? "none"))
         rows.append(("Claude token", await Self.describeToken(tokens)))
-        rows.append(("Model", model.displayName))
+        rows.append(("Model", "\(name(of: model)) (\(model.rawValue))"))
         rows.append(("Turns on screen", "\(turns.count)"))
         return Diagnostics(rows: rows)
     }
@@ -948,7 +959,23 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try await noting { try await base.query(query) } }
     func records(ofType type: String) async throws -> [Record] { try await noting { try await base.records(ofType: type) } }
 
-    private func noting<T>(_ call: () async throws -> T) async throws -> T {
+    /// The base's bounded saves and fetches, noted here like the rest: the lease asks for
+    /// these, and a wrapper that answered with itself would leave its requests unbounded.
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        Bounded(recording: self, base: base.answering(within: seconds))
+    }
+
+    private struct Bounded: RecordDatabase {
+        let recording: RecordingDatabase
+        let base: any RecordDatabase
+        func save(_ records: [Record]) async throws -> [Record] { try await recording.noting { try await base.save(records) } }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await recording.noting { try await base.fetch(ids) } }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await recording.query(query) }
+        func records(ofType type: String) async throws -> [Record] { try await recording.records(ofType: type) }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase { recording.answering(within: seconds) }
+    }
+
+    fileprivate func noting<T>(_ call: () async throws -> T) async throws -> T {
         do {
             let value = try await call()
             lock.withLock { _lastSuccess = Date() }

@@ -107,7 +107,7 @@ final class GuestBridgeTests: XCTestCase {
         let (first, _, firstGuest) = try await launch(db, .reply("Paris."))
         await db.refuse(true)
         do {
-            _ = try await first.run("What is the capital of France?", model: .sonnet5)
+            _ = try await first.run("What is the capital of France?", model: .sonnet)
             XCTFail("the reply was written")
         } catch TurnRunnerError.replyFailed {}
         XCTAssertEqual(firstGuest.inputs, ["What is the capital of France?"])
@@ -115,14 +115,14 @@ final class GuestBridgeTests: XCTestCase {
 
         let (second, bridge, guest) = try await launch(db)
         // The reply is owed the log: the pass writes it first, and then nothing waits.
-        _ = try await second.answerPending(model: .sonnet5)
+        _ = try await second.answerPending(model: .sonnet)
         XCTAssertTrue(guest.inputs.isEmpty, "the guest was asked again")
         let turns = try await log(db)
         XCTAssertEqual(turns.map(\.text), ["What is the capital of France?", "Paris."])
         let ledger = await bridge.current
         XCTAssertNil(ledger.pending)
         XCTAssertTrue(turns.allSatisfy { ledger.seen.contains($0.ref) }, "the bookkeeping did not catch up")
-        let again = try await second.answerPending(model: .sonnet5)
+        let again = try await second.answerPending(model: .sonnet)
         XCTAssertNil(again)
     }
 
@@ -132,13 +132,13 @@ final class GuestBridgeTests: XCTestCase {
         let (first, _, _) = try await launch(db, .reply("Calling."))
         await db.refuse(true)
         do {
-            _ = try await first.run("call Helen", model: .sonnet5, nonce: "said-once")
+            _ = try await first.run("call Helen", model: .sonnet, nonce: "said-once")
             XCTFail("the reply was written")
         } catch TurnRunnerError.replyFailed {}
         await db.refuse(false)
 
         let (second, _, guest) = try await launch(db)
-        let result = try await second.run("call Helen", model: .sonnet5, nonce: "said-once")
+        let result = try await second.run("call Helen", model: .sonnet, nonce: "said-once")
         XCTAssertEqual(result.assistant.text, "Calling.")
         XCTAssertTrue(guest.inputs.isEmpty)
         let turns = try await log(db)
@@ -151,12 +151,12 @@ final class GuestBridgeTests: XCTestCase {
     func testACrashAfterTheInputWasReadLeavesItUnresolvedAndSendsNothing() async throws {
         let db = InMemoryRecordDatabase()
         let (first, _, firstGuest) = try await launch(db, .hang)
-        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet) }
         try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
         _ = killed  // the app is killed here: nothing of it runs again
 
         let (second, bridge, guest) = try await launch(db)
-        let answered = try await second.answerPending(model: .sonnet5)
+        let answered = try await second.answerPending(model: .sonnet)
         XCTAssertNil(answered, "a turn the guest was cut off answering was answered by itself")
         XCTAssertTrue(guest.inputs.isEmpty, "an input the guest received was sent again")
         let logged1 = try await log(db)
@@ -165,13 +165,13 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(unresolved, [person.ref])
         let state = await bridge.current.pending?.state
         XCTAssertEqual(state, .unresolved)
-        let still = try await second.answerPending(model: .sonnet5)
+        let still = try await second.answerPending(model: .sonnet)
         XCTAssertNil(still)
         XCTAssertTrue(guest.inputs.isEmpty)
 
         await bridge.askAgain()
         guest.then(.reply("Deleted three."))
-        let reply = try await second.answerPending(model: .sonnet5)
+        let reply = try await second.answerPending(model: .sonnet)
         XCTAssertEqual(reply?.text, "Deleted three.")
         XCTAssertEqual(guest.inputs, ["delete my old drafts"], "asked again once, because the person asked")
         let noneLeft = await bridge.unresolved()
@@ -184,7 +184,7 @@ final class GuestBridgeTests: XCTestCase {
     func testATranscriptThatCannotBeReadSendsNothingAndKeepsTheRecord() async throws {
         let db = InMemoryRecordDatabase()
         let (first, _, firstGuest) = try await launch(db, .hang)
-        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet) }
         try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
         _ = killed
 
@@ -196,7 +196,7 @@ final class GuestBridgeTests: XCTestCase {
         let (second, bridge, guest) = try await launch(db, .reply("Deleted."))
         let before = await bridge.current.pending
         do {
-            _ = try await second.answerPending(model: .sonnet5)
+            _ = try await second.answerPending(model: .sonnet)
             XCTFail("a turn was answered over a transcript that could not be read")
         } catch let error as GuestBridgeError {
             XCTAssertEqual(error, .failed(GuestBridge.unknown))
@@ -207,7 +207,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(kept, before, "the record changed on a read that failed")
 
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: transcript.path)
-        let answered = try await second.answerPending(model: .sonnet5)
+        let answered = try await second.answerPending(model: .sonnet)
         XCTAssertNil(answered)
         XCTAssertTrue(guest.inputs.isEmpty)
         let state = await bridge.current.pending?.state
@@ -219,7 +219,7 @@ final class GuestBridgeTests: XCTestCase {
     func testATranscriptFolderThatCannotBeListedSendsNothingAndKeepsTheRecord() async throws {
         let db = InMemoryRecordDatabase()
         let (first, _, firstGuest) = try await launch(db, .hang)
-        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet) }
         try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
         _ = killed
 
@@ -232,7 +232,7 @@ final class GuestBridgeTests: XCTestCase {
         let (second, bridge, guest) = try await launch(db, .reply("Deleted."))
         let before = await bridge.current.pending
         do {
-            _ = try await second.answerPending(model: .sonnet5)
+            _ = try await second.answerPending(model: .sonnet)
             XCTFail("a turn was answered over a folder of transcripts that could not be listed")
         } catch let error as GuestBridgeError {
             XCTAssertEqual(error, .failed(GuestBridge.unknown))
@@ -242,7 +242,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(kept, before, "the record changed on a listing that failed")
 
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-        let answered = try await second.answerPending(model: .sonnet5)
+        let answered = try await second.answerPending(model: .sonnet)
         XCTAssertNil(answered)
         XCTAssertTrue(guest.inputs.isEmpty)
         let state = await bridge.current.pending?.state
@@ -256,7 +256,7 @@ final class GuestBridgeTests: XCTestCase {
     func testALedgerThatCannotBeDecodedSendsNothingAndIsNotWrittenOver() async throws {
         let db = InMemoryRecordDatabase()
         let (first, _, firstGuest) = try await launch(db, .hang)
-        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet) }
         try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
         _ = killed
         let recorded = try Data(contentsOf: ledgerFile)
@@ -269,7 +269,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: ledgerFile), torn, "the ledger was written over")
 
         try recorded.write(to: ledgerFile)
-        let answered = try await second.answerPending(model: .sonnet5)
+        let answered = try await second.answerPending(model: .sonnet)
         XCTAssertNil(answered)
         XCTAssertTrue(guest.inputs.isEmpty, "an input the guest received was sent again")
         let state = await bridge.current.pending?.state
@@ -281,7 +281,7 @@ final class GuestBridgeTests: XCTestCase {
     func testALedgerThatCannotBeOpenedSendsNothingAndIsReadAgain() async throws {
         let db = InMemoryRecordDatabase()
         let (first, _, firstGuest) = try await launch(db, .hang)
-        let killed = Task { try await first.run("delete my old drafts", model: .sonnet5) }
+        let killed = Task { try await first.run("delete my old drafts", model: .sonnet) }
         try await eventually("the guest to read the input") { firstGuest.inputs.count == 1 }
         _ = killed
         let recorded = try Data(contentsOf: ledgerFile)
@@ -295,7 +295,7 @@ final class GuestBridgeTests: XCTestCase {
 
         try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: ledgerFile.path)
         XCTAssertEqual(try Data(contentsOf: ledgerFile), recorded, "the ledger was written over")
-        let answered = try await second.answerPending(model: .sonnet5)
+        let answered = try await second.answerPending(model: .sonnet)
         XCTAssertNil(answered)
         XCTAssertTrue(guest.inputs.isEmpty, "an input the guest received was sent again")
         let state = await bridge.current.pending?.state
@@ -307,7 +307,7 @@ final class GuestBridgeTests: XCTestCase {
     private func assertRefusedOverAnUnreadLedger(_ runner: TurnRunner, _ bridge: GuestBridge) async throws {
         for _ in 0..<2 {
             do {
-                _ = try await runner.answerPending(model: .sonnet5)
+                _ = try await runner.answerPending(model: .sonnet)
                 XCTFail("a turn was answered over a ledger that could not be read")
             } catch let error as GuestBridgeError {
                 XCTAssertEqual(error, .failed(GuestBridge.ledgerUnreadable))
@@ -328,7 +328,7 @@ final class GuestBridgeTests: XCTestCase {
         let (first, _, _) = try await launch(db, .reply("Paris."))
         await db.loseNextReplyAcknowledgement()
         do {
-            _ = try await first.run("capital of France?", model: .sonnet5)
+            _ = try await first.run("capital of France?", model: .sonnet)
             XCTFail("the acknowledgement arrived")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             // The lost acknowledgement, and not the reply refused for any other reason.
@@ -342,7 +342,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(logged2.map(\.text), ["capital of France?", "Paris."], "the reply is in the log")
 
         let (second, bridge, guest) = try await launch(db, .reply("Berlin."))
-        let result = try await second.run("and Germany?", model: .sonnet5)
+        let result = try await second.run("and Germany?", model: .sonnet)
         XCTAssertEqual(result.assistant.text, "Berlin.")
         XCTAssertEqual(guest.inputs, ["and Germany?"], "the guest was told what it had already seen")
         let turns = try await log(db)
@@ -358,12 +358,12 @@ final class GuestBridgeTests: XCTestCase {
         let db = RefusingReplies()
         let (first, _, _) = try await launch(db, .reply("Paris."))
         await db.refuse(true)
-        let firstTurn = try? await first.run("capital of France?", model: .sonnet5)
+        let firstTurn = try? await first.run("capital of France?", model: .sonnet)
         XCTAssertNil(firstTurn)
         await db.refuse(false)
 
         let (second, _, guest) = try await launch(db, .reply("Berlin."))
-        _ = try await second.run("and Germany?", model: .sonnet5)
+        _ = try await second.run("and Germany?", model: .sonnet)
         let turns = try await log(db)
         XCTAssertEqual(turns.map(\.text), ["capital of France?", "Paris.", "and Germany?", "Berlin."])
         XCTAssertEqual(turns[1].nonce, TurnRunner.replyNonce(for: [turns[0].ref]))
@@ -378,14 +378,14 @@ final class GuestBridgeTests: XCTestCase {
         let db = RefusingReplies()
         let (first, _, _) = try await launch(db, .reply("Paris."))
         await db.refuse(true)
-        let refused = try? await first.run("capital of France?", model: .sonnet5)
+        let refused = try? await first.run("capital of France?", model: .sonnet)
         XCTAssertNil(refused)
         await db.refuse(false)
         try await write(db, .person, "and Spain?", device: "watch")
         try await write(db, .assistant, "Madrid.", device: "hub")
 
         let (second, bridge, guest) = try await launch(db)
-        _ = try await second.answerPending(model: .sonnet5)
+        _ = try await second.answerPending(model: .sonnet)
         XCTAssertTrue(guest.inputs.isEmpty, "the guest was asked again")
         let turns = try await log(db)
         XCTAssertEqual(turns.filter { $0.text == "Paris." }.count, 1)
@@ -395,7 +395,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(paris.nonce, TurnRunner.replyNonce(for: [question.ref]))
         let pending = await bridge.current.pending
         XCTAssertNil(pending)
-        let again = try await second.answerPending(model: .sonnet5)
+        let again = try await second.answerPending(model: .sonnet)
         XCTAssertNil(again)
         let after = try await log(db)
         XCTAssertEqual(after.count, turns.count, "a second pass wrote something")
@@ -410,9 +410,9 @@ final class GuestBridgeTests: XCTestCase {
         let fromWatch = try await watch.writer(for: DeviceID("watch")).append(.person, "buy milk", parents: [root.ref])
         let fromPad = try await watch.writer(for: DeviceID("pad")).append(.person, "buy eggs", parents: [root.ref])
 
-        let reply = try await runner.answerPending(model: .sonnet5)
+        let reply = try await runner.answerPending(model: .sonnet)
         XCTAssertEqual(Set(try XCTUnwrap(reply).parents), [fromWatch.ref, fromPad.ref])
-        let again = try await runner.answerPending(model: .sonnet5)
+        let again = try await runner.answerPending(model: .sonnet)
         XCTAssertNil(again)
         let logged3 = try await log(db)
         XCTAssertEqual(logged3.filter { $0.role == .assistant }.count, 1)
@@ -428,16 +428,16 @@ final class GuestBridgeTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .cutOff, .reply("Fine."))
         do {
-            _ = try await runner.run("run the report", model: .sonnet5)
+            _ = try await runner.run("run the report", model: .sonnet)
             XCTFail("an abandoned turn was answered")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             XCTAssertEqual(underlying as? GuestBridgeError, .unresolved)
         }
-        let answered = try await runner.answerPending(model: .sonnet5)
+        let answered = try await runner.answerPending(model: .sonnet)
         XCTAssertNil(answered)
         XCTAssertEqual(guest.inputs, ["run the report"])
 
-        _ = try await runner.run("never mind", model: .sonnet5)
+        _ = try await runner.run("never mind", model: .sonnet)
         XCTAssertEqual(guest.inputs, ["run the report", "never mind"])
         let unresolved = await bridge.unresolved()
         XCTAssertTrue(unresolved.isEmpty)
@@ -449,14 +449,14 @@ final class GuestBridgeTests: XCTestCase {
     func testMovingPastACutOffTurnAdvancesTheCoverageOnlyWhenTheReplyLands() async throws {
         let db = RefusingReplies()
         let (runner, bridge, guest) = try await launch(db, .cutOff, .reply("Fine."))
-        let cut = try? await runner.run("run the report", model: .sonnet5)
+        let cut = try? await runner.run("run the report", model: .sonnet)
         XCTAssertNil(cut)
         let seenBefore = await bridge.current.seen
         let logged = try await log(db)
         let report = try XCTUnwrap(logged.first)
 
         await db.refuse(true)
-        let refused = try? await runner.run("never mind", model: .sonnet5)
+        let refused = try? await runner.run("never mind", model: .sonnet)
         XCTAssertNil(refused)
         XCTAssertEqual(guest.inputs, ["run the report", "never mind"], "the guest was told the cut-off turn again")
         let afterRefusal = await bridge.current
@@ -465,7 +465,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertNotNil(afterRefusal.pending)
 
         await db.refuse(false)
-        _ = try await runner.answerPending(model: .sonnet5)
+        _ = try await runner.answerPending(model: .sonnet)
         let turns = try await log(db)
         XCTAssertEqual(turns.map(\.text), ["run the report", "never mind", "Fine."])
         let landed = await bridge.current
@@ -479,14 +479,14 @@ final class GuestBridgeTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .errorResult("API Error: 529 Overloaded"), .reply("Too late."))
         do {
-            _ = try await runner.run("run the report", model: .sonnet5)
+            _ = try await runner.run("run the report", model: .sonnet)
             XCTFail("a turn that ended in an error result was answered")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             XCTAssertEqual(underlying as? GuestBridgeError, .unresolved)
         }
         let state = await bridge.current.pending?.state
         XCTAssertEqual(state, .unresolved)
-        let answered = try await runner.answerPending(model: .sonnet5)
+        let answered = try await runner.answerPending(model: .sonnet)
         XCTAssertNil(answered)
         XCTAssertEqual(guest.inputs, ["run the report"], "a turn the guest received was sent again")
     }
@@ -497,10 +497,10 @@ final class GuestBridgeTests: XCTestCase {
     func testAnErrorResultStaysUnresolvedWhateverTheTranscriptLaterSays() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .errorResult("API Error: 529 Overloaded"), .reply("Too late."))
-        let failed = try? await runner.run("run the report", model: .sonnet5)
+        let failed = try? await runner.run("run the report", model: .sonnet)
         XCTAssertNil(failed)
         for _ in 0..<3 {
-            let answered = try await runner.answerPending(model: .sonnet5)
+            let answered = try await runner.answerPending(model: .sonnet)
             XCTAssertNil(answered)
         }
         XCTAssertEqual(guest.inputs, ["run the report"], "a turn the guest received was sent again")
@@ -517,14 +517,14 @@ final class GuestBridgeTests: XCTestCase {
     func testAnAnswerCancelledMidTurnConcludesNothingAndTheNextPassWaitsForTheTurn() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .hangUnwritten)
-        let asking = Task { try await runner.run("delete my old drafts", model: .sonnet5) }
+        let asking = Task { try await runner.run("delete my old drafts", model: .sonnet) }
         try await eventually("the guest to take the input") { guest.inputs.count == 1 }
         asking.cancel()
         if case .success = await asking.result { XCTFail("a cancelled answer was answered") }
         let kept = await bridge.current.pending
         XCTAssertEqual(kept?.state, .sent, "a turn still with the guest was concluded")
 
-        let pass = Task { try await runner.answerPending(model: .sonnet5) }
+        let pass = Task { try await runner.answerPending(model: .sonnet) }
         try await Task.sleep(for: .milliseconds(100))
         XCTAssertEqual(guest.inputs.count, 1, "the input was sent again while the guest still had it")
         guest.finishHanging(with: "Deleted three.")
@@ -543,12 +543,12 @@ final class GuestBridgeTests: XCTestCase {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .notReceived("exited"), .reply("Here."))
         guest.confirmEnds(false)
-        let first = try? await runner.run("where?", model: .sonnet5)
+        let first = try? await runner.run("where?", model: .sonnet)
         XCTAssertNil(first)
         let kept = await bridge.current.pending
         XCTAssertEqual(kept?.state, .sent, "a record was concluded from a process not confirmed gone")
         do {
-            _ = try await runner.answerPending(model: .sonnet5)
+            _ = try await runner.answerPending(model: .sonnet)
             XCTFail("a turn was answered while its process was not confirmed gone")
         } catch let error as GuestBridgeError {
             XCTAssertEqual(error, .failed(GuestBridge.unknown))
@@ -556,7 +556,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(guest.inputs, ["where?"])
 
         guest.confirmEnds(true)
-        let reply = try await runner.answerPending(model: .sonnet5)
+        let reply = try await runner.answerPending(model: .sonnet)
         XCTAssertEqual(reply?.text, "Here.")
         XCTAssertEqual(guest.inputs, ["where?", "where?"])
     }
@@ -567,8 +567,8 @@ final class GuestBridgeTests: XCTestCase {
     func testAReplyFoundForAnInputNotKnownReceivedCountsNothingSeen() async throws {
         let db = InMemoryRecordDatabase()
         let (first, _, firstGuest) = try await launch(db, .reply("Noted."), .hangUnwritten)
-        _ = try await first.run("hello", model: .sonnet5)
-        let killed = Task { try await first.run("call Helen", model: .sonnet5, nonce: "said-once") }
+        _ = try await first.run("hello", model: .sonnet)
+        let killed = Task { try await first.run("call Helen", model: .sonnet, nonce: "said-once") }
         try await eventually("the input to go") { firstGuest.inputs.count == 2 }
         _ = killed
         let logged = try await log(db)
@@ -582,7 +582,7 @@ final class GuestBridgeTests: XCTestCase {
         try XCTSkipIf((try? FileManager.default.contentsOfDirectory(atPath: folder.path)) != nil,
                       "missing coverage: this host lists a folder with no permissions")
         let (second, bridge, guest) = try await launch(db, .reply("You asked me to call Helen."))
-        let retried = try await second.run("call Helen", model: .sonnet5, nonce: "said-once")
+        let retried = try await second.run("call Helen", model: .sonnet, nonce: "said-once")
         XCTAssertEqual(retried.assistant.text, "Calling.")
         XCTAssertTrue(guest.inputs.isEmpty)
         let ledger = await bridge.current
@@ -591,7 +591,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertFalse(ledger.seen.contains(retried.assistant.ref), "another device's reply was counted the guest's")
 
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
-        _ = try await second.run("what did I ask?", model: .sonnet5)
+        _ = try await second.run("what did I ask?", model: .sonnet)
         let input = try XCTUnwrap(guest.inputs.last)
         XCTAssertTrue(input.contains("Them: call Helen"), input)
         XCTAssertTrue(input.contains("You, answering on another device: Calling."), input)
@@ -603,7 +603,7 @@ final class GuestBridgeTests: XCTestCase {
     func testAReplyTheProcessWroteBeforeItExitedIsWritten() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, _, guest) = try await launch(db, .answeredThenExited("Tuesday."))
-        let result = try await runner.run("when is it?", model: .sonnet5)
+        let result = try await runner.run("when is it?", model: .sonnet)
         XCTAssertEqual(result.assistant.text, "Tuesday.")
         XCTAssertEqual(guest.inputs.count, 1)
     }
@@ -613,11 +613,11 @@ final class GuestBridgeTests: XCTestCase {
     func testAFailureBeforeReceiptIsRetriedByTheNextPass() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .notReceived("exited"), .reply("Here."))
-        let first = try? await runner.run("where?", model: .sonnet5)
+        let first = try? await runner.run("where?", model: .sonnet)
         XCTAssertNil(first)
         let pending = await bridge.current.pending
         XCTAssertNil(pending)
-        let reply = try await runner.answerPending(model: .sonnet5)
+        let reply = try await runner.answerPending(model: .sonnet)
         XCTAssertEqual(reply?.text, "Here.")
         XCTAssertEqual(guest.inputs, ["where?", "where?"])
     }
@@ -628,9 +628,9 @@ final class GuestBridgeTests: XCTestCase {
     func testALimbsTurnBetweenTwoPhoneTurnsReachesTheGuestAsContext() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, _, guest) = try await launch(db, .reply("Noted."), .reply("Both."))
-        _ = try await runner.run("remember the bins", model: .sonnet5)
+        _ = try await runner.run("remember the bins", model: .sonnet)
         try await write(db, .person, "and the recycling", device: "watch")
-        _ = try await runner.run("what did I say?", model: .sonnet5)
+        _ = try await runner.run("what did I say?", model: .sonnet)
         XCTAssertEqual(guest.inputs.first, "remember the bins")
         let second = try XCTUnwrap(guest.inputs.last)
         XCTAssertTrue(second.contains("Them: and the recycling"), second)
@@ -642,10 +642,10 @@ final class GuestBridgeTests: XCTestCase {
     func testAnotherPrimarysReplyReachesTheGuestAsContext() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, _, guest) = try await launch(db, .reply("One."), .reply("Three."))
-        _ = try await runner.run("one", model: .sonnet5)
+        _ = try await runner.run("one", model: .sonnet)
         try await write(db, .person, "two", device: "watch")
         try await write(db, .assistant, "Two, from the hub.", device: "hub")
-        _ = try await runner.run("three", model: .sonnet5)
+        _ = try await runner.run("three", model: .sonnet)
         let input = try XCTUnwrap(guest.inputs.last)
         XCTAssertTrue(input.contains("Them: two"), input)
         XCTAssertTrue(input.contains("You, answering on another device: Two, from the hub."), input)
@@ -656,11 +656,11 @@ final class GuestBridgeTests: XCTestCase {
     func testALateBranchWithAnEarlierTimestampIsStillDelivered() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, _, guest) = try await launch(db, .reply("A."), .reply("B."))
-        let first = try await runner.run("first", model: .sonnet5)
+        let first = try await runner.run("first", model: .sonnet)
         let late = TurnLog(database: db)
         _ = try await late.writer(for: DeviceID("pad")).append(.person, "said offline, long ago",
                                                                parents: [first.person.ref], at: .distantPast)
-        _ = try await runner.run("second", model: .sonnet5)
+        _ = try await runner.run("second", model: .sonnet)
         let input = try XCTUnwrap(guest.inputs.last)
         XCTAssertTrue(input.contains("said offline, long ago"), input)
         XCTAssertFalse(input.contains("Them: first"), input)
@@ -671,7 +671,7 @@ final class GuestBridgeTests: XCTestCase {
         let db = RefusingReplies()
         let (runner, bridge, _) = try await launch(db, .reply("Refused."))
         await db.refuse(true)
-        let refused = try? await runner.run("hello", model: .sonnet5)
+        let refused = try? await runner.run("hello", model: .sonnet)
         XCTAssertNil(refused)
         let logged4 = try await log(db)
         let person = try XCTUnwrap(logged4.first)
@@ -685,9 +685,9 @@ final class GuestBridgeTests: XCTestCase {
     func testAFreshSessionIsGivenTheLogSoFar() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, _, guest) = try await launch(db, .reply("Noted."), .reply("Marmalade."))
-        _ = try await runner.run("the word is marmalade", model: .sonnet5)
+        _ = try await runner.run("the word is marmalade", model: .sonnet)
         guest.startFresh()
-        _ = try await runner.run("what was the word?", model: .sonnet5)
+        _ = try await runner.run("what was the word?", model: .sonnet)
         let input = try XCTUnwrap(guest.inputs.last)
         XCTAssertTrue(input.hasPrefix("[The conversation so far, from the log on their devices — the last 2 turns"), input)
         XCTAssertTrue(input.contains("Them: the word is marmalade"), input)
@@ -702,7 +702,7 @@ final class GuestBridgeTests: XCTestCase {
             try await write(db, n.isMultiple(of: 2) ? .assistant : .person, "t\(n)", device: "pad")
         }
         let (runner, _, guest) = try await launch(db, .reply("Caught up."))
-        _ = try await runner.run("now", model: .sonnet5)
+        _ = try await runner.run("now", model: .sonnet)
         let input = try XCTUnwrap(guest.inputs.first)
         let lines = input.components(separatedBy: "\n\n")
         let turns = lines.filter { $0.hasPrefix("Them: ") || $0.hasPrefix("You, answering on another device: ") }
@@ -721,12 +721,12 @@ final class GuestBridgeTests: XCTestCase {
     func testAnExistingSessionIsToldEveryTurnItHasNotSeenBeyondTheLimit() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .reply("Noted."), .reply("Caught up."), .reply("Fine."))
-        _ = try await runner.run("first", model: .sonnet5)
+        _ = try await runner.run("first", model: .sonnet)
         let missed = GuestBridge.contextLimit + 1
         for n in 1...missed {
             try await write(db, n.isMultiple(of: 2) ? .assistant : .person, "m\(n)", device: "pad")
         }
-        _ = try await runner.run("now", model: .sonnet5)
+        _ = try await runner.run("now", model: .sonnet)
         XCTAssertEqual(guest.inputs.count, 2)
         let input = guest.inputs[1]
         XCTAssertTrue(input.hasPrefix("[Meanwhile"), input)
@@ -737,7 +737,7 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertEqual(told.last, "Them: m\(missed)")
         XCTAssertFalse(input.contains("Them: first"), "the guest was told what it had seen")
 
-        _ = try await runner.run("again", model: .sonnet5)
+        _ = try await runner.run("again", model: .sonnet)
         XCTAssertEqual(guest.inputs.last, "again", "the next input told the guest something again")
         let ledger = await bridge.current
         let turns = try await log(db)
@@ -749,9 +749,9 @@ final class GuestBridgeTests: XCTestCase {
     func testTheModelSettingReachesTheGuest() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .reply("ok"))
-        _ = try await runner.run("hi", model: .opus5)
-        await bridge.use(model: .fable51)
-        XCTAssertEqual(guest.models, [ClaudeModel.effective(.opus5).rawValue, ClaudeModel.effective(.fable51).rawValue])
+        _ = try await runner.run("hi", model: .opus)
+        await bridge.use(model: .fable)
+        XCTAssertEqual(guest.models, [ClaudeModel.effective(.opus).rawValue, ClaudeModel.effective(.fable).rawValue])
     }
 
     // MARK: - No fallback
@@ -835,7 +835,7 @@ final class GuestBridgeTests: XCTestCase {
         let log = TurnLog(database: db)
         let lease = steadyLease(db, phone)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
-        _ = try await runner.run("hello", model: .sonnet5)
+        _ = try await runner.run("hello", model: .sonnet)
         let input = try XCTUnwrap(relaunched.inputs.first)
         XCTAssertTrue(input.hasPrefix("[The conversation so far"), input)
         XCTAssertTrue(input.contains("Them: run the report"), input)
@@ -921,7 +921,7 @@ final class GuestBridgeTests: XCTestCase {
         try await log.writer(for: DeviceID("watch")).append(.person, "and now?", continuing: try await log.read())
         let lease = steadyLease(db, phone)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
-        let waiting = Task { try await runner.answerPending(model: .sonnet5) }
+        let waiting = Task { try await runner.answerPending(model: .sonnet) }
         try await eventually("the answer to wait at ready") { guest.readyHeld }
 
         await harness.forget()
@@ -954,7 +954,7 @@ final class GuestBridgeTests: XCTestCase {
         try await log.writer(for: DeviceID("watch")).append(.person, "and now?", continuing: try await log.read())
         let lease = steadyLease(db, phone)
         let runner = TurnRunner(log: log, writer: try await log.writer(for: phone), lease: lease, brain: bridge)
-        let answering = Task { try await runner.answerPending(model: .sonnet5) }
+        let answering = Task { try await runner.answerPending(model: .sonnet) }
         try await eventually("the guest to take the watch's turn") { guest.inputs.count == 2 }
 
         await harness.forget()

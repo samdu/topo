@@ -20,6 +20,7 @@ import XCTest
 ///
 /// The same holds under the keyboard, where the glass is short and the well with it: a press at
 /// the short well's edge is delivered and counted too.
+@MainActor
 final class TopoOnTheGlassTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false

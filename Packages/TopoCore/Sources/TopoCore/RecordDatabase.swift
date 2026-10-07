@@ -64,9 +64,16 @@ public protocol RecordDatabase: Sendable {
     /// nobody has touched, and it sees every record however malformed, so a
     /// reader can report what it cannot parse.
     func records(ofType type: String) async throws -> [Record]
+    /// This database with every save and fetch by ID bounded: one not answered within
+    /// `seconds` throws `unavailable`, though it may still be applied. For a caller that
+    /// holds something up while it waits, as the lease does. A store with no slow link to
+    /// bound is its own answer, which is the default.
+    func answering(within seconds: TimeInterval) -> any RecordDatabase
 }
 
 extension RecordDatabase {
+    public func answering(within seconds: TimeInterval) -> any RecordDatabase { self }
+
     /// Saves one record; see `save(_:)`.
     public func save(_ record: Record) async throws -> Record {
         try await save([record])[0]

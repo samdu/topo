@@ -267,6 +267,31 @@ final class MascotStateTests: XCTestCase {
     /// The facing is `Mascot`'s, handed to the engine in every input, and nothing a turn or the
     /// harness does moves it: a turn's events and its end, the harness's model and context, all
     /// leave him facing the way his placement said.
+    /// Over the open model slider he is drawn with the model chosen there, and a guest's turn
+    /// naming its own model — a debug build's Haiku, whatever was chosen — does not change the
+    /// head he is drawn with, though it is still what his state holds; with the slider shut he is
+    /// drawn as his state again.
+    func testTheSlidersChoiceIsTheHeadHeIsDrawnWithThroughATurn() {
+        let mascot = Mascot(model: "claude-haiku-4-5-20251001")
+        XCTAssertEqual(mascot.drawn, mascot.state)
+        mascot.chosen = "opus"
+        XCTAssertEqual(mascot.drawn.input.model, "opus")
+        mascot.guestTurnBegan()
+        mascot.guest(.event(.started(session: "s", model: "claude-haiku-4-5-20251001")))
+        XCTAssertEqual(mascot.drawn.input.model, "opus", "the turn's start took the slider's head off him")
+        mascot.guest(.event(.usage(.init(model: "claude-haiku-4-5-20251001", context: 4_000, output: 12))))
+        XCTAssertEqual(mascot.drawn.input.model, "opus", "the turn's usage took the slider's head off him")
+        XCTAssertEqual(mascot.drawn.input.tokens, 4_000, "the slider's head cost him the turn's context")
+        mascot.guest(.event(.toolUse(name: "Bash")))
+        XCTAssertEqual(mascot.drawn.input.activity, "building", "the slider's head cost him the turn's pose")
+        mascot.harness(model: "claude-haiku-4-5-20251001", tokens: 4_000)
+        XCTAssertEqual(mascot.drawn.input.model, "opus", "the harness took the slider's head off him")
+        mascot.chosen = "fable"
+        XCTAssertEqual(mascot.drawn.input.model, "fable")
+        mascot.chosen = nil
+        XCTAssertEqual(mascot.drawn.input.model, "claude-haiku-4-5-20251001", "shut, he is not drawn as the turn has him")
+    }
+
     func testTheFacingReachesTheEngineAndNoTurnMovesIt() {
         let mascot = Mascot(model: "claude-sonnet-5")
         XCTAssertEqual(mascot.facing, .left, "the picture as drawn is where he starts")
