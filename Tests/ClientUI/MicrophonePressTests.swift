@@ -18,7 +18,7 @@ import XCTest
 /// never in a pass. Any other refusal fails.
 ///
 /// The first press is also where the permission prompts are counted, and the count is a running
-/// total across this class's tests, which share one process. The microphone is the only
+/// total across the run's tests (`ChatReading.promptsAnswered`), which share one process, so a press in a class that runs first is counted too. The microphone is the only
 /// permission Topo asks for, so one press in the run raises one alert and every press after it
 /// raises none. On a lane that cleared the app's grants (`TOPO_UITEST_PRIVACY_RESET=1`) each test
 /// that pressed holds the total is exactly one, so a reset that did not happen fails as loudly as
@@ -52,10 +52,6 @@ final class MicrophonePressTests: XCTestCase {
     /// True on a lane that cleared the app's privacy grants before the suite, where the number of
     /// prompts a run raises is exact rather than a ceiling.
     private var laneResetPrivacy: Bool { environment["TOPO_UITEST_PRIVACY_RESET"] == "1" }
-    /// Every permission alert this run has answered, across the class's tests: the runner keeps
-    /// one process for them, and the grant one test gives stands for the rest.
-    private static var promptsAnswered: [String] = []
-
     override func setUp() {
         continueAfterFailure = false
     }
@@ -379,8 +375,8 @@ final class MicrophonePressTests: XCTestCase {
             allow.tap()
             answered.append(text)
         }
-        Self.promptsAnswered += answered
-        let total = Self.promptsAnswered
+        ChatReading.promptsAnswered += answered
+        let total = ChatReading.promptsAnswered
         XCTContext.runActivity(named: "permission prompts: \(answered.count) here, \(total.count) in this run") { _ in }
         if laneResetPrivacy {
             XCTAssertEqual(total.count, 1,

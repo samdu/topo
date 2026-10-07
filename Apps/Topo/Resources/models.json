@@ -335,13 +335,13 @@
     },
     {
       "id": "claude-code",
-      "version": "2.1.278",
-      "url": "https://downloads.claude.ai/claude-code-releases/2.1.278/linux-arm64-musl/",
+      "version": "2.1.285",
+      "url": "https://downloads.claude.ai/claude-code-releases/2.1.285/linux-arm64-musl/",
       "files": [
         {
           "path": "claude",
-          "size": 226637472,
-          "sha256": "cc8266db086b92faa10180d8c34fb4f196022ad13d0d8800b656966f94a9f0f4"
+          "size": 232077120,
+          "sha256": "31efc4136bc678575f4c6730e248d34f89dbfea0468be1c5d012af199cd62ee8"
         }
       ]
     },
