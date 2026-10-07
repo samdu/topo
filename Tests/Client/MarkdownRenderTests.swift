@@ -758,6 +758,26 @@ final class MarkdownRenderTests: XCTestCase {
         }
     }
 
+    /// A link's words are drawn in the look's link ink, and the words round them are not; a link
+    /// a tap does not follow is drawn as the words it is.
+    func testALinkIsDrawnInTheLooksLinkInk() throws {
+        let ink = UIColor(red: 0.9, green: 0, blue: 0.6, alpha: 1)
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.linkInk = Color(ink)
+            let linked = try draw(turn(.assistant, "see the [docs](https://example.com/docs) now"), look)
+            let inked = try XCTUnwrap(linked.columns(ink), "\(screen): a link drew nothing in the link ink")
+            let all = try XCTUnwrap(linked.inkedColumns, "\(screen): nothing drawn")
+            XCTAssertGreaterThan(inked.lowerBound, all.lowerBound + 10, "\(screen): the words before the link are in its ink")
+            XCTAssertLessThan(inked.upperBound, all.upperBound - 10, "\(screen): the words after the link are in its ink")
+            XCTAssertNotNil(try draw(turn(.assistant, "it is at https://example.com/x"), look).columns(ink),
+                            "\(screen): a bare URL is not drawn as a link")
+            for unfollowed in ["see the [docs](topo://docs) now", "see the docs now"] {
+                XCTAssertEqual(try draw(turn(.assistant, unfollowed), look).count(ink), 0, "\(screen): \(unfollowed)")
+            }
+        }
+    }
+
     /// A table's rule, in a colour nothing else on the stage is.
     private let ruleInk = UIColor(red: 0.6, green: 0, blue: 0.9, alpha: 1)
 
@@ -927,6 +947,15 @@ final class MarkdownRenderTests: XCTestCase {
             rows.reduce(0) { total, y in
                 total + (0..<width).filter { x in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }.count
             }
+        }
+
+        /// The columns anything but white is drawn in, first to last.
+        var inkedColumns: ClosedRange<Int>? {
+            let found = (0..<width).filter { x in
+                (0..<height).contains { y in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }
+            }
+            guard let low = found.first, let high = found.last else { return nil }
+            return low...high
         }
 
         /// The rows anything but white is drawn in, first to last.

@@ -5,9 +5,9 @@ import Foundation
 /// is never drawn from this; it is what `Speaker.speak` hands the voice.
 ///
 /// The source is cut by the transcript's own parse (`Markdown.blocks`), so the voice reads the
-/// words the screen shows and nothing of the syntax around them: emphasis, headings' `#`, list
-/// markers and a link's address are gone before anything here sees the text, and a link is its
-/// words. What is here is what the parse leaves that a voice cannot read:
+/// words the screen shows and nothing of the syntax around them: emphasis, headings' `#` and list
+/// markers are gone before anything here sees the text, and a link whose words are not its
+/// address is read as its words. What is here is what the parse leaves that a voice cannot read:
 ///
 /// - A fenced or indented code block is "See code block N.", N its number in the reply, which is
 ///   the caption the transcript draws over it (`Markdown.Block.codeNumber`): a voice reading
@@ -19,8 +19,12 @@ import Foundation
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
 /// - A rule is nothing.
-/// - In the words of every other block, a URL or an address is left exactly as written: it is
-///   found first and no rule below runs inside it.
+/// - A link whose words are its own address — a bare URL — is "a link to" its host, said as a
+///   name is: `https://example.com/a?b=c` is "a link to example dot com". An address read out
+///   is noise, and the host is what a listener would have kept of it.
+/// - In the words of every other block, a URL the parse did not link (one inside code, or with
+///   a scheme a tap does not follow) or an address is left exactly as written: it is found
+///   first and no rule below runs inside it.
 /// - Inline code is a literal, so its punctuation is said wherever it is, with no judgement of what
 ///   it names: every `/` "slash", every `.` with no space after it "dot" (`./look.json` "dot slash
 ///   look dot json", `x.c` "x dot c"), every `~` "tilde".
@@ -91,6 +95,10 @@ enum Speakable {
         var out = ""
         for run in text.runs {
             let piece = String(text[run.range].characters)
+            if let link = run.link, let host = host(of: link, writtenAs: piece) {
+                out += "a link to " + host
+                continue
+            }
             let literal = run.inlinePresentationIntent?.contains(.code) == true
             out += outsideAddresses(piece, literal ? Self.literal : Self.bare)
         }
@@ -98,6 +106,17 @@ enum Speakable {
             .map { $0.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces) }
             .joined(separator: "\n")
+    }
+
+    /// The host of a link whose words are the link itself, as it is said: without a leading
+    /// `www.`, each dot "dot". Nil for a link whose words are anything else, which is read as
+    /// its words.
+    private static func host(of link: URL, writtenAs words: String) -> String? {
+        let address = link.absoluteString
+        guard words == address || "http://" + words == address || "https://" + words == address,
+              var host = link.host(), !host.isEmpty else { return nil }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return host.replacingOccurrences(of: ".", with: " dot ")
     }
 
     /// `say` applied to what lies between the URLs and addresses in `text`, and never to them.

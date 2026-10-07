@@ -45,6 +45,10 @@ struct ChatView: View {
     /// and the pane's own are. Each is nil until something has measured it — iOS 17 has no
     /// scroll geometry to read at all — and the pane is drawn whole while any of them is.
     @State private var contentBottomInTranscript: CGFloat?
+    #if DEBUG
+    /// What a tap on a reply's link asked to be opened, over a fixture transcript.
+    @State private var debugOpened: [URL] = []
+    #endif
     @State private var transcriptTop: CGFloat?
     @State private var paneTop: CGFloat?
     /// Where the memory's folder lives, and the control that moves it: the settings sheet's
@@ -331,7 +335,8 @@ struct ChatView: View {
                                                         overridePlacement: Tuning.shared.placement,
                                                         overridePin: Tuning.shared.pin,
                                                         presence: panePresence,
-                                                        contentBottom: contentBottomInTranscript))
+                                                        contentBottom: contentBottomInTranscript,
+                                                        opened: debugOpened))
                 #endif
         }
     }
@@ -398,6 +403,7 @@ struct ChatView: View {
                                   actions: turnActions,
                                   draft: draftRow, queued: row.queued(in: harness),
                                   cue: speaker.cue)
+            .recordingLinks { debugOpened.append($0) }
         if #available(iOS 18, *) {
             view
                 // Where the transcript stops drawing, measured down from the transcript's own
@@ -740,6 +746,26 @@ enum Mute {
     /// Read aloud unless muted: a phone that has never been asked reads them.
     static func readsAloud(_ defaults: UserDefaults = .standard) -> Bool {
         defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
+    }
+}
+
+private extension View {
+    /// Over a debug build's fixture transcript (`TOPO_DEBUG_TRANSCRIPT`), a tap on a reply's
+    /// link is handed to `record` and opens nothing, so a UI suite reads which taps were a
+    /// link's. Anywhere else this is the view, and a link opens as the system opens one.
+    @ViewBuilder func recordingLinks(_ record: @escaping @MainActor (URL) -> Void) -> some View {
+        #if DEBUG
+        if DebugRun.transcript() != nil {
+            environment(\.openURL, OpenURLAction { url in
+                record(url)
+                return .handled
+            })
+        } else {
+            self
+        }
+        #else
+        self
+        #endif
     }
 }
 

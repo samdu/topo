@@ -75,14 +75,26 @@ final class SpeakableTests: XCTestCase {
             ("On 9/26/2026.", "On 9/26/2026."),
             ("At 9 a.m. today.", "At 9 a.m. today."),
             ("Mail sam@example.com today.", "Mail sam@example.com today."),
-            ("See https://example.com/a.json now.", "See https://example.com/a.json now."),
-            ("See https://example.com/?file=look.json&path=/home/topo now.",
-             "See https://example.com/?file=look.json&path=/home/topo now."),
-            ("Go to www.example.com/look.json today.", "Go to www.example.com/look.json today."),
-            ("Open <https://example.com/look.json>.", "Open https://example.com/look.json."),
+            ("See ftp://example.com/a.json now.", "See ftp://example.com/a.json now."),
             ("Mail look.json@example.com, then look.json.", "Mail look.json@example.com, then look dot json."),
             ("PrePromptSubmit", "PrePromptSubmit"),
             ("line one\nline two", "line one\nline two"),
+        ])
+    }
+
+    /// A link is read as its words; a bare URL, whose words are its address, as its host.
+    func testALinkIsItsWordsAndABareURLItsHost() {
+        check([
+            ("Read [the docs](https://example.com/docs.html).", "Read the docs."),
+            ("Read [look.json](https://example.com/look.json).", "Read look dot json."),
+            ("See https://example.com/a.json now.", "See a link to example dot com now."),
+            ("See https://example.com/?file=look.json&path=/home/topo now.", "See a link to example dot com now."),
+            ("Open <https://docs.example.co.uk/look.json>.", "Open a link to docs dot example dot co dot uk."),
+            ("Go to www.example.com/look.json today.", "Go to a link to example dot com today."),
+            ("It is at https://example.com.", "It is at a link to example dot com."),
+            ("[https://example.com/a](https://example.com/a)", "a link to example dot com"),
+            // A link a tap does not follow is words, and an address in words is left as written.
+            ("See [the file](file:///etc/hosts) now.", "See the file now."),
         ])
     }
 

@@ -91,11 +91,13 @@ enum DebugRun {
     }
     #endif
 
-    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left>`: the chat draws these fixture turns
+    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left|links|blocks>`: the chat draws these fixture turns
     /// (`PreviewTurns`) in place of the log's, so a UI suite can put Topo over a transcript of a
     /// known shape — nothing, turns with gaps beside them, and turns that leave no gap at all —
     /// whatever the account's log holds. Only what is drawn changes: the harness, the log and the
-    /// microphone are the ordinary ones. Nil when the variable is absent or names none of them.
+    /// microphone are the ordinary ones — and where a link's tap goes, which over a fixture is
+    /// the chat's report (`ChatReport.opened`) and not a browser, so a suite can tap one and
+    /// stay in the app. Nil when the variable is absent or names none of them.
     static func transcript(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Turn]? {
         switch environment[transcriptVariable] {
         case "empty": []
@@ -105,6 +107,8 @@ enum DebugRun {
         case "continuity-short": PreviewTurns.continuityShort
         case "ragged": PreviewTurns.ragged
         case "left": PreviewTurns.left
+        case "links": PreviewTurns.links
+        case "blocks": PreviewTurns.blocks
         default: nil
         }
     }
@@ -427,6 +431,9 @@ extension DebugRun {
         /// Where the transcript's content ends, measured down from its own top edge, which a
         /// scroll moves (iOS 18; nil before it is measured).
         var contentBottom: Double?
+        /// The addresses a tap on a reply's link asked to be opened, in order, over a fixture
+        /// transcript (`TOPO_DEBUG_TRANSCRIPT`), where they are recorded and not opened.
+        var opened: [String] = []
     }
 
     struct TurnReport: Codable, Equatable {
@@ -448,7 +455,7 @@ extension DebugRun {
                            facing: MascotFacing = .left, clearance: CGFloat? = nil,
                            placed: Look.Mascot? = nil, overridePlacement: Look.Mascot.Placement? = nil,
                            overridePin: CGPoint? = nil, presence: Double? = nil,
-                           contentBottom: CGFloat? = nil) -> String {
+                           contentBottom: CGFloat? = nil, opened: [URL] = []) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
                                 facing: facing.rawValue, clearance: clearance.map(Double.init))
         func point(_ point: CGPoint) -> [Double] { [Double(point.x), Double(point.y)] }
@@ -458,6 +465,7 @@ extension DebugRun {
         report.overridePin = overridePin.map(point)
         report.presence = presence
         report.contentBottom = contentBottom.map(Double.init)
+        report.opened = opened.map(\.absoluteString)
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

@@ -181,6 +181,7 @@ enum LookDocument {
         r.font("heading3Font", &value.heading3Font)
         r.font("codeFont", &value.codeFont)
         r.colour("codeInk", &value.codeInk)
+        r.colour("linkInk", &value.linkInk)
         r.object("codeBlock") { enclosure(&value.codeBlock, $0) }
         r.codeOverflow("codeOverflow", &value.codeOverflow)
         r.colour("quoteBar", &value.quoteBar)

@@ -168,6 +168,8 @@ struct Look: Equatable, Sendable {
         var codeFont: Font
         /// Code's ink, inline and fenced.
         var codeInk: Color = Theme.text
+        /// A link's words, which are underlined: the one part of a reply that is a tap target.
+        var linkInk: Color = Theme.primary
         /// What a fenced block is drawn on: an enclosure of its own inside the reply.
         var codeBlock: Enclosure
         /// A code line longer than the column: scrolled sideways inside its enclosure, or

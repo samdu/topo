@@ -24,7 +24,9 @@ enum Markdown {
         /// and the lists inside it lead only what the bars enclose.
         var listsOutside: Int = 0
         /// The block's words with their inline intents — emphasis, strong, code, strikethrough —
-        /// and nothing of the block's own markup. A link is its words and goes nowhere. Empty for
+        /// and nothing of the block's own markup. A web link's run carries its address (`link`),
+        /// written out or a bare URL the parse linked, and is the one part of a reply a tap
+        /// follows; a link to anything else is its words (`opens`). Empty for
         /// a rule, and for a table, whose words are its cells'.
         var text: AttributedString
         /// A code block's number in the reply, from 1 in the order they are written, nil for any
@@ -204,12 +206,23 @@ enum Markdown {
             failurePolicy: .returnPartiallyParsedIfPossible))
     }
 
+    /// Whether a link is one a tap may follow: a web address, `http` or `https` with a host. Any
+    /// other scheme — the app's own, another app's, `file`, `tel`, `javascript` — would hand a
+    /// reply's words a way into something other than a browser, so its run is words alone.
+    static func opens(_ link: URL) -> Bool {
+        guard let scheme = link.scheme?.lowercased(), scheme == "http" || scheme == "https" else { return false }
+        return link.host().map { !$0.isEmpty } == true
+    }
+
     /// Runs of one block with each soft break (parsed as a space) and hard break made a newline,
     /// so the lines of a paragraph break where they were written.
     private static func lineBroken(_ slice: AttributedSubstring) -> AttributedString {
         var text = AttributedString(slice)
-        // A link is drawn as its words: nothing in a reply is somewhere a tap goes.
-        text.link = nil
+        // A link stays on its run only where it is one a tap may follow (`opens`); any other is
+        // its words.
+        for (link, range) in text.runs[\.link] where link.map(opens) == false {
+            text[range].link = nil
+        }
         let breaks = text.runs[\.inlinePresentationIntent].compactMap { intent, range in
             intent.map { $0.contains(.softBreak) || $0.contains(.lineBreak) } == true ? range : nil
         }

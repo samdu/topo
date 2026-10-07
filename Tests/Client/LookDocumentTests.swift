@@ -290,6 +290,12 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(bad.look.markdown.tableRowSpacing, compiled.tableRowSpacing)
         XCTAssertEqual(bad.look.markdown.tableCellMaxWidth, compiled.tableCellMaxWidth, "a cell narrower than a word is refused")
         XCTAssertEqual(bad.look.markdown.tableRuleWidth, 3, "the one good field was taken down with the rest")
+        // A link's ink is one field of its own: refused, the fields beside it are still taken.
+        let link = LookDocument.read(##"{"markdown": {"linkInk": "blue", "codeInk": "#102030", "tableRowSpacing": 4}}"##)
+        XCTAssertEqual(link.notes.count, 1, "\(link.notes)")
+        XCTAssertTrue(link.fields.isSuperset(of: ["markdown.codeInk", "markdown.tableRowSpacing"]), "\(link.fields)")
+        XCTAssertFalse(link.fields.contains("markdown.linkInk"))
+        XCTAssertTrue(LookDocument.read(##"{"markdown": {"linkInk": ["#0000FF", "#8888FF"]}}"##).fields.contains("markdown.linkInk"))
         for width in [40.0, 2000] {
             XCTAssertEqual(LookDocument.read(#"{"markdown": {"tableCellMaxWidth": \#(width)}}"#).look.markdown.tableCellMaxWidth, width)
         }

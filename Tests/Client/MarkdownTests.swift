@@ -289,12 +289,54 @@ final class MarkdownTests: XCTestCase {
         }
     }
 
-    /// A link is drawn as its words and goes nowhere: nothing a reply says is a tap target.
-    func testALinkIsItsWordsAndNothingElse() throws {
-        let blocks = Markdown.blocks("see [the docs](https://example.com) or <https://example.org>")
-        XCTAssertEqual(blocks.map { String($0.text.characters) }, ["see the docs or https://example.org"])
-        for block in blocks {
-            XCTAssertTrue(block.text.runs.allSatisfy { $0.link == nil }, "a link survived: \(block.text)")
+    /// The linked runs of the blocks of `source`: each run's words and where it goes.
+    private func links(_ source: String) -> [String] {
+        Markdown.blocks(source).flatMap { block in
+            block.text.runs.compactMap { run in
+                run.link.map { "\(String(block.text[run.range].characters)) -> \($0.absoluteString)" }
+            }
+        }
+    }
+
+    /// A web link keeps its address on its own run and on nothing round it, whether it was
+    /// written as a link or is a bare URL the parse linked, and the words are all still there.
+    func testAWebLinkIsCarriedOnItsRunAlone() {
+        let source = "see [the docs](https://example.com/a) or <https://example.org> or https://example.net/x."
+        XCTAssertEqual(Markdown.blocks(source).map { String($0.text.characters) },
+                       ["see the docs or https://example.org or https://example.net/x."])
+        XCTAssertEqual(links(source), [
+            "the docs -> https://example.com/a",
+            "https://example.org -> https://example.org",
+            "https://example.net/x -> https://example.net/x",
+        ])
+        // In a heading, an item, a quote and a table's cell alike.
+        XCTAssertEqual(links("# [h](https://e.com/h)\n\n- [i](https://e.com/i)\n\n> [q](https://e.com/q)"),
+                       ["h -> https://e.com/h", "i -> https://e.com/i", "q -> https://e.com/q"])
+        let table = Markdown.blocks("| a |\n|---|\n| [c](https://e.com/c) |")
+        guard case .table(_, let rows) = table.first?.kind else { return XCTFail("\(table)") }
+        XCTAssertEqual(rows.first?.cells.first?.text.runs.first?.link, URL(string: "https://e.com/c"))
+        // The parse keeps a link's words and none of the styles written inside them.
+        XCTAssertEqual(links("[**bold** and `code`](https://e.com/s)"),
+                       ["bold and code -> https://e.com/s"])
+    }
+
+    /// Only a web address is somewhere a tap goes. A link to anything else — the app's own
+    /// scheme, another app's, a file, a script, an address with no host — is its words.
+    func testALinkThatIsNotAWebAddressIsItsWords() {
+        let schemes = ["topo://widget/run", "file:///etc/hosts", "javascript:alert(1)", "tel:5551234",
+                       "mailto:sam@example.com", "x-apple-reminderkit://x", "shortcuts://run-shortcut?name=x",
+                       "data:text/html,hi", "relative/path.md", "/absolute/path", "#anchor", "https:///nohost",
+                       "sms:5551234", "ftp://example.com/a"]
+        for address in schemes {
+            let source = "tap [here](\(address)) now"
+            XCTAssertEqual(links(source), [], address)
+            XCTAssertEqual(Markdown.blocks(source).map { String($0.text.characters) }, ["tap here now"], address)
+        }
+        XCTAssertEqual(links("mail sam@example.com or <mailto:sam@example.com>"), [])
+        XCTAssertEqual(links("[a](HTTPS://Example.com/A) [b](http://example.com)"),
+                       ["a -> HTTPS://Example.com/A", "b -> http://example.com"])
+        for address in ["https://example.com", "http://example.com/a?b=c#d", "https://user@example.com:8443/"] {
+            XCTAssertTrue(Markdown.opens(URL(string: address)!), address)
         }
     }
 

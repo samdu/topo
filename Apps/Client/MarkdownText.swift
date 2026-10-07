@@ -255,14 +255,25 @@ struct MarkdownText: View {
         }
     }
 
-    /// `text` with its inline code runs in the look's code type, monospaced, and its code ink.
+    /// `text` with its inline code runs in the look's code type, monospaced, and its code ink,
+    /// and its linked runs underlined in the look's link ink. A linked run is the one part of a
+    /// reply that is a tap target: `Text` makes exactly the run's own glyphs one, and opens its
+    /// address through the environment's `openURL`.
     static func styled(_ text: AttributedString, look: Look.Markdown) -> AttributedString {
         var text = text
+        let links = text.runs[\.link].compactMap { link, range in link == nil ? nil : range }
+        for range in links {
+            text[range].swiftUI.foregroundColor = look.linkInk
+            text[range].swiftUI.underlineStyle = .single
+        }
         let code = text.runs[\.inlinePresentationIntent].compactMap { intent, range in
             intent?.contains(.code) == true ? range : nil
         }
         for range in code {
             text[range].swiftUI.font = look.codeFont.monospaced()
+        }
+        // Code inside a link is the link's colour: its ink is what says it is one.
+        for range in code where text[range].runs.allSatisfy({ $0.link == nil }) {
             text[range].swiftUI.foregroundColor = look.codeInk
         }
         return text
