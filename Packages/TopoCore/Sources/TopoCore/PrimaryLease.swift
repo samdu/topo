@@ -487,6 +487,20 @@ public actor PrimaryLease {
                     if heldRecord != nil { heldRecord = server }
                     continue
                 }
+                if let winner, winner.holder == device, winner.endpoint == endpoint, winner.epoch <= epochSent {
+                    // This device's own lease at a later epoch it has sent: a claim of its
+                    // own that landed and was never answered. A holder takes the server's
+                    // version as the one held and the batch goes again as its heartbeat;
+                    // after a lapse the batch is not that claim's, and nothing is given up.
+                    if heldRecord != nil, isOwnSinceHeld(winner) {
+                        heldRecord = server
+                        continue
+                    }
+                    if heldRecord == nil {
+                        Perf.mark("lease.batch.refused notHeld")
+                        return nil
+                    }
+                }
                 Perf.mark("lease.batch.refused taken")
                 yield(to: winner)
                 return nil

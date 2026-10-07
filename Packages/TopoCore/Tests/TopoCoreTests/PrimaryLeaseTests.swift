@@ -773,6 +773,25 @@ import TopoCoreTesting
         #expect(await db.current(Lease.recordID) == nil)
     }
 
+    @Test func aBatchAfterARenewalAndAClaimBothLandedUnansweredIsSavedUnderThatClaim() async throws {
+        let link = LossyLinkDatabase(inner: db)
+        let h = lease(hub, on: link)
+        _ = try await h.takeOver()
+        clock.advance(5)
+        link.commitButDropNextSaveAck()
+        _ = try? await h.heartbeat()
+        clock.advance(1)
+        link.commitButDropNextSaveAck()
+        _ = try? await h.takeOver()
+        #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 2)
+        clock.advance(1)
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        #expect(try await h.heartbeat(saving: [note])?.map(\.id) == [note.id])
+        #expect(await h.isPrimary())
+        #expect(await h.held?.epoch == 2)
+        #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
     @Test func aFirstClaimAnsweredAfterTheLeaseWasAbandonedIsFalse() async throws {
         let slow = LateAnswers(db)
         let h = lease(hub, on: slow)

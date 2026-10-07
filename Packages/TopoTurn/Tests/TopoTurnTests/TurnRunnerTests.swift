@@ -74,7 +74,15 @@ import TopoCoreTesting
         guard case .primary = try await hub.acquire() else { Issue.record("hub should claim"); return }
         // The phone has not heartbeated since: by its own clocks it still holds the lease.
         #expect(await lease.isPrimary())
-        await #expect(throws: TurnRunnerError.self) { try await runner.run("second", model: .sonnet5) }
+        let steps = Steps()
+        do {
+            _ = try await runner.run("second", model: .sonnet5) { await steps.add($0) }
+            Issue.record("the turn was answered")
+        } catch TurnRunnerError.notPrimary(.held(let by)) {
+            #expect(by.holder == DeviceID("hub"))
+        }
+        // Refused with the save, then the long way, which finds the hub.
+        #expect(await steps.all == [.saving, .takingLease])
         #expect(brain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one"])
         #expect(await hub.isPrimary())
@@ -92,7 +100,14 @@ import TopoCoreTesting
             await db.setBeforeSave(nil)
             _ = try? await hub.acquire()
         }
-        await #expect(throws: TurnRunnerError.self) { try await runner.run("second", model: .sonnet5) }
+        let steps = Steps()
+        do {
+            _ = try await runner.run("second", model: .sonnet5) { await steps.add($0) }
+            Issue.record("the turn was answered")
+        } catch TurnRunnerError.notPrimary(.held(let by)) {
+            #expect(by.holder == DeviceID("hub"))
+        }
+        #expect(await steps.all == [.saving, .takingLease])
         #expect(brain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one"])
     }
