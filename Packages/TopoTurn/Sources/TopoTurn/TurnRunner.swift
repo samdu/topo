@@ -135,6 +135,8 @@ public actor TurnRunner {
             }
             Perf.mark("turn.lease.acquired")
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            // A caller that stopped while the lease was asked — a sign-out — gives the brain nothing.
+            try Task.checkCancellation()
             if hearing == nil {
                 if known != nil { hearing = hearNow() }
                 await progress?(.saving)
@@ -282,8 +284,10 @@ public actor TurnRunner {
         let nonce = Self.replyNonce(for: transcript.heads)
         // A head this device's brain heard before it was saved, and that reached the log some
         // other way (a limb's write, a crash before the bind): its reply is the one heard.
-        let heads = transcript.heads.compactMap { transcript[$0] }.filter { $0.role == .person }
-        if heads.count == 1, let person = heads.first { await brain.bind(nonce: person.nonce, person: person, reply: nonce) }
+        // Only as the log's one head: beside another the reply answers a fork, under its nonce.
+        if transcript.heads.count == 1, let person = transcript.heads.first.flatMap({ transcript[$0] }), person.role == .person {
+            await brain.bind(nonce: person.nonce, person: person, reply: nonce)
+        }
         if let answered = try await log.turn(appendedUnder: nonce) {
             await brain.landed(answered, nonce: nonce)
             return answered

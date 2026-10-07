@@ -479,6 +479,20 @@ extension TurnRunnerTests {
         let bound = try #require(brain.bound.first)
         #expect(bound.nonce == "n1" && bound.person == person && bound.reply == reply.nonce)
     }
+
+    @Test func aPassBindsNothingBesideAnotherHead() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("answered"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let log = TurnLog(database: db)
+        let root = try await log.writer(for: DeviceID("watch")).append(.person, "root", parents: [], nonce: "n0")
+        _ = try await log.writer(for: DeviceID("hub")).append(.assistant, "the hub's", parents: [root.ref])
+        _ = try await log.writer(for: DeviceID("tablet")).append(.person, "heard here", parents: [root.ref], nonce: "n1")
+        _ = try await runner.answerPending(model: .sonnet5)
+        // The reply answers the fork, under the fork's nonce: the heard words' reply is not it.
+        #expect(brain.bound.isEmpty)
+    }
 }
 
 actor Steps {

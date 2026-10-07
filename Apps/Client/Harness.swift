@@ -107,8 +107,10 @@ final class Harness {
     /// the screen: the app's default widget follows the newest (`DefaultSurface`).
     var onLanded: (@MainActor (Turn) -> Void)?
     /// Told the nonce of a turn that ended in a failure rather than a reply, as it ends: no reply
-    /// is coming for it, and the screen's error line is not a place to work out whose. Not called
-    /// for a turn another primary is answering, whose reply is still on its way.
+    /// is coming for it, and the screen's error line is not a place to work out whose. Told too
+    /// of a turn the guest finished while iCloud had not taken it, its reply read as it was
+    /// written: nothing more is coming to wait for. Not called for a turn another primary is
+    /// answering, whose reply is still on its way.
     var onTurnFailed: (@MainActor (String) -> Void)?
     /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
     /// owed, and what the install above reads the newest of.
@@ -471,6 +473,8 @@ final class Harness {
     /// failure stands until what it was about is tried again.
     private func clearReadFailure() {
         if failure?.source == .read { failure = nil }
+        // Nothing is left for iCloud to catch up on.
+        if failure?.source == .sync, pending.isEmpty, unsaved.isEmpty { failure = nil }
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
@@ -632,8 +636,7 @@ final class Harness {
 
     /// Keeps where the runner stands with the lease for the next launch, unless a sign-out or a
     /// demotion has cleared it meanwhile.
-    private func keepStanding(of runner: TurnRunner) {
-        let login = self.login
+    private func keepStanding(of runner: TurnRunner, under login: Int) {
         Task { [weak self] in
             let standing = await runner.standing
             guard let self, self.login == login else { return }
@@ -705,7 +708,7 @@ final class Harness {
     /// False leaves it as the unsent turn.
     @discardableResult
     private func run(_ attempt: Outgoing) async -> Bool {
-        let generation = inFlight
+        let generation = inFlight, login = self.login
         let text = attempt.text
         turnOpen = true
         // Every way out closes the turn, unless a sign-out or a demotion already has and the
@@ -725,7 +728,7 @@ final class Harness {
             Perf.mark("turn.runner.made")
             // A line longer than this turn is given to the guest behind it.
             hearLine()
-            defer { keepStanding(of: runner) }
+            defer { keepStanding(of: runner, under: login) }
             #if DEBUG
             await DebugRun.delayReply()
             #endif
@@ -787,6 +790,15 @@ final class Harness {
             // the device that holds the lease writes that.
             answeredElsewhere.insert(attempt.nonce)
             if hearing == attempt.nonce { dropWriting() }
+            // Nor is anything on the line given to this device's guest from here: what is still
+            // on its way stops, and what the guest has is not kept as a reply to write.
+            hearingLine?.cancel()
+            for entry in pending {
+                answeredElsewhere.insert(entry.nonce)
+                unsaved[entry.nonce] = nil
+                await brain.withdrawn(nonce: entry.nonce)
+            }
+            guard inFlight == generation else { return false }
             // Not this device's turn to answer: the words go in the log as a limb's, and whichever
             // device is primary answers them there. Settled once they are in the log.
             do {
@@ -862,8 +874,9 @@ final class Harness {
             if replied, let reply = unsaved[nonce] { onWriting?(reply + "\n", nonce) }
             onWriting?(nil, nonce)
             writingSpoken = nil
+            // Read as it was written, so its landing is not read again.
+            if replied { spokenNonces.removeAll { $0 == nonce } }
         }
-        if replied { spokenNonces.removeAll { $0 == nonce } }
         onTurnFailed?(nonce)
     }
 
@@ -1037,7 +1050,7 @@ final class Harness {
                 runner = try await makeRunner()
             }
             guard let runner, self.login == login else { return }
-            defer { keepStanding(of: runner) }
+            defer { keepStanding(of: runner, under: login) }
             let answered = try await runner.answerPending(model: model)
             // A sign-out during the pass: what it found is for a screen that has gone.
             guard self.login == login else { return }
