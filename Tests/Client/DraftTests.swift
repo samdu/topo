@@ -567,6 +567,7 @@ final class TranscriptEndTests: XCTestCase {
     @Observable final class Shown {
         var answer: Turn?
         var queued: [QueuedTurn] = []
+        var after: [QueuedTurn] = []
     }
 
     private struct Stage: View {
@@ -575,7 +576,7 @@ final class TranscriptEndTests: XCTestCase {
         var held = true
         var body: some View {
             let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
-            TranscriptView(turns: turns, draft: held ? draft : nil, queued: (shown.queued, []), answer: shown.answer)
+            TranscriptView(turns: turns, draft: held ? draft : nil, queued: (shown.queued, shown.after), answer: shown.answer)
                 .background(Color.white)
         }
     }
@@ -611,4 +612,25 @@ final class TranscriptEndTests: XCTestCase {
                                                                             reply: UnsavedReply.turn("Calling her too.", place: 0))] }])
         assertOnScreen(try redBands(image), image, "a reply that arrived under a turn on its way")
     }
+
+    /// The row holds a first message with a second on its way below it: as the reply to the
+    /// first grows, the second stays on the screen, whole.
+    func testAReplyGrowingUnderTheRowKeepsTheTurnBelowItOnTheScreen() throws {
+        let long = (1...12).map { "Line \($0) of what the guest is writing, long enough to wrap." }.joined(separator: "\n")
+        // The bubble of the turn below, as tall as it is drawn before the reply grows.
+        func drawn(_ replies: [String]) throws -> (red: [(Int, Int)], blue: [(Int, Int)]) {
+            let shown = Shown()
+            shown.after = [QueuedTurn(text: "and book the flights", nonce: "newer")]
+            let image = try LookStage.image(Stage(turns: said(30), shown: shown), look: Self.replyLook(),
+                                            then: replies.map { text in { shown.answer = UnsavedReply.turn(text, place: 0) } })
+            return (try redBands(image), try blueBands(image))
+        }
+        let before = try drawn(["Calling"]), after = try drawn(["Calling", long])
+        let whole = try XCTUnwrap(before.blue.last, "control: the turn below is on the screen before the reply grows")
+        let reply = try XCTUnwrap(after.red.last, "the growing reply is not on the screen")
+        let below = try XCTUnwrap(after.blue.last, "no turn on its way is on the screen")
+        XCTAssertGreaterThan(below.0, reply.1, "the turn below the reply is not on the screen")
+        XCTAssertEqual(below.1 - below.0, whole.1 - whole.0, accuracy: 2, "the turn below the reply runs under the fold")
+    }
 }
+

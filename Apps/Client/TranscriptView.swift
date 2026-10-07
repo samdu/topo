@@ -83,7 +83,7 @@ struct TranscriptView: View {
             .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
             // A reply the guest wrote ahead of iCloud arrives under words already drawn.
             .onChange(of: end) { _, _ in scroll(proxy, animated: true) }
-            .onChange(of: endWords) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: unsavedWords) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the
@@ -126,13 +126,11 @@ struct TranscriptView: View {
         return turns.last.map { AnyHashable($0.ref) }
     }
 
-    /// The words of the reply drawn last, when that is one the log does not hold: it grows as
-    /// the guest writes it, and the transcript follows it down.
-    var endWords: String? {
-        if let last = queued.after.last { return last.reply?.text }
-        if let answer { return answer.text }
-        if (draft?.state ?? .hidden) != .hidden { return nil }
-        return queued.before.last?.reply?.text
+    /// The words of every reply drawn below the log's turns, top to bottom: each grows as the
+    /// guest writes it and moves whatever is drawn under it, so the transcript follows its end
+    /// down on a change to any of them.
+    var unsavedWords: [String] {
+        queued.before.compactMap { $0.reply?.text } + (answer.map { [$0.text] } ?? []) + queued.after.compactMap { $0.reply?.text }
     }
 
     private static func end(of turn: QueuedTurn) -> AnyHashable {
