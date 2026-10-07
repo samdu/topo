@@ -82,7 +82,9 @@ public enum LeaseOutcome: Hashable, Sendable {
     /// runs the turn itself, or through the log, until that lease lapses,
     /// which is one duration after its holder's last heartbeat.
     case unreachable(Lease)
-    /// The record kept changing under us. Try again next turn.
+    /// The record kept changing under us, or the lease was abandoned
+    /// (`abandon()`) after this call was made. Nothing is held. Try again
+    /// next turn.
     case contended
 }
 
@@ -122,14 +124,16 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// holder that goes away is found by the next probe.
 ///
 /// One operation at a time. Every call that reads or writes the record for
-/// this device (`acquire()`, `takeOver()`, `claim(overLapsed:)`, both
+/// this device (`acquire()`, `takeOver()`, the three claims, both
 /// heartbeats) waits its turn at one gate and runs alone from its first read
 /// to its last answer, in the order called, so no answer comes back to a
 /// lease another call of this device has moved since it was sent. The one
 /// thing that does not wait is `abandon()`, which has to take effect at
 /// once: it moves `generation`, and an operation takes an answer as the
-/// lease held (`hold`) only while the generation is the one it started
-/// under, and sends nothing more once it has moved.
+/// lease held (`hold`) only while the generation is the one it was called
+/// under, and writes nothing more once it has moved. `isPrimary()` and
+/// `held` only read, and do not wait: a probe is answered while a write is
+/// out.
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
@@ -154,8 +158,9 @@ public actor PrimaryLease {
     private var yieldedTo: Lease?
     private var heartbeatTask: Task<Void, Never>?
     /// How many times the lease was abandoned. An operation reads it as it
-    /// starts and checks it after every wait: an answer that comes back
-    /// after an `abandon()` is about a lease given up, and holds nothing.
+    /// is called and checks it before every read and write it sends and
+    /// before it takes an answer: an operation called before an `abandon()`
+    /// writes nothing after it, and its answers hold nothing.
     private var generation = 0
     /// True while an operation is running; the rest wait in `waiting`, in order.
     private var busy = false
@@ -214,10 +219,11 @@ public actor PrimaryLease {
     /// The turn-time path. Returns `.primary` when this device holds the
     /// lease afterwards, whether by keeping, retaking or claiming it.
     public func acquire() async throws -> LeaseOutcome {
+        let began = generation
         await enter()
         defer { leave() }
-        let began = generation
         for _ in 0..<3 {
+            guard generation == began else { return .contended }
             let current = try await database.fetch(Lease.recordID)
             guard generation == began else { return .contended }
 
@@ -234,10 +240,15 @@ public actor PrimaryLease {
                 continue
             }
 
+            if let mine = heldRecord, mine.changeTag != record.changeTag, isOwnSinceHeld(lease) {
+                // This device's own lease at a version it has not heard of: a write of its
+                // own that landed and was never answered, a fresh claim included. Nobody
+                // took anything, and the server's version is the one to go over.
+                heldRecord = record
+            }
+
             if let mine = heldRecord {
-                // The version held, or the lease held at a version not heard of: a write
-                // of this device's that landed and was never answered.
-                if mine.changeTag == record.changeTag || isHeld(lease) {
+                if mine.changeTag == record.changeTag {
                     if !lease.isExpired(at: now()) {
                         if let renewed = try await write(holder(epoch: lease.epoch), over: record.changeTag, began: began) {
                             return .primary(renewed)
@@ -259,6 +270,7 @@ public actor PrimaryLease {
                 forget()
                 return .held(by: lease)
             }
+            guard generation == began else { return .contended }
 
             if hasYielded(to: lease) {
                 return .unreachable(lease)
@@ -276,10 +288,11 @@ public actor PrimaryLease {
     /// learns so at its next heartbeat or turn, and yields. Nothing but the
     /// hub calls this; every other device goes through `acquire()`.
     public func takeOver() async throws -> LeaseOutcome {
+        let began = generation
         await enter()
         defer { leave() }
-        let began = generation
         for _ in 0..<3 {
+            guard generation == began else { return .contended }
             let current = try await database.fetch(Lease.recordID)
             guard generation == began else { return .contended }
             guard let record = current else {
@@ -309,18 +322,20 @@ public actor PrimaryLease {
     /// this device holds the lease afterwards. False, with nothing written, when the record is
     /// not a lapsed lease of another device or the version moved.
     public func claim(overLapsed record: Record) async throws -> Bool {
+        let began = generation
         await enter()
         defer { leave() }
         guard let lease = Lease(record: record), lease.holder != device, lease.isExpired(at: now()) else { return false }
-        return try await write(holder(epoch: lease.epoch + 1), over: record.changeTag, began: generation) != nil
+        return try await write(holder(epoch: lease.epoch + 1), over: record.changeTag, began: began) != nil
     }
 
     /// Stops counting this device primary and stops its heartbeats, without touching the
     /// record, which lapses on its own within one duration. For a claim whose owner cannot
     /// keep it (a takeover whose role records failed to land): the alternative is a lease
     /// renewed forever by nobody, which answers no turns and blocks every other device.
-    /// It does not wait for an operation under way: that operation sends nothing more, and
-    /// what it already sent holds nothing here when it is answered.
+    /// It does not wait for the operations called before it, under way or waiting their turn:
+    /// each writes nothing more, and what one already sent holds nothing here when it is
+    /// answered.
     public func abandon() {
         generation += 1
         forget()
@@ -335,6 +350,8 @@ public actor PrimaryLease {
     /// it properly when the first turn runs. False when a record exists,
     /// whoever holds it and however old.
     public func claimIfNone() async throws -> Bool {
+        await enter()
+        defer { leave() }
         do {
             _ = try await database.save(holder(epoch: 1).record(changeTag: nil))
             return true
@@ -350,14 +367,15 @@ public actor PrimaryLease {
     /// True is this device primary as the call returns: a renewal answered
     /// after the duration it was good for is false.
     public func heartbeat() async throws -> Bool {
+        let began = generation
         await enter()
         defer { leave() }
-        guard let record = heldRecord, let lease = Lease(record: record) else { return false }
+        guard generation == began, let record = heldRecord, let lease = Lease(record: record) else { return false }
         if hasLapsed(lease) {
             lapse()
             return false
         }
-        guard try await write(holder(epoch: lease.epoch), over: record.changeTag, began: generation) != nil else { return false }
+        guard try await write(holder(epoch: lease.epoch), over: record.changeTag, began: began) != nil else { return false }
         return isPrimary()
     }
 
@@ -365,10 +383,12 @@ public actor PrimaryLease {
     /// so the records land only if no other device has claimed the lease
     /// since this one last wrote it: a turn appended this way is never the
     /// work of a displaced brain. Returns the saved records, or nil with
-    /// nothing applied when the lease is not held: never granted, abandoned,
-    /// or taken by another device (which this device then yields to, as
-    /// after a failed heartbeat). A conflict on any record but the lease
-    /// propagates as the database threw it, again with nothing applied.
+    /// nothing applied when the lease is not held: never granted, abandoned
+    /// before the save was sent, or taken by another device (which this
+    /// device then yields to, as after a failed heartbeat). A lease abandoned
+    /// while the save was out leaves the records saved and returned, and
+    /// nothing held. A conflict on any record but the lease propagates as
+    /// the database threw it, again with nothing applied.
     ///
     /// A lease that lapsed locally, its heartbeats late, is not yet anyone
     /// else's. The record is read, and while it is still that lease (this
@@ -381,11 +401,15 @@ public actor PrimaryLease {
     /// Throws `CancellationError`, with nothing written, when the task was
     /// cancelled while the batch waited its turn or read the record.
     public func heartbeat(saving records: [Record]) async throws -> [Record]? {
+        let began = generation
         await enter()
         defer { leave() }
         try Task.checkCancellation()
-        let began = generation
         for _ in 0..<3 {
+            guard generation == began else {
+                Perf.mark("lease.batch.refused notHeld")
+                return nil
+            }
             let over: Record, claim: Lease
             if let record = heldRecord, let lease = Lease(record: record), !hasLapsed(lease) {
                 (over, claim) = (record, holder(epoch: lease.epoch))
@@ -405,6 +429,13 @@ public actor PrimaryLease {
                 let current = server.flatMap(Lease.init(record:))
                 guard let server, let current, current.holder == device, current.epoch == lapsed.epoch,
                       current.endpoint == endpoint else {
+                    if let current, current.holder == device, current.endpoint == endpoint, current.epoch > lapsed.epoch {
+                        // This device's own lease at a later epoch: a claim of its own that
+                        // landed and was never answered. Nothing was given up, and the
+                        // batch is not that claim's; the next `acquire()` takes it up.
+                        Perf.mark("lease.batch.refused notHeld")
+                        return nil
+                    }
                     Perf.mark("lease.batch.refused taken")
                     yield(to: current)
                     return nil
@@ -467,8 +498,11 @@ public actor PrimaryLease {
 
     /// Takes `record`, a write of the lease that was just answered, as the
     /// lease held, good until `deadline`, and keeps it renewed. The only
-    /// place a lease becomes held. False, with nothing taken, when the lease
-    /// was abandoned since the operation that sent the write began.
+    /// place an answered write becomes the lease held; a lease already held
+    /// is moved to the server's version of it, its deadline unchanged, where
+    /// a read or a conflict shows a write of this device's that was never
+    /// answered. False, with nothing taken, when the lease was abandoned
+    /// since the operation that sent the write was called.
     private func hold(_ record: Record, until deadline: TimeInterval, began: Int) -> Bool {
         guard generation == began else { return false }
         heldRecord = record
@@ -503,11 +537,13 @@ public actor PrimaryLease {
         Lease(holder: device, endpoint: endpoint, epoch: epoch, expiresAt: now() + timing.duration)
     }
 
-    /// True when `lease` is the lease this device holds: its own, at the epoch held. Only
-    /// the instance that claimed an epoch writes it again, so the version is this one's too.
-    private func isHeld(_ lease: Lease) -> Bool {
+    /// True when `lease` is this device's own, at this endpoint, at the epoch held or a
+    /// later one. With one operation at a time nothing of this instance's is in flight when
+    /// a read or a conflict shows such a lease, so it is a write of its own that landed and
+    /// was never answered: a heartbeat at the epoch held, or a fresh claim past it.
+    private func isOwnSinceHeld(_ lease: Lease) -> Bool {
         guard let mine = held else { return false }
-        return lease.holder == device && lease.epoch == mine.epoch && lease.endpoint == endpoint
+        return lease.holder == device && lease.endpoint == endpoint && lease.epoch >= mine.epoch
     }
 
     /// Same holder and epoch; the expiry moves with every heartbeat.
@@ -521,11 +557,15 @@ public actor PrimaryLease {
     /// version, its local deadline is set, and its heartbeats are running.
     /// On a conflict the lease is forgotten and the lease that won, written
     /// just now by a device that is evidently alive, is the one this device
-    /// yields to; unless this device holds the lease and the winner is that
-    /// same lease, a write of its own that landed and was never answered,
-    /// which is a success at the server's version. Anything but a conflict
-    /// propagates. Nil, with nothing sent or nothing taken, once the lease
-    /// has been abandoned.
+    /// yields to; unless this device holds a lease and the winner is its own
+    /// at that epoch or a later one, a write of its own that landed and was
+    /// never answered: the server's version is then the one held, its
+    /// deadline unchanged (the version adopted was written no earlier than
+    /// the one the deadline was set for), and the write is a success when
+    /// the winner is the very lease it was writing. A record found gone
+    /// under the version held forgets the lease; any other error propagates.
+    /// Nil, with nothing sent or nothing taken, once the lease has been
+    /// abandoned.
     private func write(_ lease: Lease, over changeTag: String?, began: Int) async throws -> Lease? {
         guard generation == began else { return nil }
         do {
@@ -535,12 +575,11 @@ public actor PrimaryLease {
         } catch RecordDatabaseError.serverRecordChanged(_, let server) {
             guard generation == began else { return nil }
             let winner = Lease(record: server)
-            if heldRecord != nil, let winner, winner.holder == lease.holder, winner.epoch == lease.epoch,
-               winner.endpoint == lease.endpoint {
+            if let winner, isOwnSinceHeld(winner) {
                 // Only a holder can say so; two cold instances creating the
                 // same lease look identical to each other and one must lose.
                 heldRecord = server
-                return winner
+                return winner.epoch == lease.epoch ? winner : nil
             }
             yield(to: winner)
             return nil

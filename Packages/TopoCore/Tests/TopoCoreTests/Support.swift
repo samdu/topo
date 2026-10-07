@@ -130,6 +130,17 @@ actor ReadGate: RecordDatabase {
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
+/// A probe the test answers: the asker waits until it does.
+actor HeldProbe: LeaseProbe {
+    private var waiter: CheckedContinuation<Bool, Never>?
+    var asked: Bool { waiter != nil }
+    func confirms(_ lease: Lease) async -> Bool { await withCheckedContinuation { waiter = $0 } }
+    func answer(_ confirmed: Bool) {
+        waiter?.resume(returning: confirmed)
+        waiter = nil
+    }
+}
+
 /// Releases every waiter once `parties` have arrived, then stays open.
 actor Barrier {
     private let parties: Int

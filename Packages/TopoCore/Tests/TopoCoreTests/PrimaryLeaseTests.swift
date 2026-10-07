@@ -404,7 +404,7 @@ import TopoCoreTesting
     @Test func twoTurnsAtOnceOnADeviceHoldingNothingLeaveItPrimary() async throws {
         let slow = LateAnswers(db)
         let h = lease(hub, on: slow)
-        // The first claim lands and its answer does not come back before the second is refused.
+        // The first claim lands and its answer does not come back; the second waits for it.
         await slow.holdNextSaveAnswer()
         let first = Task { try await h.acquire() }
         #expect(await eventually { await slow.savesOut == 1 })
@@ -586,6 +586,149 @@ import TopoCoreTesting
         _ = try await h.acquire()
         for _ in 0..<500 { await Task.yield() }
         #expect(await ticker.sleeping == 1)
+    }
+
+    @Test func callsGoInTheOrderTheyWereMade() async throws {
+        let slow = LateAnswers(db)
+        let h = lease(hub, on: slow)
+        _ = try await h.acquire()
+        await slow.holdNextSaveAnswer()
+        let renewal = Task { try await h.heartbeat() }
+        #expect(await eventually { await slow.savesOut == 1 })
+        var batches: [Task<[Record]?, any Error>] = []
+        for n in 1...4 {
+            batches.append(Task { try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/\(n)"))]) })
+            for _ in 0..<200 { await Task.yield() }
+        }
+        await slow.releaseSaves()
+        _ = try await renewal.value
+        for batch in batches { #expect(try await batch.value != nil) }
+        #expect(await db.writes.filter { $0.type == "Note" }.map(\.id) == (1...4).map { RecordID("note/\($0)") })
+    }
+
+    @Test func callsWaitingTheirTurnWhenTheLeaseIsAbandonedHoldAndWriteNothing() async throws {
+        let slow = LateAnswers(db)
+        let h = lease(hub, on: slow)
+        _ = try await h.acquire()
+        clock.advance(4)
+        await slow.holdNextSaveAnswer()
+        let renewal = Task { try await h.heartbeat() }
+        #expect(await eventually { await slow.savesOut == 1 })
+        let turn = Task { try await h.acquire() }
+        for _ in 0..<500 { await Task.yield() }
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        let batch = Task { try await h.heartbeat(saving: [note]) }
+        for _ in 0..<500 { await Task.yield() }
+        let calls = await slow.calls
+        await h.abandon()
+        await slow.releaseSaves()
+        #expect(try await !renewal.value)
+        guard case .contended = try await turn.value else { Issue.record("a turn asked for before the abandon claimed"); return }
+        #expect(try await batch.value == nil)
+        #expect(await slow.calls == calls)
+        #expect(await db.current(note.id) == nil)
+        #expect(await h.held == nil)
+        #expect(!(await h.isPrimary()))
+        // A turn asked for after it claims as any other.
+        clock.advance(11)
+        guard case .primary = try await h.acquire() else { Issue.record("should claim"); return }
+    }
+
+    @Test func aLeaseAbandonedWhileATurnProbesTheHolderIsNotClaimed() async throws {
+        _ = try await lease(hub).acquire()
+        clock.advance(1)
+        let probe = HeldProbe()
+        let p = PrimaryLease(database: db, device: phone, endpoint: "phone.local:1", probe: probe,
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        let turn = Task { try await p.acquire() }
+        #expect(await eventually { await probe.asked })
+        await p.abandon()
+        await probe.answer(false)
+        guard case .contended = try await turn.value else { Issue.record("claimed after the abandon"); return }
+        #expect(!(await p.isPrimary()))
+        let record = try #require(await db.current(Lease.recordID))
+        #expect(Lease(record: record)?.holder == hub)
+    }
+
+    @Test func aBatchCancelledWhileItWaitsItsTurnIsNotWritten() async throws {
+        let slow = LateAnswers(db)
+        let h = lease(hub, on: slow)
+        _ = try await h.acquire()
+        clock.advance(4)
+        await slow.holdNextSaveAnswer()
+        let renewal = Task { try await h.heartbeat() }
+        #expect(await eventually { await slow.savesOut == 1 })
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        let batch = Task { try await h.heartbeat(saving: [note]) }
+        for _ in 0..<500 { await Task.yield() }
+        batch.cancel()
+        await slow.releaseSaves()
+        #expect(try await renewal.value)
+        await #expect(throws: CancellationError.self) { try await batch.value }
+        #expect(await db.current(note.id) == nil)
+        // The gate is handed on: the next call goes through, on the lease still held.
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/2"))]) != nil)
+    }
+
+    @Test func aReplyCancelledWhileItWaitsItsTurnIsNotWritten() async throws {
+        let slow = LateAnswers(db), log = TurnLog(database: db)
+        let w = try await log.writer(for: hub)
+        let h = lease(hub, on: slow)
+        _ = try await h.acquire()
+        let person = try #require(try await w.append(.person, "hi", parents: [], at: tA, renewing: h))
+        clock.advance(4)
+        await slow.holdNextSaveAnswer()
+        let renewal = Task { try await h.heartbeat() }
+        #expect(await eventually { await slow.savesOut == 1 })
+        let reply = Task { try await w.append(.assistant, "reply", parents: [person.ref], at: tA + 1, renewing: h) }
+        for _ in 0..<500 { await Task.yield() }
+        reply.cancel()
+        for _ in 0..<500 { await Task.yield() }
+        await slow.releaseSaves()
+        _ = try await renewal.value
+        await #expect(throws: CancellationError.self) { try await reply.value }
+        #expect(try await log.read().ordered.map(\.text) == ["hi"])
+    }
+
+    @Test func aHeartbeatAfterOneThatLandedUnansweredKeepsTheLease() async throws {
+        let link = LossyLinkDatabase(inner: db)
+        let h = lease(hub, on: link)
+        _ = try await h.acquire()
+        clock.advance(2)
+        link.commitButDropNextSaveAck()
+        await #expect(throws: RecordDatabaseError.self) { try await h.heartbeat() }
+        clock.advance(1)
+        #expect(try await h.heartbeat())
+        #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
+    @Test func aTurnAfterAFreshClaimThatLandedUnansweredIsPrimary() async throws {
+        let link = LossyLinkDatabase(inner: db)
+        let h = lease(hub, on: link)
+        _ = try await h.acquire()
+        clock.advance(11)
+        link.commitButDropNextSaveAck()
+        _ = try? await h.acquire()
+        #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 2)
+        clock.advance(1)
+        let retry = try await h.acquire()
+        guard case .primary(let kept) = retry else { Issue.record("the retry answered \(retry)"); return }
+        #expect(kept.epoch == 2)
+        #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
+    @Test func aBatchAfterItsFreshClaimLandedUnansweredYieldsToNobodyAndTheNextTurnClaims() async throws {
+        let link = LossyLinkDatabase(inner: db)
+        let h = lease(hub, on: link)
+        _ = try await h.acquire()
+        clock.advance(11)
+        link.commitButDropNextSaveAck()
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        await #expect(throws: RecordDatabaseError.self) { try await h.heartbeat(saving: [note]) }
+        // The record is this device's own claim at epoch 2, which it never heard landed.
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/2"))]) == nil)
+        guard case .primary = try await h.acquire() else { Issue.record("yielded to its own claim"); return }
+        #expect(await h.isPrimary())
     }
 
     /// Calls made in any order, their answers arriving in any order, on one device with nobody
