@@ -53,7 +53,6 @@ final class SpokenReplyTests: XCTestCase {
         var told: [String] = []
         for message in messages {
             words.begin()
-            if !words.text.isEmpty { told.append(words.text + ReplyWords.separator) }
             for character in message {
                 words.append(String(character))
                 told.append(words.text)
@@ -89,15 +88,15 @@ final class SpokenReplyTests: XCTestCase {
         speaker.stop()
     }
 
-    /// The sentence that ends a message is read when the next message begins, before any of
-    /// that message's words: the break the harness hands over is what ends it.
-    func testTheSentenceBeforeTheBreakIsReadWhenTheNextMessageBegins() async {
+    /// The sentence that ends a message is read when the next message's first words come: the
+    /// break that comes with them is what ends it.
+    func testTheSentenceBeforeTheBreakIsReadWhenTheNextMessageHasWords() async {
         let (speaker, heard) = await speaker()
         speaker.speak(writing: "Let me look", answering: "asked")
         speaker.speak(writing: "Let me look.", answering: "asked")
         try? await Task.sleep(for: .milliseconds(200))
         XCTAssertEqual(heard.sentences, [], "a sentence was read before it had ended")
-        speaker.speak(writing: "Let me look." + ReplyWords.separator, answering: "asked")
+        speaker.speak(writing: "Let me look.\n\nIt", answering: "asked")
         await settle("the first message's sentence") { heard.sentences == ["Let me look."] }
         speaker.speak(writing: "Let me look.\n\nIt is here. ", answering: "asked")
         await settle("the second message's sentence") { heard.sentences.count >= 2 }
@@ -105,12 +104,13 @@ final class SpokenReplyTests: XCTestCase {
         speaker.stop()
     }
 
-    /// What used to be handed over at a new message — the empty string — would have counted the
-    /// next message's sentences from none and read the reply's first ones again on landing; the
-    /// text the harness hands over now never does that, whatever the messages are.
+    /// The text handed over for a turn of several messages only grows, and so does what of it
+    /// is settled, so no sentence is counted from none and read again. `told` is this suite's
+    /// model of the harness; the harness itself is driven in `GuestBridgeTests`.
     func testTheTextHandedOverOnlyEverGrows() {
         for messages in [["One. ", "Two."], ["One.", "", "", "Two. Three."], ["", "One."], ["Same. ", "Same. "],
-                         ["- a\n- b", "| x |\n|---|\n| 1 |\n", "Done."]] {
+                         ["- a\n- b", "| x |\n|---|\n| 1 |\n", "Done."],
+                         ["One. Two. ", "\n\n", "Three."], ["One. ", " \n", "\n\nTwo. ", "  "], ["One.", "\n\n"]] {
             var last = ""
             for text in told(messages) {
                 XCTAssertTrue(text.hasPrefix(last), "\(messages): \(text.debugDescription) after \(last.debugDescription)")

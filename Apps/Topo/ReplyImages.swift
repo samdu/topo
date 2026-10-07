@@ -25,8 +25,11 @@ enum ReplyImages {
         let parts = path.split(separator: "/", omittingEmptySubsequences: true)
         guard !path.hasPrefix("/"), !parts.isEmpty, !parts.contains(where: { $0 == ".." || $0 == "." }) else { return nil }
         // The home itself is opened as what it is: a link standing where the home should be is
-        // refused like any other.
-        let base = open(home.path(percentEncoded: false), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        // refused like any other. Its path is given with no slash at its end, since a path
+        // that ends in one is resolved through a link whatever the flags say.
+        var root = home.path(percentEncoded: false)
+        while root.count > 1, root.hasSuffix("/") { root.removeLast() }
+        let base = open(root, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard base >= 0 else { return nil }
         defer { close(base) }
         let file = openat(base, parts.joined(separator: "/"), O_RDONLY | O_NOFOLLOW_ANY | O_NONBLOCK | O_CLOEXEC)

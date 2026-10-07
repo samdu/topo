@@ -58,6 +58,12 @@ final class ReplyImagesTests: XCTestCase {
         try FileManager.default.createSymbolicLink(atPath: linked.path(percentEncoded: false),
                                                    withDestinationPath: home.path(percentEncoded: false))
         XCTAssertNil(ReplyImages.bytes(at: "charts/sizes.png", under: linked), "a link standing as the home was followed")
+        // The app names the home as a directory, so its path ends in a slash.
+        let hinted = root.appending(path: "linked-home", directoryHint: .isDirectory)
+        XCTAssertTrue(hinted.path(percentEncoded: false).hasSuffix("/"))
+        XCTAssertNil(ReplyImages.bytes(at: "charts/sizes.png", under: hinted), "a link standing as the home was followed by its slash")
+        XCTAssertEqual(ReplyImages.bytes(at: "charts/sizes.png", under: root.appending(path: "home", directoryHint: .isDirectory)),
+                       Data("picture".utf8))
         XCTAssertNil(ReplyImages.bytes(at: "a.png", under: root.appending(path: "none")), "a home that is not there was read")
     }
 

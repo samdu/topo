@@ -36,7 +36,8 @@ enum Markdown {
     }
 
     /// One row of a table: a cell for every column of the table, in order, an empty one where
-    /// the source wrote nothing between two bars.
+    /// the source wrote nothing between two bars. The columns are the header's: a cell a row
+    /// writes past them is one the parse does not keep, so it is in no row.
     struct TableRow: Equatable {
         var cells: [TableCell]
     }
@@ -63,8 +64,9 @@ enum Markdown {
         /// A table: the header row, whose cells name the columns, and the rows under it. Every
         /// row holds a cell for every column.
         case table(header: TableRow, rows: [TableRow])
-        /// An image, wherever in a block it was written: its source as the reply wrote it, and
-        /// its alternative text. It is a block of its own, after the block it was written in,
+        /// An image written in a block, outside a link: its source as the reply wrote it, and
+        /// its alternative text. (One written as a link's words is that link, drawn as its
+        /// alternative text.) It is a block of its own, after the block it was written in,
         /// which keeps its words. Where the source may be read from is `place(ofImage:)`.
         case image(source: String, alt: String)
         case rule
@@ -280,11 +282,13 @@ enum Markdown {
         guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~"), !path.hasPrefix("\\"),
               !path.unicodeScalars.contains(where: { $0.value == 0 }) else {
             // The vault by its mount is the memory; any other absolute path is outside.
-            return memoryNames.contains { path == "/" + $0 || path.hasPrefix("/" + $0 + "/") } ? .memory : .outside
+            let lowered = path.lowercased()
+            return memoryNames.contains { lowered == "/" + $0 || lowered.hasPrefix("/" + $0 + "/") } ? .memory : .outside
         }
         let parts = path.split(separator: "/", omittingEmptySubsequences: true).filter { $0 != "." }
         guard let first = parts.first, !parts.contains("..") else { return .outside }
-        if memoryNames.contains(String(first)) { return .memory }
+        // By any case: the home's folder may be on a filesystem that does not tell them apart.
+        if memoryNames.contains(first.lowercased()) { return .memory }
         return .home(parts.joined(separator: "/"))
     }
 

@@ -556,11 +556,13 @@ final class Speaker {
         let fences = settled.components(separatedBy: "```")
         if fences.count % 2 == 0 { settled = fences.dropLast().joined(separator: "```") }
         // A table is read as the count of its rows, which every further row changes: none of
-        // it is settled until a line that is no row follows it.
+        // it is settled until a line that is no row follows it. A row is a line that opens
+        // with a bar, which is known at its first character, so no line is half read and then
+        // taken back; a bar further along a line of prose is prose.
         var lines = settled.split(separator: "\n", omittingEmptySubsequences: false)
         var whole = false
         if lines.last == "" { lines.removeLast(); whole = true }
-        while let last = lines.last, last.contains("|") { lines.removeLast(); whole = true }
+        while let last = lines.last, last.drop(while: { " \t>".contains($0) }).hasPrefix("|") { lines.removeLast(); whole = true }
         return lines.isEmpty ? "" : lines.joined(separator: "\n") + (whole ? "\n" : "")
     }
 

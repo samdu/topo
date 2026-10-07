@@ -265,8 +265,10 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(blocks.last.map { String($0.text.characters) }, "Done.")
     }
 
-    /// Every word of every cell of a table is in the block, whatever the table's shape: the
-    /// words of the source's cells, in order, are the words of the block's.
+    /// Every word of every cell the parse kept of a table is in the block, whatever the table's
+    /// shape. A cell a row writes past its header's columns is one the parse itself drops, as
+    /// the table's syntax has it, so it is in no run to draw: "extra" below, and what follows a
+    /// bar written inside a cell's code.
     func testNoCellOfATableIsDropped() {
         let sources = [
             "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n| 7 | 8 | 9 |",
@@ -287,6 +289,8 @@ final class MarkdownTests: XCTestCase {
             XCTAssertFalse(parsed.isEmpty, source)
             XCTAssertEqual(drawn.sorted(), parsed.sorted(), source)
         }
+        let over = Markdown.blocks("| a | b |\n|---|---|\n| 1 | 2 | extra |").compactMap(Self.cells)
+        XCTAssertEqual(over, [[["a", "b"], ["1", "2"]]], "the parse keeps a row to its header's columns")
     }
 
     /// The linked runs of the blocks of `source`: each run's words and where it goes.
@@ -388,7 +392,8 @@ final class MarkdownTests: XCTestCase {
         for source in outside {
             XCTAssertEqual(Markdown.place(ofImage: source), .outside, source.debugDescription)
         }
-        for source in ["memory/a.png", "memory", "./memory/a.png", "/memory/a.png", "/memory", "memory//a.png", "%6Demory/a.png"] {
+        for source in ["memory/a.png", "memory", "./memory/a.png", "/memory/a.png", "/memory", "memory//a.png", "%6Demory/a.png", "Memory/a.png",
+                       "/MEMORY/a.png"] {
             XCTAssertEqual(Markdown.place(ofImage: source), .memory, source)
         }
         XCTAssertEqual(Markdown.place(ofImage: "https://example.com/i.png"), .web(URL(string: "https://example.com/i.png")!))

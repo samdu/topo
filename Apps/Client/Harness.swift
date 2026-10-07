@@ -674,9 +674,9 @@ final class Harness {
     /// message's words so far, the ones before a tool call included, as the reply will be
     /// written to the log (`ReplyWords`, which the bridge writes it from too).
     ///
-    /// Whoever reads it aloud is handed a string that only ever grows: at a new message, what
-    /// was written with the paragraph break after it, so the last message's final sentence is
-    /// one that has ended, and then the words as they come.
+    /// Whoever reads it aloud is handed that same text and nothing else, so a string that only
+    /// ever grows: a new message adds nothing until it has words, and then the paragraph break
+    /// comes with them, which is what ends the sentence before it.
     private func follow(_ activity: GuestActivity) {
         switch activity {
         case .began(_, let answering):
@@ -685,9 +685,6 @@ final class Harness {
             writingSpoken = turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
         case .update(.event(.writingBegan)):
             words.begin()
-            if let writing, !writing.isEmpty, let writingSpoken {
-                onWriting?(writing + ReplyWords.separator, writingSpoken)
-            }
         case .update(.event(.writing(let more))):
             if writing == nil { Perf.mark("turn.text.first") }
             words.append(more)

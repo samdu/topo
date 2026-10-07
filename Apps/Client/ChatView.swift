@@ -405,7 +405,9 @@ struct ChatView: View {
                                   cue: speaker.cue)
             // An image in a reply is read from the guest's home, and from nowhere else.
             .environment(\.replyImage, ReplyImages.read)
+            #if DEBUG
             .recordingLinks { debugOpened.append($0) }
+            #endif
         if #available(iOS 18, *) {
             view
                 // Where the transcript stops drawing, measured down from the transcript's own
@@ -752,11 +754,11 @@ enum Mute {
 }
 
 private extension View {
+    #if DEBUG
     /// Over a debug build's fixture transcript (`TOPO_DEBUG_TRANSCRIPT`), a tap on a reply's
     /// link is handed to `record` and opens nothing, so a UI suite reads which taps were a
     /// link's. Anywhere else this is the view, and a link opens as the system opens one.
     @ViewBuilder func recordingLinks(_ record: @escaping @MainActor (URL) -> Void) -> some View {
-        #if DEBUG
         if DebugRun.transcript() != nil {
             environment(\.openURL, OpenURLAction { url in
                 record(url)
@@ -765,10 +767,8 @@ private extension View {
         } else {
             self
         }
-        #else
-        self
-        #endif
     }
+    #endif
 }
 
 /// A spoken turn's reply read aloud: the chat's `Harness.onReply`, answering whether the harness

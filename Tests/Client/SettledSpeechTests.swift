@@ -31,6 +31,22 @@ final class SettledSpeechTests: XCTestCase {
         XCTAssertEqual(Speaker.settled(table + "| 3 | 4 |\n"), "Here it is.\n\n")
         XCTAssertEqual(Speaker.settled(table + "| 3 | 4 |\n\nDone. "), table + "| 3 | 4 |\n\nDone. ")
         XCTAssertEqual(Speaker.settled("| a | b |\n"), "")
+        XCTAssertEqual(Speaker.settled("> | a | b |\n> |---|---|\n"), "")
+    }
+
+    /// A bar in a line of prose is not a table's row: what was settled before the bar was
+    /// written stays settled, so nothing already read is read again.
+    func testABarInProseTakesNothingBack() {
+        let reply = "Run it first. Then `ls | wc -l` counts them.\nThat is all. Really."
+        var last = ""
+        var written = ""
+        for character in reply {
+            written.append(character)
+            let settled = Speaker.settled(written)
+            XCTAssertTrue(settled.hasPrefix(last), "after \(written.debugDescription)")
+            last = settled
+        }
+        XCTAssertEqual(Speaker.spoken(last).map(\.text), ["Run it first.", "Then ls | wc -l counts them.", "That is all."])
     }
 
     /// An image is read after the block it is written in, so that block is not settled until a
