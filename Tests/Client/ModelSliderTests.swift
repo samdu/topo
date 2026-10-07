@@ -324,7 +324,13 @@ final class ModelSliderTests: XCTestCase {
         let stops = ClaudeModel.allCases.map { Composer.Models.Stop(id: $0.rawValue, name: $0.displayName) }
         var levels: [Double] = []
         for model in ClaudeModel.allCases {
-            let view = ChatCanvas(turns: PreviewTurns.long, mascot: MascotState(model: model.rawValue),
+            // As the chat hands him over (`Mascot.drawn`): a debug build's Haiku, mid-turn, wearing
+            // the slider's choice.
+            let mascot = Mascot(model: ClaudeModel.haiku.rawValue)
+            mascot.chosen = model.rawValue
+            mascot.guestTurnBegan()
+            mascot.guest(.event(.started(session: "s", model: ClaudeModel.haiku.rawValue)))
+            let view = ChatCanvas(turns: PreviewTurns.long, mascot: mascot.drawn,
                                   models: Composer.Models(stops: stops, chosen: model.rawValue, open: true))
                 .environment(\.look, look)
                 .environment(\.scenePhase, .active)
@@ -350,7 +356,9 @@ final class ModelSliderTests: XCTestCase {
             XCTAssertEqual(box.minY + (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * look.mascot.scale, pane.minY, accuracy: 1,
                            "\(model): his shelf is not on the pane's top edge")
             XCTAssertTrue(pane.contains(stop), "\(model): the stop is not on the pane")
-            levels.append(levelForModel(model.rawValue))
+            // The head the engine was handed, off the canvas that drew him.
+            XCTAssertEqual(canvas.driver.headInForce, levelForModel(model.rawValue), "\(model): not the chosen model's head")
+            levels.append(canvas.driver.headInForce)
             CATransaction.flush()
             let image = UIGraphicsImageRenderer(size: window.bounds.size).image { _ in
                 window.drawHierarchy(in: window.bounds, afterScreenUpdates: true)

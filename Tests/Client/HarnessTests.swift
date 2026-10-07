@@ -1459,6 +1459,22 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the mark outlived it too")
     }
 
+    /// What the look calls a model is what the notice says is being asked: the mind renames Opus,
+    /// and the turn in flight says the new name.
+    func testTheAskingNoticeSaysTheLooksNameForTheModel() async throws {
+        let transport = ScriptedTransport((200, reply("Paris.")))
+        let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(), transport: transport)
+        harness.model = .opus
+        var mind = Look.Mind()
+        mind.opus = "Opus 5.5"
+        harness.mind = mind
+        let seen = Said()
+        transport.duringRequest = { await MainActor.run { seen.add(harness.status ?? "") } }
+        await harness.send("what is the capital of France")
+        XCTAssertEqual(seen.texts, ["Asking Opus 5.5…"])
+        XCTAssertEqual(harness.name(of: .sonnet), "Sonnet", "a name the look did not set changed")
+    }
+
     /// Muted, what the guest writes of a spoken turn's reply is not read as it comes; with the
     /// mute lifted while it is still being written, it is read from its first sentence, since
     /// nothing of it has been.

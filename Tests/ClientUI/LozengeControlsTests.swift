@@ -90,6 +90,67 @@ final class LozengeControlsTests: XCTestCase {
         XCTAssertTrue(app.keyboards.firstMatch.exists && lower.exists, "shutting the slider took the keyboard away")
     }
 
+    /// A finger drawn along the line chooses the stop it ends nearest: from Sonnet across Opus to
+    /// Fable, and back again after a hold on the knob first, which is a long press on where Topo
+    /// sits and must neither pick him up nor pin him.
+    func testAFingerDrawnAlongTheSliderChoosesAndAHoldOnTheKnobPinsNothing() throws {
+        let app = ChatReading.launch(transcript: "empty", tuning: "")
+        let model = app.buttons["composer-model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 60), "the glass has no model control")
+        model.tap()
+        let sonnet = app.buttons["composer-model-sonnet"], fable = app.buttons["composer-model-fable"]
+        XCTAssertTrue(sonnet.waitForExistence(timeout: 10), "the slider did not open")
+        sonnet.tap()
+        XCTAssertTrue(becomes(model, "value == 'Sonnet'"))
+        // The knob is at the top of the stop's column, on the line.
+        let knob = { (stop: XCUIElement) in stop.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)) }
+        knob(sonnet).press(forDuration: 0.05, thenDragTo: knob(fable))
+        XCTAssertTrue(becomes(model, "value == 'Fable'"), "a finger drawn to Fable chose \(String(describing: model.value))")
+        try ChatReading.wait(app, "over Fable's stop") { _, topo in topo.standing }
+        knob(fable).press(forDuration: 0.8, thenDragTo: knob(sonnet))
+        XCTAssertTrue(becomes(model, "value == 'Sonnet'"), "a hold and a slide to Sonnet chose \(String(describing: model.value))")
+        let (chat, topo) = try ChatReading.wait(app, "standing after the hold") { _, topo in topo.standing }
+        XCTAssertEqual(topo.drags, 0, "the hold on the knob picked him up")
+        XCTAssertNil(chat.overridePlacement, "the hold on the knob pinned him")
+        XCTAssertNil(chat.overridePin)
+        XCTAssertEqual(chat.placement, "roam")
+    }
+
+    /// A press on the microphone shuts the slider: the flanks go under the thumb, and the slider
+    /// with them.
+    func testAPressOnTheMicrophoneShutsTheSlider() throws {
+        let app = ChatReading.launch(transcript: "empty", tuning: "")
+        let mic = ChatReading.microphone(app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        let model = app.buttons["composer-model"]
+        model.tap()
+        let slider = app.descendants(matching: .any)["composer-models"]
+        XCTAssertTrue(app.buttons["composer-model-opus"].waitForExistence(timeout: 10), "the slider did not open")
+        let before = try XCTUnwrap(ChatReading.mic(mic), "the microphone reports nothing")
+        mic.press(forDuration: 0.2)
+        ChatReading.answerPrompt()
+        XCTAssertTrue(becomes(slider, "exists == false"), "a press on the microphone left the slider open")
+        XCTAssertEqual(ChatReading.mic(mic)?.presses, before.presses + 1, "the press did not reach the microphone")
+        XCTAssertTrue(becomes(model, "label == 'Choose the model'"), "the control still says the slider is open")
+    }
+
+    /// What the look calls a model is what the glass calls it: the stop's name and the control's
+    /// value, for the one the look renames and no other.
+    func testTheGlassCallsAModelWhatTheLookCallsIt() throws {
+        let app = ChatReading.launch(transcript: "empty", tuning: "", look: #"{"mind": {"opus": "Opus 5.5"}}"#)
+        let model = app.buttons["composer-model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 60), "the glass has no model control")
+        model.tap()
+        let opus = app.buttons["composer-model-opus"]
+        XCTAssertTrue(opus.waitForExistence(timeout: 10), "the slider did not open")
+        XCTAssertEqual(opus.label, "Opus 5.5")
+        XCTAssertEqual(app.buttons["composer-model-sonnet"].label, "Sonnet")
+        opus.tap()
+        XCTAssertTrue(becomes(model, "value == 'Opus 5.5'"), "the control says \(String(describing: model.value))")
+        app.buttons["composer-model-sonnet"].tap()
+        XCTAssertTrue(becomes(model, "value == 'Sonnet'"))
+    }
+
     /// Waits, bounded, for `element` to be as `predicate` says: what a tap changes is drawn by the
     /// app's next update, which a snapshot taken on the line after the tap can come before.
     private func becomes(_ element: XCUIElement, _ predicate: String, timeout: TimeInterval = 10) -> Bool {

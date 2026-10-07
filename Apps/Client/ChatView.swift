@@ -137,7 +137,7 @@ struct ChatView: View {
             .coordinateSpace(.named(Self.space))
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
             // under them and the glass leave him room, on the glass, or at a pin.
-            .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+            .mascotRoams(mascot.drawn, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
@@ -253,6 +253,8 @@ struct ChatView: View {
         .onChange(of: harnessFacts, initial: true) { _, facts in
             mascot.harness(model: facts.model, tokens: facts.context)
         }
+        // And over the open model slider, the model chosen there, which no turn's events change.
+        .onChange(of: sliderChoice, initial: true) { _, chosen in mascot.chosen = chosen }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { row.text = text } }
         // The row holds the turn's words until the turn is in the log, and the log is what ends
         // it: a turn whose reply failed is in the log like any other, so the row clears and the
@@ -480,13 +482,16 @@ struct ChatView: View {
     }
 
     /// What the chat's harness says of the model and the context, for Topo: the model the debug
-    /// build's pin makes of the setting, since that is the model that answers — except while the
-    /// model slider is open, when he wears the model chosen there, so his head is the one the
-    /// knob he sits over names in every build.
+    /// build's pin makes of the setting, since that is the model that answers.
     private var harnessFacts: HarnessFacts {
         let setting = ClaudeModel(setting: modelSetting) ?? .default
-        return HarnessFacts(model: (modelsOpen ? setting : ClaudeModel.effective(setting)).rawValue,
-                            context: harness.context)
+        return HarnessFacts(model: ClaudeModel.effective(setting).rawValue, context: harness.context)
+    }
+
+    /// The model chosen on the model slider while it is open, which is the head Topo wears over
+    /// it in every build and through a turn (`Mascot.chosen`); nil while it is shut.
+    private var sliderChoice: String? {
+        modelsOpen ? (ClaudeModel(setting: modelSetting) ?? .default).rawValue : nil
     }
 
     private struct HarnessFacts: Equatable {
