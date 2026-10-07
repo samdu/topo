@@ -662,6 +662,8 @@ final class Harness {
             let standing = await runner.standing
             guard let self, self.login == login else { return }
             self.standing = standing
+            // The lease is this device's again: the line is given ahead as before.
+            if standing == .mine { self.handedBack = false }
         }
     }
 

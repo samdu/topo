@@ -1748,6 +1748,53 @@ extension GuestBridgeTests {
         XCTAssertEqual(turns.map(\.text), ["what time is it?", "the phone's answer"])
     }
 
+    /// The same through the harness: a hub takes the lease and goes, the phone that answered
+    /// cannot confirm it, so its words go to the log as a limb's with its guest already on
+    /// them. When the hub's lease lapses the phone's pass writes the reply its guest made, asked
+    /// once, and the line is given ahead again from there.
+    func testAPhoneThatHandsATurnBackAndThenAnswersItAsksItsGuestOnce() async throws {
+        let db = Outage()
+        let clock = Ticks()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("the phone's answer"),
+                                                       .reply("third"), .reply("fourth")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                   now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
+        let took = try await hub.takeOver()
+        guard case .primary = took else { return XCTFail("the hub did not take the lease") }
+
+        harness.willSend("what time is it?")
+        await harness.retry()
+        try await eventually("the guest done with the words") { guest.inputs.count == 2 }
+        XCTAssertEqual(harness.turns.last?.text, "what time is it?")
+        XCTAssertEqual(harness.turns.last?.role, .person)
+        XCTAssertTrue(harness.replies.isEmpty, "this phone's reply is drawn for a turn another device holds")
+
+        clock.advance(11)
+        await harness.answerPending()
+        XCTAssertEqual(guest.inputs.count, 2, "the guest was asked the same words again")
+        XCTAssertEqual(harness.turns.last?.text, "the phone's answer")
+
+        // The lease is the phone's again: two more messages are both with the guest ahead of iCloud.
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.stall(true)
+        let third = harness.willSend("and now?")
+        let fourth = harness.willSend("and then?")
+        let sending = Task { await harness.retry() }
+        try await eventually("both answered with iCloud out") {
+            harness.replies[third] == "third" && harness.replies[fourth] == "fourth"
+        }
+        await db.stall(false)
+        await sending.value
+        XCTAssertEqual(harness.turns.suffix(4).map(\.text), ["and now?", "third", "and then?", "fourth"])
+        XCTAssertEqual(guest.inputs.count, 4)
+    }
+
     /// An input asked once its turn was saved, its reply still owed the log: a launch with no
     /// read is not given the same words ahead.
     func testWordsAnOwedReplyAnswersAreNotGivenAheadByTheNextLaunch() async throws {
@@ -2016,6 +2063,15 @@ private func eventually(_ what: String, within seconds: TimeInterval = 10, _ con
         }
         try await Task.sleep(for: .milliseconds(10))
     }
+}
+
+/// The lease's two clocks, moved together by the test.
+private final class Ticks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var passed: TimeInterval = 1_000
+    var elapsed: TimeInterval { lock.withLock { passed } }
+    var wall: Date { Date(timeIntervalSince1970: 1_800_000_000 + elapsed) }
+    func advance(_ seconds: TimeInterval) { lock.withLock { passed += seconds } }
 }
 
 private struct Confirms: LeaseProbe {
