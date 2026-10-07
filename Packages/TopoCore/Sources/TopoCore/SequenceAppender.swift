@@ -108,7 +108,9 @@ actor SequenceAppender {
             return try await appendNow(nonce: nonce, exact: exact, save: save, make)
         }
         queue = task
-        return try await task.value
+        // The append runs in a task of its own so the next one can wait on it; the caller's
+        // cancellation is passed on, so a `save` that waits (a lease's turn) can end unwritten.
+        return try await withTaskCancellationHandler { try await task.value } onCancel: { task.cancel() }
     }
 
     /// Moves past any record of this device the store already holds at or
