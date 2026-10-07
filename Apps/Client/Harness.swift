@@ -390,8 +390,12 @@ final class Harness {
         forgetHeard()
         // The line goes to the log as a limb's below, which waits on iCloud: none of it reaches
         // this device's guest meanwhile.
+        // Nor does anything else begin while it does: there is no runner to hear through, and the
+        // line is this function's until it returns.
+        runner = nil
+        lease = nil
+        busy = true
         for entry in pending { await brain.stopHearing(nonce: entry.nonce) }
-        busy = false
         status = nil
         turnOpen = false
         do {
@@ -414,6 +418,7 @@ final class Harness {
         // What the guest ended meanwhile, before it was told to forget, is not kept either.
         dropWriting()
         forgetHeard()
+        busy = false
     }
 
     /// A sign-out or a demotion: what the guest was given ahead of its turns went with the login.
@@ -823,7 +828,7 @@ final class Harness {
             guard inFlight == generation else { return false }
             turnOpen = false
             // Displaced, another device has just taken the lease, and the line stays off this guest.
-            if case TurnRunnerError.displaced = underlying {} else { handedBack = false }
+            if case TurnRunnerError.displaced = underlying { handedBack = true } else { handedBack = false }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))

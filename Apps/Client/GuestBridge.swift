@@ -185,6 +185,9 @@ struct GuestLedger: Codable, Equatable, Sendable {
         var person: String?
         /// The nonces the person's turns it answers were said under.
         var said: [String]?
+        /// Inputs given ahead whose turns the log moved past, counted in `covers`: they leave
+        /// `early` when this input's reply lands.
+        var passed: [String]?
     }
 
     /// The ledger on disk. No file is an empty ledger: nothing was ever sent, or sign-out took it
@@ -348,7 +351,8 @@ actor GuestBridge: Brain {
                 // Words given ahead that the log has moved past go here as on the path below,
                 // counted with this input once its reply lands.
                 let passed = passed(in: request.context)
-                ledger.early?.removeAll { passed.inputs.contains($0.input) }
+                let named = Array(Set(heard.passed ?? []).union(passed.inputs))
+                ledger.pending?.passed = named
                 ledger.pending?.covers.formUnion(passed.received)
                 ledger.pending?.parents = request.parents
                 ledger.pending?.answering = request.answering.map(\.ref)
@@ -428,8 +432,8 @@ actor GuestBridge: Brain {
         // Words given ahead whose turn this request shows in the log some other way — answered
         // by another device, moved past, or one head of a fork: the guest received them, so they
         // are not told again, and the reply it made of them is not written.
-        // They leave the ledger with the record of the input that counts them, below: a request
-        // that fails before it is sent keeps them, and what they told is not told again.
+        // They leave the ledger when the reply to the input that counts them lands: an input
+        // that is never received, or never answered, leaves them to be found again.
         let passed = passed(in: request.context + request.answering)
         received.formUnion(passed.received)
 
@@ -462,12 +466,11 @@ actor GuestBridge: Brain {
         // `ready` can wait a long time, and a sign-out can come while it does.
         try stillCurrent(login)
         // Written before the input goes: after a crash this is how the transcript is asked.
-        ledger.early?.removeAll { passed.inputs.contains($0.input) }
         try record(GuestLedger.Pending(input: id, nonce: request.nonce, parents: request.parents,
                                        answering: request.answering.map(\.ref),
                                        covers: covers,
                                        session: session, sentAt: Date(), state: .sent,
-                                       said: request.answering.map(\.nonce)))
+                                       said: request.answering.map(\.nonce), passed: Array(passed.inputs)))
         let pid = await conversation.residentPID()
         try stillCurrent(login)
         let updates: AsyncStream<GuestSession.TurnUpdate>
@@ -586,6 +589,7 @@ actor GuestBridge: Brain {
         // Another device's reply under the same nonce is not what the guest wrote, and is told.
         if pending.state == .answered, current, pending.text == nil || pending.text == reply.text { ledger.seen.insert([reply.ref]) }
         settle(pending.said ?? [])
+        if pending.state != .sent, let passed = pending.passed { ledger.early?.removeAll { passed.contains($0.input) && $0.bound == nil } }
         flown[pending.input] = nil
         if held != nil { ledger.pending = nil } else if let waiting { ledger.early?.remove(at: waiting) }
         // The next input bound and waiting for the slot takes it.
@@ -855,8 +859,6 @@ actor GuestBridge: Brain {
         try? save()
     }
 
-    /// The guest's replies to words given ahead that the log does not hold yet, by the person's
-    /// nonce: what the screen draws under those words until their turns land.
     /// The nonces among `unsaved()` whose turns are saved and whose replies this device owes
     /// the log: written by the next pass whatever the log has gone on to hold.
     func owedAhead() -> Set<String> {
@@ -867,6 +869,8 @@ actor GuestBridge: Brain {
         return owed
     }
 
+    /// The guest's replies to words given ahead that the log does not hold yet, by the person's
+    /// nonce: what the screen draws under those words until their turns land.
     func unsaved() -> [String: String] {
         guard readLedger() else { return [:] }
         var replies: [String: String] = [:]

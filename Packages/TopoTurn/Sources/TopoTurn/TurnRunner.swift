@@ -186,6 +186,8 @@ public actor TurnRunner {
             // the call, or between the call and this write, refuses the batch and nothing lands.
             guard let assistant = try await writer.append(.assistant, reply.text, parents: [person.ref],
                                                           nonce: replyNonce, renewing: lease) else {
+                // Another device took the lease: it answers from here, and nothing is heard ahead of it.
+                standing = .elsewhere
                 throw TurnRunnerError.displaced
             }
             Perf.mark("turn.reply.saved")
@@ -304,6 +306,8 @@ public actor TurnRunner {
         try Task.checkCancellation()
         guard let assistant = try await writer.append(.assistant, reply.text, continuing: transcript,
                                                       nonce: nonce, renewing: lease) else {
+            // Another device took the lease: it answers from here, and nothing is heard ahead of it.
+            standing = .elsewhere
             throw TurnRunnerError.displaced
         }
         await brain.landed(assistant, nonce: nonce)
@@ -324,6 +328,8 @@ public actor TurnRunner {
         try Task.checkCancellation()
         guard let turn = try await writer.append(.assistant, owed.text, parents: owed.parents,
                                                  nonce: owed.nonce, renewing: lease) else {
+            // Another device took the lease: it answers from here, and nothing is heard ahead of it.
+            standing = .elsewhere
             throw TurnRunnerError.displaced
         }
         await brain.landed(turn, nonce: owed.nonce)
