@@ -40,11 +40,17 @@ final class GuestCodeWriteTests: XCTestCase {
         let exit = try await Guest.shared.run("\(point)/codewrite")
         XCTAssertEqual(exit.output, "rounds=20000 threads=4 copies=2 mismatches=0\n", exit.errors)
         XCTAssertEqual(exit.status, 0)
-        // The emulator chains a block's exit only to a block below 4 GB, so the chains have to sit
-        // there for the test to be of chained code at all; the program says where they went.
-        let region = exit.errors.split(separator: "\n").first { $0.hasPrefix("region=0x") }
-            .flatMap { UInt64($0.dropFirst("region=0x".count), radix: 16) }
+        // The emulator chains a block's exit only to a block below 4 GB, so every chain has to sit
+        // there for the test to be of chained code at all; the program says where its region
+        // starts and ends.
+        func hex(_ name: String) -> UInt64? {
+            exit.errors.split(separator: "\n").first { $0.hasPrefix("\(name)=0x") }
+                .flatMap { UInt64($0.dropFirst("\(name)=0x".count), radix: 16) }
+        }
+        let region = hex("region"), end = hex("end")
         XCTAssertNotNil(region, exit.errors)
-        XCTAssertLessThan(region ?? .max, 1 << 32, "the chains are above 4 GB, where nothing chains")
+        XCTAssertNotNil(end, exit.errors)
+        XCTAssertLessThanOrEqual(end ?? .max, 1 << 32, "the region reaches above 4 GB, where nothing chains")
+        XCTAssertLessThan(region ?? .max, end ?? 0)
     }
 }
