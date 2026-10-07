@@ -189,6 +189,12 @@ enum LookDocument {
         r.colour("quoteText", &value.quoteText)
         r.colour("marker", &value.marker)
         r.indent("ruleWidth", &value.ruleWidth)
+        r.font("tableHeaderFont", &value.tableHeaderFont)
+        r.indent("tableColumnSpacing", &value.tableColumnSpacing)
+        r.indent("tableRowSpacing", &value.tableRowSpacing)
+        r.colour("tableRule", &value.tableRule)
+        r.indent("tableRuleWidth", &value.tableRuleWidth)
+        r.bounded("tableCellMaxWidth", &value.tableCellMaxWidth, in: Look.Markdown.cellWidths)
         r.object("codePulse") { pulse(&value.codePulse, $0) }
     }
 

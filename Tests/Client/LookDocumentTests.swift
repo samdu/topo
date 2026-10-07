@@ -270,6 +270,35 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(bad.look.markdown.blockSpacing, Look().markdown.blockSpacing, "past 64 points is refused")
     }
 
+    /// A table's fields reach the look, each in its own range, and one refused leaves the rest
+    /// standing.
+    func testTheTableFieldsAreReadAndABadOneFallsBackAlone() {
+        let good = LookDocument.read(##"{"markdown": {"tableHeaderFont": {"style": "caption", "weight": "bold"}, "tableColumnSpacing": 9, "tableRowSpacing": 2, "tableRule": "#FF0000", "tableRuleWidth": 2, "tableCellMaxWidth": 180}}"##)
+        XCTAssertEqual(good.notes, [])
+        XCTAssertEqual(good.look.markdown.tableHeaderFont, .system(.caption).weight(.bold))
+        XCTAssertEqual(good.look.markdown.tableColumnSpacing, 9)
+        XCTAssertEqual(good.look.markdown.tableRowSpacing, 2)
+        XCTAssertEqual(good.look.markdown.tableRuleWidth, 2)
+        XCTAssertEqual(good.look.markdown.tableCellMaxWidth, 180)
+        XCTAssertEqual(good.fields.filter { $0.hasPrefix("markdown.table") }.count, 6, "\(good.fields)")
+
+        let compiled = Look().markdown
+        let bad = LookDocument.read(#"{"markdown": {"tableHeaderFont": "big", "tableColumnSpacing": 65, "tableRowSpacing": -1, "tableRule": "red", "tableRuleWidth": 3, "tableCellMaxWidth": 39}}"#)
+        XCTAssertEqual(bad.notes.count, 5, "\(bad.notes)")
+        XCTAssertEqual(bad.look.markdown.tableHeaderFont, compiled.tableHeaderFont)
+        XCTAssertEqual(bad.look.markdown.tableColumnSpacing, compiled.tableColumnSpacing)
+        XCTAssertEqual(bad.look.markdown.tableRowSpacing, compiled.tableRowSpacing)
+        XCTAssertEqual(bad.look.markdown.tableCellMaxWidth, compiled.tableCellMaxWidth, "a cell narrower than a word is refused")
+        XCTAssertEqual(bad.look.markdown.tableRuleWidth, 3, "the one good field was taken down with the rest")
+        for width in [40.0, 2000] {
+            XCTAssertEqual(LookDocument.read(#"{"markdown": {"tableCellMaxWidth": \#(width)}}"#).look.markdown.tableCellMaxWidth, width)
+        }
+        for width in ["2001", "1e999", "\"wide\"", "true"] {
+            XCTAssertEqual(LookDocument.read(#"{"markdown": {"tableCellMaxWidth": \#(width)}}"#).look.markdown.tableCellMaxWidth,
+                           compiled.tableCellMaxWidth, width)
+        }
+    }
+
     /// The glass under the keyboard is read in a range of its own: a pane kept at under half its
     /// height is refused, and the ends of the range are taken.
     func testTheShortPaneIsReadInItsOwnRange() {

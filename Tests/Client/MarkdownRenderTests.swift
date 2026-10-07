@@ -758,6 +758,80 @@ final class MarkdownRenderTests: XCTestCase {
         }
     }
 
+    /// A table's rule, in a colour nothing else on the stage is.
+    private let ruleInk = UIColor(red: 0.6, green: 0, blue: 0.9, alpha: 1)
+
+    /// A table is a grid on every screen: its header row over one rule in the look's ink and
+    /// width, and a row of cells under the rule for each row of the table, so a table of more
+    /// rows is drawn taller by its rows.
+    func testATableDrawsItsHeaderOverARuleAndItsRowsUnderIt() throws {
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.tableRule = Color(ruleInk)
+            look.markdown.tableRuleWidth = 3
+            let one = try draw(turn(.assistant, "| name | size |\n|---|---|\n| look.json | 2 KB |"), look)
+            let rules = try XCTUnwrap(one.rowRuns(ruleInk), "\(screen): no rule under the header")
+            XCTAssertEqual(rules.count, 1, "\(screen): \(rules.count) rules")
+            let rule = try XCTUnwrap(rules.first)
+            XCTAssertEqual(CGFloat(rule.count) / one.scale, 3, accuracy: 0.5, "\(screen): the rule's width is not the look's")
+            XCTAssertGreaterThan(one.ink(rows: 0..<rule.lowerBound), 0, "\(screen): no header over the rule")
+            let under = one.ink(rows: (rule.upperBound + 1)..<one.height)
+            XCTAssertGreaterThan(under, 0, "\(screen): no row under the rule")
+
+            // Under the rule is the rows and whatever the turn draws after its words, so a row's
+            // own ink is what one more row adds.
+            let row = "\n| look.json | 2 KB |"
+            let rowsInk = try (2...3).map { count in
+                let drawn = try draw(turn(.assistant, "| name | size |\n|---|---|" + String(repeating: row, count: count)), look)
+                let rule = try XCTUnwrap(drawn.rows(ruleInk))
+                return drawn.ink(rows: (rule.upperBound + 1)..<drawn.height)
+            }
+            XCTAssertGreaterThan(rowsInk[0], under, "\(screen): a second row drew nothing")
+            XCTAssertEqual(rowsInk[1] - rowsInk[0], rowsInk[0] - under,
+                           "\(screen): a third row did not draw what the second did")
+            XCTAssertEqual(try draw(turn(.assistant, "name size\n\nlook.json 2 KB"), look).count(ruleInk), 0,
+                           "\(screen): a rule with no table")
+        }
+    }
+
+    /// An empty cell holds its column: the cell after it is drawn where it is drawn when the
+    /// cell before it has words, not shifted into the empty one's place.
+    func testAnEmptyCellHoldsItsColumn() throws {
+        for screen in Look.Screen.allCases {
+            let ink = UIColor(red: 0, green: 0.5, blue: 0, alpha: 1)
+            var look = look(screen)
+            look.markdown.codeInk = Color(ink)
+            let full = try draw(turn(.assistant, "| wide header | b |\n|---|---|\n| x | `m` |"), look)
+            let empty = try draw(turn(.assistant, "| wide header | b |\n|---|---|\n|  | `m` |"), look)
+            let (there, here) = (try XCTUnwrap(full.columns(ink), "\(screen)"), try XCTUnwrap(empty.columns(ink), "\(screen)"))
+            XCTAssertEqual(here, there, "\(screen): the cell after an empty one moved")
+        }
+    }
+
+    /// A table wider than the column: where the look wraps, the grid stays in the column and its
+    /// cells wrap; where it scrolls, a cell with a sentence in it wraps at the look's widest
+    /// cell and is not one line as long as the sentence — either way it is drawn taller than the
+    /// same table with a word in the cell, and no cell is squeezed to nothing.
+    func testAWideTableWrapsItsCells() throws {
+        let sentence = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 3)
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.tableRule = Color(ruleInk)
+            let short = try draw(turn(.assistant, "| a | b |\n|---|---|\n| fox | dog |"), look)
+            let long = try draw(turn(.assistant, "| a | b |\n|---|---|\n| \(sentence) | dog |"), look)
+            let (shortInk, longInk) = (try XCTUnwrap(short.inked), try XCTUnwrap(long.inked))
+            XCTAssertGreaterThan(longInk.count, shortInk.count + 10, "\(screen): a sentence in a cell did not wrap")
+            let rule = try XCTUnwrap(long.columns(ruleInk), "\(screen): no rule")
+            let trailing = (stage.width - look.transcript.horizontalPadding) * long.scale
+            if look.markdown.codeOverflow == .wrap {
+                XCTAssertLessThanOrEqual(CGFloat(rule.upperBound), trailing + 1, "\(screen): the grid left the column")
+            }
+            // Every cell is still drawn: the second column's word is on the stage.
+            XCTAssertGreaterThan(long.ink(rows: 0..<long.height), short.ink(rows: 0..<short.height),
+                                 "\(screen): the wide table drew less than the narrow one")
+        }
+    }
+
     /// A rendered stage as bytes, with the questions worth asking of it.
     private struct Pixels {
         let bytes: [UInt8]
@@ -846,6 +920,13 @@ final class MarkdownRenderTests: XCTestCase {
             let found = (0..<height).filter { y in (0..<width).contains { matches(colour, (y * width + $0) * 4) } }
             guard let low = found.first, let high = found.last else { return nil }
             return low...high
+        }
+
+        /// How many pixels in `rows` are anything but white.
+        func ink(rows: Range<Int>) -> Int {
+            rows.reduce(0) { total, y in
+                total + (0..<width).filter { x in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }.count
+            }
         }
 
         /// The rows anything but white is drawn in, first to last.

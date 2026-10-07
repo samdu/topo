@@ -47,36 +47,19 @@ enum Speakable {
     /// The spoken text a line at a time, each code block's line carrying the block's number.
     static func lines(from markdown: String) -> [Line] {
         var lines: [Line] = []
-        var table: (identity: Int, rows: Int)?
-
-        func finishTable() {
-            if let done = table {
-                lines.append(Line(text: "A table with \(done.rows) \(done.rows == 1 ? "row" : "rows")."))
-            }
-            table = nil
-        }
-
         for block in Markdown.blocks(markdown) {
-            if let row = block.row {
-                if table?.identity != row.table {
-                    finishTable()
-                    table = (row.table, 0)
-                }
-                if !row.header { table?.rows += 1 }
-                continue
-            }
-            finishTable()
             switch block.kind {
             case .code:
                 lines.append(Line(text: block.codeNumber.map(line(forCodeBlock:)) ?? "See the code block.",
                                   codeBlock: block.codeNumber))
+            case .table(_, let rows):
+                lines.append(Line(text: "A table with \(rows.count) \(rows.count == 1 ? "row" : "rows")."))
             case .rule:
                 continue
             case .paragraph, .heading, .item:
                 lines.append(Line(text: words(block.text)))
             }
         }
-        finishTable()
         return lines.filter { !$0.text.allSatisfy(\.isWhitespace) }
     }
 

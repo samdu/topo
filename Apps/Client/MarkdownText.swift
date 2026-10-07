@@ -2,14 +2,14 @@ import SwiftUI
 import TopoCore
 
 /// Topo's words drawn as their blocks (`Markdown.blocks`): paragraphs and headings as text, list
-/// items behind their markers, rules, fenced code in an enclosure of its own, and whatever sits
-/// inside a quote behind a bar for each quote it is inside. Every value is the look's
+/// items behind their markers, rules, fenced code in an enclosure of its own, a table as a grid,
+/// and whatever sits inside a quote behind a bar for each quote it is inside. Every value is the look's
 /// (`Look.Markdown`), and a paragraph is drawn in the transcript's own type and ink, as the
 /// transcript draws words.
 ///
 /// `bare` is whether the turn draws nothing round its words. Then what Topo stands clear of is
 /// the words themselves: each text reports its own lines (`mascotLines`), and what draws a shape
-/// of its own — a code block's enclosure, a quote's bar, a rule — reports its frame
+/// of its own — a code block's enclosure, a table's grid, a quote's bar, a rule — reports its frame
 /// (`mascotObstacle`). An enclosed turn reports its enclosure from `TurnRow` and nothing here.
 struct MarkdownText: View {
     let source: String
@@ -99,6 +99,8 @@ struct MarkdownText: View {
             }
         case .code:
             code(String(block.text.characters), number: block.codeNumber)
+        case .table(let header, let rows):
+            table(header: header, rows: rows, ink: ink(block))
         case .rule:
             Rectangle()
                 .fill(look.markdown.marker)
@@ -180,6 +182,72 @@ struct MarkdownText: View {
         .mascotObstacle(bare)
     }
 
+    /// A table as a grid: the header row in its own type over a rule, then the rows, every cell
+    /// in its column and aligned as the column is. Where the look scrolls what overflows
+    /// (`codeOverflow`), the grid is as wide as its cells and scrolls sideways, each cell no
+    /// wider than `tableCellMaxWidth`; where it wraps, the grid is the column's width and its
+    /// cells wrap inside it.
+    @ViewBuilder
+    private func table(header: Markdown.TableRow, rows: [Markdown.TableRow], ink: Color) -> some View {
+        let scrolls = look.markdown.codeOverflow == .scroll
+        let grid = Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: look.markdown.tableColumnSpacing,
+                        verticalSpacing: look.markdown.tableRowSpacing) {
+            GridRow {
+                ForEach(Array(header.cells.enumerated()), id: \.offset) { _, cell in
+                    self.cell(cell, font: look.markdown.tableHeaderFont, ink: ink, capped: scrolls)
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+            Rectangle()
+                .fill(look.markdown.tableRule)
+                .frame(height: look.markdown.tableRuleWidth)
+                .gridCellUnsizedAxes(.horizontal)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(Array(row.cells.enumerated()), id: \.offset) { _, cell in
+                        self.cell(cell, font: look.transcript.bodyFont, ink: ink, capped: scrolls)
+                    }
+                }
+            }
+        }
+        Group {
+            if scrolls {
+                ScrollView(.horizontal) { grid }
+                    .scrollIndicators(.hidden)
+            } else {
+                grid.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .mascotObstacle(bare)
+    }
+
+    /// One cell's words, styled as a paragraph's are, on its column's side of the column.
+    private func cell(_ cell: Markdown.TableCell, font: Font, ink: Color, capped: Bool) -> some View {
+        Text(Self.styled(cell.text, look: look.markdown))
+            .font(font)
+            .foregroundStyle(ink)
+            .multilineTextAlignment(Self.text(cell.alignment))
+            .fixedSize(horizontal: false, vertical: true)
+            .modifier(Capped(width: capped ? look.markdown.tableCellMaxWidth : nil))
+            .gridColumnAlignment(Self.horizontal(cell.alignment))
+    }
+
+    private static func text(_ alignment: Markdown.ColumnAlignment) -> TextAlignment {
+        switch alignment {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
+    }
+
+    private static func horizontal(_ alignment: Markdown.ColumnAlignment) -> HorizontalAlignment {
+        switch alignment {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
+    }
+
     static func marker(_ marker: Markdown.Marker) -> String {
         switch marker {
         case .bullet: "•"
@@ -198,6 +266,33 @@ struct MarkdownText: View {
             text[range].swiftUI.foregroundColor = look.codeInk
         }
         return text
+    }
+}
+
+/// A view offered no more than `width` across, whatever it is offered: inside a sideways scroll
+/// nothing offers a width at all, and words offered none are one line as long as they are.
+/// `nil` offers what was offered.
+private struct Capped: ViewModifier {
+    let width: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let width { Cap(width: width) { content } } else { content }
+    }
+
+    private struct Cap: Layout {
+        let width: CGFloat
+
+        private func offer(_ proposal: ProposedViewSize) -> ProposedViewSize {
+            ProposedViewSize(width: min(proposal.width ?? width, width), height: proposal.height)
+        }
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first?.sizeThatFits(offer(proposal)) ?? .zero
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+        }
     }
 }
 

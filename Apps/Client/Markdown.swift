@@ -1,7 +1,7 @@
 import Foundation
 
-/// Topo's words as blocks: paragraphs, headings, list items, fenced code and rules, each with its
-/// inline styles still on it and with how many lists and how many quotes it sits inside. The parse
+/// Topo's words as blocks: paragraphs, headings, list items, fenced code, tables and rules, each
+/// with its inline styles still on it and with how many lists and how many quotes it sits inside. The parse
 /// is Foundation's (`AttributedString(markdown:)` with the full syntax), which already marks every
 /// run with the block it belongs to; what is here is the cut into blocks, since SwiftUI's `Text`
 /// draws inline styles and nothing of a block.
@@ -25,23 +25,29 @@ enum Markdown {
         var listsOutside: Int = 0
         /// The block's words with their inline intents — emphasis, strong, code, strikethrough —
         /// and nothing of the block's own markup. A link is its words and goes nowhere. Empty for
-        /// a rule.
+        /// a rule, and for a table, whose words are its cells'.
         var text: AttributedString
-        /// The table a row is one of, nil for a block that is not a table row. A row is drawn as
-        /// a paragraph of its cells' words; this is what says it was one, for the voice
-        /// (`Speakable`), which does not read a table out cell by cell.
-        var row: TableRow? = nil
         /// A code block's number in the reply, from 1 in the order they are written, nil for any
         /// other block. The transcript draws it as the block's caption and the voice says it in
         /// the block's place, so the two always name the same block.
         var codeNumber: Int? = nil
     }
 
+    /// One row of a table: a cell for every column of the table, in order, an empty one where
+    /// the source wrote nothing between two bars.
     struct TableRow: Equatable {
-        /// The table's identity in the parse, the same for every row of one table.
-        var table: Int
-        /// The header row, whose cells name the columns rather than holding a record.
-        var header: Bool
+        var cells: [TableCell]
+    }
+
+    struct TableCell: Equatable {
+        /// The cell's words with their inline intents, as a paragraph's are.
+        var text: AttributedString
+        /// Its column's alignment, as the delimiter row wrote it (`:--`, `:-:`, `--:`).
+        var alignment: ColumnAlignment = .leading
+    }
+
+    enum ColumnAlignment: Equatable {
+        case leading, center, trailing
     }
 
     enum Kind: Equatable {
@@ -52,6 +58,9 @@ enum Markdown {
         case item(Marker)
         /// A fenced or indented code block, its text as written with the final newline gone.
         case code(language: String?)
+        /// A table: the header row, whose cells name the columns, and the rows under it. Every
+        /// row holds a cell for every column.
+        case table(header: TableRow, rows: [TableRow])
         case rule
     }
 
@@ -94,16 +103,27 @@ enum Markdown {
         var marked: Set<Int> = []
         /// The code blocks so far, which numbers the next.
         var codeBlocks = 0
-        /// The table row being gathered, and its cells so far.
-        var row: (identity: Int, depth: Int, quote: Int, outside: Int, text: AttributedString,
-                  table: TableRow?)?
+        /// The table being gathered: where it sits, its columns' alignments, and its rows so
+        /// far, each cell kept by the column the parse says it is in — the parse makes no run
+        /// for an empty cell, so a row's cells are not its columns in order.
+        var table: (identity: Int, depth: Int, quote: Int, outside: Int, columns: [ColumnAlignment],
+                    header: [Int: AttributedString],
+                    rows: [(identity: Int, cells: [Int: AttributedString])])?
 
-        func finishRow() {
-            if let done = row {
-                blocks.append(Block(kind: .paragraph, depth: done.depth, quote: done.quote,
-                                    listsOutside: done.outside, text: done.text, row: done.table))
+        func finishTable() {
+            guard let done = table else { return }
+            table = nil
+            let widest = ([done.header] + done.rows.map(\.cells)).flatMap(\.keys).max().map { $0 + 1 } ?? 0
+            let columns = max(done.columns.count, widest)
+            func row(_ cells: [Int: AttributedString]) -> TableRow {
+                TableRow(cells: (0..<columns).map { column in
+                    TableCell(text: cells[column] ?? AttributedString(),
+                              alignment: column < done.columns.count ? done.columns[column] : .leading)
+                })
             }
-            row = nil
+            blocks.append(Block(kind: .table(header: row(done.header), rows: done.rows.map { row($0.cells) }),
+                                depth: done.depth, quote: done.quote, listsOutside: done.outside,
+                                text: AttributedString()))
         }
 
         for (intent, range) in parsed.runs[\.presentationIntent] {
@@ -118,29 +138,31 @@ enum Markdown {
                 .map { last in components[components.index(after: last)...].filter { isList($0.kind) }.count } ?? depth
             guard let innermost = components.first else {
                 // A block of HTML carries no block intent, and is a paragraph of its words.
-                finishRow()
+                finishTable()
                 var text = text
                 while text.characters.last == "\n" { text.characters.removeLast() }
                 blocks.append(Block(kind: .paragraph, depth: 0, text: text))
                 continue
             }
-            if case .tableCell = innermost.kind, components.count > 1 {
-                let rowIdentity = components[1].identity
-                if row?.identity != rowIdentity {
-                    finishRow()
-                    // A cell's components are the cell, its row, then its table.
-                    let table = components.count > 2
-                        ? TableRow(table: components[2].identity,
-                                   header: components[1].kind == .tableHeaderRow)
-                        : nil
-                    row = (rowIdentity, depth, quote, outside, text, table)
+            // A cell's components are the cell, its row, then its table.
+            if case .tableCell(let column) = innermost.kind, components.count > 2,
+               case .table(let columns) = components[2].kind {
+                let (rowIntent, tableIntent) = (components[1], components[2])
+                if table?.identity != tableIntent.identity {
+                    finishTable()
+                    table = (tableIntent.identity, depth, quote, outside, columns.map(ColumnAlignment.init), [:], [])
+                }
+                if rowIntent.kind == .tableHeaderRow {
+                    table?.header[column, default: AttributedString()] += text
                 } else {
-                    row?.text += AttributedString(Self.cellSeparator)
-                    row?.text += text
+                    if table?.rows.last?.identity != rowIntent.identity { table?.rows.append((rowIntent.identity, [:])) }
+                    if let last = table?.rows.indices.last {
+                        table?.rows[last].cells[column, default: AttributedString()] += text
+                    }
                 }
                 continue
             }
-            finishRow()
+            finishTable()
             func block(_ kind: Kind, _ text: AttributedString) -> Block {
                 Block(kind: kind, depth: depth, quote: quote, listsOutside: outside, text: text)
             }
@@ -168,15 +190,12 @@ enum Markdown {
                 }
             }
         }
-        finishRow()
+        finishTable()
         if blocks.isEmpty, !source.allSatisfy(\.isWhitespace) {
             return [Block(kind: .paragraph, depth: 0, text: AttributedString(source))]
         }
         return blocks
     }
-
-    /// What stands between a table row's cells, since a table is drawn as its rows' words.
-    static let cellSeparator = "  ·  "
 
     /// Foundation's parse with the full syntax, keeping the whitespace a reply is written with.
     static func parse(_ source: String) throws -> AttributedString {
@@ -198,5 +217,15 @@ enum Markdown {
             text.replaceSubrange(range, with: AttributedString("\n"))
         }
         return text
+    }
+}
+
+private extension Markdown.ColumnAlignment {
+    init(_ column: PresentationIntent.TableColumn) {
+        switch column.alignment {
+        case .center: self = .center
+        case .right: self = .trailing
+        default: self = .leading
+        }
     }
 }

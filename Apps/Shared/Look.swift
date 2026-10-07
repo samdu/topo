@@ -150,7 +150,7 @@ struct Look: Equatable, Sendable {
     }
 
     /// Topo's words as blocks (`MarkdownText`): the room between them, how a list is indented,
-    /// the type of a heading and of code, and what a code block is drawn on. A paragraph is
+    /// the type of a heading and of code, what a code block is drawn on, and a table's grid. A paragraph is
     /// drawn in the transcript's own `bodyFont` and `text`, as the transcript draws words.
     struct Markdown: Equatable, Sendable {
         /// Between one block of a reply and the next: two paragraphs, a list and a fence.
@@ -186,6 +186,21 @@ struct Look: Equatable, Sendable {
         var marker: Color = Theme.textMuted
         /// A rule's thickness.
         var ruleWidth: CGFloat
+        /// A table's header row, whose cells name the columns.
+        var tableHeaderFont: Font
+        /// Between one column of a table and the next, and between one row and the next.
+        var tableColumnSpacing: CGFloat
+        var tableRowSpacing: CGFloat
+        /// The rule under a table's header row, and its thickness.
+        var tableRule: Color = Theme.textMuted
+        var tableRuleWidth: CGFloat
+        /// The widest a cell is drawn where a table scrolls sideways (`codeOverflow`): a cell
+        /// with more words than that wraps inside its column, so a sentence in a cell is not a
+        /// line as long as the sentence.
+        var tableCellMaxWidth: CGFloat
+        /// What `tableCellMaxWidth` is read in: no narrower than a word, so a cell is never
+        /// wrapped to a letter a line.
+        static let cellWidths: ClosedRange<Double> = 40...2000
         /// A code block's outline breathing as the voice reaches it.
         var codePulse = Pulse()
 
@@ -245,6 +260,11 @@ struct Look: Equatable, Sendable {
                 quoteBarWidth = 2
                 quoteIndent = 4
                 ruleWidth = 1
+                tableHeaderFont = .system(.footnote).weight(.semibold)
+                tableColumnSpacing = 6
+                tableRowSpacing = 3
+                tableRuleWidth = 1
+                tableCellMaxWidth = 120
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 6, horizontalPadding: 6, verticalPadding: 4,
                                       surface: .flat)
@@ -260,6 +280,11 @@ struct Look: Equatable, Sendable {
                 quoteBarWidth = 4
                 quoteIndent = 10
                 ruleWidth = 2
+                tableHeaderFont = .system(.body).weight(.semibold)
+                tableColumnSpacing = 28
+                tableRowSpacing = 10
+                tableRuleWidth = 2
+                tableCellMaxWidth = 600
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 12, horizontalPadding: 20, verticalPadding: 14,
                                       surface: .flat)
@@ -275,6 +300,11 @@ struct Look: Equatable, Sendable {
                 quoteBarWidth = 3
                 quoteIndent = 6
                 ruleWidth = 1
+                tableHeaderFont = .system(.body).weight(.semibold)
+                tableColumnSpacing = 14
+                tableRowSpacing = 6
+                tableRuleWidth = 1
+                tableCellMaxWidth = 260
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 8, horizontalPadding: 10, verticalPadding: 8,
                                       surface: .flat)

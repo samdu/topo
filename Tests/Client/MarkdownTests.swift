@@ -104,10 +104,9 @@ final class MarkdownTests: XCTestCase {
             "rule depth 0 quote 1 outside 0 ",
             "code(language: nil) depth 0 quote 1 outside 0 code",
         ])
-        XCTAssertEqual(quoted("> | a | b |\n> |---|---|\n> | 1 | 2 |"), [
-            "paragraph depth 0 quote 1 outside 0 a  ·  b",
-            "paragraph depth 0 quote 1 outside 0 1  ·  2",
-        ])
+        let quotedTable = Markdown.blocks("> | a | b |\n> |---|---|\n> | 1 | 2 |")
+        XCTAssertEqual(quotedTable.map { "\($0.depth) \($0.quote) \($0.listsOutside)" }, ["0 1 0"])
+        XCTAssertEqual(quotedTable.first.flatMap(Self.cells), [["a", "b"], ["1", "2"]])
         // A list inside a quote is inside it: none of its lists lead the bars in, so the bars of
         // the one quote stand in one column however deep the list goes.
         XCTAssertEqual(quoted("> - a\n>   - b\n>\n>   more of a"), [
@@ -190,7 +189,6 @@ final class MarkdownTests: XCTestCase {
             ("price: $5 * 2 = $10", ["paragraph 0 price: $5 * 2 = $10"]),
             ("an [unclosed link and a ] bracket", ["paragraph 0 an [unclosed link and a ] bracket"]),
             ("1) the first", ["item(Topo.Markdown.Marker.number(1)) 1 the first"]),
-            ("| a | b |\n|---|---|\n| 1 | 2 |", ["paragraph 0 a  ·  b", "paragraph 0 1  ·  2"]),
             ("5*3*2", ["paragraph 0 532"]),
             ("__init__.py", ["paragraph 0 init.py"]),
             // A block of HTML has no block intent at all, and is a paragraph of its words.
@@ -198,6 +196,96 @@ final class MarkdownTests: XCTestCase {
         ]
         for (source, blocks) in cases {
             XCTAssertEqual(summary(source), blocks, source)
+        }
+    }
+
+    /// A table's rows as their cells' words, the header first; nil for a block that is no table.
+    private static func cells(_ block: Markdown.Block) -> [[String]]? {
+        guard case .table(let header, let rows) = block.kind else { return nil }
+        return ([header] + rows).map { $0.cells.map { String($0.text.characters) } }
+    }
+
+    /// A table is one block holding every cell of the source, header included, each in its
+    /// column, with its column's alignment.
+    func testATableIsOneBlockOfEveryCell() throws {
+        let source = """
+        | name | size | kept |
+        |:-----|:----:|-----:|
+        | look.json | 2 KB | yes |
+        | notes.md | 14 KB | no |
+        | `a.py` | **1** KB | *maybe* |
+        """
+        let blocks = Markdown.blocks(source)
+        XCTAssertEqual(blocks.count, 1)
+        let block = try XCTUnwrap(blocks.first)
+        XCTAssertEqual(Self.cells(block), [
+            ["name", "size", "kept"],
+            ["look.json", "2 KB", "yes"],
+            ["notes.md", "14 KB", "no"],
+            ["a.py", "1 KB", "maybe"],
+        ])
+        guard case .table(let header, let rows) = block.kind else { return XCTFail("\(block.kind)") }
+        for row in [header] + rows {
+            XCTAssertEqual(row.cells.map(\.alignment), [.leading, .center, .trailing])
+        }
+        // A cell's inline styles are carried, as a paragraph's are.
+        XCTAssertEqual(rows[2].cells[0].text.runs.first?.inlinePresentationIntent, .code)
+        XCTAssertEqual(rows[2].cells[2].text.runs.first?.inlinePresentationIntent, .emphasized)
+        XCTAssertEqual(Speakable.text(from: source), "A table with 3 rows.")
+    }
+
+    /// The parse makes no run for an empty cell. The row still holds a cell for every column,
+    /// and the cells after the empty one stay in their own columns.
+    func testAnEmptyCellKeepsItsColumn() {
+        let source = "| a | b | c |\n|---|---|---|\n| 1 |  | 3 |\n|  | 5 |  |\n| 7 | 8 | 9 |"
+        XCTAssertEqual(Markdown.blocks(source).compactMap(Self.cells), [[
+            ["a", "b", "c"], ["1", "", "3"], ["", "5", ""], ["7", "8", "9"],
+        ]])
+        XCTAssertEqual(Speakable.text(from: source), "A table with 3 rows.")
+        // An empty header cell is the same case.
+        XCTAssertEqual(Markdown.blocks("|  | b |\n|---|---|\n| 1 | 2 |").compactMap(Self.cells),
+                       [[["", "b"], ["1", "2"]]])
+    }
+
+    /// A table inside a list item is one block at the item's depth, and the words round it stay.
+    func testATableInsideAListKeepsItsDepthAndItsCells() {
+        let source = "- sizes:\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n\n  after the table\n- next"
+        let blocks = Markdown.blocks(source)
+        XCTAssertEqual(blocks.map { "\($0.depth) \(String($0.text.characters))" },
+                       ["1 sizes:", "1 ", "1 after the table", "1 next"])
+        XCTAssertEqual(blocks.compactMap(Self.cells), [[["a", "b"], ["1", "2"]]])
+        XCTAssertEqual(Speakable.text(from: source), "sizes:\nA table with 1 row.\nafter the table\nnext")
+    }
+
+    /// Two tables one after the other are two blocks, and words between and after them stay.
+    func testTwoTablesAreTwoBlocks() {
+        let source = "| a |\n|---|\n| 1 |\n\n| b |\n|---|\n| 2 |\n| 3 |\n\nDone."
+        let blocks = Markdown.blocks(source)
+        XCTAssertEqual(blocks.compactMap(Self.cells), [[["a"], ["1"]], [["b"], ["2"], ["3"]]])
+        XCTAssertEqual(blocks.last.map { String($0.text.characters) }, "Done.")
+    }
+
+    /// Every word of every cell of a table is in the block, whatever the table's shape: the
+    /// words of the source's cells, in order, are the words of the block's.
+    func testNoCellOfATableIsDropped() {
+        let sources = [
+            "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n| 7 | 8 | 9 |",
+            "| a | b | c |\n|---|---|---|\n| 1 |  | 3 |",
+            "| a | b |\n|---|---|\n| 1 | 2 | extra |\n| short |",
+            "- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |",
+            "> | a | b |\n> |---|---|\n> | one two | three |",
+        ]
+        for source in sources {
+            let cells = Markdown.blocks(source).compactMap(Self.cells).flatMap { $0 }.flatMap { $0 }
+            let drawn = cells.flatMap { $0.split(separator: " ").map(String.init) }
+            // What the parser itself kept of the table: every run inside a cell.
+            let parsed = (try? Markdown.parse(source)).map { parsed in
+                parsed.runs.filter { run in
+                    run.presentationIntent?.components.contains { if case .tableCell = $0.kind { true } else { false } } == true
+                }.flatMap { String(parsed[$0.range].characters).split(separator: " ").map(String.init) }
+            } ?? []
+            XCTAssertFalse(parsed.isEmpty, source)
+            XCTAssertEqual(drawn.sorted(), parsed.sorted(), source)
         }
     }
 
