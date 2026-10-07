@@ -1687,21 +1687,20 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs.last, "and Germany?")
     }
 
-    /// Words still on their way to the guest when the lease says another device holds it are
-    /// stopped: the hub answers that turn, and this phone's guest is not run on it.
-    func testWordsOnTheirWayToTheGuestStopWhenTheyAreTakenBack() async throws {
+    /// Words still on their way to the guest when their giving is cancelled stop there, and are
+    /// not refused for good: the same words can be given later.
+    func testWordsOnTheirWayToTheGuestStopWhenTheirGivingIsCancelled() async throws {
         let db = InMemoryRecordDatabase()
-        let (_, bridge, guest) = try await launch(db, .hangUnwritten, .reply("never"))
+        let (_, bridge, guest) = try await launch(db, .hangUnwritten, .reply("later"))
         let first = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet5)
         XCTAssertTrue(first)
         let second = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
         try await Task.sleep(for: .milliseconds(50))
-        await bridge.withdrawn(nonce: "n2")
+        second.cancel()
         guest.finishHanging(with: "done")
         let heard = await second.value
         XCTAssertFalse(heard)
         XCTAssertEqual(guest.inputs, ["first"])
-        // Taken back once is not refused for good: the same words can be given later.
         let again = await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5)
         XCTAssertTrue(again)
     }
@@ -1730,8 +1729,40 @@ extension GuestBridgeTests {
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertEqual(guest.inputs, ["hello", "first"])
         XCTAssertTrue(harness.replies.isEmpty)
-        let ledger = await bridge.current
-        XCTAssertEqual(ledger.early ?? [], [])
+        _ = bridge
+    }
+
+    /// A phone that answered finds a hub's lease it cannot confirm, so its words go to the log
+    /// as a limb's with its guest already on them. The hub never answers and its lease lapses:
+    /// the phone answers the turn with the reply its guest made, asked once.
+    func testAPhoneThatComesToAnswerATurnItHandedBackWritesTheReplyItsGuestMade() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("the phone's answer"), .reply("a second answer"))
+        let heard = await bridge.hear("what time is it?", nonce: "n1", context: [], model: .sonnet5)
+        XCTAssertTrue(heard)
+        try await eventually("the answer") { await bridge.unsaved()["n1"] == "the phone's answer" }
+        _ = try await TurnLog(database: db).writer(for: phone).append(.person, "what time is it?", parents: [], nonce: "n1")
+        _ = try await runner.answerPending(model: .sonnet5)
+        XCTAssertEqual(guest.inputs, ["what time is it?"])
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["what time is it?", "the phone's answer"])
+    }
+
+    /// An input asked once its turn was saved, its reply still owed the log: a launch with no
+    /// read is not given the same words ahead.
+    func testWordsAnOwedReplyAnswersAreNotGivenAheadByTheNextLaunch() async throws {
+        let db = Outage()
+        let (runner, _, guest) = try await launch(db, .reply("Paris."))
+        _ = try await runner.run("warm up", model: .sonnet5, nonce: "n0")
+        guest.then(.reply("Berlin."), .reply("again"))
+        await db.refuseReplies(true)
+        _ = try? await runner.run("and Germany?", model: .sonnet5, nonce: "n1")
+        let (_, relaunched, again) = try await launch(db, .reply("again"))
+        let pending = await relaunched.current.pending
+        XCTAssertEqual(pending?.state, .answered)
+        let heard = await relaunched.hear("and Germany?", nonce: "n1", context: nil, model: .sonnet5)
+        XCTAssertTrue(heard, "words the guest has answered were not held as heard")
+        XCTAssertTrue(again.inputs.isEmpty)
     }
 
     /// A launch with no read of the log does not give the guest words whose reply the ledger
@@ -1804,25 +1835,6 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs, ["capital of France?"])
     }
 
-    /// Words the guest answered ahead and that were then handed to another device's lease: when
-    /// this device answers again, the guest is told the other device's reply and not its own
-    /// words back.
-    func testWordsHandedBackAreNotToldToTheGuestAgain() async throws {
-        let db = InMemoryRecordDatabase()
-        let (runner, bridge, guest) = try await launch(db, .reply("mine"), .reply("ok"))
-        _ = await bridge.hear("what time is it?", nonce: "n1", context: [], model: .sonnet5)
-        try await eventually("the answer") { await bridge.unsaved()["n1"] == "mine" }
-        await bridge.withdrawn(nonce: "n1")
-        let person = try await TurnLog(database: db).writer(for: phone).append(.person, "what time is it?", parents: [], nonce: "n1")
-        try await write(db, .assistant, "the hub's", device: "hub")
-        _ = try await runner.run("thanks", model: .sonnet5)
-        let told = try XCTUnwrap(guest.inputs.last)
-        XCTAssertTrue(told.contains("the hub's"), told)
-        XCTAssertFalse(told.contains("Them: what time is it?"), told)
-        let seen = await bridge.current.seen
-        XCTAssertTrue(seen.contains(person.ref))
-    }
-
     func testSignOutForgetsWhatWasGivenAhead() async throws {
         let db = Outage()
         let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])
@@ -1853,6 +1865,10 @@ private actor Outage: RecordDatabase {
 
     func away(_ on: Bool) { gone = on }
 
+    /// Refuses every save that carries an assistant's turn: the reply's batch fails, the rest lands.
+    private var noReplies = false
+    func refuseReplies(_ on: Bool) { noReplies = on }
+
     /// While stalled every call waits, answered by nothing: iCloud slow rather than failing.
     func stall(_ on: Bool) {
         stalled = on
@@ -1866,7 +1882,13 @@ private actor Outage: RecordDatabase {
         if gone { throw RecordDatabaseError.unavailable(underlying: Refused()) }
     }
 
-    func save(_ records: [Record]) async throws -> [Record] { try await reach(); return try await wrapped.save(records) }
+    func save(_ records: [Record]) async throws -> [Record] {
+        try await reach()
+        if noReplies, records.contains(where: { $0.type == Turn.recordType && $0.fields["role"] == .string(TurnRole.assistant.rawValue) }) {
+            throw RecordDatabaseError.unavailable(underlying: Refused())
+        }
+        return try await wrapped.save(records)
+    }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await reach(); return try await wrapped.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await reach(); return try await wrapped.query(query) }
     func records(ofType type: String) async throws -> [Record] { try await reach(); return try await wrapped.records(ofType: type) }

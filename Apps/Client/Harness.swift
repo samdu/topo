@@ -57,6 +57,14 @@ final class Harness {
     private var answeredElsewhere: Set<String> = []
     /// The line being given to the guest ahead of its turns, entry after entry, in order.
     private var hearingLine: Task<Void, Never>?
+    /// Every task giving the guest words ahead of their turn, cancelled when the lease says
+    /// another device answers: words still on their way stop, and what the guest has stays its.
+    private var givingAhead: [Task<Void, Never>] = []
+    /// The lease last answered that another device holds it: nothing on the line is given ahead
+    /// until a turn here is this device's to answer again.
+    private var handedBack = false
+    /// A launch's own giving of the words, before there is a runner (`reach`).
+    private var reaching: Task<Bool, Never>?
     /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
@@ -406,8 +414,8 @@ final class Harness {
     private func forgetHeard() {
         defaults.removeObject(forKey: Self.standingKey)
         unreached = false
-        hearingLine?.cancel()
-        hearingLine = nil
+        stopGivingAhead()
+        handedBack = false
         unsaved = [:]
         hearing = nil
         heardEnded = [:]
@@ -619,8 +627,10 @@ final class Harness {
     private func hearLine() {
         guard runner != nil || unreached, !pending.isEmpty else { return }
         let line = pending, login = self.login
+        guard !handedBack else { return }
         let before = hearingLine
-        hearingLine = Task { [weak self] in
+        givingAhead.removeAll { $0.isCancelled }
+        let giving = Task { [weak self] in
             await before?.value
             for entry in line {
                 guard !Task.isCancelled, let self, self.login == login,
@@ -632,6 +642,17 @@ final class Harness {
                 }
             }
         }
+        hearingLine = giving
+        givingAhead.append(giving)
+    }
+
+    /// Stops every word still on its way to the guest ahead of its turn.
+    private func stopGivingAhead() {
+        givingAhead.forEach { $0.cancel() }
+        givingAhead = []
+        hearingLine = nil
+        reaching?.cancel()
+        reaching = nil
     }
 
     /// Keeps where the runner stands with the lease for the next launch, unless a sign-out or a
@@ -665,6 +686,7 @@ final class Harness {
             self.unreached = true
             return await self.brain.hear(attempt.text, nonce: attempt.nonce, context: self.known, model: self.model)
         }
+        reaching = hearing
         do {
             try await ensureZone()
             let made = try await makeRunner()
@@ -737,6 +759,7 @@ final class Harness {
             }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
+            handedBack = false
             show(result.person)
             show(result.assistant)
             Perf.mark("turn.reply.shown")
@@ -756,6 +779,13 @@ final class Harness {
             // person. The row keeps the words, the reply is drawn as it is written and stays once
             // it is whole, and the line goes again, as any stopped line does, to save both.
             guard inFlight == generation else { return false }
+            // The lease could not be asked, so this device answers: the line behind is given too,
+            // and what the guest makes of these words is drawn again.
+            if handedBack {
+                handedBack = false
+                hearLine()
+            }
+            answeredElsewhere.remove(attempt.nonce)
             failure = Failure(words: Self.behind(underlying), source: .sync)
             if let replied = heardEnded[attempt.nonce] { settleHeard(attempt.nonce, replied: replied) }
             status = nil
@@ -791,14 +821,10 @@ final class Harness {
             answeredElsewhere.insert(attempt.nonce)
             if hearing == attempt.nonce { dropWriting() }
             // Nor is anything on the line given to this device's guest from here: what is still
-            // on its way stops, and what the guest has is not kept as a reply to write.
-            hearingLine?.cancel()
-            for entry in pending {
-                answeredElsewhere.insert(entry.nonce)
-                unsaved[entry.nonce] = nil
-                await brain.withdrawn(nonce: entry.nonce)
-            }
-            guard inFlight == generation else { return false }
+            // on its way stops. What the guest already has it keeps: should this device come to
+            // answer the turn after all, that input is its answer.
+            stopGivingAhead()
+            handedBack = true
             // Not this device's turn to answer: the words go in the log as a limb's, and whichever
             // device is primary answers them there. Settled once they are in the log.
             do {
