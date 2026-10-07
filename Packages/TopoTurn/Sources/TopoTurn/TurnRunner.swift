@@ -12,6 +12,10 @@ public enum TurnRunnerError: Error {
     /// The person's turn is in the log and the reply is not; `underlying` says why (an API
     /// error, or `displaced`). The caller keeps `person` and owes nothing for it.
     case replyFailed(person: Turn, underlying: any Error)
+    /// The person's turn is not in the log, `underlying` says why, and the brain has the words
+    /// all the same (`hear`): it is answering them, and the reply is written by the attempt under
+    /// the same nonce that gets the turn into the log.
+    case unsaved(underlying: any Error)
 }
 
 /// A probe for a device with no socket yet: every holder looks unreachable, so a live holder
@@ -24,9 +28,10 @@ public struct NoSocketProbe: LeaseProbe {
 
 /// The phone harness: one turn from the person's words to the assistant's reply, both in the log.
 ///
-/// Each turn takes the primary lease first and runs only as its holder. The person's turn is
-/// appended before the model is called, so a failed call leaves the words in the log and the next
-/// turn carries on from them; the reply is appended as a child of the person's turn in one atomic
+/// The brain is started on the person's words first (`hear`), so its answer waits on nothing
+/// CloudKit does; the lease is taken and the person's turn appended while it answers, and the
+/// turn's writes are made only as the lease's holder. A failed call leaves the words in the log
+/// and the next turn carries on from them; the reply is appended as a child of the person's turn in one atomic
 /// batch with a heartbeat of the lease, so a device displaced during a long call, or in the moment
 /// between the reply arriving and its write, does not write a second brain's answer.
 ///
@@ -57,6 +62,9 @@ public actor TurnRunner {
     private let writer: TurnWriter
     private let lease: PrimaryLease
     private let brain: any Brain
+    /// True when this device's last `acquire()` found another device holding the lease: it is
+    /// not the one that answers, so nothing is heard ahead of the lease until it holds it again.
+    private var elsewhere = false
 
     public init(log: TurnLog, writer: TurnWriter, lease: PrimaryLease, brain: any Brain) {
         self.log = log
@@ -68,6 +76,8 @@ public actor TurnRunner {
     /// Where a turn is, told to the caller as it goes, so a screen never shows nothing while
     /// CloudKit or the model takes its time.
     public enum Progress: Sendable, Equatable {
+        /// The brain has the words, ahead of everything below.
+        case heard
         case takingLease
         case saving
         /// The person's turn is in the log; the model has it now.
@@ -77,30 +87,44 @@ public actor TurnRunner {
 
     /// `nonce` names the append of the person's turn; a caller that keeps it and passes the same
     /// one again after a failure gets the turn already in the log rather than a second copy.
-    /// `progress` is called at each step, on no particular actor.
-    public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString,
+    /// `progress` is called at each step, on no particular actor. `known` is the log as the
+    /// caller last read it, nil when it has not: with it the brain hears the words before
+    /// anything is asked of CloudKit (`hear`).
+    public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString, known: [Turn]? = nil,
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
         Perf.mark("turn.begin")
-        await progress?(.takingLease)
-        // The log is read while the lease is taken: the read asks nothing of the lease, and
-        // nothing is done with it unless this device holds it.
-        async let reading = log.read()
-        let outcome = try await lease.acquire()
-        Perf.mark("turn.lease.acquired")
-        guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
-
-        await progress?(.saving)
-        var before = try await reading
-        // An owed reply moved the log; what the turn continues from is read again.
-        if try await settleOwed() != nil { before = try await log.read() }
-        Perf.mark("turn.log.read")
-        // A caller that stopped before the person's turn is in the log writes nothing at all.
-        try Task.checkCancellation()
+        let heard = await hear(text, model: model, nonce: nonce, known: known)
+        if heard { await progress?(.heard) } else { await progress?(.takingLease) }
+        let before: Transcript, person: Turn
         let at = Date()
-        let person = try await writer.append(.person, text, continuing: before, at: at, nonce: nonce, justRead: true)
+        do {
+            // The log is read while the lease is taken: the read asks nothing of the lease, and
+            // nothing is done with it unless this device holds it.
+            async let reading = log.read()
+            let outcome = try await acquire()
+            Perf.mark("turn.lease.acquired")
+            guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+
+            if !heard { await progress?(.saving) }
+            var read = try await reading
+            // An owed reply moved the log; what the turn continues from is read again.
+            if try await settleOwed() != nil { read = try await log.read() }
+            Perf.mark("turn.log.read")
+            // A caller that stopped before the person's turn is in the log writes nothing at all.
+            try Task.checkCancellation()
+            person = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce, justRead: true)
+            before = read
+        } catch let error where heard && !(error is CancellationError) {
+            if case TurnRunnerError.notPrimary = error { throw error }
+            Perf.mark("turn.unsaved \(Self.kind(of: error))")
+            throw TurnRunnerError.unsaved(underlying: error)
+        }
         Perf.mark("turn.person.saved")
-        await progress?(.asking(person: person))
         let replyNonce = Self.replyNonce(for: [person.ref])
+        // Before anything looks for the reply: a reply found landed is told to the brain by its
+        // nonce, which the words it heard carry only from here.
+        await brain.bind(nonce: nonce, person: person, reply: replyNonce)
+        await progress?(.asking(person: person))
         if person.at != at {
             // A retry: the person's turn was written by an earlier attempt. If that attempt also
             // got its reply into the log before it was cut off, that is the reply.
@@ -133,6 +157,31 @@ public actor TurnRunner {
             else { Perf.mark("turn.reply.failed \(Self.kind(of: error))") }
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
         }
+    }
+
+    /// Starts the brain on the person's words, said under `nonce`, before their turn is in the
+    /// log, and answers whether it has them. The device the person is typing on is the one that
+    /// answers, so this waits on nothing CloudKit does; `run` under the same nonce saves the turn
+    /// and writes the reply the brain is already on. Nothing is heard with no read of the log to
+    /// tell a fresh brain (`known` nil), nor on a device whose last look at the lease found
+    /// another holding it. Hearing the same nonce again asks nothing more.
+    @discardableResult
+    public func hear(_ text: String, model: ClaudeModel, nonce: String, known: [Turn]?) async -> Bool {
+        guard let known, !elsewhere else { return false }
+        let heard = await brain.hear(text, nonce: nonce, context: known, model: model)
+        if heard { Perf.mark("turn.heard") }
+        return heard
+    }
+
+    /// The lease's `acquire()`, with what it found of another holder kept for `hear`.
+    private func acquire() async throws -> LeaseOutcome {
+        let outcome = try await lease.acquire()
+        switch outcome {
+        case .primary: elsewhere = false
+        case .held, .unreachable: elsewhere = true
+        case .contended: break
+        }
+        return outcome
     }
 
     /// A failure's kind for a mark: the error's type, a database error's case and the record it
@@ -169,7 +218,7 @@ public actor TurnRunner {
         if !waiting {
             guard await brain.owed() != nil else { return nil }
         }
-        let outcome = try await lease.acquire()
+        let outcome = try await acquire()
         guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
         let settled = try await settleOwed()
         if settled != nil {
@@ -179,6 +228,10 @@ public actor TurnRunner {
         let unresolved = await brain.unresolved()
         guard transcript.isComplete, Self.awaitsReply(transcript, skipping: unresolved) else { return settled }
         let nonce = Self.replyNonce(for: transcript.heads)
+        // A head this device's brain heard before it was saved, and that reached the log some
+        // other way (a limb's write, a crash before the bind): its reply is the one heard.
+        let heads = transcript.heads.compactMap { transcript[$0] }.filter { $0.role == .person }
+        if heads.count == 1, let person = heads.first { await brain.bind(nonce: person.nonce, person: person, reply: nonce) }
         if let answered = try await log.turn(appendedUnder: nonce) {
             await brain.landed(answered, nonce: nonce)
             return answered

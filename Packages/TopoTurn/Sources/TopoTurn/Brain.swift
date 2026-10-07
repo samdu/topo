@@ -42,8 +42,21 @@ public struct OwedReply: Sendable, Equatable {
 /// log — the lease, the nonces, the atomic append with its heartbeat — is the runner's; a brain
 /// only turns a request into a reply, and hears when that reply is in the log.
 public protocol Brain: Sendable {
-    /// The reply to `request`.
+    /// The reply to `request`. For a request bound to words the brain has heard (`hear`, `bind`)
+    /// it is the reply to those words, waited for while it is still being written, and nothing
+    /// is asked a second time.
     func answer(_ request: BrainRequest) async throws -> Reply
+    /// The person's words, said under `nonce`, before their turn is in the log: the brain starts
+    /// on them now. `context` is the log as this device last read it, which may be behind.
+    /// Returns once the words are recorded and handed over, not when they are answered; true
+    /// when the brain has them, under this call or an earlier one for the nonce, and false when
+    /// it did not begin, which leaves the turn to be asked by `answer` once it is saved.
+    func hear(_ words: String, nonce: String, context: [Turn], model: ClaudeModel) async -> Bool
+    /// The words heard under `nonce` are in the log as `person`, and their reply goes under the
+    /// nonce `reply`. Nothing for a nonce the brain did not hear.
+    func bind(nonce: String, person: Turn, reply: String) async
+    /// The words heard under `nonce` were taken back: no turn of them will be saved.
+    func withdrawn(nonce: String) async
     /// The reply under `nonce` is in the log as `reply`: written now, or found there by its nonce.
     func landed(_ reply: Turn, nonce: String) async
     /// Person turns this brain holds as unresolved on this device: asked, and cut off with no
@@ -60,6 +73,9 @@ public protocol Brain: Sendable {
 }
 
 extension Brain {
+    public func hear(_ words: String, nonce: String, context: [Turn], model: ClaudeModel) async -> Bool { false }
+    public func bind(nonce: String, person: Turn, reply: String) async {}
+    public func withdrawn(nonce: String) async {}
     public func landed(_ reply: Turn, nonce: String) async {}
     public func unresolved() async -> Set<TurnRef> { [] }
     public func owed() async -> OwedReply? { nil }
