@@ -5,7 +5,8 @@ import TopoUserland
 /// alone when asked for again and refuses a second source at its point, and a link that is left
 /// alone, replaced when it points elsewhere, and never put over something that is not a link. And
 /// the guest's own `mount(2)`, which never reaches the host
-/// (`patches/ish/0004-guest-mount-real-refused.patch`).
+/// (`patches/ish/0004-guest-mount-real-refused.patch`), and its own `umount(2)` of a tmpfs, which
+/// the app survives (`patches/ish/0008-tmpfs-umount.patch`).
 final class GuestMountTests: XCTestCase {
     private let fm = FileManager.default
     private var hosts: [URL] = []
@@ -120,5 +121,22 @@ final class GuestMountTests: XCTestCase {
         let procfs = try await sh("mkdir -p \(proc) && mount -t proc proc \(proc) && [ -e \(proc)/self ] && echo proc")
         XCTAssertEqual(procfs.status, 0, procfs.errors)
         XCTAssertEqual(procfs.output, "proc\n")
+    }
+
+    /// A tmpfs the guest made is its to unmount, with the app still standing
+    /// (`patches/ish/0008-tmpfs-umount.patch`): the mount goes, its point is the empty directory it
+    /// was, and a tmpfs mounted there again starts empty. While something in it is open the unmount
+    /// is refused and the files stay; closed, it goes.
+    func testTheGuestUnmountsItsOwnTmpfs() async throws {
+        let point = "/mnt/tmpfs-\(UUID().uuidString.prefix(8))"
+        let filled = try await sh("mkdir -p \(point) && mount -t tmpfs tmpfs \(point) && mkdir \(point)/d "
+            + "&& echo deep > \(point)/d/f && echo top > \(point)/f && ls \(point) \(point)/d > /dev/null "
+            + "&& umount \(point) && echo unmounted; grep -c ' \(point) ' /proc/mounts; ls -A \(point)")
+        XCTAssertEqual(filled.output, "unmounted\n0\n", filled.errors)
+
+        let busy = try await sh("mount -t tmpfs tmpfs \(point) && { [ -e \(point)/f ] || echo fresh; } "
+            + "&& echo again > \(point)/f && exec 3< \(point)/f; umount \(point) 2> /dev/null || echo refused; "
+            + "cat \(point)/f; exec 3<&-; umount \(point) && echo unmounted; grep -c ' \(point) ' /proc/mounts")
+        XCTAssertEqual(busy.output, "fresh\nrefused\nagain\nunmounted\n0\n", busy.errors)
     }
 }
