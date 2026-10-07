@@ -1804,6 +1804,25 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs, ["capital of France?"])
     }
 
+    /// Words the guest answered ahead and that were then handed to another device's lease: when
+    /// this device answers again, the guest is told the other device's reply and not its own
+    /// words back.
+    func testWordsHandedBackAreNotToldToTheGuestAgain() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("mine"), .reply("ok"))
+        _ = await bridge.hear("what time is it?", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the answer") { await bridge.unsaved()["n1"] == "mine" }
+        await bridge.withdrawn(nonce: "n1")
+        let person = try await TurnLog(database: db).writer(for: phone).append(.person, "what time is it?", parents: [], nonce: "n1")
+        try await write(db, .assistant, "the hub's", device: "hub")
+        _ = try await runner.run("thanks", model: .sonnet5)
+        let told = try XCTUnwrap(guest.inputs.last)
+        XCTAssertTrue(told.contains("the hub's"), told)
+        XCTAssertFalse(told.contains("Them: what time is it?"), told)
+        let seen = await bridge.current.seen
+        XCTAssertTrue(seen.contains(person.ref))
+    }
+
     func testSignOutForgetsWhatWasGivenAhead() async throws {
         let db = Outage()
         let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])

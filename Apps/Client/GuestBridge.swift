@@ -151,6 +151,9 @@ struct GuestLedger: Codable, Equatable, Sendable {
     /// The nonces of the person's turns whose replies were last known in the log, newest last:
     /// words said under one are not given ahead of a read that would show their turn there.
     var settled: [String]?
+    /// The nonces of words the guest received ahead of their turn and that were then taken off
+    /// it, newest last: not given ahead again, nor told back to it as another device's turn.
+    var handed: [String]?
     static let settledLimit = 32
 
     /// An input given to the guest whose reply is not in the log yet.
@@ -442,6 +445,10 @@ actor GuestBridge: Brain {
         }
         // What inputs still waiting on their turns told this session is not told again.
         let waiting = fresh ? Coverage() : outstanding()
+        // Nor are words it was given ahead, whose turn another device went on to answer.
+        if !fresh, let handed = ledger.handed {
+            received.insert(request.context.filter { $0.role == .person && handed.contains($0.nonce) }.map(\.ref))
+        }
         let unseen = request.context.filter {
             !ledger.seen.contains($0.ref) && !received.contains($0.ref) && !waiting.contains($0.ref)
         }
@@ -659,7 +666,7 @@ actor GuestBridge: Brain {
         // for them may have gone and landed before, and is not sent a second time from here.
         // Without a read to show it, the ledger's own memory of the replies that landed says so.
         guard !context.contains(where: { $0.role == .person && $0.nonce == nonce }),
-              ledger.settled?.contains(nonce) != true else { return false }
+              ledger.settled?.contains(nonce) != true, ledger.handed?.contains(nonce) != true else { return false }
         if asking { await withCheckedContinuation { queue.append($0) } }
         asking = true
         var flying = false
@@ -707,6 +714,7 @@ actor GuestBridge: Brain {
         let waiting = fresh ? Coverage() : outstanding()
         // A turn the guest was given ahead as words is not told back to it as another device's.
         let given = fresh ? [] : Set((ledger.early ?? []).filter { $0.state != .sent || flights[$0.input] != nil }.map(\.person))
+            .union(ledger.handed ?? [])
         let unseen = context.filter {
             !ledger.seen.contains($0.ref) && !waiting.contains($0.ref) && !($0.role == .person && given.contains($0.nonce))
         }
@@ -837,6 +845,10 @@ actor GuestBridge: Brain {
         if hearing[nonce] != nil { takenBack.insert(nonce) }
         // A bound input's turn is in the log, and what is in the log is said.
         guard readLedger(), ledger.early?.contains(where: { $0.person == nonce && $0.bound == nil }) == true else { return }
+        // What the guest did receive it is not told again, should the turn reach the log after all.
+        if ledger.early?.contains(where: { $0.person == nonce && $0.bound == nil && ($0.state != .sent || flights[$0.input] != nil) }) == true {
+            ledger.handed = Array(((ledger.handed ?? []) + [nonce]).suffix(GuestLedger.settledLimit))
+        }
         ledger.early?.removeAll { $0.person == nonce && $0.bound == nil }
         try? save()
     }
