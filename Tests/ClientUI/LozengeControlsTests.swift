@@ -7,6 +7,7 @@ import XCTest
 ///
 /// Both settings outlive a launch, so neither test assumes the state it starts in, and each leaves
 /// replies read aloud and the first model chosen.
+@MainActor
 final class LozengeControlsTests: XCTestCase {
     override func setUp() {
         continueAfterFailure = false
