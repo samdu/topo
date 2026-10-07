@@ -389,7 +389,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow, queued: row.queued(in: harness),
+                                  draft: draftRow, queued: row.queued(in: harness), answer: rowAnswer,
                                   cue: speaker.cue)
         if #available(iOS 18, *) {
             view
@@ -478,9 +478,21 @@ struct ChatView: View {
         #if DEBUG
         if let fixture = DebugRun.transcript() { return fixture }
         #endif
-        guard let writing = harness.writing, !writing.isEmpty else { return harness.turns }
-        return harness.turns + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
-                                     nonce: "writing")]
+        // Replies iCloud is behind on whose person's turn did land: drawn after the log's turns.
+        let replies = harness.replies
+        let behind = harness.turns.filter { $0.role == .person && replies[$0.nonce] != nil }.enumerated().map { place, person in
+            UnsavedReply.turn(replies[person.nonce] ?? "", place: -1 - place)
+        }
+        // What is being written for words not in the log yet is drawn under those words.
+        guard let writing = harness.writing, !writing.isEmpty, !harness.writingAhead else { return harness.turns + behind }
+        return harness.turns + behind + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
+                                              nonce: "writing")]
+    }
+
+    /// The guest's reply to the turn the row holds, while that turn is not in the log.
+    private var rowAnswer: Turn? {
+        guard let sent = row.sent, !harness.said(sent), let reply = harness.replies[sent] else { return nil }
+        return UnsavedReply.turn(reply, place: Int(Int32.max))
     }
 
     /// The row the reply is drawn in while the guest writes it (`Harness.writing`): no turn of

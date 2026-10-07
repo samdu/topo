@@ -20,6 +20,9 @@ struct TranscriptView: View {
     /// Turns on their way that the row is not holding: said before its own, and said after it.
     /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
     var queued: (before: [QueuedTurn], after: [QueuedTurn]) = ([], [])
+    /// The guest's reply to the turn the row holds, as far as it is written, while that turn is
+    /// not in the log: drawn under the row, as the reply to a queued turn is under its words.
+    var answer: Turn?
     /// The code block the voice has just reached (`Speaker.cue`): scrolled into view, and drawn
     /// pulsing by the reply it is in. Nil on a screen with no voice.
     var cue: CodeBlockCue?
@@ -57,11 +60,12 @@ struct TranscriptView: View {
                                 .onDisappear { made.turns.remove(turn.ref) }
                         }
                     }
-                    ForEach(queued.before) { QueuedTurnRow(turn: $0).id($0.id) }
+                    ForEach(queued.before) { queued($0) }
                     if let draft, draft.state != .hidden {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
-                    ForEach(queued.after) { QueuedTurnRow(turn: $0).id($0.id) }
+                    if let answer { TurnRow(turn: answer, replay: replay, actions: actions).id(answer.ref) }
+                    ForEach(queued.after) { queued($0) }
                 }
                 .padding(.horizontal, look.transcript.horizontalPadding)
                 .padding(.vertical, look.transcript.spacing)
@@ -203,11 +207,22 @@ struct TurnRow: View {
     }
 }
 
+extension TranscriptView {
+    /// A turn on its way, and under it the guest's reply when it has one the log does not.
+    @ViewBuilder fileprivate func queued(_ turn: QueuedTurn) -> some View {
+        QueuedTurnRow(turn: turn).id(turn.id)
+        if let reply = turn.reply { TurnRow(turn: reply, replay: replay, actions: actions).id(reply.ref) }
+    }
+}
+
 /// Words on the line that are not in the log and not in the row: a turn on its way that nothing
 /// else draws.
 struct QueuedTurn: Identifiable, Equatable {
     let text: String
     let nonce: String
+    /// The guest's reply to these words, written before iCloud took the turn: no turn of the
+    /// log's, drawn under the words until the log has both.
+    var reply: Turn?
     var id: String { nonce }
 }
 

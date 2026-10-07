@@ -95,7 +95,11 @@ final class NextTurn {
     /// microphone can put another on the line while it does, or a relaunch can find more than one
     /// owed. With nothing on its way in the row, every one is before it.
     func queued(in harness: Harness) -> (before: [QueuedTurn], after: [QueuedTurn]) {
-        let unlanded = harness.unlanded.map { QueuedTurn(text: $0.text, nonce: $0.nonce) }
+        let replies = harness.replies
+        let unlanded = harness.unlanded.enumerated().map { place, turn in
+            QueuedTurn(text: turn.text, nonce: turn.nonce,
+                       reply: replies[turn.nonce].map { UnsavedReply.turn($0, place: place) })
+        }
         guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {
             return (unlanded, [])
         }
@@ -134,3 +138,12 @@ final class NextTurn {
     }
 }
 #endif
+
+/// A reply the guest wrote that the log does not hold, as something the transcript can draw.
+enum UnsavedReply {
+    /// No turn of the log's, so no device's sequence can name it; `place` keeps two apart.
+    static func turn(_ text: String, place: Int) -> Turn {
+        Turn(ref: TurnRef(device: DeviceID("unsaved"), sequence: Int64(place)), parents: [], role: .assistant,
+             text: text, at: Date(), nonce: "unsaved")
+    }
+}

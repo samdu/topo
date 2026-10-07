@@ -62,11 +62,22 @@ public actor TurnRunner {
     private let writer: TurnWriter
     private let lease: PrimaryLease
     private let brain: any Brain
-    /// True when this device's last `acquire()` found another device holding the lease: it is
-    /// not the one that answers, so nothing is heard ahead of the lease until it holds it again.
-    private var elsewhere = false
+    /// Where this device stood when it last asked the lease.
+    public private(set) var standing: Standing
+    /// True when the last call to the lease failed: iCloud is away, and so is whatever held the
+    /// lease, as far as this device can tell. The person is typing here, so this device answers:
+    /// the brain hears every turn at once until a call to the lease gets through.
+    private var away = false
 
-    public init(log: TurnLog, writer: TurnWriter, lease: PrimaryLease, brain: any Brain) {
+    /// What a device knows of the lease from the last time it asked: nothing yet, that it held
+    /// it, or that another device did.
+    public enum Standing: String, Sendable {
+        case unknown, mine, elsewhere
+    }
+
+    /// `standing` is what the device knew when it last ran, for a launch that kept it.
+    public init(log: TurnLog, writer: TurnWriter, lease: PrimaryLease, brain: any Brain, standing: Standing = .unknown) {
+        self.standing = standing
         self.log = log
         self.writer = writer
         self.lease = lease
@@ -93,19 +104,42 @@ public actor TurnRunner {
     public func run(_ text: String, model: ClaudeModel, nonce: String = UUID().uuidString, known: [Turn]? = nil,
                     progress: (@Sendable (Progress) async -> Void)? = nil) async throws -> Result {
         Perf.mark("turn.begin")
-        let heard = await hear(text, model: model, nonce: nonce, known: known)
-        if heard { await progress?(.heard) } else { await progress?(.takingLease) }
+        // The brain hears the words in a task of its own, so the lease and the save do not wait
+        // for it to be ready, nor it for them.
+        let brain = self.brain
+        let hearNow: @Sendable () -> Task<Bool, Never> = {
+            Task {
+                let heard = await brain.hear(text, nonce: nonce, context: known, model: model)
+                if heard { Perf.mark("turn.heard") }
+                return heard
+            }
+        }
+        // With no read of the log to go on, the turn is asked once it is saved, as a turn in the
+        // log is, and the brain is told everything the log holds that it has not seen.
+        var hearing: Task<Bool, Never>? = hearsAhead && known != nil ? hearNow() : nil
+        await progress?(hearing == nil ? .takingLease : .heard)
         let before: Transcript, person: Turn
         let at = Date()
         do {
             // The log is read while the lease is taken: the read asks nothing of the lease, and
             // nothing is done with it unless this device holds it.
             async let reading = log.read()
-            let outcome = try await acquire()
+            let outcome: LeaseOutcome
+            do {
+                outcome = try await acquire()
+            } catch {
+                // The lease could not be asked, within its own bound: whoever held it is as far
+                // away as iCloud is, and the person is typing here, so the brain hears the words.
+                if hearing == nil, known != nil, !(error is CancellationError), !Task.isCancelled { hearing = hearNow() }
+                throw error
+            }
             Perf.mark("turn.lease.acquired")
             guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+            if hearing == nil {
+                if known != nil { hearing = hearNow() }
+                await progress?(.saving)
+            }
 
-            if !heard { await progress?(.saving) }
             var read = try await reading
             // An owed reply moved the log; what the turn continues from is read again.
             if try await settleOwed() != nil { read = try await log.read() }
@@ -114,11 +148,15 @@ public actor TurnRunner {
             try Task.checkCancellation()
             person = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce, justRead: true)
             before = read
-        } catch let error where heard && !(error is CancellationError) {
+        } catch {
             if case TurnRunnerError.notPrimary = error { throw error }
+            guard !(error is CancellationError), await hearing?.value == true else { throw error }
             Perf.mark("turn.unsaved \(Self.kind(of: error))")
             throw TurnRunnerError.unsaved(underlying: error)
         }
+        // The words are recorded with the brain, or it did not take them, before the turn is
+        // bound: a bind that ran ahead of the record would leave `answer` to ask a second time.
+        _ = await hearing?.value
         Perf.mark("turn.person.saved")
         let replyNonce = Self.replyNonce(for: [person.ref])
         // Before anything looks for the reply: a reply found landed is told to the brain by its
@@ -160,25 +198,39 @@ public actor TurnRunner {
     }
 
     /// Starts the brain on the person's words, said under `nonce`, before their turn is in the
-    /// log, and answers whether it has them. The device the person is typing on is the one that
-    /// answers, so this waits on nothing CloudKit does; `run` under the same nonce saves the turn
-    /// and writes the reply the brain is already on. Nothing is heard with no read of the log to
-    /// tell a fresh brain (`known` nil), nor on a device whose last look at the lease found
-    /// another holding it. Hearing the same nonce again asks nothing more.
+    /// log, and answers whether it has them; `run` under the same nonce saves the turn and writes
+    /// the reply the brain is already on. Only a device that is the one answering hears ahead of
+    /// the lease (`hearsAhead`); any other is heard by its `run`, once the lease has answered or
+    /// could not be asked. `known` is the log as the caller last read it; with none, nothing is heard.
+    /// Hearing the same nonce again asks nothing more.
     @discardableResult
     public func hear(_ text: String, model: ClaudeModel, nonce: String, known: [Turn]?) async -> Bool {
-        guard let known, !elsewhere else { return false }
+        guard hearsAhead, let known else { return false }
         let heard = await brain.hear(text, nonce: nonce, context: known, model: model)
         if heard { Perf.mark("turn.heard") }
         return heard
     }
 
+    /// Whether the brain hears words before the lease is asked: this device held the lease when
+    /// it last asked, or the lease could not be asked at all. A device that found another holding
+    /// it, or has not asked since it launched, asks first: the call is bounded
+    /// (`LeaseTiming.patience` a request), and the brain hears as soon as it is answered primary
+    /// or fails.
+    private var hearsAhead: Bool { away || standing == .mine }
+
     /// The lease's `acquire()`, with what it found of another holder kept for `hear`.
     private func acquire() async throws -> LeaseOutcome {
-        let outcome = try await lease.acquire()
+        let outcome: LeaseOutcome
+        do {
+            outcome = try await lease.acquire()
+        } catch {
+            if !(error is CancellationError) { away = true }
+            throw error
+        }
+        away = false
         switch outcome {
-        case .primary: elsewhere = false
-        case .held, .unreachable: elsewhere = true
+        case .primary: standing = .mine
+        case .held, .unreachable: standing = .elsewhere
         case .contended: break
         }
         return outcome

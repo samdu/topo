@@ -31,12 +31,12 @@ final class ScriptedBrain: Brain, @unchecked Sendable {
 
     /// Whether this brain takes words ahead of their turn. Off, it is a brain that only answers.
     var hears = false
-    private var _heard: [(words: String, nonce: String, context: [Turn])] = []
+    private var _heard: [(words: String, nonce: String, context: [Turn]?)] = []
     private var _bound: [(nonce: String, person: Turn, reply: String)] = []
-    var heard: [(words: String, nonce: String, context: [Turn])] { lock.withLock { _heard } }
+    var heard: [(words: String, nonce: String, context: [Turn]?)] { lock.withLock { _heard } }
     var bound: [(nonce: String, person: Turn, reply: String)] { lock.withLock { _bound } }
 
-    func hear(_ words: String, nonce: String, context: [Turn], model: ClaudeModel) async -> Bool {
+    func hear(_ words: String, nonce: String, context: [Turn]?, model: ClaudeModel) async -> Bool {
         guard hears else { return false }
         lock.withLock { if !_heard.contains(where: { $0.nonce == nonce }) { _heard.append((words, nonce, context)) } }
         return true
@@ -79,7 +79,8 @@ final class Elapsed: @unchecked Sendable {
 /// A runner over an in-memory log for one device, with a lease it can always take. `clock`, when
 /// given, is the lease's time, which no heartbeat moves: the lease's own sleep never returns.
 func makeRunner(database: any RecordDatabase, device: String = "phone", brain: ScriptedBrain,
-                probe: any LeaseProbe = NoSocketProbe(), clock: Elapsed? = nil) async throws -> (TurnRunner, PrimaryLease) {
+                probe: any LeaseProbe = NoSocketProbe(), clock: Elapsed? = nil,
+                standing: TurnRunner.Standing = .unknown) async throws -> (TurnRunner, PrimaryLease) {
     let id = DeviceID(device)
     let log = TurnLog(database: database)
     let writer = try await log.writer(for: id)
@@ -89,7 +90,7 @@ func makeRunner(database: any RecordDatabase, device: String = "phone", brain: S
     } else {
         PrimaryLease(database: database, device: id, endpoint: nil, probe: probe, sleep: sleep)
     }
-    return (TurnRunner(log: log, writer: writer, lease: lease, brain: brain), lease)
+    return (TurnRunner(log: log, writer: writer, lease: lease, brain: brain, standing: standing), lease)
 }
 
 /// A database that can be taken away: while `away`, every call fails `unavailable` and nothing
