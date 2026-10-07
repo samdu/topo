@@ -11,9 +11,9 @@ index 64b4088c..c27848df 100644
 +                        // disconnect restores it (and unlinks jumps_from_links[i]). So
 +                        // the slot still holding old_jump_ip[i] is what says it is free.
 +                        // The address compare alone cannot: a patched slot holds a host
-+                        // pointer, whose low 32 bits are a guest address as often as the
-+                        // heap's offsets fall in the guest's text (the resident's does,
-+                        // 0x178cc00-0x4ce31c0 against a heap at 0x7000_0000_0000). On
++                        // pointer, whose low 32 bits are a guest address whenever the
++                        // block heap's pointers fall over the guest's text (they did: a
++                        // block at 0x7004ce1c00 chained from a bl to 0x4ce1cc0). On
 +                        // that match the already-linked jumps_from_links[i] was added to
 +                        // a second block's jumps_from, and whichever target was
 +                        // disconnected second found it NULL and crashed there.
