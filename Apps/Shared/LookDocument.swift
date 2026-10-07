@@ -146,6 +146,13 @@ enum LookDocument {
         r.object("settings") { settings(&look.settings, $0) }
         r.object("composer") { composer(&look.composer, $0) }
         r.object("mascot") { mascot(&look.mascot, $0) }
+        r.object("mind") { mind(&look.mind, $0) }
+    }
+
+    private static func mind(_ value: inout Look.Mind, _ r: Reader) {
+        r.title("sonnet", &value.sonnet)
+        r.title("opus", &value.opus)
+        r.title("fable", &value.fable)
     }
 
     // MARK: The parts of a look, each read where it is named
@@ -270,6 +277,7 @@ enum LookDocument {
         r.seconds("presenceDuration", &value.presenceDuration)
         r.compactShare("compactShare", &value.compactShare)
         r.object("flank") { flank(&value.flank, $0) }
+        r.object("models") { models(&value.models, $0) }
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
         r.object("openJewel") { jewel(&value.openJewel, $0) }
@@ -281,6 +289,7 @@ enum LookDocument {
         r.pixelScale("scale", &value.scale)
         r.clearance("clearance", &value.clearance)
         r.roamSpeed("roamSpeed", &value.roamSpeed)
+        r.roamSpeed("swimSpeed", &value.swimSpeed)
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
@@ -309,6 +318,26 @@ enum LookDocument {
         r.shadow("etchLight", &value.etchLight)
         r.shadow("etchShade", &value.etchShade)
         r.alpha("heldOpacity", &value.heldOpacity)
+        r.symbol("keyboard", &value.keyboard)
+        r.symbol("keyboardDown", &value.keyboardDown)
+        r.symbol("speaking", &value.speaking)
+        r.symbol("muted", &value.muted)
+        r.symbol("models", &value.models)
+        r.symbol("modelsOpen", &value.modelsOpen)
+    }
+
+    private static func models(_ value: inout Look.Composer.Models, _ r: Reader) {
+        r.bounded("inset", &value.inset, in: 16...160)
+        r.bounded("height", &value.height, in: 32...200)
+        r.length("spacing", &value.spacing)
+        r.indent("topInset", &value.topInset)
+        r.outline("track", &value.track)
+        r.bounded("stop", &value.stop, in: 2...44)
+        r.bounded("knob", &value.knob, in: 2...44)
+        r.alpha("restOpacity", &value.restOpacity)
+        r.alpha("restLabelOpacity", &value.restLabelOpacity)
+        r.font("labelFont", &value.labelFont)
+        r.length("labelSpacing", &value.labelSpacing)
     }
 
     private static func well(_ value: inout Look.Composer.Well, _ r: Reader) {
@@ -396,6 +425,16 @@ enum LookDocument {
         /// length is a value no view is promised to survive — and bounded well above any screen.
         func length(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...4000, "a length in points") {
+                took(key)
+                value = CGFloat(number)
+            }
+        }
+
+        /// A length with a range of its own, where the one a view survives is narrower than any
+        /// length's: the model slider's stops, which are pressed, and its row, which holds them.
+        func bounded(_ key: String, _ value: inout CGFloat, in range: ClosedRange<Double>) {
+            let what = "a length in points between \(Int(range.lowerBound)) and \(Int(range.upperBound))"
+            if let number = amount(key, in: range, what) {
                 took(key)
                 value = CGFloat(number)
             }
@@ -661,6 +700,20 @@ enum LookDocument {
 
         // MARK: Names
 
+        /// What something is called: a line of text with something in it besides space, no longer
+        /// than `Look.Mind.longest` characters and with no control character, a newline among
+        /// them, since it is drawn on one line of the notice and of the slider.
+        func title(_ key: String, _ value: inout String) {
+            guard let raw = take(key) else { return }
+            guard let text = raw as? String else { return note(key, "is not a name") }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty, trimmed.count <= Look.Mind.longest,
+                  !trimmed.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) || CharacterSet.newlines.contains($0) })
+            else { return note(key, "is not a name of 1 to \(Look.Mind.longest) characters on one line") }
+            took(key)
+            value = trimmed
+        }
+
         func surface(_ key: String, _ value: inout Look.Surface) { named(key, &value) }
         func codeOverflow(_ key: String, _ value: inout Look.Markdown.CodeOverflow) { named(key, &value) }
 
@@ -701,6 +754,27 @@ enum LookDocument {
             }
             took(key)
             value = text
+        }
+
+        /// A mark on a control, by its SF Symbol name: one the system has, since a control whose
+        /// mark is a name nothing draws is a control nobody can see to press.
+        func symbol(_ key: String, _ value: inout String) {
+            guard let raw = take(key) else { return }
+            guard let text = raw as? String, (1...200).contains(text.count), Self.isSymbol(text) else {
+                return note(key, "is not the name of a symbol the system has")
+            }
+            took(key)
+            value = text
+        }
+
+        private static func isSymbol(_ name: String) -> Bool {
+            #if canImport(UIKit)
+            UIImage(systemName: name) != nil
+            #elseif canImport(AppKit)
+            NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+            #else
+            false
+            #endif
         }
 
         /// How a colour laid over a picture meets it, by the name SwiftUI gives it.
