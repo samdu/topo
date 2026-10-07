@@ -9,8 +9,9 @@ import os
 /// tagged record is saved through a copy of the `CKRecord` it was fetched
 /// as, whose change tag CloudKit checks, and an untagged one is a fresh
 /// `CKRecord` that CloudKit refuses if the ID exists. `CKRecord`s from
-/// `fetch` and from saves are kept so a later save can find the one to
-/// write through; query and change-feed results are not kept. A record
+/// `fetch`, from saves, and the server's in a refused save are kept so a
+/// later save can find the one to write through; query and change-feed
+/// results are not kept. A record
 /// whose tag is not on hand is fetched again and checked before the save,
 /// so a save over one of those is a fetch and then the save.
 ///
@@ -50,15 +51,54 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
     }
 
     public func save(_ records: [Record]) async throws -> [Record] {
+        try await save(records, within: nil)
+    }
+
+    public func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        try await fetch(ids, within: nil)
+    }
+
+    /// The same records and the same kept `CKRecord`s, with every save and fetch by ID given
+    /// `seconds` to be answered: the request's timeout, from its start to the whole of its
+    /// answer. One that runs out throws `unavailable`, and may still have been applied. A save
+    /// over a version this object has no `CKRecord` for is a fetch and then the save, each
+    /// with its own `seconds`.
+    public func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        Bounded(database: self, seconds: seconds)
+    }
+
+    private struct Bounded: RecordDatabase {
+        let database: CloudKitRecordDatabase
+        let seconds: TimeInterval
+        func save(_ records: [Record]) async throws -> [Record] { try await database.save(records, within: seconds) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await database.fetch(ids, within: seconds) }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await database.query(query) }
+        func records(ofType type: String) async throws -> [Record] { try await database.records(ofType: type) }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase { database.answering(within: seconds) }
+    }
+
+    /// Runs `body` against the database, its requests timing out after `seconds` when given.
+    private func requesting<R>(within seconds: TimeInterval?, _ body: (CKDatabase) async throws -> R) async throws -> R {
+        guard let seconds else { return try await body(database) }
+        let configuration = CKOperation.Configuration()
+        configuration.timeoutIntervalForRequest = seconds
+        configuration.timeoutIntervalForResource = seconds
+        return try await database.configuredWith(configuration: configuration, body: body)
+    }
+
+    private func save(_ records: [Record], within seconds: TimeInterval?) async throws -> [Record] {
         var ckRecords: [CKRecord] = []
         for record in records {
-            ckRecords.append(try await ckRecord(for: record))
+            ckRecords.append(try await ckRecord(for: record, within: seconds))
         }
         let result: (saveResults: [CKRecord.ID: Result<CKRecord, any Error>], deleteResults: [CKRecord.ID: Result<Void, any Error>])
         do {
-            result = try await database.modifyRecords(saving: ckRecords, deleting: [],
-                                                      savePolicy: .ifServerRecordUnchanged, atomically: true)
+            let saving = ckRecords
+            result = try await requesting(within: seconds) {
+                try await $0.modifyRecords(saving: saving, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
+            }
         } catch {
+            rememberServerRecords(in: error)
             throw Self.mapped(error, recordIDs: ckRecords.map(\.recordID))
         }
         // An atomic batch that fails fails every record, and all but the one at fault say only
@@ -66,6 +106,7 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
         // caller that retries a conflict on its own record is told of the conflict.
         for ck in ckRecords {
             if case .failure(let e)? = result.saveResults[ck.recordID], (e as? CKError)?.code != .batchRequestFailed {
+                rememberServerRecords(in: e)
                 throw Self.mapped(e, recordIDs: [ck.recordID])
             }
         }
@@ -84,11 +125,11 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
         return saved
     }
 
-    public func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+    private func fetch(_ ids: [RecordID], within seconds: TimeInterval?) async throws -> [RecordID: Record] {
         let ckIDs = ids.map { CKRecord.ID(recordName: $0.name, zoneID: zoneID) }
         let results: [CKRecord.ID: Result<CKRecord, any Error>]
         do {
-            results = try await database.records(for: ckIDs)
+            results = try await requesting(within: seconds) { try await $0.records(for: ckIDs) }
         } catch {
             throw Self.mapped(error, recordIDs: ckIDs)
         }
@@ -290,14 +331,14 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
 
     // MARK: - Mapping
 
-    private func ckRecord(for record: Record) async throws -> CKRecord {
+    private func ckRecord(for record: Record, within seconds: TimeInterval? = nil) async throws -> CKRecord {
         let ckID = CKRecord.ID(recordName: record.id.name, zoneID: zoneID)
         let base: CKRecord
         if let tag = record.changeTag {
             if let cached = cachedRecord(record.id), cached.recordChangeTag == tag {
                 base = cached
             } else {
-                let results = try await database.records(for: [ckID])
+                let results = try await requesting(within: seconds) { try await $0.records(for: [ckID]) }
                 switch results[ckID] {
                 case .success(let server)?:
                     guard server.recordChangeTag == tag else {
@@ -335,6 +376,14 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
             copy[key] = ckValue(value)
         }
         return copy
+    }
+
+    /// Keeps the server's record a conflict carries, as a fetch would: a save over the version
+    /// the conflict reported is then one request, not a fetch and the save.
+    private func rememberServerRecords(in error: any Error) {
+        guard let ck = error as? CKError else { return }
+        if let server = ck.serverRecord { remember(server) }
+        for sub in (ck.partialErrorsByItemID ?? [:]).values { rememberServerRecords(in: sub) }
     }
 
     private func remember(_ ck: CKRecord) {

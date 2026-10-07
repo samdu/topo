@@ -101,6 +101,46 @@ actor SlowProbe: LeaseProbe {
     func confirms(_ lease: Lease) async -> Bool { clock.advance(cost); return answer }
 }
 
+/// A database whose next fetch of the lease can be held by the test, so something can happen
+/// while that read of the record is out. Fetches after it go straight through.
+actor ReadGate: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var holding = false
+    private var held: [CheckedContinuation<Void, Never>] = []
+
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func hold() { holding = true }
+    var waiting: Bool { !held.isEmpty }
+    func release() {
+        holding = false
+        held.forEach { $0.resume() }
+        held = []
+    }
+
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        if holding, ids.contains(Lease.recordID) {
+            holding = false
+            await withCheckedContinuation { held.append($0) }
+        }
+        return try await inner.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A probe the test answers: the asker waits until it does.
+actor HeldProbe: LeaseProbe {
+    private var waiter: CheckedContinuation<Bool, Never>?
+    var asked: Bool { waiter != nil }
+    func confirms(_ lease: Lease) async -> Bool { await withCheckedContinuation { waiter = $0 } }
+    func answer(_ confirmed: Bool) {
+        waiter?.resume(returning: confirmed)
+        waiter = nil
+    }
+}
+
 /// Releases every waiter once `parties` have arrived, then stays open.
 actor Barrier {
     private let parties: Int
@@ -309,5 +349,180 @@ actor QueryWatcher: RecordDatabase {
     func query(_ query: RecordQuery) async throws -> [Record] {
         queries.append(query)
         return try await inner.query(query)
+    }
+}
+
+/// A database that holds the answer of the next save, its success or the conflict it threw, after
+/// the store has judged it, or of the next read of the lease after the store has read it: what a
+/// slow network does to an answer, with whatever the test does meanwhile done before it arrives.
+actor LateAnswers: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var holdSave = false, holdFetch = false
+    private var saves: [CheckedContinuation<Void, Never>] = [], fetches: [CheckedContinuation<Void, Never>] = []
+
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+
+    func holdNextSaveAnswer() { holdSave = true }
+    func holdNextFetchAnswer() { holdFetch = true }
+    var savesOut: Int { saves.count }
+    var fetchesOut: Int { fetches.count }
+    /// Every save and fetch asked of it, answered or not.
+    private(set) var calls = 0
+    func releaseSaves() { saves.forEach { $0.resume() }; saves = [] }
+    func releaseFetches() { fetches.forEach { $0.resume() }; fetches = [] }
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        calls += 1
+        let result: Result<[Record], any Error>
+        do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
+        if holdSave {
+            holdSave = false
+            await withCheckedContinuation { saves.append($0) }
+        }
+        return try result.get()
+    }
+
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        calls += 1
+        let out = try await inner.fetch(ids)
+        if holdFetch, ids.contains(Lease.recordID) {
+            holdFetch = false
+            await withCheckedContinuation { fetches.append($0) }
+        }
+        return out
+    }
+
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database whose answers arrive after a number of turns of the scheduler drawn from `seed`,
+/// before and after the store judges each call, so calls made together are answered in an order
+/// the seed picks. Each save moves `clock` on a little, so no two writes of the lease are equal.
+actor Jitter: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private let clock: ManualClock
+    private var random: LCG
+
+    init(_ inner: InMemoryRecordDatabase, seed: UInt64, clock: ManualClock) {
+        self.inner = inner
+        self.clock = clock
+        random = LCG(seed &+ 977)
+    }
+
+    private func wander() async {
+        for _ in 0..<random.int(5) { await Task.yield() }
+    }
+
+    func save(_ records: [Record]) async throws -> [Record] {
+        await wander()
+        clock.advance(0.001)
+        let result: Result<[Record], any Error>
+        do { result = .success(try await inner.save(records)) } catch { result = .failure(error) }
+        await wander()
+        return try result.get()
+    }
+
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        await wander()
+        let out = try await inner.fetch(ids)
+        await wander()
+        return out
+    }
+
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database that records what bound it was asked to answer within, and counts the saves and
+/// fetches that reached it without one.
+final class AsksWithin: RecordDatabase, @unchecked Sendable {
+    private let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var _bounds: [TimeInterval] = [], _unbounded = 0
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    var bounds: [TimeInterval] { lock.withLock { _bounds } }
+    var unbounded: Int { lock.withLock { _unbounded } }
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        lock.withLock { _bounds.append(seconds) }
+        return inner
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        lock.withLock { _unbounded += 1 }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        lock.withLock { _unbounded += 1 }
+        return try await inner.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database whose next save stalls until the test gives it up: it then fails as a request
+/// that ran out of time does. The store never hears of it, or, `landing`, applied it first.
+actor Stalls: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var stallNext = false
+    private var landing = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private struct RanOut: Error {}
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    func stallNextSave(landing: Bool = false) {
+        stallNext = true
+        self.landing = landing
+    }
+    var stalled: Bool { waiter != nil }
+    func giveUp() {
+        waiter?.resume()
+        waiter = nil
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if stallNext {
+            stallNext = false
+            if landing { _ = try await inner.save(records) }
+            await withCheckedContinuation { waiter = $0 }
+            throw RecordDatabaseError.unavailable(underlying: RanOut())
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database whose next save fails as a dropped connection does and reaches the store late:
+/// after the read that follows it, ahead of the next save.
+final class LandsLate: RecordDatabase, @unchecked Sendable {
+    let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var lateNext = false
+    private var late: [Record]?
+    private struct Dropped: Error {}
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    func landNextSaveLate() { lock.withLock { lateNext = true } }
+    func save(_ records: [Record]) async throws -> [Record] {
+        let hold = lock.withLock { () -> Bool in
+            defer { lateNext = false }
+            if lateNext { late = records }
+            return lateNext
+        }
+        if hold { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
+        if let landing = lock.withLock({ () -> [Record]? in defer { late = nil }; return late }) {
+            _ = try await inner.save(landing)
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+}
+
+/// A probe answered by the holder itself, as the hub answers one.
+struct AsksTheHolder: LeaseProbe {
+    let holder: PrimaryLease
+    func confirms(_ lease: Lease) async -> Bool {
+        guard await holder.isPrimary(), let held = await holder.held else { return false }
+        return held.holder == lease.holder && held.epoch == lease.epoch
     }
 }

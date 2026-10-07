@@ -352,8 +352,9 @@ public actor TurnWriter {
     }
 
     /// Appends a turn in one atomic batch with a heartbeat of `lease`, so the
-    /// turn lands only if this device still holds the lease it last wrote and
-    /// a device displaced while it was working writes nothing. Returns nil,
+    /// turn lands only if no other device has claimed the lease since this
+    /// one last wrote it, and a device displaced while it was working writes
+    /// nothing. Returns nil,
     /// with nothing written, when the lease is not held (see
     /// `PrimaryLease.heartbeat(saving:)`); otherwise as `append(_:_:parents:at:nonce:)`,
     /// a retried nonce included.

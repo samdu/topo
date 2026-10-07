@@ -10,6 +10,12 @@ final class ScriptedBrain: Brain, @unchecked Sendable {
     private var _requests: [BrainRequest] = []
     /// Runs while a request is being answered, before its reply.
     var duringAnswer: (@Sendable () async -> Void)?
+    private var _owes: OwedReply?
+    /// A reply this brain finished that the log does not hold, until it hears it has landed.
+    var owes: OwedReply? {
+        get { lock.withLock { _owes } }
+        set { lock.withLock { _owes = newValue } }
+    }
 
     init(_ answers: Result<String, any Error>...) { self.answers = answers }
 
@@ -22,16 +28,13 @@ final class ScriptedBrain: Brain, @unchecked Sendable {
         return Reply(text: try next.get(), model: request.model.rawValue, context: 0, outputTokens: 0)
     }
 
-    func describe() async -> String { "scripted" }
+    func owed() async -> OwedReply? { owes }
 
-    /// A reply this brain says the log is owed, until it lands.
-    var owedReply: OwedReply? {
-        get { lock.withLock { _owed } }
-        set { lock.withLock { _owed = newValue } }
+    func landed(_ reply: Turn, nonce: String) async {
+        lock.withLock { if _owes?.nonce == nonce { _owes = nil } }
     }
-    private var _owed: OwedReply?
-    func owed() async -> OwedReply? { owedReply }
-    func landed(_ turn: Turn, nonce: String) async { if owedReply?.nonce == nonce { owedReply = nil } }
+
+    func describe() async -> String { "scripted" }
 }
 
 /// What a scripted brain throws for a failed answer.
@@ -64,28 +67,27 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
-/// A clock a test moves by hand.
-final class TestClock: @unchecked Sendable {
+/// Time a test moves by hand: the lease's wall clock and its monotonic one together.
+final class Elapsed: @unchecked Sendable {
     private let lock = NSLock()
-    private var offset: TimeInterval = 0
-    private let start = Date()
-    var now: Date { lock.withLock { start.addingTimeInterval(offset) } }
-    var uptime: TimeInterval { lock.withLock { offset } }
-    func advance(_ seconds: TimeInterval) { lock.withLock { offset += seconds } }
+    private var seconds: TimeInterval = 0
+    func advance(_ by: TimeInterval) { lock.withLock { seconds += by } }
+    var now: @Sendable () -> Date { { [self] in Date(timeIntervalSince1970: 1_800_000_000 + lock.withLock { seconds }) } }
+    var uptime: @Sendable () -> TimeInterval { { [self] in lock.withLock { seconds } } }
 }
 
-/// A runner over an in-memory log for one device, with a lease it can always take.
+/// A runner over an in-memory log for one device, with a lease it can always take. `clock`, when
+/// given, is the lease's time, which no heartbeat moves: the lease's own sleep never returns.
 func makeRunner(database: any RecordDatabase, device: String = "phone", brain: ScriptedBrain,
-                probe: any LeaseProbe = NoSocketProbe(), clock: TestClock? = nil) async throws -> (TurnRunner, PrimaryLease) {
+                probe: any LeaseProbe = NoSocketProbe(), clock: Elapsed? = nil) async throws -> (TurnRunner, PrimaryLease) {
     let id = DeviceID(device)
     let log = TurnLog(database: database)
     let writer = try await log.writer(for: id)
-    let never: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }
+    let sleep: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }
     let lease = if let clock {
-        PrimaryLease(database: database, device: id, endpoint: nil, probe: probe,
-                     now: { clock.now }, monotonic: { clock.uptime }, sleep: never)
+        PrimaryLease(database: database, device: id, endpoint: nil, probe: probe, now: clock.now, monotonic: clock.uptime, sleep: sleep)
     } else {
-        PrimaryLease(database: database, device: id, endpoint: nil, probe: probe, sleep: never)
+        PrimaryLease(database: database, device: id, endpoint: nil, probe: probe, sleep: sleep)
     }
     return (TurnRunner(log: log, writer: writer, lease: lease, brain: brain), lease)
 }

@@ -99,7 +99,7 @@ import TopoCoreTesting
 
     @Test func aLeaseLapsedOnThisDeviceIsTakenAgainBeforeThePersonsTurnIsSaved() async throws {
         let db = RecordingDatabase(inner: InMemoryRecordDatabase())
-        let clock = TestClock()
+        let clock = Elapsed()
         let brain = ScriptedBrain(.success("one"), .success("two"))
         let (runner, lease) = try await makeRunner(database: db, brain: brain, clock: clock)
         _ = try await runner.run("first", model: .sonnet5)
@@ -118,11 +118,11 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.success("one"), .success("two"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let first = try await runner.run("first", model: .sonnet5)
-        brain.owedReply = OwedReply(parents: [first.assistant.ref], nonce: "owed-nonce", text: "owed")
+        brain.owes = OwedReply(parents: [first.assistant.ref], nonce: "owed-nonce", text: "owed")
         db.reset()
         _ = try await runner.run("second", model: .sonnet5)
         #expect(db.leaseFetches == 1)
-        #expect(brain.owedReply == nil)
+        #expect(brain.owes == nil)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one", "owed", "second", "two"])
     }
 
@@ -332,6 +332,62 @@ import TopoCoreTesting
         #expect(phone.requests.count == 1)
         #expect(hubBrain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "from the hub"])
+    }
+
+    @Test func aReplyIsSavedWhenTheLeaseLapsedDuringTheAnswerAndNobodyElseClaimed() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = Elapsed()
+        let brain = ScriptedBrain(.success("a long answer"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, clock: clock)
+        // The answer outlasts the lease with no heartbeat landing: the only primary, late.
+        brain.duringAnswer = { clock.advance(34) }
+        let result = try await runner.run("bins?", model: .sonnet5)
+        #expect(result.assistant.text == "a long answer")
+        #expect(result.assistant.parents == [result.person.ref])
+        #expect(await lease.isPrimary())
+        #expect(await lease.held?.epoch == 2)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "a long answer"])
+    }
+
+    @Test func aReplyIsLeftOutWhenTheLeaseLapsedDuringTheAnswerAndAnotherDeviceClaimed() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = Elapsed()
+        let phone = ScriptedBrain(.success("too late"))
+        let (runner, _) = try await makeRunner(database: db, brain: phone, clock: clock)
+        let hubBrain = ScriptedBrain(.success("from the hub"))
+        let (hub, hubLease) = try await makeRunner(database: db, device: "hub", brain: hubBrain, clock: clock)
+        phone.duringAnswer = {
+            clock.advance(34)
+            _ = try? await hubLease.acquire()
+        }
+        do {
+            _ = try await runner.run("bins?", model: .sonnet5)
+            Issue.record("expected displacement")
+        } catch TurnRunnerError.replyFailed(_, let underlying) {
+            guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
+        }
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?"])
+        let answer = try #require(try await hub.answerPending(model: .sonnet5))
+        #expect(answer.text == "from the hub")
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "from the hub"])
+    }
+
+    @Test func aPassThatOnlyWritesAnOwedReplyReturnsItAndTheNextReturnsNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain()
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
+        let asked = try await watch.append(.person, "bins?", parents: [])
+        // The brain finished this reply and its write never landed.
+        let nonce = TurnRunner.replyNonce(for: [asked.ref])
+        brain.owes = OwedReply(parents: [asked.ref], nonce: nonce, text: "tonight")
+
+        let written = try #require(try await runner.answerPending(model: .sonnet5))
+        #expect(written.text == "tonight" && written.parents == [asked.ref] && written.nonce == nonce)
+        #expect(brain.requests.isEmpty, "the brain was asked again for a reply it had finished")
+        #expect(brain.owes == nil)
+        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "tonight"])
     }
 
     @Test func aForkOfPersonTurnsGetsOneReplyContinuingEveryHead() async throws {

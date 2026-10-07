@@ -33,6 +33,12 @@ final class Harness {
     }
     /// Where the turn in flight is, in words, so a slow step is seen to be a step. Nil when idle.
     private(set) var status: String?
+    /// A turn this device sent is open: from the moment its attempt begins, before iCloud or the
+    /// guest has answered anything, until its reply is shown, it failed, or its words went into
+    /// the log for another device to answer. It is what Topo on the glass is at work for when the
+    /// guest has nothing to show yet. A failure closes it as the failure is put up, before
+    /// whatever reads follow; a line stopped on a failure is not an open turn.
+    private(set) var turnOpen = false
     /// The reply the guest is writing now, as far as it has got, drawn under the transcript
     /// before it is whole and before it is in the log. It is not a turn: it goes when the reply
     /// lands in the transcript, when the guest starts another message, and when the turn fails.
@@ -297,6 +303,7 @@ final class Harness {
         notice = nil
         failure = nil
         status = nil
+        turnOpen = false
         dropWriting()
         busy = false
         context = nil
@@ -339,6 +346,7 @@ final class Harness {
         dropWriting()
         busy = false
         status = nil
+        turnOpen = false
         do {
             let writer: TurnWriter
             if let existing = self.writer { writer = existing } else { writer = try await log.writer(for: device) }
@@ -548,6 +556,10 @@ final class Harness {
     private func run(_ attempt: Outgoing) async -> Bool {
         let generation = inFlight
         let text = attempt.text
+        turnOpen = true
+        // Every way out closes the turn, unless a sign-out or a demotion already has and the
+        // flag is the next login's.
+        defer { if inFlight == generation { turnOpen = false } }
         do {
             Perf.mark("turn.send")
             if runner == nil {
@@ -570,6 +582,7 @@ final class Harness {
             Perf.mark("turn.reply.shown")
             if result.reply.context > 0 { context = result.reply.context }
             status = nil
+            turnOpen = false
             await refreshUnfinished()
             // The reply is in the log, as it is at the end of a pass, and anything the turn
             // left in the memory goes out from the same place whoever's turn it was.
@@ -582,6 +595,7 @@ final class Harness {
             // The person's turn is in the log; only the reply is owed, and nothing is going to
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
+            turnOpen = false
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
@@ -606,15 +620,18 @@ final class Harness {
                 return true
             } catch {
                 guard inFlight == generation else { return false }
+                turnOpen = false
                 failure = Failure(words: Self.describe(error))
                 onTurnFailed?(attempt.nonce)
             }
         } catch TokenProviderError.signedOut {
             guard inFlight == generation else { return false }
+            turnOpen = false
             failure = Failure(words: "Signed out. Sign in again to continue.")
             onTurnFailed?(attempt.nonce)
         } catch {
             guard inFlight == generation else { return false }
+            turnOpen = false
             failure = Failure(words: Self.describe(error))
             onTurnFailed?(attempt.nonce)
             await refresh()
@@ -931,7 +948,23 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try await noting { try await base.query(query) } }
     func records(ofType type: String) async throws -> [Record] { try await noting { try await base.records(ofType: type) } }
 
-    private func noting<T>(_ call: () async throws -> T) async throws -> T {
+    /// The base's bounded saves and fetches, noted here like the rest: the lease asks for
+    /// these, and a wrapper that answered with itself would leave its requests unbounded.
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        Bounded(recording: self, base: base.answering(within: seconds))
+    }
+
+    private struct Bounded: RecordDatabase {
+        let recording: RecordingDatabase
+        let base: any RecordDatabase
+        func save(_ records: [Record]) async throws -> [Record] { try await recording.noting { try await base.save(records) } }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await recording.noting { try await base.fetch(ids) } }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await recording.query(query) }
+        func records(ofType type: String) async throws -> [Record] { try await recording.records(ofType: type) }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase { recording.answering(within: seconds) }
+    }
+
+    fileprivate func noting<T>(_ call: () async throws -> T) async throws -> T {
         do {
             let value = try await call()
             lock.withLock { _lastSuccess = Date() }
