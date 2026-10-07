@@ -82,7 +82,7 @@ final class Speaker {
     /// Sentences of the current reply not yet made.
     private var making = 0
     /// The reply being read while the guest is still writing it (`speak(writing:answering:)`):
-    /// the spoken turn it answers, what of the message had settled into sentences at the last
+    /// the spoken turn it answers, what of the reply had settled into sentences at the last
     /// call and how many of those are queued, and whether it is still being read. One that was
     /// stopped keeps its turn, so what is written after the stop is not read from the top.
     private var written: (nonce: String, settled: String, queued: Int, live: Bool)?
@@ -318,12 +318,13 @@ final class Speaker {
         return begin(text, answering: nonce, reply: reply, reading: true)
     }
 
-    /// What the guest has written so far of the message that answers the spoken turn `nonce`.
+    /// What the guest has written so far of the reply to the spoken turn `nonce`: every message
+    /// of the turn's words, each call's text extending the last's (`Harness.follow`).
     /// The sentences that have settled (`settled`) are read as they come, behind one another,
     /// so the voice starts at the first sentence rather than once the reply is whole and in the
     /// log; `speak` is still called with the reply when it lands, and reads what is left. The
-    /// guest's next message of the turn begins with nothing written (the harness says so at
-    /// `writingBegan`), and is read from its first sentence, behind what was read of the last. Nothing begins while a microphone
+    /// guest's next message of the turn is more of the same text after a paragraph break, so
+    /// its sentences are read behind the last message's, each once. Nothing begins while a microphone
     /// is open or the voice is not resident: the reply is offered whole when it lands, as ever.
     func speak(writing text: String, answering nonce: String) {
         let settled = Self.settled(text)

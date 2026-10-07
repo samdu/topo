@@ -9,12 +9,16 @@ public enum StreamEvent: Sendable, Equatable {
     /// `system`/`init`: the session and the model the process answers with. Claude Code writes it
     /// once the first input arrives, not at start, and again before every turn after that.
     case started(session: String, model: String)
-    /// A text block of an assistant message.
-    case text(String)
+    /// A text block of an assistant message of the turn's own, and the id of the message it is
+    /// a block of, which is what tells one message's words from the next's (`ReplyWords`). A
+    /// sub-agent's message, and one Claude Code wrote in the model's place, make none: their
+    /// words are no part of the reply.
+    case text(String, message: String? = nil)
     /// The next few characters of a text block, as the model writes it (`--include-partial-messages`):
     /// what the screen draws before the message is whole. The whole block still comes as `text`.
     case writing(String)
-    /// A message begun: what `writing` gave of the last one is not part of this one.
+    /// A message of the turn's own begun: what `writing` gives next is its words, not the last
+    /// message's.
     case writingBegan
     /// A tool the assistant called, by name. For a tool that writes a file — `Write`, `Edit`,
     /// `MultiEdit`, `NotebookEdit` (`StreamJSON.fileTools`) — `path` is the file it names, which is
@@ -103,7 +107,9 @@ public enum StreamJSON {
         case ("result", _):
             return [.result(result(object, subtype: subtype))]
         case ("stream_event", _):
-            guard let event = object["event"] as? [String: Any] else { return [.other(type)] }
+            // A sub-agent's message is written inside a tool call of the turn's: none of it is
+            // the reply's words.
+            guard !isSubagents(object), let event = object["event"] as? [String: Any] else { return [.other(type)] }
             switch event["type"] as? String {
             case "message_start":
                 return [.writingBegan]
@@ -122,11 +128,17 @@ public enum StreamJSON {
     private static func assistant(_ object: [String: Any]) -> [StreamEvent]? {
         guard let message = object["message"] as? [String: Any],
               let content = message["content"] as? [Any] else { return nil }
+        // The same messages `GuestTranscript` reads a reply from: the turn's own, and the
+        // model's — not a sub-agent's, and not an error Claude Code wrote in the model's place.
+        let replies = !isSubagents(object) && object["isApiErrorMessage"] as? Bool != true
+            && message["model"] as? String != synthetic
         var events: [StreamEvent] = []
         for case let block as [String: Any] in content {
             switch block["type"] as? String {
             case "text":
-                if let text = block["text"] as? String, !text.isEmpty { events.append(.text(text)) }
+                if replies, let text = block["text"] as? String, !text.isEmpty {
+                    events.append(.text(text, message: message["id"] as? String))
+                }
             case "tool_use":
                 if let name = block["name"] as? String {
                     events.append(.toolUse(name: name, path: fileTools[name].flatMap { key in
@@ -146,6 +158,15 @@ public enum StreamJSON {
                                        output: int(usage["output_tokens"]))))
         }
         return events
+    }
+
+    /// The model Claude Code names on a message it wrote itself: an API error, a notice.
+    static let synthetic = "<synthetic>"
+
+    /// Whether a line is a sub-agent's: one written inside a tool call (`parent_tool_use_id`),
+    /// which Claude Code's transcript keeps as a sidechain.
+    private static func isSubagents(_ object: [String: Any]) -> Bool {
+        object["parent_tool_use_id"] is String
     }
 
     /// The `tool_result` blocks of a `user` message, in order.
