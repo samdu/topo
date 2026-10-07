@@ -886,7 +886,7 @@ actor GuestBridge: Brain {
     }
 
     /// The inputs given ahead, and not bound, whose turns are among `turns`: the log holds them
-    /// some other way, and they are the caller's to remove. With them, what the guest's session
+    /// some other way, and they leave `early` when the reply to the input that counts them lands. With them, what the guest's session
     /// received of them, to be counted seen with the input that follows; an input that went to
     /// a session the guest has since left told this one nothing.
     private func passed(in turns: [Turn]) -> (inputs: Set<String>, received: Coverage) {

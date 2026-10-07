@@ -710,6 +710,8 @@ final class Harness {
         do {
             try await ensureZone()
             let made = try await makeRunner()
+            // A sign-out or a demotion meanwhile: the runner is not this login's to keep.
+            guard self.login == login else { throw CancellationError() }
             runner = made
             unreached = false
             // The wait ends finding a runner, unless the guest has the words already, which the
@@ -817,6 +819,9 @@ final class Harness {
             turnOpen = false
             unsaved[attempt.nonce] = nil
             heardEnded[attempt.nonce] = nil
+            // Whatever the guest goes on to write of those words is not drawn, and its end is
+            // not told a second time.
+            answeredElsewhere.insert(attempt.nonce)
             if hearing == attempt.nonce { dropWriting() }
             show(person)
             onTurnFailed?(attempt.nonce)
@@ -841,7 +846,13 @@ final class Harness {
             guard inFlight == generation else { return false }
             turnOpen = false
             // Displaced, another device has just taken the lease, and the line stays off this guest.
-            if case TurnRunnerError.displaced = underlying { handedBack = true } else { handedBack = false }
+            if case TurnRunnerError.displaced = underlying {
+                handedBack = true
+                await stopGivingAhead()
+                guard inFlight == generation else { return false }
+            } else {
+                handedBack = false
+            }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))

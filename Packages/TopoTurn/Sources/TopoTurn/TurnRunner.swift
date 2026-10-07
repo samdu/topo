@@ -17,7 +17,7 @@ public enum TurnRunnerError: Error {
     /// the same nonce that gets the turn into the log.
     case unsaved(underlying: any Error)
     /// A retry found the person's turn in the log, unanswered under its own nonce, with the log
-    /// gone on from it: another device continued it, and what answers that is the answer. The
+    /// gone on from it: something continues it, and what answers that is the answer. The
     /// brain is not asked and nothing is written; the caller owes nothing for the turn.
     case movedPast(person: Turn)
 }
@@ -177,7 +177,9 @@ public actor TurnRunner {
             }
             // The log has gone on from the turn: a second answer to it would be a fork. Words the
             // brain heard for it stay unbound, and go as any the log moved past.
-            guard before.heads.contains(person.ref) else {
+            // Only a turn the read holds can be seen to have been continued: one an earlier
+            // attempt's save landed after this read is the log's head still, and is asked.
+            guard before[person.ref] == nil || before.heads.contains(person.ref) else {
                 Perf.mark("turn.movedPast")
                 throw TurnRunnerError.movedPast(person: person)
             }
