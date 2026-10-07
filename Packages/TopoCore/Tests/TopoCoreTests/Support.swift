@@ -433,3 +433,64 @@ actor Jitter: RecordDatabase {
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
+
+/// A database that records what bound it was asked to answer within, and counts the saves and
+/// fetches that reached it without one.
+final class AsksWithin: RecordDatabase, @unchecked Sendable {
+    private let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var _bounds: [TimeInterval] = [], _unbounded = 0
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    var bounds: [TimeInterval] { lock.withLock { _bounds } }
+    var unbounded: Int { lock.withLock { _unbounded } }
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        lock.withLock { _bounds.append(seconds) }
+        return inner
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        lock.withLock { _unbounded += 1 }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        lock.withLock { _unbounded += 1 }
+        return try await inner.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database whose next save stalls before the store hears of it, until the test gives it up:
+/// it then fails as a request that ran out of time does, with nothing applied.
+actor Stalls: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var stallNext = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    private struct RanOut: Error {}
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    func stallNextSave() { stallNext = true }
+    var stalled: Bool { waiter != nil }
+    func giveUp() {
+        waiter?.resume()
+        waiter = nil
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if stallNext {
+            stallNext = false
+            await withCheckedContinuation { waiter = $0 }
+            throw RecordDatabaseError.unavailable(underlying: RanOut())
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A probe answered by the holder itself, as the hub answers one.
+struct AsksTheHolder: LeaseProbe {
+    let holder: PrimaryLease
+    func confirms(_ lease: Lease) async -> Bool {
+        guard await holder.isPrimary(), let held = await holder.held else { return false }
+        return held.holder == lease.holder && held.epoch == lease.epoch
+    }
+}

@@ -948,7 +948,23 @@ final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try await noting { try await base.query(query) } }
     func records(ofType type: String) async throws -> [Record] { try await noting { try await base.records(ofType: type) } }
 
-    private func noting<T>(_ call: () async throws -> T) async throws -> T {
+    /// The base's bounded saves and fetches, noted here like the rest: the lease asks for
+    /// these, and a wrapper that answered with itself would leave its requests unbounded.
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        Bounded(recording: self, base: base.answering(within: seconds))
+    }
+
+    private struct Bounded: RecordDatabase {
+        let recording: RecordingDatabase
+        let base: any RecordDatabase
+        func save(_ records: [Record]) async throws -> [Record] { try await recording.noting { try await base.save(records) } }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await recording.noting { try await base.fetch(ids) } }
+        func query(_ query: RecordQuery) async throws -> [Record] { try await recording.query(query) }
+        func records(ofType type: String) async throws -> [Record] { try await recording.records(ofType: type) }
+        func answering(within seconds: TimeInterval) -> any RecordDatabase { recording.answering(within: seconds) }
+    }
+
+    fileprivate func noting<T>(_ call: () async throws -> T) async throws -> T {
         do {
             let value = try await call()
             lock.withLock { _lastSuccess = Date() }

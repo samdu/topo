@@ -773,6 +773,43 @@ import TopoCoreTesting
         #expect(await db.current(Lease.recordID) == nil)
     }
 
+    @Test func theLeaseAsksItsDatabaseBoundedByItsPatience() async throws {
+        let asked = AsksWithin(db)
+        let h = PrimaryLease(database: asked, device: hub, endpoint: nil, probe: StubProbe.allDead,
+                             timing: LeaseTiming(duration: 10, heartbeat: 5), now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        #expect(asked.bounds == [4])
+        _ = try await h.acquire()
+        #expect(try await h.heartbeat(saving: [Record(type: "Note", id: RecordID("note/1"))]) != nil)
+        #expect(asked.unbounded == 0, "a read or write of the lease went round the bound")
+    }
+
+    @Test func aRequestThatStallsAndIsGivenUpDoesNotCostAHealthyHolderTheLease() async throws {
+        let stalls = Stalls(db), ticker = Ticker()
+        let h = lease(hub, on: stalls, ticker: ticker)
+        _ = try await h.acquire()
+        #expect(await eventually { await ticker.sleeping == 1 })
+        clock.advance(4)
+        // The hub's timer renews at 4 s and the request stalls before the store hears of it.
+        await stalls.stallNextSave()
+        let timer = Task { try await h.takeOver() }
+        #expect(await eventually { await stalls.stalled })
+        // The loop's heartbeat at 5 s waits behind it.
+        clock.advance(1)
+        await ticker.tick()
+        for _ in 0..<500 { await Task.yield() }
+        // At 8 s the request runs out of its four seconds and the heartbeat goes through.
+        clock.advance(3)
+        await stalls.giveUp()
+        await #expect(throws: RecordDatabaseError.self) { try await timer.value }
+        #expect(await eventually { await ticker.sleeping == 1 })
+        #expect(await h.held?.expiresAt == clock.now + 10)
+        clock.advance(4)
+        #expect(await h.isPrimary())
+        let p = PrimaryLease(database: db, device: phone, endpoint: nil, probe: AsksTheHolder(holder: h),
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        guard case .held = try await p.acquire() else { Issue.record("a phone took the lease from a live hub"); return }
+    }
+
     /// Calls made in any order, their answers arriving in any order, on one device with nobody
     /// else writing: once everything is answered the lease held is the record as the store has
     /// it. An answer taken over a later write of this device's would leave an older one held.

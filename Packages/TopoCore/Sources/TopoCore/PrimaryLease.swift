@@ -68,6 +68,14 @@ public struct LeaseTiming: Hashable, Sendable {
         self.heartbeat = heartbeat
     }
 
+    /// How long one read or write of the lease may go unanswered before it
+    /// is given up as failed. The lease's calls go one at a time, so a
+    /// request that stalls holds the next heartbeat up; this is short enough
+    /// that a heartbeat held up by one stalled request, sent a full interval
+    /// after the last, still lands inside the duration with a second to
+    /// spare for its own round trip.
+    public var patience: TimeInterval { max(duration - heartbeat - 1, 1) }
+
     public static let standard = LeaseTiming()
 }
 
@@ -133,7 +141,11 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// lease held (`hold`) only while the generation is the one it was called
 /// under, and writes nothing more once it has moved. `isPrimary()` and
 /// `held` only read, and do not wait: a probe is answered while a write is
-/// out.
+/// out. A request that stalls would hold every call behind it, so each is
+/// asked of the database bounded by `timing.patience`
+/// (`RecordDatabase.answering(within:)`), and one that runs out is a
+/// transport failure like any other: the lease is kept, and the write, if
+/// it landed after all, is found as this device's own by the next call.
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
@@ -180,7 +192,7 @@ public actor PrimaryLease {
                 sleep: @escaping @Sendable (TimeInterval) async throws -> Void = {
                     try await Task.sleep(for: .seconds($0))
                 }) {
-        self.database = database
+        self.database = database.answering(within: timing.patience)
         self.device = device
         self.endpoint = endpoint
         self.probe = probe
