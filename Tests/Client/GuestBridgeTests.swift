@@ -3971,6 +3971,28 @@ extension GuestBridgeTests {
         XCTAssertFalse(ledger.seen.contains(theirs.ref), "a reply the guest may never have seen was counted seen")
     }
 
+    /// The guest was cut off on the watch's question, and the request for a turn it heard ahead
+    /// moves past that record on its way to the heard reply: what the cut-off input told the
+    /// guest goes with the reply's record, so it is not told again.
+    func testAHeardReplyReachedPastACutOffRecordCarriesWhatThatRecordTold() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .cutOff, .reply("EXTRA"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let p2 = try await write(db, .person, "second question", device: "watch")
+        _ = try? await runner.answerPending(model: .sonnet5)
+        let cut = await bridge.current.pending?.state
+        XCTAssertEqual(cut, .unresolved, "control: the second question was cut off")
+        let p1 = try await TurnLog(database: db).writer(for: phone).append(.person, "first question", parents: [p2.ref], nonce: "n1")
+        let nonce = TurnRunner.replyNonce(for: [p1.ref])
+        let answer = try await bridge.answer(BrainRequest(context: [p2], answering: [p1], parents: [p1.ref], nonce: nonce, model: .sonnet5))
+        XCTAssertEqual(answer.text, "answer one")
+        XCTAssertEqual(guest.inputs, ["first question", "second question"], "control: nothing more was sent")
+        let kept = await bridge.current.pending
+        XCTAssertEqual(kept?.nonce, nonce)
+        XCTAssertEqual(kept?.covers.contains(p2.ref), true, "what the cut-off input told the guest is in no record")
+    }
+
     /// A spoken turn answered with iCloud away: the speaker's wait for that turn's reply ends
     /// when the guest is done, read as it was written, and nothing keeps the process awake for
     /// a landing that is not read.

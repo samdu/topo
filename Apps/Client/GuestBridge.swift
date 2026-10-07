@@ -412,6 +412,8 @@ actor GuestBridge: Brain {
                     provenance[request.nonce] = (pending.session, nil)
                     ledger.pending?.state = .answered
                     ledger.pending?.text = text
+                    // What a record moved past earlier in this request carried goes with it.
+                    ledger.pending?.covers.formUnion(received)
                     try? save()
                     return reply(text, to: request, usage: nil, model: nil)
                 case .owed:
