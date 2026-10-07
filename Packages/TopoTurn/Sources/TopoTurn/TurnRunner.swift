@@ -16,6 +16,10 @@ public enum TurnRunnerError: Error {
     /// all the same (`hear`): it is answering them, and the reply is written by the attempt under
     /// the same nonce that gets the turn into the log.
     case unsaved(underlying: any Error)
+    /// A retry found the person's turn in the log, unanswered under its own nonce, with the log
+    /// gone on from it: another device continued it, and what answers that is the answer. The
+    /// brain is not asked and nothing is written; the caller owes nothing for the turn.
+    case movedPast(person: Turn)
 }
 
 /// A probe for a device with no socket yet: every holder looks unreachable, so a live holder
@@ -161,18 +165,25 @@ public actor TurnRunner {
         _ = await hearing?.value
         Perf.mark("turn.person.saved")
         let replyNonce = Self.replyNonce(for: [person.ref])
-        // Before anything looks for the reply: a reply found landed is told to the brain by its
-        // nonce, which the words it heard carry only from here.
-        await brain.bind(nonce: nonce, person: person, reply: replyNonce)
-        await progress?(.asking(person: person))
         if person.at != at {
             // A retry: the person's turn was written by an earlier attempt. If that attempt also
-            // got its reply into the log before it was cut off, that is the reply.
+            // got its reply into the log before it was cut off, that is the reply. The brain is
+            // bound first: a reply found landed is told to it by its nonce, which the words it
+            // heard carry only from there.
             if let answered = try await log.turn(appendedUnder: replyNonce) {
+                await brain.bind(nonce: nonce, person: person, reply: replyNonce)
                 await brain.landed(answered, nonce: replyNonce)
                 return Result(person: person, assistant: answered, reply: Reply(recovered: answered, model: model))
             }
+            // The log has gone on from the turn: a second answer to it would be a fork. Words the
+            // brain heard for it stay unbound, and go as any the log moved past.
+            guard before.heads.contains(person.ref) else {
+                Perf.mark("turn.movedPast")
+                throw TurnRunnerError.movedPast(person: person)
+            }
         }
+        await brain.bind(nonce: nonce, person: person, reply: replyNonce)
+        await progress?(.asking(person: person))
         do {
             // On a retry `before` already holds the recovered person turn; it is asked once.
             let request = BrainRequest(context: before.ordered.filter { $0.ref != person.ref }, answering: [person],

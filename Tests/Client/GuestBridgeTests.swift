@@ -3084,4 +3084,36 @@ extension GuestBridgeTests {
         XCTAssertEqual(during, ["hello", "first"], "words from before the demotion were given to the guest after it began")
         XCTAssertNil(defaults.string(forKey: "topo.harness.standing"), "a standing was kept after the demotion")
     }
+
+    /// The person's turn is saved and its acknowledgement lost, so the line stops with the
+    /// guest's reply drawn; a limb's turn then continues that turn and this phone's pass answers
+    /// it. The stopped line sent again finds its turn moved past: the guest is not asked again,
+    /// no second answer is written, and the line is settled.
+    func testAStoppedLineSentAgainAfterTheLogMovedPastItsTurnAsksNothing() async throws {
+        let db = LostAck()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("the phone's answer"), .reply("to the watch"), .reply("ASKED AGAIN")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.loseNextPersonAcknowledgement()
+        let nonce = harness.willSend("what time is it?")
+        await harness.retry()
+        try await eventually("the guest done") { await harness.guest?.unsaved()[nonce] == "the phone's answer" }
+        XCTAssertEqual(harness.owed.map(\.nonce), [nonce], "control: the line stopped on the lost acknowledgement")
+        XCTAssertEqual(harness.replies[nonce], "the phone's answer", "control: the reply is drawn")
+        try await write(db, .person, "and tomorrow?", device: "watch")
+        await harness.refresh()
+        await harness.answerPending()
+        XCTAssertEqual(guest.inputs.last, "and tomorrow?", "control: the pass answered the limb's turn, telling nothing again")
+        await harness.retry()
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs.filter { $0.contains("what time is it?") }.count, 1, "the guest was given the same words twice: \(guest.inputs)")
+        XCTAssertFalse(turns.map(\.text).contains("ASKED AGAIN"), "a second answer to the words was written: \(turns.map(\.text))")
+        XCTAssertEqual(turns.suffix(3).map(\.text), ["what time is it?", "and tomorrow?", "to the watch"])
+        XCTAssertFalse(harness.hasWaiting, "the line still holds a turn the log has")
+        XCTAssertTrue(harness.replies.isEmpty)
+        XCTAssertNil(harness.failure)
+    }
 }

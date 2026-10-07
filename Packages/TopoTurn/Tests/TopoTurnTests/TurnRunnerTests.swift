@@ -493,6 +493,26 @@ extension TurnRunnerTests {
         // The reply answers the fork, under the fork's nonce: the heard words' reply is not it.
         #expect(brain.bound.isEmpty)
     }
+
+    @Test func aRetryWhoseTurnTheLogMovedPastAsksNothingAndWritesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("never"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let log = TurnLog(database: db)
+        // An earlier attempt saved the turn and lost its answer; a watch has continued it since.
+        let person = try await log.writer(for: DeviceID("phone")).append(.person, "once", parents: [], nonce: "n1")
+        _ = try await log.writer(for: DeviceID("watch")).append(.person, "and then", parents: [person.ref])
+        do {
+            _ = try await runner.run("once", model: .sonnet5, nonce: "n1", known: [])
+            Issue.record("expected the turn to be moved past")
+        } catch TurnRunnerError.movedPast(let found) {
+            #expect(found.ref == person.ref)
+        }
+        #expect(brain.requests.isEmpty)
+        #expect(brain.bound.isEmpty)
+        #expect(try await log.read().ordered.map(\.text) == ["once", "and then"])
+    }
 }
 
 actor Steps {

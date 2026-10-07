@@ -810,6 +810,19 @@ final class Harness {
             if let replied = heardEnded[attempt.nonce] { settleHeard(attempt.nonce, replied: replied) }
             status = nil
             return false
+        } catch TurnRunnerError.movedPast(let person) {
+            // The turn is in the log and another device went on from it: nothing is asked or
+            // written for it here, and what this device's guest made of the words is not a reply.
+            guard inFlight == generation else { return false }
+            turnOpen = false
+            unsaved[attempt.nonce] = nil
+            heardEnded[attempt.nonce] = nil
+            if hearing == attempt.nonce { dropWriting() }
+            show(person)
+            onTurnFailed?(attempt.nonce)
+            await refresh()
+            status = nil
+            return true
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             if await keptUnsaved(attempt.nonce, underlying) {
                 // The person's turn is in the log and the guest's reply is whole; only its save
