@@ -764,6 +764,9 @@ final class Harness {
             let runner: TurnRunner
             do {
                 runner = try await reach(for: attempt)
+            } catch is CancellationError {
+                // A sign-out or a demotion: nothing of the line is given to the guest for it.
+                throw CancellationError()
             } catch {
                 // What is said behind this turn is given to the guest behind it all the same.
                 hearLine()

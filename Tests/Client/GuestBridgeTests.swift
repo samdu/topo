@@ -2993,7 +2993,7 @@ extension GuestBridgeTests {
     }
 
     /// The same with the guest's session unchanged and the turn that follows said on this phone.
-    func testTheSameThroughRun() async throws {
+    func testWordsAHubAnsweredAreNotToldAgainWhenTheNextInputIsNeverReceived() async throws {
         let db = InMemoryRecordDatabase()
         let (runner, bridge, guest) = try await launch(db, .reply("answer one"),
                                                        .notReceived("the process went before it read the input"),
@@ -3007,13 +3007,14 @@ extension GuestBridgeTests {
             .append(.assistant, "the hub's answer", parents: [p1.ref], nonce: TurnRunner.replyNonce(for: [p1.ref]))
         _ = try? await runner.run("second question", model: .sonnet5, nonce: "n2")
         _ = try await runner.answerPending(model: .sonnet5)
+        XCTAssertEqual(guest.inputs.count, 3, "the second question was not asked again after it was never received")
         let told = guest.inputs.last ?? ""
+        XCTAssertTrue(told.contains("second question"), told)
         XCTAssertFalse(told.contains("Them: first question"), "words the guest was given as an input are told to it again as another device's: \(told)")
     }
 
-    /// `handedBack` is no longer cleared on a displaced reply, and nothing sets it there either:
-    /// a phone that was the one answering (`handedBack` false, the runner standing `mine`) is
-    /// told another device took the lease, and gives its guest the next message all the same.
+    /// A phone that was the one answering is told, mid-reply, that another device took the
+    /// lease: its guest is given nothing of the next message ahead.
     func testAPhoneDisplacedMidReplyGivesItsGuestNothingOfTheNextMessageAhead() async throws {
         let db = InMemoryRecordDatabase()
         let clock = Ticks()
@@ -3164,16 +3165,9 @@ extension GuestBridgeTests {
         return UserDefaults(suiteName: name)!
     }
 
-    /// `demote()` sets `runner = nil` before its first await, and
-    /// `drain()` calls `hearLine()` before it looks at `busy` (:625-626), so the only thing that
-    /// keeps a send made during the demotion from giving the guest the line is `runner == nil`.
-    /// `reach(for:)` assigns `runner = made` with no look at `login` (:711-713). A launch whose
-    /// first send is still reaching iCloud when the demotion begins therefore puts a runner back
-    /// under the demotion; its lease is a fresh `PrimaryLease` (demote dropped the old one, and
-    /// this launch had none), which has yielded to nobody, so under `NoSocketProbe` — the probe
-    /// `makeRunner` uses in the app — the cancelled attempt's `acquire()` claims over the device
-    /// that took over, the runner stands `mine`, and the next `hearLine()` gives the guest the
-    /// line: the words from before the demotion, and whatever is typed during it.
+    /// A launch whose first send is still reaching iCloud when a demotion begins: the runner
+    /// that attempt makes is not kept, so nothing claims the lease back from the device that
+    /// took over, and a send during the demotion's wait gives the guest none of the line.
     func testADemotionWhileTheLaunchIsStillReachingICloudGivesTheGuestNoneOfTheLine() async throws {
         let db = TurnSavesHeld()
         let zone = Gate()
