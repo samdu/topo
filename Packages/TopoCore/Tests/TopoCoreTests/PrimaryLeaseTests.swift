@@ -731,6 +731,48 @@ import TopoCoreTesting
         #expect(await h.isPrimary())
     }
 
+    @Test func aDroppedInstanceThatLosesToItsSuccessorsClaimStopsRenewing() async throws {
+        // Two instances of one phone at one endpoint: the harness dropped the first without
+        // abandoning it, and its loop is still running when the second claims.
+        let ticker = Ticker()
+        let old = PrimaryLease(database: db, device: phone, endpoint: nil, probe: StubProbe.allDead,
+                               now: clock.read, monotonic: clock.uptime, sleep: ticker.sleep)
+        let new = PrimaryLease(database: db, device: phone, endpoint: nil, probe: StubProbe.allDead,
+                               now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        _ = try await old.acquire()
+        #expect(await eventually { await ticker.sleeping == 1 })
+        clock.advance(3)
+        #expect(try await old.heartbeat(saving: [Record(type: "Note", id: RecordID("note/1"))]) != nil)
+        clock.advance(1.9)
+        guard case .primary(let claim) = try await new.acquire() else { Issue.record("the successor should claim"); return }
+        #expect(claim.epoch == 2)
+        clock.advance(0.1)
+        await ticker.tick()
+        #expect(await eventually { await old.held == nil })
+        #expect(!(await old.isPrimary()))
+        for _ in 0..<500 { await Task.yield() }
+        #expect(await ticker.sleeping == 0)
+        #expect(await new.isPrimary())
+        #expect(await new.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
+    @Test func claimsWaitingTheirTurnWhenTheLeaseIsAbandonedWriteNothing() async throws {
+        let reads = ReadGate(db)
+        let h = lease(hub, on: reads)
+        await reads.hold()
+        let turn = Task { try await h.acquire() }
+        #expect(await eventually { await reads.waiting })
+        let first = Task { try await h.claimIfNone() }
+        let taking = Task { try await h.takeOver() }
+        for _ in 0..<500 { await Task.yield() }
+        await h.abandon()
+        await reads.release()
+        guard case .contended = try await turn.value else { Issue.record("claimed after the abandon"); return }
+        #expect(try await !first.value)
+        guard case .contended = try await taking.value else { Issue.record("took over after the abandon"); return }
+        #expect(await db.current(Lease.recordID) == nil)
+    }
+
     /// Calls made in any order, their answers arriving in any order, on one device with nobody
     /// else writing: once everything is answered the lease held is the record as the store has
     /// it. An answer taken over a later write of this device's would leave an older one held.
