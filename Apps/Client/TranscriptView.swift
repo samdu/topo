@@ -83,6 +83,7 @@ struct TranscriptView: View {
             .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
             // A reply the guest wrote ahead of iCloud arrives under words already drawn.
             .onChange(of: end) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: answer?.text) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the

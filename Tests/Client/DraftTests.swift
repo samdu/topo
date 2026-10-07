@@ -498,4 +498,16 @@ final class TranscriptEndTests: XCTestCase {
         XCTAssertEqual(bands.count, 2,
                        "expected the row and the turn below it on the screen, found \(bands.count) bubble(s) of a turn on its way")
     }
+
+    func testTheTranscriptEndsAtAReplyTheLogDoesNotHoldYet() {
+        let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+        let reply = UnsavedReply.turn("Calling her now.", place: 0)
+        let held = TranscriptView(turns: turns(4), draft: draft, answer: reply)
+        XCTAssertEqual(held.end, AnyHashable(reply.ref), "the reply under the row is drawn last and is not the end")
+        let before = TranscriptView(turns: turns(4), queued: ([QueuedTurn(text: "and Krista", nonce: "older", reply: reply)], []))
+        XCTAssertEqual(before.end, AnyHashable(reply.ref), "the reply under a turn on its way is drawn last and is not the end")
+        let after = TranscriptView(turns: turns(4), draft: draft,
+                                   queued: ([], [QueuedTurn(text: "and book the flights", nonce: "newer")]), answer: reply)
+        XCTAssertEqual(after.end, AnyHashable("newer"), "a turn on its way below the row's reply is drawn last")
+    }
 }
