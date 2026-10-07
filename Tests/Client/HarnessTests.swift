@@ -1755,6 +1755,44 @@ private func makeSpeaker(_ seams: Seams, _ audio: AudioSession, _ center: Notifi
 
 // MARK: - Doubles
 
+/// Records the bound it was asked for and fails every bounded save.
+private final class BoundAsked: RecordDatabase, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _bounds: [TimeInterval] = []
+    var bounds: [TimeInterval] { lock.withLock { _bounds } }
+    struct RanOut: Error {}
+    private struct Bounded: RecordDatabase {
+        func save(_ records: [Record]) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: RanOut()) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { [:] }
+        func query(_ query: RecordQuery) async throws -> [Record] { [] }
+        func records(ofType type: String) async throws -> [Record] { [] }
+    }
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        lock.withLock { _bounds.append(seconds) }
+        return Bounded()
+    }
+    func save(_ records: [Record]) async throws -> [Record] { records }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { [:] }
+    func query(_ query: RecordQuery) async throws -> [Record] { [] }
+    func records(ofType type: String) async throws -> [Record] { [] }
+}
+
+final class RecordingDatabaseTests: XCTestCase {
+    func testTheLeasesBoundReachesTheBaseAndItsFailuresAreNoted() async throws {
+        let base = BoundAsked()
+        let recording = RecordingDatabase(base)
+        let lease = PrimaryLease(database: recording, device: DeviceID("phone"), endpoint: nil, probe: NoSocketProbe(),
+                                 sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        XCTAssertEqual(base.bounds, [LeaseTiming.standard.patience])
+        XCTAssertEqual(LeaseTiming.standard.patience, 4)
+        do {
+            _ = try await lease.acquire()
+            XCTFail("the bounded save should have failed")
+        } catch {}
+        XCTAssertNotNil(recording.lastError, "a bounded request's failure is not on the diagnostics screen")
+    }
+}
+
 /// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
 private actor ReadFailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
