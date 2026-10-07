@@ -143,12 +143,22 @@ enum ChatReading {
         if alert.waitForExistence(timeout: timeout) { alert.buttons["Not Now"].tap() }
     }
 
-    /// A microphone prompt a press raised, on a lane run alone, is answered.
-    static func answerPrompt() {
+    /// Every permission alert this run has answered, across every class's tests: the runner keeps
+    /// one process for them, and the grant one test gives stands for the rest. `MicrophonePressTests`
+    /// holds the count.
+    @MainActor static var promptsAnswered: [String] = []
+
+    /// A microphone prompt a press raised, in a test that comes before `MicrophonePressTests` or
+    /// on a lane run alone, is answered and counted.
+    @MainActor static func answerPrompt() {
         let alert = XCUIApplication(bundleIdentifier: "com.apple.springboard").alerts.firstMatch
-        if alert.waitForExistence(timeout: 2) {
-            alert.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch.tap()
-        }
+        guard alert.waitForExistence(timeout: 2) else { return }
+        let text = ([alert.label] + alert.staticTexts.allElementsBoundByIndex.map(\.label))
+            .filter { !$0.isEmpty }.joined(separator: " — ")
+        let allow = alert.buttons.matching(NSPredicate(format: "label IN {'Allow', 'OK'}")).firstMatch
+        guard allow.waitForExistence(timeout: 3) else { return }
+        allow.tap()
+        promptsAnswered.append(text)
     }
 
     struct NotThere: Error, CustomStringConvertible { var description: String }

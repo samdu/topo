@@ -206,7 +206,7 @@ final class Speaker {
     /// The release of a spoken press: hold the process open for the reply that is coming, so the
     /// turn is written, asked and answered behind the lock. Capped, and dropped the moment the
     /// reply is being read, the turn fails, or anything ends the reply. Nothing is held for a
-    /// reply that could not be heard anyway — Read replies aloud off, or a voice that is not
+    /// reply that could not be heard anyway — replies muted, or a voice that is not
     /// resident at the release — since those turns make no audio to keep the phone awake for.
     ///
     /// The answer says both what was decided and what was achieved: `spoken` is whether the reply

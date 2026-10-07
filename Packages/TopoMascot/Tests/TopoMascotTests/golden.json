@@ -1,5 +1,5 @@
 {
- "engine": "topo-mascot-engine/topo-engine.js at f139be1",
+ "engine": "topo-mascot-engine/topo-engine.js at 240fda1",
  "width": 184,
  "height": 160,
  "scenarios": [
@@ -415,14 +415,14 @@
     [
      1,
      {
-      "model": "claude-sonnet-5",
+      "model": "claude-sonnet-5-5",
       "activity": "idle"
      }
     ],
     [
      2,
      {
-      "model": "claude-opus-5",
+      "model": "claude-opus-5-5",
       "activity": "idle"
      }
     ],
@@ -437,9 +437,9 @@
    "frames": 120,
    "digests": {
     "20": "0440ae95fe40d7c2e88414c6523ca7b9ff91026f4019047117ea37262997d180",
-    "50": "d05ce3d0e7156c9e4722712c2cdb9c1f9f97e928fd99c7808f172ea8238590ef",
-    "80": "a84831a2bae3d671290af83a43510ac5ed2628eabe4fc9599fb38f794209e62d",
-    "119": "009a94fa6a7981dc30d53a85788c16ec714a49469e63aa3fdf0b06717ebb6c6d"
+    "50": "1000575b8ef4b9f667e3d780ae969f51c4a49dbebe4bb35fef60a166a84d18d7",
+    "80": "b902656c4289203fcc0b195543402b50707ea138f16510f261a835a2137f3614",
+    "119": "88ef8dacc65979e42beed36ce1eec1c478ac5f25e38894a70c3cba641bc4ddf0"
    }
   },
   {
@@ -451,7 +451,7 @@
     [
      0,
      {
-      "model": "claude-sonnet-5",
+      "model": "claude-sonnet-5-5",
       "tokens": 60000,
       "activity": "writing"
      }
@@ -459,7 +459,7 @@
     [
      1,
      {
-      "model": "claude-sonnet-5",
+      "model": "claude-sonnet-5-5",
       "tokens": 205000,
       "activity": "writing"
      }
@@ -467,7 +467,7 @@
     [
      2,
      {
-      "model": "claude-sonnet-5",
+      "model": "claude-sonnet-5-5",
       "tokens": 255000,
       "activity": "writing"
      }
@@ -475,7 +475,7 @@
     [
      3,
      {
-      "model": "claude-sonnet-5",
+      "model": "claude-sonnet-5-5",
       "tokens": 310000,
       "activity": "writing"
      }
@@ -483,10 +483,10 @@
    ],
    "frames": 120,
    "digests": {
-    "20": "1c835e085cc789b757ef49e71ff90ac1696c7a7969824b7bab29cc85bd94dad7",
-    "50": "dd1d9bd9ab46f5935e34f74d710af70ab567e1d34bd8fb394a2a0d662bf237ea",
-    "80": "4471e5d881f528216e976740865421b71c37c9f8951d601855afd5b4af0f75f6",
-    "119": "f35c6f6cd017c607281578fbe7bf31f0c3c6e570189fe5b8e2b7b9bab82b9635"
+    "20": "6ccd53bdf16ed530aa73f60d49e327f76dff47330db3293b436ee661c1afa5be",
+    "50": "fdb07984e53fc73ce0bd8e3dcd3c0b58160703aba7a1bfa9ad0e41d73724ac3e",
+    "80": "763875a0100756e9667aee1ab1ee2f885f6ce6cdf773785ce3655063648e4d77",
+    "119": "9c0a2450f4ff50645a45affbf7cefb3025b1c78ab5690e5d9eb0eee3c69c1b58"
    }
   },
   {
@@ -1259,10 +1259,10 @@
    ],
    "frames": 270,
    "digests": {
-    "40": "4d351f3e83b76a9067c44d60456534c37e4e030a9c0a7cf28999577870bb5028",
-    "85": "f0aa465c6dfef38c9db2a7403cc90643fff4fabf9105025c913ec3eb0d7539b4",
-    "130": "d4855cb88be1d5724410aa0b7fbd9c6c57086a2e842c4a87940c5af605e894b0",
-    "265": "f25f37b90af94d1faed6ac6f43e98ac24ead34fd5b26298f24750f85a0e6ba3e"
+    "40": "095f8027cc778626e2be1451b5441e293bea78fad51a296aaca02c4e90a54443",
+    "85": "72d83a7ad705d173cfeb6790d69011ccdfb98a68a63ea81239b8d6269e106e8f",
+    "130": "f88e5432d09855c2c926b46d242a8f28678304c1a36cfdbfe905d77303613cca",
+    "265": "05db779d26bb80ee881cd1ee830f7f2725754f4560d43a136827c6f72d1b533d"
    }
   },
   {

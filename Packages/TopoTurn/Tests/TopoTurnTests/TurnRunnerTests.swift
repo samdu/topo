@@ -10,17 +10,17 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.success("Reply one"), .success("Reply two"))
         let (runner, lease) = try await makeRunner(database: db, brain: brain)
 
-        let first = try await runner.run("I forgot the bins", model: .sonnet5)
+        let first = try await runner.run("I forgot the bins", model: .sonnet)
         #expect(await lease.isPrimary())
         #expect(first.person.role == .person && first.person.text == "I forgot the bins")
         #expect(first.assistant.text == "Reply one")
         #expect(first.assistant.parents == [first.person.ref])
         #expect(first.person.parents.isEmpty)
 
-        let second = try await runner.run("and the milk", model: .fable51)
+        let second = try await runner.run("and the milk", model: .fable)
         #expect(second.person.parents == [first.assistant.ref])
         let asked = try #require(brain.requests.last)
-        #expect(asked.model == .fable51)
+        #expect(asked.model == .fable)
         #expect(asked.context.map(\.text) == ["I forgot the bins", "Reply one"])
         #expect(asked.answering == [second.person])
         #expect(asked.parents == [second.person.ref])
@@ -36,7 +36,7 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.success("ok"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let steps = Steps()
-        let result = try await runner.run("words", model: .sonnet5) { await steps.add($0) }
+        let result = try await runner.run("words", model: .sonnet) { await steps.add($0) }
         let seen = await steps.all
         #expect(seen == [.takingLease, .saving, .asking(person: result.person), .savingReply])
     }
@@ -48,7 +48,7 @@ import TopoCoreTesting
         guard case .primary = try await other.acquire() else { Issue.record("hub should claim"); return }
         let brain = ScriptedBrain(.success("never"))
         let (runner, _) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
-        await #expect(throws: TurnRunnerError.self) { try await runner.run("hello?", model: .sonnet5) }
+        await #expect(throws: TurnRunnerError.self) { try await runner.run("hello?", model: .sonnet) }
         #expect(brain.requests.isEmpty)
         #expect(try await TurnLog(database: db).read().isEmpty)
     }
@@ -58,7 +58,7 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.failure(Refused()), .success("ok now"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         do {
-            _ = try await runner.run("first", model: .sonnet5)
+            _ = try await runner.run("first", model: .sonnet)
             Issue.record("expected the reply to fail")
         } catch TurnRunnerError.replyFailed(let person, let underlying) {
             #expect(person.text == "first")
@@ -67,7 +67,7 @@ import TopoCoreTesting
         let after = try await TurnLog(database: db).read()
         #expect(after.ordered.map(\.text) == ["first"])
 
-        let second = try await runner.run("second", model: .sonnet5)
+        let second = try await runner.run("second", model: .sonnet)
         #expect(second.person.parents == after.heads)
         let asked = try #require(brain.requests.last)
         #expect(asked.context.map(\.text) == ["first"])
@@ -82,7 +82,7 @@ import TopoCoreTesting
                                sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         brain.duringAnswer = { _ = try? await hub.acquire() }
         do {
-            _ = try await runner.run("hello", model: .sonnet5)
+            _ = try await runner.run("hello", model: .sonnet)
             Issue.record("expected displacement")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
@@ -106,7 +106,7 @@ import TopoCoreTesting
             _ = try? await hub.acquire()
         }
         do {
-            _ = try await runner.run("hello", model: .sonnet5)
+            _ = try await runner.run("hello", model: .sonnet)
             Issue.record("expected displacement")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
@@ -122,8 +122,8 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.failure(Refused()), .success("ok"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let nonce = "same-nonce"
-        _ = try? await runner.run("once", model: .sonnet5, nonce: nonce)
-        let again = try await runner.run("once", model: .sonnet5, nonce: nonce)
+        _ = try? await runner.run("once", model: .sonnet, nonce: nonce)
+        let again = try await runner.run("once", model: .sonnet, nonce: nonce)
         #expect(again.person.nonce == nonce)
         // The recovered turn is asked once: it is answered, not also context.
         let asked = try #require(brain.requests.last)
@@ -138,8 +138,8 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.success("the reply"), .success("never"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let nonce = "cut-off-after-commit"
-        let first = try await runner.run("words", model: .sonnet5, nonce: nonce)
-        let again = try await runner.run("words", model: .sonnet5, nonce: nonce)
+        let first = try await runner.run("words", model: .sonnet, nonce: nonce)
+        let again = try await runner.run("words", model: .sonnet, nonce: nonce)
         #expect(again.assistant == first.assistant)
         #expect(brain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.count == 2)
@@ -149,19 +149,19 @@ import TopoCoreTesting
         let db = InMemoryRecordDatabase()
         let brain = ScriptedBrain(.success("from the phone"))
         let (runner, lease) = try await makeRunner(database: db, brain: brain)
-        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
         #expect(!(await lease.isPrimary()))
 
         let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
         let asked = try await watch.append(.person, "bins?", parents: [])
-        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        let answer = try #require(try await runner.answerPending(model: .sonnet))
         #expect(answer.role == .assistant && answer.text == "from the phone")
         #expect(answer.parents == [asked.ref])
         #expect(await lease.isPrimary())
         let request = try #require(brain.requests.last)
         #expect(request.context.isEmpty && request.answering == [asked])
         // Answered, so nothing is pending; no second call.
-        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
         #expect(brain.requests.count == 1)
     }
 
@@ -171,14 +171,14 @@ import TopoCoreTesting
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
         _ = try await watch.append(.person, "hello", parents: [])
-        await #expect(throws: Refused.self) { try await runner.answerPending(model: .sonnet5) }
-        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        await #expect(throws: Refused.self) { try await runner.answerPending(model: .sonnet) }
+        let answer = try #require(try await runner.answerPending(model: .sonnet))
         #expect(answer.text == "second time")
 
         // Another primary answering the same words finds this reply by its nonce and makes no call.
         let other = ScriptedBrain(.success("never"))
         let (hub, _) = try await makeRunner(database: db, device: "hub", brain: other)
-        #expect(try await hub.answerPending(model: .sonnet5) == nil)
+        #expect(try await hub.answerPending(model: .sonnet) == nil)
         #expect(other.requests.isEmpty)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["hello", "second time"])
     }
@@ -188,7 +188,7 @@ import TopoCoreTesting
         let brain = ScriptedBrain(.failure(Refused()), .success("second time"))
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         do {
-            _ = try await runner.run("I forgot the bins", model: .sonnet5)
+            _ = try await runner.run("I forgot the bins", model: .sonnet)
             Issue.record("expected the reply to fail")
         } catch TurnRunnerError.replyFailed(let person, let underlying) {
             // The app accepted the turn: it is in the log, so its caller owes nothing for it.
@@ -198,11 +198,11 @@ import TopoCoreTesting
         let accepted = try await TurnLog(database: db).read()
         #expect(accepted.ordered.map(\.text) == ["I forgot the bins"])
 
-        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        let answer = try #require(try await runner.answerPending(model: .sonnet))
         #expect(answer.text == "second time")
         #expect(answer.parents == accepted.heads)
         // Exactly one reply: the next pass finds nothing waiting and makes no call.
-        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
         #expect(brain.requests.count == 2)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["I forgot the bins", "second time"])
     }
@@ -215,7 +215,7 @@ import TopoCoreTesting
         let (hub, hubLease) = try await makeRunner(database: db, device: "hub", brain: hubBrain)
         phone.duringAnswer = { _ = try? await hubLease.acquire() }
         do {
-            _ = try await runner.run("bins?", model: .sonnet5)
+            _ = try await runner.run("bins?", model: .sonnet)
             Issue.record("expected displacement")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
@@ -223,12 +223,12 @@ import TopoCoreTesting
         let accepted = try await TurnLog(database: db).read()
         #expect(accepted.ordered.map(\.text) == ["bins?"])
 
-        let answer = try #require(try await hub.answerPending(model: .sonnet5))
+        let answer = try #require(try await hub.answerPending(model: .sonnet))
         #expect(answer.text == "from the hub")
         #expect(answer.parents == accepted.heads)
         // Nothing waits now, so neither device answers again and the phone makes no second call.
-        #expect(try await hub.answerPending(model: .sonnet5) == nil)
-        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await hub.answerPending(model: .sonnet) == nil)
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
         #expect(phone.requests.count == 1)
         #expect(hubBrain.requests.count == 1)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "from the hub"])
@@ -241,7 +241,7 @@ import TopoCoreTesting
         let (runner, lease) = try await makeRunner(database: db, brain: brain, clock: clock)
         // The answer outlasts the lease with no heartbeat landing: the only primary, late.
         brain.duringAnswer = { clock.advance(34) }
-        let result = try await runner.run("bins?", model: .sonnet5)
+        let result = try await runner.run("bins?", model: .sonnet)
         #expect(result.assistant.text == "a long answer")
         #expect(result.assistant.parents == [result.person.ref])
         #expect(await lease.isPrimary())
@@ -261,13 +261,13 @@ import TopoCoreTesting
             _ = try? await hubLease.acquire()
         }
         do {
-            _ = try await runner.run("bins?", model: .sonnet5)
+            _ = try await runner.run("bins?", model: .sonnet)
             Issue.record("expected displacement")
         } catch TurnRunnerError.replyFailed(_, let underlying) {
             guard case TurnRunnerError.displaced = underlying else { Issue.record("wrong cause: \(underlying)"); return }
         }
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?"])
-        let answer = try #require(try await hub.answerPending(model: .sonnet5))
+        let answer = try #require(try await hub.answerPending(model: .sonnet))
         #expect(answer.text == "from the hub")
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "from the hub"])
     }
@@ -282,11 +282,11 @@ import TopoCoreTesting
         let nonce = TurnRunner.replyNonce(for: [asked.ref])
         brain.owes = OwedReply(parents: [asked.ref], nonce: nonce, text: "tonight")
 
-        let written = try #require(try await runner.answerPending(model: .sonnet5))
+        let written = try #require(try await runner.answerPending(model: .sonnet))
         #expect(written.text == "tonight" && written.parents == [asked.ref] && written.nonce == nonce)
         #expect(brain.requests.isEmpty, "the brain was asked again for a reply it had finished")
         #expect(brain.owes == nil)
-        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["bins?", "tonight"])
     }
 
@@ -297,7 +297,7 @@ import TopoCoreTesting
         let log = TurnLog(database: db)
         let a = try await log.writer(for: DeviceID("watch")).append(.person, "one", parents: [])
         let b = try await log.writer(for: DeviceID("pad")).append(.person, "two", parents: [])
-        let answer = try #require(try await runner.answerPending(model: .sonnet5))
+        let answer = try #require(try await runner.answerPending(model: .sonnet))
         #expect(Set(answer.parents) == [a.ref, b.ref])
         #expect(try await log.read().heads == [answer.ref])
     }
@@ -309,7 +309,7 @@ import TopoCoreTesting
         let watch = try await TurnLog(database: db).writer(for: DeviceID("watch"))
         // A turn continuing from one the read cannot see: the read is incomplete.
         _ = try await watch.append(.person, "second", parents: [TurnRef(device: DeviceID("ghost"), sequence: 1)])
-        #expect(try await runner.answerPending(model: .sonnet5) == nil)
+        #expect(try await runner.answerPending(model: .sonnet) == nil)
         #expect(brain.requests.isEmpty)
     }
 
@@ -331,7 +331,7 @@ extension TurnRunnerTests {
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         db.away = true
         do {
-            _ = try await runner.run("are you there", model: .sonnet5, nonce: "n1", known: [])
+            _ = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
             Issue.record("expected the turn to be unsaved")
         } catch TurnRunnerError.unsaved(let underlying) {
             guard case RecordDatabaseError.unavailable = underlying else { Issue.record("wrong cause: \(underlying)"); return }
@@ -344,7 +344,7 @@ extension TurnRunnerTests {
         // iCloud is back: the same nonce saves the turn, binds what was heard to it, and writes
         // the reply, with the words heard once.
         db.away = false
-        let result = try await runner.run("are you there", model: .sonnet5, nonce: "n1", known: [])
+        let result = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
         #expect(brain.heard.count == 1)
         let bound = try #require(brain.bound.first)
         #expect(bound.nonce == "n1" && bound.person == result.person)
@@ -362,7 +362,7 @@ extension TurnRunnerTests {
         brain.hears = true
         let (runner, _) = try await makeRunner(database: db, brain: brain, standing: .mine)
         let steps = Steps()
-        let result = try await runner.run("words", model: .sonnet5, nonce: "n1", known: []) { step in
+        let result = try await runner.run("words", model: .sonnet, nonce: "n1", known: []) { step in
             if step == .heard {
                 for _ in 0..<1000 where brain.heard.isEmpty { await Task.yield() }
                 #expect(await db.writes.isEmpty, "something was saved before the brain was given the words")
@@ -381,14 +381,14 @@ extension TurnRunnerTests {
         let brain = ScriptedBrain(.success("ok"))
         brain.hears = true
         let (runner, _) = try await makeRunner(database: db, brain: brain)
-        #expect(!(await runner.hear("early", model: .sonnet5, nonce: "n0", known: [])))
+        #expect(!(await runner.hear("early", model: .sonnet, nonce: "n0", known: [])))
         let steps = Steps()
-        let result = try await runner.run("words", model: .sonnet5, nonce: "n1", known: []) { await steps.add($0) }
+        let result = try await runner.run("words", model: .sonnet, nonce: "n1", known: []) { await steps.add($0) }
         #expect(await steps.all == [.takingLease, .saving, .asking(person: result.person), .savingReply])
         #expect(brain.heard.map(\.nonce) == ["n1"])
         #expect(brain.bound.map(\.nonce) == ["n1"])
         // With no read of the log, the turn is asked as a turn in the log is.
-        _ = try? await runner.run("more", model: .sonnet5, nonce: "n2")
+        _ = try? await runner.run("more", model: .sonnet, nonce: "n2")
         #expect(brain.heard.map(\.nonce) == ["n1"])
     }
 
@@ -399,12 +399,12 @@ extension TurnRunnerTests {
         brain.hears = true
         let (runner, _) = try await makeRunner(database: db, brain: brain, standing: .mine)
         db.away = true
-        #expect(await runner.hear("first", model: .sonnet5, nonce: "n1", known: []))
-        #expect(await runner.hear("second", model: .sonnet5, nonce: "n2", known: []))
-        await #expect(throws: TurnRunnerError.self) { try await runner.run("first", model: .sonnet5, nonce: "n1", known: []) }
+        #expect(await runner.hear("first", model: .sonnet, nonce: "n1", known: []))
+        #expect(await runner.hear("second", model: .sonnet, nonce: "n2", known: []))
+        await #expect(throws: TurnRunnerError.self) { try await runner.run("first", model: .sonnet, nonce: "n1", known: []) }
         db.away = false
-        let first = try await runner.run("first", model: .sonnet5, nonce: "n1", known: [])
-        let second = try await runner.run("second", model: .sonnet5, nonce: "n2", known: [])
+        let first = try await runner.run("first", model: .sonnet, nonce: "n1", known: [])
+        let second = try await runner.run("second", model: .sonnet, nonce: "n2", known: [])
         #expect(brain.heard.map(\.nonce) == ["n1", "n2"])
         #expect(second.person.parents == [first.assistant.ref])
         #expect(second.assistant.nonce == TurnRunner.replyNonce(for: [second.person.ref]))
@@ -425,30 +425,30 @@ extension TurnRunnerTests {
                                sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
         guard case .primary = try await hub.acquire() else { Issue.record("hub should claim"); return }
         do {
-            _ = try await runner.run("first", model: .sonnet5, nonce: "n0", known: [])
+            _ = try await runner.run("first", model: .sonnet, nonce: "n0", known: [])
             Issue.record("expected not primary")
         } catch TurnRunnerError.notPrimary {
         }
         #expect(brain.heard.isEmpty, "a turn the hub answers ran this device's brain")
         #expect(await runner.standing == .elsewhere)
-        #expect(!(await runner.hear("early", model: .sonnet5, nonce: "n0b", known: [])))
+        #expect(!(await runner.hear("early", model: .sonnet, nonce: "n0b", known: [])))
 
         db.away = true
         do {
-            _ = try await runner.run("are you there", model: .sonnet5, nonce: "n1", known: [])
+            _ = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
             Issue.record("expected the turn to be unsaved")
         } catch TurnRunnerError.unsaved {
         }
         #expect(brain.heard.map(\.nonce) == ["n1"])
-        #expect(await runner.hear("still there", model: .sonnet5, nonce: "n2", known: []))
+        #expect(await runner.hear("still there", model: .sonnet, nonce: "n2", known: []))
 
         db.away = false
         do {
-            _ = try await runner.run("are you there", model: .sonnet5, nonce: "n1", known: [])
+            _ = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
             Issue.record("expected not primary")
         } catch TurnRunnerError.notPrimary {
         }
-        #expect(!(await runner.hear("later", model: .sonnet5, nonce: "n3", known: [])))
+        #expect(!(await runner.hear("later", model: .sonnet, nonce: "n3", known: [])))
         #expect(brain.requests.isEmpty)
         #expect(try await TurnLog(database: store).read().isEmpty)
     }
@@ -458,9 +458,9 @@ extension TurnRunnerTests {
         let brain = ScriptedBrain(.success("landed"))
         brain.hears = true
         let (runner, _) = try await makeRunner(database: db, brain: brain)
-        let first = try await runner.run("once", model: .sonnet5, nonce: "n1", known: [])
+        let first = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
         // The acknowledgement was lost: the caller sends the same nonce again.
-        let again = try await runner.run("once", model: .sonnet5, nonce: "n1", known: [])
+        let again = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
         #expect(again.assistant == first.assistant)
         #expect(brain.requests.count == 1)
         #expect(brain.bound.count == 2)
@@ -475,7 +475,7 @@ extension TurnRunnerTests {
         let (runner, _) = try await makeRunner(database: db, brain: brain)
         let log = TurnLog(database: db)
         let person = try await log.writer(for: DeviceID("watch")).append(.person, "from the wrist", parents: [], nonce: "n1")
-        let reply = try #require(try await runner.answerPending(model: .sonnet5))
+        let reply = try #require(try await runner.answerPending(model: .sonnet))
         let bound = try #require(brain.bound.first)
         #expect(bound.nonce == "n1" && bound.person == person && bound.reply == reply.nonce)
     }
@@ -489,7 +489,7 @@ extension TurnRunnerTests {
         let root = try await log.writer(for: DeviceID("watch")).append(.person, "root", parents: [], nonce: "n0")
         _ = try await log.writer(for: DeviceID("hub")).append(.assistant, "the hub's", parents: [root.ref])
         _ = try await log.writer(for: DeviceID("tablet")).append(.person, "heard here", parents: [root.ref], nonce: "n1")
-        _ = try await runner.answerPending(model: .sonnet5)
+        _ = try await runner.answerPending(model: .sonnet)
         // The reply answers the fork, under the fork's nonce: the heard words' reply is not it.
         #expect(brain.bound.isEmpty)
     }
@@ -504,7 +504,7 @@ extension TurnRunnerTests {
         let person = try await log.writer(for: DeviceID("phone")).append(.person, "once", parents: [], nonce: "n1")
         _ = try await log.writer(for: DeviceID("watch")).append(.person, "and then", parents: [person.ref])
         do {
-            _ = try await runner.run("once", model: .sonnet5, nonce: "n1", known: [])
+            _ = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
             Issue.record("expected the turn to be moved past")
         } catch TurnRunnerError.movedPast(let found) {
             #expect(found.ref == person.ref)

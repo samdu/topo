@@ -34,16 +34,16 @@ actor LandsLate: RecordDatabase {
         let brain = ScriptedBrain(.success("to hello"), .success("to once"), .success("to second"))
         brain.hears = true
         let (runner, _) = try await makeRunner(database: db, brain: brain, standing: .mine)
-        _ = try await runner.run("hello", model: .sonnet5, nonce: "n0", known: [])
+        _ = try await runner.run("hello", model: .sonnet, nonce: "n0", known: [])
         await db.arm()
         do {
-            _ = try await runner.run("once", model: .sonnet5, nonce: "n1", known: [])
+            _ = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
             Issue.record("control: the first attempt's save was expected to fail")
         } catch TurnRunnerError.unsaved {}
         #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["hello", "to hello"], "control: not landed yet")
         var movedPast = false
         do {
-            _ = try await runner.run("once", model: .sonnet5, nonce: "n1", known: [])
+            _ = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
         } catch {
             // By name, so the same file compiles against the runner before `movedPast` existed.
             movedPast = "\(error)".hasPrefix("movedPast")
@@ -54,8 +54,8 @@ actor LandsLate: RecordDatabase {
         #expect(after.heads == [movedPast ? once.ref : after.heads[0]], "control")
         #expect(!movedPast, "a retry whose turn is the log's one head, with nothing after it, was told the log moved past it")
         // What the harness does on movedPast: the line entry is settled, and the next goes.
-        if more { _ = try await runner.run("second", model: .sonnet5, nonce: "n2", known: []) }
-        _ = try await runner.answerPending(model: .sonnet5)
+        if more { _ = try await runner.run("second", model: .sonnet, nonce: "n2", known: []) }
+        _ = try await runner.answerPending(model: .sonnet)
         let end = try await TurnLog(database: db).read()
         #expect(end.ordered.contains { $0.role == .assistant && $0.parents == [once.ref] },
                 "the turn has no reply and is no head: \(end.ordered.map(\.text)), heads \(end.heads.compactMap { end[$0]?.text })")

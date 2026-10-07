@@ -177,7 +177,7 @@ alpine-bash|https://dl-cdn.alpinelinux.org/alpine/v3.22/main/aarch64/|bash-5.2.3
 # its own updater off, since the updater's TLS never completes a handshake under the emulator.
 releases="https://downloads.claude.ai/claude-code-releases"
 claude="
-claude-code|2.1.278|linux-arm64-musl
+claude-code|2.1.285|linux-arm64-musl
 "
 
 # id | version | platform: 1Password's CLI, `op`, as the zip 1Password's own install instructions

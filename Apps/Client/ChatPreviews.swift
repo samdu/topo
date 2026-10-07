@@ -147,6 +147,9 @@ struct ChatCanvas: View {
     var row: Row = .hidden
     /// Topo over the chat, standing where the fixtures leave him room; nil for none.
     var mascot: MascotState?
+    /// The model slider on the glass; nil for a glass with no model control.
+    var models: Composer.Models?
+    var readsAloud = true
 
     enum Row: String, CaseIterable { case hidden, writing, inFlight }
 
@@ -168,7 +171,7 @@ struct ChatCanvas: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    Composer(typing: .constant(false), mic: mic)
+                    Composer(typing: .constant(false), mic: mic, readsAloud: readsAloud, models: models)
                 }
                 .mascotRoams(mascot)
         }

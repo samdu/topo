@@ -41,6 +41,8 @@ struct Look: Equatable, Sendable {
     var draft: Draft
     /// Topo himself, over the chat.
     var mascot: Mascot
+    /// What the models the chat offers are called.
+    var mind = Mind()
 
     init(_ screen: Screen = .current) {
         transcript = Transcript(screen)
@@ -487,6 +489,8 @@ struct Look: Equatable, Sendable {
         var compactShare: CGFloat = 2.0 / 3
 
         var flank = Flank()
+        /// The slider the trailing flank's control opens: the models, smallest to largest.
+        var models = Models()
         var well = Well()
         var glyph = Glyph()
 
@@ -521,6 +525,41 @@ struct Look: Equatable, Sendable {
             /// While the thumb is on the microphone the flanks go, keeping their space so the
             /// glass never changes size.
             var heldOpacity = 0.0
+            /// The marks: the way to the keyboard and back from it, replies read aloud and muted,
+            /// and the model slider shut and open. SF Symbol names.
+            var keyboard = "keyboard"
+            var keyboardDown = "keyboard.chevron.compact.down"
+            var speaking = "speaker.wave.2.fill"
+            var muted = "speaker.slash.fill"
+            var models = "slider.horizontal.3"
+            var modelsOpen = "chevron.down"
+        }
+
+        /// The model slider: a row across the top of the pane while it is open, a stop for each
+        /// model the chat offers, smallest at the leading end, with the model's name under its
+        /// stop and a knob on the one chosen. Topo sits on the pane's top edge over the knob, so
+        /// the head he wears is over the model that gives it him.
+        struct Models: Equatable, Sendable {
+            /// From each end of the pane to the first and last stop's centre: far enough in that
+            /// Topo, at his own size, sits over an end stop with his reach inside the screen.
+            var inset: CGFloat = 40
+            /// The row's own height, the room between it and the row the microphone is in, and
+            /// the room above it, over the pane's own inset.
+            var height: CGFloat = 44
+            var spacing: CGFloat = 2
+            var topInset: CGFloat = 4
+            /// The line the stops are on, a stop's mark on it and the knob.
+            var track: CGFloat = 3
+            var stop: CGFloat = 7
+            var knob: CGFloat = 18
+            /// The line and the stops not chosen, as a share of the flank's ink, and the names
+            /// of the models not chosen, which have to be read.
+            var restOpacity = 0.35
+            var restLabelOpacity = 0.7
+            /// A model's name under its stop.
+            var labelFont: Font = .caption2.weight(.semibold)
+            /// Between the line and the names.
+            var labelSpacing: CGFloat = 5
         }
 
         /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
@@ -555,6 +594,28 @@ struct Look: Equatable, Sendable {
         }
     }
 
+    /// What each model the chat offers is called, by its family's alias: on the model slider, and
+    /// in the notice while a turn is asked of it. Words and not ids: which model an alias reaches is
+    /// Claude Code's to say.
+    struct Mind: Equatable, Sendable {
+        /// The longest a name may be, in characters: the notice and a slider's stop hold a word.
+        static let longest = 24
+
+        var sonnet = "Sonnet"
+        var opus = "Opus"
+        var fable = "Fable"
+
+        /// The name of the model `alias` names, or nil for one the chat does not offer.
+        func name(_ alias: String) -> String? {
+            switch alias {
+            case "sonnet": sonnet
+            case "opus": opus
+            case "fable": fable
+            default: nil
+            }
+        }
+    }
+
     /// Topo over the chat: how big he is drawn, how much room he keeps from any word, how he
     /// goes from one gap to the next and how often he is drawn. His pixels and colours are the
     /// engine's (`Packages/TopoMascot`); where he stands is `MascotRoost`'s, from the chat's
@@ -574,6 +635,10 @@ struct Look: Equatable, Sendable {
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
         var roamSpeed: CGFloat = 40
+        /// How fast he goes to the model slider when it opens, along it as the model changes and,
+        /// where the look places him, home when it shuts, in points a second: a swim, since he was called and is not
+        /// strolling.
+        var swimSpeed: CGFloat = 240
         /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
         /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
         var hurry: CGFloat = 10
@@ -618,7 +683,7 @@ struct Look: Equatable, Sendable {
         enum Placement: String, Equatable, Sendable, CaseIterable {
             /// In whatever gap the words leave him, never on the glass (`MascotRoost`).
             case roam
-            /// On the composer's pane, in its empty flank, which is then drawn whole at every
+            /// On the composer's pane, in its trailing flank, which is then drawn whole at every
             /// presence: a Topo on invisible glass is a Topo floating.
             case glass
             /// At `pin`, where a person put him; words and glass are not obstacles. The keyboard

@@ -19,8 +19,8 @@ struct ChatView: View {
     @Environment(\.look) private var look
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
-    @AppStorage("readAloud") private var readAloud = true
-    /// The model the settings sheet chose, which is the head Topo wears between the guest's turns
+    @AppStorage(Mute.key) private var readAloud = true
+    /// The model chosen on the glass's slider, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
     /// The row at the end of the transcript: what is written, whether the keyboard has it, and
@@ -53,6 +53,8 @@ struct ChatView: View {
     /// The offer card's answer, once and for good: Choose folder or Not now. It is the chat's
     /// rather than the sheet's, because the card it answers is drawn here.
     @AppStorage("memoryOfferAnswered") private var memoryOfferAnswered = false
+    /// The model slider is open on the glass.
+    @State private var modelsOpen = false
     #if DEBUG
     /// The last spoken turn's nonce, for the badge's debug report.
     @State private var spokenNonce: String?
@@ -135,7 +137,7 @@ struct ChatView: View {
             .coordinateSpace(.named(Self.space))
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
             // under them and the glass leave him room, on the glass, or at a pin.
-            .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+            .mascotRoams(mascot.drawn, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
@@ -216,7 +218,10 @@ struct ChatView: View {
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
-            SpokenReply.follow(harness, speaker: speaker)
+            // And before it lands: the reply to a spoken turn is read as the guest writes it.
+            // Muted, neither is read: the mute is asked as each comes, off the defaults and not
+            // this view's copy, which a task started earlier does not see change.
+            SpokenReply.follow(harness, speaker: speaker) { Mute.readsAloud() }
             defer {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
@@ -246,6 +251,8 @@ struct ChatView: View {
         .onChange(of: harnessFacts, initial: true) { _, facts in
             mascot.harness(model: facts.model, tokens: facts.context)
         }
+        // And over the open model slider, the model chosen there, which no turn's events change.
+        .onChange(of: sliderChoice, initial: true) { _, chosen in mascot.chosen = chosen }
         .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { row.text = text } }
         // The row holds the turn's words until the turn is in the log, and the log is what ends
         // it: a turn whose reply failed is in the log like any other, so the row clears and the
@@ -257,7 +264,12 @@ struct ChatView: View {
         }
         // The keyboard coming up ends a hands-free session: a person who has started typing is
         // not still talking. What was heard stays in the row, to be finished by hand.
-        .onChange(of: row.typing) { _, up in if up { voice.cancel(.chat) } }
+        .onChange(of: row.typing) { _, up in
+            guard up else { return }
+            voice.cancel(.chat)
+        }
+        // What the look calls the models is what the notice calls them.
+        .onChange(of: look.mind, initial: true) { _, mind in harness.mind = mind }
         .onChange(of: scenePhase) { _, phase in
             // A microphone open when the scene goes is dropped, words and all: nobody is holding
             // it, so nothing said into it was meant. A reply plays on — that is what the hold is
@@ -412,7 +424,7 @@ struct ChatView: View {
         return PanePresence.of(contentBottom: transcriptTop + contentBottomInTranscript,
                                paneTop: paneTop, rise: look.composer.presenceRise,
                                open: micState.open, keyboard: focused,
-                               holdsTopo: look.mascot.placement == .glass)
+                               holdsTopo: look.mascot.placement == .glass || modelsOpen)
     }
 
     /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
@@ -433,10 +445,21 @@ struct ChatView: View {
                             // the next press. The session logic is `VoiceInput`'s and the routing
                             // `MicPress`'s; this only sends what a press hands back.
                             micPressed: { down, drawn in
+                                // A thumb on the microphone takes the flanks away, and the slider
+                                // with them.
+                                if down { modelsOpen = false }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
                                                  send: { await sendSpoken($0) })
                             },
-                            micReport: micReport)
+                            micReport: micReport,
+                            readsAloud: readAloud,
+                            // Muting ends what is being read and what was waited for, as Stop
+                            // does; a reply that lands muted is read by nobody (`SpokenReply`).
+                            setReadsAloud: { on in
+                                readAloud = on
+                                SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
+                            },
+                            models: models)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {
@@ -444,11 +467,29 @@ struct ChatView: View {
         }
     }
 
+    /// The model slider: what the chat offers under the look's names, the setting, and whether
+    /// the slider is open, which it is over the keyboard as without it.
+    private var models: Composer.Models {
+        Composer.Models(stops: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
+                        chosen: (ClaudeModel(setting: modelSetting) ?? .default).rawValue,
+                        open: modelsOpen,
+                        setOpen: { modelsOpen = $0 },
+                        choose: { alias in
+                            if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
+                        })
+    }
+
     /// What the chat's harness says of the model and the context, for Topo: the model the debug
     /// build's pin makes of the setting, since that is the model that answers.
     private var harnessFacts: HarnessFacts {
-        HarnessFacts(model: ClaudeModel.effective(ClaudeModel(rawValue: modelSetting) ?? .default).rawValue,
-                     context: harness.context)
+        let setting = ClaudeModel(setting: modelSetting) ?? .default
+        return HarnessFacts(model: ClaudeModel.effective(setting).rawValue, context: harness.context)
+    }
+
+    /// The model chosen on the model slider while it is open, which is the head Topo wears over
+    /// it in every build and through a turn (`Mascot.chosen`); nil while it is shut.
+    private var sliderChoice: String? {
+        modelsOpen ? (ClaudeModel(setting: modelSetting) ?? .default).rawValue : nil
     }
 
     private struct HarnessFacts: Equatable {
@@ -692,28 +733,59 @@ enum MicrophoneWatch {
     }
 }
 
+/// Whether replies to spoken turns are read aloud: the glass's mute, kept in the defaults.
+enum Mute {
+    static let key = "readAloud"
+
+    /// Read aloud unless muted: a phone that has never been asked reads them.
+    static func readsAloud(_ defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) == nil || defaults.bool(forKey: key)
+    }
+}
+
 /// A spoken turn's reply read aloud: the chat's `Harness.onReply`, answering whether the harness
 /// is done with the reply.
 @MainActor
 enum SpokenReply {
     /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
-    static func follow(_ harness: Harness, speaker: Speaker) {
-        harness.onReply = { reply in read(reply, harness: harness, speaker: speaker) }
-        // And before it lands: the reply to a spoken turn is read as the guest writes it.
-        harness.onWriting = { text, nonce in
-            if let text { speaker.speak(writing: text, answering: nonce) } else { speaker.writingEnded(nonce) }
-        }
-        speaker.settled = { nonce in harness.answeredAloud(nonce) }
+    static func follow(_ harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
+        wire(harness: harness, speaker: speaker, readsAloud: readsAloud)
         // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
         // is owed no reply from the log, so nothing waits for one.
         harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
     }
 
-    static func read(_ reply: Turn, harness: Harness, speaker: Speaker) -> Bool {
-        // The mark is the decision, made at the release: a reply whose turn is marked is read
-        // whatever the setting says now, since the setting governs what the next release decides
-        // and not what a turn already released is owed.
+    /// The harness's reply and the guest's writing of it handed to the speaker, and the speaker's
+    /// settling handed back, as the chat has them. `readsAloud` is asked each time: muted, a
+    /// reply that lands is read by nobody (`read`), and what the guest writes is not read as it
+    /// comes — and that is all a muted delta does, so a reply stopped by the mute stays stopped
+    /// (`Speaker` keeps the turn it stopped) and is not begun again from the top when the mute
+    /// is lifted.
+    static func wire(harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
+        harness.onReply = { reply in
+            read(reply, harness: harness, speaker: speaker, muted: !readsAloud())
+        }
+        harness.onWriting = { text, nonce in
+            guard let text else { return speaker.writingEnded(nonce) }
+            if readsAloud() { speaker.speak(writing: text, answering: nonce) }
+        }
+        speaker.settled = { nonce in harness.answeredAloud(nonce) }
+    }
+
+    /// The mute pressed: muting ends what is being read and what was waited for, as Stop does.
+    static func muteChanged(readsAloud: Bool, speaker: Speaker) {
+        if !readsAloud { speaker.stop() }
+    }
+
+    static func read(_ reply: Turn, harness: Harness, speaker: Speaker, muted: Bool = false) -> Bool {
+        // The mark is the decision, made at the release: a reply whose turn is marked is read,
+        // unless the person has muted replies since, which is them saying they will not hear it.
         guard let asked = harness.spokenTurn(answeredBy: reply) else { return true }
+        if muted {
+            speaker.endAwaiting(asked, "replies are muted")
+            harness.answeredAloud(asked)
+            return true
+        }
         // Only a reply the speaker took is read: one it refused is still owed, so the turn stays
         // marked spoken and the next pass offers the reply again.
         guard speaker.speak(reply.text, answering: asked, reply: reply.ref) else { return false }
