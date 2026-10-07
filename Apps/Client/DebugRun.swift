@@ -108,10 +108,42 @@ enum DebugRun {
         case "ragged": PreviewTurns.ragged
         case "left": PreviewTurns.left
         case "links": PreviewTurns.links
-        case "blocks": PreviewTurns.blocks
+        case "blocks": blocks
         default: nil
         }
     }
+
+    /// The `blocks` fixture, its picture written before the first row that names it is drawn.
+    private static let blocks: [Turn] = {
+        #if os(iOS)
+        fixtureImages()
+        #endif
+        return PreviewTurns.blocks
+    }()
+
+    #if os(iOS)
+    /// The picture the `blocks` fixture's reply names, written into the guest's home where the
+    /// reply says it is (`charts/sizes.png`), so a launch over that fixture draws it through the
+    /// reader every reply's image is read by. Nothing is written for any other launch.
+    static func fixtureImages(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                              home: URL = GuestResident.homeDirectory) {
+        guard environment[transcriptVariable] == "blocks" else { return }
+        let size = CGSize(width: 320, height: 180)
+        let bars: [(CGFloat, UIColor)] = [(0.2, .systemTeal), (0.9, .systemIndigo), (0.45, .systemOrange)]
+        let picture = UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.secondarySystemBackground.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            for (index, (share, colour)) in bars.enumerated() {
+                colour.setFill()
+                context.fill(CGRect(x: 40 + CGFloat(index) * 90, y: size.height * (1 - share) - 10,
+                                    width: 60, height: size.height * share))
+            }
+        }
+        let folder = home.appendingPathComponent("charts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? picture.pngData()?.write(to: folder.appendingPathComponent("sizes.png"))
+    }
+    #endif
 
     /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
     /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be

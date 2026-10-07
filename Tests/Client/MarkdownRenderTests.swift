@@ -41,12 +41,14 @@ final class MarkdownRenderTests: XCTestCase {
         return look
     }
 
-    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil) throws -> Pixels {
+    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil,
+                      images: @escaping @Sendable (String) -> Data? = { _ in nil }) throws -> Pixels {
         let row = VStack(spacing: 0) {
             TurnRow(turn: turn, cue: cue)
                 .padding(.horizontal, look.transcript.horizontalPadding)
             Spacer(minLength: 0)
         }
+        .environment(\.replyImage, images)
         .frame(width: stage.width, height: stage.height, alignment: .top)
         .background(Color.white)
         return try Pixels(LookStage.image(row, look: look, size: stage))
@@ -850,6 +852,84 @@ final class MarkdownRenderTests: XCTestCase {
             XCTAssertGreaterThan(long.ink(rows: 0..<long.height), short.ink(rows: 0..<short.height),
                                  "\(screen): the wide table drew less than the narrow one")
         }
+    }
+
+    /// A picture of one colour nothing else on the stage is, as the bytes of a PNG.
+    private let pictureInk = UIColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1)
+    private func png(_ width: CGFloat, _ height: CGFloat) -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).pngData { context in
+            pictureInk.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    /// An image under the home is drawn as its picture: as wide as the column where that keeps
+    /// it under the look's height, and no taller than that height where it would not, its
+    /// shape kept either way.
+    func testAnImageIsDrawnAcrossTheColumnAndNoTallerThanTheLooks() throws {
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.imageMaxHeight = 60
+            look.markdown.imageCornerRadius = 0
+            let wide = png(800, 100), tall = png(100, 400)
+            let asked = Asked()
+            let images: @Sendable (String) -> Data? = { path in
+                asked.add(path)
+                return path == "charts/wide.png" ? wide : path == "tall.png" ? tall : nil
+            }
+            let across = try draw(turn(.assistant, "Here:\n\n![A chart](charts/wide.png)"), look, images: images)
+            let columns = try XCTUnwrap(across.columns(pictureInk), "\(screen): no picture drawn")
+            let rows = try XCTUnwrap(across.rows(pictureInk))
+            XCTAssertEqual(CGFloat(columns.count) / CGFloat(rows.count), 8, accuracy: 0.5, "\(screen): the picture lost its shape")
+            XCTAssertLessThanOrEqual(CGFloat(rows.count) / across.scale, 60.5, "\(screen): taller than the look's height")
+            XCTAssertLessThanOrEqual(CGFloat(columns.upperBound) / across.scale, stage.width - look.transcript.horizontalPadding + 1,
+                                     "\(screen): the picture left the column")
+
+            let capped = try draw(turn(.assistant, "![A chart](tall.png)"), look, images: images)
+            let high = try XCTUnwrap(capped.rows(pictureInk), "\(screen): no picture drawn")
+            let narrow = try XCTUnwrap(capped.columns(pictureInk))
+            XCTAssertEqual(CGFloat(high.count) / capped.scale, 60, accuracy: 1, "\(screen): not capped at the look's height")
+            XCTAssertEqual(CGFloat(narrow.count) / CGFloat(high.count), 0.25, accuracy: 0.05, "\(screen): the picture lost its shape")
+            XCTAssertEqual(Set(asked.paths), ["charts/wide.png", "tall.png"], "\(screen)")
+        }
+    }
+
+    /// An image with no picture is its alternative text behind a quote's bar in the quote's
+    /// ink, and the reader is asked only for the one that names a file under the home.
+    func testAnImageWithNoPictureIsItsAlternativeText() throws {
+        let linkInk = UIColor(red: 0.9, green: 0, blue: 0.6, alpha: 1)
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.linkInk = Color(linkInk)
+            let picture = png(100, 100)
+            for source in ["../x.png", "/etc/hosts", "https://example.com/i.png", "memory/a.png", "gone.png", "notes.txt"] {
+                let asked = Asked()
+                let drawn = try draw(turn(.assistant, "![A chart of sizes](\(source))"), look) { path in
+                    asked.add(path)
+                    return path == "notes.txt" ? Data("words".utf8) : path == "gone.png" ? nil : picture
+                }
+                XCTAssertEqual(drawn.count(pictureInk), 0, "\(screen): \(source) drew a picture")
+                XCTAssertGreaterThan(drawn.count(quoteInk), 0, "\(screen): \(source) drew no alternative text")
+                XCTAssertGreaterThan(drawn.count(barInk), 0, "\(screen): \(source) drew no bar")
+                XCTAssertEqual(asked.paths.isEmpty, !["gone.png", "notes.txt"].contains(source), "\(screen): \(source) asked \(asked.paths)")
+                // Only a web address is offered as a link.
+                XCTAssertEqual(drawn.count(linkInk) > 0, source.hasPrefix("https"), "\(screen): \(source)")
+            }
+            // No alternative text is still the reason, not nothing.
+            let bare = try draw(turn(.assistant, "![](../x.png)"), look)
+            XCTAssertGreaterThan(bare.count(barInk), 0, "\(screen): an image with no words drew nothing")
+            XCTAssertNotNil(bare.inked, "\(screen)")
+        }
+    }
+
+    /// The paths a reader was asked for.
+    private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String] = []
+        func add(_ path: String) { lock.withLock { asked.append(path) } }
+        var paths: [String] { lock.withLock { asked } }
     }
 
     /// A rendered stage as bytes, with the questions worth asking of it.

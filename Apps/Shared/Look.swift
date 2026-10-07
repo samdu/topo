@@ -200,6 +200,13 @@ struct Look: Equatable, Sendable {
         /// with more words than that wraps inside its column, so a sentence in a cell is not a
         /// line as long as the sentence.
         var tableCellMaxWidth: CGFloat
+        /// The tallest an image in a reply is drawn: it is as wide as the column unless that
+        /// would make it taller than this, and then it is this tall and narrower.
+        var imageMaxHeight: CGFloat
+        /// What `imageMaxHeight` is read in: tall enough to be a picture at all.
+        static let imageHeights: ClosedRange<Double> = 24...4000
+        /// The radius an image's corners are cut to.
+        var imageCornerRadius: CGFloat
         /// What `tableCellMaxWidth` is read in: no narrower than a word, so a cell is never
         /// wrapped to a letter a line.
         static let cellWidths: ClosedRange<Double> = 40...2000
@@ -267,6 +274,8 @@ struct Look: Equatable, Sendable {
                 tableRowSpacing = 3
                 tableRuleWidth = 1
                 tableCellMaxWidth = 120
+                imageMaxHeight = 120
+                imageCornerRadius = 6
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 6, horizontalPadding: 6, verticalPadding: 4,
                                       surface: .flat)
@@ -287,6 +296,8 @@ struct Look: Equatable, Sendable {
                 tableRowSpacing = 10
                 tableRuleWidth = 2
                 tableCellMaxWidth = 600
+                imageMaxHeight = 540
+                imageCornerRadius = 12
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 12, horizontalPadding: 20, verticalPadding: 14,
                                       surface: .flat)
@@ -307,6 +318,8 @@ struct Look: Equatable, Sendable {
                 tableRowSpacing = 6
                 tableRuleWidth = 1
                 tableCellMaxWidth = 260
+                imageMaxHeight = 320
+                imageCornerRadius = 8
                 codeBlock = Enclosure(accent: Theme.textMuted, fillOpacity: 0.15, strokeWidth: 0,
                                       cornerRadius: 8, horizontalPadding: 10, verticalPadding: 8,
                                       surface: .flat)

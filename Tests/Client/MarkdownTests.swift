@@ -340,6 +340,91 @@ final class MarkdownTests: XCTestCase {
         }
     }
 
+    /// The image blocks of `source`, as "alt <- source", and every other block as its words.
+    private func pictured(_ source: String) -> [String] {
+        Markdown.blocks(source).map { block in
+            if case .image(let source, let alt) = block.kind { return "image \(alt) <- \(source)" }
+            return String(block.text.characters)
+        }
+    }
+
+    /// An image is a block of its own after the block it was written in, which keeps its words
+    /// and none of the image's markup; one written alone leaves no empty block behind it.
+    func testAnImageIsABlockOfItsOwnAfterTheWordsItWasWrittenIn() {
+        XCTAssertEqual(pictured("![A chart](charts/sizes.png)"), ["image A chart <- charts/sizes.png"])
+        XCTAssertEqual(pictured("Here it is: ![A chart](a.png) and that is all."),
+                       ["Here it is:  and that is all.", "image A chart <- a.png"])
+        XCTAssertEqual(pictured("Here it is:\n![A chart](a.png)\n\nNext."), ["Here it is:", "image A chart <- a.png", "Next."])
+        XCTAssertEqual(pictured("![](a.png) ![two](b.png)"), ["image  <- a.png", "image two <- b.png"])
+        XCTAssertEqual(pictured("![a b](<my chart.png>)"), ["image a b <- my%20chart.png"])
+        // In a heading, a list item, a quote and a table's cell: under the block, at its depth.
+        XCTAssertEqual(pictured("# Sizes ![c](c.png)"), ["Sizes", "image c <- c.png"])
+        let listed = Markdown.blocks("- one ![c](c.png)\n- ![d](d.png)\n- three")
+        XCTAssertEqual(listed.map { "\($0.depth)" }, ["1", "1", "1", "1"])
+        XCTAssertEqual(pictured("- one ![c](c.png)\n- ![d](d.png)\n- three"), ["one", "image c <- c.png", "image d <- d.png", "three"])
+        XCTAssertEqual(Markdown.blocks("> ![q](q.png)").map(\.quote), [1])
+        XCTAssertEqual(pictured("| a |\n|---|\n| x ![t](t.png) |\n\nafter"), ["", "image t <- t.png", "after"])
+        // What is not an image stays words: code, and brackets that close nothing.
+        XCTAssertEqual(pictured("`![a](b.png)` and ![open](b.png"), ["![a](b.png) and ![open](b.png"])
+        XCTAssertEqual(Speakable.text(from: "Look:\n\n![A chart of look.json](a.png)\n\n![](b.png)\n\n![Done.](c.png)"),
+                       "Look:\nAn image: A chart of look dot json.\nAn image.\nAn image: Done.")
+    }
+
+    /// Where an image's source says its bytes are: a relative path is a file under the home, and
+    /// nothing else is anywhere a picture is read from.
+    func testWhereAnImagesSourceIs() {
+        let home: [(String, String)] = [
+            ("a.png", "a.png"), ("charts/sizes.png", "charts/sizes.png"), ("./a.png", "a.png"),
+            ("charts//./sizes.png", "charts/sizes.png"), ("my%20chart.png", "my chart.png"),
+            ("memory.png", "memory.png"), ("notes/memory/a.png", "notes/memory/a.png"), ("..a.png", "..a.png"),
+        ]
+        for (source, path) in home {
+            XCTAssertEqual(Markdown.place(ofImage: source), .home(path), source)
+        }
+        let outside = ["../x.png", "a/../../x.png", "a/..", "..", "/etc/hosts", "/home/topo/a.png", "~/a.png", "",
+                       "   ", ".", "./", "file:///etc/hosts", "file:a.png", "data:image/png;base64,AAAA", "topo://a.png",
+                       "ftp://example.com/a.png", "%2E%2E/x.png", "a/%2e%2e/%2e%2e/x.png", "%2Fetc/hosts", "https:///a.png",
+                       "\\\\server\\a.png"]
+        for source in outside {
+            XCTAssertEqual(Markdown.place(ofImage: source), .outside, source.debugDescription)
+        }
+        for source in ["memory/a.png", "memory", "./memory/a.png", "/memory/a.png", "/memory", "memory//a.png", "%6Demory/a.png"] {
+            XCTAssertEqual(Markdown.place(ofImage: source), .memory, source)
+        }
+        XCTAssertEqual(Markdown.place(ofImage: "https://example.com/i.png"), .web(URL(string: "https://example.com/i.png")!))
+        XCTAssertEqual(Markdown.place(ofImage: "http://example.com/i.png?x=../y"), .web(URL(string: "http://example.com/i.png?x=../y")!))
+    }
+
+    /// An image whose source leaves the home, names the memory or is a web address is never
+    /// read or fetched: the reader is not asked at all, and what is drawn is why there is no
+    /// picture. Only a file under the home reaches the reader, by its path from the home.
+    @MainActor func testOnlyAFileUnderTheHomeIsEverRead() {
+        var asked: [String] = []
+        let read: (String) -> Data? = { path in
+            asked.append(path)
+            return nil
+        }
+        XCTAssertEqual(ReplyImage.resolve("../x.png", read: read), .missing(.outsideHome))
+        XCTAssertEqual(ReplyImage.resolve("/etc/hosts", read: read), .missing(.outsideHome))
+        XCTAssertEqual(ReplyImage.resolve("file:///etc/hosts", read: read), .missing(.outsideHome))
+        XCTAssertEqual(ReplyImage.resolve("https://example.com/i.png", read: read),
+                       .missing(.onTheWeb(URL(string: "https://example.com/i.png")!)))
+        XCTAssertEqual(ReplyImage.resolve("http://example.com/i.png", read: read),
+                       .missing(.onTheWeb(URL(string: "http://example.com/i.png")!)))
+        XCTAssertEqual(ReplyImage.resolve("memory/a.png", read: read), .missing(.inMemory))
+        XCTAssertEqual(ReplyImage.resolve("/memory/a.png", read: read), .missing(.inMemory))
+        XCTAssertEqual(asked, [], "a source that is not under the home was read")
+
+        XCTAssertEqual(ReplyImage.resolve("charts/./sizes.png", read: read), .missing(.notHere))
+        XCTAssertEqual(asked, ["charts/sizes.png"])
+        // Bytes that are no picture are no picture.
+        XCTAssertEqual(ReplyImage.resolve("a.png", read: { _ in Data("not a png".utf8) }), .missing(.notHere))
+        // And the blocks of those sources carry the alternative text that is drawn in its place.
+        for source in ["../x.png", "/etc/hosts", "https://example.com/i.png"] {
+            XCTAssertEqual(Markdown.blocks("![a](\(source))").map(\.kind), [.image(source: source, alt: "a")])
+        }
+    }
+
     /// The cache hands back what the parse makes.
     func testTheCacheIsTheParse() {
         let source = "# Head\n\n- one\n- two"

@@ -1,9 +1,11 @@
+import ImageIO
 import SwiftUI
 import TopoCore
 
 /// Topo's words drawn as their blocks (`Markdown.blocks`): paragraphs and headings as text, list
 /// items behind their markers, rules, fenced code in an enclosure of its own, a table as a grid,
-/// and whatever sits inside a quote behind a bar for each quote it is inside. Every value is the look's
+/// an image read from the guest's home, and whatever sits inside a quote behind a bar for each
+/// quote it is inside. Every value is the look's
 /// (`Look.Markdown`), and a paragraph is drawn in the transcript's own type and ink, as the
 /// transcript draws words.
 ///
@@ -101,6 +103,8 @@ struct MarkdownText: View {
             code(String(block.text.characters), number: block.codeNumber)
         case .table(let header, let rows):
             table(header: header, rows: rows, ink: ink(block))
+        case .image(let source, let alt):
+            ReplyImage(source: source, alt: alt, bare: bare)
         case .rule:
             Rectangle()
                 .fill(look.markdown.marker)
@@ -304,6 +308,170 @@ private struct Capped: ViewModifier {
         func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
             subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
         }
+    }
+}
+
+/// An image in a reply. Its bytes are read only from the guest's own home, through the reader
+/// the environment carries (`replyImage`), and only where the source names a file there
+/// (`Markdown.place(ofImage:)`): a source that leaves the home, names the memory or is a web
+/// address reaches no reader at all, and nothing is ever fetched. A file that reads and decodes
+/// is drawn as wide as the column, no taller than the look's `imageMaxHeight`, its corners cut
+/// to `imageCornerRadius`. Anything else is drawn as the image's alternative text, in a quote's
+/// style, over why there is no picture in the caption's ink — and, for a web address, the
+/// address as a link.
+struct ReplyImage: View {
+    let source: String
+    let alt: String
+    var bare = true
+    @Environment(\.look) private var look
+    @Environment(\.replyImage) private var read
+    @State private var drawn: Drawn?
+
+    /// What became of the source: a picture, or the reason there is none.
+    enum Drawn: Equatable {
+        case picture(CGImage)
+        case missing(Missing)
+    }
+
+    enum Missing: Equatable {
+        /// The home holds no such file that can be read as a picture: it was written on another
+        /// device, it is behind a link, or its bytes are no image.
+        case notHere
+        case outsideHome
+        case inMemory
+        case onTheWeb(URL)
+
+        var reason: String {
+            switch self {
+            case .notHere: "Not on this device"
+            case .outsideHome: "Outside Topo's home, so not read"
+            case .inMemory: "In the memory, which pictures are not read from"
+            case .onTheWeb: "On the web, so not fetched"
+            }
+        }
+    }
+
+    /// The long side, in pixels, an image is decoded at: more than any column draws.
+    static let pixels = 2048
+
+    /// What `source` is drawn as. The reader is asked only for a file under the home.
+    static func resolve(_ source: String, read: (String) -> Data?) -> Drawn {
+        switch Markdown.place(ofImage: source) {
+        case .home(let path):
+            guard let data = read(path), let image = decoded(data) else { return .missing(.notHere) }
+            return .picture(image)
+        case .web(let url): return .missing(.onTheWeb(url))
+        case .memory: return .missing(.inMemory)
+        case .outside: return .missing(.outsideHome)
+        }
+    }
+
+    /// The picture in `data`, kept by the bytes it was decoded from: a lazy transcript makes a
+    /// reply's row again each time it scrolls into view, and a decode is tens of milliseconds a
+    /// picture. The file is still read each time, so a picture rewritten under the same name,
+    /// or gone, is drawn as it now is.
+    private static func decoded(_ data: Data) -> CGImage? {
+        let key = data as NSData
+        if let kept = cache.object(forKey: key) { return kept.image }
+        guard let image = decode(data) else { return nil }
+        cache.setObject(Kept(image), forKey: key, cost: data.count)
+        return image
+    }
+
+    /// The picture in `data`, upright and no larger than `pixels` on its long side, or nil for
+    /// bytes that are no image.
+    static func decode(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetCount(source) > 0 else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: pixels,
+                                        kCGImageSourceShouldCacheImmediately: true]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    var body: some View {
+        Group {
+            switch drawn {
+            case .picture(let image):
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: look.markdown.imageCornerRadius, style: .continuous))
+                    .frame(maxHeight: look.markdown.imageMaxHeight, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement()
+                    .accessibilityLabel(alt.isEmpty ? "Image" : alt)
+                    .accessibilityAddTraits(.isImage)
+            case .missing(let missing):
+                fallback(missing)
+            case nil:
+                // Not yet read: the room a line takes, so the reply does not jump far.
+                Text(alt).font(look.transcript.bodyFont).hidden()
+            }
+        }
+        .mascotObstacle(bare)
+        .onAppear { load() }
+        .onChange(of: source) { load() }
+    }
+
+    private func load() { drawn = Self.resolve(source, read: read) }
+
+    /// The alternative text behind a quote's bar, over the reason.
+    private func fallback(_ missing: Missing) -> some View {
+        HStack(alignment: .top, spacing: look.markdown.quoteIndent) {
+            Rectangle()
+                .fill(look.markdown.quoteBar)
+                .frame(width: look.markdown.quoteBarWidth)
+            VStack(alignment: .leading, spacing: look.transcript.captionSpacing) {
+                if !alt.isEmpty {
+                    Text(alt)
+                        .font(look.transcript.bodyFont)
+                        .foregroundStyle(look.markdown.quoteText)
+                }
+                Text(missing.reason)
+                    .font(look.transcript.labelFont)
+                    .foregroundStyle(look.transcript.caption)
+                if case .onTheWeb(let url) = missing {
+                    Text(MarkdownText.styled(Self.link(url), look: look.markdown))
+                        .font(look.transcript.labelFont)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A web address as words that are a link to it.
+    static func link(_ url: URL) -> AttributedString {
+        var text = AttributedString(url.absoluteString)
+        text.link = url
+        return text
+    }
+
+    private final class Kept: @unchecked Sendable {
+        let image: CGImage
+        init(_ image: CGImage) { self.image = image }
+    }
+
+    nonisolated(unsafe) private static let cache: NSCache<NSData, Kept> = {
+        let cache = NSCache<NSData, Kept>()
+        cache.countLimit = 16
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
+}
+
+private struct ReplyImageKey: EnvironmentKey {
+    static let defaultValue: @Sendable (String) -> Data? = { _ in nil }
+}
+
+extension EnvironmentValues {
+    /// Reads an image a reply names, by its path from the guest's home, or answers nil. The app
+    /// hands down the home-only reader (`ReplyImages.read`); everywhere else — a watch, a
+    /// television, a preview — there is no home and so no picture.
+    var replyImage: @Sendable (String) -> Data? {
+        get { self[ReplyImageKey.self] }
+        set { self[ReplyImageKey.self] = newValue }
     }
 }
 

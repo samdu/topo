@@ -18,6 +18,8 @@ import Foundation
 ///   is prose.
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
+/// - An image is "An image: " and its alternative text, or "An image." when it has none: a line
+///   of its own, after the block it was written in, as the transcript draws it.
 /// - A rule is nothing.
 /// - A link whose words are its own address — a bare URL — is "a link to" its host, said as a
 ///   name is: `https://example.com/a?b=c` is "a link to example dot com". An address read out
@@ -58,6 +60,8 @@ enum Speakable {
                                   codeBlock: block.codeNumber))
             case .table(_, let rows):
                 lines.append(Line(text: "A table with \(rows.count) \(rows.count == 1 ? "row" : "rows")."))
+            case .image(_, let alt):
+                lines.append(Line(text: line(forImage: alt)))
             case .rule:
                 continue
             case .paragraph, .heading, .item:
@@ -69,6 +73,15 @@ enum Speakable {
 
     /// What the voice says in code block `number`'s place, a line of its own.
     static func line(forCodeBlock number: Int) -> String { "See code block \(number)." }
+
+    /// What the voice says in an image's place: that there is one, and its alternative text when
+    /// it has any, said as a paragraph's words are.
+    static func line(forImage alt: String) -> String {
+        let said = words(AttributedString(alt)).replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard !said.isEmpty else { return "An image." }
+        return "An image: " + said + (said.last.map { ".!?".contains($0) } == true ? "" : ".")
+    }
 
     /// A run of what could be a path or a file name: an optional leading `/` or `~/`, then names
     /// of word characters, dots and hyphens separated by slashes. Not where it would start inside

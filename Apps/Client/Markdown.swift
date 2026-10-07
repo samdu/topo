@@ -1,6 +1,6 @@
 import Foundation
 
-/// Topo's words as blocks: paragraphs, headings, list items, fenced code, tables and rules, each
+/// Topo's words as blocks: paragraphs, headings, list items, fenced code, tables, images and rules, each
 /// with its inline styles still on it and with how many lists and how many quotes it sits inside. The parse
 /// is Foundation's (`AttributedString(markdown:)` with the full syntax), which already marks every
 /// run with the block it belongs to; what is here is the cut into blocks, since SwiftUI's `Text`
@@ -63,6 +63,10 @@ enum Markdown {
         /// A table: the header row, whose cells name the columns, and the rows under it. Every
         /// row holds a cell for every column.
         case table(header: TableRow, rows: [TableRow])
+        /// An image, wherever in a block it was written: its source as the reply wrote it, and
+        /// its alternative text. It is a block of its own, after the block it was written in,
+        /// which keeps its words. Where the source may be read from is `place(ofImage:)`.
+        case image(source: String, alt: String)
         case rule
     }
 
@@ -110,7 +114,8 @@ enum Markdown {
         /// for an empty cell, so a row's cells are not its columns in order.
         var table: (identity: Int, depth: Int, quote: Int, outside: Int, columns: [ColumnAlignment],
                     header: [Int: AttributedString],
-                    rows: [(identity: Int, cells: [Int: AttributedString])])?
+                    rows: [(identity: Int, cells: [Int: AttributedString])],
+                    images: [Kind])?
 
         func finishTable() {
             guard let done = table else { return }
@@ -126,10 +131,16 @@ enum Markdown {
             blocks.append(Block(kind: .table(header: row(done.header), rows: done.rows.map { row($0.cells) }),
                                 depth: done.depth, quote: done.quote, listsOutside: done.outside,
                                 text: AttributedString()))
+            // An image written in a cell is drawn under the table.
+            for image in done.images {
+                blocks.append(Block(kind: image, depth: done.depth, quote: done.quote, listsOutside: done.outside,
+                                    text: AttributedString()))
+            }
         }
 
         for (intent, range) in parsed.runs[\.presentationIntent] {
-            let text = lineBroken(parsed[range])
+            var text = lineBroken(parsed[range])
+            let images = takeImages(from: &text)
             let components = intent?.components ?? []
             let isList = { (kind: PresentationIntent.Kind) in kind == .orderedList || kind == .unorderedList }
             let depth = components.filter { isList($0.kind) }.count
@@ -152,8 +163,9 @@ enum Markdown {
                 let (rowIntent, tableIntent) = (components[1], components[2])
                 if table?.identity != tableIntent.identity {
                     finishTable()
-                    table = (tableIntent.identity, depth, quote, outside, columns.map(ColumnAlignment.init), [:], [])
+                    table = (tableIntent.identity, depth, quote, outside, columns.map(ColumnAlignment.init), [:], [], [])
                 }
+                table?.images += images
                 if rowIntent.kind == .tableHeaderRow {
                     table?.header[column, default: AttributedString()] += text
                 } else {
@@ -167,6 +179,16 @@ enum Markdown {
             finishTable()
             func block(_ kind: Kind, _ text: AttributedString) -> Block {
                 Block(kind: kind, depth: depth, quote: quote, listsOutside: outside, text: text)
+            }
+            let before = blocks.count
+            defer {
+                if !images.isEmpty {
+                    // A block that held nothing but its images is not drawn as an empty one.
+                    if blocks.count > before, blocks[before].text.characters.allSatisfy(\.isWhitespace) {
+                        blocks.remove(at: before)
+                    }
+                    blocks += images.map { block($0, AttributedString()) }
+                }
             }
             switch innermost.kind {
             case .header(let level):
@@ -204,6 +226,66 @@ enum Markdown {
         try AttributedString(markdown: source, options: .init(
             allowsExtendedAttributes: false, interpretedSyntax: .full,
             failurePolicy: .returnPartiallyParsedIfPossible))
+    }
+
+    /// Takes the images out of a block's words, in order, and trims the space they leave at its
+    /// ends. The parse marks an image as a run carrying its source whose characters are its
+    /// alternative text, or the object replacement character when it has none.
+    private static func takeImages(from text: inout AttributedString) -> [Kind] {
+        var images: [Kind] = []
+        var ranges: [Range<AttributedString.Index>] = []
+        for (source, range) in text.runs[\.imageURL] {
+            guard let source else { continue }
+            let alt = String(text[range].characters).replacingOccurrences(of: "\u{FFFC}", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            images.append(.image(source: source.relativeString, alt: alt))
+            ranges.append(range)
+        }
+        guard !images.isEmpty else { return [] }
+        for range in ranges.reversed() { text.removeSubrange(range) }
+        while text.characters.first?.isWhitespace == true { text.characters.removeFirst() }
+        while text.characters.last?.isWhitespace == true { text.characters.removeLast() }
+        return images
+    }
+
+    /// Where an image's source says its bytes are.
+    enum ImagePlace: Equatable {
+        /// A file under the guest's own home, by its path from the home: the one place an image
+        /// is read from.
+        case home(String)
+        /// A web address. It is never fetched; a reply can show where it is.
+        case web(URL)
+        /// The memory: the vault's mount, or the home's link to it. The vault is read through
+        /// its own coordination and never for a picture.
+        case memory
+        /// Anywhere else: an absolute path, one that climbs with `..`, another scheme, nothing.
+        case outside
+    }
+
+    /// The name the memory goes by from inside the guest, at the root (`ClaudeLauncher.vault`,
+    /// `/memory`) and as the home's link to it.
+    static let memoryNames = ["memory"]
+
+    /// Where the image a reply names by `source` is. A relative path resolves against the
+    /// guest's home; a path that is absolute, climbs out with `..`, or names the memory is
+    /// refused, as is every scheme but the web's, which is recognised and not fetched. This is
+    /// the judgement of the name alone: whether a link stands anywhere along a path it allows
+    /// is the reader's to refuse, at the open.
+    static func place(ofImage source: String) -> ImagePlace {
+        let source = source.trimmingCharacters(in: .whitespaces)
+        if let url = URL(string: source), url.scheme != nil {
+            return opens(url) ? .web(url) : .outside
+        }
+        let path = source.removingPercentEncoding ?? source
+        guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~"), !path.hasPrefix("\\"),
+              !path.unicodeScalars.contains(where: { $0.value == 0 }) else {
+            // The vault by its mount is the memory; any other absolute path is outside.
+            return memoryNames.contains { path == "/" + $0 || path.hasPrefix("/" + $0 + "/") } ? .memory : .outside
+        }
+        let parts = path.split(separator: "/", omittingEmptySubsequences: true).filter { $0 != "." }
+        guard let first = parts.first, !parts.contains("..") else { return .outside }
+        if memoryNames.contains(String(first)) { return .memory }
+        return .home(parts.joined(separator: "/"))
     }
 
     /// Whether a link is one a tap may follow: a web address, `http` or `https` with a host. Any

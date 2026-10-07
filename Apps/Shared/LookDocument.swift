@@ -196,6 +196,8 @@ enum LookDocument {
         r.colour("tableRule", &value.tableRule)
         r.indent("tableRuleWidth", &value.tableRuleWidth)
         r.bounded("tableCellMaxWidth", &value.tableCellMaxWidth, in: Look.Markdown.cellWidths)
+        r.bounded("imageMaxHeight", &value.imageMaxHeight, in: Look.Markdown.imageHeights)
+        r.length("imageCornerRadius", &value.imageCornerRadius)
         r.object("codePulse") { pulse(&value.codePulse, $0) }
     }
 

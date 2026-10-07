@@ -535,8 +535,14 @@ final class Speaker {
     /// As much of a message still being written as will not change in the reading: up to its
     /// last line break, or its last sentence-final punctuation followed by whitespace, and no
     /// further than the opening of a code fence that has not closed, since what a block is read
-    /// as is decided by the whole of it.
+    /// as is decided by the whole of it, nor than an image in a block still being written.
     static func settled(_ text: String) -> String {
+        // An image is read after the block it was written in, as it is drawn, so the words
+        // written after it in that block are read before it: from an image on, a block is not
+        // settled until a blank line ends it. That also keeps an image half written — its
+        // brackets open, its alternative text read as words — from being read at all.
+        let block = text.range(of: "\n\n", options: .backwards)?.upperBound ?? text.startIndex
+        let text = text[..<(text.range(of: "![", range: block..<text.endIndex)?.lowerBound ?? text.endIndex)]
         var end = text.startIndex
         var previous: Character?
         for index in text.indices {

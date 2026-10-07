@@ -33,6 +33,33 @@ final class SettledSpeechTests: XCTestCase {
         XCTAssertEqual(Speaker.settled("| a | b |\n"), "")
     }
 
+    /// An image is read after the block it is written in, so that block is not settled until a
+    /// blank line ends it; an image half written is read as nothing.
+    func testABlockWithAnImageIsNotSettledUntilABlankLineEndsIt() {
+        XCTAssertEqual(Speaker.settled("Here. ![A ch"), "Here. ")
+        XCTAssertEqual(Speaker.settled("Here is ![A chart](a.png) the chart. Then"), "")
+        XCTAssertEqual(Speaker.settled("Before.\n\nHere. ![A chart](a.png) And more. Then"), "Before.\n\nHere. ")
+        XCTAssertEqual(Speaker.settled("Before.\n\nHere. ![A chart](a.png) And more.\n\nThen"),
+                       "Before.\n\nHere. ![A chart](a.png) And more.\n\n")
+    }
+
+    func testAnImageWrittenACharacterAtATimeIsReadOnceAfterItsBlock() {
+        let reply = "Here it is. ![A chart. Of sizes](charts/sizes.png) It is small. Very.\n\n![](b.png)\n\nThat is all. Really."
+        var queued: [String] = []
+        var written = ""
+        var last = ""
+        for character in reply {
+            written.append(character)
+            let settled = Speaker.settled(written)
+            XCTAssertTrue(settled.hasPrefix(last), "after \(written.debugDescription)")
+            last = settled
+            let sentences = Speaker.spoken(settled).map(\.text)
+            XCTAssertEqual(Array(sentences.prefix(queued.count)), queued, "after \(written.debugDescription)")
+            queued = sentences
+        }
+        XCTAssertEqual(queued, ["Here it is.", "It is small.", "Very.", "An image: A chart.", "Of sizes.", "An image.", "That is all."])
+    }
+
     func testATableWrittenARowAtATimeIsCountedOnce() {
         let reply = "Two rows.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n\nThat is all. Really."
         var queued: [String] = []
