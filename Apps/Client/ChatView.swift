@@ -20,7 +20,7 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
     @AppStorage(Mute.key) private var readAloud = true
-    /// The model the settings sheet chose, which is the head Topo wears between the guest's turns
+    /// The model chosen on the glass's slider, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
     /// The row at the end of the transcript: what is written, whether the keyboard has it, and
@@ -218,17 +218,10 @@ struct ChatView: View {
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
-            // Muted since the release, it is read by nobody: the mute is asked as the reply comes,
-            // off the defaults and not this view's copy, which a task started earlier does not see
-            // change.
-            harness.onReply = { reply in
-                SpokenReply.read(reply, harness: harness, speaker: speaker, muted: !Mute.readsAloud())
-            }
             // And before it lands: the reply to a spoken turn is read as the guest writes it.
-            harness.onWriting = { text, nonce in
-                if let text, Mute.readsAloud() { speaker.speak(writing: text, answering: nonce) } else { speaker.writingEnded(nonce) }
-            }
-            speaker.settled = { nonce in harness.answeredAloud(nonce) }
+            // Muted, neither is read: the mute is asked as each comes, off the defaults and not
+            // this view's copy, which a task started earlier does not see change.
+            SpokenReply.wire(harness: harness, speaker: speaker) { Mute.readsAloud() }
             // A turn that ended in a failure is owed no reply, so nothing waits for one.
             harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
             defer {
@@ -466,7 +459,7 @@ struct ChatView: View {
                             // does; a reply that lands muted is read by nobody (`SpokenReply`).
                             setReadsAloud: { on in
                                 readAloud = on
-                                if !on { speaker.stop() }
+                                SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
                             },
                             models: models)
         if #available(iOS 18, *) {
@@ -755,6 +748,28 @@ enum Mute {
 /// is done with the reply.
 @MainActor
 enum SpokenReply {
+    /// The harness's reply and the guest's writing of it handed to the speaker, and the speaker's
+    /// settling handed back, as the chat has them. `readsAloud` is asked each time: muted, a
+    /// reply that lands is read by nobody (`read`), and what the guest writes is not read as it
+    /// comes — and that is all a muted delta does, so a reply stopped by the mute stays stopped
+    /// (`Speaker` keeps the turn it stopped) and is not begun again from the top when the mute
+    /// is lifted.
+    static func wire(harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
+        harness.onReply = { reply in
+            read(reply, harness: harness, speaker: speaker, muted: !readsAloud())
+        }
+        harness.onWriting = { text, nonce in
+            guard let text else { return speaker.writingEnded(nonce) }
+            if readsAloud() { speaker.speak(writing: text, answering: nonce) }
+        }
+        speaker.settled = { nonce in harness.answeredAloud(nonce) }
+    }
+
+    /// The mute pressed: muting ends what is being read and what was waited for, as Stop does.
+    static func muteChanged(readsAloud: Bool, speaker: Speaker) {
+        if !readsAloud { speaker.stop() }
+    }
+
     static func read(_ reply: Turn, harness: Harness, speaker: Speaker, muted: Bool = false) -> Bool {
         // The mark is the decision, made at the release: a reply whose turn is marked is read,
         // unless the person has muted replies since, which is them saying they will not hear it.

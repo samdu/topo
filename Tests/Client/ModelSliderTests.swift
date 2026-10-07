@@ -142,6 +142,10 @@ final class ModelSliderTests: XCTestCase {
             hand(&roam, Self.field(), placement, at: time)
             let back = try XCTUnwrap(roam.move, "\(placement): jumped off the slider")
             XCTAssertEqual(back.from, sat, "\(placement)")
+            if placement != .roam {
+                // A placed Topo goes home as he came, at the swim: six times these settings' stroll.
+                XCTAssertEqual(back.pace, 240 / 40, accuracy: 1e-9, "\(placement): strolled home across the glass")
+            }
             XCTAssertEqual(roam.position, sat, "\(placement): moved before the glide")
             time += Self.frame
             roam.advance(to: time)
@@ -153,8 +157,10 @@ final class ModelSliderTests: XCTestCase {
             let ended = try XCTUnwrap(roam.picture)
             if placement == .roam {
                 // Roaming, a roost is decided from where he stands: the nearest gap, off the glass.
+                // Where he sat hangs below the transcript's foot, so inside it is somewhere else.
                 XCTAssertEqual(roam.roost.name, "gap")
-                XCTAssertFalse(MascotRoost.overlap(Self.pane, Self.reach.around(ended)), "roaming, left on the glass")
+                XCTAssertFalse(Self.visible.contains(CGRect(origin: sat, size: Self.size)))
+                XCTAssertTrue(Self.visible.contains(ended), "roaming, left on the glass: \(ended)")
             } else {
                 XCTAssertEqual(ended.origin.x, home.x, accuracy: 1, "\(placement): not back where his placement has him")
                 XCTAssertEqual(ended.origin.y, home.y, accuracy: 1, "\(placement): not back where his placement has him")
@@ -181,6 +187,54 @@ final class ModelSliderTests: XCTestCase {
         let placed = try XCTUnwrap(roam.picture)
         XCTAssertLessThanOrEqual(Self.reach.around(placed).maxY, risen.pane!.minY + MascotRoost.epsilon,
                                  "left under the glass the keyboard brought up")
+    }
+
+    /// On the glass, the keyboard rising as the slider shuts places him on the short pane at
+    /// once: a glide there would cross the well and end under the keyboard's top edge on its way.
+    func testOnTheGlassTheKeyboardRisingAsTheSliderShutsPlacesHim() throws {
+        var time = 0.0
+        var roam = MascotRoam(Self.settings(.glass), frame: Self.frame)
+        hand(&roam, Self.field(), .glass, at: time)
+        run(&roam, time: &time)
+        for stop in 0..<3 {
+            hand(&roam, Self.field(stop: stop), .glass, at: time)
+            run(&roam, time: &time)
+            // Shut, and gliding home; then the keyboard.
+            hand(&roam, Self.field(), .glass, at: time)
+            XCTAssertNotNil(roam.move, "stop \(stop)")
+            time += Self.frame
+            roam.advance(to: time)
+            let risen = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 330),
+                                    pane: CGRect(x: 40, y: 344, width: 321, height: 53),
+                                    well: CGRect(x: 177, y: 346, width: 48, height: 48),
+                                    keyboard: CGRect(x: 0, y: 400, width: 402, height: 474))
+            hand(&roam, risen, .glass, at: time)
+            let home = try XCTUnwrap(MascotPerch.glass(risen, size: Self.size))
+            XCTAssertNil(roam.move, "stop \(stop): still gliding with the keyboard up")
+            XCTAssertEqual(roam.position, home.origin, "stop \(stop): not on the short glass")
+            hand(&roam, Self.field(), .glass, at: time)
+            run(&roam, time: &time)
+        }
+    }
+
+    /// Over the slider he is not to be picked up: a press there is the slider's, and a drop would
+    /// pin him where the slider had put him. Once it is shut and he is home he is again.
+    func testHeIsNotGrabbedOverTheSlider() throws {
+        var time = 0.0
+        var roam = MascotRoam(Self.settings(), frame: Self.frame)
+        hand(&roam, Self.field(), at: time)
+        run(&roam, time: &time)
+        hand(&roam, Self.field(stop: 1), at: time)
+        run(&roam, time: &time)
+        let sat = try XCTUnwrap(roam.picture)
+        let knob = CGPoint(x: Self.stops[1].midX, y: Self.stops[1].minY + 9)
+        XCTAssertTrue(sat.contains(knob), "the knob is not under him, so this holds nothing")
+        XCTAssertFalse(roam.grabbable(at: knob))
+        XCTAssertFalse(roam.grabbable(at: CGPoint(x: sat.midX, y: sat.midY)))
+        hand(&roam, Self.field(), at: time)
+        run(&roam, time: &time)
+        let home = try XCTUnwrap(roam.picture)
+        XCTAssertTrue(roam.grabbable(at: CGPoint(x: home.midX, y: home.midY)))
     }
 
     // MARK: Names

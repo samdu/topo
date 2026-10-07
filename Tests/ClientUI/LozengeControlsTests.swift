@@ -52,11 +52,13 @@ final class LozengeControlsTests: XCTestCase {
             XCTAssertLessThanOrEqual(box.maxY + offset.dy, stop.frame.maxY + 1, "\(alias): he stands below the stop he is over")
             ChatReading.attach(app, "slider-\(alias)", to: self)
         }
+        let sat = try XCTUnwrap(ChatReading.chat(app)?.mascot?.frame, "he is nowhere over the slider")
         model.tap()
         XCTAssertTrue(becomes(slider, "exists == false"), "the slider did not shut")
-        let (_, away) = try ChatReading.wait(app, "off the glass with the slider shut") { _, topo in
-            guard topo.standing, let box = topo.box, let pane = topo.paneRect else { return false }
-            return !box.intersects(pane)
+        // Where he sat hangs below the transcript's foot, so standing inside it he has left.
+        let (_, away) = try ChatReading.wait(app, "inside the transcript with the slider shut") { _, topo in
+            guard topo.standing, let box = topo.box, let visible = topo.visibleRect else { return false }
+            return box.maxY <= visible.maxY + 1 && !ChatReading.near(topo.frame, sat)
         }
         XCTAssertEqual(away.placement, "roam", "the slider left him another placement")
         XCTAssertTrue(becomes(model, "value == 'Sonnet'"), "the model chosen did not outlive the slider")

@@ -285,6 +285,37 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(high.look.composer.compactShare, 1)
     }
 
+    /// The model slider's lengths are read in ranges of their own: an inset that leaves the stops
+    /// no column to be pressed in, a row too short to hold them and a stop too small or too big
+    /// are refused, and the ends of each range are taken.
+    func testTheModelSliderIsReadInItsOwnRanges() {
+        for (field, low, high) in [("inset", 16.0, 160.0), ("height", 32, 200), ("stop", 2, 44), ("knob", 2, 44)] {
+            for outside in [low - 1, high + 1, 0] {
+                let refused = LookDocument.read(#"{"composer": {"models": {"\#(field)": \#(outside)}}}"#)
+                XCTAssertEqual(refused.look, Look(), "\(field) \(outside) was taken")
+                XCTAssertEqual(refused.notes.count, 1, refused.notes.description)
+            }
+            for end in [low, high] {
+                let taken = LookDocument.read(#"{"composer": {"models": {"\#(field)": \#(end)}}}"#)
+                XCTAssertEqual(taken.notes, [], "\(field) \(end)")
+                XCTAssertNotEqual(taken.look, Look(), "\(field) \(end) was not taken")
+            }
+        }
+    }
+
+    /// A control's mark is a symbol the system has: a name it has not is refused and the compiled
+    /// mark stays, since a control drawn with nothing is one nobody can see to press.
+    func testAMarkTheSystemHasNoSymbolForIsRefused() {
+        for name in ["speaker.wave.2.fil", "", "not a symbol"] {
+            let refused = LookDocument.read(#"{"composer": {"flank": {"muted": "\#(name)"}}}"#)
+            XCTAssertEqual(refused.look, Look(), "\(name) was taken")
+            XCTAssertEqual(refused.notes, ["composer.flank.muted is not the name of a symbol the system has"])
+        }
+        let taken = LookDocument.read(#"{"composer": {"flank": {"muted": "bell.slash"}}}"#)
+        XCTAssertEqual(taken.notes, [])
+        XCTAssertEqual(taken.look.composer.flank.muted, "bell.slash")
+    }
+
     func testABooleanIsNotANumber() {
         let reading = LookDocument.read("""
         { "bubble": { "strokeWidth": true } }

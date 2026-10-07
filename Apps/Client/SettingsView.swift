@@ -4,8 +4,7 @@ import TopoAuth
 import TopoTurn
 
 /// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
-/// diagnostics, the acknowledgements, and the way out. The model and the mute are on the glass
-/// (`Composer`).
+/// diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut

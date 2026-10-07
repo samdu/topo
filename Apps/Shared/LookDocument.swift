@@ -328,13 +328,14 @@ enum LookDocument {
     }
 
     private static func models(_ value: inout Look.Composer.Models, _ r: Reader) {
-        r.length("inset", &value.inset)
-        r.reach("height", &value.height)
+        r.bounded("inset", &value.inset, in: 16...160)
+        r.bounded("height", &value.height, in: 32...200)
         r.length("spacing", &value.spacing)
         r.outline("track", &value.track)
-        r.length("stop", &value.stop)
-        r.length("knob", &value.knob)
+        r.bounded("stop", &value.stop, in: 2...44)
+        r.bounded("knob", &value.knob, in: 2...44)
         r.alpha("restOpacity", &value.restOpacity)
+        r.alpha("restLabelOpacity", &value.restLabelOpacity)
         r.font("labelFont", &value.labelFont)
         r.length("labelSpacing", &value.labelSpacing)
     }
@@ -424,6 +425,16 @@ enum LookDocument {
         /// length is a value no view is promised to survive — and bounded well above any screen.
         func length(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...4000, "a length in points") {
+                took(key)
+                value = CGFloat(number)
+            }
+        }
+
+        /// A length with a range of its own, where the one a view survives is narrower than any
+        /// length's: the model slider's stops, which are pressed, and its row, which holds them.
+        func bounded(_ key: String, _ value: inout CGFloat, in range: ClosedRange<Double>) {
+            let what = "a length in points between \(Int(range.lowerBound)) and \(Int(range.upperBound))"
+            if let number = amount(key, in: range, what) {
                 took(key)
                 value = CGFloat(number)
             }

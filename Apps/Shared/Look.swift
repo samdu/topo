@@ -552,8 +552,10 @@ struct Look: Equatable, Sendable {
             var track: CGFloat = 3
             var stop: CGFloat = 7
             var knob: CGFloat = 18
-            /// The line and the stops not chosen, as a share of the flank's ink.
+            /// The line and the stops not chosen, as a share of the flank's ink, and the names
+            /// of the models not chosen, which have to be read.
             var restOpacity = 0.35
+            var restLabelOpacity = 0.7
             /// A model's name under its stop.
             var labelFont: Font = .caption2.weight(.semibold)
             /// Between the line and the names.
@@ -633,8 +635,8 @@ struct Look: Equatable, Sendable {
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
         var roamSpeed: CGFloat = 40
-        /// How fast he goes to the model slider when it opens, along it as the model changes and
-        /// home when it shuts, in points a second: a swim, since he was called and is not
+        /// How fast he goes to the model slider when it opens, along it as the model changes and,
+        /// where the look places him, home when it shuts, in points a second: a swim, since he was called and is not
         /// strolling.
         var swimSpeed: CGFloat = 240
         /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
@@ -681,7 +683,7 @@ struct Look: Equatable, Sendable {
         enum Placement: String, Equatable, Sendable, CaseIterable {
             /// In whatever gap the words leave him, never on the glass (`MascotRoost`).
             case roam
-            /// On the composer's pane, in its empty flank, which is then drawn whole at every
+            /// On the composer's pane, in its trailing flank, which is then drawn whole at every
             /// presence: a Topo on invisible glass is a Topo floating.
             case glass
             /// At `pin`, where a person put him; words and glass are not obstacles. The keyboard

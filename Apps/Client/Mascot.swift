@@ -13,7 +13,7 @@ import TopoUserland
 /// him in is a thing a test can hold over recorded stream-json rather than a view reading a
 /// harness.
 struct MascotState: Equatable, Sendable {
-    /// The model as the picker's alias or the API's id names it (`sonnet`, `claude-haiku-4-5-20251001`):
+    /// The model as the slider's alias or the API's id names it (`sonnet`, `claude-haiku-4-5-20251001`):
     /// its family is the head, sonnet's and haiku's the smallest, then opus's, then fable's.
     var model: String
     /// The tokens of context the last message was written over: input and both cache counts.

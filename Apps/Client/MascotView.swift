@@ -159,7 +159,7 @@ final class MascotDriver {
 /// The view he is drawn in, laid over the whole of the chat: one layer holding the engine's
 /// whole picture, magnified nearest-neighbour and put so that the part he takes up at rest
 /// (`MascotSprite.box`) is where his roam says he is; what a pose draws past that box is drawn
-/// over whatever is there, except on the glass, where he is drawn inside the empty flank. The view
+/// over whatever is there, except on the glass, where he is drawn inside the trailing flank. The view
 /// itself takes no touch and is nothing to accessibility, so everything under it is found and
 /// pressed exactly as it would be without him.
 ///
@@ -172,7 +172,7 @@ final class MascotDriver {
 @MainActor
 final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     let driver = MascotDriver()
-    /// What the picture is drawn inside: the whole canvas, or on the glass the empty flank.
+    /// What the picture is drawn inside: the whole canvas, or on the glass the trailing flank.
     private let stage = CALayer()
     private let sprite = CALayer()
     private var link: CADisplayLink?
@@ -454,7 +454,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     }
 
     /// What he is drawn inside with no glass stage to stand in: on the glass, standing there and
-    /// not in a finger, the empty flank, so no pose is drawn over the microphone; the whole canvas
+    /// not in a finger, the trailing flank, so no pose is drawn over the microphone; the whole canvas
     /// otherwise.
     private func clip(_ roam: MascotRoam) -> CGRect? {
         guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,

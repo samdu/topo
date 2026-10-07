@@ -347,25 +347,28 @@ private struct ModelSlider: View {
         let count = models.stops.count
         let chosen = models.stops.firstIndex { $0.id == models.chosen }
         GeometryReader { proxy in
-            let span = max(proxy.size.width - 2 * slider.inset, 0)
-            let x = { (index: Int) in slider.inset + span * Composer.Models.share(of: index, count: count) }
+            // The look's inset, and no more than leaves the stops half the pane to stand along.
+            let inset = min(slider.inset, proxy.size.width / 4)
+            let span = max(proxy.size.width - 2 * inset, 0)
+            let x = { (index: Int) in inset + span * Composer.Models.share(of: index, count: count) }
             let line = slider.knob / 2
-            // A stop's column: as wide as the room between two stops, and no wider than leaves an
-            // end stop's inside the pane.
-            let column = min(count > 1 ? span / CGFloat(count - 1) : proxy.size.width, 2 * slider.inset)
+            // A stop's column: as wide as the room between two stops, no wider than leaves an end
+            // stop's inside the pane, and never too narrow to press.
+            let column = max(min(count > 1 ? span / CGFloat(count - 1) : proxy.size.width, 2 * inset), slider.knob)
             ZStack(alignment: .topLeading) {
                 Capsule().fill(ink.opacity(slider.restOpacity))
                     .frame(width: span, height: slider.track)
-                    .offset(x: slider.inset, y: line - slider.track / 2)
+                    .offset(x: inset, y: line - slider.track / 2)
                 ForEach(Array(models.stops.enumerated()), id: \.element.id) { index, stop in
                     let own = index == chosen
                     Button { models.choose(stop.id) } label: {
                         VStack(spacing: slider.labelSpacing) {
-                            Circle().fill(ink.opacity(own ? 0 : slider.restOpacity))
+                            // The knob stands on the chosen stop, so its own mark is not drawn.
+                            Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
                                 .frame(width: slider.stop, height: slider.stop)
                                 .frame(height: slider.knob)
                             Text(stop.name).font(slider.labelFont).lineLimit(1)
-                                .foregroundStyle(ink.opacity(own ? 1 : slider.restOpacity * 2))
+                                .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
                         }
                         .frame(width: column, height: proxy.size.height, alignment: .top)
                         .contentShape(Rectangle())
@@ -389,7 +392,7 @@ private struct ModelSlider: View {
             // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
             .simultaneousGesture(DragGesture(minimumDistance: slider.knob / 2).onChanged { drag in
                 guard let index = Composer.Models.nearest(to: drag.location.x, width: proxy.size.width,
-                                                          inset: slider.inset, count: count),
+                                                          inset: inset, count: count),
                       index != chosen else { return }
                 models.choose(models.stops[index].id)
             })
@@ -488,7 +491,7 @@ enum KeyboardInset {
 /// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
 /// open, and that must not depend on how much has been said. So is the keyboard: the pane goes
 /// short under it, and a pane that is not there cannot be seen to.
-/// So is a pane Topo sits on (`holdsTopo`, the look's `glass` placement): a Topo on invisible glass
+/// So is a pane Topo sits on (`holdsTopo`: the look's `glass` placement, or the model slider open): a Topo on invisible glass
 /// is a Topo floating.
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing

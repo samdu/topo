@@ -1442,29 +1442,96 @@ final class HarnessIntegrationTests: XCTestCase {
         let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
         let speaker = try await makeSpeaker(seams, audio, center)
         defer { speaker.stop() }
-        var offered = 0
-        harness.onReply = { reply in
-            offered += 1
-            return SpokenReply.read(reply, harness: harness, speaker: speaker, muted: true)
-        }
+        // Wired as the chat wires them, and muted after the release.
+        var readsAloud = true
+        SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
 
         let nonce = harness.willSend("what is the capital of France")
-        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: readsAloud).spoken)
         harness.markSpoken(nonce)
         XCTAssertEqual(speaker.awaiting, [nonce])
+        readsAloud = false
 
         await harness.retry()
-        XCTAssertEqual(offered, 1, "the reply was not offered, or was offered again")
         XCTAssertEqual(speaker.report.speaks, 0, "a muted reply was read")
         XCTAssertFalse(speaker.speaking)
         XCTAssertEqual(speaker.awaiting, [], "the wait outlived the reply nobody will hear")
         XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the mark outlived it too")
     }
 
-    /// A question asked aloud is still that question's answer when it lands, and leaving it unread
-    /// would strand its mark and its hold. What ends the hold is `speak` taking the reply, which
-    /// is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
-    func testAReplyIsReadWhenItsTurnIsMarkedWhateverTheSettingReadsNow() async throws {
+    /// Muted, what the guest writes of a spoken turn's reply is not read as it comes; with the
+    /// mute lifted while it is still being written, it is read from its first sentence, since
+    /// nothing of it has been.
+    func testAMutedReplyIsNotReadAsItIsWrittenAndIsOnceTheMuteIsLifted() async throws {
+        let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(),
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        var readsAloud = false
+        SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
+        let nonce = harness.willSend("what is the capital of France")
+        harness.markSpoken(nonce)
+
+        harness.onWriting?("Paris is the capital. ", nonce)
+        XCTAssertFalse(speaker.speaking, "read as it was written, muted")
+        XCTAssertEqual(speaker.report.speaks, 0)
+        readsAloud = true
+        harness.onWriting?("Paris is the capital. It is on the Seine. ", nonce)
+        XCTAssertTrue(speaker.speaking, "the mute was lifted and nothing is read")
+        XCTAssertEqual(speaker.report.speaks, 1)
+    }
+
+    /// A reply being read as it is written, stopped by the mute, stays stopped: what the guest
+    /// writes while muted does not make the speaker forget it stopped that reply, so lifting the
+    /// mute does not begin it again from the top, and when it lands it is not read either, with
+    /// its mark and its wait both gone.
+    func testAReplyStoppedByTheMuteIsNotBegunAgainWhenTheMuteIsLifted() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("One sentence. Two of them. Three."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        var readsAloud = true
+        SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
+        let nonce = harness.willSend("count sentences")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: readsAloud).spoken)
+        harness.markSpoken(nonce)
+
+        harness.onWriting?("One sentence. ", nonce)
+        XCTAssertTrue(speaker.speaking, "the reply is not read as it is written")
+        let begun = speaker.report.speaks
+
+        // The mute, pressed: what is being read stops, and what was waited for is let go.
+        readsAloud = false
+        SpokenReply.muteChanged(readsAloud: false, speaker: speaker)
+        XCTAssertFalse(speaker.speaking, "muting did not stop the reply being read")
+        XCTAssertEqual(speaker.awaiting, [], "muting left the wait standing")
+        harness.onWriting?("One sentence. Two of them. ", nonce)
+        XCTAssertFalse(speaker.speaking)
+
+        // Lifted, with the reply still being written and then landing.
+        readsAloud = true
+        SpokenReply.muteChanged(readsAloud: true, speaker: speaker)
+        harness.onWriting?("One sentence. Two of them. Three. ", nonce)
+        XCTAssertFalse(speaker.speaking, "the reply the mute stopped was begun again")
+        await harness.retry()
+        XCTAssertFalse(speaker.speaking, "the reply the mute stopped was read when it landed")
+        XCTAssertEqual(speaker.report.speaks, begun, "it was begun again from the top")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "its mark outlived it")
+        XCTAssertEqual(speaker.awaiting, [])
+    }
+
+    /// A question asked aloud, with replies not muted, is that question's answer when it lands,
+    /// and leaving it unread would strand its mark and its hold. What ends the hold is `speak`
+    /// taking the reply, which is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
+    func testAReplyIsReadWhenItsTurnIsMarkedAndRepliesAreNotMuted() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
         let harness = harness(db, defaults: defaults,
@@ -1476,7 +1543,7 @@ final class HarnessIntegrationTests: XCTestCase {
         let said = Said()
         install(harness, speaker, said)
 
-        // The release, with the setting on: the wait is held and the turn marked.
+        // The release, with replies not muted: the wait is held and the turn marked.
         let nonce = harness.willSend("what is the capital of France")
         XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
         harness.markSpoken(nonce)
