@@ -63,6 +63,8 @@ final class Harness {
     /// The lease last answered that another device holds it: nothing on the line is given ahead
     /// until a turn here is this device's to answer again.
     private var handedBack = false
+    /// The nonces in `unsaved` whose turns are saved and whose replies this device owes the log.
+    private var owedAhead: Set<String> = []
     /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
@@ -386,6 +388,9 @@ final class Harness {
         // The guest is told to forget below, and what it says of its ending is not followed.
         dropWriting()
         forgetHeard()
+        // The line goes to the log as a limb's below, which waits on iCloud: none of it reaches
+        // this device's guest meanwhile.
+        for entry in pending { await brain.stopHearing(nonce: entry.nonce) }
         busy = false
         status = nil
         turnOpen = false
@@ -406,6 +411,9 @@ final class Harness {
         writer = nil
         info = nil
         await brain.forget()
+        // What the guest ended meanwhile, before it was told to forget, is not kept either.
+        dropWriting()
+        forgetHeard()
     }
 
     /// A sign-out or a demotion: what the guest was given ahead of its turns went with the login.
@@ -416,6 +424,7 @@ final class Harness {
         hearingLine = nil
         handedBack = false
         unsaved = [:]
+        owedAhead = []
         hearing = nil
         heardEnded = [:]
         answeredElsewhere = []
@@ -425,7 +434,11 @@ final class Harness {
     /// person's nonce: the finished ones, and the one being written for words given ahead. The
     /// chat draws each under its words while iCloud is behind.
     var replies: [String: String] {
-        var all = unsaved.filter { !movedPast($0.key) && !answeredElsewhere.contains($0.key) }
+        // A reply this device owes the log is drawn until it is there; any other gives way once
+        // the log has gone on from its turn, since it will not be written.
+        var all = unsaved.filter {
+            !(owedAhead.contains($0.key) ? answered($0.key) : movedPast($0.key)) && !answeredElsewhere.contains($0.key)
+        }
         if let hearing, let writing, !writing.isEmpty, !said(hearing) { all[hearing] = writing }
         return all
     }
@@ -439,9 +452,10 @@ final class Harness {
     private func readUnsaved() async {
         guard let guest else { return }
         let login = self.login
-        let held = await guest.unsaved()
+        let held = await guest.unsaved(), owed = await guest.owedAhead()
         guard self.login == login else { return }
         unsaved = held
+        owedAhead = owed
         let line = Set(pending.map(\.nonce))
         heardEnded = heardEnded.filter { held[$0.key] != nil || line.contains($0.key) }
     }
@@ -551,7 +565,7 @@ final class Harness {
 
     /// Whether the log has gone on from the turn said under `nonce`, as this device knows it: a
     /// reply to it, or anything else that continues it. A reply this device's guest made of
-    /// those words can no longer be written under them.
+    /// those words ahead of their turn, and never bound to it, will not be written.
     func movedPast(_ nonce: String) -> Bool {
         guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
         return turns.contains { $0.parents.contains(person.ref) }
@@ -808,7 +822,8 @@ final class Harness {
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
             turnOpen = false
-            handedBack = false
+            // Displaced, another device has just taken the lease, and the line stays off this guest.
+            if case TurnRunnerError.displaced = underlying {} else { handedBack = false }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
@@ -891,6 +906,7 @@ final class Harness {
         let held = await guest.unsaved()
         guard let reply = held[nonce] else { return false }
         unsaved[nonce] = reply
+        owedAhead.insert(nonce)
         return true
     }
 

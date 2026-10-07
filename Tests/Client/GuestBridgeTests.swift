@@ -2656,3 +2656,167 @@ extension GuestBridgeTests {
         XCTAssertNil(after.early?.first { $0.person == "nz" }?.bound, "the other input was bound to this turn's record")
     }
 }
+
+// MARK: - Words given ahead: demotion, kept replies and coverage of the log moved past
+
+extension GuestBridgeTests {
+
+    // (d) A demotion with a second message parked behind the first's guest turn. `demote()` moves the
+    // harness's login and then reads and writes the log before it reaches `brain.forget()`; the
+    // guest finishes the first inside that window.
+    func testADemotionStillSavingGivesTheGuestTheWordsThatWereWaiting() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangUnwritten, .reply("AFTER DEMOTION")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.stall(true)
+        harness.willSend("first")
+        harness.willSend("second")
+        let sending = Task { await harness.retry() }
+        try await eventually("the first with the guest") { guest.inputs.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        let demoting = Task { await harness.demote() }
+        try await Task.sleep(for: .milliseconds(100))
+        // The demotion is under way, its writes of the line still out. The guest finishes the first.
+        guest.finishHanging(with: "late")
+        try await Task.sleep(for: .milliseconds(300))
+        let during = guest.inputs
+        let written = FileManager.default.fileExists(atPath: ledgerFile.path)
+            ? (try? GuestLedger.load(ledgerFile))?.early?.map(\.person).count ?? 0 : 0
+        await db.stall(false)
+        await demoting.value
+        await sending.value
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(during, ["hello", "first"], "words from before the demotion were given to the guest after it began")
+        XCTAssertLessThanOrEqual(written, 1, "an input for words from before the demotion was recorded on disk after it began")
+        XCTAssertTrue(harness.replies.isEmpty, "the demoted screen draws a reply its guest made after the demotion: \(harness.replies.values.sorted())")
+    }
+
+    // (d) The same with no runner yet: the launch's own giving (`reach`), the guest still coming up.
+    func testADemotionStillSavingGivesTheGuestTheWordsALaunchWasGiving() async throws {
+        let db = Outage()
+        let defaults = try await aPhoneThatAnswered(db)
+        let guest = ScriptedGuest(home: home, script: [.reply("AFTER DEMOTION")])
+        guest.holdReady()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        await harness.refresh()
+        await db.stall(true)
+        harness.willSend("from before the demotion")
+        let sending = Task { await harness.retry() }
+        try await eventually("the guest asked for") { guest.readyHeld }
+        let demoting = Task { await harness.demote() }
+        try await Task.sleep(for: .milliseconds(100))
+        guest.releaseReady()
+        try await Task.sleep(for: .milliseconds(300))
+        let during = guest.inputs
+        await db.stall(false)
+        await demoting.value
+        await sending.value
+        XCTAssertEqual(during, [], "words from before the demotion were given to the guest after it began")
+    }
+
+    // (a) A reply kept after its batch failed (`replyFailed`, kept), then a limb's turn continuing
+    // the person's turn: the bridge still owes the reply and the next pass writes it.
+    func testAKeptReplyStaysDrawnWhenALimbsTurnContinuesItsTurn() async throws {
+        let db = RefusingReplies()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris."), .reply("Noted.")])
+        let (harness, bridge) = harness(db, guest)
+        await harness.refresh()
+        await harness.answerPending()
+        await db.refuse(true)
+        let nonce = harness.willSend("capital of France?")
+        await harness.retry()
+        XCTAssertEqual(harness.replies[nonce], "Paris.", "control: the kept reply is drawn")
+        try await write(db, .person, "and from the watch", device: "watch")
+        await harness.refresh()
+        let owed = await bridge.owed()
+        XCTAssertEqual(owed?.text, "Paris.", "control: the bridge still owes the reply")
+        XCTAssertEqual(harness.replies[nonce], "Paris.", "a reply this phone still owes the log left the screen")
+        await db.refuse(false)
+        await harness.answerPending()
+        let turns = try await log(db)
+        XCTAssertTrue(turns.map(\.text).contains("Paris."), "control: this phone wrote the reply: \(turns.map(\.text))")
+    }
+
+    // (a) The same reply, and the only child of its turn is this phone's own next message, written
+    // as a limb's because a hub took the lease meanwhile.
+    func testAKeptReplyStaysDrawnWhenThisPhonesNextTurnGoesToTheHub() async throws {
+        let db = RefusingReplies()
+        let clock = Ticks()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris."), .reply("the phone's second"), .reply("EXTRA")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                   now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await harness.refresh()
+        await harness.answerPending()
+        await db.refuse(true)
+        let first = harness.willSend("capital of France?")
+        await harness.retry()
+        XCTAssertEqual(harness.replies[first], "Paris.", "control: the kept reply is drawn")
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
+        let took = try await hub.takeOver()
+        guard case .primary = took else { return XCTFail("the hub did not take the lease") }
+        await harness.send("and Germany?")
+        XCTAssertEqual(harness.turns.map(\.text), ["capital of France?", "and Germany?"])
+        let owed = await bridge.owed()
+        XCTAssertEqual(owed?.text, "Paris.", "control: the bridge still owes the first reply")
+        XCTAssertEqual(harness.replies[first], "Paris.", "a reply this phone still owes the log left the screen")
+        await db.refuse(false)
+        clock.advance(11)
+        await harness.answerPending()
+        let turns = try await log(db)
+        XCTAssertTrue(turns.map(\.text).contains("Paris."), "control: this phone wrote the reply: \(turns.map(\.text))")
+    }
+
+    // (b) `movePast` on the heard fast path: the input the log moved past went to a session the
+    // guest has since left, so the session that answers was never given its words.
+    func testWordsGivenToASessionTheGuestLeftAreNotCountedSeenWhenTheLogMovesPastThem() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .reply("answer two"), .reply("ok"))
+        let one = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        XCTAssertTrue(one)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        // The resume fails: the next process is a fresh session, which knows none of the first.
+        guest.startFresh()
+        let two = await bridge.hear("second question", nonce: "n2", context: [], model: .sonnet5)
+        XCTAssertTrue(two)
+        try await eventually("the second answer") { await bridge.unsaved()["n2"] == "answer two" }
+        XCTAssertEqual(guest.inputs, ["first question", "second question"])
+        // Both reach the log as a limb's turns, and then this phone answers the head.
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await writer.append(.person, "second question", parents: [p1.ref], nonce: "n2")
+        _ = try await runner.answerPending(model: .sonnet5)
+        XCTAssertEqual(guest.inputs.count, 2)
+        let ledger = await bridge.current
+        XCTAssertFalse(ledger.seen.contains(p1.ref), "a turn only a session the guest left was given is counted seen (after the heard path)")
+        _ = try await runner.run("thanks", model: .sonnet5)
+        let told = guest.inputs.last ?? ""
+        XCTAssertTrue(told.contains("first question"), "the session that answers is never told a turn of the log: \(told)")
+    }
+
+    // (b) What an input the log moved past told the guest, when the request that found it so is
+    // then refused by a guest not ready: the next attempt.
+    func testAnInputTheLogMovedPastIsNotToldAgainAfterAGuestNotReady() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .reply("answer two"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        guest.refuse("the userland is still downloading")
+        do {
+            _ = try await runner.answerPending(model: .sonnet5)
+            XCTFail("answered by a guest that was not ready")
+        } catch {}
+        guest.refuse(nil)
+        _ = try await runner.answerPending(model: .sonnet5)
+        XCTAssertEqual(guest.inputs.last, "second question", "words the guest was given as an input are told to it again")
+    }
+}
