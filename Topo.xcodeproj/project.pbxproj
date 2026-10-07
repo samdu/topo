@@ -196,6 +196,7 @@
 		6EF0576A04E62FEF82FF89AE /* WatchSurfaceSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649A32DB00E91758914258B0 /* WatchSurfaceSyncTests.swift */; };
 		6FB46136563FED2942CB8295 /* VaultDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E270E681606D89AAEA041E6 /* VaultDownloads.swift */; };
 		72726826FE4958249B7EFF62 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
+		72E4311E57C1FD9BEEB7F524 /* GuestCodeWriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22285419A6D3B8D4C91D153 /* GuestCodeWriteTests.swift */; };
 		7352D3C41BCCE85957B9C667 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		73A4054C3FA45E24C3655044 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		73C32173CE9A5C77C5FD3E1D /* systemLarge-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 241574A16DDE36FEEFD20034 /* systemLarge-dark.png */; };
@@ -743,6 +744,7 @@
 		D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiagnosticsView.swift; sourceTree = "<group>"; };
 		D1EB8233D6C5D8507C7D34F2 /* MascotGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotGeometryTests.swift; sourceTree = "<group>"; };
 		D208F0EB92F7CB7D30DC4D7F /* WidgetHostView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetHostView.swift; sourceTree = "<group>"; };
+		D22285419A6D3B8D4C91D153 /* GuestCodeWriteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestCodeWriteTests.swift; sourceTree = "<group>"; };
 		D237ABF387E8A76064A494FA /* LookTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookTool.swift; sourceTree = "<group>"; };
 		D2C039ECC1C92B7FF7EE214C /* LookToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookToolTests.swift; sourceTree = "<group>"; };
 		D340E2EBD4E7079577777054 /* TurnRowRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnRowRenderTests.swift; sourceTree = "<group>"; };
@@ -1011,6 +1013,7 @@
 			children = (
 				5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */,
 				3C85E2F26724D2DFDA22E0E7 /* ClaudeCodeInstallerTests.swift */,
+				D22285419A6D3B8D4C91D153 /* GuestCodeWriteTests.swift */,
 				5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */,
 				DE4006DA9780D0A37EBCACB7 /* GuestDNSTests.swift */,
 				BD6A5FA002CAE78588A94E39 /* GuestLifecycleTests.swift */,
@@ -2044,6 +2047,7 @@
 				6BA81614A5DAA60FB08C276F /* ClaudeCodeGuestTests.swift in Sources */,
 				24D0E6115E039F63E2B34C67 /* ClaudeCodeInstallerTests.swift in Sources */,
 				B6D3FC3FD33A20C4A5EB3000 /* Fixture.swift in Sources */,
+				72E4311E57C1FD9BEEB7F524 /* GuestCodeWriteTests.swift in Sources */,
 				AE9F04E40A3D14A888B3CD36 /* GuestConcurrencyTests.swift in Sources */,
 				0FEE95E130EFDE926BB8CB0F /* GuestDNSTests.swift in Sources */,
 				8010C73B33C821825010A793 /* GuestLifecycleTests.swift in Sources */,

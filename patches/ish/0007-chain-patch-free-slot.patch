@@ -1,0 +1,26 @@
+diff --git a/asbestos/asbestos.c b/asbestos/asbestos.c
+index 64b4088c..c27848df 100644
+--- a/asbestos/asbestos.c
++++ b/asbestos/asbestos.c
+@@ -896,8 +896,20 @@ static int cpu_step_to_interrupt(struct cpu_state *cpu, struct tlb *tlb) {
+                 // and is thus assumed to have no pointers left
+                 if (!last_block->is_jetsam && !block->is_jetsam) {
+                     for (int i = 0; i <= 1; i++) {
++                        // A slot is patched at most once per target: it holds its fake
++                        // ip until the patch stores block->code, and only the target's
++                        // disconnect restores it (and unlinks jumps_from_links[i]). So
++                        // the slot still holding old_jump_ip[i] is what says it is free.
++                        // The address compare alone cannot: a patched slot holds a host
++                        // pointer, whose low 32 bits are a guest address as often as the
++                        // heap's offsets fall in the guest's text (the resident's does,
++                        // 0x178cc00-0x4ce31c0 against a heap at 0x7000_0000_0000). On
++                        // that match the already-linked jumps_from_links[i] was added to
++                        // a second block's jumps_from, and whichever target was
++                        // disconnected second found it NULL and crashed there.
+                         if (last_block->jump_ip[i] != NULL &&
+-                                (*last_block->jump_ip[i] & 0xffffffff) == block->addr) {
++                                *last_block->jump_ip[i] == last_block->old_jump_ip[i] &&
++                                (last_block->old_jump_ip[i] & 0xffffffff) == block->addr) {
+                             *last_block->jump_ip[i] = (unsigned long) block->code;
+                             list_add(&block->jumps_from[i], &last_block->jumps_from_links[i]);
+                         }
