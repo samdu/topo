@@ -709,25 +709,32 @@ enum MascotPerch {
 
     /// His box over the model slider's chosen stop: the engine's shelf on the pane's top edge, as
     /// on the glass, and his body's axis over the stop's middle, so his head is over the model that
-    /// gives it him. Nil with no stop or no pane, and under the keyboard, where the slider is shut.
-    static func over(_ field: MascotField, size: CGSize) -> CGRect? {
-        guard let stop = field.stop, let pane = field.pane, field.keyboard == nil,
-              size.width > 0, size.height > 0 else { return nil }
+    /// gives it him, on the short pane over the keyboard as on the resting one. With a `reach`, moved
+    /// in only as far as keeps it inside the transcript's width, so the screen's edge holds him at
+    /// an end stop. Nil with no stop or no pane.
+    static func over(_ field: MascotField, size: CGSize, reach: MascotSprite.Reach? = nil) -> CGRect? {
+        guard let stop = field.stop, let pane = field.pane, size.width > 0, size.height > 0 else { return nil }
         let scale = size.width / MascotSprite.box.width
         let top = pane.minY - (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * scale
-        return CGRect(x: stop.midX - size.width / 2, y: top, width: size.width, height: size.height)
+        var x = stop.midX - size.width / 2
+        if let reach {
+            x = inside(x, from: field.visible.minX + reach.left, to: field.visible.maxX - reach.right - size.width)
+        }
+        return CGRect(x: x, y: top, width: size.width, height: size.height)
     }
 
     /// The settings he is placed by while the model slider is open: pinned over its chosen stop,
     /// whatever the look's placement, and going there and along the slider at `swim`
-    /// rather than the stroll. A pin and not a policy of its own, so the glide to a new stop, the
-    /// screen's edge holding his reach and the way back are the pin's (`MascotRoam.perch`). The
-    /// look's own settings where no slider is open.
+    /// rather than the stroll. A pin and not a policy of its own, so the glide to a new stop and
+    /// the way back are the pin's (`MascotRoam.perch`); where the pin puts him is `over`, which the
+    /// roam asks while a stop is there, since a pin is lifted clear of the keyboard and the slider
+    /// is over it. The look's own settings where no slider is open.
     static func sliding(_ settings: MascotRoam.Settings, over field: MascotField?, swim: CGFloat) -> MascotRoam.Settings {
         guard let field, let box = over(field, size: settings.size) else { return settings }
         var sliding = settings
         sliding.placement = .pinned
         sliding.pin = pin(of: box, in: field.pinFrame)
+        sliding.sliding = true
         sliding.speed = swim
         return sliding
     }
@@ -820,6 +827,10 @@ struct MascotRoam: Equatable, Sendable {
         /// is `pinned`.
         var placement = Look.Mascot.Placement.roam
         var pin = Look.Mascot().pin
+        /// The pin is the model slider's (`MascotPerch.sliding`): he is over its chosen stop
+        /// (`MascotPerch.over`), on the pane wherever the keyboard has it, and not at a pin of the
+        /// person's, which is lifted clear of the keyboard.
+        var sliding = false
 
         init(size: CGSize, clearance: CGFloat, reach: MascotSprite.Reach = .none, speed: CGFloat,
              hurry: CGFloat = 10, settle: Double, reduceMotion: Bool = false,
@@ -844,7 +855,7 @@ struct MascotRoam: Equatable, Sendable {
         /// The same policy and the same place: a change of either is a glide to where the new one
         /// puts him.
         func samePlace(as other: Settings) -> Bool {
-            placement == other.placement && (placement != .pinned || pin == other.pin)
+            placement == other.placement && sliding == other.sliding && (placement != .pinned || pin == other.pin)
         }
     }
 
@@ -990,6 +1001,9 @@ struct MascotRoam: Equatable, Sendable {
         }
         if settings.placement != .roam {
             let keyboardMoved = (self.field?.keyboard == nil) != (field.keyboard == nil)
+            // Another stop of the model slider chosen: a place of its own, gone to by a glide as
+            // a new pin is, where the same stop moved by the pane is the geometry's.
+            let stopChosen = self.field?.stop.flatMap { was in field.stop.map { abs($0.midX - was.midX) > MascotRoost.epsilon } } ?? false
             self.field = field
             changed = now
             // Not yet placed: the chat is still laying itself out, and he is placed once it has
@@ -998,7 +1012,7 @@ struct MascotRoam: Equatable, Sendable {
                 unsettled = true
                 return
             }
-            perch(keyboardMoved ? .keyboard : .geometry)
+            perch(keyboardMoved ? .keyboard : stopChosen ? .switched : .geometry)
             return
         }
         let drift = self.field.map { field.drift(since: $0) } ?? 0
@@ -1396,6 +1410,7 @@ struct MascotRoam: Equatable, Sendable {
         case .glass:
             return MascotPerch.glass(field, size: settings.size)
         case .pinned:
+            if settings.sliding, let over = MascotPerch.over(field, size: settings.size, reach: settings.reach) { return over }
             return MascotPerch.pinned(settings.pin, in: resting ?? field.pinFrame, keyboard: field.keyboard,
                                       size: settings.size, reach: settings.reach, clearance: settings.clearance)
         }

@@ -64,6 +64,32 @@ final class LozengeControlsTests: XCTestCase {
         XCTAssertTrue(becomes(model, "value == 'Sonnet'"), "the model chosen did not outlive the slider")
     }
 
+    /// The slider opens over the keyboard and leaves it up: the row is still being typed in, the
+    /// stops are there to press, the one pressed is the model chosen, and shutting the slider
+    /// leaves the keyboard where it was.
+    func testTheSliderOpensOverTheKeyboardAndLeavesItUp() throws {
+        let app = ChatReading.launch(transcript: "empty", tuning: "", softwareKeyboard: true)
+        let model = app.buttons["composer-model"]
+        XCTAssertTrue(model.waitForExistence(timeout: 60), "the glass has no model control")
+        app.buttons["Type instead"].tap()
+        let lower = app.buttons["Hide the keyboard"]
+        XCTAssertTrue(lower.waitForExistence(timeout: 10), "the keyboard did not come up")
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10), "no keyboard on screen")
+        model.tap()
+        let stop = app.buttons["composer-model-opus"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 10), "the slider did not open over the keyboard")
+        XCTAssertTrue(app.keyboards.firstMatch.exists && lower.exists, "opening the slider took the keyboard away")
+        stop.tap()
+        XCTAssertTrue(becomes(model, "value == 'Opus'"), "a stop pressed over the keyboard chose nothing")
+        XCTAssertTrue(app.keyboards.firstMatch.exists, "choosing a model took the keyboard away")
+        ChatReading.attach(app, "slider-over-keyboard", to: self)
+        app.buttons["composer-model-sonnet"].tap()
+        XCTAssertTrue(becomes(model, "value == 'Sonnet'"))
+        model.tap()
+        XCTAssertTrue(becomes(stop, "exists == false"), "the slider did not shut")
+        XCTAssertTrue(app.keyboards.firstMatch.exists && lower.exists, "shutting the slider took the keyboard away")
+    }
+
     /// Waits, bounded, for `element` to be as `predicate` says: what a tap changes is drawn by the
     /// app's next update, which a snapshot taken on the line after the tap can come before.
     private func becomes(_ element: XCUIElement, _ predicate: String, timeout: TimeInterval = 10) -> Bool {

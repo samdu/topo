@@ -82,7 +82,7 @@ struct Composer: View {
     }
 
     /// The slider is drawn: open, and with no keyboard up, under which the pane is short.
-    private var sliderShown: Bool { (models?.open ?? false) && !keyboard }
+    private var sliderShown: Bool { models?.open ?? false }
 
     /// What the microphone is doing, and which of the five the glass draws for it. The chat
     /// screen reads four facts off `VoiceInput` and one off `Speaker`, and this decides what they
@@ -157,6 +157,7 @@ struct Composer: View {
         VStack(spacing: look.composer.models.spacing) {
             if sliderShown, let models {
                 ModelSlider(models: models, ink: ink)
+                    .padding(.top, look.composer.models.topInset)
                     .opacity(flankOpacity)
                     .transition(.opacity)
             }
@@ -210,12 +211,17 @@ struct Composer: View {
     @ViewBuilder private var trailing: some View {
         if let models {
             let flank = look.composer.flank
-            Button { models.setOpen(!models.open) } label: {
-                Self.mark(flank.models, flank.modelsOpen, second: sliderShown).font(flank.font)
+            HStack(spacing: 0) {
+                Button { models.setOpen(!models.open) } label: {
+                    Self.mark(flank.models, flank.modelsOpen, second: sliderShown).font(flank.font)
+                }
+                .accessibilityIdentifier("composer-model")
+                .accessibilityLabel(sliderShown ? "Close the model slider" : "Choose the model")
+                .accessibilityValue(models.stops.first { $0.id == models.chosen }?.name ?? "")
+                .frame(maxWidth: .infinity)
+                // The far half is nobody's, which is what mirrors the keyboard's across the well.
+                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
             }
-            .accessibilityIdentifier("composer-model")
-            .accessibilityLabel(sliderShown ? "Close the model slider" : "Choose the model")
-            .accessibilityValue(models.stops.first { $0.id == models.chosen }?.name ?? "")
         } else {
             Color.clear.frame(width: 0, height: 0)
         }
@@ -226,16 +232,18 @@ struct Composer: View {
     /// is the only thing it has to undo; the mute is the same, replies read aloud or not.
     private var leading: some View {
         let flank = look.composer.flank
-        return HStack(spacing: flank.spacing) {
+        return HStack(spacing: 0) {
             Button { typing.toggle() } label: {
                 Self.mark(flank.keyboard, flank.keyboardDown, second: typing).font(flank.font)
             }
             .accessibilityLabel(typing ? "Hide the keyboard" : "Type instead")
+            .frame(maxWidth: .infinity)
             Button { setReadsAloud(!readsAloud) } label: {
                 Self.mark(flank.speaking, flank.muted, second: !readsAloud).font(flank.font)
             }
             .accessibilityIdentifier("composer-mute")
             .accessibilityLabel(readsAloud ? "Mute replies" : "Read replies aloud")
+            .frame(maxWidth: .infinity)
         }
     }
 

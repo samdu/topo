@@ -72,8 +72,8 @@ final class ModelSliderTests: XCTestCase {
     // MARK: Where he sits
 
     /// Over each stop his body's axis is over the stop's middle and the engine's shelf is on the
-    /// pane's top edge; with no stop, no pane or the keyboard up there is no such place and the
-    /// look's settings stand.
+    /// pane's top edge; with no stop or no pane there is no such place and the look's settings
+    /// stand.
     func testHeSitsOnThePanesTopEdgeOverTheChosenStop() throws {
         for index in 0..<3 {
             let field = Self.field(stop: index)
@@ -91,7 +91,6 @@ final class ModelSliderTests: XCTestCase {
             XCTAssertEqual(placed.minY, box.minY, accuracy: 1e-6, "stop \(index)")
         }
         XCTAssertNil(MascotPerch.over(Self.field(), size: Self.size))
-        XCTAssertNil(MascotPerch.over(Self.field(stop: 1, keyboard: true), size: Self.size))
         var paneless = Self.field(stop: 1)
         paneless.pane = nil
         XCTAssertNil(MascotPerch.over(paneless, size: Self.size))
@@ -214,6 +213,42 @@ final class ModelSliderTests: XCTestCase {
             XCTAssertEqual(roam.position, home.origin, "stop \(stop): not on the short glass")
             hand(&roam, Self.field(), .glass, at: time)
             run(&roam, time: &time)
+        }
+    }
+
+    /// The slider open over the keyboard: he sits over the chosen stop on the short pane, whatever
+    /// his placement, not lifted clear of the keyboard as a pin of the person's is; a new stop is a
+    /// glide along it; and the keyboard going under the open slider takes him down with the pane.
+    func testOverTheKeyboardHeSitsOverTheStopOnTheShortPane() throws {
+        let short = CGRect(x: 40, y: 298, width: 321, height: 99)
+        let risen = { (stop: Int?) -> MascotField in
+            var field = MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 330),
+                                    pane: stop == nil ? CGRect(x: 40, y: 344, width: 321, height: 53) : short,
+                                    well: CGRect(x: 177, y: 346, width: 48, height: 48),
+                                    keyboard: CGRect(x: 0, y: 400, width: 402, height: 474))
+            field.stop = stop.map { CGRect(x: Self.stops[$0].minX, y: short.minY + 8, width: 80, height: 44) }
+            return field
+        }
+        for placement in Look.Mascot.Placement.allCases {
+            var time = 0.0
+            var roam = MascotRoam(Self.settings(placement), frame: Self.frame)
+            hand(&roam, Self.field(), placement, at: time)
+            run(&roam, time: &time)
+            hand(&roam, risen(nil), placement, at: time)
+            run(&roam, time: &time)
+            for stop in [0, 2] {
+                hand(&roam, risen(stop), placement, at: time)
+                run(&roam, time: &time)
+                let sat = try XCTUnwrap(roam.picture, "\(placement): nowhere over the keyboard")
+                XCTAssertEqual(sat.midX, Self.stops[stop].midX, accuracy: 1e-6, "\(placement), stop \(stop)")
+                XCTAssertEqual(sat.minY + CGFloat(Topo.shelfY) - MascotSprite.box.minY, short.minY, accuracy: 1e-6,
+                               "\(placement), stop \(stop): not on the short pane's top edge")
+            }
+            // The keyboard goes with the slider still open: he is over the stop on the resting pane.
+            hand(&roam, Self.field(stop: 2), placement, at: time)
+            run(&roam, time: &time)
+            let down = try XCTUnwrap(MascotPerch.over(Self.field(stop: 2), size: Self.size))
+            XCTAssertEqual(try XCTUnwrap(roam.picture).origin.y, down.minY, accuracy: 1e-6, "\(placement): left where the keyboard had him")
         }
     }
 

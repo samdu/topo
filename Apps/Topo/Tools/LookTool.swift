@@ -87,7 +87,7 @@ struct LookTool: Tool {
                 refused += answer.refused.count
             }
             if kept > 0 {
-                lines.append("Worn now on this phone; Settings › Topo › Reset, or topo look reset, takes it back.")
+                lines.append("Worn now on this phone; Settings › Reset, or topo look reset, takes it back.")
             }
             return ToolReply(status: refused == 0 ? ToolReply.ok : ToolReply.refused, text: lines.joined(separator: "\n") + "\n")
         case "reset":

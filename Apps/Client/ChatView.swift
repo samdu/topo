@@ -267,8 +267,6 @@ struct ChatView: View {
         .onChange(of: row.typing) { _, up in
             guard up else { return }
             voice.cancel(.chat)
-            // The pane goes short under the keyboard and holds no slider.
-            modelsOpen = false
         }
         // What the look calls the models is what the notice calls them.
         .onChange(of: look.mind, initial: true) { _, mind in harness.mind = mind }
@@ -470,16 +468,12 @@ struct ChatView: View {
     }
 
     /// The model slider: what the chat offers under the look's names, the setting, and whether
-    /// the slider is open. Opening it lowers the keyboard, under which the pane is short and
-    /// holds no slider.
+    /// the slider is open, which it is over the keyboard as without it.
     private var models: Composer.Models {
         Composer.Models(stops: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
                         chosen: (ClaudeModel(setting: modelSetting) ?? .default).rawValue,
                         open: modelsOpen,
-                        setOpen: { open in
-                            if open { row.typing = false }
-                            modelsOpen = open
-                        },
+                        setOpen: { modelsOpen = $0 },
                         choose: { alias in
                             if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
                         })

@@ -361,8 +361,6 @@ struct PlacementSection: View {
             }
             Button("Reset", role: .destructive) { tuning.reset() }
                 .disabled(tuning.isEmpty)
-        } header: {
-            Text("Topo")
         } footer: {
             Text("Drag Topo to pin him. Worn over the vault's look on this device until reset.")
         }

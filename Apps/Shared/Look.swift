@@ -525,8 +525,6 @@ struct Look: Equatable, Sendable {
             /// While the thumb is on the microphone the flanks go, keeping their space so the
             /// glass never changes size.
             var heldOpacity = 0.0
-            /// Between two controls on one flank.
-            var spacing: CGFloat = 10
             /// The marks: the way to the keyboard and back from it, replies read aloud and muted,
             /// and the model slider shut and open. SF Symbol names.
             var keyboard = "keyboard"
@@ -545,9 +543,11 @@ struct Look: Equatable, Sendable {
             /// From each end of the pane to the first and last stop's centre: far enough in that
             /// Topo, at his own size, sits over an end stop with his reach inside the screen.
             var inset: CGFloat = 40
-            /// The row's own height, and the room between it and the row the microphone is in.
+            /// The row's own height, the room between it and the row the microphone is in, and
+            /// the room above it, over the pane's own inset.
             var height: CGFloat = 44
             var spacing: CGFloat = 2
+            var topInset: CGFloat = 4
             /// The line the stops are on, a stop's mark on it and the knob.
             var track: CGFloat = 3
             var stop: CGFloat = 7

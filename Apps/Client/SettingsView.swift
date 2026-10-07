@@ -21,17 +21,11 @@ struct SettingsView: View {
             Form {
                 // First: where Topo sits, and the Reset for this device's hand on the look.
                 PlacementSection()
-                Section("Voice") {
+                // One row each, named for what is behind it, so no heading says it again.
+                Section {
                     Button("Vocabulary") { showVocabulary = true }
-                }
-                Section("Memory") {
-                    // The screen behind it says where the vault's folder is and carries the one
-                    // control that moves it, so the row names that rather than the section again.
-                    Button("Where it lives") { showMemory = true }
-                }
-                Section("Connections") {
-                    // GitHub and 1Password, and who or what each reaches, on the screen behind it.
-                    Button("GitHub and 1Password") { showConnections = true }
+                    Button("Memory") { showMemory = true }
+                    Button("Connections") { showConnections = true }
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
