@@ -806,9 +806,11 @@ actor GuestBridge: Brain {
                 }
             }
         }
+        let kept = self.login == login && whereabouts(of: id) != nil
         flights[id] = nil
         release()
-        if self.login == login { await heardObserver(.ended(nonce, reply: reply)) }
+        // Words taken back while the guest was on them have no record, and no reply to draw.
+        if self.login == login { await heardObserver(.ended(nonce, reply: kept ? reply : nil)) }
     }
 
     func bind(nonce: String, person: Turn, reply: String) async {

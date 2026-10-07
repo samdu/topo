@@ -797,6 +797,7 @@ final class Harness {
                 // failed, and the next pass writes it. It stays on screen meanwhile.
                 guard inFlight == generation else { return false }
                 turnOpen = false
+                handedBack = false
                 failure = Failure(words: Self.behind(underlying), source: .sync)
                 settleHeard(attempt.nonce, replied: true)
                 await refresh()
@@ -807,6 +808,7 @@ final class Harness {
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
             turnOpen = false
+            handedBack = false
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
