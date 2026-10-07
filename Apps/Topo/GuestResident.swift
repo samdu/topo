@@ -97,7 +97,7 @@ final class GuestResident {
 
     /// The model a process is started with: the setting, as the debug pin makes it.
     static var model: String {
-        let setting = UserDefaults.standard.string(forKey: Harness.modelKey).flatMap(ClaudeModel.init(rawValue:))
+        let setting = UserDefaults.standard.string(forKey: Harness.modelKey).flatMap(ClaudeModel.init(setting:))
         return ClaudeModel.effective(setting ?? .default).rawValue
     }
 

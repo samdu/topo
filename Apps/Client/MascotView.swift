@@ -864,7 +864,8 @@ extension MascotScene.Value {
         }
         return MascotField(visible: proxy[visible], obstacles: obstacles.flatMap { proxy[$0] },
                            pane: pane.map { proxy[$0] }, well: well.map { proxy[$0] }, keyboard: keyboard,
-                           beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) })
+                           beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) },
+                           stop: stop.map { proxy[$0] })
     }
 }
 
@@ -923,7 +924,9 @@ struct MascotLayer: View {
     var body: some View {
         GeometryReader { proxy in
             let field = scene.field(in: proxy, keyboardTop: keyboardTop)
-            let settings = MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion)
+            // Over the model slider while it is open, whatever the look's placement.
+            let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion),
+                                               over: field, swim: look.mascot.swimSpeed)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,
                                interval: look.mascot.frameInterval, ready: ready,
@@ -939,7 +942,7 @@ struct MascotLayer: View {
                 #endif
                 // On the glass, the stage is framed from the pane as laid out now, so SwiftUI
                 // draws it wherever it draws the pane, in the same transaction.
-                if look.mascot.placement == .glass, let field,
+                if settings.placement == .glass, let field,
                    let stage = MascotPerch.glassStage(field, size: settings.size),
                    let slot = MascotPerch.glassSlot(field) {
                     // The flank clips from the top of his picture to the pane's foot.

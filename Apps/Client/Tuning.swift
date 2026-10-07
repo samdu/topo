@@ -341,16 +341,12 @@ final class Tuning {
     }
 }
 
-/// The settings sheet's Tuning section: where Topo sits, with the pin a drag left, and in a debug
-/// build a slider for each knob, labelled with the value worn; and a Reset. What it shows is read
-/// off the look in the environment, which is the tuned one, so what it says is what is drawn.
-struct TuningSection: View {
+/// The settings sheet's Topo section, its first: where Topo sits, with the pin a drag left, and
+/// the Reset for everything this device wears over the vault's look. What it shows is read off
+/// the look in the environment, which is the tuned one, so what it says is what is drawn.
+struct PlacementSection: View {
     @Environment(\.look) private var look
     var tuning = Tuning.shared
-    #if DEBUG
-    /// The overlay of his field (`MascotFieldOverlay`): this device's, and not the look's.
-    @AppStorage(MascotFieldOverlay.key) private var showField = false
-    #endif
 
     var body: some View {
         Section {
@@ -363,7 +359,27 @@ struct TuningSection: View {
                                                           look.mascot.pin.x * 100, look.mascot.pin.y * 100))
                     .accessibilityIdentifier("tuning-pin")
             }
-            #if DEBUG
+            Button("Reset", role: .destructive) { tuning.reset() }
+                .disabled(tuning.isEmpty)
+        } header: {
+            Text("Topo")
+        } footer: {
+            Text("Drag Topo to pin him. Worn over the vault's look on this device until reset.")
+        }
+    }
+}
+
+#if DEBUG
+/// The settings sheet's Tuning section, a debug build's alone and its last: a slider for each
+/// knob, labelled with the value worn, and the overlay of his field.
+struct TuningSection: View {
+    @Environment(\.look) private var look
+    var tuning = Tuning.shared
+    /// The overlay of his field (`MascotFieldOverlay`): this device's, and not the look's.
+    @AppStorage(MascotFieldOverlay.key) private var showField = false
+
+    var body: some View {
+        Section("Tuning") {
             ForEach(Tuning.Knob.allCases) { knob in
                 let value = knob.value(in: look)
                 VStack(alignment: .leading) {
@@ -374,16 +390,10 @@ struct TuningSection: View {
             }
             Toggle("Show his field", isOn: $showField)
                 .accessibilityIdentifier("tuning-show-field")
-            #endif
-            Button("Reset", role: .destructive) { tuning.reset() }
-                .disabled(tuning.isEmpty)
-        } header: {
-            Text("Tuning")
-        } footer: {
-            Text("Drag Topo to pin him. Worn over the vault's look on this device until reset.")
         }
     }
 }
+#endif
 
 extension Look.Mascot.Placement {
     /// What the settings sheet calls it.

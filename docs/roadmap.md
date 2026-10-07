@@ -14,8 +14,8 @@ What is built, what comes next and in what order, what is parked, and the thread
 - The memory as an Obsidian vault: local or in iCloud Drive, mirrored both ways under file coordination, moved between homes with one commit point, and mounted into the guest at `/home/topo/memory` with every open coordinated, so the mind reads and writes its own notes.
 - The look as a document (`look.json`), the glass composer that goes short under the keyboard, the badge, and the transcript drawn by phone, watch and television, Topo's turns as markdown.
 - Topo on the glass: the pixel engine, poses from the guest's events, a calm idle with yoga, facing by side, roaming the chat without juddering under a turn.
-- The model picker, Tuning (placement and pin in every build, sliders in debug), diagnostics, About with the GPL text and the source commit.
-- Topo's placement: roam, glass or pinned by a long-press drag, kept in Tuning (#165); when nothing clears the words he stands where the least of his box covers them (#172).
+- The mute and the model slider on the glass, Topo sitting over the model chosen; the models sent as aliases and named by the look; the settings sheet with where Topo sits first, Tuning's sliders in debug, diagnostics, About with the GPL text and the source commit.
+- Topo's placement: roam, glass or pinned by a long-press drag, kept in this device's override (#165); when nothing clears the words he stands where the least of his box covers them (#172).
 - Markdown in Topo's replies: fenced and inline code, emphasis, headings, lists, quotes and rules from Foundation's parser, styled by `Look.Markdown` (#173).
 - The phone's own tools (P7): a loopback tool service and the `topo` CLI in the guest, found by a skill, with `topo look`, reminders, calendar, notify, contacts and location (#189, #214).
 - P7c's HomeKit: `topo home` lists, gets and sets accessories and runs scenes, behind the HomeKit entitlement (#226).
@@ -44,7 +44,7 @@ Not sequenced, on the issue list: #129, the proxy's debug pin skipping a non-can
 ## Open threads
 - **A "topo" menu** with menu-items populated by the agent themselves. Quick access to frequent settings, long-press the octopus (conflicts with dragging topo, TBD)
 - need to implement a (+) button on the glass for inserting attachments
-- need a model + effort selector on the glass — opens to a panel with a model size slider, topo remains visible with this panel open so his head size can react in real time to model changes
+- need an effort selector beside the model slider on the glass
 - first-run progress screen with progress bars for environment setup, speech setup, and transcription setup — need to decide how to show this progress when launching a newly-updated app that already has a log, since it will jump straight to the transcript while things download in the background
 
 ### Deferred proof gaps

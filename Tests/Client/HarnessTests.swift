@@ -1390,7 +1390,7 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNotNil(harness.error)
     }
 
-    /// Read replies aloud off at the release: the turn is not one whose reply is read, so nothing
+    /// Replies muted at the release: the turn is not one whose reply is read, so nothing
     /// records it as spoken. A launch that turns the setting on afterwards would otherwise speak
     /// a reply from last week.
     func testATurnSentWithRepliesNotReadAloudIsNotSpokenAfterARelaunch() async throws {
@@ -1429,10 +1429,41 @@ final class HarnessIntegrationTests: XCTestCase {
         }
     }
 
-    /// The setting governs what a release decides, not what a turn already released is owed: a
-    /// question asked aloud and answered after Read replies aloud was turned off is still that
-    /// question's answer, and leaving it unread would strand its mark and its hold. What ends the
-    /// hold is `speak` taking the reply, which is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
+    /// Muted between the release and the reply, the reply is read by nobody, and nothing is left
+    /// standing for it: the turn's mark is cleared and its wait ended, so a muted phone is not kept
+    /// awake for a reply it will not read and the reply is not offered again.
+    func testAReplyThatLandsMutedIsNotReadAndLeavesNoMarkAndNoWait() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        var offered = 0
+        harness.onReply = { reply in
+            offered += 1
+            return SpokenReply.read(reply, harness: harness, speaker: speaker, muted: true)
+        }
+
+        let nonce = harness.willSend("what is the capital of France")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
+        harness.markSpoken(nonce)
+        XCTAssertEqual(speaker.awaiting, [nonce])
+
+        await harness.retry()
+        XCTAssertEqual(offered, 1, "the reply was not offered, or was offered again")
+        XCTAssertEqual(speaker.report.speaks, 0, "a muted reply was read")
+        XCTAssertFalse(speaker.speaking)
+        XCTAssertEqual(speaker.awaiting, [], "the wait outlived the reply nobody will hear")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the mark outlived it too")
+    }
+
+    /// A question asked aloud is still that question's answer when it lands, and leaving it unread
+    /// would strand its mark and its hold. What ends the hold is `speak` taking the reply, which
+    /// is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
     func testAReplyIsReadWhenItsTurnIsMarkedWhateverTheSettingReadsNow() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
@@ -1450,7 +1481,6 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
         harness.markSpoken(nonce)
 
-        // The setting goes off before the reply lands. What it governs is the next release.
         await harness.retry()
         XCTAssertEqual(said.texts, ["Paris."], "the turn was marked, so its reply is read")
         XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "and the mark is cleared")

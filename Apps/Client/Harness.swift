@@ -275,10 +275,16 @@ final class Harness {
     /// The guest, when it is what answers.
     var guest: GuestBridge? { brain as? GuestBridge }
 
+    /// What the look calls the models (`Look.Mind`), handed over by the chat as the look changes.
+    var mind = Look.Mind()
+
+    /// What `model` is called: the look's name for it, or its family's where the look has none.
+    func name(of model: ClaudeModel) -> String { mind.name(model.rawValue) ?? model.displayName }
+
     /// The model setting. A change reaches the brain at once, which for the guest replaces the
     /// resident process at its next idle moment, never in the middle of a turn.
     var model: ClaudeModel {
-        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
+        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default }
         set {
             defaults.set(newValue.rawValue, forKey: Self.modelKey)
             let brain = brain
@@ -649,7 +655,7 @@ final class Harness {
         case .saving: status = "Saving what you said…"
         case .asking(let person):
             show(person)
-            status = "Asking \(model.displayName)…"
+            status = "Asking \(name(of: model))…"
         case .savingReply: status = "Saving the reply…"
         }
     }
@@ -883,7 +889,7 @@ final class Harness {
         rows.append(("Brain", await brain.describe()))
         rows.append(("Unfinished turn", unfinished.map { "\($0.ref): \($0.text)" } ?? "none"))
         rows.append(("Claude token", await Self.describeToken(tokens)))
-        rows.append(("Model", model.displayName))
+        rows.append(("Model", "\(name(of: model)) (\(model.rawValue))"))
         rows.append(("Turns on screen", "\(turns.count)"))
         return Diagnostics(rows: rows)
     }

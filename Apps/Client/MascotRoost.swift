@@ -20,6 +20,9 @@ struct MascotScene: PreferenceKey {
         /// The code block the voice has reached, which he goes to stand beside, and the cue's
         /// serial (`CodeBlockCue.serial`); nil while no block is reached.
         var beside: (frame: Anchor<CGRect>, serial: Int)?
+        /// The model slider's chosen stop, which he sits over while the slider is open; nil while
+        /// it is shut.
+        var stop: Anchor<CGRect>?
     }
 
     static let defaultValue = Value()
@@ -30,6 +33,7 @@ struct MascotScene: PreferenceKey {
         value.pane = value.pane ?? next.pane
         value.well = value.well ?? next.well
         value.beside = value.beside ?? next.beside
+        value.stop = value.stop ?? next.stop
         value.obstacles += next.obstacles
     }
 }
@@ -63,6 +67,14 @@ extension View {
     /// The composer's well, which he is never drawn over.
     func mascotWell() -> some View {
         transformAnchorPreference(key: MascotScene.self, value: .bounds) { $0.well = $1 }
+    }
+
+    /// The model slider's chosen stop, which he sits over (`MascotPerch.over`). False reports
+    /// nothing.
+    func mascotStop(_ chosen: Bool) -> some View {
+        transformAnchorPreference(key: MascotScene.self, value: .bounds) { value, frame in
+            if chosen { value.stop = frame }
+        }
     }
 
     /// The code block the voice has reached, under the cue's `serial`: the frame he goes to stand
@@ -198,6 +210,9 @@ struct MascotField: Equatable, Sendable, Codable {
     /// The code block the voice has reached, which he stands beside (`MascotRoost.beside`); nil
     /// while none is.
     var beside: Beside?
+    /// The model slider's chosen stop, while the slider is open: he sits on the pane's top edge
+    /// over it (`MascotPerch.over`).
+    var stop: CGRect?
 
     /// A code block's frame, and the serial of the cue that reached it: a new serial is a new
     /// visit, the same one moved by a scroll is not.
@@ -693,6 +708,31 @@ enum MascotPerch {
         glass(field, size: size).map(MascotSprite.drawn(around:))
     }
 
+    /// His box over the model slider's chosen stop: the engine's shelf on the pane's top edge, as
+    /// on the glass, and his body's axis over the stop's middle, so his head is over the model that
+    /// gives it him. Nil with no stop or no pane, and under the keyboard, where the slider is shut.
+    static func over(_ field: MascotField, size: CGSize) -> CGRect? {
+        guard let stop = field.stop, let pane = field.pane, field.keyboard == nil,
+              size.width > 0, size.height > 0 else { return nil }
+        let scale = size.width / MascotSprite.box.width
+        let top = pane.minY - (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * scale
+        return CGRect(x: stop.midX - size.width / 2, y: top, width: size.width, height: size.height)
+    }
+
+    /// The settings he is placed by while the model slider is open: pinned over its chosen stop,
+    /// whatever the look's placement, and going there and along the slider at `swim`
+    /// rather than the stroll. A pin and not a policy of its own, so the glide to a new stop, the
+    /// screen's edge holding his reach and the way back are the pin's (`MascotRoam.perch`). The
+    /// look's own settings where no slider is open.
+    static func sliding(_ settings: MascotRoam.Settings, over field: MascotField?, swim: CGFloat) -> MascotRoam.Settings {
+        guard let field, let box = over(field, size: settings.size) else { return settings }
+        var sliding = settings
+        sliding.placement = .pinned
+        sliding.pin = pin(of: box, in: field.pinFrame)
+        sliding.speed = swim
+        return sliding
+    }
+
     /// His box at `pin`, a fraction of `frame` across and down, as the look carries it: the box's
     /// centre put there, then moved in only as far as it takes to keep his reach inside `frame` —
     /// the transcript's carried to the pane's foot with the keyboard down (`MascotField.pinFrame`) —
@@ -880,6 +920,10 @@ struct MascotRoam: Equatable, Sendable {
     private(set) var riding = false
     /// The geometry changed since the roost was last decided.
     private(set) var unsettled = false
+    /// He is gliding from where a placed policy had him to the roost roaming decided: a glide that
+    /// may start on the glass, since a pin or the model slider put him there, and so is not one the
+    /// glass under him ends.
+    private(set) var leaving = false
     /// When the geometry last changed, and when the roam was last moved on.
     private var changed = -Double.infinity
     private var now = 0.0
@@ -936,6 +980,7 @@ struct MascotRoam: Equatable, Sendable {
     /// is not drawn.
     mutating func observe(_ field: MascotField, at time: Double) {
         now = max(now, time)
+        if move == nil { leaving = false }
         guard field != self.field else { return }
         if field.keyboard == nil { resting = field.pinFrame }
         // A finger has him, or the look places him: the roam decides nothing.
@@ -975,7 +1020,10 @@ struct MascotRoam: Equatable, Sendable {
             covered = isCovered
             return
         }
-        if let picture, case let reached = settings.reach.around(picture),
+        // Leaving a placed policy's place he glides off the glass he was put on; the keyboard
+        // rising under that glide still places him.
+        if !(leaving && move != nil && field.keyboard == nil),
+           let picture, case let reached = settings.reach.around(picture),
            reached.maxY > field.open.maxY + MascotRoost.epsilon
             || [field.pane, field.well].contains(where: { $0.map { MascotRoost.overlap($0, reached) } ?? false }) {
             move = nil
@@ -1062,6 +1110,7 @@ struct MascotRoam: Equatable, Sendable {
             let cut = move != nil
             move = nil
             decide(glide: !reroost, standing: !cut)
+            leaving = move != nil
             unsettled = true
             covered = isCovered
             return
@@ -1092,6 +1141,7 @@ struct MascotRoam: Equatable, Sendable {
             if move.done {
                 position = move.to
                 self.move = nil
+                leaving = false
             } else {
                 self.move = move
             }

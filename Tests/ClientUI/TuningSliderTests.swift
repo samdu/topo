@@ -1,7 +1,7 @@
 import XCTest
 
-/// The settings sheet's Tuning section in a running debug build: a slider moved there is worn by
-/// the chat, and Reset gives the chat the look it had. Read off the badge's debug report
+/// The settings sheet's Topo and Tuning sections in a running debug build: a slider moved in
+/// Tuning is worn by the chat, and Topo's Reset gives the chat the look it had. Read off the badge's debug report
 /// (`DebugRun.ChatReport.clearance`), which is the look in the chat's own environment.
 @MainActor
 final class TuningSliderTests: XCTestCase {
@@ -32,7 +32,7 @@ final class TuningSliderTests: XCTestCase {
         done(app)
         XCTAssertTrue(wait(for: moved, in: app), "the chat does not wear the slider's \(moved): \(String(describing: clearance(in: app)))")
 
-        _ = try openTuning(app, badge: badge)
+        openSettings(app, badge: badge)
         let reset = app.buttons["Reset"]
         XCTAssertTrue(reset.isEnabled, "Reset is not offered with a slider moved")
         reset.tap()
@@ -41,7 +41,7 @@ final class TuningSliderTests: XCTestCase {
         XCTAssertTrue(wait(for: shipped, in: app), "Reset did not give the chat its look back: \(String(describing: clearance(in: app)))")
     }
 
-    /// The Tuning section shows where Topo sits and the pin a drag left, and offers Reset: with a
+    /// The Topo section shows where Topo sits and the pin a drag left, and offers Reset: with a
     /// pin kept, the section says so, Reset gives the chat its roaming back; the placement chosen
     /// there, `glass`, is what the chat wears.
     func testTheSectionShowsThePlacementAndThePinAndResetRemovesThem() throws {
@@ -65,7 +65,7 @@ final class TuningSliderTests: XCTestCase {
         XCTAssertTrue(badge.waitForExistence(timeout: 60), "the chat screen, with its badge")
         XCTAssertTrue(wait(in: app) { $0.placement == "pinned" }, "the chat does not wear the kept pin")
 
-        _ = try openTuning(app, badge: badge)
+        openSettings(app, badge: badge)
         let pin = app.descendants(matching: .any)["tuning-pin"]
         XCTAssertTrue(pin.waitForExistence(timeout: 5), "the section does not show the pin")
         XCTAssertTrue(pin.label.contains("25% across") || (pin.value as? String ?? "").contains("25% across"),
@@ -79,7 +79,7 @@ final class TuningSliderTests: XCTestCase {
         XCTAssertTrue(wait(in: app) { $0.placement == "roam" && $0.overridePlacement == nil },
                       "Reset did not give him his roaming back")
 
-        _ = try openTuning(app, badge: badge)
+        openSettings(app, badge: badge)
         let picker = app.buttons["tuning-placement"]
         XCTAssertTrue(picker.waitForExistence(timeout: 5), "the section has no placement")
         picker.tap()
@@ -139,23 +139,29 @@ final class TuningSliderTests: XCTestCase {
         return false
     }
 
+    /// Opens the settings on the Topo section, which is the first in the sheet: where he sits, his
+    /// pin and Reset are there to be hit with nothing scrolled.
+    private func openSettings(_ app: XCUIApplication, badge: XCUIElement) {
+        badge.tap()
+        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the tap did not open the settings")
+        XCTAssertTrue(becomes(app.buttons["tuning-placement"], "hittable == true"), "the settings do not open on where Topo sits")
+        XCTAssertTrue(becomes(app.buttons["Reset"], "hittable == true"), "the settings have no Reset in reach")
+    }
+
     /// Opens the settings and scrolls to the Tuning section, which is the last in the sheet, until
-    /// Reset, its last row, can be hit. Each scroll is a drag held a moment first: a fling handed
+    /// the clearance slider can be hit. Each scroll is a drag held a moment first: a fling handed
     /// to a starved app can arrive as a touch too short to move the list, so the list is dragged
     /// until it gets there, a bounded number of times, from the leading margin, where no row's
     /// control is to be picked up by it.
     private func openTuning(_ app: XCUIApplication, badge: XCUIElement) throws -> XCUIElement {
-        badge.tap()
-        XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 10), "the tap did not open the settings")
+        openSettings(app, badge: badge)
         let slider = app.sliders["tuning-clearance"]
-        let reset = app.buttons["Reset"]
         let form = app.collectionViews.firstMatch
-        for _ in 0..<10 where !(slider.exists && slider.isHittable && reset.exists && reset.isHittable) {
+        for _ in 0..<10 where !(slider.exists && slider.isHittable) {
             form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.8))
                 .press(forDuration: 0.1, thenDragTo: form.coordinate(withNormalizedOffset: CGVector(dx: 0.03, dy: 0.3)))
         }
         XCTAssertTrue(slider.isHittable, "the settings have no clearance slider")
-        XCTAssertTrue(reset.exists && reset.isHittable, "the settings have no Reset")
         return slider
     }
 
