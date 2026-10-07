@@ -59,7 +59,9 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
 
     /// The same records and the same kept `CKRecord`s, with every save and fetch by ID given
     /// `seconds` to be answered: the request's timeout, from its start to the whole of its
-    /// answer. One that runs out throws `unavailable`, and may still have been applied.
+    /// answer. One that runs out throws `unavailable`, and may still have been applied. A save
+    /// over a version this object has no `CKRecord` for is a fetch and then the save, each
+    /// with its own `seconds`.
     public func answering(within seconds: TimeInterval) -> any RecordDatabase {
         Bounded(database: self, seconds: seconds)
     }
@@ -75,13 +77,11 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
     }
 
     /// Runs `body` against the database, its requests timing out after `seconds` when given.
-    /// Interactive either way, as the plain calls are.
     private func requesting<R>(within seconds: TimeInterval?, _ body: (CKDatabase) async throws -> R) async throws -> R {
         guard let seconds else { return try await body(database) }
         let configuration = CKOperation.Configuration()
         configuration.timeoutIntervalForRequest = seconds
         configuration.timeoutIntervalForResource = seconds
-        configuration.qualityOfService = .userInitiated
         return try await database.configuredWith(configuration: configuration, body: body)
     }
 
@@ -97,6 +97,7 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
                 try await $0.modifyRecords(saving: saving, deleting: [], savePolicy: .ifServerRecordUnchanged, atomically: true)
             }
         } catch {
+            rememberServerRecords(in: error)
             throw Self.mapped(error, recordIDs: ckRecords.map(\.recordID))
         }
         // An atomic batch that fails fails every record, and all but the one at fault say only
@@ -104,6 +105,7 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
         // caller that retries a conflict on its own record is told of the conflict.
         for ck in ckRecords {
             if case .failure(let e)? = result.saveResults[ck.recordID], (e as? CKError)?.code != .batchRequestFailed {
+                rememberServerRecords(in: e)
                 throw Self.mapped(e, recordIDs: [ck.recordID])
             }
         }
@@ -373,6 +375,14 @@ public final class CloudKitRecordDatabase: ZoneDatabase, @unchecked Sendable {
             copy[key] = ckValue(value)
         }
         return copy
+    }
+
+    /// Keeps the server's record a conflict carries, as a fetch would: a save over the version
+    /// the conflict reported is then one request, not a fetch and the save.
+    private func rememberServerRecords(in error: any Error) {
+        guard let ck = error as? CKError else { return }
+        if let server = ck.serverRecord { remember(server) }
+        for sub in (ck.partialErrorsByItemID ?? [:]).values { rememberServerRecords(in: sub) }
     }
 
     private func remember(_ ck: CKRecord) {
