@@ -59,8 +59,7 @@ public protocol LeaseProbe: Sendable {
 public struct LeaseTiming: Hashable, Sendable {
     /// How long a claim or heartbeat is good for.
     public var duration: TimeInterval
-    /// How often a holder heartbeats. Half the duration, so one missed
-    /// heartbeat does not lose the lease.
+    /// How often a holder heartbeats. Half the duration.
     public var heartbeat: TimeInterval
 
     public init(duration: TimeInterval = 10, heartbeat: TimeInterval = 5) {
@@ -70,10 +69,13 @@ public struct LeaseTiming: Hashable, Sendable {
 
     /// How long one read or write of the lease may go unanswered before it
     /// is given up as failed. The lease's calls go one at a time, so a
-    /// request that stalls holds the next heartbeat up; this is short enough
-    /// that a heartbeat held up by one stalled request, sent a full interval
-    /// after the last, still lands inside the duration with a second to
-    /// spare for its own round trip.
+    /// request that stalls holds the next heartbeat up, and this bounds each
+    /// request, not the call that makes it: a call is a read and a write at
+    /// most, so it can hold the next up to twice this. A heartbeat due a full
+    /// interval after the last, behind one request that used all of it, goes
+    /// out with a second left of the duration; behind more than that, or
+    /// when its own answer takes longer than this, the lease lapses locally
+    /// and is claimed afresh by the next turn or batch.
     public var patience: TimeInterval { max(duration - heartbeat - 1, 1) }
 
     public static let standard = LeaseTiming()
@@ -144,8 +146,11 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// out. A request that stalls would hold every call behind it, so each is
 /// asked of the database bounded by `timing.patience`
 /// (`RecordDatabase.answering(within:)`), and one that runs out is a
-/// transport failure like any other: the lease is kept, and the write, if
-/// it landed after all, is found as this device's own by the next call.
+/// transport failure like any other: nothing is forgotten, and the write,
+/// if it landed after all, is found as this instance's own by the next
+/// call, which knows the epochs it has sent (`epochSent`). The bound is a
+/// request's, so a network slower than it loses every request, where an
+/// unbounded one would have been answered late.
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
@@ -169,6 +174,9 @@ public actor PrimaryLease {
     /// The lease that took ours, while it stays fresh.
     private var yieldedTo: Lease?
     private var heartbeatTask: Task<Void, Never>?
+    /// The highest epoch this instance has sent a write of, answered or not. A lease of this
+    /// device's at an epoch past it was claimed by another instance.
+    private var epochSent: Int64 = 0
     /// How many times the lease was abandoned. An operation reads it as it
     /// is called and checks it before every read and write it sends and
     /// before it takes an answer: an operation called before an `abandon()`
@@ -444,9 +452,10 @@ public actor PrimaryLease {
                 let current = server.flatMap(Lease.init(record:))
                 guard let server, let current, current.holder == device, current.epoch == lapsed.epoch,
                       current.endpoint == endpoint else {
-                    if let current, current.holder == device, current.endpoint == endpoint, current.epoch > lapsed.epoch {
-                        // This device's own lease at a later epoch: a claim of its own that
-                        // landed and was never answered. Nothing was given up, and the
+                    if let current, current.holder == device, current.endpoint == endpoint,
+                       current.epoch > lapsed.epoch, current.epoch <= epochSent {
+                        // This device's own lease at a later epoch it has sent: a claim of
+                        // its own that landed and was never answered. Nothing was given up, and the
                         // batch is not that claim's; the next `acquire()` takes it up.
                         Perf.mark("lease.batch.refused notHeld")
                         return nil
@@ -458,6 +467,7 @@ public actor PrimaryLease {
                 (over, claim) = (server, holder(epoch: current.epoch + 1))
             }
             let deadline = monotonic() + timing.duration
+            epochSent = max(epochSent, claim.epoch)
             do {
                 let saved = try await database.save(records + [claim.record(changeTag: over.changeTag)])
                 // The records are in the log whatever became of the lease meanwhile.
@@ -552,15 +562,15 @@ public actor PrimaryLease {
         Lease(holder: device, endpoint: endpoint, epoch: epoch, expiresAt: now() + timing.duration)
     }
 
-    /// True when `lease` is this device's own, at this endpoint, at the epoch held or a
-    /// later one. With one operation at a time nothing of this instance's is in flight when
-    /// a read or a conflict shows such a lease, so it is a write of its own that landed and
-    /// was never answered, a heartbeat at the epoch held or a fresh claim past it, or the
-    /// claim of another instance of this device at the same endpoint, which this cannot tell
-    /// from its own.
+    /// True when `lease` is this device's own, at this endpoint, at the epoch held or a later
+    /// one this instance has sent. With one operation at a time nothing of this instance's is
+    /// in flight when a read or a conflict shows such a lease, so it is a write of its own
+    /// that landed and was never answered: a heartbeat at the epoch held, or a fresh claim
+    /// past it. An epoch this instance never sent is another instance's claim, whatever
+    /// endpoint it names.
     private func isOwnSinceHeld(_ lease: Lease) -> Bool {
         guard let mine = held else { return false }
-        return lease.holder == device && lease.endpoint == endpoint && lease.epoch >= mine.epoch
+        return lease.holder == device && lease.endpoint == endpoint && lease.epoch >= mine.epoch && lease.epoch <= epochSent
     }
 
     /// Same holder and epoch; the expiry moves with every heartbeat.
@@ -574,32 +584,31 @@ public actor PrimaryLease {
     /// version, its local deadline is set, and its heartbeats are running.
     /// On a conflict the lease is forgotten and the lease that won, written
     /// just now by a device that is evidently alive, is the one this device
-    /// yields to; unless this device holds a lease and the winner is its own
-    /// at that epoch, a heartbeat of its own that landed and was never
-    /// answered: the server's version is then the one held, its deadline
-    /// unchanged (the version adopted was written no earlier than the one
-    /// the deadline was set for), and the write is a success when the winner
-    /// is the very lease it was writing. A winner of its own at a later
-    /// epoch is yielded to like any other: a write that has lost to a claim
-    /// cannot tell its own unanswered claim from one by another instance of
-    /// this device, which a read by `acquire()` is left to settle. A record found gone
-    /// under the version held forgets the lease; any other error propagates.
-    /// Nil, with nothing sent or nothing taken, once the lease has been
-    /// abandoned.
-    private func write(_ lease: Lease, over changeTag: String?, began: Int) async throws -> Lease? {
+    /// yields to. Unless this device holds a lease and the winner is its own
+    /// at an epoch this instance has sent: a write of its own that landed
+    /// and was never answered. The server's version is then the one held,
+    /// and since no answer set a deadline for it the write goes once more
+    /// over that version, at the later of the two epochs; `again` is false
+    /// on that second go, which answers nil if it finds the same. A record
+    /// found gone under the version held forgets the lease; any other error
+    /// propagates. Nil, with nothing sent or nothing taken, once the lease
+    /// has been abandoned.
+    private func write(_ lease: Lease, over changeTag: String?, began: Int, again: Bool = true) async throws -> Lease? {
         guard generation == began else { return nil }
         do {
             let deadline = monotonic() + timing.duration
+            epochSent = max(epochSent, lease.epoch)
             let saved = try await database.save(lease.record(changeTag: changeTag))
             return hold(lease.record(changeTag: saved.changeTag), until: deadline, began: began) ? lease : nil
         } catch RecordDatabaseError.serverRecordChanged(_, let server) {
             guard generation == began else { return nil }
             let winner = Lease(record: server)
-            if let winner, isOwnSinceHeld(winner), winner.epoch == held?.epoch {
+            if let winner, isOwnSinceHeld(winner) {
                 // Only a holder can say so; two cold instances creating the
                 // same lease look identical to each other and one must lose.
                 heldRecord = server
-                return winner.epoch == lease.epoch ? winner : nil
+                guard again else { return nil }
+                return try await write(holder(epoch: max(lease.epoch, winner.epoch)), over: server.changeTag, began: began, again: false)
             }
             yield(to: winner)
             return nil

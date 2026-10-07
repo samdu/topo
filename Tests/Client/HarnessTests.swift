@@ -1755,7 +1755,6 @@ private func makeSpeaker(_ seams: Seams, _ audio: AudioSession, _ center: Notifi
 
 // MARK: - Doubles
 
-/// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
 /// Records the bound it was asked for and fails every bounded save.
 private final class BoundAsked: RecordDatabase, @unchecked Sendable {
     private let lock = NSLock()
@@ -1794,6 +1793,7 @@ final class RecordingDatabaseTests: XCTestCase {
     }
 }
 
+/// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
 private actor ReadFailingDatabase: RecordDatabase {
     let wrapped: InMemoryRecordDatabase
     private var failing = false

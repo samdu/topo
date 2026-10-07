@@ -9,8 +9,9 @@ import os
 /// tagged record is saved through a copy of the `CKRecord` it was fetched
 /// as, whose change tag CloudKit checks, and an untagged one is a fresh
 /// `CKRecord` that CloudKit refuses if the ID exists. `CKRecord`s from
-/// `fetch` and from saves are kept so a later save can find the one to
-/// write through; query and change-feed results are not kept. A record
+/// `fetch`, from saves, and the server's in a refused save are kept so a
+/// later save can find the one to write through; query and change-feed
+/// results are not kept. A record
 /// whose tag is not on hand is fetched again and checked before the save,
 /// so a save over one of those is a fetch and then the save.
 ///

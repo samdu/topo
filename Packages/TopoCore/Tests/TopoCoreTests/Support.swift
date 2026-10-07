@@ -459,15 +459,19 @@ final class AsksWithin: RecordDatabase, @unchecked Sendable {
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
 }
 
-/// A database whose next save stalls before the store hears of it, until the test gives it up:
-/// it then fails as a request that ran out of time does, with nothing applied.
+/// A database whose next save stalls until the test gives it up: it then fails as a request
+/// that ran out of time does. The store never hears of it, or, `landing`, applied it first.
 actor Stalls: RecordDatabase {
     private let inner: InMemoryRecordDatabase
     private var stallNext = false
+    private var landing = false
     private var waiter: CheckedContinuation<Void, Never>?
     private struct RanOut: Error {}
     init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
-    func stallNextSave() { stallNext = true }
+    func stallNextSave(landing: Bool = false) {
+        stallNext = true
+        self.landing = landing
+    }
     var stalled: Bool { waiter != nil }
     func giveUp() {
         waiter?.resume()
@@ -476,6 +480,7 @@ actor Stalls: RecordDatabase {
     func save(_ records: [Record]) async throws -> [Record] {
         if stallNext {
             stallNext = false
+            if landing { _ = try await inner.save(records) }
             await withCheckedContinuation { waiter = $0 }
             throw RecordDatabaseError.unavailable(underlying: RanOut())
         }
@@ -484,6 +489,33 @@ actor Stalls: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
     func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// A database whose next save fails as a dropped connection does and reaches the store late:
+/// after the read that follows it, ahead of the next save.
+final class LandsLate: RecordDatabase, @unchecked Sendable {
+    let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var lateNext = false
+    private var late: [Record]?
+    private struct Dropped: Error {}
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    func landNextSaveLate() { lock.withLock { lateNext = true } }
+    func save(_ records: [Record]) async throws -> [Record] {
+        let hold = lock.withLock { () -> Bool in
+            defer { lateNext = false }
+            if lateNext { late = records }
+            return lateNext
+        }
+        if hold { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
+        if let landing = lock.withLock({ () -> [Record]? in defer { late = nil }; return late }) {
+            _ = try await inner.save(landing)
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func records(ofType type: String) async throws -> [Record] { try await query(RecordQuery(type: type)) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
 }
 
 /// A probe answered by the holder itself, as the hub answers one.

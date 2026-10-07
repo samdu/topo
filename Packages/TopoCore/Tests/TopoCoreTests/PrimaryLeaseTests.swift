@@ -810,6 +810,67 @@ import TopoCoreTesting
         guard case .held = try await p.acquire() else { Issue.record("a phone took the lease from a live hub"); return }
     }
 
+    @Test func aRequestThatLandedAndIsGivenUpDoesNotCostAHealthyHolderTheLease() async throws {
+        let stalls = Stalls(db), ticker = Ticker()
+        let h = lease(hub, on: stalls, ticker: ticker)
+        _ = try await h.acquire()
+        #expect(await eventually { await ticker.sleeping == 1 })
+        clock.advance(4)
+        // The hub's timer renews at 4 s; the store applies it and the answer never comes.
+        await stalls.stallNextSave(landing: true)
+        let timer = Task { try await h.takeOver() }
+        #expect(await eventually { await stalls.stalled })
+        clock.advance(1)
+        await ticker.tick()
+        for _ in 0..<500 { await Task.yield() }
+        // At 8 s the request is given up. The heartbeat behind it finds the version that
+        // landed, and renews over it rather than leave the deadline where it was.
+        clock.advance(3)
+        await stalls.giveUp()
+        await #expect(throws: RecordDatabaseError.self) { try await timer.value }
+        #expect(await eventually { await ticker.sleeping == 1 })
+        #expect(await h.held?.expiresAt == clock.now + 10)
+        clock.advance(4)
+        #expect(await h.isPrimary())
+        let p = PrimaryLease(database: db, device: phone, endpoint: nil, probe: AsksTheHolder(holder: h),
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        guard case .held = try await p.acquire() else { Issue.record("a phone took the lease from a live hub"); return }
+    }
+
+    @Test func aTurnWhoseEarlierClaimLandsUnderItsOwnTakesThatClaimAsItsOwn() async throws {
+        let link = LandsLate(inner: db)
+        let p = lease(phone, on: link)
+        _ = try await p.acquire()
+        clock.advance(11)
+        link.landNextSaveLate()
+        await #expect(throws: RecordDatabaseError.self) { try await p.acquire() }
+        clock.advance(1)
+        // The claim at epoch 2 reaches the store between this turn's read and its write.
+        let retry = try await p.acquire()
+        guard case .primary(let kept) = retry else { Issue.record("the retry answered \(retry)"); return }
+        #expect(kept.epoch == 2)
+        #expect(await p.isPrimary())
+        #expect(await p.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
+    @Test func aHeartbeatAfterARenewalAndAClaimBothLandedUnansweredKeepsTheLease() async throws {
+        let link = LossyLinkDatabase(inner: db)
+        let h = lease(hub, on: link)
+        _ = try await h.takeOver()
+        clock.advance(5)
+        link.commitButDropNextSaveAck()
+        _ = try? await h.heartbeat()
+        clock.advance(1)
+        // The record is at a version the hub has not heard of, so its timer claims epoch 2.
+        link.commitButDropNextSaveAck()
+        _ = try? await h.takeOver()
+        #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 2)
+        clock.advance(1)
+        #expect(try await h.heartbeat())
+        #expect(await h.held?.epoch == 2)
+        #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
     /// Calls made in any order, their answers arriving in any order, on one device with nobody
     /// else writing: once everything is answered the lease held is the record as the store has
     /// it. An answer taken over a later write of this device's would leave an older one held.
