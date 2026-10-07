@@ -216,14 +216,7 @@ struct ChatView: View {
             // the screen's: behind the lock nothing is drawn, and whether a view's observer runs
             // is the framework's to decide. It fires for a reply this phone wrote and for one
             // another primary wrote that the log brought, once for either.
-            harness.onReply = { reply in SpokenReply.read(reply, harness: harness, speaker: speaker) }
-            // And before it lands: the reply to a spoken turn is read as the guest writes it.
-            harness.onWriting = { text, nonce in
-                if let text { speaker.speak(writing: text, answering: nonce) } else { speaker.writingEnded(nonce) }
-            }
-            speaker.settled = { nonce in harness.answeredAloud(nonce) }
-            // A turn that ended in a failure is owed no reply, so nothing waits for one.
-            harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
+            SpokenReply.follow(harness, speaker: speaker)
             defer {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
@@ -389,7 +382,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow, queued: row.queued(in: harness), answer: rowAnswer,
+                                  draft: draftRow, queued: row.queued(in: harness), answer: row.answer(in: harness),
                                   cue: speaker.cue)
         if #available(iOS 18, *) {
             view
@@ -478,21 +471,11 @@ struct ChatView: View {
         #if DEBUG
         if let fixture = DebugRun.transcript() { return fixture }
         #endif
-        // Replies iCloud is behind on whose person's turn did land: drawn after the log's turns.
-        let replies = harness.replies
-        let behind = harness.turns.filter { $0.role == .person && replies[$0.nonce] != nil }.enumerated().map { place, person in
-            UnsavedReply.turn(replies[person.nonce] ?? "", place: -1 - place)
-        }
+        let behind = row.behind(in: harness)
         // What is being written for words not in the log yet is drawn under those words.
         guard let writing = harness.writing, !writing.isEmpty, !harness.writingAhead else { return harness.turns + behind }
         return harness.turns + behind + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
                                               nonce: "writing")]
-    }
-
-    /// The guest's reply to the turn the row holds, while that turn is not in the log.
-    private var rowAnswer: Turn? {
-        guard let sent = row.sent, !harness.said(sent), let reply = harness.replies[sent] else { return nil }
-        return UnsavedReply.turn(reply, place: Int(Int32.max))
     }
 
     /// The row the reply is drawn in while the guest writes it (`Harness.writing`): no turn of
@@ -713,6 +696,19 @@ enum MicrophoneWatch {
 /// is done with the reply.
 @MainActor
 enum SpokenReply {
+    /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
+    static func follow(_ harness: Harness, speaker: Speaker) {
+        harness.onReply = { reply in read(reply, harness: harness, speaker: speaker) }
+        // And before it lands: the reply to a spoken turn is read as the guest writes it.
+        harness.onWriting = { text, nonce in
+            if let text { speaker.speak(writing: text, answering: nonce) } else { speaker.writingEnded(nonce) }
+        }
+        speaker.settled = { nonce in harness.answeredAloud(nonce) }
+        // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
+        // is owed no reply from the log, so nothing waits for one.
+        harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
+    }
+
     static func read(_ reply: Turn, harness: Harness, speaker: Speaker) -> Bool {
         // The mark is the decision, made at the release: a reply whose turn is marked is read
         // whatever the setting says now, since the setting governs what the next release decides

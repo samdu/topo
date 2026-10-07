@@ -416,7 +416,12 @@ actor GuestBridge: Brain {
                     return reply(text, to: request, usage: nil, model: nil)
                 case .owed:
                     // The runner writes an owed reply before it asks; one still here is a write that
-                    // did not happen, and the next attempt makes it.
+                    // did not happen, and the next attempt makes it. What a record moved past
+                    // earlier in this request carried goes with the record kept.
+                    if received != Coverage() {
+                        ledger.pending?.covers.formUnion(received)
+                        try? save()
+                    }
                     throw GuestBridgeError.failed("a reply the guest finished is still to be written")
                 case .unresolved:
                     ledger.pending?.state = .unresolved
@@ -425,7 +430,13 @@ actor GuestBridge: Brain {
                 case .askAgain:
                     break
                 case .superseded:
-                    received = pending.covers
+                    // Only a turn this request read can have been moved past by it: one bound
+                    // since the log was read is read with the next request.
+                    let read = Set((request.context + request.answering).map(\.ref))
+                    guard pending.answering.allSatisfy({ read.contains($0) }) else {
+                        throw GuestBridgeError.failed("a turn the guest was cut off on was saved since the log was read")
+                    }
+                    received.formUnion(pending.covers)
                     try record(nil)
                 case .hold:
                     break
@@ -487,8 +498,9 @@ actor GuestBridge: Brain {
         do {
             updates = try await conversation.send(input, id: id)
         } catch {
-            // Refused before anything was written: not received.
-            if self.login == login { try? record(nil) }
+            // Refused before anything was written: not received. The record may have landed
+            // and another taken its place while the guest was asked for its process.
+            if self.login == login, ledger.pending?.input == id { try? record(nil) }
             throw GuestBridgeError.failed(String(describing: error))
         }
 
@@ -596,8 +608,9 @@ actor GuestBridge: Brain {
             ledger.seen.formUnion(pending.covers)
             if let session = pending.session { ledger.session = session }
         }
-        // Another device's reply under the same nonce is not what the guest wrote, and is told.
-        if pending.state == .answered, current, pending.text == nil || pending.text == reply.text { ledger.seen.insert([reply.ref]) }
+        // Another device's reply under the same nonce is not what the guest wrote, and is told;
+        // so is one that cannot be compared, the record holding no words.
+        if pending.state == .answered, current, pending.text == reply.text { ledger.seen.insert([reply.ref]) }
         settle(pending.said ?? [])
         if pending.state != .sent, let passed = pending.passed { ledger.early?.removeAll { passed.contains($0.input) && $0.bound == nil } }
         flown[pending.input] = nil

@@ -106,6 +106,22 @@ final class NextTurn {
         return (Array(unlanded[..<held]), Array(unlanded[unlanded.index(after: held)...]))
     }
 
+    /// The guest's reply to the turn the row holds, while that turn is not in the log: drawn
+    /// under the row.
+    func answer(in harness: Harness) -> Turn? {
+        guard let sent, !harness.said(sent), let reply = harness.replies[sent] else { return nil }
+        return UnsavedReply.turn(reply, place: Int(Int32.max))
+    }
+
+    /// The replies iCloud is behind on whose person's turn did land, oldest first: drawn after
+    /// the log's turns.
+    func behind(in harness: Harness) -> [Turn] {
+        let replies = harness.replies
+        return harness.turns.filter { $0.role == .person && replies[$0.nonce] != nil }.enumerated().map { place, person in
+            UnsavedReply.turn(replies[person.nonce] ?? "", place: -1 - place)
+        }
+    }
+
     /// Holding one of the person's own landed turns puts its words back in the row, to be changed
     /// and said again; the log is append-only, so this edits what is said next and never the turn
     /// that was said. Refused while the row is holding a turn on its way: those words are the

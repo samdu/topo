@@ -439,10 +439,11 @@ final class Harness {
     /// person's nonce: the finished ones, and the one being written for words given ahead. The
     /// chat draws each under its words while iCloud is behind.
     var replies: [String: String] {
-        // A reply this device owes the log is drawn until it is there; any other gives way once
-        // the log has gone on from its turn, since it will not be written.
+        // A reply this device owes the log is drawn until it is there, under its own nonce and
+        // whatever else answers the turn meanwhile; any other gives way once the log has gone on
+        // from its turn, since it will not be written.
         var all = unsaved.filter {
-            !(owedAhead.contains($0.key) ? answered($0.key) : movedPast($0.key)) && !answeredElsewhere.contains($0.key)
+            !(owedAhead.contains($0.key) ? replied($0.key) : movedPast($0.key)) && !answeredElsewhere.contains($0.key)
         }
         if let hearing, let writing, !writing.isEmpty, !said(hearing) { all[hearing] = writing }
         return all
@@ -580,6 +581,15 @@ final class Harness {
     func answered(_ nonce: String) -> Bool {
         guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
         return turns.contains { $0.role == .assistant && $0.parents.contains(person.ref) }
+    }
+
+    /// Whether the log holds the reply to the turn said under `nonce` alone, as this device
+    /// knows it: the one written under that turn's own reply nonce, which a reply to a fork the
+    /// turn is one head of is not.
+    func replied(_ nonce: String) -> Bool {
+        guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
+        let reply = TurnRunner.replyNonce(for: [person.ref])
+        return turns.contains { $0.role == .assistant && $0.nonce == reply }
     }
 
     /// Whether the words said under `nonce` can be taken back: they are still owed on this

@@ -31,7 +31,7 @@ enum LookStage {
     /// animation that runs on first appearance: the pane's presence, which eases over
     /// `composer.presenceDuration` off scroll geometry that arrives after layout.
     static func image(_ view: some View, look: Look, style: UIUserInterfaceStyle = .light,
-                      size: CGSize = LookStage.size) throws -> UIImage {
+                      size: CGSize = LookStage.size, then changes: [() -> Void] = []) throws -> UIImage {
         let animations = UIView.areAnimationsEnabled
         UIView.setAnimationsEnabled(false)
         defer { UIView.setAnimationsEnabled(animations) }
@@ -73,6 +73,15 @@ enum LookStage {
         window.layer.speed = 0
         window.layer.timeOffset = 0
         try refreshed(window)
+        // What changes on the stage before the picture: a view's answer to a change is part of
+        // what is drawn, and an animated scroll is one, so the clock runs for each and is given
+        // long enough for the scroll to come to rest.
+        for change in changes {
+            window.layer.speed = 1
+            change()
+            try refreshed(window, count: settling)
+            window.layer.speed = 0
+        }
         // The whole window is drawn at its own size into a picture the stage's size, which
         // keeps the stage and clips the rest.
         let renderer = UIGraphicsImageRenderer(size: size)
@@ -89,6 +98,10 @@ enum LookStage {
     /// refreshes gave it none in 40 each. That is the evidence two refreshes settle the glass in
     /// practice; it is no guarantee against a render server further behind than that.
     private static let refreshes = 2
+
+    /// How many refreshes a change on the stage is given to settle: three quarters of a second
+    /// at sixty a second, over the system's scroll animation.
+    private static let settling = 45
 
     /// How long those refreshes may take before the stage gives up, which is a failure and never
     /// a picture: a stage that took the picture anyway would be the defect this wait exists for.
@@ -109,7 +122,7 @@ enum LookStage {
 
     ///
     /// The wait turns the run loop, which is also what SwiftUI commits its layout on.
-    private static func refreshed(_ window: UIWindow) throws {
+    private static func refreshed(_ window: UIWindow, count refreshes: Int = LookStage.refreshes) throws {
         CATransaction.flush()
         let counter = DisplayRefreshes()
         defer { counter.stop() }

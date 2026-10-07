@@ -1583,6 +1583,12 @@ extension GuestBridgeTests {
         XCTAssertEqual(harness.replies[first], "Paris.", "a finished reply went when the next began")
         XCTAssertTrue(harness.writingAhead)
         XCTAssertEqual(NextTurn().queued(in: harness).before.map(\.reply?.text), ["Paris.", "Ber"])
+        // The row that holds the first draws its reply under itself, and the second's below.
+        let row = NextTurn()
+        XCTAssertTrue(row.resume(from: harness))
+        XCTAssertEqual(row.answer(in: harness)?.text, "Paris.")
+        XCTAssertEqual(row.queued(in: harness).after.map(\.reply?.text), ["Ber"])
+        XCTAssertTrue(row.behind(in: harness).isEmpty)
 
         guest.finishHanging(with: "Berlin.")
         try await eventually("the second reply") { harness.replies[second] == "Berlin." }
@@ -1609,6 +1615,7 @@ extension GuestBridgeTests {
         await harness.retry()
         XCTAssertEqual(harness.turns.map(\.text), ["capital of France?"])
         XCTAssertEqual(harness.replies[nonce], "Paris.", "a reply iCloud refused was dropped from the screen")
+        XCTAssertEqual(NextTurn().behind(in: harness).map(\.text), ["Paris."])
         XCTAssertEqual(harness.failure?.source, .sync)
         await db.refuse(false)
         await harness.answerPending()
@@ -3479,5 +3486,518 @@ extension GuestBridgeTests {
         XCTAssertEqual(log.ordered.map(\.text), ["first question", "second question", "answer one", "answer two"])
         XCTAssertEqual(log.heads.count, 1)
         XCTAssertEqual(guest.inputs.filter { $0.contains("first question") }.count, 1, "the guest was given the words twice: \(guest.inputs)")
+    }
+}
+
+// MARK: - A bind while a request waits for the guest
+
+/// A scripted guest whose `residentPID` can be held, which is the one suspension `answer` has left
+/// between writing its record and sending.
+private final class PIDGatedGuest: GuestConversation, @unchecked Sendable {
+    let inner: ScriptedGuest
+    private let lock = NSLock()
+    private var holding = false
+    private var gate: CheckedContinuation<Void, Never>?
+
+    init(_ inner: ScriptedGuest) { self.inner = inner }
+
+    var home: URL { inner.home }
+    func holdPID() { lock.withLock { holding = true } }
+    var pidHeld: Bool { lock.withLock { gate != nil } }
+    func releasePID() {
+        let waiting = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            holding = false
+            defer { gate = nil }
+            return gate
+        }
+        waiting?.resume()
+    }
+
+    func ready() async throws { try await inner.ready() }
+    func warm() async {}
+    func use(model: String?) async { await inner.use(model: model) }
+    func sessionID() async -> String? { await inner.sessionID() }
+    func residentPID() async -> Int32? {
+        if lock.withLock({ holding }) {
+            await withCheckedContinuation { continuation in
+                let open = lock.withLock { () -> Bool in
+                    guard holding else { return true }
+                    gate = continuation
+                    return false
+                }
+                if open { continuation.resume() }
+            }
+        }
+        return await inner.residentPID()
+    }
+    func send(_ text: String, id: String) async throws -> AsyncStream<GuestSession.TurnUpdate> {
+        try await inner.send(text, id: id)
+    }
+    func settle() async -> Bool { await inner.settle() }
+    func forget() async { await inner.forget() }
+    func status() async -> String { "gated" }
+}
+
+private enum BindMoment { case never, beforeThePass, duringTheWait }
+
+extension GuestBridgeTests {
+    private static let owedFirst = GuestBridgeError.failed("a reply the guest finished is still to be written")
+
+    // MARK: the loop ends; bar 1 — nothing given twice, nothing lost
+
+    /// Two inputs given ahead, both bound while one request waits for the guest: the first takes
+    /// `pending`, the second waits bound behind it. The request goes round once and no more.
+    func testTwoBindsWhileTheRequestWaitsForTheGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .reply("answer two"), .reply("answer three"),
+                                                       .reply("ASKED AGAIN"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        _ = await bridge.hear("second question", nonce: "n2", context: [], model: .sonnet5)
+        try await eventually("the second answer") { await bridge.unsaved()["n2"] == "answer two" }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        let p2 = try await writer.append(.person, "second question", parents: [p1.ref], nonce: "n2")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "third question", parents: [p2.ref])
+        let uses = guest.models.count
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the pass waiting for the guest") { guest.readyHeld }
+        await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
+        await bridge.bind(nonce: "n2", person: p2, reply: TurnRunner.replyNonce(for: [p2.ref]))
+        let during = await bridge.current
+        XCTAssertEqual(during.pending?.person, "n1", "control: the first bind took pending")
+        XCTAssertEqual(during.early?.compactMap { $0.bound?.person } ?? [], ["n2"], "control: the second waits bound")
+        guest.releaseReady()
+        let first = await passing.result
+        if case .failure(let error) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
+        XCTAssertEqual(guest.models.count - uses, 1, "the request went round the guest's wait again")
+        let kept = await bridge.current
+        XCTAssertEqual(kept.pending?.person, "n1", "the first bound record was lost: \(kept)")
+        XCTAssertEqual(kept.early?.compactMap { $0.bound?.person } ?? [], ["n2"], "the second bound record was lost: \(kept)")
+        for _ in 0..<4 { _ = try? await runner.answerPending(model: .sonnet5) }
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text).sorted(), ["answer one", "answer three", "answer two", "first question",
+                                                     "second question", "third question"])
+        XCTAssertEqual(guest.inputs.count, 3, "\(guest.inputs)")
+        for words in ["first question", "second question", "third question"] {
+            XCTAssertEqual(guest.inputs.filter { $0.contains(words) }.count, 1, "the guest was given \(words) twice: \(guest.inputs)")
+        }
+        let after = await bridge.current
+        XCTAssertNil(after.pending)
+        XCTAssertEqual(after.early ?? [], [])
+    }
+
+    /// Bound, answered without the slot, written and landed, all while the request waits: `pending`
+    /// is nil again when it looks, as it was when it began to wait.
+    func testABindAnsweredAndLandedWhileTheRequestWaitsForTheGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .reply("answer two"), .reply("ASKED AGAIN"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        let uses = guest.models.count
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the pass waiting for the guest") { guest.readyHeld }
+        let reply = TurnRunner.replyNonce(for: [p1.ref])
+        await bridge.bind(nonce: "n1", person: p1, reply: reply)
+        // The turn's own `run` goes on while the pass waits: handed the heard reply without the
+        // slot, it writes it and says so.
+        let heard = try await bridge.answer(BrainRequest(context: [], answering: [p1], parents: [p1.ref], nonce: reply, model: .sonnet5))
+        XCTAssertEqual(heard.text, "answer one", "control")
+        // Written from another writer than the runner's own so the two do not race for a sequence
+        // number, which one device's single writer never does.
+        let written = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+            .append(.assistant, heard.text, parents: [p1.ref], nonce: reply)
+        await bridge.landed(written, nonce: reply)
+        let between = await bridge.current
+        XCTAssertNil(between.pending, "control: pending is as the waiting request left it")
+        XCTAssertEqual(guest.models.count - uses, 1, "control: the request is still in its first wait")
+        guest.releaseReady()
+        let second = try await passing.value
+        XCTAssertEqual(second?.text, "answer two")
+        XCTAssertEqual(guest.inputs, ["first question", "second question"], "the guest was given something twice, or told what it had")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text).sorted(), ["answer one", "answer two", "first question", "second question"])
+        let after = await bridge.current
+        XCTAssertNil(after.pending)
+        XCTAssertEqual(after.early ?? [], [])
+        XCTAssertTrue(turns.allSatisfy { after.seen.contains($0.ref) }, "coverage: \(after.seen)")
+    }
+
+    // MARK: `standing` non-nil
+
+    /// The request's own record, cut off and asked again, is what it goes over; a bind while it
+    /// waits lands behind that record, on an Early the request has already named as passed.
+    func testABindWhileARequestAskingAgainWaitsForTheGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .cutOff, .reply("answer two"), .reply("ASKED AGAIN"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        _ = try? await runner.answerPending(model: .sonnet5)
+        let cut = await bridge.current
+        XCTAssertEqual(cut.pending?.state, .unresolved, "control: the second question was cut off")
+        XCTAssertEqual(cut.early?.map(\.person) ?? [], ["n1"], "control: the words given ahead are still unbound")
+        await bridge.askAgain()
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the pass waiting for the guest") { guest.readyHeld }
+        let reply = TurnRunner.replyNonce(for: [p1.ref])
+        await bridge.bind(nonce: "n1", person: p1, reply: reply)
+        let during = await bridge.current
+        XCTAssertEqual(during.pending?.askAgain, true, "control: the record asked again still holds pending")
+        XCTAssertEqual(during.early?.first?.bound?.nonce, reply, "control: the bind waits behind it")
+        XCTAssertEqual(during.settled ?? [], ["n1"], "control: the request named the Early as passed before it was bound")
+        guest.releaseReady()
+        let second = try await passing.value
+        XCTAssertEqual(second?.text, "answer two")
+        let kept = await bridge.current
+        XCTAssertEqual(kept.pending?.person, "n1", "the bound reply was lost: \(kept)")
+        XCTAssertEqual(kept.pending?.text, "answer one")
+        // A second hear of the words, their nonce in `settled`: nothing more is given.
+        let again = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        XCTAssertTrue(again, "words the guest holds were refused")
+        for _ in 0..<3 { _ = try? await runner.answerPending(model: .sonnet5) }
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text).sorted(), ["answer one", "answer two", "first question", "second question"])
+        XCTAssertEqual(guest.inputs, ["first question", "second question", "second question"],
+                       "the guest was given the words twice, or told what it had")
+        let after = await bridge.current
+        XCTAssertNil(after.pending)
+        XCTAssertEqual(after.early ?? [], [])
+    }
+
+    // MARK: what a `.superseded` record carried, across iterations
+
+    /// The guest is cut off on the watch's second question (X, in `pending`), having been given
+    /// the first ahead (an Early, answered or cut off). The log then holds first → third, and
+    /// the pass for the third moves past X. Answers what the guest was sent, in order.
+    private func movingPast(earlyCutOff: Bool, bind: BindMoment) async throws -> [String] {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, earlyCutOff ? .cutOff : .reply("answer one"), .cutOff,
+                                                       .reply("answer three"), .reply("EXTRA"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        let wanted: GuestLedger.Pending.State = earlyCutOff ? .unresolved : .answered
+        try await eventually("the end of the words given ahead") { await bridge.current.early?.first?.state == wanted }
+        let p2 = try await write(db, .person, "second question", device: "watch")
+        _ = try? await runner.answerPending(model: .sonnet5)
+        let cut = await bridge.current
+        XCTAssertEqual(cut.pending?.state, .unresolved, "control: the second question was cut off")
+        XCTAssertEqual(guest.inputs, ["first question", "second question"], "control")
+        let p1 = try await TurnLog(database: db).writer(for: phone).append(.person, "first question", parents: [p2.ref], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "third question", parents: [p1.ref])
+        let reply = TurnRunner.replyNonce(for: [p1.ref])
+        switch bind {
+        case .beforeThePass:
+            await bridge.bind(nonce: "n1", person: p1, reply: reply)
+            _ = try? await runner.answerPending(model: .sonnet5)
+        case .never, .duringTheWait:
+            guest.holdReady()
+            let passing = Task { try? await runner.answerPending(model: .sonnet5) }
+            try await eventually("the pass waiting for the guest") { guest.readyHeld }
+            let moved = await bridge.current
+            XCTAssertNil(moved.pending, "control: the cut-off record was moved past before the wait")
+            if bind == .duringTheWait { await bridge.bind(nonce: "n1", person: p1, reply: reply) }
+            guest.releaseReady()
+            _ = await passing.value
+        }
+        for _ in 0..<3 { _ = try? await runner.answerPending(model: .sonnet5) }
+        let turns = try await log(db)
+        XCTAssertTrue(turns.map(\.text).contains("answer three"), "control: the third question was answered: \(turns.map(\.text))")
+        return guest.inputs
+    }
+
+    /// Control: with no bind, what the cut-off record carried rides on the request's own.
+    func testMovingPastWithNoBindTellsTheCutOffTurnOnce() async throws {
+        let inputs = try await movingPast(earlyCutOff: true, bind: .never)
+        XCTAssertEqual(inputs.filter { $0.contains("second question") }.count, 1, "\(inputs)")
+        XCTAssertEqual(inputs.last, "third question")
+    }
+
+    /// The new path: X is moved past in the first iteration; the bind made during the wait (a
+    /// cut-off Early) is moved past in the second, and `received = pending.covers` forgets X's.
+    func testMovingPastTwiceAcrossTheWaitTellsTheCutOffTurnOnce() async throws {
+        let inputs = try await movingPast(earlyCutOff: true, bind: .duringTheWait)
+        XCTAssertEqual(inputs.filter { $0.contains("second question") }.count, 1, "the guest was told the cut-off turn again: \(inputs)")
+    }
+
+    /// The same two records met in one iteration (bound before the pass): the code the diff did
+    /// not touch.
+    func testMovingPastTwiceInOnePassTellsTheCutOffTurnOnce() async throws {
+        let inputs = try await movingPast(earlyCutOff: true, bind: .beforeThePass)
+        XCTAssertEqual(inputs.filter { $0.contains("second question") }.count, 1, "the guest was told the cut-off turn again: \(inputs)")
+    }
+
+    /// The accepted throw ("still to be written") after X was moved past in the first iteration.
+    func testAnOwedBindAfterMovingPastTellsTheCutOffTurnOnce() async throws {
+        let inputs = try await movingPast(earlyCutOff: false, bind: .duringTheWait)
+        XCTAssertEqual(inputs.filter { $0.contains("first question") }.count, 1, "the words given ahead went twice: \(inputs)")
+        XCTAssertEqual(inputs.filter { $0.contains("second question") }.count, 1, "the guest was told the cut-off turn again: \(inputs)")
+    }
+
+    // MARK: three iterations
+
+    /// Two Earlies, one answered and one cut off, bound one in each of two waits: the request
+    /// goes round twice and stops on the reply that is owed.
+    func testABindInEachOfTwoWaits() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .cutOff, .reply("answer three"), .reply("EXTRA"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        _ = await bridge.hear("second question", nonce: "n2", context: [], model: .sonnet5)
+        try await eventually("the second cut off") { await bridge.current.early?.last?.state == .unresolved }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        let p2 = try await writer.append(.person, "second question", parents: [p1.ref], nonce: "n2")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "third question", parents: [p2.ref])
+        let uses = guest.models.count
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the first wait") { guest.readyHeld }
+        await bridge.bind(nonce: "n2", person: p2, reply: TurnRunner.replyNonce(for: [p2.ref]))
+        guest.releaseReady()
+        guest.holdReady()
+        try await eventually("the second wait") { guest.readyHeld && guest.models.count - uses == 2 }
+        let between = await bridge.current
+        XCTAssertNil(between.pending, "control: the cut-off bind was moved past")
+        await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
+        guest.releaseReady()
+        let first = await passing.result
+        if case .failure(let error) = first, error as? GuestBridgeError == Self.owedFirst {} else { XCTFail("the pass: \(first)") }
+        XCTAssertEqual(guest.models.count - uses, 2, "the request went round more often than there were binds")
+        let kept = await bridge.current
+        XCTAssertEqual(kept.pending?.person, "n1", "the bound reply was lost: \(kept)")
+        XCTAssertEqual(guest.inputs, ["first question", "second question"], "something was sent: \(guest.inputs)")
+    }
+
+    // MARK: a sign-out during the wait
+
+    func testASignOutWhileTheRequestWaitsOverAKeptBindWritesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .reply("SENT AFTER THE SIGN-OUT"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the pass waiting for the guest") { guest.readyHeld }
+        let reply = TurnRunner.replyNonce(for: [p1.ref])
+        await bridge.bind(nonce: "n1", person: p1, reply: reply)
+        await bridge.forget()
+        // A bind that arrives after the sign-out has nothing to bind.
+        await bridge.bind(nonce: "n1", person: p1, reply: reply)
+        guest.releaseReady()
+        let result = await passing.result
+        if case .failure(let error) = result, error is CancellationError {} else { XCTFail("the pass: \(result)") }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(guest.inputs, ["first question"], "something reached the guest after the sign-out")
+        let ledger = await bridge.current
+        XCTAssertEqual(ledger, GuestLedger(), "the ledger holds something from before the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the sign-out")
+    }
+
+    /// The same in the second wait, the request having written (a moved-past record cleared) on
+    /// its way round.
+    func testASignOutInTheSecondWaitWritesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .cutOff, .reply("SENT AFTER THE SIGN-OUT"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the words cut off") { await bridge.current.early?.first?.state == .unresolved }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        let uses = guest.models.count
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the first wait") { guest.readyHeld }
+        await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
+        guest.releaseReady()
+        guest.holdReady()
+        try await eventually("the second wait") { guest.readyHeld && guest.models.count - uses == 2 }
+        await bridge.forget()
+        guest.releaseReady()
+        let result = await passing.result
+        if case .failure(let error) = result, error is CancellationError {} else { XCTFail("the pass: \(result)") }
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(guest.inputs, ["first question"], "something reached the guest after the sign-out")
+        let ledger = await bridge.current
+        XCTAssertEqual(ledger, GuestLedger(), "the ledger holds something from before the sign-out")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the sign-out")
+    }
+
+    // MARK: a cut-off bind for a turn the waiting request never read
+
+    /// The PR's own test with the words cut off rather than answered, and their turn saved beside
+    /// the watch's while the request waits: a head the request's read does not hold, and so one
+    /// its reply does not go on from. The bound record is the only thing that says the guest
+    /// received the words and was cut off.
+    func testACutOffBindWhileARequestThatNeverReadItsTurnWaitsForTheGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .cutOff, .reply("answer two"), .reply("ASKED AGAIN"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the words cut off") { await bridge.current.early?.first?.state == .unresolved }
+        try await write(db, .person, "second question", device: "watch")
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the pass waiting for the guest") { guest.readyHeld }
+        // The words' own turn reaches the log now, beside the watch's, and is bound. (Written by
+        // another device than the runner's so the test's two writers do not race for a sequence.)
+        let p1 = try await TurnLog(database: db).writer(for: DeviceID("ipad")).append(.person, "first question", parents: [], nonce: "n1")
+        await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
+        let bound = await bridge.unresolved()
+        XCTAssertEqual(bound, [p1.ref], "control: the bound record says the turn was cut off")
+        guest.releaseReady()
+        let second = await passing.result
+        let kept = await bridge.current
+        XCTAssertTrue(kept.pending?.person == "n1" || (kept.early ?? []).contains { $0.bound?.person == "n1" },
+                      "the cut-off bound record was lost (the pass: \(second)): \(kept)")
+        let stillCutOff = await bridge.unresolved()
+        XCTAssertEqual(stillCutOff, [p1.ref], "nothing says the turn was cut off any more")
+        for _ in 0..<3 { _ = try? await runner.answerPending(model: .sonnet5) }
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs.filter { $0.contains("first question") }.count, 1,
+                       "words the guest was cut off on were given to it again, unasked: \(guest.inputs); log \(turns.map(\.text))")
+    }
+
+    /// Control: the same turns, read by the request before it began. Its reply goes on from both
+    /// heads, so the cut-off turn is moved past, and is never asked again.
+    func testACutOffBindBeforeTheRequestReadsItsTurnIsMovedPast() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .cutOff, .reply("answer two"), .reply("ASKED AGAIN"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the words cut off") { await bridge.current.early?.first?.state == .unresolved }
+        try await write(db, .person, "second question", device: "watch")
+        let p1 = try await TurnLog(database: db).writer(for: DeviceID("ipad")).append(.person, "first question", parents: [], nonce: "n1")
+        await bridge.bind(nonce: "n1", person: p1, reply: TurnRunner.replyNonce(for: [p1.ref]))
+        for _ in 0..<4 { _ = try? await runner.answerPending(model: .sonnet5) }
+        let turns = try await log(db)
+        XCTAssertTrue(turns.map(\.text).contains("answer two"), "control: the watch's turn was answered: \(turns.map(\.text))")
+        XCTAssertEqual(guest.inputs.filter { $0.contains("first question") }.count, 1,
+                       "words the guest was cut off on were given to it again, unasked: \(guest.inputs)")
+    }
+
+    // MARK: after the record: `residentPID`, then `send`
+
+    /// The request has written its record and waits on `residentPID`. A bind lands behind it;
+    /// another device's reply under the request's nonce is found in the log (`landed`), which
+    /// promotes the bound record; then the guest refuses the send, and the refusal's
+    /// `record(nil)` (GuestBridge.swift:491) is not asked whose record it clears.
+    func testARefusedSendAfterItsRecordWasLandedClearsOnlyItsOwn() async throws {
+        let db = InMemoryRecordDatabase()
+        let scripted = ScriptedGuest(home: home, script: [.reply("answer one"), .reply("ASKED AGAIN")])
+        let guest = PIDGatedGuest(scripted)
+        let bridge = GuestBridge(conversation: guest, ledger: ledgerFile)
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let p1 = try await TurnLog(database: db).writer(for: phone).append(.person, "first question", parents: [], nonce: "n1")
+        let p2 = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        let first = TurnRunner.replyNonce(for: [p1.ref]), second = TurnRunner.replyNonce(for: [p2.ref])
+        guest.holdPID()
+        let asking = Task {
+            try await bridge.answer(BrainRequest(context: [p1], answering: [p2], parents: [p2.ref], nonce: second, model: .sonnet5))
+        }
+        try await eventually("the request recorded and about to send") { guest.pidHeld }
+        let recorded = await bridge.current.pending?.nonce
+        XCTAssertEqual(recorded, second, "control: the request's own record is written")
+        await bridge.bind(nonce: "n1", person: p1, reply: first)
+        let theirs = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+            .append(.assistant, "the hub's answer", parents: [p2.ref], nonce: second)
+        await bridge.landed(theirs, nonce: second)
+        let promoted = await bridge.current.pending?.person
+        XCTAssertEqual(promoted, "n1", "control: the bound record took pending when the request's landed")
+        scripted.refuse("the resident process went away")
+        guest.releasePID()
+        let result = await asking.result
+        if case .failure = result {} else { XCTFail("control: the send was refused: \(result)") }
+        scripted.refuse(nil)
+        let kept = await bridge.current
+        XCTAssertEqual(kept.pending?.person, "n1", "the refused send cleared a record that was not its own: \(kept)")
+        let answer = try await bridge.answer(BrainRequest(context: [], answering: [p1], parents: [p1.ref], nonce: first, model: .sonnet5))
+        XCTAssertEqual(answer.text, "answer one", "the reply is not the one the guest made of the words it heard")
+        XCTAssertEqual(scripted.inputs.filter { $0.contains("first question") }.count, 1, "the guest was given the words twice: \(scripted.inputs)")
+    }
+}
+
+
+extension GuestBridgeTests {
+    /// The reply's save failed, and a hub then answers a fork the turn is one head of, under the
+    /// fork's nonce: this phone still owes its reply under the turn's own, and draws it until
+    /// that one lands.
+    func testAnOwedReplyStaysDrawnWhenAnotherDeviceAnswersAForkOfItsTurn() async throws {
+        let db = RefusingReplies()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])
+        let (harness, _) = harness(db, guest)
+        await harness.refresh()
+        await harness.answerPending()
+        await db.refuse(true)
+        let nonce = harness.willSend("capital of France?")
+        await harness.retry()
+        let person = try XCTUnwrap(harness.turns.first { $0.nonce == nonce })
+        let log = TurnLog(database: db.wrapped)
+        let other = try await log.writer(for: DeviceID("watch")).append(.person, "and the weather?", parents: [])
+        _ = try await log.writer(for: DeviceID("hub")).append(.assistant, "The hub's, to both.", parents: [person.ref, other.ref],
+                                                              nonce: TurnRunner.replyNonce(for: [person.ref, other.ref]))
+        await harness.refresh()
+        XCTAssertTrue(harness.answered(nonce), "control: the log holds a reply naming the turn")
+        XCTAssertEqual(harness.replies[nonce], "Paris.", "a reply this phone still owes went from the screen")
+        XCTAssertEqual(NextTurn().behind(in: harness).map(\.text), ["Paris."])
+        await db.refuse(false)
+        await harness.answerPending()
+        XCTAssertTrue(harness.turns.contains { $0.text == "Paris." && $0.parents == [person.ref] }, "the owed reply was not written")
+        XCTAssertTrue(harness.replies.isEmpty, "a landed reply is still drawn as unsaved")
+        XCTAssertEqual(guest.inputs.filter { $0.contains("capital of France?") }.count, 1)
+    }
+
+    /// A ledger from before answered records kept their words, one answered and not yet landed:
+    /// a reply found under its nonce cannot be told from another device's, so the guest is told it.
+    func testAnAnsweredRecordWithNoWordsDoesNotCountAReplyFoundUnderItsNonceSeen() async throws {
+        let old = #"{"seen":{"runs":{}},"pending":{"input":"i","nonce":"reply","parents":[],"answering":[],"covers":{"runs":{}},"sentAt":0,"state":"answered","askAgain":false}}"#
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(old.utf8).write(to: ledgerFile)
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, _) = try await launch(db)
+        let theirs = try await TurnLog(database: db).writer(for: DeviceID("hub")).append(.assistant, "the hub's", parents: [], nonce: "reply")
+        await bridge.landed(theirs, nonce: "reply")
+        let ledger = await bridge.current
+        XCTAssertNil(ledger.pending, "the record is settled by the reply in the log")
+        XCTAssertFalse(ledger.seen.contains(theirs.ref), "a reply the guest may never have seen was counted seen")
+    }
+
+    /// A spoken turn answered with iCloud away: the speaker's wait for that turn's reply ends
+    /// when the guest is done, read as it was written, and nothing keeps the process awake for
+    /// a landing that is not read.
+    func testASpokenTurnAnsweredInAnOutageEndsTheSpeakersWait() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Paris.")])
+        let (harness, _) = harness(db, guest)
+        await harness.refresh()
+        await harness.answerPending()
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let voice = Voice(engine: ScriptedVoice())
+        voice.load(base: URL(fileURLWithPath: "/dev/null"))
+        try await eventually("the voice to load") { voice.state == .ready }
+        let speaker = Speaker(audio: audio, voice: voice, center: center, makeEngine: { seams.makePlayEngine(rate: Voice.rate) })
+        SpokenReply.follow(harness, speaker: speaker)
+        await db.away(true)
+
+        let nonce = harness.willSend("capital of France?")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).held)
+        harness.markSpoken(nonce)
+        XCTAssertEqual(speaker.awaiting, [nonce], "control: the wait stands")
+        await harness.retry()
+        try await eventually("the reply") { harness.replies[nonce] == "Paris." }
+        try await eventually("the wait to end") { speaker.awaiting.isEmpty }
+        XCTAssertEqual(speaker.report.speaks, 1, "the reply was not read as it was written")
+        XCTAssertTrue(harness.turns.isEmpty, "control: nothing landed")
     }
 }
