@@ -1687,24 +1687,6 @@ extension GuestBridgeTests {
         XCTAssertEqual(guest.inputs.last, "and Germany?")
     }
 
-    /// Words still on their way to the guest when their giving is cancelled stop there, and are
-    /// not refused for good: the same words can be given later.
-    func testWordsOnTheirWayToTheGuestStopWhenTheirGivingIsCancelled() async throws {
-        let db = InMemoryRecordDatabase()
-        let (_, bridge, guest) = try await launch(db, .hangUnwritten, .reply("later"))
-        let first = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet5)
-        XCTAssertTrue(first)
-        let second = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
-        try await Task.sleep(for: .milliseconds(50))
-        second.cancel()
-        guest.finishHanging(with: "done")
-        let heard = await second.value
-        XCTAssertFalse(heard)
-        XCTAssertEqual(guest.inputs, ["first"])
-        let again = await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5)
-        XCTAssertTrue(again)
-    }
-
     /// The harness's half: a hub takes the lease while two messages wait behind slow iCloud. The
     /// first was given to the guest as the phone that answered; the second never is.
     func testALineBehindATurnTheHubAnswersIsNotGivenToThisPhonesGuest() async throws {
@@ -2076,4 +2058,601 @@ private final class Ticks: @unchecked Sendable {
 
 private struct Confirms: LeaseProbe {
     func confirms(_ lease: Lease) async -> Bool { true }
+}
+// MARK: - Words given ahead: hand-backs, withdrawals and relaunches
+
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var on = false
+    var value: Bool { lock.withLock { on } }
+    func set() { lock.withLock { on = true } }
+}
+
+/// Reads get through and every save is refused: a lease call or a save that fails with the log readable.
+private actor SavesRefused: RecordDatabase {
+    let wrapped = InMemoryRecordDatabase()
+    private var refusing = false
+    func refuse(_ on: Bool) { refusing = on }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if refusing { throw RecordDatabaseError.unavailable(underlying: Refused()) }
+        return try await wrapped.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
+}
+
+extension GuestBridgeTests {
+
+    // Recipe 1, `.contended`: the lease is abandoned while acquire is stalled.
+    func testContendedHandBackThenThePassAsksOnce() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("the phone's answer"), .reply("SECOND INPUT")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        harness.adopt(lease)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.stall(true)
+        let nonce = harness.willSend("what time is it?")
+        let sending = Task { await harness.retry() }
+        try await eventually("answered ahead") { harness.replies[nonce] == "the phone's answer" }
+        await lease.abandon()
+        await db.stall(false)
+        await sending.value
+        XCTAssertEqual(harness.turns.last?.text, "what time is it?")
+        XCTAssertEqual(harness.turns.last?.role, .person)
+        await harness.answerPending()
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs.count, 2, "the guest was asked the same words again")
+        XCTAssertEqual(turns.map(\.text), ["hello", "Hi.", "what time is it?", "the phone's answer"])
+        XCTAssertEqual(turns.last?.nonce, TurnRunner.replyNonce(for: [turns[2].ref]))
+    }
+
+    // Recipe 1 with the guest still on the words at the hand-back and when the pass asks.
+    func testHandBackWhileTheGuestIsStillWritingThenThePassAsksOnce() async throws {
+        let db = Outage()
+        let clock = Ticks()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangUnwritten, .reply("SECOND INPUT")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                   now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
+        _ = try await hub.takeOver()
+        harness.willSend("what time is it?")
+        await harness.retry()
+        try await eventually("the guest on the words") { guest.inputs.count == 2 }
+        XCTAssertEqual(harness.turns.last?.role, .person)
+        clock.advance(11)
+        let done = Flag()
+        let pass = Task { await harness.answerPending(); done.set() }
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertFalse(done.value, "the pass returned while the guest was still writing")
+        XCTAssertEqual(guest.inputs.count, 2)
+        guest.finishHanging(with: "the phone's answer")
+        try await eventually("the pass returned") { done.value }
+        await pass.value
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs.count, 2)
+        XCTAssertEqual(turns.map(\.text), ["hello", "Hi.", "what time is it?", "the phone's answer"])
+    }
+
+    // Recipe 1 across a relaunch between the hand-back and the pass.
+    func testHandBackThenRelaunchThenThePassAsksNothing() async throws {
+        let db = Outage()
+        let clock = Ticks()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("the phone's answer")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                   now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
+        _ = try await hub.takeOver()
+        let nonce = harness.willSend("what time is it?")
+        await harness.retry()
+        try await eventually("the guest done") { await harness.guest?.unsaved()[nonce] == "the phone's answer" }
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+
+        let again = ScriptedGuest(home: home, script: [.reply("SECOND INPUT")])
+        let (relaunched, _) = self.harness(db, again, defaults: defaults)
+        relaunched.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                      now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await relaunched.refresh()
+        clock.advance(11)
+        await relaunched.answerPending()
+        let turns = try await log(db)
+        XCTAssertTrue(again.inputs.isEmpty, "the relaunch asked the guest again: \(again.inputs)")
+        XCTAssertEqual(turns.map(\.text), ["hello", "Hi.", "what time is it?", "the phone's answer"])
+    }
+
+    // Two messages, both answered ahead, both handed back; the hub never answers, the phone does.
+    func testTwoMessagesHandedBackThenAnsweredHere() async throws {
+        let db = Outage()
+        let clock = Ticks()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("answer one"), .reply("answer two"), .reply("EXTRA")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                   now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
+        _ = try await hub.takeOver()
+        await db.stall(true)
+        let n1 = harness.willSend("first question")
+        let n2 = harness.willSend("second question")
+        let sending = Task { await harness.retry() }
+        try await eventually("both answered ahead") { harness.replies[n1] == "answer one" && harness.replies[n2] == "answer two" }
+        await db.stall(false)
+        await sending.value
+        clock.advance(11)
+        await harness.answerPending()
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs.count, 3)
+        // The log moved past the first message before this phone answered: its reply is not written.
+        XCTAssertEqual(turns.suffix(3).map(\.text), ["first question", "second question", "answer two"])
+
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let again = ScriptedGuest(home: home, script: [.reply("answer three"), .reply("EXTRA")])
+        let (relaunched, bridge2) = self.harness(db, again, defaults: defaults)
+        relaunched.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                      now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await relaunched.refresh()
+        XCTAssertTrue(relaunched.replies.isEmpty, "a relaunch draws a reply the log moved past: \(relaunched.replies)")
+        await relaunched.send("third question")
+        await relaunched.refresh()
+        let ledger = await bridge2.current
+        XCTAssertEqual(ledger.early ?? [], [], "an input the log moved past is still kept")
+        XCTAssertTrue(relaunched.replies.isEmpty, "still drawn after another whole turn: \(relaunched.replies)")
+    }
+
+    // Words taken back while on their way stop.
+    func testWordsTakenBackWhileOnTheirWayStop() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .hangUnwritten, .reply("never"))
+        let first = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet5)
+        XCTAssertTrue(first)
+        let second = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
+        try await Task.sleep(for: .milliseconds(50))
+        await bridge.withdrawn(nonce: "n2")
+        guest.finishHanging(with: "done")
+        let heard = await second.value
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertFalse(heard)
+        XCTAssertEqual(guest.inputs, ["first"])
+    }
+
+    // The same through the person's own withdrawal: the line stopped with the log readable,
+    // the second message still waiting for the guest to finish the first.
+    func testAPersonsWithdrawalWhileTheWordsWaitForTheGuest() async throws {
+        let db = SavesRefused()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangUnwritten, .reply("to the withdrawn words"), .reply("EXTRA")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.refuse(true)
+        harness.willSend("first")
+        let n2 = harness.willSend("second")
+        await harness.retry()
+        XCTAssertEqual(guest.inputs, ["hello", "first"])
+        let took = await harness.withdraw(n2)
+        XCTAssertTrue(took, "the withdrawal was refused")
+        XCTAssertEqual(harness.owed.map(\.text), ["first"])
+        guest.finishHanging(with: "first's answer")
+        try await Task.sleep(for: .milliseconds(300))
+        let ledger = await bridge.current
+        await harness.refresh()
+        XCTAssertEqual(guest.inputs, ["hello", "first"], "words the person took back were given to the guest after")
+        XCTAssertFalse((ledger.early ?? []).contains { $0.person == n2 }, "the ledger keeps an input for words no turn will carry")
+    }
+
+    // Coverage: the phone's guest answered ahead, the hub answered the turn under the same nonce.
+    private func hubReplyCoverage(heardAhead: Bool) async throws -> (told: String, counted: Bool) {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply(heardAhead ? "the phone's answer" : "ok"), .reply("ok"))
+        if heardAhead {
+            let heard = await bridge.hear("what time is it?", nonce: "n1", context: [], model: .sonnet5)
+            XCTAssertTrue(heard)
+            try await eventually("the answer") { await bridge.unsaved()["n1"] == "the phone's answer" }
+        }
+        let person = try await TurnLog(database: db).writer(for: phone).append(.person, "what time is it?", parents: [], nonce: "n1")
+        let hubs = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+            .append(.assistant, "the hub's answer", parents: [person.ref], nonce: TurnRunner.replyNonce(for: [person.ref]))
+        // The limb write's acknowledgement was lost, so the words are still on the line: sent again.
+        let result = try await runner.run("what time is it?", model: .sonnet5, nonce: "n1", known: try await log(db))
+        XCTAssertEqual(result.assistant.text, "the hub's answer")
+        let counted = await bridge.current.seen.contains(hubs.ref)
+        _ = try await runner.run("thanks", model: .sonnet5)
+        return (guest.inputs.last ?? "", counted)
+    }
+
+    func testControl_NoWordsAheadTheHubsReplyIsTold() async throws {
+        let (told, counted) = try await hubReplyCoverage(heardAhead: false)
+        XCTAssertFalse(counted)
+        XCTAssertTrue(told.contains("the hub's answer"), told)
+    }
+
+    func testWordsAheadTheHubsReplyIsTold() async throws {
+        let (told, counted) = try await hubReplyCoverage(heardAhead: true)
+        XCTAssertFalse(counted, "the hub's reply is counted seen though the guest was never told it")
+        XCTAssertTrue(told.contains("the hub's answer"), told)
+    }
+
+    // A hear that was not cancelled, following one that was.
+    func testAHearFollowingACancelledOne() async throws {
+        let db = InMemoryRecordDatabase()
+        let (_, bridge, guest) = try await launch(db, .hangUnwritten, .reply("later"))
+        _ = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet5)
+        let owner = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
+        try await Task.sleep(for: .milliseconds(50))
+        owner.cancel()
+        let follower = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
+        try await Task.sleep(for: .milliseconds(50))
+        guest.finishHanging(with: "done")
+        _ = await owner.value
+        let b = await follower.value
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertTrue(b, "a hear nobody cancelled was told the words were not begun")
+    }
+
+    // The answer-side bind: an Early mid-flight, a hear waiting on the slot, a cancelled hear.
+    func testAnAnswerForAnEarlyStillInFlightReal() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .hangUnwritten, .reply("SECOND"))
+        let heard = await bridge.hear("q", nonce: "n1", context: [], model: .sonnet5)
+        XCTAssertTrue(heard)
+        _ = try await TurnLog(database: db).writer(for: phone).append(.person, "q", parents: [], nonce: "n1")
+        let done = Flag()
+        let pass = Task { let turn = try await runner.answerPending(model: .sonnet5); done.set(); return turn }
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertEqual(guest.inputs, ["q"])
+        guest.finishHanging(with: "A")
+        try await eventually("the pass returned") { done.value }
+        _ = try await pass.value
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs, ["q"])
+        XCTAssertEqual(turns.map(\.text), ["q", "A"])
+    }
+
+    func testAnAnswerWhileItsHearWaitsForTheSlot() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .hangUnwritten, .reply("B"), .reply("EXTRA"))
+        _ = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet5)
+        let waiting = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try await TurnLog(database: db).writer(for: phone).append(.person, "second", parents: [], nonce: "n2")
+        let done = Flag()
+        let pass = Task { let turn = try await runner.answerPending(model: .sonnet5); done.set(); return turn }
+        try await Task.sleep(for: .milliseconds(150))
+        guest.finishHanging(with: "A")
+        try await eventually("the pass returned") { done.value }
+        _ = try await pass.value
+        _ = await waiting.value
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs, ["first", "second"])
+        XCTAssertEqual(turns.map(\.text), ["second", "B"])
+    }
+
+    func testAnAnswerWhileItsHearWaitsForTheSlotAndIsCancelled() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .hangUnwritten, .reply("B"), .reply("EXTRA"))
+        _ = await bridge.hear("first", nonce: "n1", context: [], model: .sonnet5)
+        let waiting = Task { await bridge.hear("second", nonce: "n2", context: [], model: .sonnet5) }
+        try await Task.sleep(for: .milliseconds(50))
+        _ = try await TurnLog(database: db).writer(for: phone).append(.person, "second", parents: [], nonce: "n2")
+        let done = Flag()
+        let pass = Task { let turn = try await runner.answerPending(model: .sonnet5); done.set(); return turn }
+        try await Task.sleep(for: .milliseconds(150))
+        waiting.cancel()
+        guest.finishHanging(with: "A")
+        try await eventually("the pass returned") { done.value }
+        _ = try await pass.value
+        _ = await waiting.value
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs, ["first", "second"])
+        XCTAssertEqual(turns.map(\.text), ["second", "B"])
+        // And the slot is free: another turn goes through.
+        let more = await bridge.hear("third", nonce: "n3", context: turns, model: .sonnet5)
+        XCTAssertTrue(more)
+    }
+
+    // Recipe 4 through the harness: a plain answer whose reply save was refused, a relaunch
+    // with the words still on the line and iCloud away, then iCloud back.
+    func testAnOwedPlainReplyAcrossARelaunchInAnOutage() async throws {
+        let db = Outage()
+        let defaults = makeDefaults()
+        let guest = ScriptedGuest(home: home, script: [.reply("Berlin."), .reply("EXTRA")])
+        let (first, _) = harness(db, guest, defaults: defaults)
+        await db.refuseReplies(true)
+        let n1 = first.willSend("and Germany?")
+        await first.retry()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        XCTAssertEqual(guest.inputs, ["and Germany?"])
+
+        let again = ScriptedGuest(home: home, script: [.reply("AGAIN")])
+        let (second, bridge) = harness(db, again, defaults: defaults)
+        let pending = await bridge.current.pending
+        XCTAssertEqual(pending?.state, .answered)
+        XCTAssertNil(pending?.person)
+        XCTAssertTrue(second.willSend("and Germany?", nonce: n1))
+        await db.away(true)
+        await second.retry()
+        XCTAssertTrue(again.inputs.isEmpty)
+        await db.away(false)
+        await db.refuseReplies(false)
+        await second.retry()
+        let turns = try await log(db)
+        XCTAssertTrue(again.inputs.isEmpty)
+        XCTAssertEqual(turns.map(\.text), ["and Germany?", "Berlin."])
+        XCTAssertTrue(second.owed.isEmpty)
+    }
+
+    // A cold launch on a phone that answered, the guest still coming up, the hub holding the lease.
+    func testAColdLaunchWithTheGuestComingUpAndTheHubHolding() async throws {
+        let db = Outage()
+        let defaults = try await aPhoneThatAnswered(db)
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: Confirms(), sleep: parked)
+        _ = try await hub.takeOver()
+        let guest = ScriptedGuest(home: home, script: [.reply("never")])
+        guest.holdReady()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: Confirms(), sleep: parked))
+        await harness.refresh()
+        await harness.send("share this link")
+        XCTAssertEqual(harness.turns.last?.text, "share this link")
+        guest.releaseReady()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertTrue(guest.inputs.isEmpty, "the guest was given a turn the hub answers, after the lease said so: \(guest.inputs)")
+    }
+
+    // The same warm: the runner standing, the hub taking the lease between two turns.
+    func testAWarmPhoneWithTheGuestComingUpAndTheHubHolding() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("never")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: Confirms(), sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: Confirms(), sleep: parked)
+        _ = try await hub.takeOver()
+        guest.holdReady()
+        await harness.send("share this link")
+        XCTAssertEqual(harness.turns.last?.text, "share this link")
+        guest.releaseReady()
+        try await Task.sleep(for: .milliseconds(300))
+        XCTAssertEqual(guest.inputs, ["hello"], "the guest was given a turn the hub answers, after the lease said so")
+    }
+
+    // The ordinary hand-back: two messages in a row, the first answered ahead, the hub answers once.
+    func testTwoMessagesHandedBackTheHubAnswersARelaunchDrawsNothingOfItsOwn() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("answer one"), .reply("answer two")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: Confirms(), sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: Confirms(), sleep: parked)
+        _ = try await hub.takeOver()
+        await db.stall(true)
+        let n1 = harness.willSend("first question")
+        harness.willSend("second question")
+        let sending = Task { await harness.retry() }
+        try await eventually("the first answered ahead") { harness.replies[n1] == "answer one" }
+        await db.stall(false)
+        await sending.value
+        XCTAssertEqual(harness.turns.suffix(2).map(\.text), ["first question", "second question"])
+        try await write(db, .assistant, "the hub's one answer to both", device: "hub")
+        await harness.refresh()
+        XCTAssertTrue(harness.replies.isEmpty)
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "elsewhere" }
+
+        let again = ScriptedGuest(home: home, script: [.reply("EXTRA")])
+        let (relaunched, _) = self.harness(db, again, defaults: defaults)
+        relaunched.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: Confirms(), sleep: parked))
+        await relaunched.refresh()
+        await relaunched.answerPending()
+        await relaunched.refresh()
+        XCTAssertTrue(relaunched.replies.isEmpty, "the phone draws its own guest's reply beside the hub's, for good: \(relaunched.replies)")
+    }
+}
+
+extension GuestBridgeTests {
+
+    // A sign-out with a second message still waiting for the guest to finish the first.
+    func testASignOutWithWordsWaitingForTheGuest() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangUnwritten, .reply("AFTER SIGN-OUT")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.stall(true)
+        harness.willSend("first")
+        harness.willSend("second")
+        let sending = Task { await harness.retry() }
+        try await eventually("the first with the guest") { guest.inputs.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        await harness.forget()
+        guest.finishHanging(with: "late")
+        await db.stall(false)
+        await sending.value
+        try await Task.sleep(for: .milliseconds(300))
+        let ledger = await bridge.current
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs, ["hello", "first"])
+        XCTAssertNil(ledger.early)
+        XCTAssertNil(ledger.pending)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the sign-out")
+        XCTAssertNil(defaults.string(forKey: "topo.harness.standing"))
+        XCTAssertEqual(turns.map(\.text), ["hello", "Hi."])
+        XCTAssertTrue(harness.replies.isEmpty)
+    }
+
+    // A demotion in the same place.
+    func testADemotionWithWordsWaitingForTheGuest() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangUnwritten, .reply("AFTER DEMOTION")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.stall(true)
+        harness.willSend("first")
+        harness.willSend("second")
+        let sending = Task { await harness.retry() }
+        try await eventually("the first with the guest") { guest.inputs.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        let demoting = Task { await harness.demote() }
+        try await Task.sleep(for: .milliseconds(100))
+        await db.stall(false)
+        await demoting.value
+        await sending.value
+        guest.finishHanging(with: "late")
+        try await Task.sleep(for: .milliseconds(300))
+        let ledger = await bridge.current
+        let turns = try await log(db)
+        XCTAssertEqual(guest.inputs, ["hello", "first"])
+        XCTAssertNil(ledger.early)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: ledgerFile.path), "a ledger was written after the demotion")
+        XCTAssertNil(defaults.string(forKey: "topo.harness.standing"))
+        XCTAssertEqual(turns.map(\.text), ["hello", "Hi.", "first", "second"])
+        XCTAssertTrue(harness.replies.isEmpty)
+    }
+}
+
+/// Commits the next save that carries a person's turn and then fails it: a lost acknowledgement.
+private actor LostAck: RecordDatabase {
+    let wrapped = InMemoryRecordDatabase()
+    private var loseNextPerson = false
+    func loseNextPersonAcknowledgement() { loseNextPerson = true }
+    func save(_ records: [Record]) async throws -> [Record] {
+        let saved = try await wrapped.save(records)
+        if loseNextPerson, records.contains(where: { Turn(record: $0)?.role == .person }) {
+            loseNextPerson = false
+            throw RecordDatabaseError.unavailable(underlying: Refused())
+        }
+        return saved
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await wrapped.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
+}
+
+extension GuestBridgeTests {
+
+    // Coverage through the harness: the limb write's acknowledgement is lost, the hub answers
+    // the turn and goes, the stopped line is sent again.
+    func testALostAcknowledgementOnTheLimbWriteThenTheHubAnswers() async throws {
+        let db = LostAck()
+        let clock = Ticks()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("the phone's answer"), .reply("ok"), .reply("EXTRA")])
+        let defaults = makeDefaults()
+        let (harness, bridge) = harness(db, guest, defaults: defaults)
+        harness.adopt(PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                   now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked))
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
+        _ = try await hub.takeOver()
+        await db.loseNextPersonAcknowledgement()
+        let nonce = harness.willSend("what time is it?")
+        await harness.retry()
+        try await eventually("the guest done") { await harness.guest?.unsaved()[nonce] == "the phone's answer" }
+        let before = try await log(db)
+        XCTAssertEqual(harness.owed.map(\.nonce), [nonce], "the line did not stop on the lost acknowledgement")
+        let person = try XCTUnwrap(before.last { $0.role == .person && $0.nonce == nonce })
+        let hubs = try await TurnLog(database: db).writer(for: DeviceID("hub"))
+            .append(.assistant, "the hub's answer", parents: [person.ref], nonce: TurnRunner.replyNonce(for: [person.ref]))
+        clock.advance(11)
+        await harness.refresh()
+        await harness.retry()
+        let ledger = await bridge.current
+        let counted = ledger.seen.contains(hubs.ref)
+        XCTAssertEqual(harness.turns.last?.text, "the hub's answer")
+        await harness.send("thanks")
+        let told = guest.inputs.last ?? ""
+        XCTAssertFalse(counted, "the hub's reply is counted seen though the guest was never told it")
+        XCTAssertTrue(told.contains("the hub's answer"), "the guest is never told the reply the log holds: \(told)")
+    }
+
+    // `.contended` with three on the line: what order the guest is given them in.
+    func testContendedWithThreeOnTheLine() async throws {
+        let db = Outage()
+        let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .hangUnwritten, .reply("r-a"), .reply("r-b"), .reply("r-c"), .reply("r-d")])
+        let defaults = makeDefaults()
+        let (harness, _) = harness(db, guest, defaults: defaults)
+        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        harness.adopt(lease)
+        await harness.send("hello")
+        await harness.refresh()
+        try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        await db.stall(true)
+        harness.willSend("X")
+        harness.willSend("E")
+        harness.willSend("F")
+        let sending = Task { await harness.retry() }
+        try await eventually("X with the guest") { guest.inputs.count == 2 }
+        try await Task.sleep(for: .milliseconds(100))
+        await lease.abandon()
+        await db.stall(false)
+        try await Task.sleep(for: .milliseconds(300))
+        guest.finishHanging(with: "rX")
+        let done = Flag()
+        Task { await sending.value; done.set() }
+        try await eventually("the line drained") { done.value }
+        try await Task.sleep(for: .milliseconds(300))
+        await harness.answerPending()
+        await harness.refresh()
+        let order = guest.inputs.dropFirst().map { String($0.split(separator: "\n").last ?? "") }
+        XCTAssertEqual(order, ["X", "E", "F"], "the guest was given the line out of order")
+    }
+}
+
+extension GuestBridgeTests {
+    // A ledger written by hand: `pending` empty with a
+    // bound input still in `early` (what a `record(nil)` with no `promote` after it leaves), then a bind.
+    func testABindAfterPromoteHasMovedTheList() async throws {
+        let db = InMemoryRecordDatabase()
+        let ref1 = TurnRef(device: phone, sequence: 1)
+        var ledger = GuestLedger()
+        ledger.session = "S1"
+        let boundX = GuestLedger.Pending(input: "input-x", nonce: "reply-x", parents: [ref1], answering: [ref1],
+                                         covers: Coverage([ref1]), session: "S1", sentAt: Date(), state: .answered,
+                                         text: "x's answer", person: "nx", said: ["nx"])
+        ledger.early = [
+            GuestLedger.Early(person: "nx", input: "input-x", covers: Coverage(), session: "S1", sentAt: Date(),
+                              state: .answered, text: "x's answer", bound: boundX),
+            GuestLedger.Early(person: "nz", input: "input-z", covers: Coverage(), session: "S1", sentAt: Date(),
+                              state: .answered, text: "z's answer", bound: nil),
+        ]
+        try ledger.save(ledgerFile)
+        let (_, bridge, _) = try await launch(db)
+        let personX = Turn(ref: ref1, parents: [], role: .person, text: "x", at: Date(), nonce: "nx")
+        await bridge.bind(nonce: "nx", person: personX, reply: "reply-x")
+        let after = await bridge.current
+        XCTAssertNil(after.early?.first { $0.person == "nz" }?.bound, "the other input was bound to this turn's record")
+    }
 }

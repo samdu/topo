@@ -57,14 +57,12 @@ final class Harness {
     private var answeredElsewhere: Set<String> = []
     /// The line being given to the guest ahead of its turns, entry after entry, in order.
     private var hearingLine: Task<Void, Never>?
-    /// Every task giving the guest words ahead of their turn, cancelled when the lease says
-    /// another device answers: words still on their way stop, and what the guest has stays its.
-    private var givingAhead: [Task<Void, Never>] = []
+    /// Moved when the lease says another device answers: a giving of the line begun before it
+    /// gives nothing more.
+    private var giving = 0
     /// The lease last answered that another device holds it: nothing on the line is given ahead
     /// until a turn here is this device's to answer again.
     private var handedBack = false
-    /// A launch's own giving of the words, before there is a runner (`reach`).
-    private var reaching: Task<Bool, Never>?
     /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
@@ -414,7 +412,8 @@ final class Harness {
     private func forgetHeard() {
         defaults.removeObject(forKey: Self.standingKey)
         unreached = false
-        stopGivingAhead()
+        giving += 1
+        hearingLine = nil
         handedBack = false
         unsaved = [:]
         hearing = nil
@@ -426,7 +425,7 @@ final class Harness {
     /// person's nonce: the finished ones, and the one being written for words given ahead. The
     /// chat draws each under its words while iCloud is behind.
     var replies: [String: String] {
-        var all = unsaved.filter { !answered($0.key) && !answeredElsewhere.contains($0.key) }
+        var all = unsaved.filter { !movedPast($0.key) && !answeredElsewhere.contains($0.key) }
         if let hearing, let writing, !writing.isEmpty, !said(hearing) { all[hearing] = writing }
         return all
     }
@@ -550,6 +549,14 @@ final class Harness {
         turns.contains { $0.role == .person && $0.nonce == nonce }
     }
 
+    /// Whether the log has gone on from the turn said under `nonce`, as this device knows it: a
+    /// reply to it, or anything else that continues it. A reply this device's guest made of
+    /// those words can no longer be written under them.
+    func movedPast(_ nonce: String) -> Bool {
+        guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
+        return turns.contains { $0.parents.contains(person.ref) }
+    }
+
     /// Whether the turn said under `nonce` has a reply in the log, as this device knows it.
     func answered(_ nonce: String) -> Bool {
         guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
@@ -628,12 +635,11 @@ final class Harness {
         guard runner != nil || unreached, !pending.isEmpty else { return }
         let line = pending, login = self.login
         guard !handedBack else { return }
-        let before = hearingLine
-        givingAhead.removeAll { $0.isCancelled }
-        let giving = Task { [weak self] in
+        let before = hearingLine, giving = self.giving
+        hearingLine = Task { [weak self] in
             await before?.value
             for entry in line {
-                guard !Task.isCancelled, let self, self.login == login,
+                guard !Task.isCancelled, let self, self.login == login, self.giving == giving,
                       self.pending.contains(entry), !self.said(entry.nonce) else { continue }
                 if let runner = self.runner {
                     await runner.hear(entry.text, model: self.model, nonce: entry.nonce, known: self.known)
@@ -642,17 +648,13 @@ final class Harness {
                 }
             }
         }
-        hearingLine = giving
-        givingAhead.append(giving)
     }
 
-    /// Stops every word still on its way to the guest ahead of its turn.
-    private func stopGivingAhead() {
-        givingAhead.forEach { $0.cancel() }
-        givingAhead = []
-        hearingLine = nil
-        reaching?.cancel()
-        reaching = nil
+    /// Stops every word of the line still on its way to the guest ahead of its turn. What the
+    /// guest already has it keeps.
+    private func stopGivingAhead() async {
+        giving += 1
+        for entry in pending { await brain.stopHearing(nonce: entry.nonce) }
     }
 
     /// Keeps where the runner stands with the lease for the next launch, unless a sign-out or a
@@ -662,8 +664,6 @@ final class Harness {
             let standing = await runner.standing
             guard let self, self.login == login else { return }
             self.standing = standing
-            // The lease is this device's again: the line is given ahead as before.
-            if standing == .mine { self.handedBack = false }
         }
     }
 
@@ -688,7 +688,6 @@ final class Harness {
             self.unreached = true
             return await self.brain.hear(attempt.text, nonce: attempt.nonce, context: self.known, model: self.model)
         }
-        reaching = hearing
         do {
             try await ensureZone()
             let made = try await makeRunner()
@@ -825,8 +824,9 @@ final class Harness {
             // Nor is anything on the line given to this device's guest from here: what is still
             // on its way stops. What the guest already has it keeps: should this device come to
             // answer the turn after all, that input is its answer.
-            stopGivingAhead()
             handedBack = true
+            await stopGivingAhead()
+            guard inFlight == generation else { return false }
             // Not this device's turn to answer: the words go in the log as a limb's, and whichever
             // device is primary answers them there. Settled once they are in the log.
             do {
@@ -1083,6 +1083,8 @@ final class Harness {
             // A sign-out during the pass: what it found is for a screen that has gone.
             guard self.login == login else { return }
             if let reply = answered {
+                // This device answered: the lease is its own, and the line is given ahead again.
+                handedBack = false
                 show(reply)
                 failure = nil
                 await refresh()

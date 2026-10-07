@@ -58,6 +58,9 @@ public protocol Brain: Sendable {
     func bind(nonce: String, person: Turn, reply: String) async
     /// The words heard under `nonce` were taken back: no turn of them will be saved.
     func withdrawn(nonce: String) async
+    /// Words said under `nonce` that are still on their way to the brain stop there: another
+    /// device answers their turn. What the brain already has of them it keeps.
+    func stopHearing(nonce: String) async
     /// The reply under `nonce` is in the log as `reply`: written now, or found there by its nonce.
     func landed(_ reply: Turn, nonce: String) async
     /// Person turns this brain holds as unresolved on this device: asked, and cut off with no
@@ -77,6 +80,7 @@ extension Brain {
     public func hear(_ words: String, nonce: String, context: [Turn]?, model: ClaudeModel) async -> Bool { false }
     public func bind(nonce: String, person: Turn, reply: String) async {}
     public func withdrawn(nonce: String) async {}
+    public func stopHearing(nonce: String) async {}
     public func landed(_ reply: Turn, nonce: String) async {}
     public func unresolved() async -> Set<TurnRef> { [] }
     public func owed() async -> OwedReply? { nil }

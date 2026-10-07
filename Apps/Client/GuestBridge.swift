@@ -288,6 +288,8 @@ actor GuestBridge: Brain {
     /// Whether a request is with the guest; the next waits its turn in `queue`, since the guest
     /// takes one turn at a time.
     private var asking = false
+    /// Nonces whose words, still on their way to the guest, are to stop there (`stopHearing`).
+    private var stopping: Set<String> = []
     private var queue: [CheckedContinuation<Void, Never>] = []
     private var warming = false
     /// Which session and process wrote each reply this bridge returned, by its nonce.
@@ -343,6 +345,10 @@ actor GuestBridge: Brain {
         if readLedger() {
             promote()
             if let heard = ledger.pending, heard.nonce == request.nonce, heard.person != nil {
+                // Words given ahead that the log has moved past go here as on the path below,
+                // counted with this input once its reply lands.
+                let passed = movePast(request.context)
+                ledger.pending?.covers.formUnion(passed)
                 ledger.pending?.parents = request.parents
                 ledger.pending?.answering = request.answering.map(\.ref)
                 try? save()
@@ -421,16 +427,8 @@ actor GuestBridge: Brain {
         // Words given ahead whose turn this request shows in the log some other way — answered
         // by another device, moved past, or one head of a fork: the guest received them, so they
         // are not told again, and the reply it made of them is not written.
-        for early in ledger.early ?? [] {
-            guard let turn = (request.context + request.answering).first(where: { $0.role == .person && $0.nonce == early.person }) else { continue }
-            if early.state != .sent {
-                received.formUnion(early.covers)
-                received.insert([turn.ref])
-            }
-            ledger.early?.removeAll { $0.input == early.input }
-            settle([early.person])
-            try save()
-        }
+        received.formUnion(movePast(request.context + request.answering))
+        try save()
 
         await conversation.use(model: ClaudeModel.effective(request.model).rawValue)
         Perf.mark("turn.bridge.begin")
@@ -581,7 +579,8 @@ actor GuestBridge: Brain {
             ledger.seen.formUnion(pending.covers)
             if let session = pending.session { ledger.session = session }
         }
-        if pending.state == .answered, current { ledger.seen.insert([reply.ref]) }
+        // Another device's reply under the same nonce is not what the guest wrote, and is told.
+        if pending.state == .answered, current, pending.text == nil || pending.text == reply.text { ledger.seen.insert([reply.ref]) }
         settle(pending.said ?? [])
         flown[pending.input] = nil
         if held != nil { ledger.pending = nil } else if let waiting { ledger.early?.remove(at: waiting) }
@@ -645,6 +644,7 @@ actor GuestBridge: Brain {
         }
         hearing[nonce] = []
         let heard = await begin(words, nonce: nonce, context: context, model: model)
+        stopping.remove(nonce)
         (hearing.removeValue(forKey: nonce) ?? []).forEach { $0.resume(returning: heard) }
         return heard
     }
@@ -667,10 +667,10 @@ actor GuestBridge: Brain {
         asking = true
         var flying = false
         defer { if !flying { release() } }
-        guard self.login == login, !Task.isCancelled, readLedger() else { return false }
+        guard self.login == login, !stopping.contains(nonce), readLedger() else { return false }
         // An input a killed launch left with its end unknown is read off the transcript first:
         // one the guest never received is sent now, and not held as heard.
-        guard await settleEarly(), self.login == login else { return false }
+        guard await settleEarly(), self.login == login, !stopping.contains(nonce) else { return false }
         if holds(nonce) { return true }
         guard ledger.settled?.contains(nonce) != true else { return false }
         promote()
@@ -697,7 +697,7 @@ actor GuestBridge: Brain {
         guard (try? await conversation.ready()) != nil else { return false }
         Perf.mark("turn.bridge.guestReady")
         let session = await conversation.sessionID()
-        guard self.login == login, !Task.isCancelled else { return false }
+        guard self.login == login, !stopping.contains(nonce) else { return false }
         let fresh = session == nil || session != ledger.session
         // A session with nothing of the conversation in it, and no read of the log to tell it:
         // the words wait for the read rather than be answered by a guest that knows none of it.
@@ -728,7 +728,7 @@ actor GuestBridge: Brain {
             return false
         }
         let pid = await conversation.residentPID()
-        guard self.login == login, !Task.isCancelled else {
+        guard self.login == login, !stopping.contains(nonce) else {
             if self.login == login { drop(id) }
             return false
         }
@@ -825,6 +825,8 @@ actor GuestBridge: Brain {
                                         covers: covers, session: early.session, sentAt: early.sentAt, state: early.state,
                                         text: early.text, person: nonce, said: [nonce])
         promote()
+        // The list may have moved: the input is found again by its uuid.
+        guard let index = ledger.early?.firstIndex(where: { $0.input == early.input }) else { return }
         if ledger.pending == nil {
             ledger.early?.remove(at: index)
             ledger.pending = bound
@@ -835,7 +837,12 @@ actor GuestBridge: Brain {
         try? save()
     }
 
+    func stopHearing(nonce: String) async {
+        if hearing[nonce] != nil { stopping.insert(nonce) }
+    }
+
     func withdrawn(nonce: String) async {
+        await stopHearing(nonce: nonce)
         // A bound input's turn is in the log, and what is in the log is said.
         guard readLedger(), ledger.early?.contains(where: { $0.person == nonce && $0.bound == nil }) == true else { return }
         ledger.early?.removeAll { $0.person == nonce && $0.bound == nil }
@@ -856,6 +863,23 @@ actor GuestBridge: Brain {
     private func holds(_ nonce: String) -> Bool {
         // An input asked once its turn was saved is the guest's as much as one given ahead.
         ledger.pending?.said?.contains(nonce) == true || ledger.pending?.person == nonce || ledger.early?.contains { $0.person == nonce } == true
+    }
+
+    /// Removes the inputs given ahead, and not bound, whose turns are among `turns`: the log
+    /// holds them some other way. What the guest received of them is returned, to be counted
+    /// seen with the input that follows.
+    private func movePast(_ turns: [Turn]) -> Coverage {
+        var received = Coverage()
+        for early in ledger.early ?? [] where early.bound == nil {
+            guard let turn = turns.first(where: { $0.role == .person && $0.nonce == early.person }) else { continue }
+            if early.state != .sent {
+                received.formUnion(early.covers)
+                received.insert([turn.ref])
+            }
+            ledger.early?.removeAll { $0.input == early.input }
+            settle([early.person])
+        }
+        return received
     }
 
     /// Whether the input for `nonce` is one a killed launch left unbound with its end unknown.
