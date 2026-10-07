@@ -70,8 +70,9 @@ public struct LeaseTiming: Hashable, Sendable {
     /// How long one read or write of the lease may go unanswered before it
     /// is given up as failed. The lease's calls go one at a time, so a
     /// request that stalls holds the next heartbeat up, and this bounds each
-    /// request, not the call that makes it: a call is a read and a write at
-    /// most, so it can hold the next up to twice this. A heartbeat due a full
+    /// request, not the call that makes it: a pass is a read and a write, twice
+    /// this, and a call whose write loses to another writer goes again, three
+    /// passes at most. A heartbeat due a full
     /// interval after the last, behind one request that used all of it, goes
     /// out with a second left of the duration; behind more than that, or
     /// when its own answer takes longer than this, the lease lapses locally
@@ -286,11 +287,12 @@ public actor PrimaryLease {
                 continue
             }
 
-            if await probe.confirms(lease) {
+            let alive = await probe.confirms(lease)
+            guard generation == began else { return .contended }
+            if alive {
                 forget()
                 return .held(by: lease)
             }
-            guard generation == began else { return .contended }
 
             if hasYielded(to: lease) {
                 return .unreachable(lease)
@@ -377,7 +379,7 @@ public actor PrimaryLease {
         guard generation == began else { return false }
         do {
             _ = try await database.save(holder(epoch: 1).record(changeTag: nil))
-            return true
+            return generation == began
         } catch RecordDatabaseError.serverRecordChanged {
             return false
         }

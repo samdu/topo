@@ -773,6 +773,30 @@ import TopoCoreTesting
         #expect(await db.current(Lease.recordID) == nil)
     }
 
+    @Test func aFirstClaimAnsweredAfterTheLeaseWasAbandonedIsFalse() async throws {
+        let slow = LateAnswers(db)
+        let h = lease(hub, on: slow)
+        await slow.holdNextSaveAnswer()
+        let first = Task { try await h.claimIfNone() }
+        #expect(await eventually { await slow.savesOut == 1 })
+        await h.abandon()
+        await slow.releaseSaves()
+        #expect(try await !first.value)
+    }
+
+    @Test func aTurnWhoseProbeIsConfirmedAfterTheLeaseWasAbandonedIsContended() async throws {
+        _ = try await lease(hub).acquire()
+        clock.advance(1)
+        let probe = HeldProbe()
+        let p = PrimaryLease(database: db, device: phone, endpoint: "phone.local:1", probe: probe,
+                             now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        let turn = Task { try await p.acquire() }
+        #expect(await eventually { await probe.asked })
+        await p.abandon()
+        await probe.answer(true)
+        guard case .contended = try await turn.value else { Issue.record("answered as if not abandoned"); return }
+    }
+
     @Test func theLeaseAsksItsDatabaseBoundedByItsPatience() async throws {
         let asked = AsksWithin(db)
         let h = PrimaryLease(database: asked, device: hub, endpoint: nil, probe: StubProbe.allDead,
