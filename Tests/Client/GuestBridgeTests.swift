@@ -3449,5 +3449,35 @@ extension GuestBridgeTests {
         XCTAssertEqual(ledger.early ?? [], [])
         XCTAssertTrue(harness.replies.isEmpty)
     }
-}
 
+    // An input given ahead that the log moved past, bound while the pass that counted it waits
+    // for the guest: the bind is kept, and the words are not given a second time.
+    func testAnEarlyBoundWhileTheRequestThatPassedItWaitsForTheGuest() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, bridge, guest) = try await launch(db, .reply("answer one"), .reply("answer two"), .reply("ASKED AGAIN"))
+        _ = await bridge.hear("first question", nonce: "n1", context: [], model: .sonnet5)
+        try await eventually("the first answer") { await bridge.unsaved()["n1"] == "answer one" }
+        let writer = try await TurnLog(database: db).writer(for: phone)
+        let p1 = try await writer.append(.person, "first question", parents: [], nonce: "n1")
+        _ = try await TurnLog(database: db).writer(for: DeviceID("watch")).append(.person, "second question", parents: [p1.ref])
+        guest.holdReady()
+        let passing = Task { try await runner.answerPending(model: .sonnet5) }
+        try await eventually("the pass waiting for the guest") { guest.readyHeld }
+        let reply = TurnRunner.replyNonce(for: [p1.ref])
+        await bridge.bind(nonce: "n1", person: p1, reply: reply)
+        guest.releaseReady()
+        let first = await passing.result
+        let kept = await bridge.current.pending
+        XCTAssertEqual(kept?.person, "n1", "the request recorded its own input over the bound one: \(first)")
+        let answer = try await bridge.answer(BrainRequest(context: [], answering: [p1], parents: [p1.ref], nonce: reply, model: .sonnet5))
+        XCTAssertEqual(answer.text, "answer one", "the reply is not the one the guest made of the words it heard")
+        // The bound reply is owed like one bound before the pass began: written first, then the
+        // pass answers what the watch said.
+        _ = try await runner.answerPending(model: .sonnet5)
+        _ = try await runner.answerPending(model: .sonnet5)
+        let log = try await TurnLog(database: db).read()
+        XCTAssertEqual(log.ordered.map(\.text), ["first question", "second question", "answer one", "answer two"])
+        XCTAssertEqual(log.heads.count, 1)
+        XCTAssertEqual(guest.inputs.filter { $0.contains("first question") }.count, 1, "the guest was given the words twice: \(guest.inputs)")
+    }
+}

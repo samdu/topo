@@ -81,6 +81,8 @@ struct TranscriptView: View {
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.before.last?.id) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
+            // A reply the guest wrote ahead of iCloud arrives under words already drawn.
+            .onChange(of: end) { _, _ in scroll(proxy, animated: true) }
             // A block the voice reaches is brought into view, by as little as shows it whole: one
             // already on the screen does not move. A block inside a row the lazy stack has not
             // made has no place to be scrolled to yet, so its row is brought in first, and the
@@ -110,14 +112,21 @@ struct TranscriptView: View {
     static let draftID = "draft"
 
     /// What the transcript scrolls to: whatever is drawn last. That is a turn on its way said
-    /// after the row's, then the row while it is shown, then a turn on its way said before it,
-    /// then the newest turn — so a caption arriving with no keyboard is scrolled to like anything
-    /// else, and a turn still owed below the row is never left under the fold.
+    /// after the row's, or the guest's reply to it; then the reply to the row's own words, then
+    /// the row while it is shown, then a turn on its way said before it or its reply, then the
+    /// newest turn — so a caption arriving with no keyboard is scrolled to like anything else,
+    /// and neither a turn still owed below the row nor a reply the log does not hold yet is left
+    /// under the fold.
     var end: AnyHashable? {
-        if let last = queued.after.last { return AnyHashable(last.id) }
+        if let last = queued.after.last { return Self.end(of: last) }
+        if let answer { return AnyHashable(answer.ref) }
         if (draft?.state ?? .hidden) != .hidden { return AnyHashable(Self.draftID) }
-        if let last = queued.before.last { return AnyHashable(last.id) }
+        if let last = queued.before.last { return Self.end(of: last) }
         return turns.last.map { AnyHashable($0.ref) }
+    }
+
+    private static func end(of turn: QueuedTurn) -> AnyHashable {
+        turn.reply.map { AnyHashable($0.ref) } ?? AnyHashable(turn.id)
     }
 
     private func scroll(_ proxy: ScrollViewProxy, animated: Bool) {

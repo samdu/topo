@@ -382,66 +382,78 @@ actor GuestBridge: Brain {
         // What an input the log moved past carried: the guest received it, so it is not told
         // again, but it is counted seen only when this request's reply lands, which covers it.
         var received = Coverage()
+        var named: (inputs: Set<String>, received: Coverage) = ([], Coverage())
         if let known = recent.last(where: { $0.nonce == request.nonce }) {
             return reply(known.text, to: request, usage: nil, model: nil)
         }
-        // An input given ahead of its turn and left with no end known, by a launch that was
-        // killed: read off the guest's transcript before anything else is sent.
-        guard await settleEarly() else {
-            try stillCurrent(login)
-            throw GuestBridgeError.failed(Self.unknown)
-        }
-        try stillCurrent(login)
-        repeat { reconciling: while let pending = ledger.pending {
-            let verdict = await verdict(on: pending)
-            // The read waited on the guest: a sign-out meanwhile makes it about a login that has
-            // gone, and a record that moved meanwhile is read again.
-            try stillCurrent(login)
-            guard ledger.pending == pending else { continue reconciling }
-            switch Reconciliation.of(pending, verdict: verdict, request: request.nonce) {
-            case .clear:
-                try record(nil)
-            case .answered(let text):
-                // The ledger keeps the input until the reply is in the log (`landed`).
-                provenance[request.nonce] = (pending.session, nil)
-                ledger.pending?.state = .answered
-                ledger.pending?.text = text
-                try? save()
-                return reply(text, to: request, usage: nil, model: nil)
-            case .owed:
-                // The runner writes an owed reply before it asks; one still here is a write that
-                // did not happen, and the next attempt makes it.
-                throw GuestBridgeError.failed("a reply the guest finished is still to be written")
-            case .unresolved:
-                ledger.pending?.state = .unresolved
-                try save()
-                throw GuestBridgeError.unresolved
-            case .askAgain:
-                break
-            case .superseded:
-                received = pending.covers
-                try record(nil)
-            case .hold:
-                break
-            case .unknown:
+        // The wait for the guest below is long, and a turn can be bound to words given ahead
+        // while it lasts: what is found in `pending` after it is reconciled like any other
+        // record before this request writes its own there.
+        var session: String?
+        composing: while true {
+            // An input given ahead of its turn and left with no end known, by a launch that was
+            // killed: read off the guest's transcript before anything else is sent.
+            guard await settleEarly() else {
+                try stillCurrent(login)
                 throw GuestBridgeError.failed(Self.unknown)
             }
-            break reconciling
-        } } while promote()
+            try stillCurrent(login)
+            repeat { reconciling: while let pending = ledger.pending {
+                let verdict = await verdict(on: pending)
+                // The read waited on the guest: a sign-out meanwhile makes it about a login that has
+                // gone, and a record that moved meanwhile is read again.
+                try stillCurrent(login)
+                guard ledger.pending == pending else { continue reconciling }
+                switch Reconciliation.of(pending, verdict: verdict, request: request.nonce) {
+                case .clear:
+                    try record(nil)
+                case .answered(let text):
+                    // The ledger keeps the input until the reply is in the log (`landed`).
+                    provenance[request.nonce] = (pending.session, nil)
+                    ledger.pending?.state = .answered
+                    ledger.pending?.text = text
+                    try? save()
+                    return reply(text, to: request, usage: nil, model: nil)
+                case .owed:
+                    // The runner writes an owed reply before it asks; one still here is a write that
+                    // did not happen, and the next attempt makes it.
+                    throw GuestBridgeError.failed("a reply the guest finished is still to be written")
+                case .unresolved:
+                    ledger.pending?.state = .unresolved
+                    try save()
+                    throw GuestBridgeError.unresolved
+                case .askAgain:
+                    break
+                case .superseded:
+                    received = pending.covers
+                    try record(nil)
+                case .hold:
+                    break
+                case .unknown:
+                    throw GuestBridgeError.failed(Self.unknown)
+                }
+                break reconciling
+            } } while promote()
 
-        // Words given ahead whose turn this request shows in the log some other way — answered
-        // by another device, moved past, or one head of a fork: the guest received them, so they
-        // are not told again, and the reply it made of them is not written.
-        // They leave the ledger when the reply to the input that counts them lands: an input
-        // that is never received, or never answered, leaves them to be found again.
-        let passed = passed(in: request.context + request.answering)
-        received.formUnion(passed.received)
+            // Words given ahead whose turn this request shows in the log some other way — answered
+            // by another device, moved past, or one head of a fork: the guest received them, so they
+            // are not told again, and the reply it made of them is not written.
+            // They leave the ledger when the reply to the input that counts them lands: an input
+            // that is never received, or never answered, leaves them to be found again.
+            named = passed(in: request.context + request.answering)
 
-        await conversation.use(model: ClaudeModel.effective(request.model).rawValue)
-        Perf.mark("turn.bridge.begin")
-        try await conversation.ready()
-        Perf.mark("turn.bridge.guestReady")
-        let session = await conversation.sessionID()
+            // The record this request's own goes over: none, or one it is asking again.
+            let standing = ledger.pending
+            await conversation.use(model: ClaudeModel.effective(request.model).rawValue)
+            Perf.mark("turn.bridge.begin")
+            try await conversation.ready()
+            Perf.mark("turn.bridge.guestReady")
+            session = await conversation.sessionID()
+            // `ready` can wait a long time, and a sign-out can come while it does.
+            try stillCurrent(login)
+            if ledger.pending == standing { break composing }
+        }
+        received.formUnion(named.received)
         let fresh = session == nil || session != ledger.session
         if fresh {
             // A fresh session, or another one than the ledger's, has seen none of the log.
@@ -463,14 +475,12 @@ actor GuestBridge: Brain {
         covers.formUnion(received)
         if fresh { covers.insert(request.context.map(\.ref)) }
         let id = UUID().uuidString.lowercased()
-        // `ready` can wait a long time, and a sign-out can come while it does.
-        try stillCurrent(login)
         // Written before the input goes: after a crash this is how the transcript is asked.
         try record(GuestLedger.Pending(input: id, nonce: request.nonce, parents: request.parents,
                                        answering: request.answering.map(\.ref),
                                        covers: covers,
                                        session: session, sentAt: Date(), state: .sent,
-                                       said: request.answering.map(\.nonce), passed: Array(passed.inputs)))
+                                       said: request.answering.map(\.nonce), passed: Array(named.inputs)))
         let pid = await conversation.residentPID()
         try stillCurrent(login)
         let updates: AsyncStream<GuestSession.TurnUpdate>

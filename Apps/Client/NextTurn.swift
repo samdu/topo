@@ -137,7 +137,6 @@ final class NextTurn {
         return nonce
     }
 }
-#endif
 
 /// A reply the guest wrote that the log does not hold, as something the transcript can draw.
 enum UnsavedReply {
@@ -147,3 +146,4 @@ enum UnsavedReply {
              text: text, at: Date(), nonce: "unsaved")
     }
 }
+#endif
