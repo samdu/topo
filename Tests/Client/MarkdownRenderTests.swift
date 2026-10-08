@@ -897,7 +897,8 @@ final class MarkdownRenderTests: XCTestCase {
     }
 
     /// An image with no picture is its alternative text behind a quote's bar in the quote's
-    /// ink; a web address is never asked for, and is offered as a link.
+    /// ink; a web address is never asked for, and is offered as a link. Nothing else is an
+    /// address: `file:///etc/hosts` is a name the guest is asked for, and has no file by.
     func testAnImageWithNoPictureIsItsAlternativeText() throws {
         let linkInk = UIColor(red: 0.9, green: 0, blue: 0.6, alpha: 1)
         for screen in Look.Screen.allCases {
@@ -908,12 +909,12 @@ final class MarkdownRenderTests: XCTestCase {
                 let asked = Asked()
                 let drawn = try draw(turn(.assistant, "![A chart of sizes](\(source))"), look) { path in
                     asked.add(path)
-                    return path == "notes.txt" ? Data("words".utf8) : picture
+                    return path == "notes.txt" ? Data("words".utf8) : path.hasPrefix("file:") ? nil : picture
                 }
                 XCTAssertEqual(drawn.count(pictureInk), 0, "\(screen): \(source) drew a picture")
                 XCTAssertGreaterThan(drawn.count(quoteInk), 0, "\(screen): \(source) drew no alternative text")
                 XCTAssertGreaterThan(drawn.count(barInk), 0, "\(screen): \(source) drew no bar")
-                XCTAssertEqual(asked.paths.isEmpty, source != "notes.txt", "\(screen): \(source) asked \(asked.paths)")
+                XCTAssertEqual(asked.paths.isEmpty, source.hasPrefix("https"), "\(screen): \(source) asked \(asked.paths)")
                 // Only a web address is offered as a link.
                 XCTAssertEqual(drawn.count(linkInk) > 0, source.hasPrefix("https"), "\(screen): \(source)")
             }
