@@ -85,6 +85,7 @@ struct TopoApp: App {
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
+            LogTool(reader: UnifiedLogReader()),
         ]
         // A control's request to the home network asks for local network access in the
         // foreground only, since a background one while it is undetermined is denied unasked.
