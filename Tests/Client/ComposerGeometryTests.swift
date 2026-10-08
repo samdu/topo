@@ -302,11 +302,26 @@ final class ComposerGeometryTests: XCTestCase {
     /// field still being typed in — so the pane can take the focus as its row again, and what is
     /// typed meanwhile lands. A field that does not hold focus takes no touch at rest.
     func testAFieldHoldingFocusKeepsItWhenThePaneGoesToRest() throws {
-        final class Form: ObservableObject { @Published var row = true }
+        final class Form: ObservableObject {
+            @Published var row = true
+            /// What the composer has said of its field's focus, in order.
+            var heard: [Bool] = []
+            /// How tall the pane is laid out, which is which form it is in.
+            var tall: CGFloat?
+        }
         struct Stage: View {
             @ObservedObject var form: Form
             @State var text = "Hello"
-            var body: some View { Composer(draft: Draft(text: $text, typing: .constant(true), row: form.row)) }
+            var body: some View {
+                Composer(draft: Draft(text: $text, typing: .constant(true), row: form.row),
+                         focused: { form.heard.append($0) })
+                    .overlayPreferenceValue(ComposerFrames.Pane.self) { pane in
+                        GeometryReader { proxy in
+                            let tall = pane.map { proxy[$0].height }
+                            Color.clear.onChange(of: tall, initial: true) { _, tall in form.tall = tall }
+                        }
+                    }
+            }
         }
         var look = Look()
         look.composer.surface = .flat
@@ -331,11 +346,34 @@ final class ComposerGeometryTests: XCTestCase {
         let field = try XCTUnwrap(find(window), "no text view in the composer")
         XCTAssertTrue(field.isFirstResponder || field.becomeFirstResponder(), "the field would not take focus")
         defer { field.resignFirstResponder() }
-        settle()
+        // The composer knows its field holds focus before the pane is put to rest, as it does
+        // by the time a keyboard leaves a field somebody is typing in: the focus the text view
+        // has reaches the view's own state a turn of the run loop later, and on a slow machine
+        // later than that.
+        let known = Date().addingTimeInterval(20)
+        while form.heard.last != true, Date() < known { settle() }
+        XCTAssertEqual(form.heard.last, true, "the composer never heard that its field holds focus: \(form.heard)")
+        XCTAssertTrue(field.isFirstResponder, "the field lost focus before the pane was put to rest")
 
+        var ended = 0
+        let watching = NotificationCenter.default.addObserver(forName: UITextView.textDidEndEditingNotification,
+                                                              object: field, queue: nil) { _ in ended += 1 }
+        defer { NotificationCenter.default.removeObserver(watching) }
+        // The pane at rest is laid out before anything is asked of the field: on a slow machine
+        // five turns of the run loop can pass before the row is gone, and a field in a row
+        // keeps its focus whatever this test is for.
+        let row = try XCTUnwrap(form.tall, "no pane was laid out")
         form.row = false
+        let rested = Date().addingTimeInterval(20)
+        while form.tall == row, Date() < rested { settle() }
+        XCTAssertNotEqual(form.tall, row, "the pane never went to rest")
         for _ in 0..<5 { settle() }
-        XCTAssertTrue(field.isFirstResponder, "the pane going to rest took the keyboard from a field being typed in")
+        let open = sequence(first: field as UIView, next: \.superview).allSatisfy(\.isUserInteractionEnabled)
+        XCTAssertTrue(open, "the pane going to rest took the touches from a field that holds focus")
+        XCTAssertTrue(field.isFirstResponder, """
+            the pane going to rest took the keyboard from a field being typed in: editing ended \(ended) times, \
+            the window is key \(window.isKeyWindow), the composer heard \(form.heard)
+            """)
         field.insertText("!")
         settle()
         XCTAssertEqual(field.text, "Hello!", "what was typed at rest did not land")
