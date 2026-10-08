@@ -79,7 +79,7 @@ struct TopoApp: App {
             SecretTool(store: connections.store, onePassword: GuestOnePassword(), leftBehind: connections.leftBehind,
                        requests: connections.secrets),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
-                         broker: broker),
+                         broker: broker, places: { memory.places }),
             MapsTool.standard(permission: location, broker: broker),
             homeTool,
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
