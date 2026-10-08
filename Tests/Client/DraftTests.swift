@@ -498,4 +498,139 @@ final class TranscriptEndTests: XCTestCase {
         XCTAssertEqual(bands.count, 2,
                        "expected the row and the turn below it on the screen, found \(bands.count) bubble(s) of a turn on its way")
     }
+
+    func testTheTranscriptEndsAtAReplyTheLogDoesNotHoldYet() {
+        let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+        let reply = UnsavedReply.turn("Calling her now.", place: 0)
+        let held = TranscriptView(turns: turns(4), draft: draft, answer: reply)
+        XCTAssertEqual(held.end, AnyHashable(reply.ref), "the reply under the row is drawn last and is not the end")
+        let before = TranscriptView(turns: turns(4), queued: ([QueuedTurn(text: "and Krista", nonce: "older", reply: reply)], []))
+        XCTAssertEqual(before.end, AnyHashable(reply.ref), "the reply under a turn on its way is drawn last and is not the end")
+        let after = TranscriptView(turns: turns(4), draft: draft,
+                                   queued: ([], [QueuedTurn(text: "and book the flights", nonce: "newer")]), answer: reply)
+        XCTAssertEqual(after.end, AnyHashable("newer"), "a turn on its way below the row's reply is drawn last")
+    }
+
+    /// Topo's side in a red nothing else on the stage is drawn in, over a log of the person's
+    /// turns alone: every red band down the picture is a reply the log does not hold.
+    private static func replyLook() -> Look {
+        var look = Self.look()
+        look.plain.accent = Color(red: 1, green: 0, blue: 0)
+        look.plain.fillOpacity = 1
+        return look
+    }
+
+    private func said(_ count: Int) -> [Turn] {
+        (1...count).map { n in
+            Turn(ref: TurnRef(device: DeviceID("phone"), sequence: Int64(n)), parents: [], role: .person,
+                 text: "Turn \(n), long enough to take a line or two of the transcript's width on a phone.",
+                 at: Date(timeIntervalSince1970: 1_700_000_000 + Double(n)))
+        }
+    }
+
+    private func redBands(_ image: UIImage) throws -> [(Int, Int)] {
+        let cgImage = try XCTUnwrap(image.cgImage)
+        let width = cgImage.width, height = cgImage.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let context = try XCTUnwrap(CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8,
+                                              bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(cgImage, in: CGRect(x: 0, y: 0, width: width, height: height))
+        var bands: [(Int, Int)] = []
+        for y in 0..<height {
+            var red = false
+            for x in 0..<width {
+                let i = (y * width + x) * 4
+                if bytes[i] > 220, bytes[i + 1] < 30, bytes[i + 2] < 30 { red = true; break }
+            }
+            guard red else { continue }
+            if let last = bands.last, last.1 >= y - 2 { bands[bands.count - 1].1 = y } else { bands.append((y, y)) }
+        }
+        return bands
+    }
+
+    func testAnUnsavedReplyIsDrawnUnderTheRowAndUnderATurnOnItsWay() throws {
+        let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+        let reply = UnsavedReply.turn("Calling her now.", place: 0)
+        let none = TranscriptView(turns: said(3), draft: draft).background(Color.white)
+        XCTAssertEqual(try redBands(try LookStage.image(none, look: Self.replyLook())).count, 0, "control: nothing of Topo's is drawn")
+        let held = TranscriptView(turns: said(3), draft: draft, answer: reply).background(Color.white)
+        XCTAssertEqual(try redBands(try LookStage.image(held, look: Self.replyLook())).count, 1, "the reply to the row's words is not drawn")
+        let queued = TranscriptView(turns: said(3), draft: draft,
+                                    queued: ([QueuedTurn(text: "and Krista", nonce: "older", reply: reply)],
+                                             [QueuedTurn(text: "and book the flights", nonce: "newer", reply: UnsavedReply.turn("Booked.", place: 1))]))
+            .background(Color.white)
+        XCTAssertEqual(try redBands(try LookStage.image(queued, look: Self.replyLook())).count, 2, "the replies to turns on their way are not drawn")
+    }
+
+    /// The transcript under a model a test changes, as the chat's is under the harness.
+    @Observable final class Shown {
+        var answer: Turn?
+        var queued: [QueuedTurn] = []
+        var after: [QueuedTurn] = []
+    }
+
+    private struct Stage: View {
+        let turns: [Turn]
+        let shown: Shown
+        var held = true
+        var body: some View {
+            let draft = Draft(text: .constant("call Helen"), typing: .constant(false), sending: true)
+            TranscriptView(turns: turns, draft: held ? draft : nil, queued: (shown.queued, shown.after), answer: shown.answer)
+                .background(Color.white)
+        }
+    }
+
+    /// Whole on the stage: one band, clear of the stage's foot.
+    private func assertOnScreen(_ bands: [(Int, Int)], _ image: UIImage, _ what: String, line: UInt = #line) {
+        XCTAssertEqual(bands.count, 1, "\(what) is not on the screen", line: line)
+        guard let band = bands.first, let height = image.cgImage?.height else { return }
+        XCTAssertLessThan(band.1, height - 2, "\(what) runs under the fold", line: line)
+    }
+
+    func testAnUnsavedReplyArrivingUnderTheRowIsScrolledTo() throws {
+        let shown = Shown()
+        let image = try LookStage.image(Stage(turns: said(30), shown: shown), look: Self.replyLook(),
+                                        then: [{ shown.answer = UnsavedReply.turn("Calling her now.", place: 0) }])
+        assertOnScreen(try redBands(image), image, "a reply that arrived under the row")
+    }
+
+    func testAnUnsavedReplyGrowingUnderTheRowIsFollowed() throws {
+        let shown = Shown()
+        let long = (1...12).map { "Line \($0) of what the guest is writing, long enough to wrap." }.joined(separator: "\n")
+        let image = try LookStage.image(Stage(turns: said(30), shown: shown), look: Self.replyLook(),
+                                        then: [{ shown.answer = UnsavedReply.turn("Calling", place: 0) },
+                                               { shown.answer = UnsavedReply.turn(long, place: 0) }])
+        assertOnScreen(try redBands(image), image, "a reply that grew under the row")
+    }
+
+    func testAnUnsavedReplyArrivingUnderATurnOnItsWayIsScrolledTo() throws {
+        let shown = Shown()
+        shown.queued = [QueuedTurn(text: "and Krista", nonce: "older")]
+        let image = try LookStage.image(Stage(turns: said(30), shown: shown, held: false), look: Self.replyLook(),
+                                        then: [{ shown.queued = [QueuedTurn(text: "and Krista", nonce: "older",
+                                                                            reply: UnsavedReply.turn("Calling her too.", place: 0))] }])
+        assertOnScreen(try redBands(image), image, "a reply that arrived under a turn on its way")
+    }
+
+    /// The row holds a first message with a second on its way below it: as the reply to the
+    /// first grows, the second stays on the screen, whole.
+    func testAReplyGrowingUnderTheRowKeepsTheTurnBelowItOnTheScreen() throws {
+        let long = (1...12).map { "Line \($0) of what the guest is writing, long enough to wrap." }.joined(separator: "\n")
+        // The bubble of the turn below, as tall as it is drawn before the reply grows.
+        func drawn(_ replies: [String]) throws -> (red: [(Int, Int)], blue: [(Int, Int)]) {
+            let shown = Shown()
+            shown.after = [QueuedTurn(text: "and book the flights", nonce: "newer")]
+            let image = try LookStage.image(Stage(turns: said(30), shown: shown), look: Self.replyLook(),
+                                            then: replies.map { text in { shown.answer = UnsavedReply.turn(text, place: 0) } })
+            return (try redBands(image), try blueBands(image))
+        }
+        let before = try drawn(["Calling"]), after = try drawn(["Calling", long])
+        let whole = try XCTUnwrap(before.blue.last, "control: the turn below is on the screen before the reply grows")
+        let reply = try XCTUnwrap(after.red.last, "the growing reply is not on the screen")
+        let below = try XCTUnwrap(after.blue.last, "no turn on its way is on the screen")
+        XCTAssertGreaterThan(below.0, reply.1, "the turn below the reply is not on the screen")
+        XCTAssertEqual(below.1 - below.0, whole.1 - whole.0, accuracy: 2, "the turn below the reply runs under the fold")
+    }
 }
+

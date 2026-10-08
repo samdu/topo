@@ -322,6 +322,199 @@ import TopoCoreTesting
     }
 }
 
+extension TurnRunnerTests {
+    @Test func theBrainHasTheWordsBeforeAnySaveSucceeds() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = Outage(store)
+        let brain = ScriptedBrain(.success("Here"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        db.away = true
+        do {
+            _ = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("expected the turn to be unsaved")
+        } catch TurnRunnerError.unsaved(let underlying) {
+            guard case RecordDatabaseError.unavailable = underlying else { Issue.record("wrong cause: \(underlying)"); return }
+        }
+        #expect(brain.heard.map(\.words) == ["are you there"])
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        #expect(await store.writes.isEmpty)
+        #expect(brain.requests.isEmpty)
+
+        // iCloud is back: the same nonce saves the turn, binds what was heard to it, and writes
+        // the reply, with the words heard once.
+        db.away = false
+        let result = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
+        #expect(brain.heard.count == 1)
+        let bound = try #require(brain.bound.first)
+        #expect(bound.nonce == "n1" && bound.person == result.person)
+        #expect(bound.reply == TurnRunner.replyNonce(for: [result.person.ref]))
+        #expect(brain.requests.map(\.nonce) == [bound.reply])
+        #expect(result.assistant.parents == [result.person.ref])
+        #expect(try await TurnLog(database: store).read().ordered.map(\.text) == ["are you there", "Here"])
+    }
+
+    /// A device that held the lease when it last asked hears before anything is asked of iCloud:
+    /// the brain has the words while the lease's own read is still out.
+    @Test func aDeviceThatLastHeldTheLeaseHearsBeforeTheLeaseIsAsked() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain, standing: .mine)
+        let steps = Steps()
+        let result = try await runner.run("words", model: .sonnet, nonce: "n1", known: []) { step in
+            if step == .heard {
+                for _ in 0..<1000 where brain.heard.isEmpty { await Task.yield() }
+                #expect(await db.writes.isEmpty, "something was saved before the brain was given the words")
+            }
+            await steps.add(step)
+        }
+        #expect(await steps.all == [.heard, .asking(person: result.person), .savingReply])
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        #expect(await runner.standing == .mine)
+    }
+
+    /// A launch that does not know where it stands asks the lease first, and the brain hears the
+    /// moment the lease answers that this device holds it.
+    @Test func aDeviceThatHasNotAskedTheLeaseAsksItFirstAndThenHears() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("ok"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        #expect(!(await runner.hear("early", model: .sonnet, nonce: "n0", known: [])))
+        let steps = Steps()
+        let result = try await runner.run("words", model: .sonnet, nonce: "n1", known: []) { await steps.add($0) }
+        #expect(await steps.all == [.takingLease, .saving, .asking(person: result.person), .savingReply])
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        #expect(brain.bound.map(\.nonce) == ["n1"])
+        // With no read of the log, the turn is asked as a turn in the log is.
+        _ = try? await runner.run("more", model: .sonnet, nonce: "n2")
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+    }
+
+    @Test func twoTurnsHeardInAnOutageLandInOrderEachReplyAfterItsPersonsTurn() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = Outage(store)
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain, standing: .mine)
+        db.away = true
+        #expect(await runner.hear("first", model: .sonnet, nonce: "n1", known: []))
+        #expect(await runner.hear("second", model: .sonnet, nonce: "n2", known: []))
+        await #expect(throws: TurnRunnerError.self) { try await runner.run("first", model: .sonnet, nonce: "n1", known: []) }
+        db.away = false
+        let first = try await runner.run("first", model: .sonnet, nonce: "n1", known: [])
+        let second = try await runner.run("second", model: .sonnet, nonce: "n2", known: [])
+        #expect(brain.heard.map(\.nonce) == ["n1", "n2"])
+        #expect(second.person.parents == [first.assistant.ref])
+        #expect(second.assistant.nonce == TurnRunner.replyNonce(for: [second.person.ref]))
+        #expect(try await TurnLog(database: store).read().ordered.map(\.text) == ["first", "one", "second", "two"])
+    }
+
+    /// A phone that knows a hub holds the lease asks the lease first. While the lease answers,
+    /// its words go to the hub and its brain hears nothing; when the lease cannot be asked, the
+    /// brain hears, and hears at once from then on; when a call gets through and the hub still
+    /// holds the lease, the phone hands back.
+    @Test func aDeviceThatKnowsAHubAsksTheLeaseFirstAndHearsOnlyWhenItCannotBeAsked() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = Outage(store)
+        let brain = ScriptedBrain(.success("from the phone"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
+        let hub = PrimaryLease(database: store, device: DeviceID("hub"), endpoint: nil, probe: AlwaysConfirms(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await hub.acquire() else { Issue.record("hub should claim"); return }
+        do {
+            _ = try await runner.run("first", model: .sonnet, nonce: "n0", known: [])
+            Issue.record("expected not primary")
+        } catch TurnRunnerError.notPrimary {
+        }
+        #expect(brain.heard.isEmpty, "a turn the hub answers ran this device's brain")
+        #expect(await runner.standing == .elsewhere)
+        #expect(!(await runner.hear("early", model: .sonnet, nonce: "n0b", known: [])))
+
+        db.away = true
+        do {
+            _ = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("expected the turn to be unsaved")
+        } catch TurnRunnerError.unsaved {
+        }
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        #expect(await runner.hear("still there", model: .sonnet, nonce: "n2", known: []))
+
+        db.away = false
+        do {
+            _ = try await runner.run("are you there", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("expected not primary")
+        } catch TurnRunnerError.notPrimary {
+        }
+        #expect(!(await runner.hear("later", model: .sonnet, nonce: "n3", known: [])))
+        #expect(brain.requests.isEmpty)
+        #expect(try await TurnLog(database: store).read().isEmpty)
+    }
+
+    @Test func aRetryThatFindsTheHeardReplyLandedBindsItBeforeTheBrainHearsItLanded() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("landed"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let first = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
+        // The acknowledgement was lost: the caller sends the same nonce again.
+        let again = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
+        #expect(again.assistant == first.assistant)
+        #expect(brain.requests.count == 1)
+        #expect(brain.bound.count == 2)
+        #expect(brain.bound.allSatisfy { $0.reply == first.assistant.nonce })
+        #expect(brain.landedNonces == [first.assistant.nonce, first.assistant.nonce])
+    }
+
+    @Test func aPassBindsAHeardTurnThatReachedTheLogAnotherWay() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("answered"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let log = TurnLog(database: db)
+        let person = try await log.writer(for: DeviceID("watch")).append(.person, "from the wrist", parents: [], nonce: "n1")
+        let reply = try #require(try await runner.answerPending(model: .sonnet))
+        let bound = try #require(brain.bound.first)
+        #expect(bound.nonce == "n1" && bound.person == person && bound.reply == reply.nonce)
+    }
+
+    @Test func aPassBindsNothingBesideAnotherHead() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("answered"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let log = TurnLog(database: db)
+        let root = try await log.writer(for: DeviceID("watch")).append(.person, "root", parents: [], nonce: "n0")
+        _ = try await log.writer(for: DeviceID("hub")).append(.assistant, "the hub's", parents: [root.ref])
+        _ = try await log.writer(for: DeviceID("tablet")).append(.person, "heard here", parents: [root.ref], nonce: "n1")
+        _ = try await runner.answerPending(model: .sonnet)
+        // The reply answers the fork, under the fork's nonce: the heard words' reply is not it.
+        #expect(brain.bound.isEmpty)
+    }
+
+    @Test func aRetryWhoseTurnTheLogMovedPastAsksNothingAndWritesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("never"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let log = TurnLog(database: db)
+        // An earlier attempt saved the turn and lost its answer; a watch has continued it since.
+        let person = try await log.writer(for: DeviceID("phone")).append(.person, "once", parents: [], nonce: "n1")
+        _ = try await log.writer(for: DeviceID("watch")).append(.person, "and then", parents: [person.ref])
+        do {
+            _ = try await runner.run("once", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("expected the turn to be moved past")
+        } catch TurnRunnerError.movedPast(let found) {
+            #expect(found.ref == person.ref)
+        }
+        #expect(brain.requests.isEmpty)
+        #expect(brain.bound.isEmpty)
+        #expect(try await log.read().ordered.map(\.text) == ["once", "and then"])
+    }
+}
+
 actor Steps {
     private(set) var all: [TurnRunner.Progress] = []
     func add(_ step: TurnRunner.Progress) { all.append(step) }

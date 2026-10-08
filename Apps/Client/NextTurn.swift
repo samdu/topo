@@ -95,11 +95,31 @@ final class NextTurn {
     /// microphone can put another on the line while it does, or a relaunch can find more than one
     /// owed. With nothing on its way in the row, every one is before it.
     func queued(in harness: Harness) -> (before: [QueuedTurn], after: [QueuedTurn]) {
-        let unlanded = harness.unlanded.map { QueuedTurn(text: $0.text, nonce: $0.nonce) }
+        let replies = harness.replies
+        let unlanded = harness.unlanded.enumerated().map { place, turn in
+            QueuedTurn(text: turn.text, nonce: turn.nonce,
+                       reply: replies[turn.nonce].map { UnsavedReply.turn($0, place: place) })
+        }
         guard let sent, let held = unlanded.firstIndex(where: { $0.nonce == sent }) else {
             return (unlanded, [])
         }
         return (Array(unlanded[..<held]), Array(unlanded[unlanded.index(after: held)...]))
+    }
+
+    /// The guest's reply to the turn the row holds, while that turn is not in the log: drawn
+    /// under the row.
+    func answer(in harness: Harness) -> Turn? {
+        guard let sent, !harness.said(sent), let reply = harness.replies[sent] else { return nil }
+        return UnsavedReply.turn(reply, place: Int(Int32.max))
+    }
+
+    /// The replies iCloud is behind on whose person's turn did land, oldest first: drawn after
+    /// the log's turns.
+    func behind(in harness: Harness) -> [Turn] {
+        let replies = harness.replies
+        return harness.turns.filter { $0.role == .person && replies[$0.nonce] != nil }.enumerated().map { place, person in
+            UnsavedReply.turn(replies[person.nonce] ?? "", place: -1 - place)
+        }
     }
 
     /// Holding one of the person's own landed turns puts its words back in the row, to be changed
@@ -131,6 +151,15 @@ final class NextTurn {
         sent = nil
         typing = true
         return nonce
+    }
+}
+
+/// A reply the guest wrote that the log does not hold, as something the transcript can draw.
+enum UnsavedReply {
+    /// No turn of the log's, so no device's sequence can name it; `place` keeps two apart.
+    static func turn(_ text: String, place: Int) -> Turn {
+        Turn(ref: TurnRef(device: DeviceID("unsaved"), sequence: Int64(place)), parents: [], role: .assistant,
+             text: text, at: Date(), nonce: "unsaved")
     }
 }
 #endif

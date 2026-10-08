@@ -225,9 +225,7 @@ struct ChatView: View {
             // And before it lands: the reply to a spoken turn is read as the guest writes it.
             // Muted, neither is read: the mute is asked as each comes, off the defaults and not
             // this view's copy, which a task started earlier does not see change.
-            SpokenReply.wire(harness: harness, speaker: speaker) { Mute.readsAloud() }
-            // A turn that ended in a failure is owed no reply, so nothing waits for one.
-            harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
+            SpokenReply.follow(harness, speaker: speaker) { Mute.readsAloud() }
             defer {
                 // Sign-out, a takeover, the screen going: nothing here is going to read a reply
                 // aloud any more, so nothing keeps the process awake for one.
@@ -402,7 +400,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow, queued: row.queued(in: harness),
+                                  draft: draftRow, queued: row.queued(in: harness), answer: row.answer(in: harness),
                                   cue: speaker.cue)
             // An image in a reply is read as the guest reads it, once there is a guest.
             .environment(\.replyImages, GuestImages.reader(epoch: GuestImages.Mounts.shared.epoch))
@@ -525,9 +523,11 @@ struct ChatView: View {
         #if DEBUG
         if let fixture = DebugRun.transcript() { return fixture }
         #endif
-        guard let writing = harness.writing, !writing.isEmpty else { return harness.turns }
-        return harness.turns + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
-                                     nonce: "writing")]
+        let behind = row.behind(in: harness)
+        // What is being written for words not in the log yet is drawn under those words.
+        guard let writing = harness.writing, !writing.isEmpty, !harness.writingAhead else { return harness.turns + behind }
+        return harness.turns + behind + [Turn(ref: Self.writingRef, parents: [], role: .assistant, text: writing, at: Date(),
+                                              nonce: "writing")]
     }
 
     /// The row the reply is drawn in while the guest writes it (`Harness.writing`): no turn of
@@ -776,6 +776,14 @@ private extension View {
 /// is done with the reply.
 @MainActor
 enum SpokenReply {
+    /// The chat's handlers for a spoken turn, as the screen installs them while it answers.
+    static func follow(_ harness: Harness, speaker: Speaker, readsAloud: @escaping @MainActor () -> Bool) {
+        wire(harness: harness, speaker: speaker, readsAloud: readsAloud)
+        // A turn that ended in a failure, or whose reply the guest finished with iCloud behind,
+        // is owed no reply from the log, so nothing waits for one.
+        harness.onTurnFailed = { nonce in speaker.endAwaiting(nonce, "the turn failed") }
+    }
+
     /// The harness's reply and the guest's writing of it handed to the speaker, and the speaker's
     /// settling handed back, as the chat has them. `readsAloud` is asked each time: muted, a
     /// reply that lands is read by nobody (`read`), and what the guest writes is not read as it
