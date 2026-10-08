@@ -4,6 +4,7 @@ import Observation
 import TopoAuth
 import TopoCore
 import TopoTurn
+import TopoUserland
 
 /// The phone harness as the UI sees it: the transcript, the model setting, and one turn at a time.
 /// The log is the shared CloudKit log, on the person's own Apple ID. What answers is the brain the
@@ -27,7 +28,8 @@ final class Harness {
     private(set) var failure: Failure?
 
     struct Failure: Equatable {
-        enum Source { case read, other }
+        /// `sync` is iCloud behind a turn the guest already has: nothing failed for the person.
+        enum Source { case read, sync, other }
         var words: String
         var source: Source = .other
     }
@@ -40,9 +42,33 @@ final class Harness {
     /// whatever reads follow; a line stopped on a failure is not an open turn.
     private(set) var turnOpen = false
     /// The reply the guest is writing now, as far as it has got, drawn under the transcript
-    /// before it is whole and before it is in the log. It is not a turn: it goes when the reply
-    /// lands in the transcript, when the guest starts another message, and when the turn fails.
+    /// before it is whole and before it is in the log: the words of every message of the turn
+    /// so far, so what was said before a tool call stays while the tool runs and after. It is
+    /// not a turn: it goes when the reply lands in the transcript and when the turn fails.
     private(set) var writing: String?
+    /// The guest's finished replies to words said on this device whose turns the log does not
+    /// hold yet, by the person's nonce: iCloud is behind, and each is drawn under its words until
+    /// the turn lands (`replies`).
+    private(set) var unsaved: [String: String] = [:]
+    /// The words the guest is on now that it was given ahead of their turn, by their nonce.
+    private var hearing: String?
+    /// The words given ahead whose guest turn has ended, and whether it ended in a reply.
+    private var heardEnded: [String: Bool] = [:]
+    /// Words given ahead that another device turned out to be the one to answer: what this
+    /// device's guest wrote for them is not drawn, since the log's reply will be another's.
+    private var answeredElsewhere: Set<String> = []
+    /// The line being given to the guest ahead of its turns, entry after entry, in order.
+    private var hearingLine: Task<Void, Never>?
+    /// Moved when the lease says another device answers: a giving of the line begun before it
+    /// gives nothing more.
+    private var giving = 0
+    /// The lease last answered that another device holds it: nothing on the line is given ahead
+    /// until a turn here is this device's to answer again.
+    private var handedBack = false
+    /// The nonces in `unsaved` whose turns are saved and whose replies this device owes the log.
+    private var owedAhead: Set<String> = []
+    /// What `writing` is built from, a message at a time (`follow`).
+    @ObservationIgnored private var words = ReplyWords()
     /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
@@ -69,8 +95,9 @@ final class Harness {
     /// refused it, a call still holding the session — is not recorded, so the next pass offers it
     /// again; every other reply, read aloud or not this screen's to read, is recorded and offered
     /// once.
-    /// Told the reply to a spoken turn as the guest writes it: the message so far and the turn's
-    /// nonce, then nil for the text once nothing more of it is coming — the reply landed (after
+    /// Told the reply to a spoken turn as the guest writes it: the reply so far, which each
+    /// telling extends and none replaces, and the turn's nonce, then nil for the text once
+    /// nothing more of it is coming — the reply landed (after
     /// `onReply` was offered it), or the turn failed.
     var onWriting: (@MainActor (String?, String) -> Void)?
     var onReply: (@MainActor (Turn) -> Bool)? {
@@ -93,8 +120,10 @@ final class Harness {
     /// the screen: the app's default widget follows the newest (`DefaultSurface`).
     var onLanded: (@MainActor (Turn) -> Void)?
     /// Told the nonce of a turn that ended in a failure rather than a reply, as it ends: no reply
-    /// is coming for it, and the screen's error line is not a place to work out whose. Not called
-    /// for a turn another primary is answering, whose reply is still on its way.
+    /// is coming for it, and the screen's error line is not a place to work out whose. Told too
+    /// of a turn the guest finished while iCloud had not taken it, its reply read as it was
+    /// written: nothing more is coming to wait for. Not called for a turn another primary is
+    /// answering, whose reply is still on its way.
     var onTurnFailed: (@MainActor (String) -> Void)?
     /// The replies to spoken turns that no handler has taken, oldest first: what a relaunch finds
     /// owed, and what the install above reads the newest of.
@@ -159,6 +188,20 @@ final class Harness {
         var nonce: String
     }
     private static let outboxKey = "topo.harness.outbox"
+    /// Where this device stood with the lease when it last asked (`TurnRunner.Standing`), kept
+    /// across launches: a phone that was the one answering hears a turn the moment it is said,
+    /// before this launch has asked the lease anything.
+    private static let standingKey = "topo.harness.standing"
+    private var standing: TurnRunner.Standing {
+        get { defaults.string(forKey: Self.standingKey).flatMap(TurnRunner.Standing.init(rawValue:)) ?? .unknown }
+        set { defaults.set(newValue.rawValue, forKey: Self.standingKey) }
+    }
+    /// True when this launch could not reach iCloud to make its runner: the lease cannot be
+    /// asked, so the guest is given what is said directly until a runner is made.
+    private var unreached = false
+    /// How long iCloud is given to answer, before a turn said by a launch with no runner yet is
+    /// given to the guest regardless: the lease's own patience with a request.
+    private let patience: Duration
     private static let spokenKey = "topo.harness.spoken"
     /// The most spoken turns kept waiting for a reply at once. A turn whose reply never comes
     /// would otherwise sit here for good; the oldest go first, and each is only a nonce.
@@ -224,7 +267,9 @@ final class Harness {
          brain: any Brain, relay: GuestRelay = GuestRelay(),
          leaseSleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) },
          pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
-         now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime) {
+         now: @escaping @Sendable () -> TimeInterval = PrimaryLease.continuousUptime,
+         patience: Duration = .seconds(LeaseTiming.standard.patience)) {
+        self.patience = patience
         self.database = RecordingDatabase(database)
         self.tokens = tokens
         self.device = device
@@ -237,6 +282,7 @@ final class Harness {
         self.now = now
         log = TurnLog(database: self.database)
         relay.writing = { [weak self] in self?.follow($0) }
+        relay.heard = { [weak self] in self?.follow($0) }
         spokenNonces = defaults.stringArray(forKey: Self.spokenKey) ?? []
         if let data = defaults.data(forKey: Self.outboxKey),
            let saved = try? JSONDecoder().decode([Outgoing].self, from: data) {
@@ -268,21 +314,33 @@ final class Harness {
     static func guestBrain(_ conversation: any GuestConversation, ledger: URL) -> (GuestBridge, GuestRelay) {
         let relay = GuestRelay()
         let bridge = GuestBridge(conversation: conversation, ledger: ledger,
-                                 observe: { activity in await relay.tell(activity) })
+                                 observe: { activity in await relay.tell(activity) },
+                                 heard: { heard in await relay.tell(heard) })
         return (bridge, relay)
     }
 
     /// The guest, when it is what answers.
     var guest: GuestBridge? { brain as? GuestBridge }
 
+    /// What the look calls the models (`Look.Mind`), handed over by the chat as the look changes.
+    var mind = Look.Mind()
+
+    /// What `model` is called: the look's name for it, or its family's where the look has none.
+    func name(of model: ClaudeModel) -> String { mind.name(model.rawValue) ?? model.displayName }
+
     /// The model setting. A change reaches the brain at once, which for the guest replaces the
-    /// resident process at its next idle moment, never in the middle of a turn.
+    /// resident process at its next idle moment, never in the middle of a turn. What the brain is
+    /// told is the setting as it is when the telling runs, not as it was set: a finger drawn
+    /// along the slider sets it twice in a moment, and the last of them is what must stand.
     var model: ClaudeModel {
-        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(rawValue:)) ?? .default }
+        get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default }
         set {
             defaults.set(newValue.rawValue, forKey: Self.modelKey)
             let brain = brain
-            Task { await brain.use(model: newValue) }
+            Task { [weak self] in
+                guard let self else { return }
+                await brain.use(model: self.model)
+            }
         }
     }
 
@@ -305,6 +363,7 @@ final class Harness {
         status = nil
         turnOpen = false
         dropWriting()
+        forgetHeard()
         busy = false
         context = nil
         unfinished = nil
@@ -344,7 +403,15 @@ final class Harness {
         stopAnswering()
         // The guest is told to forget below, and what it says of its ending is not followed.
         dropWriting()
-        busy = false
+        forgetHeard()
+        // The line goes to the log as a limb's below, which waits on iCloud: none of it reaches
+        // this device's guest meanwhile.
+        // Nor does anything else begin while it does: there is no runner to hear through, and the
+        // line is this function's until it returns.
+        runner = nil
+        lease = nil
+        busy = true
+        for entry in pending { await brain.stopHearing(nonce: entry.nonce) }
         status = nil
         turnOpen = false
         do {
@@ -364,6 +431,55 @@ final class Harness {
         writer = nil
         info = nil
         await brain.forget()
+        // What the guest ended meanwhile, before it was told to forget, is not kept either.
+        dropWriting()
+        forgetHeard()
+        busy = false
+    }
+
+    /// A sign-out or a demotion: what the guest was given ahead of its turns went with the login.
+    private func forgetHeard() {
+        defaults.removeObject(forKey: Self.standingKey)
+        unreached = false
+        giving += 1
+        hearingLine = nil
+        handedBack = false
+        unsaved = [:]
+        owedAhead = []
+        hearing = nil
+        heardEnded = [:]
+        answeredElsewhere = []
+    }
+
+    /// The guest's replies to words said here that the log does not hold a reply to, by the
+    /// person's nonce: the finished ones, and the one being written for words given ahead. The
+    /// chat draws each under its words while iCloud is behind.
+    var replies: [String: String] {
+        // A reply this device owes the log is drawn until it is there, under its own nonce and
+        // whatever else answers the turn meanwhile; any other gives way once the log has gone on
+        // from its turn, since it will not be written.
+        var all = unsaved.filter {
+            !(owedAhead.contains($0.key) ? replied($0.key) : movedPast($0.key)) && !answeredElsewhere.contains($0.key)
+        }
+        if let hearing, let writing, !writing.isEmpty, !said(hearing) { all[hearing] = writing }
+        return all
+    }
+
+    /// True while the reply being written is for words whose turn is not in the log: it is drawn
+    /// under those words (`replies`) and not at the end of the log's turns.
+    var writingAhead: Bool { hearing.map { !said($0) } ?? false }
+
+    /// Reads from the guest which replies it holds for words given ahead: what a relaunch finds,
+    /// and what a landing or a withdrawal took away.
+    private func readUnsaved() async {
+        guard let guest else { return }
+        let login = self.login
+        let held = await guest.unsaved(), owed = await guest.owedAhead()
+        guard self.login == login else { return }
+        unsaved = held
+        owedAhead = owed
+        let line = Set(pending.map(\.nonce))
+        heardEnded = heardEnded.filter { held[$0.key] != nil || line.contains($0.key) }
     }
 
     /// Reads the log into the screen, and answers whether it read it: a log that is not there
@@ -371,6 +487,7 @@ final class Harness {
     /// Only `withdraw` asks; everything else refreshes for the screen's sake.
     @discardableResult
     func refresh() async -> Bool {
+        await readUnsaved()
         do {
             let transcript = try await log.read()
             let dropped = turns.filter { transcript[$0.ref] == nil }.count
@@ -399,6 +516,8 @@ final class Harness {
     /// failure stands until what it was about is tried again.
     private func clearReadFailure() {
         if failure?.source == .read { failure = nil }
+        // Nothing is left for iCloud to catch up on.
+        if failure?.source == .sync, pending.isEmpty, unsaved.isEmpty { failure = nil }
     }
 
     /// One turn: the words go in the log, the reply comes back into it. Words said while a turn
@@ -466,10 +585,27 @@ final class Harness {
         turns.contains { $0.role == .person && $0.nonce == nonce }
     }
 
+    /// Whether the log has gone on from the turn said under `nonce`, as this device knows it: a
+    /// reply to it, or anything else that continues it. A reply this device's guest made of
+    /// those words ahead of their turn, and never bound to it, will not be written.
+    func movedPast(_ nonce: String) -> Bool {
+        guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
+        return turns.contains { $0.parents.contains(person.ref) }
+    }
+
     /// Whether the turn said under `nonce` has a reply in the log, as this device knows it.
     func answered(_ nonce: String) -> Bool {
         guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
         return turns.contains { $0.role == .assistant && $0.parents.contains(person.ref) }
+    }
+
+    /// Whether the log holds the reply to the turn said under `nonce` alone, as this device
+    /// knows it: the one written under that turn's own reply nonce, which a reply to a fork the
+    /// turn is one head of is not.
+    func replied(_ nonce: String) -> Bool {
+        guard let person = turns.first(where: { $0.role == .person && $0.nonce == nonce }) else { return false }
+        let reply = TurnRunner.replyNonce(for: [person.ref])
+        return turns.contains { $0.role == .assistant && $0.nonce == reply }
     }
 
     /// Whether the words said under `nonce` can be taken back: they are still owed on this
@@ -496,6 +632,10 @@ final class Harness {
         guard canWithdraw(nonce) else { return false }
         pending.removeAll { $0.nonce == nonce }
         spokenNonces.removeAll { $0 == nonce }
+        // The guest may have the words already, and an answer to them: neither is the log's now.
+        unsaved[nonce] = nil
+        heardEnded[nonce] = nil
+        await brain.withdrawn(nonce: nonce)
         return true
     }
 
@@ -508,6 +648,7 @@ final class Harness {
     var hasWaiting: Bool { !busy && !pending.isEmpty }
 
     private func drain() async {
+        hearLine()
         guard !busy else { return }
         busy = true
         failure = nil
@@ -527,6 +668,89 @@ final class Harness {
         if pending.isEmpty {
             failedRetries = 0
             retryNotBefore = nil
+        }
+    }
+
+    /// Gives the guest every entry on the line it does not have yet, oldest first, ahead of the
+    /// lease and the save: the device the person is typing on is the one that answers, so what
+    /// was said is answered while iCloud is slow or away, a second message behind the first. Each
+    /// call follows the one before, so the order is the line's. Nothing is given before the log
+    /// has been read, since the read is what a fresh guest is told of the conversation.
+    private func hearLine() {
+        guard runner != nil || unreached, !pending.isEmpty else { return }
+        let line = pending, login = self.login
+        guard !handedBack else { return }
+        let before = hearingLine, giving = self.giving
+        hearingLine = Task { [weak self] in
+            await before?.value
+            for entry in line {
+                guard !Task.isCancelled, let self, self.login == login, self.giving == giving,
+                      self.pending.contains(entry), !self.said(entry.nonce) else { continue }
+                if let runner = self.runner {
+                    await runner.hear(entry.text, model: self.model, nonce: entry.nonce, known: self.known)
+                } else if self.unreached {
+                    _ = await self.brain.hear(entry.text, nonce: entry.nonce, context: self.known, model: self.model)
+                }
+            }
+        }
+    }
+
+    /// Stops every word of the line still on its way to the guest ahead of its turn. What the
+    /// guest already has it keeps.
+    private func stopGivingAhead() async {
+        giving += 1
+        for entry in pending { await brain.stopHearing(nonce: entry.nonce) }
+    }
+
+    /// Keeps where the runner stands with the lease for the next launch, unless a sign-out or a
+    /// demotion has cleared it meanwhile.
+    private func keepStanding(of runner: TurnRunner, under login: Int) {
+        Task { [weak self] in
+            let standing = await runner.standing
+            guard let self, self.login == login else { return }
+            self.standing = standing
+        }
+    }
+
+    /// The log as this device last read it, for a guest to be told of; nil before any read.
+    private var known: [Turn]? { hasRead ? turns : nil }
+
+    /// Makes the runner, which is the first thing a launch asks of iCloud. A launch that was the
+    /// one answering gives the guest the words first; any other gives iCloud the lease's own
+    /// patience, and the guest the words once that runs out or iCloud fails, since the lease
+    /// cannot then be asked who holds it. Throws `unsaved` when the guest has the words and
+    /// there is still no runner to save them.
+    private func reach(for attempt: Outgoing) async throws -> TurnRunner {
+        if let runner { return runner }
+        let login = self.login
+        // iCloud's patience, cut short when it fails outright.
+        let waiting = Task { [patience, mine = standing == .mine] in
+            if !mine { try? await Task.sleep(for: patience) }
+        }
+        let hearing = Task { [weak self] () -> Bool in
+            await waiting.value
+            guard let self, self.runner == nil, self.login == login else { return false }
+            self.unreached = true
+            return await self.brain.hear(attempt.text, nonce: attempt.nonce, context: self.known, model: self.model)
+        }
+        do {
+            try await ensureZone()
+            let made = try await makeRunner()
+            // A sign-out or a demotion meanwhile: the runner is not this login's to keep.
+            guard self.login == login else { throw CancellationError() }
+            runner = made
+            unreached = false
+            // The wait ends finding a runner, unless the guest has the words already, which the
+            // runner then finds.
+            waiting.cancel()
+            return made
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // iCloud failed inside its patience: the guest hears now rather than when it runs out.
+            waiting.cancel()
+            if await hearing.value { throw TurnRunnerError.unsaved(underlying: error) }
+            throw error
         }
     }
 
@@ -554,7 +778,7 @@ final class Harness {
     /// False leaves it as the unsent turn.
     @discardableResult
     private func run(_ attempt: Outgoing) async -> Bool {
-        let generation = inFlight
+        let generation = inFlight, login = self.login
         let text = attempt.text
         turnOpen = true
         // Every way out closes the turn, unless a sign-out or a demotion already has and the
@@ -562,21 +786,31 @@ final class Harness {
         defer { if inFlight == generation { turnOpen = false } }
         do {
             Perf.mark("turn.send")
-            if runner == nil {
-                status = "Reaching iCloud…"
-                try await ensureZone()
-                runner = try await makeRunner()
-                Perf.mark("turn.runner.made")
+            if runner == nil { status = "Reaching iCloud…" }
+            let runner: TurnRunner
+            do {
+                runner = try await reach(for: attempt)
+            } catch is CancellationError {
+                // A sign-out or a demotion: nothing of the line is given to the guest for it.
+                throw CancellationError()
+            } catch {
+                // What is said behind this turn is given to the guest behind it all the same.
+                hearLine()
+                throw error
             }
-            guard let runner else { return false }
+            Perf.mark("turn.runner.made")
+            // A line longer than this turn is given to the guest behind it.
+            hearLine()
+            defer { keepStanding(of: runner, under: login) }
             #if DEBUG
             await DebugRun.delayReply()
             #endif
-            let result = try await runner.run(text, model: model, nonce: attempt.nonce) { [weak self] step in
+            let result = try await runner.run(text, model: model, nonce: attempt.nonce, known: known) { [weak self] step in
                 await self?.show(step, generation: generation)
             }
             // A sign-out during the turn cleared the screen; this result is not for it.
             guard inFlight == generation, !Task.isCancelled else { return false }
+            handedBack = false
             show(result.person)
             show(result.assistant)
             Perf.mark("turn.reply.shown")
@@ -591,11 +825,63 @@ final class Harness {
             return true
         } catch is CancellationError {
             return false
+        } catch TurnRunnerError.unsaved(let underlying) {
+            // iCloud is behind and the guest has the words all the same: nothing failed for the
+            // person. The row keeps the words, the reply is drawn as it is written and stays once
+            // it is whole, and the line goes again, as any stopped line does, to save both.
+            guard inFlight == generation else { return false }
+            // The lease could not be asked, so this device answers: the line behind is given too,
+            // and what the guest makes of these words is drawn again.
+            if handedBack {
+                handedBack = false
+                hearLine()
+            }
+            answeredElsewhere.remove(attempt.nonce)
+            failure = Failure(words: Self.behind(underlying), source: .sync)
+            if let replied = heardEnded[attempt.nonce] { settleHeard(attempt.nonce, replied: replied) }
+            status = nil
+            return false
+        } catch TurnRunnerError.movedPast(let person) {
+            // The turn is in the log and another device went on from it: nothing is asked or
+            // written for it here, and what this device's guest made of the words is not a reply.
+            guard inFlight == generation else { return false }
+            turnOpen = false
+            unsaved[attempt.nonce] = nil
+            heardEnded[attempt.nonce] = nil
+            // Whatever the guest goes on to write of those words is not drawn, and its end is
+            // not told a second time.
+            answeredElsewhere.insert(attempt.nonce)
+            if hearing == attempt.nonce { dropWriting() }
+            show(person)
+            onTurnFailed?(attempt.nonce)
+            await refresh()
+            status = nil
+            return true
         } catch TurnRunnerError.replyFailed(_, let underlying) {
+            if await keptUnsaved(attempt.nonce, underlying) {
+                // The person's turn is in the log and the guest's reply is whole; only its save
+                // failed, and the next pass writes it. It stays on screen meanwhile.
+                guard inFlight == generation else { return false }
+                turnOpen = false
+                handedBack = false
+                failure = Failure(words: Self.behind(underlying), source: .sync)
+                settleHeard(attempt.nonce, replied: true)
+                await refresh()
+                status = nil
+                return true
+            }
             // The person's turn is in the log; only the reply is owed, and nothing is going to
             // bring it, so whatever is waiting on that turn hears so now.
             guard inFlight == generation else { return false }
             turnOpen = false
+            // Displaced, another device has just taken the lease, and the line stays off this guest.
+            if case TurnRunnerError.displaced = underlying {
+                handedBack = true
+                await stopGivingAhead()
+                guard inFlight == generation else { return false }
+            } else {
+                handedBack = false
+            }
             // What was drawn of the reply is not in the log, and the log is what the screen shows.
             dropWriting()
             failure = Failure(words: Self.describe(underlying))
@@ -605,6 +891,16 @@ final class Harness {
             status = nil
             return true
         } catch TurnRunnerError.notPrimary(let outcome) {
+            guard inFlight == generation else { return false }
+            // Whatever this device's guest makes of words it was given ahead is not the reply:
+            // the device that holds the lease writes that.
+            answeredElsewhere.insert(attempt.nonce)
+            if hearing == attempt.nonce { dropWriting() }
+            // Nor is anything on the line given to this device's guest from here: what is still
+            // on its way stops. What the guest already has it keeps: should this device come to
+            // answer the turn after all, that input is its answer.
+            handedBack = true
+            await stopGivingAhead()
             guard inFlight == generation else { return false }
             // Not this device's turn to answer: the words go in the log as a limb's, and whichever
             // device is primary answers them there. Settled once they are in the log.
@@ -645,29 +941,97 @@ final class Harness {
     private func show(_ step: TurnRunner.Progress, generation: Task<Bool, Never>?) {
         guard inFlight == generation else { return }
         switch step {
+        case .heard: status = "Asking \(model.displayName)…"
         case .takingLease: status = "Checking this device is primary…"
         case .saving: status = "Saving what you said…"
         case .asking(let person):
             show(person)
-            status = "Asking \(model.displayName)…"
+            status = "Asking \(name(of: model))…"
         case .savingReply: status = "Saving the reply…"
         }
     }
 
-    /// Keeps `writing` to what the guest has written of the message it is on.
+    /// iCloud being behind, in words that fit the notice's two lines.
+    static func behind(_ error: any Error) -> String {
+        "iCloud is behind; what was said here is saved when it is back."
+    }
+
+    /// Whether the reply to the turn said under `nonce` is one the guest finished and holds for
+    /// the log, its save having failed for a reason of the database's and not a displacement.
+    private func keptUnsaved(_ nonce: String, _ underlying: any Error) async -> Bool {
+        if case TurnRunnerError.displaced = underlying { return false }
+        guard underlying is RecordDatabaseError, let guest else { return false }
+        let held = await guest.unsaved()
+        guard let reply = held[nonce] else { return false }
+        unsaved[nonce] = reply
+        owedAhead.insert(nonce)
+        return true
+    }
+
+    /// The guest has finished with words whose turn or reply iCloud has not taken: nothing more
+    /// of the reply is coming to read aloud, and nothing waits for it to land. A reply that was
+    /// written was read as it was written, so its landing later is not read again.
+    private func settleHeard(_ nonce: String, replied: Bool) {
+        heardEnded[nonce] = nil
+        if writingSpoken == nonce {
+            // A line break settles the last sentence (`Speaker.settled`), so it is read too.
+            if replied, let reply = unsaved[nonce] { onWriting?(reply + "\n", nonce) }
+            onWriting?(nil, nonce)
+            writingSpoken = nil
+            // Read as it was written, so its landing is not read again.
+            if replied { spokenNonces.removeAll { $0 == nonce } }
+        }
+        onTurnFailed?(nonce)
+    }
+
+    /// What became of words given to the guest ahead of their turn.
+    private func follow(_ heard: GuestHeard) {
+        switch heard {
+        case .began(let nonce):
+            hearing = nonce
+        case .ended(let nonce, let reply):
+            let drawn = !answeredElsewhere.contains(nonce) && !answered(nonce)
+            if let reply, drawn { unsaved[nonce] = reply }
+            if hearing == nonce {
+                // The reply is whole and held by its nonce now, or there is none: either way
+                // the row for what is being written is done with. The reader is told below.
+                if reply != nil { writing = nil } else { dropWriting() }
+                hearing = nil
+            }
+            // A turn still being run hears of its end from the runner. One that is not — its
+            // save failed while the guest wrote, or it waits behind the line's head — ends here.
+            if busy, pending.first?.nonce == nonce {
+                heardEnded[nonce] = reply != nil
+            } else if drawn {
+                settleHeard(nonce, replied: reply != nil)
+            }
+        }
+    }
+
+    /// Keeps `writing` to what the guest has written of the turn it is answering: every
+    /// message's words so far, the ones before a tool call included, as the reply will be
+    /// written to the log (`ReplyWords`, which the bridge writes it from too).
+    ///
+    /// Whoever reads it aloud is handed that same text and nothing else, so a string that only
+    /// ever grows: a new message adds nothing until it has words, and then the paragraph break
+    /// comes with them, which is what ends the sentence before it.
     private func follow(_ activity: GuestActivity) {
+        if case .update(.event(.writing)) = activity, let hearing, answeredElsewhere.contains(hearing) { return }
         switch activity {
         case .began(_, let answering):
             writing = nil
-            writingSpoken = turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
+            words = ReplyWords()
+            if !answering.isEmpty { hearing = nil }
+            writingSpoken = hearing.flatMap { spokenNonces.contains($0) ? $0 : nil }
+                ?? turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
         case .update(.event(.writingBegan)):
-            // Empty rather than nil: the turn is still being answered, by a new message.
-            writing = writing == nil ? nil : ""
-            if let writing, let writingSpoken { onWriting?(writing, writingSpoken) }
+            words.begin()
         case .update(.event(.writing(let more))):
             if writing == nil { Perf.mark("turn.text.first") }
-            writing = (writing ?? "") + more
-            if let writingSpoken { onWriting?(writing, writingSpoken) }
+            words.append(more)
+            let written = words.text
+            writing = written
+            if let writingSpoken { onWriting?(written, writingSpoken) }
         case .update(.ended(let end)):
             // A turn that ended with no reply leaves nothing to land; one that answered is
             // replaced by its turn when that is shown.
@@ -680,6 +1044,7 @@ final class Harness {
     /// What was drawn of a reply goes, and whoever was reading it aloud is told no more comes.
     private func dropWriting() {
         writing = nil
+        words = ReplyWords()
         if let writingSpoken { onWriting?(nil, writingSpoken) }
         writingSpoken = nil
     }
@@ -690,6 +1055,13 @@ final class Harness {
         defer { if turn.role == .assistant { dropWriting() } }
         guard !turns.contains(where: { $0.ref == turn.ref }) else { return }
         turns.append(turn)
+        // A reply in the log is drawn as the turn it is, and no longer as one iCloud is behind on.
+        if turn.role == .assistant {
+            for person in turns where person.role == .person && turn.parents.contains(person.ref) {
+                unsaved[person.nonce] = nil
+                heardEnded[person.nonce] = nil
+            }
+        }
         seen(turn)
     }
 
@@ -790,10 +1162,13 @@ final class Harness {
                 runner = try await makeRunner()
             }
             guard let runner, self.login == login else { return }
+            defer { keepStanding(of: runner, under: login) }
             let answered = try await runner.answerPending(model: model)
             // A sign-out during the pass: what it found is for a screen that has gone.
             guard self.login == login else { return }
             if let reply = answered {
+                // This device answered: the lease is its own, and the line is given ahead again.
+                handedBack = false
                 show(reply)
                 failure = nil
                 await refresh()
@@ -845,7 +1220,7 @@ final class Harness {
         let lease = self.lease ?? PrimaryLease(database: database, device: device, endpoint: nil, probe: NoSocketProbe(),
                                                sleep: leaseSleep)
         self.lease = lease
-        return TurnRunner(log: log, writer: writer, lease: lease, brain: brain)
+        return TurnRunner(log: log, writer: writer, lease: lease, brain: brain, standing: standing)
     }
 
     /// What the diagnostics screen shows: everything a failed or silent turn could be blamed on.
@@ -883,7 +1258,7 @@ final class Harness {
         rows.append(("Brain", await brain.describe()))
         rows.append(("Unfinished turn", unfinished.map { "\($0.ref): \($0.text)" } ?? "none"))
         rows.append(("Claude token", await Self.describeToken(tokens)))
-        rows.append(("Model", model.displayName))
+        rows.append(("Model", "\(name(of: model)) (\(model.rawValue))"))
         rows.append(("Turns on screen", "\(turns.count)"))
         return Diagnostics(rows: rows)
     }
@@ -921,7 +1296,10 @@ final class GuestRelay {
     var handler: (@MainActor (GuestActivity) -> Void)?
     /// The harness's own ear, for the reply as it is written (`Harness.writing`).
     var writing: (@MainActor (GuestActivity) -> Void)?
+    /// And for what became of words given to the guest ahead of their turn.
+    var heard: (@MainActor (GuestHeard) -> Void)?
     nonisolated init() {}
+    func tell(_ what: GuestHeard) { heard?(what) }
     func tell(_ activity: GuestActivity) {
         writing?(activity)
         handler?(activity)

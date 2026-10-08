@@ -428,15 +428,18 @@ final class MascotGeometryTests: XCTestCase {
     // MARK: His picture
 
     /// The runs both engine tests make: every facing, every head, and one token count in each
-    /// load band (default, warning, reset, untrusted), each with its own seeds.
+    /// load band (default, warning, reset, untrusted), each with its own seeds. The heads are the
+    /// engine's four and not the models' three: the brain is no model's, and the box and the reach
+    /// keep its room, so a model that takes it moves nothing on the page.
     private struct Run: Sendable {
-        let facing: MascotFacing, model: String, tokens: Double, m: Int, b: Int
-        var label: String { "\(model) \(tokens) facing \(facing.rawValue)" }
+        let facing: MascotFacing, level: Double, tokens: Double, m: Int, b: Int
+        var label: String { "head \(Int(level)) \(tokens) facing \(facing.rawValue)" }
 
+        static let heads: [Double] = [1, 2, 3, 4]
         static let all: [Run] = MascotFacing.allCases.flatMap { facing in
-            ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"].enumerated().flatMap { m, model in
+            heads.enumerated().flatMap { m, level in
                 [1_000.0, 210_000, 260_000, 320_000].enumerated().map { b, tokens in
-                    Run(facing: facing, model: model, tokens: tokens, m: m, b: b)
+                    Run(facing: facing, level: level, tokens: tokens, m: m, b: b)
                 }
             }
         }
@@ -477,7 +480,7 @@ final class MascotGeometryTests: XCTestCase {
             var reached = Reach(), otherFacing = 0
             var home = 0.0
             for frame in 0..<(120 * 30) {
-                engine.update(1.0 / 30, TopoInput(model: run.model, tokens: run.tokens, activity: "idle", corner: 0,
+                engine.update(1.0 / 30, TopoInput(tokens: run.tokens, level: run.level, activity: "idle", corner: 0,
                                                   facing: run.facing.rawValue))
                 let resting = engine.poseName == "shelf" && engine.x == 0 && engine.outing == nil
                 home = resting ? home + 1.0 / 30 : 0
@@ -540,7 +543,7 @@ final class MascotGeometryTests: XCTestCase {
                         until = time + (activity == "idle" ? 20 + schedule.next() * 40 : schedule.next() * 5)
                     }
                 }
-                engine.update(1.0 / 30, TopoInput(model: run.model, tokens: run.tokens, activity: activity, corner: 0,
+                engine.update(1.0 / 30, TopoInput(tokens: run.tokens, level: run.level, activity: activity, corner: 0,
                                                   facing: run.facing.rawValue))
                 engine.draw(&rgba)
                 let pose = engine.poseName
@@ -565,11 +568,11 @@ final class MascotGeometryTests: XCTestCase {
         XCTAssertNotNil(poses["yoga"], "no run took him to yoga")
         XCTAssertNotNil(poses["corner"], "no run took him to the corner")
         var sign = Reach()
-        for model in ["claude-haiku-4-5", "claude-opus-5", "claude-fable-5-1"] {
+        for level in Run.heads {
             let engine = Topo(random: { 0.5 })
             var rgba = [UInt8](repeating: 0, count: Topo.width * Topo.height * 4)
             for _ in 0..<(6 * 30) {
-                engine.update(1.0 / 30, TopoInput(model: model, tokens: 1_000, activity: "sign", sign: "updating memory", corner: 0))
+                engine.update(1.0 / 30, TopoInput(tokens: 1_000, level: level, activity: "sign", sign: "updating memory", corner: 0))
                 engine.draw(&rgba)
                 sign.add(rgba)
             }

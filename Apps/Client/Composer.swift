@@ -2,8 +2,9 @@
 import SwiftUI
 
 /// The bar under the transcript: a floating pane of glass with the microphone set into the
-/// middle of it and a control at each end. It holds no state of its own beyond what it is
-/// handed, so a canvas can show every state it has.
+/// middle of it and its controls at each end — the keyboard and the mute on the leading flank,
+/// the model on the trailing one, which opens the model slider across the top of the pane. It
+/// holds no state of its own beyond what it is handed, so a canvas can show every state it has.
 ///
 /// The glass is what says the microphone is open. A thumb on the microphone covers the jewel,
 /// so the pane takes Topo's colour, the jewel goes pale under the thumb and the glow spills onto
@@ -39,7 +40,49 @@ struct Composer: View {
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
+    /// Replies to spoken turns are read aloud. The mute on the leading flank says so and asks for
+    /// the other; what muting ends is the chat's.
+    var readsAloud = true
+    var setReadsAloud: (Bool) -> Void = { _ in }
+    /// The models the chat offers and the one chosen, or nil where there is no choice to make.
+    var models: Models?
     @Environment(\.look) private var look
+
+    /// The model slider as the glass draws it: the stops, smallest model first, the one chosen,
+    /// and whether the slider is open. A value the chat makes and two things it is told, so the
+    /// glass knows no model by name.
+    struct Models {
+        struct Stop: Equatable, Identifiable, Sendable {
+            /// The model's alias, which is what `choose` is handed.
+            var id: String
+            /// What the look calls it.
+            var name: String
+        }
+
+        var stops: [Stop]
+        var chosen: String
+        var open = false
+        var setOpen: (Bool) -> Void = { _ in }
+        var choose: (String) -> Void = { _ in }
+
+        /// The stop nearest `x` on a line `width` long whose first and last stops are `inset`
+        /// from its ends: where a finger on the line is.
+        static func nearest(to x: CGFloat, width: CGFloat, inset: CGFloat, count: Int) -> Int? {
+            guard count > 0, x.isFinite, width.isFinite else { return nil }
+            guard count > 1 else { return 0 }
+            let span = max(width - 2 * inset, 1)
+            let share = min(max((x - inset) / span, 0), 1)
+            return Int((share * CGFloat(count - 1)).rounded())
+        }
+
+        /// How far along the line stop `index` of `count` is, 0 to 1; the middle for a lone stop.
+        static func share(of index: Int, count: Int) -> CGFloat {
+            count > 1 ? CGFloat(index) / CGFloat(count - 1) : 0.5
+        }
+    }
+
+    /// The slider is drawn: open, and with no keyboard up, under which the pane is short.
+    private var sliderShown: Bool { models?.open ?? false }
 
     /// What the microphone is doing, and which of the five the glass draws for it. The chat
     /// screen reads four facts off `VoiceInput` and one off `Speaker`, and this decides what they
@@ -111,20 +154,29 @@ struct Composer: View {
 
     var body: some View {
         let geometry = ComposerGeometry.of(look.composer, keyboard: keyboard)
-        HStack(spacing: look.composer.spacing) {
-            // The two ends take the same width, which is what keeps the microphone in the
-            // middle of the glass. A control that has gone keeps its place, so the glass
-            // never changes size.
-            leading
-                .etched(look.composer.flank, ink: ink)
-                .frame(maxWidth: .infinity, alignment: .trailing)
-                .opacity(flankOpacity)
-            micButton(geometry)
-            trailing
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .opacity(flankOpacity)
+        VStack(spacing: look.composer.models.spacing) {
+            if sliderShown, let models {
+                ModelSlider(models: models, ink: ink)
+                    .padding(.top, look.composer.models.topInset)
+                    .opacity(flankOpacity)
+                    .transition(.opacity)
+            }
+            HStack(spacing: look.composer.spacing) {
+                // The two ends take the same width, which is what keeps the microphone in the
+                // middle of the glass. A control that has gone keeps its place, so the glass
+                // never changes size.
+                leading
+                    .etched(look.composer.flank, ink: ink)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .opacity(flankOpacity)
+                micButton(geometry)
+                trailing
+                    .etched(look.composer.flank, ink: ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(flankOpacity)
+            }
+            .padding(.horizontal, look.composer.horizontalInset)
         }
-        .padding(.horizontal, look.composer.horizontalInset)
         .padding(.vertical, geometry.verticalInset)
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
         // The whole pane is off limits to Topo, at every presence.
@@ -135,6 +187,7 @@ struct Composer: View {
         .padding(.bottom, look.composer.bottomPadding)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
         .animation(.easeInOut(duration: look.composer.duration), value: typing)
+        .animation(.easeInOut(duration: look.composer.duration), value: sliderShown)
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
     }
 
@@ -152,27 +205,56 @@ struct Composer: View {
     /// itself has taken that colour.
     private var ink: Color { mic.open ? look.composer.flank.openInk : look.composer.flank.ink }
 
-    /// No control: what else can come in besides words has no path into the log yet. It keeps the
-    /// space so the microphone stays in the middle.
-    private var trailing: some View {
-        Color.clear.frame(width: 0, height: 0)
+    /// The model: the control that opens the slider across the top of the pane and shuts it
+    /// again, which says the model chosen as its value. Nothing where there is no choice to make;
+    /// the flank keeps its space either way, so the microphone stays in the middle.
+    @ViewBuilder private var trailing: some View {
+        if let models {
+            let flank = look.composer.flank
+            HStack(spacing: 0) {
+                Button { models.setOpen(!models.open) } label: {
+                    Self.mark(flank.models, flank.modelsOpen, second: sliderShown).font(flank.font)
+                }
+                .accessibilityIdentifier("composer-model")
+                .accessibilityLabel(sliderShown ? "Close the model slider" : "Choose the model")
+                .accessibilityValue(models.stops.first { $0.id == models.chosen }?.name ?? "")
+                .frame(maxWidth: .infinity)
+                // The far half is nobody's, which is what mirrors the keyboard's across the well.
+                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
+            }
+        } else {
+            Color.clear.frame(width: 0, height: 0)
+        }
     }
 
-    /// The way to the keyboard, and back from it. One control with two states rather than two
-    /// controls, since the row it raises the keyboard for is the only thing it has to undo.
-    ///
-    /// Both marks are laid out and one is drawn, so the control is the size of the larger of them
-    /// either way: the keyboard mark is taller than the plain one, and a flank that grew as the
-    /// keyboard rose would hold up a pane that is meant to go short.
+    /// The way to the keyboard, and back from it, and beside it the mute. The keyboard's is one
+    /// control with two states rather than two controls, since the row it raises the keyboard for
+    /// is the only thing it has to undo; the mute is the same, replies read aloud or not.
     private var leading: some View {
-        Button { typing.toggle() } label: {
-            ZStack {
-                Image(systemName: "keyboard").opacity(typing ? 0 : 1)
-                Image(systemName: "keyboard.chevron.compact.down").opacity(typing ? 1 : 0)
+        let flank = look.composer.flank
+        return HStack(spacing: 0) {
+            Button { typing.toggle() } label: {
+                Self.mark(flank.keyboard, flank.keyboardDown, second: typing).font(flank.font)
             }
-            .font(look.composer.flank.font)
+            .accessibilityLabel(typing ? "Hide the keyboard" : "Type instead")
+            .frame(maxWidth: .infinity)
+            Button { setReadsAloud(!readsAloud) } label: {
+                Self.mark(flank.speaking, flank.muted, second: !readsAloud).font(flank.font)
+            }
+            .accessibilityIdentifier("composer-mute")
+            .accessibilityLabel(readsAloud ? "Mute replies" : "Read replies aloud")
+            .frame(maxWidth: .infinity)
         }
-        .accessibilityLabel(typing ? "Hide the keyboard" : "Type instead")
+    }
+
+    /// A control with two states: both marks are laid out and one is drawn, so the control is the
+    /// size of the larger of them either way. The keyboard's second mark is taller than its first,
+    /// and a flank that grew as the keyboard rose would hold up a pane that is meant to go short.
+    private static func mark(_ first: String, _ other: String, second: Bool) -> some View {
+        ZStack {
+            Image(systemName: first).opacity(second ? 0 : 1)
+            Image(systemName: other).opacity(second ? 1 : 0)
+        }
     }
 
     /// The system's glass where there is any, a material of the same shape below it. The tint
@@ -256,6 +338,76 @@ struct Composer: View {
             // where they are and the pane, whose width a wide look's content can set, never
             // narrows under the keyboard.
             .frame(width: geometry.slot)
+    }
+}
+
+/// The model slider: a line across the top of the pane with a stop for each model, smallest
+/// first, each model's name under its stop and a knob on the one chosen. A tap on a stop or its
+/// name chooses it, and so does a finger drawn along the line, at the stop it is nearest. The
+/// chosen stop reports where it is, which is where Topo sits (`mascotStop`).
+private struct ModelSlider: View {
+    let models: Composer.Models
+    let ink: Color
+    @Environment(\.look) private var look
+
+    var body: some View {
+        let slider = look.composer.models
+        let count = models.stops.count
+        let chosen = models.stops.firstIndex { $0.id == models.chosen }
+        GeometryReader { proxy in
+            // The look's inset, and no more than leaves the stops half the pane to stand along.
+            let inset = min(slider.inset, proxy.size.width / 4)
+            let span = max(proxy.size.width - 2 * inset, 0)
+            let x = { (index: Int) in inset + span * Composer.Models.share(of: index, count: count) }
+            let line = slider.knob / 2
+            // A stop's column: as wide as the room between two stops, no wider than leaves an end
+            // stop's inside the pane, and never too narrow to press.
+            let column = max(min(count > 1 ? span / CGFloat(count - 1) : proxy.size.width, 2 * inset), slider.knob)
+            ZStack(alignment: .topLeading) {
+                Capsule().fill(ink.opacity(slider.restOpacity))
+                    .frame(width: span, height: slider.track)
+                    .offset(x: inset, y: line - slider.track / 2)
+                ForEach(Array(models.stops.enumerated()), id: \.element.id) { index, stop in
+                    let own = index == chosen
+                    Button { models.choose(stop.id) } label: {
+                        VStack(spacing: slider.labelSpacing) {
+                            // The knob stands on the chosen stop, so its own mark is not drawn.
+                            Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
+                                .frame(width: slider.stop, height: slider.stop)
+                                .frame(height: slider.knob)
+                            Text(stop.name).font(slider.labelFont).lineLimit(1)
+                                .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
+                        }
+                        .frame(width: column, height: proxy.size.height, alignment: .top)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("composer-model-\(stop.id)")
+                    .accessibilityLabel(stop.name)
+                    .accessibilityAddTraits(own ? .isSelected : [])
+                    .mascotStop(own)
+                    .position(x: x(index), y: proxy.size.height / 2)
+                }
+                if let chosen {
+                    Circle().fill(ink)
+                        .frame(width: slider.knob, height: slider.knob)
+                        .position(x: x(chosen), y: line)
+                        .allowsHitTesting(false)
+                        .animation(.easeInOut(duration: look.composer.duration), value: chosen)
+                }
+            }
+            .contentShape(Rectangle())
+            // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
+            .simultaneousGesture(DragGesture(minimumDistance: slider.knob / 2).onChanged { drag in
+                guard let index = Composer.Models.nearest(to: drag.location.x, width: proxy.size.width,
+                                                          inset: inset, count: count),
+                      index != chosen else { return }
+                models.choose(models.stops[index].id)
+            })
+        }
+        .frame(height: slider.height)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("composer-models")
     }
 }
 
@@ -347,7 +499,7 @@ enum KeyboardInset {
 /// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
 /// open, and that must not depend on how much has been said. So is the keyboard: the pane goes
 /// short under it, and a pane that is not there cannot be seen to.
-/// So is a pane Topo sits on (`holdsTopo`, the look's `glass` placement): a Topo on invisible glass
+/// So is a pane Topo sits on (`holdsTopo`: the look's `glass` placement, or the model slider open): a Topo on invisible glass
 /// is a Topo floating.
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing

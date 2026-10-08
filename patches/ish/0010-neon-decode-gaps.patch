@@ -1,0 +1,339 @@
+diff --git a/asbestos/guest-arm64/gadgets-aarch64/math.S b/asbestos/guest-arm64/gadgets-aarch64/math.S
+index 4d05aac..ceb0886 100644
+--- a/asbestos/guest-arm64/gadgets-aarch64/math.S
++++ b/asbestos/guest-arm64/gadgets-aarch64/math.S
+@@ -9402,6 +9402,216 @@ make_vec_aba uaba, uaba
+     str q2, [x14]
+     gret
+ 
++/*
++ * SQSHLU / UQSHL (vector, immediate) - saturating shift left by an immediate
++ * Code stream: [gadget addr][rd | rn<<8 | shift<<16 | esize<<24 | Q<<28]
++ *
++ * Run on the host's NEON as UQSHL by register, the shift in every element.
++ * SQSHLU reads its elements as signed and saturates to the unsigned range, so
++ * its negative elements are zeroed first and the rest is UQSHL.
++ */
++.macro make_sat_shl_imm name, from_signed
++.gadget \name\()_imm_vec
++    ldr x8, [_pc]
++    add _pc, _pc, #8
++
++    and x9, x8, #0x1f       // rd
++    ubfx x10, x8, #8, #5    // rn
++    ubfx x11, x8, #16, #8   // shift amount
++    ubfx x12, x8, #24, #4   // esize (0=8, 1=16, 2=32, 3=64)
++    ubfx x17, x8, #28, #1   // Q
++
++    add x13, _cpu, #CPU_fp
++    lsl x14, x9, #4
++    add x14, x13, x14       // &Vd
++    lsl x15, x10, #4
++    add x15, x13, x15       // &Vn
++
++    ldr q0, [x15]
++
++    cmp x12, #1
++    b.lo .L\name\()_imm_b
++    b.eq .L\name\()_imm_h
++    cmp x12, #2
++    b.eq .L\name\()_imm_s
++
++    dup v1.2d, x11
++.if \from_signed
++    cmge v2.2d, v0.2d, #0
++    and v0.16b, v0.16b, v2.16b
++.endif
++    uqshl v0.2d, v0.2d, v1.2d
++    b .L\name\()_imm_store
++
++.L\name\()_imm_b:
++    dup v1.16b, w11
++.if \from_signed
++    cmge v2.16b, v0.16b, #0
++    and v0.16b, v0.16b, v2.16b
++.endif
++    uqshl v0.16b, v0.16b, v1.16b
++    b .L\name\()_imm_store
++
++.L\name\()_imm_h:
++    dup v1.8h, w11
++.if \from_signed
++    cmge v2.8h, v0.8h, #0
++    and v0.16b, v0.16b, v2.16b
++.endif
++    uqshl v0.8h, v0.8h, v1.8h
++    b .L\name\()_imm_store
++
++.L\name\()_imm_s:
++    dup v1.4s, w11
++.if \from_signed
++    cmge v2.4s, v0.4s, #0
++    and v0.16b, v0.16b, v2.16b
++.endif
++    uqshl v0.4s, v0.4s, v1.4s
++
++.L\name\()_imm_store:
++    cbz x17, .L\name\()_imm_store_low
++    str q0, [x14]
++    gret
++.L\name\()_imm_store_low:
++    str d0, [x14]
++    str xzr, [x14, #8]
++    gret
++.endm
++
++make_sat_shl_imm sqshlu, 1
++make_sat_shl_imm uqshl, 0
++
++/*
++ * SCVTF / UCVTF (vector, fixed-point) - integer to FP with fractional bits
++ * Code stream: [gadget addr][rd | rn<<8 | fbits<<16 | esize<<24 | Q<<28]
++ *
++ * esize: 2 = single, 3 = double. The integer conversion on the host's NEON,
++ * which rounds once, then a multiplication by 2^-fbits, which is exact: the
++ * smallest result is 2^-64, far from subnormal.
++ */
++.macro make_cvtf_fixpt_vec name
++.gadget \name\()_fixpt_vec
++    ldr x8, [_pc]
++    add _pc, _pc, #8
++
++    and x9, x8, #0x1f       // rd
++    ubfx x10, x8, #8, #5    // rn
++    ubfx x11, x8, #16, #8   // fbits
++    ubfx x12, x8, #24, #4   // esize (2=32, 3=64)
++    ubfx x17, x8, #28, #1   // Q
++
++    add x13, _cpu, #CPU_fp
++    lsl x14, x9, #4
++    add x14, x13, x14       // &Vd
++    lsl x15, x10, #4
++    add x15, x13, x15       // &Vn
++
++    ldr q0, [x15]
++
++    cmp x12, #3
++    b.eq .L\name\()_fixpt_d
++
++    cbnz x17, .L\name\()_fixpt_s
++    mov v0.8b, v0.8b        // 2S: the upper half is not converted
++.L\name\()_fixpt_s:
++    \name v0.4s, v0.4s
++    mov w16, #127
++    sub w16, w16, w11
++    lsl w16, w16, #23       // 2^-fbits as a single
++    dup v1.4s, w16
++    fmul v0.4s, v0.4s, v1.4s
++    str q0, [x14]
++    gret
++
++.L\name\()_fixpt_d:
++    \name v0.2d, v0.2d
++    mov x16, #1023
++    sub x16, x16, x11
++    lsl x16, x16, #52       // 2^-fbits as a double
++    dup v1.2d, x16
++    fmul v0.2d, v0.2d, v1.2d
++    str q0, [x14]
++    gret
++.endm
++
++make_cvtf_fixpt_vec scvtf
++make_cvtf_fixpt_vec ucvtf
++
++/*
++ * UDOT (vector) - unsigned dot product, accumulated into 32-bit elements
++ * Code stream: [gadget addr][rd | rn<<8 | rm<<16 | Q<<24]
++ *
++ * Each 32-bit element of Vd gains the sum of the four byte products under it.
++ * From widening multiplies and pairwise adds, not the host's UDOT, which is
++ * outside the build's iOS 17 baseline.
++ */
++.gadget udot_vec
++    ldr x8, [_pc]
++    add _pc, _pc, #8
++
++    and x9, x8, #0x1f       // rd
++    ubfx x10, x8, #8, #5    // rn
++    ubfx x11, x8, #16, #5   // rm
++    ubfx x17, x8, #24, #1   // Q
++
++    add x13, _cpu, #CPU_fp
++    lsl x14, x9, #4
++    add x14, x13, x14       // &Vd
++    lsl x15, x10, #4
++    add x15, x13, x15       // &Vn
++    lsl x16, x11, #4
++    add x16, x13, x16       // &Vm
++
++    ldr q0, [x15]
++    ldr q1, [x16]
++    ldr q2, [x14]
++
++    umull v3.8h, v0.8b, v1.8b       // the low eight products
++    umull2 v0.8h, v0.16b, v1.16b    // the high eight
++    uaddlp v3.4s, v3.8h             // in pairs
++    uaddlp v0.4s, v0.8h
++    addp v3.4s, v3.4s, v0.4s        // in fours, low elements then high
++    add v2.4s, v2.4s, v3.4s
++
++    cbz x17, .Ludot_vec_low
++    str q2, [x14]
++    gret
++.Ludot_vec_low:
++    str d2, [x14]
++    str xzr, [x14, #8]
++    gret
++
++/*
++ * FNEG (vector, half-precision) - flip each 16-bit element's sign bit
++ * Code stream: [gadget addr][rd | rn<<8 | Q<<16]
++ */
++.gadget fneg_half_vec
++    ldr x8, [_pc]
++    add _pc, _pc, #8
++
++    and x9, x8, #0x1f       // rd
++    ubfx x10, x8, #8, #5    // rn
++    ubfx x17, x8, #16, #1   // Q
++
++    add x13, _cpu, #CPU_fp
++    lsl x14, x9, #4
++    add x14, x13, x14       // &Vd
++    lsl x15, x10, #4
++    add x15, x13, x15       // &Vn
++
++    ldr q0, [x15]
++    movi v1.8h, #0x80, lsl #8
++    eor v0.16b, v0.16b, v1.16b
++
++    cbz x17, .Lfneg_half_vec_low
++    str q0, [x14]
++    gret
++.Lfneg_half_vec_low:
++    str d0, [x14]
++    str xzr, [x14, #8]
++    gret
++
+ /*
+  * SHL (vector, immediate) - shift left immediate
+  * Code stream: [gadget addr][rd | rn<<8 | shift<<16 | esize<<24 | Q<<28]
+diff --git a/asbestos/guest-arm64/gen.c b/asbestos/guest-arm64/gen.c
+index 0c59147..23d17fc 100644
+--- a/asbestos/guest-arm64/gen.c
++++ b/asbestos/guest-arm64/gen.c
+@@ -309,6 +309,12 @@ extern void gadget_shll2_vec_h_to_s(void); // SHLL2 Vd.4S, Vn.8H, #16
+ extern void gadget_shll2_vec_s_to_d(void); // SHLL2 Vd.2D, Vn.4S, #32
+ extern void gadget_shl_imm_vec(void);      // SHL Vd, Vn, #imm (shift left immediate)
+ extern void gadget_shl_imm_scalar(void);   // SHL Dd, Dn, #imm (scalar shift left immediate)
++extern void gadget_sqshlu_imm_vec(void);   // SQSHLU Vd, Vn, #imm (signed saturating shift left unsigned, immediate)
++extern void gadget_uqshl_imm_vec(void);    // UQSHL Vd, Vn, #imm (unsigned saturating shift left, immediate)
++extern void gadget_scvtf_fixpt_vec(void);  // SCVTF Vd, Vn, #fbits (signed int to FP fixed-point, vector)
++extern void gadget_ucvtf_fixpt_vec(void);  // UCVTF Vd, Vn, #fbits (unsigned int to FP fixed-point, vector)
++extern void gadget_udot_vec(void);         // UDOT Vd, Vn, Vm (unsigned dot product)
++extern void gadget_fneg_half_vec(void);    // FNEG Vd, Vn (half-precision vector negate)
+ extern void gadget_sshr_imm_vec(void);     // SSHR Vd, Vn, #imm (signed shift right immediate)
+ extern void gadget_sshr_imm_scalar(void);  // SSHR Dd, Dn, #imm (scalar signed shift right)
+ extern void gadget_ushr_imm_vec(void);     // USHR Vd, Vn, #imm (unsigned shift right immediate)
+@@ -4163,6 +4169,100 @@ static int gen_simd_fp(struct gen_state *state, uint32_t insn) {
+         return 1;
+     }
+ 
++    // SQSHLU / UQSHL (vector, immediate) - saturating shift left by an immediate
++    // SQSHLU: 0 Q 1 011110 immh immb 011001 Rn Rd
++    // UQSHL:  0 Q 1 011110 immh immb 011101 Rn Rd
++    // immh:immb is the element size plus the shift, as for SHL; immh=0 is
++    // MVNI/BIC, and 1D (immh=1xxx, Q=0) is unallocated. Autovectorised pixel
++    // packing reaches SQSHLU, and zlib's Adler-32 UQSHL. FPSR.QC is not
++    // modelled, as for the other saturating gadgets.
++    if ((insn & 0xbf80ec00) == 0x2f006400) {
++        uint32_t immh = (insn >> 19) & 0xf;
++        if (immh != 0) {
++            uint32_t Q = (insn >> 30) & 1;
++            uint32_t immb = (insn >> 16) & 0x7;
++            uint32_t rd = insn & 0x1f;
++            uint32_t rn = (insn >> 5) & 0x1f;
++
++            if ((immh & 0x8) && Q == 0) {
++                gen_interrupt(state, INT_UNDEFINED);
++                return 0;
++            }
++
++            uint32_t esize = (immh & 0x8) ? 3 : (immh & 0x4) ? 2 : (immh & 0x2) ? 1 : 0;
++            uint32_t shift = ((immh << 3) | immb) - (8u << esize);
++
++            void *gadget = (insn & 0x1000) ? gadget_uqshl_imm_vec : gadget_sqshlu_imm_vec;
++            gen(state, (unsigned long) gadget);
++            // Pack: rd | rn<<8 | shift<<16 | esize<<24 | Q<<28
++            gen(state, rd | (rn << 8) | (shift << 16) | (esize << 24) | (Q << 28));
++            return 1;
++        }
++        // Fall through to the MVNI/BIC handler when immh=0
++    }
++
++    // SCVTF / UCVTF (vector, fixed-point) - integer to FP with fractional bits
++    // 0 Q U 011110 immh immb 111001 Rn Rd  (U=0 SCVTF, U=1 UCVTF)
++    // immh:immb is twice the element size less the fractional bits; immh=0 is
++    // MOVI. 8-bit elements (immh=0001) and 1D (immh=1xxx, Q=0) are
++    // unallocated, and 16-bit ones (immh=001x) are half-precision, which the
++    // guest does not report. Autovectorised integer-to-double scaling reaches
++    // both on .2D.
++    if ((insn & 0x9f80fc00) == 0x0f00e400) {
++        uint32_t immh = (insn >> 19) & 0xf;
++        if (immh != 0) {
++            uint32_t Q = (insn >> 30) & 1;
++            uint32_t U = (insn >> 29) & 1;
++            uint32_t immb = (insn >> 16) & 0x7;
++            uint32_t rd = insn & 0x1f;
++            uint32_t rn = (insn >> 5) & 0x1f;
++
++            if ((immh & 0xc) == 0 || ((immh & 0x8) && Q == 0)) {
++                gen_interrupt(state, INT_UNDEFINED);
++                return 0;
++            }
++
++            uint32_t esize = (immh & 0x8) ? 3 : 2;
++            uint32_t fbits = (16u << esize) - ((immh << 3) | immb);
++
++            void *gadget = U ? gadget_ucvtf_fixpt_vec : gadget_scvtf_fixpt_vec;
++            gen(state, (unsigned long) gadget);
++            // Pack: rd | rn<<8 | fbits<<16 | esize<<24 | Q<<28
++            gen(state, rd | (rn << 8) | (fbits << 16) | (esize << 24) | (Q << 28));
++            return 1;
++        }
++        // Fall through to the MOVI handler when immh=0
++    }
++
++    // UDOT (vector) - unsigned dot product
++    // 0 Q 1 01110 10 0 Rm 100101 Rn Rd; every other size is unallocated.
++    // The guest does not report the dot-product feature, so only code that
++    // does not ask reaches it.
++    if ((insn & 0xbfe0fc00) == 0x2e809400) {
++        uint32_t Q = (insn >> 30) & 1;
++        uint32_t rm = (insn >> 16) & 0x1f;
++        uint32_t rn = (insn >> 5) & 0x1f;
++        uint32_t rd = insn & 0x1f;
++
++        gen(state, (unsigned long) gadget_udot_vec);
++        gen(state, rd | (rn << 8) | (rm << 16) | (Q << 24));
++        return 1;
++    }
++
++    // FNEG (vector, half-precision)
++    // 0 Q 1 01110 1 111100 0 01111 10 Rn Rd
++    // A sign flip, so it needs no half-precision arithmetic: code compiled
++    // for half-precision builds 16-bit constants with it.
++    if ((insn & 0xbffffc00) == 0x2ef8f800) {
++        uint32_t Q = (insn >> 30) & 1;
++        uint32_t rn = (insn >> 5) & 0x1f;
++        uint32_t rd = insn & 0x1f;
++
++        gen(state, (unsigned long) gadget_fneg_half_vec);
++        gen(state, rd | (rn << 8) | (Q << 16));
++        return 1;
++    }
++
+     // SHL (vector, immediate) - shift left immediate
+     // 0 Q U 0 1 1 1 1 0 immh immb 0 1 0 1 0 1 Rn Rd  (U=0 for SHL)
+     // immh:immb encodes the shift and element size

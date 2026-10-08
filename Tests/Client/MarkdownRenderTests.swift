@@ -41,12 +41,14 @@ final class MarkdownRenderTests: XCTestCase {
         return look
     }
 
-    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil) throws -> Pixels {
+    private func draw(_ turn: Turn, _ look: Look, cue: CodeBlockCue? = nil,
+                      images: @escaping @Sendable (String) -> Data? = { _ in nil }) throws -> Pixels {
         let row = VStack(spacing: 0) {
             TurnRow(turn: turn, cue: cue)
                 .padding(.horizontal, look.transcript.horizontalPadding)
             Spacer(minLength: 0)
         }
+        .environment(\.replyImages, ReplyImages(kept: images, read: { images($0) }))
         .frame(width: stage.width, height: stage.height, alignment: .top)
         .background(Color.white)
         return try Pixels(LookStage.image(row, look: look, size: stage))
@@ -758,6 +760,179 @@ final class MarkdownRenderTests: XCTestCase {
         }
     }
 
+    /// A link's words are drawn in the look's link ink, and the words round them are not; a link
+    /// a tap does not follow is drawn as the words it is.
+    func testALinkIsDrawnInTheLooksLinkInk() throws {
+        let ink = UIColor(red: 0.9, green: 0, blue: 0.6, alpha: 1)
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.linkInk = Color(ink)
+            let linked = try draw(turn(.assistant, "see the [docs](https://example.com/docs) now"), look)
+            let inked = try XCTUnwrap(linked.columns(ink), "\(screen): a link drew nothing in the link ink")
+            let all = try XCTUnwrap(linked.inkedColumns, "\(screen): nothing drawn")
+            XCTAssertGreaterThan(inked.lowerBound, all.lowerBound + 10, "\(screen): the words before the link are in its ink")
+            XCTAssertLessThan(inked.upperBound, all.upperBound - 10, "\(screen): the words after the link are in its ink")
+            XCTAssertNotNil(try draw(turn(.assistant, "it is at https://example.com/x"), look).columns(ink),
+                            "\(screen): a bare URL is not drawn as a link")
+            for unfollowed in ["see the [docs](topo://docs) now", "see the docs now"] {
+                XCTAssertEqual(try draw(turn(.assistant, unfollowed), look).count(ink), 0, "\(screen): \(unfollowed)")
+            }
+        }
+    }
+
+    /// A table's rule, in a colour nothing else on the stage is.
+    private let ruleInk = UIColor(red: 0.6, green: 0, blue: 0.9, alpha: 1)
+
+    /// A table is a grid on every screen: its header row over one rule in the look's ink and
+    /// width, and a row of cells under the rule for each row of the table, so a table of more
+    /// rows is drawn taller by its rows.
+    func testATableDrawsItsHeaderOverARuleAndItsRowsUnderIt() throws {
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.tableRule = Color(ruleInk)
+            look.markdown.tableRuleWidth = 3
+            let one = try draw(turn(.assistant, "| name | size |\n|---|---|\n| look.json | 2 KB |"), look)
+            let rules = try XCTUnwrap(one.rowRuns(ruleInk), "\(screen): no rule under the header")
+            XCTAssertEqual(rules.count, 1, "\(screen): \(rules.count) rules")
+            let rule = try XCTUnwrap(rules.first)
+            XCTAssertEqual(CGFloat(rule.count) / one.scale, 3, accuracy: 0.5, "\(screen): the rule's width is not the look's")
+            XCTAssertGreaterThan(one.ink(rows: 0..<rule.lowerBound), 0, "\(screen): no header over the rule")
+            let under = one.ink(rows: (rule.upperBound + 1)..<one.height)
+            XCTAssertGreaterThan(under, 0, "\(screen): no row under the rule")
+
+            // Under the rule is the rows and whatever the turn draws after its words, so a row's
+            // own ink is what one more row adds.
+            let row = "\n| look.json | 2 KB |"
+            let rowsInk = try (2...3).map { count in
+                let drawn = try draw(turn(.assistant, "| name | size |\n|---|---|" + String(repeating: row, count: count)), look)
+                let rule = try XCTUnwrap(drawn.rows(ruleInk))
+                return drawn.ink(rows: (rule.upperBound + 1)..<drawn.height)
+            }
+            XCTAssertGreaterThan(rowsInk[0], under, "\(screen): a second row drew nothing")
+            XCTAssertEqual(rowsInk[1] - rowsInk[0], rowsInk[0] - under,
+                           "\(screen): a third row did not draw what the second did")
+            XCTAssertEqual(try draw(turn(.assistant, "name size\n\nlook.json 2 KB"), look).count(ruleInk), 0,
+                           "\(screen): a rule with no table")
+        }
+    }
+
+    /// An empty cell holds its column: the cell after it is drawn where it is drawn when the
+    /// cell before it has words, not shifted into the empty one's place.
+    func testAnEmptyCellHoldsItsColumn() throws {
+        for screen in Look.Screen.allCases {
+            let ink = UIColor(red: 0, green: 0.5, blue: 0, alpha: 1)
+            var look = look(screen)
+            look.markdown.codeInk = Color(ink)
+            let full = try draw(turn(.assistant, "| wide header | b |\n|---|---|\n| x | `m` |"), look)
+            let empty = try draw(turn(.assistant, "| wide header | b |\n|---|---|\n|  | `m` |"), look)
+            let (there, here) = (try XCTUnwrap(full.columns(ink), "\(screen)"), try XCTUnwrap(empty.columns(ink), "\(screen)"))
+            XCTAssertEqual(here, there, "\(screen): the cell after an empty one moved")
+        }
+    }
+
+    /// A table wider than the column: where the look wraps, the grid stays in the column and its
+    /// cells wrap; where it scrolls, a cell with a sentence in it wraps at the look's widest
+    /// cell and is not one line as long as the sentence — either way it is drawn taller than the
+    /// same table with a word in the cell, and no cell is squeezed to nothing.
+    func testAWideTableWrapsItsCells() throws {
+        let sentence = String(repeating: "the quick brown fox jumps over the lazy dog ", count: 3)
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.tableRule = Color(ruleInk)
+            let short = try draw(turn(.assistant, "| a | b |\n|---|---|\n| fox | dog |"), look)
+            let long = try draw(turn(.assistant, "| a | b |\n|---|---|\n| \(sentence) | dog |"), look)
+            let (shortInk, longInk) = (try XCTUnwrap(short.inked), try XCTUnwrap(long.inked))
+            XCTAssertGreaterThan(longInk.count, shortInk.count + 10, "\(screen): a sentence in a cell did not wrap")
+            let rule = try XCTUnwrap(long.columns(ruleInk), "\(screen): no rule")
+            let trailing = (stage.width - look.transcript.horizontalPadding) * long.scale
+            if look.markdown.codeOverflow == .wrap {
+                XCTAssertLessThanOrEqual(CGFloat(rule.upperBound), trailing + 1, "\(screen): the grid left the column")
+            }
+            // Every cell is still drawn: the second column's word is on the stage.
+            XCTAssertGreaterThan(long.ink(rows: 0..<long.height), short.ink(rows: 0..<short.height),
+                                 "\(screen): the wide table drew less than the narrow one")
+        }
+    }
+
+    /// A picture of one colour nothing else on the stage is, as the bytes of a PNG.
+    private let pictureInk = UIColor(red: 0.9, green: 0.1, blue: 0.1, alpha: 1)
+    private func png(_ width: CGFloat, _ height: CGFloat) -> Data {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        return UIGraphicsImageRenderer(size: CGSize(width: width, height: height), format: format).pngData { context in
+            pictureInk.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        }
+    }
+
+    /// An image under the home is drawn as its picture: as wide as the column where that keeps
+    /// it under the look's height, and no taller than that height where it would not, its
+    /// shape kept either way.
+    func testAnImageIsDrawnAcrossTheColumnAndNoTallerThanTheLooks() throws {
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.imageMaxHeight = 60
+            look.markdown.imageCornerRadius = 0
+            let wide = png(800, 100), tall = png(100, 400)
+            let asked = Asked()
+            let images: @Sendable (String) -> Data? = { path in
+                asked.add(path)
+                return path == "charts/wide.png" ? wide : path == "tall.png" ? tall : nil
+            }
+            let across = try draw(turn(.assistant, "Here:\n\n![A chart](charts/wide.png)"), look, images: images)
+            let columns = try XCTUnwrap(across.columns(pictureInk), "\(screen): no picture drawn")
+            let rows = try XCTUnwrap(across.rows(pictureInk))
+            XCTAssertEqual(CGFloat(columns.count) / CGFloat(rows.count), 8, accuracy: 0.5, "\(screen): the picture lost its shape")
+            XCTAssertLessThanOrEqual(CGFloat(rows.count) / across.scale, 60.5, "\(screen): taller than the look's height")
+            XCTAssertLessThanOrEqual(CGFloat(columns.upperBound) / across.scale, stage.width - look.transcript.horizontalPadding + 1,
+                                     "\(screen): the picture left the column")
+
+            let capped = try draw(turn(.assistant, "![A chart](tall.png)"), look, images: images)
+            let high = try XCTUnwrap(capped.rows(pictureInk), "\(screen): no picture drawn")
+            let narrow = try XCTUnwrap(capped.columns(pictureInk))
+            XCTAssertEqual(CGFloat(high.count) / capped.scale, 60, accuracy: 1, "\(screen): not capped at the look's height")
+            XCTAssertEqual(CGFloat(narrow.count) / CGFloat(high.count), 0.25, accuracy: 0.05, "\(screen): the picture lost its shape")
+            XCTAssertEqual(Set(asked.paths), ["charts/wide.png", "tall.png"], "\(screen)")
+        }
+    }
+
+    /// An image with no picture is its alternative text behind a quote's bar in the quote's
+    /// ink; a web address is never asked for, and is offered as a link. Nothing else is an
+    /// address: `file:///etc/hosts` is a name the guest is asked for, and has no file by.
+    func testAnImageWithNoPictureIsItsAlternativeText() throws {
+        let linkInk = UIColor(red: 0.9, green: 0, blue: 0.6, alpha: 1)
+        for screen in Look.Screen.allCases {
+            var look = look(screen)
+            look.markdown.linkInk = Color(linkInk)
+            let picture = png(100, 100)
+            for source in ["https://example.com/i.png", "file:///etc/hosts", "notes.txt"] {
+                let asked = Asked()
+                let drawn = try draw(turn(.assistant, "![A chart of sizes](\(source))"), look) { path in
+                    asked.add(path)
+                    return path == "notes.txt" ? Data("words".utf8) : path.hasPrefix("file:") ? nil : picture
+                }
+                XCTAssertEqual(drawn.count(pictureInk), 0, "\(screen): \(source) drew a picture")
+                XCTAssertGreaterThan(drawn.count(quoteInk), 0, "\(screen): \(source) drew no alternative text")
+                XCTAssertGreaterThan(drawn.count(barInk), 0, "\(screen): \(source) drew no bar")
+                XCTAssertEqual(asked.paths.isEmpty, source.hasPrefix("https"), "\(screen): \(source) asked \(asked.paths)")
+                // Only a web address is offered as a link.
+                XCTAssertEqual(drawn.count(linkInk) > 0, source.hasPrefix("https"), "\(screen): \(source)")
+            }
+            // No alternative text is still the reason, not nothing.
+            let bare = try draw(turn(.assistant, "![](https://example.com/i.png)"), look)
+            XCTAssertGreaterThan(bare.count(barInk), 0, "\(screen): an image with no words drew nothing")
+            XCTAssertNotNil(bare.inked, "\(screen)")
+        }
+    }
+
+    /// The paths a reader was asked for.
+    private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String] = []
+        func add(_ path: String) { lock.withLock { asked.append(path) } }
+        var paths: [String] { lock.withLock { asked } }
+    }
+
     /// A rendered stage as bytes, with the questions worth asking of it.
     private struct Pixels {
         let bytes: [UInt8]
@@ -844,6 +1019,22 @@ final class MarkdownRenderTests: XCTestCase {
         /// The rows a colour is found in, first to last.
         func rows(_ colour: UIColor) -> ClosedRange<Int>? {
             let found = (0..<height).filter { y in (0..<width).contains { matches(colour, (y * width + $0) * 4) } }
+            guard let low = found.first, let high = found.last else { return nil }
+            return low...high
+        }
+
+        /// How many pixels in `rows` are anything but white.
+        func ink(rows: Range<Int>) -> Int {
+            rows.reduce(0) { total, y in
+                total + (0..<width).filter { x in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }.count
+            }
+        }
+
+        /// The columns anything but white is drawn in, first to last.
+        var inkedColumns: ClosedRange<Int>? {
+            let found = (0..<width).filter { x in
+                (0..<height).contains { y in (0..<3).contains { bytes[(y * width + x) * 4 + $0] < 200 } }
+            }
             guard let low = found.first, let high = found.last else { return nil }
             return low...high
         }

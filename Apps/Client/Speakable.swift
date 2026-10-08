@@ -5,9 +5,9 @@ import Foundation
 /// is never drawn from this; it is what `Speaker.speak` hands the voice.
 ///
 /// The source is cut by the transcript's own parse (`Markdown.blocks`), so the voice reads the
-/// words the screen shows and nothing of the syntax around them: emphasis, headings' `#`, list
-/// markers and a link's address are gone before anything here sees the text, and a link is its
-/// words. What is here is what the parse leaves that a voice cannot read:
+/// words the screen shows and nothing of the syntax around them: emphasis, headings' `#` and list
+/// markers are gone before anything here sees the text, and a link whose words are not its
+/// address is read as its words. What is here is what the parse leaves that a voice cannot read:
 ///
 /// - A fenced or indented code block is "See code block N.", N its number in the reply, which is
 ///   the caption the transcript draws over it (`Markdown.Block.codeNumber`): a voice reading
@@ -18,9 +18,15 @@ import Foundation
 ///   is prose.
 /// - A table is "A table with N rows.", N not counting the header: its cells read one after
 ///   another in a line are a list of words nobody can follow.
+/// - An image is "An image: " and its alternative text, or "An image." when it has none: a line
+///   of its own, after the block it was written in, as the transcript draws it.
 /// - A rule is nothing.
-/// - In the words of every other block, a URL or an address is left exactly as written: it is
-///   found first and no rule below runs inside it.
+/// - A link whose words are its own address — a bare URL — is "a link to" its host, said as a
+///   name is: `https://example.com/a?b=c` is "a link to example dot com". An address read out
+///   is noise, and the host is what a listener would have kept of it.
+/// - In the words of every other block, a URL the parse did not link (one inside code, or with
+///   a scheme a tap does not follow) or an address is left exactly as written: it is found
+///   first and no rule below runs inside it.
 /// - Inline code is a literal, so its punctuation is said wherever it is, with no judgement of what
 ///   it names: every `/` "slash", every `.` with no space after it "dot" (`./look.json` "dot slash
 ///   look dot json", `x.c` "x dot c"), every `~` "tilde".
@@ -47,41 +53,35 @@ enum Speakable {
     /// The spoken text a line at a time, each code block's line carrying the block's number.
     static func lines(from markdown: String) -> [Line] {
         var lines: [Line] = []
-        var table: (identity: Int, rows: Int)?
-
-        func finishTable() {
-            if let done = table {
-                lines.append(Line(text: "A table with \(done.rows) \(done.rows == 1 ? "row" : "rows")."))
-            }
-            table = nil
-        }
-
         for block in Markdown.blocks(markdown) {
-            if let row = block.row {
-                if table?.identity != row.table {
-                    finishTable()
-                    table = (row.table, 0)
-                }
-                if !row.header { table?.rows += 1 }
-                continue
-            }
-            finishTable()
             switch block.kind {
             case .code:
                 lines.append(Line(text: block.codeNumber.map(line(forCodeBlock:)) ?? "See the code block.",
                                   codeBlock: block.codeNumber))
+            case .table(_, let rows):
+                lines.append(Line(text: "A table with \(rows.count) \(rows.count == 1 ? "row" : "rows")."))
+            case .image(_, let alt):
+                lines.append(Line(text: line(forImage: alt)))
             case .rule:
                 continue
             case .paragraph, .heading, .item:
                 lines.append(Line(text: words(block.text)))
             }
         }
-        finishTable()
         return lines.filter { !$0.text.allSatisfy(\.isWhitespace) }
     }
 
     /// What the voice says in code block `number`'s place, a line of its own.
     static func line(forCodeBlock number: Int) -> String { "See code block \(number)." }
+
+    /// What the voice says in an image's place: that there is one, and its alternative text when
+    /// it has any, said as a paragraph's words are.
+    static func line(forImage alt: String) -> String {
+        let said = words(AttributedString(alt)).replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespaces)
+        guard !said.isEmpty else { return "An image." }
+        return "An image: " + said + (said.last.map { ".!?".contains($0) } == true ? "" : ".")
+    }
 
     /// A run of what could be a path or a file name: an optional leading `/` or `~/`, then names
     /// of word characters, dots and hyphens separated by slashes. Not where it would start inside
@@ -108,6 +108,10 @@ enum Speakable {
         var out = ""
         for run in text.runs {
             let piece = String(text[run.range].characters)
+            if let link = run.link, let host = host(of: link, writtenAs: piece) {
+                out += "a link to " + host
+                continue
+            }
             let literal = run.inlinePresentationIntent?.contains(.code) == true
             out += outsideAddresses(piece, literal ? Self.literal : Self.bare)
         }
@@ -115,6 +119,17 @@ enum Speakable {
             .map { $0.replacingOccurrences(of: " {2,}", with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespaces) }
             .joined(separator: "\n")
+    }
+
+    /// The host of a link whose words are the link itself, as it is said: without a leading
+    /// `www.`, each dot "dot". Nil for a link whose words are anything else, which is read as
+    /// its words.
+    private static func host(of link: URL, writtenAs words: String) -> String? {
+        let address = link.absoluteString
+        guard words == address || "http://" + words == address || "https://" + words == address,
+              var host = link.host(), !host.isEmpty else { return nil }
+        if host.hasPrefix("www.") { host.removeFirst(4) }
+        return host.replacingOccurrences(of: ".", with: " dot ")
     }
 
     /// `say` applied to what lies between the URLs and addresses in `text`, and never to them.

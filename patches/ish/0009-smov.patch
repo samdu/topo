@@ -1,0 +1,77 @@
+diff --git a/asbestos/guest-arm64/gadgets-aarch64/math.S b/asbestos/guest-arm64/gadgets-aarch64/math.S
+index 4d05aac..306f024 100644
+--- a/asbestos/guest-arm64/gadgets-aarch64/math.S
++++ b/asbestos/guest-arm64/gadgets-aarch64/math.S
+@@ -4338,11 +4338,13 @@ msub_store:
+ 1:  gret
+ 
+ /*
+- * UMOV/MOV - Move vector element to GPR (zero-extend)
+- * Code stream: [gadget addr][rd | rn<<8 | elem_size<<16 | index<<20]
++ * UMOV/MOV/SMOV - Move vector element to GPR (zero-extend, or sign-extend for SMOV)
++ * Code stream: [gadget addr][rd | rn<<8 | elem_size<<16 | index<<20 | signed<<24 | xd<<25]
+  *
+  * elem_size: 0=B, 1=H, 2=S, 3=D
+  * index: element index within 128-bit vector
++ * signed: SMOV, the element sign-extended; to 64 bits where xd is set, and
++ *         otherwise to 32 with the upper half of the register zeroed
+  */
+ .gadget umov_vec_to_gpr
+     ldr x8, [_pc]
+@@ -4420,6 +4422,16 @@ msub_store:
+     mov x3, x15
+ 
+ .Lumov_store:
++    tbz x8, #24, .Lumov_put
++    mov x13, #8
++    lsl x13, x13, x11       // the element's bits
++    mov x17, #64
++    sub x17, x17, x13
++    lsl x3, x3, x17
++    asr x3, x3, x17         // sign-extended to 64
++    tbnz x8, #25, .Lumov_put
++    mov w3, w3              // Wd: the upper half zeroed
++.Lumov_put:
+     add x14, _cpu, #CPU_x0
+     cmp x9, #31
+     b.eq .Lumov_done
+diff --git a/asbestos/guest-arm64/gen.c b/asbestos/guest-arm64/gen.c
+index 0c59147..f8cdd63 100644
+--- a/asbestos/guest-arm64/gen.c
++++ b/asbestos/guest-arm64/gen.c
+@@ -4802,6 +4802,35 @@ static int gen_simd_fp(struct gen_state *state, uint32_t insn) {
+         return 1;
+     }
+ 
++    // SMOV (to general) - extract vector element to GPR, sign-extended
++    // Matches: 0Q001110 000 imm5 0 0101 1 Rn Rd
++    // Wd (Q=0) takes B and H elements, Xd (Q=1) takes B, H and S; anything
++    // else is unallocated. Autovectorised sums of a CMEQ mask's lanes reach
++    // SMOV Wd, Vn.H[0] to read the count back (Bun 1.4's string search does).
++    if ((insn & 0xbfe0fc00) == 0x0e002c00) {
++        uint32_t Q = (insn >> 30) & 1;
++        uint32_t imm5 = (insn >> 16) & 0x1f;
++        uint32_t rn = (insn >> 5) & 0x1f;
++        uint32_t rd = insn & 0x1f;
++
++        int elem_size = -1;
++        if (imm5 & 0x1) elem_size = 0;             // B
++        else if (imm5 & 0x2) elem_size = 1;        // H
++        else if ((imm5 & 0x4) && Q) elem_size = 2; // S, to Xd only
++
++        if (elem_size < 0) {
++            gen_interrupt(state, INT_UNDEFINED);
++            return 0;
++        }
++
++        uint32_t index = imm5 >> (elem_size + 1);
++
++        gen(state, (unsigned long) gadget_umov_vec_to_gpr);
++        // Pack: rd | rn<<8 | elem_size<<16 | index<<20 | signed<<24 | Xd<<25
++        gen(state, rd | (rn << 8) | (elem_size << 16) | (index << 20) | (1u << 24) | (Q << 25));
++        return 1;
++    }
++
+     // STR (vector, immediate) - store 128-bit
+     // Pattern: 00111101 10 imm12 Rn Rt (scaled offset)
+     // Mask: check bits 31:30=00, 29:22=0x3d8 for Q variant

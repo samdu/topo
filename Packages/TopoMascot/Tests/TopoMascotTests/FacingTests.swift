@@ -52,10 +52,10 @@ import TopoMascot
         }
     }
 
-    @Test(arguments: ["haiku", "sonnet", "opus", "fable"])
-    func theMirroredIdleFrameIsTheReflectionAboutTheBodysAxis(_ model: String) {
-        let left = Self.settled(TopoInput(model: model, activity: "idle"), facing: "left")
-        let right = Self.settled(TopoInput(model: model, activity: "idle"), facing: "right")
+    @Test(arguments: [1.0, 2.0, 3.0, 4.0])
+    func theMirroredIdleFrameIsTheReflectionAboutTheBodysAxis(_ level: Double) {
+        let left = Self.settled(TopoInput(level: level, activity: "idle"), facing: "left")
+        let right = Self.settled(TopoInput(level: level, activity: "idle"), facing: "right")
         #expect(right.topo.facing == "right")
         #expect(Self.reflected(left.rgba, right.rgba), "not the reflection about x = \(Self.BX)")
         #expect(!Self.same(left.rgba, right.rgba), "the same picture both ways")

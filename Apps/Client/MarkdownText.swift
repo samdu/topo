@@ -1,15 +1,17 @@
+import ImageIO
 import SwiftUI
 import TopoCore
 
 /// Topo's words drawn as their blocks (`Markdown.blocks`): paragraphs and headings as text, list
-/// items behind their markers, rules, fenced code in an enclosure of its own, and whatever sits
-/// inside a quote behind a bar for each quote it is inside. Every value is the look's
+/// items behind their markers, rules, fenced code in an enclosure of its own, a table as a grid,
+/// an image read from the guest's home, and whatever sits inside a quote behind a bar for each
+/// quote it is inside. Every value is the look's
 /// (`Look.Markdown`), and a paragraph is drawn in the transcript's own type and ink, as the
 /// transcript draws words.
 ///
 /// `bare` is whether the turn draws nothing round its words. Then what Topo stands clear of is
 /// the words themselves: each text reports its own lines (`mascotLines`), and what draws a shape
-/// of its own — a code block's enclosure, a quote's bar, a rule — reports its frame
+/// of its own — a code block's enclosure, a table's grid, a quote's bar, a rule — reports its frame
 /// (`mascotObstacle`). An enclosed turn reports its enclosure from `TurnRow` and nothing here.
 struct MarkdownText: View {
     let source: String
@@ -99,6 +101,10 @@ struct MarkdownText: View {
             }
         case .code:
             code(String(block.text.characters), number: block.codeNumber)
+        case .table(let header, let rows):
+            table(header: header, rows: rows, ink: ink(block))
+        case .image(let source, let alt):
+            ReplyImage(source: source, alt: alt, bare: bare)
         case .rule:
             Rectangle()
                 .fill(look.markdown.marker)
@@ -180,6 +186,72 @@ struct MarkdownText: View {
         .mascotObstacle(bare)
     }
 
+    /// A table as a grid: the header row in its own type over a rule, then the rows, every cell
+    /// in its column and aligned as the column is. Where the look scrolls what overflows
+    /// (`codeOverflow`), the grid is as wide as its cells and scrolls sideways, each cell no
+    /// wider than `tableCellMaxWidth`; where it wraps, the grid is the column's width and its
+    /// cells wrap inside it.
+    @ViewBuilder
+    private func table(header: Markdown.TableRow, rows: [Markdown.TableRow], ink: Color) -> some View {
+        let scrolls = look.markdown.codeOverflow == .scroll
+        let grid = Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: look.markdown.tableColumnSpacing,
+                        verticalSpacing: look.markdown.tableRowSpacing) {
+            GridRow {
+                ForEach(Array(header.cells.enumerated()), id: \.offset) { _, cell in
+                    self.cell(cell, font: look.markdown.tableHeaderFont, ink: ink, capped: scrolls)
+                        .accessibilityAddTraits(.isHeader)
+                }
+            }
+            Rectangle()
+                .fill(look.markdown.tableRule)
+                .frame(height: look.markdown.tableRuleWidth)
+                .gridCellUnsizedAxes(.horizontal)
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                GridRow {
+                    ForEach(Array(row.cells.enumerated()), id: \.offset) { _, cell in
+                        self.cell(cell, font: look.transcript.bodyFont, ink: ink, capped: scrolls)
+                    }
+                }
+            }
+        }
+        Group {
+            if scrolls {
+                ScrollView(.horizontal) { grid }
+                    .scrollIndicators(.hidden)
+            } else {
+                grid.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .mascotObstacle(bare)
+    }
+
+    /// One cell's words, styled as a paragraph's are, on its column's side of the column.
+    private func cell(_ cell: Markdown.TableCell, font: Font, ink: Color, capped: Bool) -> some View {
+        Text(Self.styled(cell.text, look: look.markdown))
+            .font(font)
+            .foregroundStyle(ink)
+            .multilineTextAlignment(Self.text(cell.alignment))
+            .fixedSize(horizontal: false, vertical: true)
+            .modifier(Capped(width: capped ? look.markdown.tableCellMaxWidth : nil))
+            .gridColumnAlignment(Self.horizontal(cell.alignment))
+    }
+
+    private static func text(_ alignment: Markdown.ColumnAlignment) -> TextAlignment {
+        switch alignment {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
+    }
+
+    private static func horizontal(_ alignment: Markdown.ColumnAlignment) -> HorizontalAlignment {
+        switch alignment {
+        case .leading: .leading
+        case .center: .center
+        case .trailing: .trailing
+        }
+    }
+
     static func marker(_ marker: Markdown.Marker) -> String {
         switch marker {
         case .bullet: "•"
@@ -187,17 +259,249 @@ struct MarkdownText: View {
         }
     }
 
-    /// `text` with its inline code runs in the look's code type, monospaced, and its code ink.
+    /// `text` with its inline code runs in the look's code type, monospaced, and its code ink,
+    /// and its linked runs underlined in the look's link ink. A linked run is the one part of a
+    /// reply that is a tap target: `Text` makes exactly the run's own glyphs one, and opens its
+    /// address through the environment's `openURL`.
     static func styled(_ text: AttributedString, look: Look.Markdown) -> AttributedString {
         var text = text
+        let links = text.runs[\.link].compactMap { link, range in link == nil ? nil : range }
+        for range in links {
+            text[range].swiftUI.foregroundColor = look.linkInk
+            text[range].swiftUI.underlineStyle = .single
+        }
         let code = text.runs[\.inlinePresentationIntent].compactMap { intent, range in
             intent?.contains(.code) == true ? range : nil
         }
         for range in code {
             text[range].swiftUI.font = look.codeFont.monospaced()
+        }
+        // Code inside a link is the link's colour: its ink is what says it is one.
+        for range in code where text[range].runs.allSatisfy({ $0.link == nil }) {
             text[range].swiftUI.foregroundColor = look.codeInk
         }
         return text
+    }
+}
+
+/// A view offered no more than `width` across, whatever it is offered: inside a sideways scroll
+/// nothing offers a width at all, and words offered none are one line as long as they are.
+/// `nil` offers what was offered.
+private struct Capped: ViewModifier {
+    let width: CGFloat?
+
+    func body(content: Content) -> some View {
+        if let width { Cap(width: width) { content } } else { content }
+    }
+
+    private struct Cap: Layout {
+        let width: CGFloat
+
+        private func offer(_ proposal: ProposedViewSize) -> ProposedViewSize {
+            ProposedViewSize(width: min(proposal.width ?? width, width), height: proposal.height)
+        }
+
+        func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+            subviews.first?.sizeThatFits(offer(proposal)) ?? .zero
+        }
+
+        func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+            subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+        }
+    }
+}
+
+/// An image in a reply. A source that is a path is read as the guest reads it, through the
+/// reader the environment carries (`replyImages`): the guest's own path, absolute or from its
+/// home, with its mounts and links, so a picture Claude Code could open is one the reply draws.
+/// A web address is never fetched. A file that reads and decodes is drawn as wide as the
+/// column, no taller than the look's `imageMaxHeight`, its corners cut to `imageCornerRadius`.
+/// Anything else is drawn as the image's alternative text, in a quote's style, over why there
+/// is no picture in the caption's ink — and, for a web address, the address as a link.
+///
+/// The read is the guest's and takes as long as it takes, so it is awaited off the main actor;
+/// what the reader already holds of the source is drawn at once, in the row's first frame.
+struct ReplyImage: View {
+    let source: String
+    let alt: String
+    var bare = true
+    @Environment(\.look) private var look
+    @Environment(\.replyImages) private var images
+    @State private var drawn: Drawn?
+
+    /// What became of the source: a picture, or the reason there is none.
+    enum Drawn: Equatable {
+        case picture(CGImage)
+        case missing(Missing)
+    }
+
+    enum Missing: Equatable {
+        /// The guest has no such file that can be read as a picture: it was written on another
+        /// device, there is no guest here, it is too large, or its bytes are no image.
+        case notHere
+        case onTheWeb(URL)
+        case neither
+
+        var reason: String {
+            switch self {
+            case .notHere: "Not on this device"
+            case .onTheWeb: "On the web, so not fetched"
+            case .neither: "Not a file or a web address"
+            }
+        }
+    }
+
+    /// The long side, in pixels, an image is decoded at: more than any column draws.
+    static let pixels = 2048
+
+    /// What `source` is drawn as before anything is read: a picture the reader already holds,
+    /// the reason there will be none, or nil for a file still to be asked for.
+    static func settled(_ source: String, kept: (String) -> Data?) -> Drawn? {
+        switch Markdown.place(ofImage: source) {
+        case .file(let path): kept(path).map { decoded($0).map(Drawn.picture) ?? .missing(.notHere) }
+        case .web(let url): .missing(.onTheWeb(url))
+        case .neither: .missing(.neither)
+        }
+    }
+
+    /// What `source` is drawn as. The reader is asked only for a path, and nothing is fetched.
+    static func resolve(_ source: String, read: (String) async -> Data?) async -> Drawn {
+        switch Markdown.place(ofImage: source) {
+        case .file(let path):
+            guard let data = await read(path), let image = decoded(data) else { return .missing(.notHere) }
+            return .picture(image)
+        case .web(let url): return .missing(.onTheWeb(url))
+        case .neither: return .missing(.neither)
+        }
+    }
+
+    /// The picture in `data`, kept by the bytes it was decoded from: a lazy transcript makes a
+    /// reply's row again each time it scrolls into view, and a decode is tens of milliseconds a
+    /// picture. The file is still read each time, so a picture rewritten under the same name,
+    /// or gone, is drawn as it now is.
+    private static func decoded(_ data: Data) -> CGImage? {
+        let key = data as NSData
+        if let kept = cache.object(forKey: key) { return kept.image }
+        guard let image = decode(data) else { return nil }
+        cache.setObject(Kept(image), forKey: key, cost: data.count)
+        return image
+    }
+
+    /// The picture in `data`, upright and no larger than `pixels` on its long side, or nil for
+    /// bytes that are no image.
+    static func decode(_ data: Data) -> CGImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              CGImageSourceGetCount(source) > 0 else { return nil }
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                        kCGImageSourceCreateThumbnailWithTransform: true,
+                                        kCGImageSourceThumbnailMaxPixelSize: pixels,
+                                        kCGImageSourceShouldCacheImmediately: true]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    var body: some View {
+        Group {
+            switch drawn {
+            case .picture(let image):
+                Image(decorative: image, scale: 1)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .clipShape(RoundedRectangle(cornerRadius: look.markdown.imageCornerRadius, style: .continuous))
+                    .frame(maxHeight: look.markdown.imageMaxHeight, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityElement()
+                    .accessibilityLabel(alt.isEmpty ? "Image" : alt)
+                    .accessibilityAddTraits(.isImage)
+            case .missing(let missing):
+                fallback(missing)
+            case nil:
+                // Not yet read: the room a line takes, so the reply does not jump far.
+                Text(alt).font(look.transcript.bodyFont).hidden()
+            }
+        }
+        .mascotObstacle(bare)
+        .onAppear { if drawn == nil { drawn = Self.settled(source, kept: images.kept) } }
+        // Read again when the source changes and when what the guest can read does: a row
+        // drawn before the guest has its home has no picture yet, and gets it then.
+        .task(id: Asked(source: source, epoch: images.epoch)) {
+            let read = images.read
+            let resolved = await Self.resolve(source, read: read)
+            if !Task.isCancelled { drawn = resolved }
+        }
+    }
+
+    private struct Asked: Hashable {
+        var source: String
+        var epoch: Int
+    }
+
+    /// The alternative text behind a quote's bar, over the reason.
+    private func fallback(_ missing: Missing) -> some View {
+        HStack(alignment: .top, spacing: look.markdown.quoteIndent) {
+            Rectangle()
+                .fill(look.markdown.quoteBar)
+                .frame(width: look.markdown.quoteBarWidth)
+            VStack(alignment: .leading, spacing: look.transcript.captionSpacing) {
+                if !alt.isEmpty {
+                    Text(alt)
+                        .font(look.transcript.bodyFont)
+                        .foregroundStyle(look.markdown.quoteText)
+                }
+                Text(missing.reason)
+                    .font(look.transcript.labelFont)
+                    .foregroundStyle(look.transcript.caption)
+                if case .onTheWeb(let url) = missing {
+                    Text(MarkdownText.styled(Self.link(url), look: look.markdown))
+                        .font(look.transcript.labelFont)
+                }
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A web address as words that are a link to it.
+    static func link(_ url: URL) -> AttributedString {
+        var text = AttributedString(url.absoluteString)
+        text.link = url
+        return text
+    }
+
+    private final class Kept: @unchecked Sendable {
+        let image: CGImage
+        init(_ image: CGImage) { self.image = image }
+    }
+
+    nonisolated(unsafe) private static let cache: NSCache<NSData, Kept> = {
+        let cache = NSCache<NSData, Kept>()
+        cache.countLimit = 16
+        cache.totalCostLimit = 32 * 1024 * 1024
+        return cache
+    }()
+}
+
+/// How a reply's images are read: by the guest's own path.
+struct ReplyImages: Sendable {
+    /// What is already in hand for a path, with no waiting: what a row is drawn with in its
+    /// first frame.
+    var kept: @Sendable (String) -> Data? = { _ in nil }
+    /// The file's bytes as the guest reads them now, or nil.
+    var read: @Sendable (String) async -> Data? = { _ in nil }
+    /// Counts the changes in what the guest can read — its home mounted, the memory mounted,
+    /// a sign-out; a row reads again when this changes.
+    var epoch = 0
+}
+
+private struct ReplyImagesKey: EnvironmentKey {
+    static let defaultValue = ReplyImages()
+}
+
+extension EnvironmentValues {
+    /// Reads an image a reply names by its path in the guest. The app hands down the guest's
+    /// reader (`GuestImages`); everywhere else — a watch, a television, a preview — there is
+    /// no guest and so no picture.
+    var replyImages: ReplyImages {
+        get { self[ReplyImagesKey.self] }
+        set { self[ReplyImagesKey.self] = newValue }
     }
 }
 
