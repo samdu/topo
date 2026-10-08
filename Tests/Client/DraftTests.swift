@@ -56,6 +56,33 @@ final class DraftStateTests: XCTestCase {
         }
     }
 
+    /// What is written is read once, where it is drawn: the field says its words only while the
+    /// pane is a row with no turn on its way. A turn sent with the keyboard still up is the
+    /// row's from that moment, and the field under it says nothing.
+    func testTheFieldSaysNothingOfATurnOnItsWayInEitherForm() {
+        XCTAssertEqual(draft("bins?", typing: true, row: true).fieldValue, "bins?")
+        for row in [false, true] {
+            for typing in [false, true] {
+                XCTAssertEqual(draft("bins?", typing: typing, sending: true, row: row).fieldValue, "",
+                               "row \(row), typing \(typing): a turn on its way is read in the field and in the row")
+            }
+        }
+        XCTAssertEqual(draft("bins?").fieldValue, "", "words the row draws at rest are read in the field too")
+    }
+
+    /// The transcript keeps its end at what the row draws and at nothing the field holds: words
+    /// typed in the pane's field are no change to what it follows, so a transcript scrolled back
+    /// while someone writes stays where it was read.
+    func testTheTranscriptFollowsTheRowsWordsAndNotTheFields() {
+        let typed = [draft("bins", typing: true, row: true), draft("bins on", typing: true, row: true)]
+        XCTAssertEqual(typed.map(\.drawer), [.pane, .pane])
+        XCTAssertEqual(typed.map(\.followed), [nil, nil], "words in the field move the transcript")
+        XCTAssertEqual(draft("bins", typing: true, row: false).followed, "bins")
+        XCTAssertEqual(draft("bins on", typing: false, row: false).followed, "bins on")
+        XCTAssertEqual(draft("bins", typing: true, sending: true, row: true).followed, "bins", "a turn on its way is the row's")
+        XCTAssertNil(draft("", typing: false, row: false).followed)
+    }
+
     /// What is written is drawn in one place or none, whatever the draft holds: the field has it
     /// only in a pane that is a row, and the row has it only with something to draw.
     func testWhatIsWrittenIsNeverDrawnTwice() {

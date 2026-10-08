@@ -162,6 +162,8 @@ final class DraftRowTests: XCTestCase {
         let row = app.descendants(matching: .any)[Self.row]
         XCTAssertTrue(row.waitForExistence(timeout: 5), "the words left the screen when the turn went")
         XCTAssertEqual(row.label, Self.words, "the row is not holding the words that went")
+        // Before the keyboard is waited down: the words are the row's from the moment they go.
+        XCTAssertEqual(drawings(of: Self.words, in: app), 1, "the turn on its way is read in the field and in the row")
         XCTAssertTrue(ChatReading.keyboardGone(app), "the keyboard stayed up over a turn on its way")
         XCTAssertFalse(ChatReading.fieldShown(app), "the field is still there to be typed into over a turn on its way")
         XCTAssertFalse(ChatReading.field(app).isEnabled, "the field takes typing over a turn on its way")

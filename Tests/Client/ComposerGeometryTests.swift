@@ -226,14 +226,14 @@ final class ComposerGeometryTests: XCTestCase {
     /// only shrinks: a pane that outgrows the column pushes the column's edges out, and a room
     /// that followed it would let the pane grow again.
     func testTheRoomOnlyShrinksUntilTheKeyboardOrTheWidthChanges() {
-        let up = ChatView.Room(tall: 423, wide: 402, keyboard: true)
-        XCTAssertEqual(up.taken(after: ChatView.Room(tall: 724, wide: 402, keyboard: false), held: 724), 423)
-        XCTAssertEqual(ChatView.Room(tall: 436, wide: 402, keyboard: true).taken(after: up, held: 423), 423,
+        let up = ChatColumnRoom(tall: 423, wide: 402, keyboard: true)
+        XCTAssertEqual(up.taken(after: ChatColumnRoom(tall: 724, wide: 402, keyboard: false), held: 724), 423)
+        XCTAssertEqual(ChatColumnRoom(tall: 436, wide: 402, keyboard: true).taken(after: up, held: 423), 423,
                        "a column pushed out by the pane gave the pane more room")
-        XCTAssertEqual(ChatView.Room(tall: 400, wide: 402, keyboard: true).taken(after: up, held: 423), 400)
-        XCTAssertEqual(ChatView.Room(tall: 724, wide: 402, keyboard: false).taken(after: up, held: 423), 724,
+        XCTAssertEqual(ChatColumnRoom(tall: 400, wide: 402, keyboard: true).taken(after: up, held: 423), 400)
+        XCTAssertEqual(ChatColumnRoom(tall: 724, wide: 402, keyboard: false).taken(after: up, held: 423), 724,
                        "the keyboard gone left the room it had left")
-        XCTAssertEqual(ChatView.Room(tall: 500, wide: 874, keyboard: true).taken(after: up, held: 423), 500)
+        XCTAssertEqual(ChatColumnRoom(tall: 500, wide: 874, keyboard: true).taken(after: up, held: 423), 500)
         XCTAssertEqual(up.taken(after: up, held: nil), 423)
     }
 
@@ -428,6 +428,170 @@ final class ComposerGeometryTests: XCTestCase {
         }
         defer { field.resignFirstResponder() }
         return (written.text, field.text)
+    }
+
+    // MARK: Drawn
+
+    /// What a view is hosted in for the tests that read what was drawn: a window the size of the
+    /// smallest screen, laid out and settled.
+    private func hosted<Content: View>(_ view: Content, size: CGSize, _ read: (UIWindow) throws -> Void) throws {
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: size)
+        window.rootViewController = UIHostingController(rootView: view.transaction { $0.animation = nil })
+        window.isHidden = false
+        defer { window.isHidden = true }
+        for _ in 0..<4 { window.layoutIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        try read(window)
+    }
+
+    private final class Drawn {
+        var pane: CGRect?
+        var parts: [ComposerPart: CGRect] = [:]
+        var named: [String: CGRect] = [:]
+    }
+
+    /// The row as drawn on the smallest screen, 320 points wide, at each end of every length it
+    /// reads: the bounds each control is drawn in, not the plan's. The control, the field and the
+    /// send are in order after the well with none over its neighbour, each inside the pane, and
+    /// the field has width wherever the slots can yield it.
+    func testEveryControlIsDrawnInItsOwnRoomOnTheNarrowestPhone() throws {
+        let looks: [(String, (inout Look) -> Void)] = [
+            ("the default", { _ in }),
+            ("draft.slot 4000", { $0.draft.slot = 4000 }),
+            ("draft.slot 8", { $0.draft.slot = 8 }),
+            ("composer.flank.slot 4000", { $0.composer.flank.slot = 4000 }),
+            ("composer.flank.slot 8", { $0.composer.flank.slot = 8 }),
+            ("both slots 4000", { $0.draft.slot = 4000; $0.composer.flank.slot = 4000 }),
+            ("draft.spacing 4000", { $0.draft.spacing = 4000 }),
+            ("composer.spacing 4000", { $0.composer.spacing = 4000 }),
+            ("composer.jewelInset 200", { $0.composer.jewelInset = 200 }),
+            ("draft.minimumWidth 4000", { $0.draft.minimumWidth = 4000 }),
+            ("composer.typingWidthFraction 0.1", { $0.composer.typingWidthFraction = 0.1 }),
+            ("composer.well.size 8", { $0.composer.well.size = 8 }),
+            ("composer.well.size 200", { $0.composer.well.size = 200 }),
+            ("composer.flank.font 400", { $0.composer.flank.font = .system(size: 400) }),
+            ("draft.sendFont 400", { $0.draft.sendFont = .system(size: 400) }),
+        ]
+        for (name, set) in looks {
+            var look = Look()
+            look.composer.surface = .flat
+            set(&look)
+            let drawn = Drawn()
+            let view = VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Composer(draft: Draft(text: .constant("bins"), typing: .constant(true), row: true))
+                    .overlayPreferenceValue(ComposerFrames.Pane.self) { pane in
+                        GeometryReader { proxy in
+                            Color.clear.onChange(of: Self.global(pane, proxy), initial: true) { _, rect in drawn.pane = rect }
+                        }
+                    }
+                    .overlayPreferenceValue(ComposerFrames.Parts.self) { parts in
+                        GeometryReader { proxy in
+                            let rects = parts.compactMapValues { Self.global($0, proxy) }
+                            Color.clear.onChange(of: rects, initial: true) { _, rects in drawn.parts = rects }
+                        }
+                    }
+                    .overlayPreferenceValue(ComposerFrames.Well.self) { well in
+                        GeometryReader { proxy in
+                            Color.clear.onChange(of: Self.global(well, proxy), initial: true) { _, rect in drawn.named["well"] = rect }
+                        }
+                    }
+            }
+            .environment(\.look, look)
+            try hosted(view, size: narrowest) { _ in
+                let pane = try XCTUnwrap(drawn.pane, "\(name): no pane was drawn")
+                let well = try XCTUnwrap(drawn.named["well"], "\(name): no well")
+                let more = try XCTUnwrap(drawn.parts[.more], "\(name): no control")
+                let field = try XCTUnwrap(drawn.parts[.field], "\(name): no field")
+                let send = try XCTUnwrap(drawn.parts[.send], "\(name): no send")
+                XCTAssertLessThanOrEqual(pane.width, narrowest.width + 0.5, "\(name): the pane is wider than the screen")
+                XCTAssertGreaterThanOrEqual(more.minX, well.maxX - 0.5, "\(name): the control is drawn over the well")
+                XCTAssertGreaterThanOrEqual(field.minX, more.maxX - 0.5, "\(name): the field is drawn under the control")
+                XCTAssertGreaterThanOrEqual(send.minX, field.maxX - 0.5, "\(name): the send is drawn over the field")
+                XCTAssertGreaterThanOrEqual(send.minX, more.maxX - 0.5, "\(name): the send is drawn over the control")
+                XCTAssertLessThanOrEqual(send.maxX, pane.maxX + 0.5, "\(name): the send is drawn past the pane's end")
+                for (part, rect) in [("control", more), ("field", field), ("send", send), ("well", well)] {
+                    XCTAssertGreaterThanOrEqual(rect.minY, pane.minY - 0.5, "\(name): the \(part) is drawn over the pane's top")
+                    XCTAssertLessThanOrEqual(rect.maxY, pane.maxY + 0.5, "\(name): the \(part) is drawn under the pane's foot")
+                }
+                // The slots give the field its minimum down to a control's reach, so only a
+                // minimum or a spacing the screen cannot hold leaves the field with less.
+                if look.draft.minimumWidth <= 160, look.draft.spacing <= 64, look.composer.well.size <= 72 {
+                    XCTAssertGreaterThanOrEqual(field.width, look.draft.minimumWidth - 0.5, "\(name): the field is under its minimum")
+                }
+            }
+        }
+    }
+
+    /// The room the pane grows in is what the column has left once a line under the transcript
+    /// and a card over the pane have taken theirs: on the smallest screen with a keyboard up, the
+    /// look's most lines at the most the reader takes and a draft longer than all of them, the
+    /// pane with the memory's offer over it, with a line to send again under the transcript, and
+    /// with both, stays under the column's top with the line still above the card.
+    func testTheRoomIsWhatTheLineAndTheCardLeaveOfTheColumn() throws {
+        let words = String(repeating: "and then the bins, the plants on the stairs and the post, ", count: 40)
+        var look = Look()
+        look.composer.surface = .flat
+        look.draft.maximumLines = Look.Draft.lines.upperBound
+        // The screen, less the status bar, the navigation bar and a keyboard with its bar.
+        let column = CGSize(width: 320, height: 568 - 20 - 44 - 260)
+        func mark(_ name: String, _ drawn: Drawn) -> some View {
+            GeometryReader { proxy in
+                Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, rect in drawn.named[name] = rect }
+            }
+        }
+        var heights: [String: CGFloat] = [:]
+        for (name, line, card) in [("neither", false, false), ("the card", false, true), ("the line", true, false), ("both", true, true)] {
+            let drawn = Drawn()
+            let view = ChatColumn(keyboard: true) {
+                Color.clear.background { mark("transcript", drawn) }
+            } line: {
+                if line {
+                    Button("Send \"bins on Tuesday\" again") {}.buttonStyle(.bordered).font(.footnote).padding(.bottom, 8)
+                        .background { mark("line", drawn) }
+                }
+            } card: {
+                if card { MemoryOfferCard(choose: {}, notNow: {}).background { mark("card", drawn) } }
+            } pane: { room in
+                Composer(draft: Draft(text: .constant(words), typing: .constant(true), row: true), room: room)
+                    .overlayPreferenceValue(ComposerFrames.Pane.self) { pane in
+                        GeometryReader { proxy in
+                            Color.clear.onChange(of: Self.global(pane, proxy), initial: true) { _, rect in drawn.pane = rect }
+                        }
+                    }
+            }
+            .background { mark("column", drawn) }
+            .ignoresSafeArea()
+            .environment(\.look, look)
+            try hosted(view, size: column) { _ in
+                let pane = try XCTUnwrap(drawn.pane, "\(name): no pane was drawn")
+                let whole = try XCTUnwrap(drawn.named["column"], "\(name): no column")
+                let transcript = try XCTUnwrap(drawn.named["transcript"], "\(name): no transcript")
+                heights[name] = pane.height
+                XCTAssertLessThanOrEqual(whole.height, column.height + 0.5, "\(name): the column outgrew its screen")
+                var top = pane.minY
+                if card {
+                    let card = try XCTUnwrap(drawn.named["card"], "\(name): no card")
+                    XCTAssertGreaterThan(card.height, 40, "\(name): the card took no room, so this holds nothing")
+                    XCTAssertLessThanOrEqual(card.maxY, pane.minY + 0.5, "\(name): the pane is drawn over the card")
+                    top = card.minY
+                }
+                if line {
+                    let line = try XCTUnwrap(drawn.named["line"], "\(name): no line")
+                    XCTAssertGreaterThan(line.height, 20, "\(name): the line took no room, so this holds nothing")
+                    XCTAssertLessThanOrEqual(line.maxY, top + 0.5, "\(name): the line is drawn under what stands over it")
+                    top = line.minY
+                }
+                XCTAssertGreaterThanOrEqual(top, whole.minY - 0.5, "\(name): the column's rows are pushed past its top")
+                XCTAssertGreaterThanOrEqual(transcript.height, -0.5, "\(name)")
+                XCTAssertLessThanOrEqual(transcript.maxY, top + 0.5, "\(name): the transcript is drawn under the rows below it")
+            }
+        }
+        let neither = try XCTUnwrap(heights["neither"])
+        for name in ["the card", "the line", "both"] {
+            XCTAssertLessThan(try XCTUnwrap(heights[name]), neither, "\(name): the pane grew as if nothing stood in its room")
+        }
     }
 
     /// An anchor's rectangle in the window's space, so the resting and the short layouts, whose
@@ -705,7 +869,7 @@ final class ComposerPlanTests: XCTestCase {
         // slot wherever the row can hold the well and both.
         XCTAssertLessThanOrEqual(plan.moreSlot, look.composer.flank.slot + 1e-6, what)
         XCTAssertLessThanOrEqual(plan.sendSlot, look.draft.slot + 1e-6, what)
-        if plan.size.width >= geometry.well + look.composer.flank.slot + look.draft.slot {
+        if plan.size.width >= ComposerPlan.least(look.composer, draft: look.draft, geometry: geometry) {
             XCTAssertEqual(plan.moreSlot, look.composer.flank.slot, accuracy: 1e-6, "\(what): the control's room yielded with room for it")
             XCTAssertEqual(plan.sendSlot, look.draft.slot, accuracy: 1e-6, "\(what): the send's room yielded with room for it")
         }

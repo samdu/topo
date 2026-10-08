@@ -133,13 +133,13 @@ struct Composer: View {
         // other.
         ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry) {
             micButton(geometry).layoutValue(key: ComposerPart.self, value: .well)
-            more.layoutValue(key: ComposerPart.self, value: .more)
-            field(shown: row).layoutValue(key: ComposerPart.self, value: .field)
+            more.drawn(as: .more)
+            field(shown: row).drawn(as: .field)
             line.layoutValue(key: ComposerPart.self, value: .line)
             if row {
-                send.layoutValue(key: ComposerPart.self, value: .send)
+                send.drawn(as: .send)
             } else {
-                keyboard.layoutValue(key: ComposerPart.self, value: .keyboard)
+                keyboard.drawn(as: .keyboard)
             }
         }
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
@@ -190,6 +190,11 @@ struct Composer: View {
     private var more: some View {
         Button {} label: {
             Image(systemName: look.composer.flank.more).font(look.composer.flank.font)
+                // In the row it is laid out in the slot the plan gives it and no wider, so a mark
+                // larger than its slot is cut at the slot's edge and stands over nothing.
+                .frame(maxWidth: look.composer.flank.slot)
+                .clipped()
+                .contentShape(Rectangle())
         }
         .accessibilityIdentifier("composer-more")
         .accessibilityLabel("More")
@@ -246,8 +251,10 @@ struct Composer: View {
             // the pane could never take the focus as its row again.
             .allowsHitTesting(shown || writing)
             .accessibilityHidden(!shown)
-            // At rest the words are the transcript row's to read, and the field says none.
-            .accessibilityValue(shown ? draft.text : "")
+            // The words are read where they are drawn: the field says them only while it is what
+            // draws them, and none at rest or while a turn is on its way, which are the
+            // transcript row's.
+            .accessibilityValue(draft.fieldValue)
     }
 
     /// The most lines the field takes before it scrolls inside itself: the look's, and no more
@@ -290,6 +297,7 @@ struct Composer: View {
                 .foregroundStyle(look.draft.sendInk)
                 .opacity(nothing ? look.draft.sendRestingOpacity : 1)
                 .frame(maxWidth: look.draft.slot, maxHeight: look.draft.slot)
+                .clipped()
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
@@ -426,7 +434,9 @@ struct ComposerRow: Layout {
         let at = { (point: CGPoint) in CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y) }
         part(.well, of: subviews)?.place(at: at(plan.well.center), anchor: .center,
                                          proposal: ProposedViewSize(plan.well.size))
-        part(.more, of: subviews)?.place(at: at(plan.more), anchor: .center, proposal: .unspecified)
+        // At rest the control is its own size; in the row it is given its slot.
+        part(.more, of: subviews)?.place(at: at(plan.more), anchor: .center,
+                                         proposal: row ? ProposedViewSize(width: plan.moreSlot, height: nil) : .unspecified)
         part(.send, of: subviews)?.place(at: at(plan.send), anchor: .center,
                                          proposal: ProposedViewSize(width: plan.sendSlot, height: draft.slot))
         part(.keyboard, of: subviews)?.place(at: at(plan.keyboard), anchor: .center, proposal: .unspecified)
@@ -456,6 +466,23 @@ enum ComposerFrames {
         static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
             value = value ?? nextValue()
         }
+    }
+
+    /// The control, the field, the send and the way to the keyboard, as drawn: what a test
+    /// holds apart from each other and inside the pane, off the layout and not off the plan.
+    struct Parts: PreferenceKey {
+        static let defaultValue: [ComposerPart: Anchor<CGRect>] = [:]
+        static func reduce(value: inout [ComposerPart: Anchor<CGRect>], nextValue: () -> [ComposerPart: Anchor<CGRect>]) {
+            value.merge(nextValue()) { first, _ in first }
+        }
+    }
+}
+
+private extension View {
+    /// One of the pane's parts: placed by what it is, and its drawn bounds published under it.
+    func drawn(as part: ComposerPart) -> some View {
+        anchorPreference(key: ComposerFrames.Parts.self, value: .bounds) { [part: $0] }
+            .layoutValue(key: ComposerPart.self, value: part)
     }
 }
 
@@ -637,16 +664,38 @@ struct ComposerPlan: Equatable, Sendable {
                 + 2 * max(draft.spacing, 0)
         }
 
+        /// The least a slot yields to for the field's sake: a control's reach, or the look's
+        /// slot where that is less.
+        static let reach: CGFloat = 44
+
         init(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat) {
-            let half = geometry.well / 2
-            // The slots are the last to yield, and yield together: a row narrower than the well
-            // and both of them shares what is past the well between them, so the three stay in
-            // order and inside the row whatever the look asks for.
-            let slots = max(composer.flank.slot, 0) + max(draft.slot, 0)
+            // A row narrower than the well and both slots shares what is past the well between
+            // them, so the three stay in order and inside the row whatever the look asks for.
             let room = max(width - geometry.well, 0)
-            let kept = slots > room && slots > 0 ? room / slots : 1
-            self.control = max(composer.flank.slot, 0) * kept
-            self.sending = max(draft.slot, 0) * kept
+            var (wide, send) = (max(composer.flank.slot, 0), max(draft.slot, 0))
+            if wide + send > room {
+                // The smaller keeps its slot where that is no more than half of what there is,
+                // and the larger has the rest: one absurd slot does not cost the other its own.
+                if wide <= room / 2 { send = room - wide } else if send <= room / 2 { wide = room - send } else { (wide, send) = (room / 2, room / 2) }
+            }
+            var short: CGFloat = 0
+            self.init(composer, draft: draft, geometry: geometry, width: width, control: wide, sending: send, short: &short)
+            // The slots are the last to yield, and only as far as a control's reach: what either
+            // has over that goes to a field still under its minimum.
+            let (over, above) = (max(wide - Self.reach, 0), max(send - Self.reach, 0))
+            guard short > 0, over + above > 0 else { return }
+            let given = min(short, over + above)
+            self.init(composer, draft: draft, geometry: geometry, width: width,
+                      control: wide - given * over / (over + above), sending: send - given * above / (over + above), short: &short)
+        }
+
+        /// The row with the control and the send in the room given each. `short` is what the
+        /// field is left under its minimum by, once everything else has yielded.
+        private init(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat,
+                     control wide: CGFloat, sending send: CGFloat, short left: inout CGFloat) {
+            let half = geometry.well / 2
+            self.control = wide
+            self.sending = send
             let (control, sending) = (self.control / 2, self.sending / 2)
             var lead = max(composer.jewelInset, half)
             var past = max(composer.spacing, control)
@@ -669,11 +718,12 @@ struct ComposerPlan: Equatable, Sendable {
             lead -= give(lead - half)
             gap -= give(2 * gap) / 2
 
+            left = max(short, 0)
             well = lead
             more = lead + half + past
-            send = width - trail
+            self.send = width - trail
             let from = more + control + gap
-            field = from...max(send - sending - gap, from)
+            field = from...max(self.send - sending - gap, from)
         }
     }
 }

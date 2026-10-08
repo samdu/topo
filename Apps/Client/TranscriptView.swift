@@ -90,7 +90,9 @@ struct TranscriptView: View {
             .onChange(of: turns.last?.ref) { _, _ in scroll(proxy, animated: true) }
             // The row appearing, and each line it grows by, keep it where the newest turn was.
             .onChange(of: draft?.drawer) { _, _ in scroll(proxy, animated: true) }
-            .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
+            // Only while the row draws them: words typed in the pane's field move nothing here,
+            // so someone scrolled back to read an older turn while writing is left reading it.
+            .onChange(of: draft?.followed) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.before.last?.id) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
             // A reply the guest wrote ahead of iCloud arrives under words already drawn.
@@ -408,6 +410,15 @@ struct Draft {
         case .writing: row ? .pane : text.isEmpty ? .none : .row
         }
     }
+
+    /// The words the transcript keeps its end at: the row's, while it is the row that draws
+    /// them, and none while they are the field's.
+    var followed: String? { drawer == .row ? text : nil }
+
+    /// What the field says it holds to whoever reads the screen: the words while it is the
+    /// field that draws them, and none at rest or while a turn is on its way, whatever form the
+    /// pane is in, since those are the row's and are read there.
+    var fieldValue: String { drawer == .pane ? text : "" }
 }
 
 /// The person's next turn at the end of the transcript, while the glass has no field for it: a
