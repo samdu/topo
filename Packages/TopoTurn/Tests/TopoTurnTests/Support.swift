@@ -171,3 +171,32 @@ final class Marks: @unchecked Sendable {
     var all: [String] { lock.withLock { names } }
     var add: @Sendable (String) -> Void { { [self] name in lock.withLock { names.append(name) } } }
 }
+
+/// A database that fails the next fetch of the lease as an unreachable CloudKit does.
+final class LosesALeaseFetch: RecordDatabase, @unchecked Sendable {
+    private let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var lose = false
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    func loseNextLeaseFetch() { lock.withLock { lose = true } }
+    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        if ids.contains(Lease.recordID) {
+            let lost = lock.withLock { () -> Bool in defer { lose = false }; return lose }
+            if lost { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+        }
+        return try await inner.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// True once `condition` holds, asked a bounded number of times: a wait that fails instead of
+/// hanging the suite.
+func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
+    for _ in 0..<100_000 {
+        if await condition() { return true }
+        await Task.yield()
+    }
+    return false
+}

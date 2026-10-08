@@ -128,8 +128,23 @@ public actor TurnRunner {
         let before: Transcript, person: Turn
         let at = Date()
         do {
-            if fresh, let saved = try await savedWithRenewal(text, at: at, nonce: nonce) {
-                (before, person) = saved
+            let renewed: (Transcript, Turn)?
+            do {
+                renewed = fresh ? try await savedWithRenewal(text, at: at, nonce: nonce) : nil
+            } catch {
+                // The save with the lease's renewal could not be made: as when the lease could
+                // not be asked, the person is typing here, so the brain hears the words.
+                if error is RecordDatabaseError, !Task.isCancelled {
+                    away = true
+                    if hearing == nil, known != nil { hearing = hearNow() }
+                }
+                throw error
+            }
+            if let renewed {
+                (before, person) = renewed
+                // The lease answered, and this device holds it: the brain hears as it does
+                // once `acquire()` has answered primary.
+                if hearing == nil, known != nil { hearing = hearNow() }
             } else {
                 if fresh, hearing == nil { await progress?(.takingLease) }
                 // The log is read while the lease is taken: the read asks nothing of the lease, and
@@ -224,29 +239,29 @@ public actor TurnRunner {
 
     /// The log as read and the person's turn appended to it in one atomic batch with the renewal
     /// of the lease this device holds: the compare-and-set `acquire()` makes after its fetch, on
-    /// the version this device last wrote, with no fetch before it. Nil, with nothing written,
-    /// when the batch was refused: the lease was claimed since this device's last heartbeat, or
-    /// lapsed here and is no longer this device's to claim afresh. The turn then takes the lease
-    /// the long way. A turn found already in the log (a retry) renewed nothing, so the lease is
-    /// heartbeated before the turn is taken as this device's to answer.
+    /// the version this device last wrote, with no fetch of the lease before it unless the lease
+    /// lapsed while the batch waited its turn, when the batch reads the record and claims it
+    /// afresh (`PrimaryLease.heartbeat(saving:)`). The lease bounds its requests, so the save is
+    /// given `LeaseTiming.patience`. Nil, with nothing written, when the turn is to take the
+    /// lease the long way: the batch was refused (`heartbeat(saving:)` says when), the brain
+    /// came to owe the log a reply while the log was read, or the turn was found already in the
+    /// log (a retry, which renewed nothing) and the lease's heartbeat, sent before the turn is
+    /// taken as this device's to answer, said it is not held. What the lease then answers the
+    /// long way is where this device stands.
     private func savedWithRenewal(_ text: String, at: Date, nonce: String) async throws -> (Transcript, Turn)? {
         let read = try await log.read()
+        // An owed reply is written before the person's turn, under a lease taken first.
+        guard await brain.owed() == nil else { return nil }
         // A caller that stopped before the person's turn is in the log writes nothing at all.
         try Task.checkCancellation()
         guard let person = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce,
-                                                   justRead: true, renewing: lease) else {
-            // What the lease answers next says who holds it; nothing is heard ahead of that.
-            standing = .elsewhere
-            return nil
+                                                   justRead: true, renewing: lease) else { return nil }
+        if person.at != at {
+            guard try await lease.heartbeat() else { return nil }
         }
-        guard person.at == at else {
-            guard try await lease.heartbeat() else {
-                standing = .elsewhere
-                return nil
-            }
-            Perf.mark("turn.lease.fresh")
-            return (read, person)
-        }
+        // A call to the lease got through, and this device holds it.
+        away = false
+        standing = .mine
         Perf.mark("turn.lease.fresh")
         return (read, person)
     }
