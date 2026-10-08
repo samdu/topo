@@ -941,7 +941,6 @@ final class MicPress {
         }
     }
 }
-#endif
 
 /// What of the chat's column is the room the pane grows in.
 enum ChatColumnRoom {
@@ -995,3 +994,4 @@ struct ChatColumn<Transcript: View, Line: View, Card: View, Pane: View>: View {
         }
     }
 }
+#endif
