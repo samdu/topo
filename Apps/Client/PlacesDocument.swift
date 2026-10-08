@@ -10,9 +10,9 @@ import Foundation
 /// ```
 ///
 /// Each key is a place's name. It is read entry by entry, as `LookDocument` reads a look: an
-/// entry that is not an object, lacks a coordinate, or holds a number that is not finite or is
-/// outside its range is left out alone with the reason written down, and every other entry
-/// stands.
+/// entry that is not an object, lacks a coordinate, or holds a number outside its range is left
+/// out alone with the reason written down, and every other entry stands. A number JSON cannot
+/// hold (`1e400`) is not an entry's fault but the file's: it is not JSON.
 enum PlacesDocument {
     /// Where the document lives, in the vault's root beside the notes.
     static let name = "places.json"
@@ -20,7 +20,7 @@ enum PlacesDocument {
     /// In metres: what a place with no `radius` is given, and what one may name.
     static let defaultRadius = 50.0
     static let radii = 5.0...5000.0
-    /// The longest name and address read, in characters.
+    /// The longest name and address read, in UTF-8 bytes: each is a line `topo location` prints.
     static let nameLength = 64
     static let addressLength = 200
     /// The most places read: the rest are counted in one note.
@@ -52,14 +52,15 @@ enum PlacesDocument {
         guard let root = parsed as? [String: Any] else { return Reading(unreadable: "is not a JSON object") }
         var reading = Reading()
         // By name, so what is read and what is noted do not depend on a dictionary's order.
-        for key in root.keys.sorted() {
+        let keys = root.keys.sorted()
+        for (index, key) in keys.enumerated() {
             guard reading.places.count < limit else {
-                reading.notes.append("\(root.count - limit) more places than the \(limit) read")
+                reading.notes.append("\(keys.count - index) more places than the \(limit) read")
                 break
             }
             let label = shown(key)
-            guard !key.isEmpty, key.count <= nameLength, !key.contains(where: \.isNewline) else {
-                reading.notes.append("\(label) is not a name of one line and at most \(nameLength) characters")
+            guard !key.allSatisfy(\.isWhitespace), key.utf8.count <= nameLength, !key.contains(where: \.isNewline) else {
+                reading.notes.append("\(label) is not a name of one line and at most \(nameLength) bytes")
                 continue
             }
             guard let entry = root[key] as? [String: Any] else {
@@ -85,10 +86,11 @@ enum PlacesDocument {
             var address: String?
             if let given = entry["address"] {
                 // An address that cannot be read costs the address and not the place.
-                if let text = given as? String, !text.isEmpty, text.count <= addressLength, !text.contains(where: \.isNewline) {
+                if let text = given as? String, !text.allSatisfy(\.isWhitespace), text.utf8.count <= addressLength,
+                   !text.contains(where: \.isNewline) {
                     address = text
                 } else {
-                    reading.notes.append("\(label).address is not text of one line and at most \(addressLength) characters")
+                    reading.notes.append("\(label).address is not text of one line and at most \(addressLength) bytes")
                 }
             }
             for stray in entry.keys.sorted() where !["latitude", "longitude", "radius", "address"].contains(stray) {
@@ -99,16 +101,22 @@ enum PlacesDocument {
         return reading
     }
 
-    /// A JSON number that is finite and in `range`: a bool, which `NSNumber` also holds, is not one.
+    /// A JSON number in `range`: a bool, which `NSNumber` also holds, is not one.
     private static func number(_ value: Any?, in range: ClosedRange<Double>) -> Double? {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
         let double = number.doubleValue
-        return double.isFinite && range.contains(double) ? double : nil
+        return range.contains(double) ? double : nil
     }
 
     /// A key as a note names it: on one line and no longer than a name may be.
     private static func shown(_ key: String) -> String {
         let flat = key.split(whereSeparator: \.isNewline).joined(separator: " ")
-        return flat.count > nameLength ? String(flat.prefix(nameLength)) + "…" : flat
+        guard flat.utf8.count > nameLength else { return flat }
+        var kept = ""
+        for character in flat {
+            guard kept.utf8.count + String(character).utf8.count <= nameLength else { break }
+            kept.append(character)
+        }
+        return kept + "…"
     }
 }

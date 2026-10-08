@@ -44,8 +44,9 @@ final class PlacesTests: XCTestCase {
             (#""x": {"latitude": 1, "longitude": 1, "radius": 0}"#, "x.radius is not a number of metres from 5 to 5000"),
             (#""x": {"latitude": 1, "longitude": 1, "radius": 5001}"#, "x.radius is not a number of metres from 5 to 5000"),
             (#""x": {"latitude": 1, "longitude": 1, "radius": "30"}"#, "x.radius is not a number of metres from 5 to 5000"),
-            (#""": {"latitude": 1, "longitude": 1}"#, " is not a name of one line and at most 64 characters"),
-            (#""a\nb": {"latitude": 1, "longitude": 1}"#, "a b is not a name of one line and at most 64 characters"),
+            (#""": {"latitude": 1, "longitude": 1}"#, " is not a name of one line and at most 64 bytes"),
+            (#""a\nb": {"latitude": 1, "longitude": 1}"#, "a b is not a name of one line and at most 64 bytes"),
+            (#""   ": {"latitude": 1, "longitude": 1}"#, "    is not a name of one line and at most 64 bytes"),
         ]
         for (entry, note) in cases {
             let reading = PlacesDocument.read("{\(entry), " + homeText.dropFirst())
@@ -56,7 +57,7 @@ final class PlacesTests: XCTestCase {
         let long = String(repeating: "n", count: 65)
         let reading = PlacesDocument.read(#"{"\#(long)": {"latitude": 1, "longitude": 1}}"#)
         XCTAssertEqual(reading.places, [])
-        XCTAssertEqual(reading.notes, [String(repeating: "n", count: 64) + "… is not a name of one line and at most 64 characters"])
+        XCTAssertEqual(reading.notes, [String(repeating: "n", count: 64) + "… is not a name of one line and at most 64 bytes"])
     }
 
     /// An address that cannot be read, and a key nothing reads, cost themselves and not the place.
@@ -65,7 +66,35 @@ final class PlacesTests: XCTestCase {
         var bare = home
         bare.address = nil
         XCTAssertEqual(reading.places, [bare])
-        XCTAssertEqual(reading.notes, ["home.address is not text of one line and at most 200 characters", "home.lat is not a field a place has"])
+        XCTAssertEqual(reading.notes, ["home.address is not text of one line and at most 200 bytes", "home.lat is not a field a place has"])
+    }
+
+    /// The bound on a name and an address is in bytes, so a name of one character and a great many
+    /// combining marks is not a name, and its note is no longer than a name either.
+    func testANameOrAnAddressIsBoundedInBytes() {
+        let marked = "x" + String(repeating: "\u{301}", count: 5000)
+        XCTAssertEqual(marked.count, 1)
+        let named = PlacesDocument.read(#"{"\#(marked)": {"latitude": 1, "longitude": 1}}"#)
+        XCTAssertEqual(named.places, [])
+        XCTAssertEqual(named.notes, ["… is not a name of one line and at most 64 bytes"])
+
+        for address in [marked, String(repeating: "a", count: 201), "", "  "] {
+            let reading = PlacesDocument.read(#"{"home": {"latitude": 37.78167, "longitude": -122.45261, "radius": 30, "address": "\#(address)"}}"#)
+            XCTAssertEqual(reading.places.map(\.address), [nil], address.prefix(8).description)
+            XCTAssertEqual(reading.notes, ["home.address is not text of one line and at most 200 bytes"])
+        }
+        let broken = PlacesDocument.read(#"{"home": {"latitude": 37.78167, "longitude": -122.45261, "address": "1 Fake St\nplace work"}}"#)
+        XCTAssertEqual(broken.places.map(\.address), [nil])
+        let widest = String(repeating: "é", count: 32)
+        XCTAssertEqual(PlacesDocument.read(#"{"\#(widest)": {"latitude": 1, "longitude": 1}}"#).places.map(\.name), [widest])
+    }
+
+    /// What is counted past the limit is what was not read, whatever was left out before it.
+    func testEntriesLeftOutBeforeTheLimitAreNotCountedPastIt() {
+        let entries = (0..<103).map { #""p\#(String(format: "%03d", $0))": {"latitude": 1, "longitude": 1}"# }.joined(separator: ", ")
+        let reading = PlacesDocument.read(#"{"a": 1, "b": 2, \#(entries)}"#)
+        XCTAssertEqual(reading.places.count, 100)
+        XCTAssertEqual(reading.notes, ["a is not an object", "b is not an object", "3 more places than the 100 read"])
     }
 
     func testPlacesPastTheLimitAreCounted() {
