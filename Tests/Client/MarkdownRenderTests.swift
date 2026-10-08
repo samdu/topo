@@ -48,7 +48,7 @@ final class MarkdownRenderTests: XCTestCase {
                 .padding(.horizontal, look.transcript.horizontalPadding)
             Spacer(minLength: 0)
         }
-        .environment(\.replyImage, images)
+        .environment(\.replyImages, ReplyImages(kept: images, read: { images($0) }))
         .frame(width: stage.width, height: stage.height, alignment: .top)
         .background(Color.white)
         return try Pixels(LookStage.image(row, look: look, size: stage))
@@ -897,28 +897,28 @@ final class MarkdownRenderTests: XCTestCase {
     }
 
     /// An image with no picture is its alternative text behind a quote's bar in the quote's
-    /// ink, and the reader is asked only for the one that names a file under the home.
+    /// ink; a web address is never asked for, and is offered as a link.
     func testAnImageWithNoPictureIsItsAlternativeText() throws {
         let linkInk = UIColor(red: 0.9, green: 0, blue: 0.6, alpha: 1)
         for screen in Look.Screen.allCases {
             var look = look(screen)
             look.markdown.linkInk = Color(linkInk)
             let picture = png(100, 100)
-            for source in ["../x.png", "/etc/hosts", "https://example.com/i.png", "memory/a.png", "gone.png", "notes.txt"] {
+            for source in ["https://example.com/i.png", "file:///etc/hosts", "notes.txt"] {
                 let asked = Asked()
                 let drawn = try draw(turn(.assistant, "![A chart of sizes](\(source))"), look) { path in
                     asked.add(path)
-                    return path == "notes.txt" ? Data("words".utf8) : path == "gone.png" ? nil : picture
+                    return path == "notes.txt" ? Data("words".utf8) : picture
                 }
                 XCTAssertEqual(drawn.count(pictureInk), 0, "\(screen): \(source) drew a picture")
                 XCTAssertGreaterThan(drawn.count(quoteInk), 0, "\(screen): \(source) drew no alternative text")
                 XCTAssertGreaterThan(drawn.count(barInk), 0, "\(screen): \(source) drew no bar")
-                XCTAssertEqual(asked.paths.isEmpty, !["gone.png", "notes.txt"].contains(source), "\(screen): \(source) asked \(asked.paths)")
+                XCTAssertEqual(asked.paths.isEmpty, source != "notes.txt", "\(screen): \(source) asked \(asked.paths)")
                 // Only a web address is offered as a link.
                 XCTAssertEqual(drawn.count(linkInk) > 0, source.hasPrefix("https"), "\(screen): \(source)")
             }
             // No alternative text is still the reason, not nothing.
-            let bare = try draw(turn(.assistant, "![](../x.png)"), look)
+            let bare = try draw(turn(.assistant, "![](https://example.com/i.png)"), look)
             XCTAssertGreaterThan(bare.count(barInk), 0, "\(screen): an image with no words drew nothing")
             XCTAssertNotNil(bare.inked, "\(screen)")
         }

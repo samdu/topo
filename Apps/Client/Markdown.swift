@@ -64,10 +64,10 @@ enum Markdown {
         /// A table: the header row, whose cells name the columns, and the rows under it. Every
         /// row holds a cell for every column.
         case table(header: TableRow, rows: [TableRow])
-        /// An image written in a block, outside a link: its source as the reply wrote it, and
-        /// its alternative text. (One written as a link's words is that link, drawn as its
-        /// alternative text.) It is a block of its own, after the block it was written in,
-        /// which keeps its words. Where the source may be read from is `place(ofImage:)`.
+        /// An image written in a block: its source as the reply wrote it, and its alternative
+        /// text. (One written as a link's words is also still that link, on its alternative
+        /// text, in the block it was written in.) It is a block of its own, after the block it was written in,
+        /// which keeps its words. What the source names is `place(ofImage:)`.
         case image(source: String, alt: String)
         case rule
     }
@@ -107,22 +107,26 @@ enum Markdown {
             return [Block(kind: .paragraph, depth: 0, text: AttributedString(source))]
         }
         var blocks: [Block] = []
+        /// The images written as a link's words, which the parse keeps as that link alone.
+        var linked = linkedImages(in: source)
         /// The list items whose marker has been drawn, so a second paragraph of one draws none.
         var marked: Set<Int> = []
         /// The code blocks so far, which numbers the next.
         var codeBlocks = 0
         /// The table being gathered: where it sits, its columns' alignments, and its rows so
         /// far, each cell kept by the column the parse says it is in — the parse makes no run
-        /// for an empty cell, so a row's cells are not its columns in order.
+        /// for an empty cell, so a row's cells are not its columns in order — and each row by
+        /// the place the parse says it has in the table, since a row of empty cells has no run
+        /// at all and is known only by the place it leaves between the rows round it.
         var table: (identity: Int, depth: Int, quote: Int, outside: Int, columns: [ColumnAlignment],
                     header: [Int: AttributedString],
-                    rows: [(identity: Int, cells: [Int: AttributedString])],
+                    rows: [Int: [Int: AttributedString]],
                     images: [Kind])?
 
         func finishTable() {
             guard let done = table else { return }
             table = nil
-            let widest = ([done.header] + done.rows.map(\.cells)).flatMap(\.keys).max().map { $0 + 1 } ?? 0
+            let widest = ([done.header] + done.rows.values).flatMap(\.keys).max().map { $0 + 1 } ?? 0
             let columns = max(done.columns.count, widest)
             func row(_ cells: [Int: AttributedString]) -> TableRow {
                 TableRow(cells: (0..<columns).map { column in
@@ -130,7 +134,10 @@ enum Markdown {
                               alignment: column < done.columns.count ? done.columns[column] : .leading)
                 })
             }
-            blocks.append(Block(kind: .table(header: row(done.header), rows: done.rows.map { row($0.cells) }),
+            // The header is row 0 and the rows under it count from 1; a place no run names is a
+            // row of empty cells. (One at the table's very end leaves no place to know it by.)
+            let rows = done.rows.keys.max().map { last in (1...max(last, 1)).map { row(done.rows[$0] ?? [:]) } } ?? []
+            blocks.append(Block(kind: .table(header: row(done.header), rows: rows),
                                 depth: done.depth, quote: done.quote, listsOutside: done.outside,
                                 text: AttributedString()))
             // An image written in a cell is drawn under the table.
@@ -142,7 +149,7 @@ enum Markdown {
 
         for (intent, range) in parsed.runs[\.presentationIntent] {
             var text = lineBroken(parsed[range])
-            let images = takeImages(from: &text)
+            let images = takeImages(from: &text) + linkedImages(in: text, of: &linked)
             let components = intent?.components ?? []
             let isList = { (kind: PresentationIntent.Kind) in kind == .orderedList || kind == .unorderedList }
             let depth = components.filter { isList($0.kind) }.count
@@ -165,16 +172,13 @@ enum Markdown {
                 let (rowIntent, tableIntent) = (components[1], components[2])
                 if table?.identity != tableIntent.identity {
                     finishTable()
-                    table = (tableIntent.identity, depth, quote, outside, columns.map(ColumnAlignment.init), [:], [], [])
+                    table = (tableIntent.identity, depth, quote, outside, columns.map(ColumnAlignment.init), [:], [:], [])
                 }
                 table?.images += images
                 if rowIntent.kind == .tableHeaderRow {
                     table?.header[column, default: AttributedString()] += text
-                } else {
-                    if table?.rows.last?.identity != rowIntent.identity { table?.rows.append((rowIntent.identity, [:])) }
-                    if let last = table?.rows.indices.last {
-                        table?.rows[last].cells[column, default: AttributedString()] += text
-                    }
+                } else if case .tableRow(let index) = rowIntent.kind {
+                    table?.rows[index, default: [:]][column, default: AttributedString()] += text
                 }
                 continue
             }
@@ -250,46 +254,128 @@ enum Markdown {
         return images
     }
 
-    /// Where an image's source says its bytes are.
-    enum ImagePlace: Equatable {
-        /// A file under the guest's own home, by its path from the home: the one place an image
-        /// is read from.
-        case home(String)
-        /// A web address. It is never fetched; a reply can show where it is.
-        case web(URL)
-        /// The memory: the vault's mount, or the home's link to it. The vault is read through
-        /// its own coordination and never for a picture.
-        case memory
-        /// Anywhere else: an absolute path, one that climbs with `..`, another scheme, nothing.
-        case outside
+    /// An image written as a link's words, `[![alt](source)](address)`: its alternative text,
+    /// its source and the link's address, as the reply wrote them.
+    private struct LinkedImage {
+        var alt: String
+        var source: String
+        var address: String
     }
 
-    /// The name the memory goes by from inside the guest, at the root (`ClaudeLauncher.vault`,
-    /// `/memory`) and as the home's link to it.
-    static let memoryNames = ["memory"]
+    /// The images `source` writes as a link's words, in order. The parse keeps such an image
+    /// as its alternative text on the link's run and says nothing of its source, so the source
+    /// is read from the reply as written: the plain form of it, `[![alt](source)](address)`
+    /// on one line with no bracket nested in it. One written another way is still its words
+    /// and its link, and so is one written where it is not a link at all — in code — which
+    /// this cannot tell apart, so it is matched to a link only by that link's own address and
+    /// words (`linkedImages(in:of:)`).
+    ///
+    /// It is one pass over the reply's bytes: each `[![` is read forward a part at a time, each
+    /// part to a length it may not pass, and a part that does not fit ends that reading there.
+    private static func linkedImages(in source: String) -> [LinkedImage] {
+        guard source.contains("[![") else { return [] }
+        let bytes = Array(source.utf8)
+        let (open, close, round, unround, less, more, bang, slash, line) =
+            (UInt8(ascii: "["), UInt8(ascii: "]"), UInt8(ascii: "("), UInt8(ascii: ")"), UInt8(ascii: "<"),
+             UInt8(ascii: ">"), UInt8(ascii: "!"), UInt8(ascii: "\\"), UInt8(ascii: "\n"))
+        func isSpace(_ byte: UInt8) -> Bool { byte == 0x20 || byte == 0x09 }
+        /// From `at`, the bytes up to the first of `ends`, and where that is: nil when one of
+        /// `never`, a line's end, the text's end or the part's limit comes first.
+        func part(from at: Int, to ends: [UInt8], never: [UInt8], limit: Int) -> (text: String, end: Int)? {
+            var index = at
+            while index < bytes.count, index - at <= limit {
+                let byte = bytes[index]
+                if ends.contains(byte) { return (String(decoding: bytes[at..<index], as: UTF8.self), index) }
+                if byte == line || never.contains(byte) { return nil }
+                index += 1
+            }
+            return nil
+        }
+        /// An address in round brackets from the byte after the `(`: bare, or in angle brackets.
+        func address(from at: Int) -> (text: String, end: Int)? {
+            var index = at
+            while index < bytes.count, isSpace(bytes[index]) { index += 1 }
+            guard index < bytes.count else { return nil }
+            if bytes[index] == less {
+                guard let found = part(from: index + 1, to: [more], never: [less], limit: partLimit) else { return nil }
+                return found.text.isEmpty ? nil : (found.text.replacingOccurrences(of: " ", with: "%20"), found.end + 1)
+            }
+            guard let found = part(from: index, to: [unround, 0x20, 0x09], never: [open, close, round, less], limit: partLimit),
+                  !found.text.isEmpty else { return nil }
+            return found
+        }
+        var images: [LinkedImage] = []
+        var index = 0
+        while index + 2 < bytes.count {
+            guard bytes[index] == open, bytes[index + 1] == bang, bytes[index + 2] == open,
+                  index == 0 || bytes[index - 1] != slash else {
+                index += 1
+                continue
+            }
+            let start = index
+            index += 3
+            guard let alt = part(from: start + 3, to: [close], never: [open], limit: partLimit),
+                  alt.end + 1 < bytes.count, bytes[alt.end + 1] == round,
+                  let source = address(from: alt.end + 2),
+                  // A title, if there is one, and the bracket that closes the image.
+                  let closed = part(from: source.end, to: [unround], never: [round], limit: partLimit),
+                  // Whatever else the link's words are, and the bracket that closes them.
+                  let label = part(from: closed.end + 1, to: [close], never: [open], limit: partLimit),
+                  label.end + 1 < bytes.count, bytes[label.end + 1] == round,
+                  let link = address(from: label.end + 2) else { continue }
+            images.append(LinkedImage(alt: alt.text, source: source.text, address: link.text))
+            index = link.end
+        }
+        return images
+    }
 
-    /// Where the image a reply names by `source` is. A relative path resolves against the
-    /// guest's home; a path that is absolute, climbs out with `..`, or names the memory is
-    /// refused, as is every scheme but the web's, which is recognised and not fetched. This is
-    /// the judgement of the name alone: whether a link stands anywhere along a path it allows
-    /// is the reader's to refuse, at the open.
+    /// The most bytes any one part of a linked image — its alternative text, its source, its
+    /// address — is read to.
+    private static let partLimit = 2048
+
+    /// The image blocks for the links of `text` that were written round an image: each linked
+    /// run whose address and words are those of one still in `pending`, which leaves it. The
+    /// run stays as it is — the image's alternative text, linked — and the image is drawn
+    /// after its block as any other.
+    private static func linkedImages(in text: AttributedString, of pending: inout [LinkedImage]) -> [Kind] {
+        guard !pending.isEmpty else { return [] }
+        var images: [Kind] = []
+        for (link, range) in text.runs[\.link] {
+            guard let link else { continue }
+            let words = String(text[range].characters)
+            guard let found = pending.firstIndex(where: {
+                URL(string: $0.address) == link && words.contains($0.alt.trimmingCharacters(in: .whitespaces))
+            }) else { continue }
+            let image = pending.remove(at: found)
+            images.append(.image(source: image.source, alt: image.alt.trimmingCharacters(in: .whitespaces)))
+        }
+        return images
+    }
+
+    /// Where an image's source says its bytes are.
+    enum ImagePlace: Equatable {
+        /// A file, by the path the reply wrote: the guest's own path, absolute or from its
+        /// home, which only the guest can resolve.
+        case file(String)
+        /// A web address, which is never fetched: its picture is not drawn, and the address is
+        /// offered as a link.
+        case web(URL)
+        /// Neither: another scheme's address, or nothing at all.
+        case neither
+    }
+
+    /// Where the image a reply names by `source` is: a web address, which is recognised and
+    /// not fetched, or a path, as the reply wrote it with its percent escapes read. A path is
+    /// not judged here — whether there is a file at it, and whether it may be read, is the
+    /// guest's own answer (`ReplyImage`).
     static func place(ofImage source: String) -> ImagePlace {
         let source = source.trimmingCharacters(in: .whitespaces)
         if let url = URL(string: source), url.scheme != nil {
-            return opens(url) ? .web(url) : .outside
+            return opens(url) ? .web(url) : .neither
         }
         let path = source.removingPercentEncoding ?? source
-        guard !path.isEmpty, !path.hasPrefix("/"), !path.hasPrefix("~"), !path.hasPrefix("\\"),
-              !path.unicodeScalars.contains(where: { $0.value == 0 }) else {
-            // The vault by its mount is the memory; any other absolute path is outside.
-            let lowered = path.lowercased()
-            return memoryNames.contains { lowered == "/" + $0 || lowered.hasPrefix("/" + $0 + "/") } ? .memory : .outside
-        }
-        let parts = path.split(separator: "/", omittingEmptySubsequences: true).filter { $0 != "." }
-        guard let first = parts.first, !parts.contains("..") else { return .outside }
-        // By any case: the home's folder may be on a filesystem that does not tell them apart.
-        if memoryNames.contains(first.lowercased()) { return .memory }
-        return .home(parts.joined(separator: "/"))
+        guard !path.isEmpty, !path.unicodeScalars.contains(where: { $0.value == 0 }) else { return .neither }
+        return .file(path)
     }
 
     /// Whether a link is one a tap may follow: a web address, `http` or `https` with a host. Any

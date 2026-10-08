@@ -123,8 +123,9 @@ enum DebugRun {
 
     #if os(iOS)
     /// The picture the `blocks` fixture's reply names, written into the guest's home where the
-    /// reply says it is (`charts/sizes.png`), so a launch over that fixture draws it through the
-    /// reader every reply's image is read by. Nothing is written for any other launch.
+    /// reply says it is (`/home/topo/charts/sizes.png`), so a launch over that fixture whose
+    /// guest comes up draws it through the reader every reply's image is read by, the guest's
+    /// own. Nothing is written for any other launch.
     static func fixtureImages(_ environment: [String: String] = ProcessInfo.processInfo.environment,
                               home: URL = GuestResident.homeDirectory) {
         guard environment[transcriptVariable] == "blocks" else { return }

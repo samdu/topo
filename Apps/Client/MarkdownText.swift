@@ -311,20 +311,22 @@ private struct Capped: ViewModifier {
     }
 }
 
-/// An image in a reply. Its bytes are read only from the guest's own home, through the reader
-/// the environment carries (`replyImage`), and only where the source names a file there
-/// (`Markdown.place(ofImage:)`): a source that leaves the home, names the memory or is a web
-/// address reaches no reader at all, and nothing is ever fetched. A file that reads and decodes
-/// is drawn as wide as the column, no taller than the look's `imageMaxHeight`, its corners cut
-/// to `imageCornerRadius`. Anything else is drawn as the image's alternative text, in a quote's
-/// style, over why there is no picture in the caption's ink — and, for a web address, the
-/// address as a link.
+/// An image in a reply. A source that is a path is read as the guest reads it, through the
+/// reader the environment carries (`replyImages`): the guest's own path, absolute or from its
+/// home, with its mounts and links, so a picture Claude Code could open is one the reply draws.
+/// A web address is never fetched. A file that reads and decodes is drawn as wide as the
+/// column, no taller than the look's `imageMaxHeight`, its corners cut to `imageCornerRadius`.
+/// Anything else is drawn as the image's alternative text, in a quote's style, over why there
+/// is no picture in the caption's ink — and, for a web address, the address as a link.
+///
+/// The read is the guest's and takes as long as it takes, so it is awaited off the main actor;
+/// what the reader already holds of the source is drawn at once, in the row's first frame.
 struct ReplyImage: View {
     let source: String
     let alt: String
     var bare = true
     @Environment(\.look) private var look
-    @Environment(\.replyImage) private var read
+    @Environment(\.replyImages) private var images
     @State private var drawn: Drawn?
 
     /// What became of the source: a picture, or the reason there is none.
@@ -334,19 +336,17 @@ struct ReplyImage: View {
     }
 
     enum Missing: Equatable {
-        /// The home holds no such file that can be read as a picture: it was written on another
-        /// device, it is behind a link, or its bytes are no image.
+        /// The guest has no such file that can be read as a picture: it was written on another
+        /// device, there is no guest here, it is too large, or its bytes are no image.
         case notHere
-        case outsideHome
-        case inMemory
         case onTheWeb(URL)
+        case neither
 
         var reason: String {
             switch self {
             case .notHere: "Not on this device"
-            case .outsideHome: "Outside Topo's home, so not read"
-            case .inMemory: "In the memory, which pictures are not read from"
             case .onTheWeb: "On the web, so not fetched"
+            case .neither: "Not a file or a web address"
             }
         }
     }
@@ -354,15 +354,24 @@ struct ReplyImage: View {
     /// The long side, in pixels, an image is decoded at: more than any column draws.
     static let pixels = 2048
 
-    /// What `source` is drawn as. The reader is asked only for a file under the home.
-    static func resolve(_ source: String, read: (String) -> Data?) -> Drawn {
+    /// What `source` is drawn as before anything is read: a picture the reader already holds,
+    /// the reason there will be none, or nil for a file still to be asked for.
+    static func settled(_ source: String, kept: (String) -> Data?) -> Drawn? {
         switch Markdown.place(ofImage: source) {
-        case .home(let path):
-            guard let data = read(path), let image = decoded(data) else { return .missing(.notHere) }
+        case .file(let path): kept(path).map { decoded($0).map(Drawn.picture) ?? .missing(.notHere) }
+        case .web(let url): .missing(.onTheWeb(url))
+        case .neither: .missing(.neither)
+        }
+    }
+
+    /// What `source` is drawn as. The reader is asked only for a path, and nothing is fetched.
+    static func resolve(_ source: String, read: (String) async -> Data?) async -> Drawn {
+        switch Markdown.place(ofImage: source) {
+        case .file(let path):
+            guard let data = await read(path), let image = decoded(data) else { return .missing(.notHere) }
             return .picture(image)
         case .web(let url): return .missing(.onTheWeb(url))
-        case .memory: return .missing(.inMemory)
-        case .outside: return .missing(.outsideHome)
+        case .neither: return .missing(.neither)
         }
     }
 
@@ -411,11 +420,20 @@ struct ReplyImage: View {
             }
         }
         .mascotObstacle(bare)
-        .onAppear { load() }
-        .onChange(of: source) { load() }
+        .onAppear { if drawn == nil { drawn = Self.settled(source, kept: images.kept) } }
+        // Read again when the source changes and when what the guest can read does: a row
+        // drawn before the guest has its home has no picture yet, and gets it then.
+        .task(id: Asked(source: source, epoch: images.epoch)) {
+            let read = images.read
+            let resolved = await Self.resolve(source, read: read)
+            if !Task.isCancelled { drawn = resolved }
+        }
     }
 
-    private func load() { drawn = Self.resolve(source, read: read) }
+    private struct Asked: Hashable {
+        var source: String
+        var epoch: Int
+    }
 
     /// The alternative text behind a quote's bar, over the reason.
     private func fallback(_ missing: Missing) -> some View {
@@ -461,17 +479,29 @@ struct ReplyImage: View {
     }()
 }
 
-private struct ReplyImageKey: EnvironmentKey {
-    static let defaultValue: @Sendable (String) -> Data? = { _ in nil }
+/// How a reply's images are read: by the guest's own path.
+struct ReplyImages: Sendable {
+    /// What is already in hand for a path, with no waiting: what a row is drawn with in its
+    /// first frame.
+    var kept: @Sendable (String) -> Data? = { _ in nil }
+    /// The file's bytes as the guest reads them now, or nil.
+    var read: @Sendable (String) async -> Data? = { _ in nil }
+    /// Counts the changes in what the guest can read — its home mounted, the memory mounted,
+    /// a sign-out; a row reads again when this changes.
+    var epoch = 0
+}
+
+private struct ReplyImagesKey: EnvironmentKey {
+    static let defaultValue = ReplyImages()
 }
 
 extension EnvironmentValues {
-    /// Reads an image a reply names, by its path from the guest's home, or answers nil. The app
-    /// hands down the home-only reader (`ReplyImages.read`); everywhere else — a watch, a
-    /// television, a preview — there is no home and so no picture.
-    var replyImage: @Sendable (String) -> Data? {
-        get { self[ReplyImageKey.self] }
-        set { self[ReplyImageKey.self] = newValue }
+    /// Reads an image a reply names by its path in the guest. The app hands down the guest's
+    /// reader (`GuestImages`); everywhere else — a watch, a television, a preview — there is
+    /// no guest and so no picture.
+    var replyImages: ReplyImages {
+        get { self[ReplyImagesKey.self] }
+        set { self[ReplyImagesKey.self] = newValue }
     }
 }
 

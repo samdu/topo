@@ -146,7 +146,7 @@ enum PreviewTurns {
         | notes.md | 14 KB | yes |
         | old-look.json |  | no |
 
-        ![A chart of the three sizes](charts/sizes.png)
+        ![A chart of the three sizes](/home/topo/charts/sizes.png)
 
         ![A chart from the web](https://example.com/chart.png)
         """),

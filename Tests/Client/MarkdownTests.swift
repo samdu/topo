@@ -293,6 +293,58 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(over, [[["a", "b"], ["1", "2"]]], "the parse keeps a row to its header's columns")
     }
 
+    /// A row whose every cell is empty is a row: the parse makes no run for it, and it is kept
+    /// by the place it leaves between the rows round it, so the rows the voice counts are the
+    /// rows written.
+    func testARowOfEmptyCellsIsARow() {
+        let source = "| a | b |\n|---|---|\n|   |   |\n| 1 | 2 |"
+        XCTAssertEqual(Markdown.blocks(source).compactMap(Self.cells), [[["a", "b"], ["", ""], ["1", "2"]]])
+        XCTAssertEqual(Speakable.text(from: source), "A table with 2 rows.")
+        let two = "| a |\n|---|\n| 1 |\n|  |\n|  |\n| 4 |"
+        XCTAssertEqual(Markdown.blocks(two).compactMap(Self.cells), [[["a"], ["1"], [""], [""], ["4"]]])
+        XCTAssertEqual(Speakable.text(from: two), "A table with 4 rows.")
+        XCTAssertEqual(Markdown.blocks("| a |\n|---|").compactMap(Self.cells), [[["a"]]])
+    }
+
+    /// An image written as a link's words is both: the link stays on its alternative text, in
+    /// the block it was written in, and the image is a block after it.
+    func testAnImageThatIsALinksWordsKeepsItsLinkAndIsAnImage() {
+        let source = "[![chart](chart.png)](https://example.com)"
+        XCTAssertEqual(links(source), ["chart -> https://example.com"])
+        XCTAssertEqual(pictured(source), ["chart", "image chart <- chart.png"])
+        let among = "See [![a chart](/tmp/c.png)](https://example.com/c) and [the docs](https://example.com/c) and ![b](b.png)."
+        XCTAssertEqual(links(among), ["a chart -> https://example.com/c", "the docs -> https://example.com/c"])
+        XCTAssertEqual(pictured(among), ["See a chart and the docs and .", "image b <- b.png", "image a chart <- /tmp/c.png"])
+        // Written in code it is words, with no link of its own to hang an image on.
+        XCTAssertEqual(pictured("`[![x](x.png)](https://example.com)` and [x](https://example.org)"),
+                       ["[![x](x.png)](https://example.com) and x"])
+        // A source in angle brackets, and one escaped so that it is no image at all.
+        XCTAssertEqual(pictured("[![a](<my chart.png>)](https://example.com)"), ["a", "image a <- my%20chart.png"])
+        XCTAssertEqual(pictured("[![a](c.png \"A title\")](https://example.com)"), ["a", "image a <- c.png"])
+    }
+
+    /// Reading a reply for its linked images is one pass, whatever the reply holds: the shapes
+    /// that begin like one and never end are read no further than a part's limit each.
+    func testAReplyOfUnfinishedLinkedImagesIsReadInOnePass() {
+        let sources = [
+            String(repeating: "[![a](", count: 20_000),
+            "[![a](data:image/png;base64," + String(repeating: "QUJD", count: 50_000) + ") and words",
+            String(repeating: "[![", count: 40_000),
+            String(repeating: "[![a](x.png)", count: 20_000),
+            String(repeating: "[![a](x.png)](", count: 20_000),
+            "[![" + String(repeating: "a", count: 200_000),
+        ]
+        for source in sources {
+            let began = Date()
+            _ = Markdown.blocks(source)
+            let parse = Date()
+            _ = try? Markdown.parse(source)
+            let alone = Date().timeIntervalSince(parse)
+            // The parse itself is the measure: the reading for linked images adds little to it.
+            XCTAssertLessThan(parse.timeIntervalSince(began), max(alone * 4, 0.5), "\(source.prefix(16))… ×\(source.count)")
+        }
+    }
+
     /// The linked runs of the blocks of `source`: each run's words and where it goes.
     private func links(_ source: String) -> [String] {
         Markdown.blocks(source).flatMap { block in
@@ -374,60 +426,64 @@ final class MarkdownTests: XCTestCase {
                        "Look:\nAn image: A chart of look dot json.\nAn image.\nAn image: Done.")
     }
 
-    /// Where an image's source says its bytes are: a relative path is a file under the home, and
-    /// nothing else is anywhere a picture is read from.
-    func testWhereAnImagesSourceIs() {
-        let home: [(String, String)] = [
-            ("a.png", "a.png"), ("charts/sizes.png", "charts/sizes.png"), ("./a.png", "a.png"),
-            ("charts//./sizes.png", "charts/sizes.png"), ("my%20chart.png", "my chart.png"),
-            ("memory.png", "memory.png"), ("notes/memory/a.png", "notes/memory/a.png"), ("..a.png", "..a.png"),
+    /// What an image's source names: a path, as written with its escapes read, for the guest to
+    /// resolve; a web address; or neither.
+    func testWhatAnImagesSourceNames() {
+        let files: [(String, String)] = [
+            ("a.png", "a.png"), ("charts/sizes.png", "charts/sizes.png"), ("./a.png", "./a.png"),
+            ("my%20chart.png", "my chart.png"), ("/tmp/x.png", "/tmp/x.png"), ("/home/topo/x.png", "/home/topo/x.png"),
+            ("/memory/notes/x.png", "/memory/notes/x.png"), ("memory/x.png", "memory/x.png"), ("../x.png", "../x.png"),
+            ("~/x.png", "~/x.png"), ("  a.png ", "a.png"),
         ]
-        for (source, path) in home {
-            XCTAssertEqual(Markdown.place(ofImage: source), .home(path), source)
+        for (source, path) in files {
+            XCTAssertEqual(Markdown.place(ofImage: source), .file(path), source)
         }
-        let outside = ["../x.png", "a/../../x.png", "a/..", "..", "/etc/hosts", "/home/topo/a.png", "~/a.png", "",
-                       "   ", ".", "./", "file:///etc/hosts", "file:a.png", "data:image/png;base64,AAAA", "topo://a.png",
-                       "ftp://example.com/a.png", "%2E%2E/x.png", "a/%2e%2e/%2e%2e/x.png", "%2Fetc/hosts", "https:///a.png",
-                       "\\\\server\\a.png"]
-        for source in outside {
-            XCTAssertEqual(Markdown.place(ofImage: source), .outside, source.debugDescription)
-        }
-        for source in ["memory/a.png", "memory", "./memory/a.png", "/memory/a.png", "/memory", "memory//a.png", "%6Demory/a.png", "Memory/a.png",
-                       "/MEMORY/a.png"] {
-            XCTAssertEqual(Markdown.place(ofImage: source), .memory, source)
+        for source in ["", "   ", "file:///etc/hosts", "file:a.png", "data:image/png;base64,AAAA", "topo://a.png",
+                       "ftp://example.com/a.png", "https:///a.png", "a%00.png"] {
+            XCTAssertEqual(Markdown.place(ofImage: source), .neither, source.debugDescription)
         }
         XCTAssertEqual(Markdown.place(ofImage: "https://example.com/i.png"), .web(URL(string: "https://example.com/i.png")!))
         XCTAssertEqual(Markdown.place(ofImage: "http://example.com/i.png?x=../y"), .web(URL(string: "http://example.com/i.png?x=../y")!))
     }
 
-    /// An image whose source leaves the home, names the memory or is a web address is never
-    /// read or fetched: the reader is not asked at all, and what is drawn is why there is no
-    /// picture. Only a file under the home reaches the reader, by its path from the home.
-    @MainActor func testOnlyAFileUnderTheHomeIsEverRead() {
-        var asked: [String] = []
-        let read: (String) -> Data? = { path in
-            asked.append(path)
-            return nil
+    /// Nothing is fetched from the network: for a web address, or any address that is not a
+    /// path, the reader is not asked at all, and what is drawn is why there is no picture. A
+    /// path is the guest's to answer, and one it cannot read is drawn as "not on this device".
+    @MainActor func testAnUnreadablePathIsNoPictureAndNothingIsFetched() async {
+        let asked = Asked()
+        let read: @Sendable (String) async -> Data? = { path in
+            asked.add(path)
+            return path == "notes.txt" ? Data("not a png".utf8) : nil
         }
-        XCTAssertEqual(ReplyImage.resolve("../x.png", read: read), .missing(.outsideHome))
-        XCTAssertEqual(ReplyImage.resolve("/etc/hosts", read: read), .missing(.outsideHome))
-        XCTAssertEqual(ReplyImage.resolve("file:///etc/hosts", read: read), .missing(.outsideHome))
-        XCTAssertEqual(ReplyImage.resolve("https://example.com/i.png", read: read),
-                       .missing(.onTheWeb(URL(string: "https://example.com/i.png")!)))
-        XCTAssertEqual(ReplyImage.resolve("http://example.com/i.png", read: read),
-                       .missing(.onTheWeb(URL(string: "http://example.com/i.png")!)))
-        XCTAssertEqual(ReplyImage.resolve("memory/a.png", read: read), .missing(.inMemory))
-        XCTAssertEqual(ReplyImage.resolve("/memory/a.png", read: read), .missing(.inMemory))
-        XCTAssertEqual(asked, [], "a source that is not under the home was read")
+        for source in ["https://example.com/i.png", "http://example.com/i.png"] {
+            let drawn = await ReplyImage.resolve(source, read: read)
+            XCTAssertEqual(drawn, .missing(.onTheWeb(URL(string: source)!)))
+            XCTAssertEqual(ReplyImage.settled(source, kept: { asked.add($0); return nil }), .missing(.onTheWeb(URL(string: source)!)))
+        }
+        for source in ["file:///etc/hosts", "data:image/png;base64,AAAA", "ftp://example.com/a.png", ""] {
+            let drawn = await ReplyImage.resolve(source, read: read)
+            XCTAssertEqual(drawn, .missing(.neither), source)
+        }
+        XCTAssertEqual(asked.paths, [], "an address that is not a path was read")
 
-        XCTAssertEqual(ReplyImage.resolve("charts/./sizes.png", read: read), .missing(.notHere))
-        XCTAssertEqual(asked, ["charts/sizes.png"])
-        // Bytes that are no picture are no picture.
-        XCTAssertEqual(ReplyImage.resolve("a.png", read: { _ in Data("not a png".utf8) }), .missing(.notHere))
-        // And the blocks of those sources carry the alternative text that is drawn in its place.
+        for source in ["../x.png", "/etc/hosts", "/tmp/gone.png", "charts/gone.png", "notes.txt"] {
+            let drawn = await ReplyImage.resolve(source, read: read)
+            XCTAssertEqual(drawn, .missing(.notHere), source)
+        }
+        XCTAssertEqual(asked.paths, ["../x.png", "/etc/hosts", "/tmp/gone.png", "charts/gone.png", "notes.txt"])
+        // A path not yet read is not yet anything; the blocks carry the words drawn in its place.
+        XCTAssertNil(ReplyImage.settled("/tmp/x.png", kept: { _ in nil }))
         for source in ["../x.png", "/etc/hosts", "https://example.com/i.png"] {
             XCTAssertEqual(Markdown.blocks("![a](\(source))").map(\.kind), [.image(source: source, alt: "a")])
         }
+    }
+
+    /// The paths a reader was asked for.
+    private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String] = []
+        func add(_ path: String) { lock.withLock { asked.append(path) } }
+        var paths: [String] { lock.withLock { asked } }
     }
 
     /// The cache hands back what the parse makes.

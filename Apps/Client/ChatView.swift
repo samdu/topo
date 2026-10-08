@@ -403,8 +403,8 @@ struct ChatView: View {
                                   actions: turnActions,
                                   draft: draftRow, queued: row.queued(in: harness),
                                   cue: speaker.cue)
-            // An image in a reply is read from the guest's home, and from nowhere else.
-            .environment(\.replyImage, ReplyImages.read)
+            // An image in a reply is read as the guest reads it, once there is a guest.
+            .environment(\.replyImages, GuestImages.reader(epoch: GuestImages.Mounts.shared.epoch))
             #if DEBUG
             .recordingLinks { debugOpened.append($0) }
             #endif
