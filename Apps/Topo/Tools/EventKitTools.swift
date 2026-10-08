@@ -66,7 +66,8 @@ struct RemindersTool: Tool {
     let summary = "the person's reminders: list them, add one, mark one done"
     let usage = """
     topo reminders                      the reminders not yet done that have a due date, soonest first, one a line,
-                                        id first, and a last line counting the ones with none
+                                        id first, 24 KB of them at most; then, when there are any, a line counting
+                                        the later ones left out and a line counting the ones with no due date
     topo reminders --all                every reminder not yet done, the ones with no due date last
     topo reminders [--list NAME] [--due-before DATE] [--done]
                                         one list's, the ones due before DATE, or (--done) the ones done: each
@@ -100,9 +101,7 @@ struct RemindersTool: Tool {
                 records.sort { ($0.due?.date ?? .distantFuture, $0.title) < ($1.due?.date ?? .distantFuture, $1.title) }
                 guard !undated else { return .ok(PhoneTool.lines(records.map(Self.line), none: "no reminders")) }
                 let dated = records.filter { $0.due != nil }
-                let rest = records.count - dated.count
-                guard rest > 0 else { return .ok(PhoneTool.lines(dated.map(Self.line), none: "no reminders")) }
-                return .ok(PhoneTool.lines(dated.map(Self.line) + [Self.undated(rest, after: dated.count)], none: ""))
+                return .ok(Self.bare(dated.map(Self.line), undated: records.count - dated.count))
             case .lists:
                 return .ok(PhoneTool.lines(try await store.lists().map(\.line), none: "no lists"))
             case let .add(title, list, due, notes):
@@ -147,10 +146,32 @@ struct RemindersTool: Tool {
                         record.notes.map { "notes: " + $0.replacingOccurrences(of: "\n", with: " ") }])
     }
 
-    /// The bare call's last line: how many it left out for having no due date, and the call that
-    /// lists them.
-    static func undated(_ count: Int, after dated: Int) -> String {
-        "\(dated > 0 ? "and " : "")\(count) with no due date — topo reminders --all lists them"
+    /// The most the call with nothing after it answers, in bytes, and the room kept in that for
+    /// its two counting lines: under the size at which Claude Code hands the mind a file instead
+    /// of the answer.
+    static let budget = 24 * 1024
+    static let countingRoom = 256
+
+    /// The bare call's answer: the dated lines whole, soonest first, until the next would pass the
+    /// budget; a line counting the later ones that left out; and a line counting the ones with no
+    /// due date. Each counting line is there only when it has something to count.
+    static func bare(_ dated: [String], undated: Int) -> String {
+        var kept: [String] = []
+        var bytes = 0
+        for line in dated {
+            let size = line.utf8.count + 1
+            guard bytes + size <= budget - countingRoom else { break }
+            kept.append(line)
+            bytes += size
+        }
+        var lines = kept
+        if kept.count < dated.count {
+            lines.append("… \(dated.count - kept.count) more due later, cut at 24 KB — topo reminders --due-before DATE lists the ones due before a day")
+        }
+        if undated > 0 {
+            lines.append("\(dated.isEmpty ? "" : "and ")\(undated) with no due date — topo reminders --all lists them")
+        }
+        return PhoneTool.lines(lines, none: "no reminders")
     }
 
     static func due(_ due: ToolDates.Reading?) -> String {

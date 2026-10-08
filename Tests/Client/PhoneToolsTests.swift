@@ -330,6 +330,13 @@ final class PhoneToolsTests: XCTestCase {
         let before = await tool.run(["--due-before", "2026-09-27"])
         XCTAssertEqual(before.text, "d2 | Sooner | Work | due \(ToolDates.write(soon.date)) | notes: bring the form\n")
 
+        // Nothing undated: the dated lines and no counting line.
+        let undatedRecords = store.records.filter { $0.due == nil }
+        store.records.removeAll { $0.due == nil }
+        let datedOnly = await tool.run([])
+        XCTAssertEqual(datedOnly.text, dated)
+        store.records += undatedRecords
+
         // Nothing dated: the count alone. Nothing at all: as before.
         store.records.removeAll { $0.due != nil }
         let undated = await tool.run([])
@@ -341,6 +348,37 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(try tool.parse(["--all"]), .reminders(list: nil, before: nil, done: false, undated: true))
         let refused = await tool.run(["add", "Milk", "--all"])
         XCTAssertEqual(refused.status, ToolReply.usage, refused.text)
+    }
+
+    /// #245: the call with nothing after it is at most 24 KB however many reminders are due: the
+    /// soonest whole, then how many later ones were left out, then how many have no due date.
+    func testRemindersWithNothingAfterItIsAtMostTwentyFourKilobytes() async {
+        let store = Reminders()
+        let tool = RemindersTool(store: store, authorizer: Permission(), broker: PermissionBroker())
+        let first = ToolDates.read("2026-09-26")!.date
+        store.records = (0..<400).map {
+            ReminderRecord(id: "d\($0)", title: "Due \($0)", list: "Home", due: ToolDates.Reading(date: first.addingTimeInterval(Double($0) * 86400), hasTime: false),
+                           done: false, notes: String(repeating: "é", count: 150))
+        } + (0..<5).map { ReminderRecord(id: "u\($0)", title: "Someday \($0)", list: "Home", due: nil, done: false, notes: nil) }
+        let bare = await tool.run([])
+        XCTAssertLessThanOrEqual(bare.text.utf8.count, RemindersTool.budget)
+        XCTAssertTrue(bare.text.hasSuffix("\n"))
+        let lines = bare.text.split(separator: "\n").map(String.init)
+        let kept = lines.count - 2
+        XCTAssertGreaterThan(kept, 50)
+        XCTAssertLessThan(kept, 400)
+        XCTAssertTrue(lines[0].hasPrefix("d0 | Due 0 | Home | due 2026-09-26 | notes: "), lines[0])
+        XCTAssertTrue(lines[kept - 1].hasPrefix("d\(kept - 1) | Due \(kept - 1) | "), lines[kept - 1])
+        XCTAssertEqual(lines[kept], "… \(400 - kept) more due later, cut at 24 KB — topo reminders --due-before DATE lists the ones due before a day")
+        XCTAssertEqual(lines[kept + 1], "and 5 with no due date — topo reminders --all lists them")
+        XCTAssertLessThanOrEqual((lines[kept] + "\n" + lines[kept + 1] + "\n").utf8.count, RemindersTool.countingRoom)
+        // One more line would not have fitted.
+        let size = lines[0].utf8.count + 1
+        XCTAssertGreaterThan(kept * size + size, RemindersTool.budget - RemindersTool.countingRoom)
+        // The whole listing is not cut.
+        let all = await tool.run(["--all"])
+        XCTAssertEqual(all.text.split(separator: "\n").count, 405)
+        XCTAssertFalse(all.text.contains("…"))
     }
 
     func testRemindersRefuseWhatTheyDoNotTake() async {
