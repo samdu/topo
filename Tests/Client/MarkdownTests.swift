@@ -104,10 +104,9 @@ final class MarkdownTests: XCTestCase {
             "rule depth 0 quote 1 outside 0 ",
             "code(language: nil) depth 0 quote 1 outside 0 code",
         ])
-        XCTAssertEqual(quoted("> | a | b |\n> |---|---|\n> | 1 | 2 |"), [
-            "paragraph depth 0 quote 1 outside 0 a  ·  b",
-            "paragraph depth 0 quote 1 outside 0 1  ·  2",
-        ])
+        let quotedTable = Markdown.blocks("> | a | b |\n> |---|---|\n> | 1 | 2 |")
+        XCTAssertEqual(quotedTable.map { "\($0.depth) \($0.quote) \($0.listsOutside)" }, ["0 1 0"])
+        XCTAssertEqual(quotedTable.first.flatMap(Self.cells), [["a", "b"], ["1", "2"]])
         // A list inside a quote is inside it: none of its lists lead the bars in, so the bars of
         // the one quote stand in one column however deep the list goes.
         XCTAssertEqual(quoted("> - a\n>   - b\n>\n>   more of a"), [
@@ -190,7 +189,6 @@ final class MarkdownTests: XCTestCase {
             ("price: $5 * 2 = $10", ["paragraph 0 price: $5 * 2 = $10"]),
             ("an [unclosed link and a ] bracket", ["paragraph 0 an [unclosed link and a ] bracket"]),
             ("1) the first", ["item(Topo.Markdown.Marker.number(1)) 1 the first"]),
-            ("| a | b |\n|---|---|\n| 1 | 2 |", ["paragraph 0 a  ·  b", "paragraph 0 1  ·  2"]),
             ("5*3*2", ["paragraph 0 532"]),
             ("__init__.py", ["paragraph 0 init.py"]),
             // A block of HTML has no block intent at all, and is a paragraph of its words.
@@ -201,13 +199,306 @@ final class MarkdownTests: XCTestCase {
         }
     }
 
-    /// A link is drawn as its words and goes nowhere: nothing a reply says is a tap target.
-    func testALinkIsItsWordsAndNothingElse() throws {
-        let blocks = Markdown.blocks("see [the docs](https://example.com) or <https://example.org>")
-        XCTAssertEqual(blocks.map { String($0.text.characters) }, ["see the docs or https://example.org"])
-        for block in blocks {
-            XCTAssertTrue(block.text.runs.allSatisfy { $0.link == nil }, "a link survived: \(block.text)")
+    /// A table's rows as their cells' words, the header first; nil for a block that is no table.
+    private static func cells(_ block: Markdown.Block) -> [[String]]? {
+        guard case .table(let header, let rows) = block.kind else { return nil }
+        return ([header] + rows).map { $0.cells.map { String($0.text.characters) } }
+    }
+
+    /// A table is one block holding every cell of the source, header included, each in its
+    /// column, with its column's alignment.
+    func testATableIsOneBlockOfEveryCell() throws {
+        let source = """
+        | name | size | kept |
+        |:-----|:----:|-----:|
+        | look.json | 2 KB | yes |
+        | notes.md | 14 KB | no |
+        | `a.py` | **1** KB | *maybe* |
+        """
+        let blocks = Markdown.blocks(source)
+        XCTAssertEqual(blocks.count, 1)
+        let block = try XCTUnwrap(blocks.first)
+        XCTAssertEqual(Self.cells(block), [
+            ["name", "size", "kept"],
+            ["look.json", "2 KB", "yes"],
+            ["notes.md", "14 KB", "no"],
+            ["a.py", "1 KB", "maybe"],
+        ])
+        guard case .table(let header, let rows) = block.kind else { return XCTFail("\(block.kind)") }
+        for row in [header] + rows {
+            XCTAssertEqual(row.cells.map(\.alignment), [.leading, .center, .trailing])
         }
+        // A cell's inline styles are carried, as a paragraph's are.
+        XCTAssertEqual(rows[2].cells[0].text.runs.first?.inlinePresentationIntent, .code)
+        XCTAssertEqual(rows[2].cells[2].text.runs.first?.inlinePresentationIntent, .emphasized)
+        XCTAssertEqual(Speakable.text(from: source), "A table with 3 rows.")
+    }
+
+    /// The parse makes no run for an empty cell. The row still holds a cell for every column,
+    /// and the cells after the empty one stay in their own columns.
+    func testAnEmptyCellKeepsItsColumn() {
+        let source = "| a | b | c |\n|---|---|---|\n| 1 |  | 3 |\n|  | 5 |  |\n| 7 | 8 | 9 |"
+        XCTAssertEqual(Markdown.blocks(source).compactMap(Self.cells), [[
+            ["a", "b", "c"], ["1", "", "3"], ["", "5", ""], ["7", "8", "9"],
+        ]])
+        XCTAssertEqual(Speakable.text(from: source), "A table with 3 rows.")
+        // An empty header cell is the same case.
+        XCTAssertEqual(Markdown.blocks("|  | b |\n|---|---|\n| 1 | 2 |").compactMap(Self.cells),
+                       [[["", "b"], ["1", "2"]]])
+    }
+
+    /// A table inside a list item is one block at the item's depth, and the words round it stay.
+    func testATableInsideAListKeepsItsDepthAndItsCells() {
+        let source = "- sizes:\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n\n  after the table\n- next"
+        let blocks = Markdown.blocks(source)
+        XCTAssertEqual(blocks.map { "\($0.depth) \(String($0.text.characters))" },
+                       ["1 sizes:", "1 ", "1 after the table", "1 next"])
+        XCTAssertEqual(blocks.compactMap(Self.cells), [[["a", "b"], ["1", "2"]]])
+        XCTAssertEqual(Speakable.text(from: source), "sizes:\nA table with 1 row.\nafter the table\nnext")
+    }
+
+    /// Two tables one after the other are two blocks, and words between and after them stay.
+    func testTwoTablesAreTwoBlocks() {
+        let source = "| a |\n|---|\n| 1 |\n\n| b |\n|---|\n| 2 |\n| 3 |\n\nDone."
+        let blocks = Markdown.blocks(source)
+        XCTAssertEqual(blocks.compactMap(Self.cells), [[["a"], ["1"]], [["b"], ["2"], ["3"]]])
+        XCTAssertEqual(blocks.last.map { String($0.text.characters) }, "Done.")
+    }
+
+    /// Every word of every cell the parse kept of a table is in the block, whatever the table's
+    /// shape. A cell a row writes past its header's columns is one the parse itself drops, as
+    /// the table's syntax has it, so it is in no run to draw: "extra" below, and what follows a
+    /// bar written inside a cell's code.
+    func testNoCellOfATableIsDropped() {
+        let sources = [
+            "| a | b | c |\n|---|---|---|\n| 1 | 2 | 3 |\n| 4 | 5 | 6 |\n| 7 | 8 | 9 |",
+            "| a | b | c |\n|---|---|---|\n| 1 |  | 3 |",
+            "| a | b |\n|---|---|\n| 1 | 2 | extra |\n| short |",
+            "- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |",
+            "> | a | b |\n> |---|---|\n> | one two | three |",
+        ]
+        for source in sources {
+            let cells = Markdown.blocks(source).compactMap(Self.cells).flatMap { $0 }.flatMap { $0 }
+            let drawn = cells.flatMap { $0.split(separator: " ").map(String.init) }
+            // What the parser itself kept of the table: every run inside a cell.
+            let parsed = (try? Markdown.parse(source)).map { parsed in
+                parsed.runs.filter { run in
+                    run.presentationIntent?.components.contains { if case .tableCell = $0.kind { true } else { false } } == true
+                }.flatMap { String(parsed[$0.range].characters).split(separator: " ").map(String.init) }
+            } ?? []
+            XCTAssertFalse(parsed.isEmpty, source)
+            XCTAssertEqual(drawn.sorted(), parsed.sorted(), source)
+        }
+        let over = Markdown.blocks("| a | b |\n|---|---|\n| 1 | 2 | extra |").compactMap(Self.cells)
+        XCTAssertEqual(over, [[["a", "b"], ["1", "2"]]], "the parse keeps a row to its header's columns")
+    }
+
+    /// A row whose every cell is empty is a row: the parse makes no run for it, and it is kept
+    /// by the place it leaves between the rows round it, so the rows the voice counts are the
+    /// rows written.
+    func testARowOfEmptyCellsIsARow() {
+        let source = "| a | b |\n|---|---|\n|   |   |\n| 1 | 2 |"
+        XCTAssertEqual(Markdown.blocks(source).compactMap(Self.cells), [[["a", "b"], ["", ""], ["1", "2"]]])
+        XCTAssertEqual(Speakable.text(from: source), "A table with 2 rows.")
+        let two = "| a |\n|---|\n| 1 |\n|  |\n|  |\n| 4 |"
+        XCTAssertEqual(Markdown.blocks(two).compactMap(Self.cells), [[["a"], ["1"], [""], [""], ["4"]]])
+        XCTAssertEqual(Speakable.text(from: two), "A table with 4 rows.")
+        XCTAssertEqual(Markdown.blocks("| a |\n|---|").compactMap(Self.cells), [[["a"]]])
+    }
+
+    /// An image written as a link's words is both: the link stays on its alternative text, in
+    /// the block it was written in, and the image is a block after it.
+    func testAnImageThatIsALinksWordsKeepsItsLinkAndIsAnImage() {
+        let source = "[![chart](chart.png)](https://example.com)"
+        XCTAssertEqual(links(source), ["chart -> https://example.com"])
+        XCTAssertEqual(pictured(source), ["chart", "image chart <- chart.png"])
+        let among = "See [![a chart](/tmp/c.png)](https://example.com/c) and [the docs](https://example.com/c) and ![b](b.png)."
+        XCTAssertEqual(links(among), ["a chart -> https://example.com/c", "the docs -> https://example.com/c"])
+        // The images of a block are drawn in the order they were written, linked or not.
+        XCTAssertEqual(pictured(among), ["See a chart and the docs and .", "image a chart <- /tmp/c.png", "image b <- b.png"])
+        XCTAssertEqual(pictured("![one](1.png) [![two](2.png)](https://example.com) ![three](3.png) [![four](4.png)](https://example.com)"),
+                       ["two  four", "image one <- 1.png", "image two <- 2.png", "image three <- 3.png", "image four <- 4.png"])
+        // Written in code it is words, and no image of a link to the same address beside it: an
+        // image is one by where it was written, not by an address it shares.
+        XCTAssertEqual(pictured("`[![x](x.png)](https://example.com)` and [x](https://example.com)"),
+                       ["[![x](x.png)](https://example.com) and x"])
+        XCTAssertEqual(pictured("```\n[![x](x.png)](https://example.com)\n```\n\n[x](https://example.com)"),
+                       ["[![x](x.png)](https://example.com)", "x"])
+        XCTAssertEqual(pictured("First [a](https://e.com) link.\n\nThen [![a](x.png)](https://e.com)."),
+                       ["First a link.", "Then a.", "image a <- x.png"])
+        XCTAssertEqual(pictured("\\[![a](x.png)](https://e.com) and [a](https://e.com)"), ["[](https://e.com) and a", "image a <- x.png"])
+        // With no alternative text, with words beside it in the link, and in a table's cell.
+        XCTAssertEqual(pictured("[![](c.png) words](https://example.com)"), [" words", "image  <- c.png"])
+        XCTAssertEqual(pictured("| a |\n|---|\n| [![t](t.png)](https://e.com) é [d](https://e.com) |"), ["", "image t <- t.png"])
+        // A source in angle brackets, and one escaped so that it is no image at all.
+        XCTAssertEqual(pictured("[![a](<my chart.png>)](https://example.com)"), ["a", "image a <- my%20chart.png"])
+        XCTAssertEqual(pictured("[![a](c.png \"A title\")](https://example.com)"), ["a", "image a <- c.png"])
+        // Parentheses that balance are part of a source, as they are of one not in a link.
+        XCTAssertEqual(pictured("[![chart](charts/plot(1).png)](https://example.com)"), ["chart", "image chart <- charts/plot(1).png"])
+        XCTAssertEqual(pictured("![chart](charts/plot(1).png)"), ["image chart <- charts/plot(1).png"])
+    }
+
+    /// A reply of the shapes that begin like a linked image and never end is read as fast as
+    /// the parse itself reads it: finding the images adds nothing that grows with them.
+    func testAReplyOfUnfinishedLinkedImagesCostsWhatItsParseCosts() {
+        let sources = [
+            String(repeating: "[![a](", count: 20_000),
+            "[![a](data:image/png;base64," + String(repeating: "QUJD", count: 50_000) + ") and words",
+            String(repeating: "[![a](x.png)](", count: 20_000),
+            String(repeating: "[![a](x.png)](https://e.com) ", count: 5_000),
+        ]
+        for source in sources {
+            let began = Date()
+            _ = Markdown.blocks(source)
+            let parse = Date()
+            _ = try? Markdown.parse(source)
+            let alone = Date().timeIntervalSince(parse)
+            XCTAssertLessThan(parse.timeIntervalSince(began), max(alone * 4, 0.5), "\(source.prefix(16))… ×\(source.count)")
+        }
+    }
+
+    /// The linked runs of the blocks of `source`: each run's words and where it goes.
+    private func links(_ source: String) -> [String] {
+        Markdown.blocks(source).flatMap { block in
+            block.text.runs.compactMap { run in
+                run.link.map { "\(String(block.text[run.range].characters)) -> \($0.absoluteString)" }
+            }
+        }
+    }
+
+    /// A web link keeps its address on its own run and on nothing round it, whether it was
+    /// written as a link or is a bare URL the parse linked, and the words are all still there.
+    func testAWebLinkIsCarriedOnItsRunAlone() {
+        let source = "see [the docs](https://example.com/a) or <https://example.org> or https://example.net/x."
+        XCTAssertEqual(Markdown.blocks(source).map { String($0.text.characters) },
+                       ["see the docs or https://example.org or https://example.net/x."])
+        XCTAssertEqual(links(source), [
+            "the docs -> https://example.com/a",
+            "https://example.org -> https://example.org",
+            "https://example.net/x -> https://example.net/x",
+        ])
+        // In a heading, an item, a quote and a table's cell alike.
+        XCTAssertEqual(links("# [h](https://e.com/h)\n\n- [i](https://e.com/i)\n\n> [q](https://e.com/q)"),
+                       ["h -> https://e.com/h", "i -> https://e.com/i", "q -> https://e.com/q"])
+        let table = Markdown.blocks("| a |\n|---|\n| [c](https://e.com/c) |")
+        guard case .table(_, let rows) = table.first?.kind else { return XCTFail("\(table)") }
+        XCTAssertEqual(rows.first?.cells.first?.text.runs.first?.link, URL(string: "https://e.com/c"))
+        // The parse keeps a link's words and none of the styles written inside them.
+        XCTAssertEqual(links("[**bold** and `code`](https://e.com/s)"),
+                       ["bold and code -> https://e.com/s"])
+    }
+
+    /// Only a web address is somewhere a tap goes. A link to anything else — the app's own
+    /// scheme, another app's, a file, a script, an address with no host — is its words.
+    func testALinkThatIsNotAWebAddressIsItsWords() {
+        let schemes = ["topo://widget/run", "file:///etc/hosts", "javascript:alert(1)", "tel:5551234",
+                       "mailto:sam@example.com", "x-apple-reminderkit://x", "shortcuts://run-shortcut?name=x",
+                       "data:text/html,hi", "relative/path.md", "/absolute/path", "#anchor", "https:///nohost",
+                       "sms:5551234", "ftp://example.com/a"]
+        for address in schemes {
+            let source = "tap [here](\(address)) now"
+            XCTAssertEqual(links(source), [], address)
+            XCTAssertEqual(Markdown.blocks(source).map { String($0.text.characters) }, ["tap here now"], address)
+        }
+        XCTAssertEqual(links("mail sam@example.com or <mailto:sam@example.com>"), [])
+        XCTAssertEqual(links("[a](HTTPS://Example.com/A) [b](http://example.com)"),
+                       ["a -> HTTPS://Example.com/A", "b -> http://example.com"])
+        for address in ["https://example.com", "http://example.com/a?b=c#d", "https://user@example.com:8443/"] {
+            XCTAssertTrue(Markdown.opens(URL(string: address)!), address)
+        }
+    }
+
+    /// The image blocks of `source`, as "alt <- source", and every other block as its words.
+    private func pictured(_ source: String) -> [String] {
+        Markdown.blocks(source).map { block in
+            if case .image(let source, let alt) = block.kind { return "image \(alt) <- \(source)" }
+            return String(block.text.characters)
+        }
+    }
+
+    /// An image is a block of its own after the block it was written in, which keeps its words
+    /// and none of the image's markup; one written alone leaves no empty block behind it.
+    func testAnImageIsABlockOfItsOwnAfterTheWordsItWasWrittenIn() {
+        XCTAssertEqual(pictured("![A chart](charts/sizes.png)"), ["image A chart <- charts/sizes.png"])
+        XCTAssertEqual(pictured("Here it is: ![A chart](a.png) and that is all."),
+                       ["Here it is:  and that is all.", "image A chart <- a.png"])
+        XCTAssertEqual(pictured("Here it is:\n![A chart](a.png)\n\nNext."), ["Here it is:", "image A chart <- a.png", "Next."])
+        XCTAssertEqual(pictured("![](a.png) ![two](b.png)"), ["image  <- a.png", "image two <- b.png"])
+        XCTAssertEqual(pictured("![a b](<my chart.png>)"), ["image a b <- my%20chart.png"])
+        // In a heading, a list item, a quote and a table's cell: under the block, at its depth.
+        XCTAssertEqual(pictured("# Sizes ![c](c.png)"), ["Sizes", "image c <- c.png"])
+        let listed = Markdown.blocks("- one ![c](c.png)\n- ![d](d.png)\n- three")
+        XCTAssertEqual(listed.map { "\($0.depth)" }, ["1", "1", "1", "1"])
+        XCTAssertEqual(pictured("- one ![c](c.png)\n- ![d](d.png)\n- three"), ["one", "image c <- c.png", "image d <- d.png", "three"])
+        XCTAssertEqual(Markdown.blocks("> ![q](q.png)").map(\.quote), [1])
+        XCTAssertEqual(pictured("| a |\n|---|\n| x ![t](t.png) |\n\nafter"), ["", "image t <- t.png", "after"])
+        // What is not an image stays words: code, and brackets that close nothing.
+        XCTAssertEqual(pictured("`![a](b.png)` and ![open](b.png"), ["![a](b.png) and ![open](b.png"])
+        XCTAssertEqual(Speakable.text(from: "Look:\n\n![A chart of look.json](a.png)\n\n![](b.png)\n\n![Done.](c.png)"),
+                       "Look:\nAn image: A chart of look dot json.\nAn image.\nAn image: Done.")
+    }
+
+    /// What an image's source names: a path, as written with its escapes read, for the guest to
+    /// resolve; a web address; or neither.
+    func testWhatAnImagesSourceNames() {
+        let files: [(String, String)] = [
+            ("a.png", "a.png"), ("charts/sizes.png", "charts/sizes.png"), ("./a.png", "./a.png"),
+            ("my%20chart.png", "my chart.png"), ("/tmp/x.png", "/tmp/x.png"), ("/home/topo/x.png", "/home/topo/x.png"),
+            ("/memory/notes/x.png", "/memory/notes/x.png"), ("memory/x.png", "memory/x.png"), ("../x.png", "../x.png"),
+            ("~/x.png", "~/x.png"), ("  a.png ", "a.png"),
+            // Only the web's is an address: a colon is a character a name may have.
+            ("chart 12:30.png", "chart 12:30.png"), ("a:b.png", "a:b.png"), ("notes:2026/x.png", "notes:2026/x.png"),
+            ("file:///etc/hosts", "file:///etc/hosts"), ("data:image/png;base64,AAAA", "data:image/png;base64,AAAA"),
+            ("https:///a.png", "https:///a.png"), ("ftp://example.com/a.png", "ftp://example.com/a.png"),
+        ]
+        for (source, path) in files {
+            XCTAssertEqual(Markdown.place(ofImage: source), .file(path), source)
+        }
+        for source in ["", "   ", "a%00.png", String(repeating: "a", count: Markdown.pathLimit + 1)] {
+            XCTAssertEqual(Markdown.place(ofImage: source), .neither, source.debugDescription)
+        }
+        XCTAssertEqual(Markdown.place(ofImage: "https://example.com/i.png"), .web(URL(string: "https://example.com/i.png")!))
+        XCTAssertEqual(Markdown.place(ofImage: "http://example.com/i.png?x=../y"), .web(URL(string: "http://example.com/i.png?x=../y")!))
+    }
+
+    /// Nothing is fetched from the network: for a web address, or any address that is not a
+    /// path, the reader is not asked at all, and what is drawn is why there is no picture. A
+    /// path is the guest's to answer, and one it cannot read is drawn as "not on this device".
+    @MainActor func testAnUnreadablePathIsNoPictureAndNothingIsFetched() async {
+        let asked = Asked()
+        let read: @Sendable (String) async -> Data? = { path in
+            asked.add(path)
+            return path == "notes.txt" ? Data("not a png".utf8) : nil
+        }
+        for source in ["https://example.com/i.png", "http://example.com/i.png"] {
+            let drawn = await ReplyImage.resolve(source, read: read)
+            XCTAssertEqual(drawn, .missing(.onTheWeb(URL(string: source)!)))
+            XCTAssertEqual(ReplyImage.settled(source, kept: { asked.add($0); return nil }), .missing(.onTheWeb(URL(string: source)!)))
+        }
+        for source in ["", "data:image/png;base64," + String(repeating: "QUJD", count: 2000)] {
+            let drawn = await ReplyImage.resolve(source, read: read)
+            XCTAssertEqual(drawn, .missing(.neither), source.prefix(24).description)
+        }
+        XCTAssertEqual(asked.paths, [], "a web address, or what is no path, was read")
+
+        for source in ["../x.png", "/etc/hosts", "/tmp/gone.png", "charts/gone.png", "notes.txt"] {
+            let drawn = await ReplyImage.resolve(source, read: read)
+            XCTAssertEqual(drawn, .missing(.notHere), source)
+        }
+        XCTAssertEqual(asked.paths, ["../x.png", "/etc/hosts", "/tmp/gone.png", "charts/gone.png", "notes.txt"])
+        // A path not yet read is not yet anything; the blocks carry the words drawn in its place.
+        XCTAssertNil(ReplyImage.settled("/tmp/x.png", kept: { _ in nil }))
+        for source in ["../x.png", "/etc/hosts", "https://example.com/i.png"] {
+            XCTAssertEqual(Markdown.blocks("![a](\(source))").map(\.kind), [.image(source: source, alt: "a")])
+        }
+    }
+
+    /// The paths a reader was asked for.
+    private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var asked: [String] = []
+        func add(_ path: String) { lock.withLock { asked.append(path) } }
+        var paths: [String] { lock.withLock { asked } }
     }
 
     /// The cache hands back what the parse makes.

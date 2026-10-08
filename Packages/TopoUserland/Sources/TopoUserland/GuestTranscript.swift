@@ -14,8 +14,9 @@ public enum GuestTranscript {
         /// No entry carries the input's id: Claude Code never began it, so nothing it could do
         /// was done, and sending it is safe.
         case notReceived
-        /// The input is there and the assistant finished a reply after it: the text of that
-        /// reply's final message.
+        /// The input is there and the assistant finished a reply after it: the words of every
+        /// message of that reply, the ones before a tool call included (`ReplyWords`), which is
+        /// what the turn would have been written as had it ended while the app was listening.
         case answered(String)
         /// The input is there and no finished reply follows it: it was cut off, or failed. It may
         /// have run tools, so sending it again could repeat what they did.
@@ -29,15 +30,18 @@ public enum GuestTranscript {
     static let finished: Set<String> = ["end_turn", "stop_sequence", "max_tokens"]
 
     /// The verdict on the input `id` over a transcript's lines. Only what follows the input and
-    /// comes before the next prompt counts: the reply is the last main-chain assistant message
-    /// there, and it is finished when its stop reason is one that ends a turn and it holds text. An error Claude
+    /// comes before the next prompt counts: the reply is the words of the main-chain assistant
+    /// messages there, and it is finished when the last of them has a stop reason that ends a
+    /// turn and holds text of its own. An error Claude
     /// Code wrote in the model's place (`isApiErrorMessage`, or the `<synthetic>` model) is no
     /// reply. A line that is not a JSON object is skipped, since the last line of a transcript a
     /// process was killed while writing can be half a line.
     public static func verdict(for id: String, in lines: some Sequence<String>) -> Verdict {
         var received = false
         var last: (id: String?, stop: String?)?
-        var texts: [(id: String?, text: String)] = []
+        /// The reply's words so far, and the last message's own.
+        var words = ReplyWords()
+        var final = ""
         for line in lines {
             guard let entry = object(line) else { continue }
             let type = entry["type"] as? String
@@ -46,15 +50,17 @@ public enum GuestTranscript {
                 continue
             }
             if type == "user", isPrompt(entry) { break }
-            guard type == "assistant", entry["isSidechain"] as? Bool != true,
+            guard type == "assistant", entry["isSidechain"] as? Bool != true, !StreamJSON.isSubagents(entry),
                   entry["isApiErrorMessage"] as? Bool != true,
                   let message = entry["message"] as? [String: Any],
-                  message["model"] as? String != "<synthetic>" else { continue }
+                  message["model"] as? String != StreamJSON.synthetic else { continue }
             let messageID = message["id"] as? String
-            if last?.id != messageID { texts = [] }
+            if last?.id != messageID { final = "" }
             last = (messageID, message["stop_reason"] as? String)
             for case let block as [String: Any] in message["content"] as? [Any] ?? [] where block["type"] as? String == "text" {
-                if let text = block["text"] as? String { texts.append((messageID, text)) }
+                guard let text = block["text"] as? String else { continue }
+                words.append(text, of: messageID)
+                final += text
             }
         }
         guard received else { return .notReceived }
@@ -62,8 +68,9 @@ public enum GuestTranscript {
         // Every block of the final message carries its stop reason, the thinking before the text
         // included, so a transcript cut between them ends on a finished message with no words
         // yet: no reply.
-        let reply = texts.filter { $0.id == last.id }.map(\.text).joined()
-        return reply.isEmpty ? .unresolved : .answered(reply)
+        guard !final.isEmpty else { return .unresolved }
+        let reply = words.text
+        return .answered(reply.isEmpty ? final : reply)
     }
 
     /// The verdict on `id` from the transcripts under `home`: the session's own file first, then

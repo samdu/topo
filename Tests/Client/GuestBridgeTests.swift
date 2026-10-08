@@ -1047,19 +1047,132 @@ final class GuestBridgeTests: XCTestCase {
         XCTAssertNil(harness.writing)
     }
 
-    /// A spoken turn the guest answers in two messages, a tool call between them: whoever reads
-    /// it aloud is told of the second message's start with nothing written, so the boundary is
-    /// heard even when both messages open with the same words.
-    func testTheReaderIsToldWhenTheGuestBeginsAnotherMessage() async throws {
+    // MARK: - The words before a tool call
+
+    /// A turn the guest answers by saying something, running a tool, running another with
+    /// nothing said, and saying more: what it said before, and what after.
+    private static let told: [ScriptedGuest.Message] = [
+        .words("Let me look. ", tool: true), .toolOnly, .words("It is on the shelf."),
+    ]
+    private static let toldReply = "Let me look. \n\nIt is on the shelf."
+
+    /// The words said before a tool call land in the log with the words said after it, in
+    /// order, one blank line between: the reply is every message's words, not the result line's,
+    /// which carries the last message's alone. A message that said nothing adds no break.
+    func testTheWordsBeforeAToolCallLandWithTheWordsAfterIt() async throws {
         let db = InMemoryRecordDatabase()
-        let guest = ScriptedGuest(home: home, script: [.hangWritingTwice("Let me look. ", "Let me look. It is")])
+        let (runner, _, guest) = try await launch(db, .said(Self.told))
+        let result = try await runner.run("where is it?", model: .sonnet)
+        XCTAssertEqual(result.assistant.text, Self.toldReply)
+        XCTAssertEqual(guest.inputs.count, 1)
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["where is it?", Self.toldReply])
+        XCTAssertEqual(turns.last?.nonce, TurnRunner.replyNonce(for: [turns[0].ref]), "one reply, under the turn's own nonce")
+    }
+
+    /// Two text blocks of one message run on from one another, and only a new message is a new
+    /// paragraph: the same on the live path and from the transcript.
+    func testTwoTextBlocksOfOneMessageRunOn() async throws {
+        let said: [ScriptedGuest.Message] = [.init(texts: ["One, ", "two. "], tool: true), .init(texts: ["Three."])]
+        let live = try await launch(InMemoryRecordDatabase(), .said(said)).0.run("count", model: .sonnet)
+        XCTAssertEqual(live.assistant.text, "One, two. \n\nThree.")
+        try? FileManager.default.removeItem(at: directory)
+        let recovered = try await launch(InMemoryRecordDatabase(), .said(said, ending: .exit)).0.run("count", model: .sonnet)
+        XCTAssertEqual(recovered.assistant.text, live.assistant.text)
+    }
+
+    /// A turn whose stream carried no text event still writes its result's text.
+    func testATurnWithNoTextEventWritesItsResult() async throws {
+        let db = InMemoryRecordDatabase()
+        let (runner, _, _) = try await launch(db, .resultOnly("Done."))
+        let result = try await runner.run("do it", model: .sonnet)
+        XCTAssertEqual(result.assistant.text, "Done.")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["do it", "Done."])
+    }
+
+    /// The process ended after writing both messages and before its result line: the reply read
+    /// back from the transcript is the bytes the live path writes for the same turn.
+    func testAReplyReadFromTheTranscriptIsTheBytesTheLivePathWrites() async throws {
+        let live = try await launch(InMemoryRecordDatabase(), .said(Self.told)).0.run("where is it?", model: .sonnet)
+        try? FileManager.default.removeItem(at: directory)
+        let db = InMemoryRecordDatabase()
+        let (runner, _, guest) = try await launch(db, .said(Self.told, ending: .exit))
+        let recovered = try await runner.run("where is it?", model: .sonnet)
+        XCTAssertEqual(recovered.assistant.text, live.assistant.text)
+        XCTAssertEqual(recovered.assistant.text, Self.toldReply)
+        XCTAssertEqual(guest.inputs.count, 1, "the guest was asked again")
+    }
+
+    /// The guest answered in two messages round a tool call and the reply never reached the log;
+    /// the app is killed. The next launch reads the reply from the guest's transcript and writes
+    /// it once, under the turn's own nonce, as the bytes the first launch held — both messages'
+    /// words — without asking again.
+    func testACrashBeforeTheAppendRecoversBothMessagesUnderTheOriginalNonce() async throws {
+        let db = RefusingReplies()
+        let (first, _, _) = try await launch(db, .said(Self.told))
+        await db.refuse(true)
+        do {
+            _ = try await first.run("where is it?", model: .sonnet, nonce: "asked-once")
+            XCTFail("the reply was written")
+        } catch TurnRunnerError.replyFailed {}
+        await db.refuse(false)
+
+        let (second, _, guest) = try await launch(db)
+        let result = try await second.run("where is it?", model: .sonnet, nonce: "asked-once")
+        XCTAssertEqual(result.assistant.text, Self.toldReply)
+        XCTAssertTrue(guest.inputs.isEmpty, "the guest was asked again")
+        let turns = try await log(db)
+        XCTAssertEqual(turns.map(\.text), ["where is it?", Self.toldReply])
+        XCTAssertEqual(turns.last?.nonce, TurnRunner.replyNonce(for: [turns[0].ref]))
+    }
+
+    private func harness(_ db: any RecordDatabase, _ guest: ScriptedGuest) -> Harness {
         let name = "topo.tests.bridge.\(UUID().uuidString)"
         addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
         let (bridge, relay) = Harness.guestBrain(guest, ledger: ledgerFile)
-        let harness = Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
-                              defaults: UserDefaults(suiteName: name)!,
-                              brain: bridge, relay: relay, leaseSleep: parked,
-                              pause: { _ in throw CancellationError() })
+        return Harness(database: db, tokens: InMemoryTokenStore(nil).provider, device: phone, ensureZone: {},
+                       defaults: UserDefaults(suiteName: name)!,
+                       brain: bridge, relay: relay, leaseSleep: parked,
+                       pause: { _ in throw CancellationError() })
+    }
+
+    /// The row drawn while the guest writes keeps what it said before a tool call, and what it
+    /// shows when the stream ends is the reply that lands, byte for byte: the two are built by
+    /// one function (`ReplyWords`) from the deltas and from the whole blocks. A message begun
+    /// that says nothing — the second tool call — changes nothing the row shows.
+    func testTheRowKeepsTheWordsBeforeAToolCallAndTheReplyLandsAsTheRowShowedIt() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.said(Self.told, ending: .held)])
+        let harness = harness(db, guest)
+        let sending = Task { await harness.send("where is it?") }
+        var shown: [String] = []
+        for _ in 0..<1000 where harness.writing != Self.toldReply {
+            if let writing = harness.writing, shown.last != writing { shown.append(writing) }
+            try await Task.sleep(for: .milliseconds(2))
+        }
+        XCTAssertEqual(harness.writing, Self.toldReply, "the row did not come to both messages' words: \(shown)")
+        for (earlier, later) in zip(shown, shown.dropFirst()) {
+            XCTAssertTrue(later.hasPrefix(earlier), "the row went from \(earlier.debugDescription) to \(later.debugDescription)")
+        }
+        let row = harness.writing
+        guest.finishHanging(with: "unused")
+        await sending.value
+        XCTAssertNil(harness.writing)
+        XCTAssertEqual(harness.turns.last?.role, .assistant)
+        XCTAssertEqual(harness.turns.last?.text, row, "the reply landed as something other than the row showed")
+        let logged = try await log(db)
+        XCTAssertEqual(logged.map(\.text), ["where is it?", Self.toldReply])
+    }
+
+    /// A spoken turn the guest answers in messages round tool calls: whoever reads it aloud is
+    /// handed one string that only grows, each beginning with the last, the paragraph break
+    /// arriving with the first words of the message after it and none for a message that says
+    /// nothing. Then nil, once the reply has landed.
+    func testTheReaderIsHandedOneGrowingReplyAcrossMessages() async throws {
+        let db = InMemoryRecordDatabase()
+        let guest = ScriptedGuest(home: home, script: [.said(Self.told, ending: .held)])
+        let harness = harness(db, guest)
         var heard: [String?] = []
         let nonce = harness.willSend("where is it?")
         harness.markSpoken(nonce)
@@ -1068,10 +1181,40 @@ final class GuestBridgeTests: XCTestCase {
             heard.append(text)
         }
         let sending = Task { await harness.retry() }
-        for _ in 0..<500 where heard.count < 3 { try await Task.sleep(for: .milliseconds(10)) }
-        XCTAssertEqual(heard, ["Let me look. ", "", "Let me look. It is"])
-        guest.finishHanging(with: "It is on the shelf.")
+        for _ in 0..<500 where heard.last != .some(Self.toldReply) { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(heard, ["Let me", "Let me look. ", "Let me look. \n\nIt is on ", Self.toldReply])
+        for (earlier, later) in zip(heard, heard.dropFirst()) {
+            XCTAssertTrue(later?.hasPrefix(earlier ?? "") == true, "\(String(describing: later)) does not extend \(String(describing: earlier))")
+        }
+        guest.finishHanging(with: "unused")
         await sending.value
+        XCTAssertEqual(heard.last, .some(nil), "the reader was not told the reply had landed")
+        XCTAssertEqual(harness.turns.last?.text, Self.toldReply)
+    }
+
+    /// A message that is only whitespace, or opens with it, takes nothing back from the reader:
+    /// what it is handed still only grows, and the reply lands as the last of it.
+    func testAMessageOfWhitespaceTakesNothingBackFromTheReader() async throws {
+        let db = InMemoryRecordDatabase()
+        let said: [ScriptedGuest.Message] = [.words("Let me look. It is here. ", tool: true), .init(texts: ["\n\n"], tool: true),
+                                             .init(texts: ["\n\n", "Found it."])]
+        let guest = ScriptedGuest(home: home, script: [.said(said, ending: .held)])
+        let harness = harness(db, guest)
+        var heard: [String] = []
+        let nonce = harness.willSend("where is it?")
+        harness.markSpoken(nonce)
+        harness.onWriting = { text, _ in if let text { heard.append(text) } }
+        let sending = Task { await harness.retry() }
+        let whole = "Let me look. It is here. \n\n\n\nFound it."
+        for _ in 0..<500 where heard.last != whole { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(heard.last, whole)
+        for (earlier, later) in zip(heard, heard.dropFirst()) {
+            XCTAssertTrue(later.hasPrefix(earlier), "\(later.debugDescription) does not extend \(earlier.debugDescription)")
+        }
+        XCTAssertEqual(harness.writing, whole)
+        guest.finishHanging(with: "unused")
+        await sending.value
+        XCTAssertEqual(harness.turns.last?.text, whole)
     }
 
     /// Sign-out while a send has not yet written the person's turn — iCloud still being reached:

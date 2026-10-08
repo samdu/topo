@@ -91,11 +91,13 @@ enum DebugRun {
     }
     #endif
 
-    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left>`: the chat draws these fixture turns
+    /// `TOPO_DEBUG_TRANSCRIPT=<empty|long|full|continuity|continuity-short|ragged|left|links|blocks>`: the chat draws these fixture turns
     /// (`PreviewTurns`) in place of the log's, so a UI suite can put Topo over a transcript of a
     /// known shape — nothing, turns with gaps beside them, and turns that leave no gap at all —
     /// whatever the account's log holds. Only what is drawn changes: the harness, the log and the
-    /// microphone are the ordinary ones. Nil when the variable is absent or names none of them.
+    /// microphone are the ordinary ones — and where a link's tap goes, which over a fixture is
+    /// the chat's report (`ChatReport.opened`) and not a browser, so a suite can tap one and
+    /// stay in the app. Nil when the variable is absent or names none of them.
     static func transcript(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> [Turn]? {
         switch environment[transcriptVariable] {
         case "empty": []
@@ -105,9 +107,44 @@ enum DebugRun {
         case "continuity-short": PreviewTurns.continuityShort
         case "ragged": PreviewTurns.ragged
         case "left": PreviewTurns.left
+        case "links": PreviewTurns.links
+        case "blocks": blocks
         default: nil
         }
     }
+
+    /// The `blocks` fixture, its picture written before the first row that names it is drawn.
+    private static let blocks: [Turn] = {
+        #if os(iOS)
+        fixtureImages()
+        #endif
+        return PreviewTurns.blocks
+    }()
+
+    #if os(iOS)
+    /// The picture the `blocks` fixture's reply names, written into the guest's home where the
+    /// reply says it is (`/home/topo/charts/sizes.png`), so a launch over that fixture whose
+    /// guest comes up draws it through the reader every reply's image is read by, the guest's
+    /// own. Nothing is written for any other launch.
+    static func fixtureImages(_ environment: [String: String] = ProcessInfo.processInfo.environment,
+                              home: URL = GuestResident.homeDirectory) {
+        guard environment[transcriptVariable] == "blocks" else { return }
+        let size = CGSize(width: 320, height: 180)
+        let bars: [(CGFloat, UIColor)] = [(0.2, .systemTeal), (0.9, .systemIndigo), (0.45, .systemOrange)]
+        let picture = UIGraphicsImageRenderer(size: size).image { context in
+            UIColor.secondarySystemBackground.setFill()
+            context.fill(CGRect(origin: .zero, size: size))
+            for (index, (share, colour)) in bars.enumerated() {
+                colour.setFill()
+                context.fill(CGRect(x: 40 + CGFloat(index) * 90, y: size.height * (1 - share) - 10,
+                                    width: 60, height: size.height * share))
+            }
+        }
+        let folder = home.appendingPathComponent("charts", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? picture.pngData()?.write(to: folder.appendingPathComponent("sizes.png"))
+    }
+    #endif
 
     /// `TOPO_DEBUG_LOOP_SECONDS=<seconds>`: how long the answering loop waits between passes,
     /// in place of the five seconds it ordinarily waits. A minute makes the loop too slow to be
@@ -427,6 +464,12 @@ extension DebugRun {
         /// Where the transcript's content ends, measured down from its own top edge, which a
         /// scroll moves (iOS 18; nil before it is measured).
         var contentBottom: Double?
+        /// The addresses a tap on a reply's link asked to be opened, in order, over a fixture
+        /// transcript (`TOPO_DEBUG_TRANSCRIPT`), where they are recorded and not opened.
+        var opened: [String] = []
+        /// Whether the guest's home is mounted: whether there is a guest for a reply's image
+        /// to be read from in this launch.
+        var guestHome = false
     }
 
     struct TurnReport: Codable, Equatable {
@@ -448,7 +491,8 @@ extension DebugRun {
                            facing: MascotFacing = .left, clearance: CGFloat? = nil,
                            placed: Look.Mascot? = nil, overridePlacement: Look.Mascot.Placement? = nil,
                            overridePin: CGPoint? = nil, presence: Double? = nil,
-                           contentBottom: CGFloat? = nil) -> String {
+                           contentBottom: CGFloat? = nil, opened: [URL] = [],
+                           guestHome: Bool = false) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
                                 facing: facing.rawValue, clearance: clearance.map(Double.init))
         func point(_ point: CGPoint) -> [Double] { [Double(point.x), Double(point.y)] }
@@ -458,6 +502,8 @@ extension DebugRun {
         report.overridePin = overridePin.map(point)
         report.presence = presence
         report.contentBottom = contentBottom.map(Double.init)
+        report.opened = opened.map(\.absoluteString)
+        report.guestHome = guestHome
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

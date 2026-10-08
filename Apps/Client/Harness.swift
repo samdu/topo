@@ -4,6 +4,7 @@ import Observation
 import TopoAuth
 import TopoCore
 import TopoTurn
+import TopoUserland
 
 /// The phone harness as the UI sees it: the transcript, the model setting, and one turn at a time.
 /// The log is the shared CloudKit log, on the person's own Apple ID. What answers is the brain the
@@ -40,9 +41,12 @@ final class Harness {
     /// whatever reads follow; a line stopped on a failure is not an open turn.
     private(set) var turnOpen = false
     /// The reply the guest is writing now, as far as it has got, drawn under the transcript
-    /// before it is whole and before it is in the log. It is not a turn: it goes when the reply
-    /// lands in the transcript, when the guest starts another message, and when the turn fails.
+    /// before it is whole and before it is in the log: the words of every message of the turn
+    /// so far, so what was said before a tool call stays while the tool runs and after. It is
+    /// not a turn: it goes when the reply lands in the transcript and when the turn fails.
     private(set) var writing: String?
+    /// What `writing` is built from, a message at a time (`follow`).
+    @ObservationIgnored private var words = ReplyWords()
     /// The spoken turn the guest is answering now, by its nonce, when it is one (`markSpoken`):
     /// whose reply the speaker may begin reading as it is written.
     private(set) var writingSpoken: String?
@@ -69,8 +73,9 @@ final class Harness {
     /// refused it, a call still holding the session — is not recorded, so the next pass offers it
     /// again; every other reply, read aloud or not this screen's to read, is recorded and offered
     /// once.
-    /// Told the reply to a spoken turn as the guest writes it: the message so far and the turn's
-    /// nonce, then nil for the text once nothing more of it is coming — the reply landed (after
+    /// Told the reply to a spoken turn as the guest writes it: the reply so far, which each
+    /// telling extends and none replaces, and the turn's nonce, then nil for the text once
+    /// nothing more of it is coming — the reply landed (after
     /// `onReply` was offered it), or the turn failed.
     var onWriting: (@MainActor (String?, String) -> Void)?
     var onReply: (@MainActor (Turn) -> Bool)? {
@@ -665,20 +670,27 @@ final class Harness {
         }
     }
 
-    /// Keeps `writing` to what the guest has written of the message it is on.
+    /// Keeps `writing` to what the guest has written of the turn it is answering: every
+    /// message's words so far, the ones before a tool call included, as the reply will be
+    /// written to the log (`ReplyWords`, which the bridge writes it from too).
+    ///
+    /// Whoever reads it aloud is handed that same text and nothing else, so a string that only
+    /// ever grows: a new message adds nothing until it has words, and then the paragraph break
+    /// comes with them, which is what ends the sentence before it.
     private func follow(_ activity: GuestActivity) {
         switch activity {
         case .began(_, let answering):
             writing = nil
+            words = ReplyWords()
             writingSpoken = turns.last { answering.contains($0.ref) && spokenNonces.contains($0.nonce) }?.nonce
         case .update(.event(.writingBegan)):
-            // Empty rather than nil: the turn is still being answered, by a new message.
-            writing = writing == nil ? nil : ""
-            if let writing, let writingSpoken { onWriting?(writing, writingSpoken) }
+            words.begin()
         case .update(.event(.writing(let more))):
             if writing == nil { Perf.mark("turn.text.first") }
-            writing = (writing ?? "") + more
-            if let writingSpoken { onWriting?(writing, writingSpoken) }
+            words.append(more)
+            let written = words.text
+            writing = written
+            if let writingSpoken { onWriting?(written, writingSpoken) }
         case .update(.ended(let end)):
             // A turn that ended with no reply leaves nothing to land; one that answered is
             // replaced by its turn when that is shown.
@@ -691,6 +703,7 @@ final class Harness {
     /// What was drawn of a reply goes, and whoever was reading it aloud is told no more comes.
     private func dropWriting() {
         writing = nil
+        words = ReplyWords()
         if let writingSpoken { onWriting?(nil, writingSpoken) }
         writingSpoken = nil
     }

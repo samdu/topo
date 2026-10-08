@@ -372,6 +372,9 @@ actor GuestBridge: Brain {
         let answering = request.answering.map(\.ref)
         await observe(.began(pid: pid, answering: answering))
         var model: String?, usage: StreamEvent.Usage?, end: GuestSession.TurnEnd?
+        // Every message's words, the ones said before a tool call included: the result line
+        // carries the last message's alone.
+        var words = ReplyWords()
         for await update in updates {
             await observe(.update(update))
             switch update {
@@ -386,6 +389,8 @@ actor GuestBridge: Brain {
                 provenance[request.nonce] = (started, pid)
             case .event(.usage(let reported)):
                 usage = reported
+            case .event(.text(let text, let message)):
+                words.append(text, of: message)
             case .ended(let ended):
                 end = ended
             case .event:
@@ -409,7 +414,9 @@ actor GuestBridge: Brain {
                 ledger.pending?.state = .answered
                 try? save()
             }
-            return reply(result.text ?? "", to: request, usage: usage, model: model)
+            // The result's own text only for a turn whose stream carried no words at all.
+            let said = words.text
+            return reply(said.isEmpty ? result.text ?? "" : said, to: request, usage: usage, model: model)
         }
         if case .failed(.result) = end {
             // An error result is Claude Code's own word that it received the turn and ended it

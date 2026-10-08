@@ -270,6 +270,64 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(bad.look.markdown.blockSpacing, Look().markdown.blockSpacing, "past 64 points is refused")
     }
 
+    /// A table's fields reach the look, each in its own range, and one refused leaves the rest
+    /// standing.
+    func testTheTableFieldsAreReadAndABadOneFallsBackAlone() {
+        let good = LookDocument.read(##"{"markdown": {"tableHeaderFont": {"style": "caption", "weight": "bold"}, "tableColumnSpacing": 9, "tableRowSpacing": 2, "tableRule": "#FF0000", "tableRuleWidth": 2, "tableCellMaxWidth": 180}}"##)
+        XCTAssertEqual(good.notes, [])
+        XCTAssertEqual(good.look.markdown.tableHeaderFont, .system(.caption).weight(.bold))
+        XCTAssertEqual(good.look.markdown.tableColumnSpacing, 9)
+        XCTAssertEqual(good.look.markdown.tableRowSpacing, 2)
+        XCTAssertEqual(good.look.markdown.tableRuleWidth, 2)
+        XCTAssertEqual(good.look.markdown.tableCellMaxWidth, 180)
+        XCTAssertEqual(good.fields.filter { $0.hasPrefix("markdown.table") }.count, 6, "\(good.fields)")
+
+        let compiled = Look().markdown
+        let bad = LookDocument.read(#"{"markdown": {"tableHeaderFont": "big", "tableColumnSpacing": 65, "tableRowSpacing": -1, "tableRule": "red", "tableRuleWidth": 3, "tableCellMaxWidth": 39}}"#)
+        XCTAssertEqual(bad.notes.count, 5, "\(bad.notes)")
+        XCTAssertEqual(bad.look.markdown.tableHeaderFont, compiled.tableHeaderFont)
+        XCTAssertEqual(bad.look.markdown.tableColumnSpacing, compiled.tableColumnSpacing)
+        XCTAssertEqual(bad.look.markdown.tableRowSpacing, compiled.tableRowSpacing)
+        XCTAssertEqual(bad.look.markdown.tableCellMaxWidth, compiled.tableCellMaxWidth, "a cell narrower than a word is refused")
+        XCTAssertEqual(bad.look.markdown.tableRuleWidth, 3, "the one good field was taken down with the rest")
+        // A link's ink is one field of its own: refused, the fields beside it are still taken.
+        let link = LookDocument.read(##"{"markdown": {"linkInk": "blue", "codeInk": "#102030", "tableRowSpacing": 4}}"##)
+        XCTAssertEqual(link.notes.count, 1, "\(link.notes)")
+        XCTAssertTrue(link.fields.isSuperset(of: ["markdown.codeInk", "markdown.tableRowSpacing"]), "\(link.fields)")
+        XCTAssertFalse(link.fields.contains("markdown.linkInk"))
+        XCTAssertTrue(LookDocument.read(##"{"markdown": {"linkInk": ["#0000FF", "#8888FF"]}}"##).fields.contains("markdown.linkInk"))
+        for width in [40.0, 2000] {
+            XCTAssertEqual(LookDocument.read(#"{"markdown": {"tableCellMaxWidth": \#(width)}}"#).look.markdown.tableCellMaxWidth, width)
+        }
+        for width in ["2001", "1e999", "\"wide\"", "true"] {
+            XCTAssertEqual(LookDocument.read(#"{"markdown": {"tableCellMaxWidth": \#(width)}}"#).look.markdown.tableCellMaxWidth,
+                           compiled.tableCellMaxWidth, width)
+        }
+    }
+
+    /// An image's height and corner are the document's, each in its range, and a refused one
+    /// leaves the other standing.
+    func testAnImagesHeightAndCornerAreReadInTheirRanges() {
+        let compiled = Look().markdown
+        let good = LookDocument.read(#"{"markdown": {"imageMaxHeight": 200, "imageCornerRadius": 4}}"#)
+        XCTAssertEqual(good.notes, [])
+        XCTAssertEqual(good.look.markdown.imageMaxHeight, 200)
+        XCTAssertEqual(good.look.markdown.imageCornerRadius, 4)
+        XCTAssertTrue(good.fields.isSuperset(of: ["markdown.imageMaxHeight", "markdown.imageCornerRadius"]), "\(good.fields)")
+        for height in [24.0, 4000] {
+            XCTAssertEqual(LookDocument.read(#"{"markdown": {"imageMaxHeight": \#(height)}}"#).look.markdown.imageMaxHeight, height)
+        }
+        for height in ["23", "4001", "0", "-1", "\"tall\"", "true", "null"] {
+            let read = LookDocument.read(#"{"markdown": {"imageMaxHeight": \#(height), "imageCornerRadius": 3}}"#)
+            XCTAssertEqual(read.look.markdown.imageMaxHeight, compiled.imageMaxHeight, height)
+            XCTAssertEqual(read.look.markdown.imageCornerRadius, 3, "the good field was taken down with \(height)")
+        }
+        let bad = LookDocument.read(#"{"markdown": {"imageMaxHeight": 300, "imageCornerRadius": -1}}"#)
+        XCTAssertEqual(bad.notes.count, 1, "\(bad.notes)")
+        XCTAssertEqual(bad.look.markdown.imageCornerRadius, compiled.imageCornerRadius)
+        XCTAssertEqual(bad.look.markdown.imageMaxHeight, 300)
+    }
+
     /// The glass under the keyboard is read in a range of its own: a pane kept at under half its
     /// height is refused, and the ends of the range are taken.
     func testTheShortPaneIsReadInItsOwnRange() {
