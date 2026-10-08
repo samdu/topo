@@ -294,6 +294,55 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertTrue(reply2.text.contains("oat milk"))
     }
 
+    /// #245: the call with nothing after it leaves out the reminders with no due date and counts
+    /// them on a last line; `--all` is the whole listing, and naming a part is answered whole.
+    func testRemindersWithNothingAfterItLeavesOutTheUndatedAndCountsThem() async {
+        let store = Reminders()
+        let tool = RemindersTool(store: store, authorizer: Permission(), broker: PermissionBroker())
+        let late = ToolDates.read("2026-09-28")!, soon = ToolDates.read("2026-09-26T18:00")!
+        store.records = [ReminderRecord(id: "d1", title: "Later", list: "Home", due: late, done: false, notes: nil),
+                         ReminderRecord(id: "d2", title: "Sooner", list: "Work", due: soon, done: false, notes: "bring the form")]
+            + (1...222).map { ReminderRecord(id: "u\($0)", title: "Backlog \($0)", list: $0 % 2 == 0 ? "Home" : "Work", due: nil, done: false,
+                                              notes: String(repeating: "a long note ", count: 25)) }
+            + [ReminderRecord(id: "x1", title: "Finished", list: "Home", due: nil, done: true, notes: nil)]
+        let dated = "d2 | Sooner | Work | due \(ToolDates.write(soon.date)) | notes: bring the form\nd1 | Later | Home | due 2026-09-28\n"
+
+        let bare = await tool.run([])
+        XCTAssertEqual(bare.status, ToolReply.ok, bare.text)
+        XCTAssertEqual(bare.text, dated + "and 222 with no due date — topo reminders --all lists them\n")
+        let named = await tool.run(["list"])
+        XCTAssertEqual(named.text, bare.text)
+
+        let all = await tool.run(["--all"])
+        let lines = all.text.split(separator: "\n")
+        XCTAssertEqual(lines.count, 224)
+        XCTAssertTrue(all.text.hasPrefix(dated + "u1 | Backlog 1 | Work | no due date | notes: a long note"), String(all.text.prefix(300)))
+        XCTAssertFalse(all.text.contains("topo reminders --all"))
+        XCTAssertGreaterThan(all.text.utf8.count, 60_000)
+        XCTAssertLessThan(bare.text.utf8.count, 300)
+
+        // A named list is the caller saying which part: whole, the undated included.
+        let home = await tool.run(["--list", "Home"])
+        XCTAssertEqual(home.text.split(separator: "\n").count, 112)
+        XCTAssertFalse(home.text.contains("topo reminders --all"))
+        let done = await tool.run(["--done"])
+        XCTAssertEqual(done.text, "x1 | Finished | Home | no due date | done\n")
+        let before = await tool.run(["--due-before", "2026-09-27"])
+        XCTAssertEqual(before.text, "d2 | Sooner | Work | due \(ToolDates.write(soon.date)) | notes: bring the form\n")
+
+        // Nothing dated: the count alone. Nothing at all: as before.
+        store.records.removeAll { $0.due != nil }
+        let undated = await tool.run([])
+        XCTAssertEqual(undated.text, "222 with no due date — topo reminders --all lists them\n")
+        store.records = []
+        let none = await tool.run([])
+        XCTAssertEqual(none.text, "no reminders\n")
+        XCTAssertEqual(try tool.parse([]), .reminders(list: nil, before: nil, done: false, undated: false))
+        XCTAssertEqual(try tool.parse(["--all"]), .reminders(list: nil, before: nil, done: false, undated: true))
+        let refused = await tool.run(["add", "Milk", "--all"])
+        XCTAssertEqual(refused.status, ToolReply.usage, refused.text)
+    }
+
     func testRemindersRefuseWhatTheyDoNotTake() async {
         let tool = RemindersTool(store: Reminders(), authorizer: Permission(), broker: PermissionBroker())
         for arguments in [["add"], ["add", "a", "b"], ["done"], ["delete", "r1"], ["--colour", "red"], ["add", "x", "--due", "tomorrow"]] {
@@ -584,7 +633,7 @@ final class PhoneToolsTests: XCTestCase {
         let reminders = RemindersTool(store: store, authorizer: Permission(), broker: PermissionBroker())
         let added = await reminders.run(["add", "Milk\nEggs\r\nBread", "--notes", "two\nlines"])
         XCTAssertEqual(added.text, "added: r1 | Milk Eggs Bread | Home | no due date | notes: two lines\n")
-        let listed = await reminders.run([])
+        let listed = await reminders.run(["--all"])
         XCTAssertEqual(listed.text, "r1 | Milk Eggs Bread | Home | no due date | notes: two lines\n")
         let events = Events()
         let calendar = CalendarTool(store: events, authorizer: Permission("Calendars"), broker: PermissionBroker())
