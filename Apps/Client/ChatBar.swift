@@ -52,6 +52,9 @@ struct ChatBar: View {
             .accessibilityLabel(readsAloud ? "Mute replies" : "Read replies aloud")
         }
         .font(look.bar.font)
+        // The bar is a fixed height, so its controls stop growing with the text setting where
+        // its notice does.
+        .dynamicTypeSize(...ChatNotices.largestType)
         .tint(look.bar.ink)
         .foregroundStyle(look.bar.ink)
     }
