@@ -34,14 +34,40 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case hang
         /// As `hang`, having begun a message and written these words of it.
         case hangWriting(String)
-        /// As `hangWriting`, with a second message begun after the first and these words of it.
-        case hangWritingTwice(String, String)
         /// Received, and still being answered, with its transcript entry not written yet: the
         /// turn ends when `finishHanging` says.
         case hangUnwritten
         /// Received, and ended with an error result while the process lives on, before its
         /// transcript has the input on disk: a read now would say it never arrived.
         case errorResult(String)
+        /// Received, and answered over several assistant messages, as a turn that runs tools is:
+        /// each message's words written as deltas and then whole, a tool call and its result
+        /// after a message that makes one, and a result line carrying the last message's words
+        /// alone, as Claude Code's does. The transcript holds every message. `ending` is how the
+        /// turn ends once they are written.
+        case said([Message], ending: Ending = .result)
+        /// Received, and answered with a result line and no text event at all.
+        case resultOnly(String)
+    }
+
+    /// One assistant message of a scripted turn.
+    struct Message {
+        /// Its text blocks, in order; none for a message that only thought or called a tool.
+        var texts: [String] = []
+        /// Whether it ends in a tool call, whose result comes back before the next message.
+        var tool = false
+
+        static func words(_ text: String, tool: Bool = false) -> Message { Message(texts: [text], tool: tool) }
+        static let toolOnly = Message(texts: [], tool: true)
+    }
+
+    enum Ending {
+        /// The result line comes: the turn is answered.
+        case result
+        /// The process ends before its result line: the transcript alone has the answer.
+        case exit
+        /// Nothing more until `finishHanging`, which sends the result line.
+        case held
     }
 
     let home: URL
@@ -56,7 +82,7 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     private var refusal: String?
     /// Turns the guest still has: `settle` waits for them, as the resident session does.
     private var hanging: [(continuation: AsyncStream<GuestSession.TurnUpdate>.Continuation, id: String, text: String,
-                           session: String, written: Bool)] = []
+                           session: String, written: Bool, said: String?)] = []
     private var confirmed = true
     private var messages = 0
     private var holdingReady = false
@@ -86,13 +112,14 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
     /// transcript before its result: `settle` returns only once it is on disk.
     func finishHanging(with reply: String) {
         let turns = lock.withLock { hanging }
-        for turn in turns {
+        for turn in turns where turn.said == nil {
             if !turn.written { write(input: turn.text, id: turn.id, session: turn.session) }
             write(reply: reply, model: "claude-haiku-4-5-20251001", session: turn.session)
         }
         lock.withLock { hanging = [] }
         for turn in turns {
-            turn.continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: reply,
+            // A turn held after its messages were written ends on its own result line.
+            turn.continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: turn.said ?? reply,
                                                            session: turn.session, duration: .milliseconds(10)))))
             turn.continuation.finish()
         }
@@ -189,24 +216,56 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
         case .hang:
             write(input: text, id: id, session: session)
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
-            lock.withLock { hanging.append((continuation, id, text, session, true)) }
+            lock.withLock { hanging.append((continuation, id, text, session, true, nil)) }
         case .hangWriting(let words):
             write(input: text, id: id, session: session)
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
             continuation.yield(.event(.writingBegan))
             continuation.yield(.event(.writing(words)))
-            lock.withLock { hanging.append((continuation, id, text, session, true)) }
-        case .hangWritingTwice(let before, let after):
+            lock.withLock { hanging.append((continuation, id, text, session, true, nil)) }
+        case .said(let said, let ending):
+            let model = "claude-haiku-4-5-20251001"
             write(input: text, id: id, session: session)
+            continuation.yield(.event(.started(session: session, model: model)))
+            for (index, message) in said.enumerated() {
+                let messageID = write(message: message, last: index == said.count - 1, model: model, session: session)
+                continuation.yield(.event(.writingBegan))
+                for words in message.texts {
+                    // Written a piece at a time, then whole, as the stream carries a text block.
+                    let half = words.index(words.startIndex, offsetBy: words.count / 2)
+                    for piece in [words[..<half], words[half...]] where !piece.isEmpty {
+                        continuation.yield(.event(.writing(String(piece))))
+                    }
+                    continuation.yield(.event(.text(words, message: messageID)))
+                }
+                if message.tool {
+                    continuation.yield(.event(.toolUse(name: "Bash")))
+                    continuation.yield(.event(.toolResult(isError: false, text: "ok")))
+                }
+            }
+            // The result line carries the last message's words and none of the others'.
+            let result = said.last?.texts.joined() ?? ""
+            switch ending {
+            case .result:
+                continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: result, session: session,
+                                                          duration: .milliseconds(10)))))
+                continuation.finish()
+            case .exit:
+                continuation.yield(.ended(.failed(.exited(""))))
+                continuation.finish()
+            case .held:
+                lock.withLock { hanging.append((continuation, id, text, session, true, result)) }
+            }
+        case .resultOnly(let reply):
+            write(input: text, id: id, session: session)
+            write(reply: reply, model: "claude-haiku-4-5-20251001", session: session)
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
-            continuation.yield(.event(.writingBegan))
-            continuation.yield(.event(.writing(before)))
-            continuation.yield(.event(.writingBegan))
-            continuation.yield(.event(.writing(after)))
-            lock.withLock { hanging.append((continuation, id, text, session, true)) }
+            continuation.yield(.ended(.answered(.init(isError: false, subtype: "success", text: reply, session: session,
+                                                      duration: .milliseconds(10)))))
+            continuation.finish()
         case .hangUnwritten:
             continuation.yield(.event(.started(session: session, model: "claude-haiku-4-5-20251001")))
-            lock.withLock { hanging.append((continuation, id, text, session, false)) }
+            lock.withLock { hanging.append((continuation, id, text, session, false, nil)) }
         }
         return stream
     }
@@ -261,6 +320,29 @@ final class ScriptedGuest: GuestConversation, @unchecked Sendable {
 
     private func write(input text: String, id: String, session: String) {
         append(["type": "user", "uuid": id, "sessionId": session, "message": ["role": "user", "content": text]], session: session)
+    }
+
+    /// One message as Claude Code writes it: an entry per content block, each carrying the
+    /// message's id and stop reason, and the tool's result after a message that calls one. The
+    /// message's id is returned.
+    private func write(message: Message, last: Bool, model: String, session: String) -> String {
+        let number = lock.withLock { () -> Int in messages += 1; return messages }
+        let messageID = "msg-\(number)"
+        let stop = !message.tool && last ? "end_turn" : "tool_use"
+        var blocks: [[String: Any]] = [["type": "thinking", "thinking": ""]]
+        blocks += message.texts.map { ["type": "text", "text": $0] }
+        if message.tool { blocks.append(["type": "tool_use", "id": "toolu-\(number)", "name": "Bash", "input": ["command": "ls"]]) }
+        for block in blocks {
+            append(["type": "assistant", "uuid": UUID().uuidString, "sessionId": session, "isSidechain": false,
+                    "message": ["id": messageID, "model": model, "role": "assistant", "stop_reason": stop,
+                                "content": [block]]], session: session)
+        }
+        if message.tool {
+            append(["type": "user", "uuid": UUID().uuidString, "sessionId": session,
+                    "message": ["role": "user", "content": [["type": "tool_result", "tool_use_id": "toolu-\(number)",
+                                                              "content": "ok"]]]], session: session)
+        }
+        return messageID
     }
 
     private func write(reply text: String, model: String, session: String) {

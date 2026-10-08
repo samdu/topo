@@ -153,13 +153,16 @@ final class MascotDriver {
 
     /// The facing in force, as the engine draws it now.
     var facingInForce: String { engine.facing }
+
+    /// The head in force, as the engine was last handed it: 1 the smallest.
+    var headInForce: Double { engine.state.level }
     #endif
 }
 
 /// The view he is drawn in, laid over the whole of the chat: one layer holding the engine's
 /// whole picture, magnified nearest-neighbour and put so that the part he takes up at rest
 /// (`MascotSprite.box`) is where his roam says he is; what a pose draws past that box is drawn
-/// over whatever is there, except on the glass, where he is drawn inside the empty flank. The view
+/// over whatever is there, except on the glass, where he is drawn inside the trailing flank. The view
 /// itself takes no touch and is nothing to accessibility, so everything under it is found and
 /// pressed exactly as it would be without him.
 ///
@@ -172,7 +175,7 @@ final class MascotDriver {
 @MainActor
 final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     let driver = MascotDriver()
-    /// What the picture is drawn inside: the whole canvas, or on the glass the empty flank.
+    /// What the picture is drawn inside: the whole canvas, or on the glass the trailing flank.
     private let stage = CALayer()
     private let sprite = CALayer()
     private var link: CADisplayLink?
@@ -454,7 +457,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     }
 
     /// What he is drawn inside with no glass stage to stand in: on the glass, standing there and
-    /// not in a finger, the empty flank, so no pose is drawn over the microphone; the whole canvas
+    /// not in a finger, the trailing flank, so no pose is drawn over the microphone; the whole canvas
     /// otherwise.
     private func clip(_ roam: MascotRoam) -> CGRect? {
         guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
@@ -864,7 +867,8 @@ extension MascotScene.Value {
         }
         return MascotField(visible: proxy[visible], obstacles: obstacles.flatMap { proxy[$0] },
                            pane: pane.map { proxy[$0] }, well: well.map { proxy[$0] }, keyboard: keyboard,
-                           beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) })
+                           beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) },
+                           stop: stop.map { proxy[$0] })
     }
 }
 
@@ -923,7 +927,9 @@ struct MascotLayer: View {
     var body: some View {
         GeometryReader { proxy in
             let field = scene.field(in: proxy, keyboardTop: keyboardTop)
-            let settings = MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion)
+            // Over the model slider while it is open, whatever the look's placement.
+            let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion),
+                                               over: field, swim: look.mascot.swimSpeed)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,
                                interval: look.mascot.frameInterval, ready: ready,
@@ -939,7 +945,7 @@ struct MascotLayer: View {
                 #endif
                 // On the glass, the stage is framed from the pane as laid out now, so SwiftUI
                 // draws it wherever it draws the pane, in the same transaction.
-                if look.mascot.placement == .glass, let field,
+                if settings.placement == .glass, let field,
                    let stage = MascotPerch.glassStage(field, size: settings.size),
                    let slot = MascotPerch.glassSlot(field) {
                     // The flank clips from the top of his picture to the pane's foot.

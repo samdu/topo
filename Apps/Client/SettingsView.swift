@@ -3,15 +3,13 @@ import SwiftUI
 import TopoAuth
 import TopoTurn
 
-/// What the badge opens: the model, the voice, the vocabulary, the connections, the
+/// What the badge opens: where Topo sits, the vocabulary, the memory, the connections, the
 /// diagnostics, the acknowledgements, and the way out.
 struct SettingsView: View {
     /// The way out, handed down from the chat because that is where the five things it ends are.
     let signOut: SignOut
-    @Environment(Harness.self) private var harness
     @Environment(\.dismiss) private var dismiss
     @Environment(\.look) private var look
-    @AppStorage("readAloud") private var readAloud = true
     @State private var showDiagnostics = false
     @State private var showAbout = false
     @State private var showVocabulary = false
@@ -19,26 +17,15 @@ struct SettingsView: View {
     @State private var showConnections = false
 
     var body: some View {
-        @Bindable var harness = harness
         NavigationStack {
             Form {
-                Section("Mind") {
-                    Picker("Model", selection: $harness.model) {
-                        ForEach(ClaudeModel.allCases) { Text($0.displayName).tag($0) }
-                    }
-                }
-                Section("Voice") {
-                    Toggle("Read replies aloud", isOn: $readAloud)
+                // First: where Topo sits, and the Reset for this device's hand on the look.
+                PlacementSection()
+                // One row each, named for what is behind it, so no heading says it again.
+                Section {
                     Button("Vocabulary") { showVocabulary = true }
-                }
-                Section("Memory") {
-                    // The screen behind it says where the vault's folder is and carries the one
-                    // control that moves it, so the row names that rather than the section again.
-                    Button("Where it lives") { showMemory = true }
-                }
-                Section("Connections") {
-                    // GitHub and 1Password, and who or what each reaches, on the screen behind it.
-                    Button("GitHub and 1Password") { showConnections = true }
+                    Button("Memory") { showMemory = true }
+                    Button("Connections") { showConnections = true }
                 }
                 Section {
                     Button("Diagnostics") { showDiagnostics = true }
@@ -47,9 +34,10 @@ struct SettingsView: View {
                 Section {
                     Button("Sign out", role: .destructive) { Task { await signOut.act() } }
                 }
-                // Last: where Topo sits and the Reset for this device's hand on the look, with a
-                // debug build's sliders under them.
+                #if DEBUG
+                // Last, and a debug build's alone: the sliders.
                 TuningSection()
+                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

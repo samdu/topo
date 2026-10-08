@@ -229,6 +229,119 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertEqual(mascot.state.tokens, 0, "Topo wore the last login's load after a sign-out")
     }
 
+    // MARK: A turn open
+
+    /// A turn is open from its first step, while iCloud is still being reached and the guest has
+    /// been told nothing, through the wait on the model with no word from it, until the reply is
+    /// in the log; Topo, following the harness, is at work for all of it and idle once it is
+    /// over. Nothing is drawn here: he hears of the turn from the harness itself.
+    func testATurnIsOpenFromItsFirstStepUntilItsReplyAndTopoIsNotIdleMeanwhile() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        let reaching = Answers(), posedReaching = Answers(), asking = Answers(), posedAsking = Answers()
+        let pose: @Sendable () async -> Bool = {
+            // The change reaches him a hop behind the harness.
+            for _ in 0..<200 {
+                if await MainActor.run(body: { mascot.state.input.activity == "thinking" }) { return true }
+                try? await Task.sleep(for: .milliseconds(5))
+            }
+            return false
+        }
+        let transport = ScriptedTransport((200, reply("Tonight.")))
+        transport.duringRequest = {
+            // The model has the turn and has said nothing.
+            await asking.set(await MainActor.run { seen.harness?.turnOpen ?? false })
+            await posedAsking.set(await pose())
+        }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport, ensureZone: {
+            await reaching.set(await MainActor.run { seen.harness?.turnOpen ?? false })
+            await posedReaching.set(await pose())
+        })
+        seen.harness = harness
+        mascot.follow(harness)
+        XCTAssertFalse(harness.turnOpen)
+        XCTAssertEqual(mascot.state.input.activity, "idle")
+
+        await harness.send("When are the bins?")
+
+        let (wasReaching, wasAsking) = await (reaching.value, asking.value)
+        let (topoReaching, topoAsking) = await (posedReaching.value, posedAsking.value)
+        XCTAssertEqual(wasReaching, true, "no turn was open while iCloud was being reached")
+        XCTAssertEqual(topoReaching, true, "Topo was idle while iCloud was being reached")
+        XCTAssertEqual(wasAsking, true, "no turn was open while the model had it")
+        XCTAssertEqual(topoAsking, true, "Topo was idle with the turn waiting on the model")
+        XCTAssertFalse(harness.turnOpen, "the turn stayed open after its reply")
+        try await eventually("Topo idle after the reply") { mascot.state.input.activity == "idle" }
+    }
+
+    /// A second turn, sent over the runner the first one made, is open before any of its steps
+    /// has said where it is: here while a debug launch holds the reply, which is before the
+    /// runner is asked anything.
+    func testALaterTurnIsOpenBeforeItsFirstStep() async throws {
+        let db = InMemoryRecordDatabase()
+        let transport = ScriptedTransport((200, reply("One.")), (200, reply("Two.")))
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        mascot.follow(harness)
+        await harness.send("one")
+        XCTAssertFalse(harness.turnOpen)
+
+        setenv(DebugRun.replyDelayVariable, "0.5", 1)
+        defer { unsetenv(DebugRun.replyDelayVariable) }
+        let second = Task { await harness.send("two") }
+        try await eventually("the second turn open with no step taken") { harness.turnOpen && harness.status == nil }
+        XCTAssertEqual(transport.sent.count, 1, "the model already had the second turn")
+        try await eventually("Topo at work for it") { mascot.state.input.activity == "thinking" }
+        await second.value
+        XCTAssertFalse(harness.turnOpen)
+        let turns = try await log(db).map(\.text)
+        XCTAssertEqual(turns, ["one", "One.", "two", "Two."])
+    }
+
+    /// A turn whose reply failed is closed as the failure is put up, before the reads that
+    /// follow it: no turn is open while the chat is told the turn failed.
+    func testATurnWhoseReplyFailedIsClosedBeforeTheReadsThatFollow() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((500, "{}")))
+        var openWhenFailed: Bool?
+        harness.onTurnFailed = { [weak harness] _ in openWhenFailed = harness?.turnOpen }
+        await harness.send("When are the bins?")
+        XCTAssertNotNil(harness.error)
+        XCTAssertEqual(openWhenFailed, false, "the turn was still open as its failure was told")
+        XCTAssertFalse(harness.turnOpen)
+    }
+
+    /// A turn that never reached the log is not open either: the line has stopped, and nothing
+    /// is waiting on a model.
+    func testATurnThatFailedIsNotOpen() async throws {
+        let db = InMemoryRecordDatabase()
+        let harness = harness(db, defaults: makeDefaults(), transport: ScriptedTransport((200, reply("never"))),
+                              ensureZone: { throw Unexpected() })
+        var openWhenFailed: Bool?
+        harness.onTurnFailed = { [weak harness] _ in openWhenFailed = harness?.turnOpen }
+        await harness.send("When are the bins?")
+        XCTAssertNotNil(harness.error)
+        XCTAssertTrue(harness.hasWaiting)
+        XCTAssertEqual(openWhenFailed, false)
+        XCTAssertFalse(harness.turnOpen)
+    }
+
+    /// A sign-out during a turn closes it.
+    func testASignOutClosesAnOpenTurn() async throws {
+        let db = InMemoryRecordDatabase()
+        let seen = Seen()
+        let transport = ScriptedTransport((200, reply("never")))
+        transport.duringRequest = { await seen.harness?.forget() }
+        let harness = harness(db, defaults: makeDefaults(), transport: transport)
+        seen.harness = harness
+        let mascot = Mascot(model: "claude-haiku-4-5")
+        mascot.follow(harness)
+        await harness.send("When are the bins?")
+        XCTAssertFalse(harness.turnOpen)
+        try await eventually("Topo idle after the sign-out") { mascot.state.input.activity == "idle" }
+    }
+
     // MARK: A failed model call
 
     func testAFailedModelCallLeavesTheTurnInTheLogAndTheNextPassAnswersItOnce() async throws {
@@ -665,6 +778,53 @@ final class HarnessIntegrationTests: XCTestCase {
         await hub.answerPending()
         let read13 = try await log(db).map(\.text)
         XCTAssertEqual(read13, ["hello", "from the hub"])
+    }
+
+    func testAReplyIsSavedWhenTheLeasesHeartbeatsRanLateAndNoOtherDeviceClaimed() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = TestClock()
+        let transport = ScriptedTransport((200, reply("a long answer")))
+        // The answer outlasts the lease and no heartbeat lands: the only primary, late.
+        transport.duringRequest = { clock.advance(34) }
+        let phone = harness(db, defaults: makeDefaults(), transport: transport)
+        phone.adopt(PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: NoSocketProbe(),
+                                 now: { clock.wall }, monotonic: clock.now, sleep: parked))
+
+        await phone.send("hello")
+
+        let read = try await log(db).map(\.text)
+        XCTAssertEqual(read, ["hello", "a long answer"], "the reply is saved under a fresh claim")
+        XCTAssertNil(phone.error)
+        XCTAssertEqual(phone.turns.map(\.text), ["hello", "a long answer"])
+        XCTAssertEqual(transport.sent, [["hello"]])
+    }
+
+    func testADisplacedReplyIsWrittenByTheNextPassWithoutAskingAgainOnceTheTakerIsGone() async throws {
+        let db = InMemoryRecordDatabase()
+        let clock = TestClock()
+        let hubLease = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                                    now: { clock.wall }, monotonic: clock.now, sleep: parked)
+        let transport = ScriptedTransport((200, reply("the guest's answer")))
+        transport.duringRequest = { _ = try? await hubLease.acquire() }
+        let phone = harness(db, defaults: makeDefaults(), transport: transport)
+        phone.adopt(PrimaryLease(database: db, device: self.phone, endpoint: nil, probe: NoSocketProbe(),
+                                 now: { clock.wall }, monotonic: clock.now, sleep: parked))
+
+        await phone.send("hello")
+        let displaced = try await log(db).map(\.text)
+        XCTAssertEqual(displaced, ["hello"])
+        XCTAssertEqual(phone.error, Harness.describe(TurnRunnerError.displaced))
+
+        // The taker never answers and its lease lapses: the phone's next pass claims, and writes
+        // the reply its guest already finished rather than asking for another.
+        clock.advance(11)
+        await phone.answerPending()
+
+        let read = try await log(db).map(\.text)
+        XCTAssertEqual(read, ["hello", "the guest's answer"])
+        XCTAssertEqual(phone.turns.map(\.text), ["hello", "the guest's answer"])
+        XCTAssertEqual(transport.sent, [["hello"]], "the guest is not asked a second time")
+        XCTAssertNil(phone.error)
     }
 
     // MARK: Handover
@@ -1230,7 +1390,7 @@ final class HarnessIntegrationTests: XCTestCase {
         XCTAssertNotNil(harness.error)
     }
 
-    /// Read replies aloud off at the release: the turn is not one whose reply is read, so nothing
+    /// Replies muted at the release: the turn is not one whose reply is read, so nothing
     /// records it as spoken. A launch that turns the setting on afterwards would otherwise speak
     /// a reply from last week.
     func testATurnSentWithRepliesNotReadAloudIsNotSpokenAfterARelaunch() async throws {
@@ -1269,11 +1429,125 @@ final class HarnessIntegrationTests: XCTestCase {
         }
     }
 
-    /// The setting governs what a release decides, not what a turn already released is owed: a
-    /// question asked aloud and answered after Read replies aloud was turned off is still that
-    /// question's answer, and leaving it unread would strand its mark and its hold. What ends the
-    /// hold is `speak` taking the reply, which is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
-    func testAReplyIsReadWhenItsTurnIsMarkedWhateverTheSettingReadsNow() async throws {
+    /// Muted between the release and the reply, the reply is read by nobody, and nothing is left
+    /// standing for it: the turn's mark is cleared and its wait ended, so a muted phone is not kept
+    /// awake for a reply it will not read and the reply is not offered again.
+    func testAReplyThatLandsMutedIsNotReadAndLeavesNoMarkAndNoWait() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        // Wired as the chat wires them, and muted after the release.
+        var readsAloud = true
+        SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
+
+        let nonce = harness.willSend("what is the capital of France")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: readsAloud).spoken)
+        harness.markSpoken(nonce)
+        XCTAssertEqual(speaker.awaiting, [nonce])
+        readsAloud = false
+
+        await harness.retry()
+        XCTAssertEqual(speaker.report.speaks, 0, "a muted reply was read")
+        XCTAssertFalse(speaker.speaking)
+        XCTAssertEqual(speaker.awaiting, [], "the wait outlived the reply nobody will hear")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "the mark outlived it too")
+    }
+
+    /// What the look calls a model is what the notice says is being asked: the mind renames Opus,
+    /// and the turn in flight says the new name.
+    func testTheAskingNoticeSaysTheLooksNameForTheModel() async throws {
+        let transport = ScriptedTransport((200, reply("Paris.")))
+        let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(), transport: transport)
+        harness.model = .opus
+        var mind = Look.Mind()
+        mind.opus = "Opus 5.5"
+        harness.mind = mind
+        let seen = Said()
+        transport.duringRequest = { await MainActor.run { seen.add(harness.status ?? "") } }
+        await harness.send("what is the capital of France")
+        XCTAssertEqual(seen.texts, ["Asking Opus 5.5…"])
+        XCTAssertEqual(harness.name(of: .sonnet), "Sonnet", "a name the look did not set changed")
+    }
+
+    /// Muted, what the guest writes of a spoken turn's reply is not read as it comes; with the
+    /// mute lifted while it is still being written, it is read from its first sentence, since
+    /// nothing of it has been.
+    func testAMutedReplyIsNotReadAsItIsWrittenAndIsOnceTheMuteIsLifted() async throws {
+        let harness = harness(InMemoryRecordDatabase(), defaults: makeDefaults(),
+                              transport: ScriptedTransport((200, reply("Paris."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        var readsAloud = false
+        SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
+        let nonce = harness.willSend("what is the capital of France")
+        harness.markSpoken(nonce)
+
+        harness.onWriting?("Paris is the capital. ", nonce)
+        XCTAssertFalse(speaker.speaking, "read as it was written, muted")
+        XCTAssertEqual(speaker.report.speaks, 0)
+        readsAloud = true
+        harness.onWriting?("Paris is the capital. It is on the Seine. ", nonce)
+        XCTAssertTrue(speaker.speaking, "the mute was lifted and nothing is read")
+        XCTAssertEqual(speaker.report.speaks, 1)
+    }
+
+    /// A reply being read as it is written, stopped by the mute, stays stopped: what the guest
+    /// writes while muted does not make the speaker forget it stopped that reply, so lifting the
+    /// mute does not begin it again from the top, and when it lands it is not read either, with
+    /// its mark and its wait both gone.
+    func testAReplyStoppedByTheMuteIsNotBegunAgainWhenTheMuteIsLifted() async throws {
+        let db = InMemoryRecordDatabase()
+        let defaults = makeDefaults()
+        let harness = harness(db, defaults: defaults,
+                              transport: ScriptedTransport((200, reply("One sentence. Two of them. Three."))))
+        let seams = Seams()
+        let center = NotificationCenter()
+        let audio = AudioSession(center: center, configure: seams.configure, isActive: { true })
+        let speaker = try await makeSpeaker(seams, audio, center)
+        defer { speaker.stop() }
+        var readsAloud = true
+        SpokenReply.wire(harness: harness, speaker: speaker) { readsAloud }
+        let nonce = harness.willSend("count sentences")
+        XCTAssertTrue(speaker.awaitReply(nonce, readAloud: readsAloud).spoken)
+        harness.markSpoken(nonce)
+
+        harness.onWriting?("One sentence. ", nonce)
+        XCTAssertTrue(speaker.speaking, "the reply is not read as it is written")
+        let begun = speaker.report.speaks
+
+        // The mute, pressed: what is being read stops, and what was waited for is let go.
+        readsAloud = false
+        SpokenReply.muteChanged(readsAloud: false, speaker: speaker)
+        XCTAssertFalse(speaker.speaking, "muting did not stop the reply being read")
+        XCTAssertEqual(speaker.awaiting, [], "muting left the wait standing")
+        harness.onWriting?("One sentence. Two of them. ", nonce)
+        XCTAssertFalse(speaker.speaking)
+
+        // Lifted, with the reply still being written and then landing.
+        readsAloud = true
+        SpokenReply.muteChanged(readsAloud: true, speaker: speaker)
+        harness.onWriting?("One sentence. Two of them. Three. ", nonce)
+        XCTAssertFalse(speaker.speaking, "the reply the mute stopped was begun again")
+        await harness.retry()
+        XCTAssertFalse(speaker.speaking, "the reply the mute stopped was read when it landed")
+        XCTAssertEqual(speaker.report.speaks, begun, "it was begun again from the top")
+        XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "its mark outlived it")
+        XCTAssertEqual(speaker.awaiting, [])
+    }
+
+    /// A question asked aloud, with replies not muted, is that question's answer when it lands,
+    /// and leaving it unread would strand its mark and its hold. What ends the hold is `speak`
+    /// taking the reply, which is `testTheKeeperDoesNotStopBetweenTheWaitAndTheReply`.
+    func testAReplyIsReadWhenItsTurnIsMarkedAndRepliesAreNotMuted() async throws {
         let db = InMemoryRecordDatabase()
         let defaults = makeDefaults()
         let harness = harness(db, defaults: defaults,
@@ -1285,12 +1559,11 @@ final class HarnessIntegrationTests: XCTestCase {
         let said = Said()
         install(harness, speaker, said)
 
-        // The release, with the setting on: the wait is held and the turn marked.
+        // The release, with replies not muted: the wait is held and the turn marked.
         let nonce = harness.willSend("what is the capital of France")
         XCTAssertTrue(speaker.awaitReply(nonce, readAloud: true).spoken)
         harness.markSpoken(nonce)
 
-        // The setting goes off before the reply lands. What it governs is the next release.
         await harness.retry()
         XCTAssertEqual(said.texts, ["Paris."], "the turn was marked, so its reply is read")
         XCTAssertEqual(defaults.stringArray(forKey: "topo.harness.spoken"), nil, "and the mark is cleared")
@@ -1594,6 +1867,44 @@ private func makeSpeaker(_ seams: Seams, _ audio: AudioSession, _ center: Notifi
 }
 
 // MARK: - Doubles
+
+/// Records the bound it was asked for and fails every bounded save.
+private final class BoundAsked: RecordDatabase, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _bounds: [TimeInterval] = []
+    var bounds: [TimeInterval] { lock.withLock { _bounds } }
+    struct RanOut: Error {}
+    private struct Bounded: RecordDatabase {
+        func save(_ records: [Record]) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: RanOut()) }
+        func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { [:] }
+        func query(_ query: RecordQuery) async throws -> [Record] { [] }
+        func records(ofType type: String) async throws -> [Record] { [] }
+    }
+    func answering(within seconds: TimeInterval) -> any RecordDatabase {
+        lock.withLock { _bounds.append(seconds) }
+        return Bounded()
+    }
+    func save(_ records: [Record]) async throws -> [Record] { records }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { [:] }
+    func query(_ query: RecordQuery) async throws -> [Record] { [] }
+    func records(ofType type: String) async throws -> [Record] { [] }
+}
+
+final class RecordingDatabaseTests: XCTestCase {
+    func testTheLeasesBoundReachesTheBaseAndItsFailuresAreNoted() async throws {
+        let base = BoundAsked()
+        let recording = RecordingDatabase(base)
+        let lease = PrimaryLease(database: recording, device: DeviceID("phone"), endpoint: nil, probe: NoSocketProbe(),
+                                 sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        XCTAssertEqual(base.bounds, [LeaseTiming.standard.patience])
+        XCTAssertEqual(LeaseTiming.standard.patience, 4)
+        do {
+            _ = try await lease.acquire()
+            XCTFail("the bounded save should have failed")
+        } catch {}
+        XCTAssertNotNil(recording.lastError, "a bounded request's failure is not on the diagnostics screen")
+    }
+}
 
 /// The in-memory database whose reads throw while told to, as CloudKit's do with no connection.
 private actor ReadFailingDatabase: RecordDatabase {

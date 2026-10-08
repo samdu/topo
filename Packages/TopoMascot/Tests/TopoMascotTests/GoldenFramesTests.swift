@@ -6,13 +6,13 @@ import TopoMascot
 /// The engine against the pinned JavaScript it was ported from, frame for frame.
 ///
 /// `golden.json` is what the reference rendered, made in samdu/experiments by
-/// `topo-mascot-swift/oracle/golden.mjs` from `topo-mascot-engine/topo-engine.js` at f139be1: the
+/// `topo-mascot-swift/oracle/golden.mjs` from `topo-mascot-engine/topo-engine.js` at 240fda1: the
 /// eighteen cells of the engine's own sheet — the four heads idle, the four loads idle, and every
 /// pose but the shelf he rests on (front, walk, corner, sign, building, writing, calendar,
 /// searching, thinking) — each at frames 10, 40 and 65 of the 2.2 s it settles for, which catches
 /// the arms on their way and settled, and yoga, which is the idle cycle's and not an activity, at
 /// three frames into the first excursion (seed 1 makes it yoga); two films of what the app actually
-/// hands over, the four model names one a second and four token counts across the load thresholds
+/// hands over, a model id of each family one a second and four token counts across the load thresholds
 /// while writing, at four frames each; and the idle cycle — the arms' drift on the shelf, a stroll
 /// to the corner and the stay there, yoga, work cutting into a stroll, a corner stay and yoga (on
 /// the way, the work worn, the shelf after), and yoga asked for and not taken. Then all of it again

@@ -367,7 +367,9 @@ class Decisions(unittest.TestCase):
         d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r"}, self.COMMITS)
         self.assertEqual(d["action"], "refused")
         d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r", "commit": " 75af080\n"}, self.COMMITS)
-        self.assertEqual(d["action"], "fixed", "the listed hash itself, whatever space is round it")
+        self.assertEqual(d["action"], "refused", "character for character: space round a listed hash is not that hash")
+        d = janitor.decide_triage(40, "t", {"action": "fixed", "reason": "r", "commit": "75af080"}, self.COMMITS)
+        self.assertEqual(d["action"], "fixed")
 
     def test_a_reason_that_quotes_the_body_is_withheld(self):
         body = "the token is ghp_abcdefghijklmnopqrstuvwxyz0123 and the code is 482913, at 14 Flat Street"
@@ -524,7 +526,10 @@ if tool == "gh":
         i = S.get("views", {}).get(a[2])
         if i is None: print("issue not found", file=sys.stderr); sys.exit(1)
         out(i)
-    if a[:2] in (["issue", "edit"], ["issue", "close"]): sys.exit(S.get("issue_exit", 0))
+    if a[:2] in (["issue", "edit"], ["issue", "close"]):
+        if S.get("issue_snapshot"):
+            import shutil; shutil.copy(os.environ["JANITOR_STATE"], S["issue_snapshot"])
+        sys.exit(S.get("issue_exit", 0))
 elif tool == "claude":
     asked = sys.stdin.read()
     with open(os.environ["FAKE_LOG"] + ".asked", "a") as f: f.write(asked + "\n=====\n")
@@ -1027,6 +1032,54 @@ class WholePass(unittest.TestCase):
         self.assertEqual(p.returncode, 2)
         self.assertIn(f"--triage takes at most {janitor.TRIAGE_MAX} issues", p.stderr)
         self.assertEqual(calls, "", "nothing is read or asked")
+
+    def test_an_issue_commented_on_since_the_list_was_read_is_left_as_triaged_by_hand(self):
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Answered meanwhile")],
+                          views={"40": dict(self.view(40), comments=[{"author": {"login": "samdu"}, "body": "planned in P9"}])},
+                          answers={"40": {"object": {"action": "parked", "reason": "r"}}})
+        p, calls = self.run_pass(s, triage=True)
+        self.assertNotIn("claude", calls)
+        self.assertNotIn("gh issue edit", calls)
+        self.assertEqual(Bridge.received, [])
+
+    def test_the_action_line_is_on_disk_before_the_call_that_does_it(self):
+        snap = os.path.join(self.work, "at-the-edit.json")
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(40, "Labelled")], views={"40": self.view(40, "Labelled")},
+                          answers={"40": {"object": {"action": "next", "reason": "r"}}}, issue_snapshot=snap)
+        self.run_pass(s, triage=True)
+        with open(snap) as f:
+            self.assertEqual(json.load(f)["pending"], ["triage: labelled #40 Labelled triaged and next: r"],
+                             "a pass killed after the label still has its line to deliver")
+        self.assertEqual(self.triage_lines(), ["- triage: labelled #40 Labelled triaged and next: r"], "and it is said once")
+
+    def test_an_answer_is_recorded_under_the_fingerprint_of_the_issue_as_it_was_asked_about(self):
+        later = ago(timedelta(minutes=2))
+        s = self.scripted(prs=[], worktrees=self.QUIET, issues=[issue(45, "Moved")], views={"45": dict(self.view(45, "Moved"), updatedAt=later)},
+                          answers={"45": {"object": {"action": "ask", "reason": "q"}}})
+        self.run_pass(s, triage=True)
+        self.assertEqual(self.triage_lines(), ["- triage: #45 Moved is put to Sam: q"])
+        self.assertEqual(self.issue_lines(), [], "in the pass that asked, its triage line stands in for its untriaged line")
+        s["issues"] = [issue(45, "Moved", updatedAt=later)]
+        n = len(Bridge.received)
+        p, calls = self.run_pass(s, triage=True)
+        self.assertNotIn("claude", calls, "the next list shows the issue as it was asked about, and it is not asked again")
+        self.assertEqual([l for m in Bridge.received[n:] for l in m["body"]["text"].splitlines() if "triage" in l], [])
+
+    def test_triage_by_number_changes_nothing_when_the_report_is_full_or_one_waits(self):
+        s = self.scripted(views={"40": self.view(40)}, answers={"40": {"object": {"action": "next", "reason": "r"}}})
+        with open(self.state, "w") as f:
+            json.dump(dict(self.seed, pending=[f"pr line {i}" for i in range(janitor.PENDING_MAX)]), f)
+        p, calls = self.run_pass(s, extra=["--triage", "40"])
+        self.assertNotIn("claude", calls)
+        self.assertNotIn("gh issue", calls)
+        self.assertIn("triage: #40 and what follows are left", p.stderr)
+        self.assertEqual(Bridge.received[-1]["body"]["text"].splitlines()[1:], [f"- pr line {i}" for i in range(janitor.PENDING_MAX)])
+        with open(self.state, "w") as f:
+            json.dump(dict(self.seed, undelivered=[{"id": "m1", "at": "2026-09-26T19:00Z", "lines": ["an earlier line"]}]), f)
+        Bridge.status = 503
+        p, calls = self.run_pass(s, extra=["--triage", "40"])
+        self.assertNotIn("claude", calls)
+        self.assertNotIn("gh issue", calls)
 
     def test_a_pass_asks_about_at_most_the_cap(self):
         ns = range(40, 40 + janitor.TRIAGE_MAX + 3)

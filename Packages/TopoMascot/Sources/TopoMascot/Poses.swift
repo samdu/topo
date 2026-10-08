@@ -113,9 +113,11 @@ let FOLDS: [[(Double, Double)]] = [
     [(0.6, 0.4), (0.75, 0.05), (0.6, -0.25)],
 ]
 
-/// A model's family picks the head; the context window's fill picks the load.
+/// A model's family picks the head: sonnet the first level, as haiku and any name with no family
+/// in it do, opus the second, fable the third. The fourth, the brain, is no model's: only `level`
+/// reaches it. The context window's fill picks the load.
 public func levelForModel(_ model: String) -> Double {
-    Double(1 + max(0, ["haiku", "sonnet", "opus", "fable"].firstIndex { model.lowercased().contains($0) } ?? -1))
+    Double(1 + max(0, ["sonnet", "opus", "fable"].firstIndex { model.lowercased().contains($0) } ?? -1))
 }
 public func loadForTokens(_ tokens: Double) -> Load {
     tokens > 300_000 ? .untrusted : tokens >= 250_000 ? .reset : tokens >= 200_000 ? .warning : .default
