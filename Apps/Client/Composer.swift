@@ -153,7 +153,7 @@ struct Composer: View {
         .containerRelativeFrame(.horizontal) { width, _ in
             ComposerGeometry.width(look.composer, draft: look.draft, column: look.transcript.maximumLineWidth, in: width, row: row)
         }
-        .padding(.bottom, look.composer.bottomPadding)
+        .padding(.bottom, foot)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
         .onAppear { writing = draft.typing }
@@ -268,7 +268,15 @@ struct Composer: View {
     /// and never less than the well can be pressed in. Nil at rest and with no room measured.
     private var tallest: CGFloat? {
         guard draft.row, let room else { return nil }
-        return max(room - look.composer.bottomPadding, Look.Composer.Well.pressable)
+        return max(room - foot, Look.Composer.Well.pressable)
+    }
+
+    /// The room kept under the pane: the look's, and in a row with a room to stay inside no
+    /// more of that room than leaves the well pressable.
+    private var foot: CGFloat {
+        let asked = look.composer.bottomPadding
+        guard draft.row, let room else { return asked }
+        return min(asked, max(room - Look.Composer.Well.pressable, 0))
     }
 
     /// The most lines the field takes before it scrolls inside itself: the look's, and no more
@@ -283,7 +291,7 @@ struct Composer: View {
         // A row's height of the room is left to the transcript, which has a least height of its
         // own: a pane and a transcript that together outgrow the column are pushed past both
         // of its ends, under the bar and under the keyboard.
-        return ComposerPlan.lines(most: most, room: room - look.composer.bottomPadding - band, band: band, line: textLine)
+        return ComposerPlan.lines(most: most, room: room - foot - band, band: band, line: textLine)
     }
 
     /// One line of the field, which is not drawn: the height the row is laid out round, so a

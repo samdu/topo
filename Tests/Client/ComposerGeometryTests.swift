@@ -596,7 +596,7 @@ final class ComposerGeometryTests: XCTestCase {
     /// The chat's column as drawn in a window of `size`, with the pane, its parts, the well and
     /// the field's own text view, each in the window's space.
     private func column(_ look: Look, row: Bool = true, card: Bool = false, line: Bool = false,
-                        words: String = "bins", size: CGSize = above) throws -> Drawn {
+                        words: String = "bins", size: CGSize = above, type: DynamicTypeSize = .large) throws -> Drawn {
         let drawn = Drawn()
         let view = ChatColumn {
             Color.clear
@@ -633,6 +633,7 @@ final class ComposerGeometryTests: XCTestCase {
         }
         .ignoresSafeArea()
         .environment(\.look, look)
+        .environment(\.dynamicTypeSize, type)
         try hosted(view, size: size) { window in
             func find(_ view: UIView) -> UITextView? { (view as? UITextView) ?? view.subviews.lazy.compactMap(find).first }
             if let text = find(window) { drawn.named["text"] = text.convert(text.bounds, to: nil) }
@@ -658,6 +659,8 @@ final class ComposerGeometryTests: XCTestCase {
             ("draft.slot 150, the card and the line", look { $0.draft.slot = 150 }, true, "bins"),
             ("composer.verticalInset 4000", look { $0.composer.verticalInset = 4000 }, false, "bins"),
             ("composer.well.size 200, the card and the line", look { $0.composer.well.size = 200 }, true, "bins"),
+            ("composer.bottomPadding 4000", look { $0.composer.bottomPadding = 4000 }, false, "bins"),
+            ("composer.bottomPadding 200, the card and the line", look { $0.composer.bottomPadding = 200 }, true, "bins"),
             ("draft.maximumLines 20, a long draft, the card and the line", look { $0.draft.maximumLines = 20 }, true, Self.long),
         ]
         for (name, look, siblings, words) in cases {
@@ -667,6 +670,21 @@ final class ComposerGeometryTests: XCTestCase {
             XCTAssertLessThanOrEqual(whole.height, Self.above.height + 0.5, "\(name): the column is taller than its screen")
             XCTAssertLessThanOrEqual(pane.height, Self.above.height + 0.5, "\(name): the pane is taller than the room")
             XCTAssertGreaterThanOrEqual(pane.minY, whole.minY - 0.5, "\(name): the pane is past the column's top")
+            XCTAssertLessThanOrEqual(pane.maxY, whole.maxY + 0.5, "\(name): the pane is past the column's foot")
+        }
+    }
+
+    /// At the text sizes past the largest, with a draft longer than the field's lines: the pane
+    /// is inside the column alone at every size, and with the card and the line to the third
+    /// accessibility size. Past that the card and the line leave less than the well's reach.
+    func testThePaneStaysInsideTheColumnAtTheAccessibilityTextSizes() throws {
+        let sizes: [(DynamicTypeSize, Bool)] = [(.accessibility1, false), (.accessibility1, true), (.accessibility3, false),
+                                                (.accessibility3, true), (.accessibility5, false)]
+        for (type, siblings) in sizes {
+            let drawn = try column(look { _ in }, card: siblings, line: siblings, words: Self.long, type: type)
+            let pane = try XCTUnwrap(drawn.pane, "\(type): no pane")
+            XCTAssertGreaterThanOrEqual(pane.minY, -0.5, "\(type), siblings \(siblings): the pane is past the column's top")
+            XCTAssertLessThanOrEqual(pane.maxY, Self.above.height + 0.5, "\(type), siblings \(siblings): the pane is past the column's foot")
         }
     }
 
@@ -707,6 +725,13 @@ final class ComposerGeometryTests: XCTestCase {
             let pane = try XCTUnwrap(drawn.pane)
             XCTAssertGreaterThanOrEqual(try XCTUnwrap(drawn.parts[.more]).minX, pane.minX - 0.5, "\(spacing): the control is past the pane's leading end")
             XCTAssertLessThanOrEqual(try XCTUnwrap(drawn.parts[.keyboard]).maxX, pane.maxX + 0.5, "\(spacing): the way to the keyboard is past the pane's end")
+        }
+        // A mark at the largest font the reader takes is its slot's size at rest too.
+        let drawn = try column(look { $0.composer.flank.font = .system(size: 400) }, row: false, size: CGSize(width: 320, height: 568 - 20 - 44))
+        let slot = Look().composer.flank.slot
+        for part in [ComposerPart.more, .keyboard] {
+            let mark = try XCTUnwrap(drawn.parts[part])
+            XCTAssertLessThanOrEqual(max(mark.width, mark.height), slot + 0.5, "\(part): a mark at rest is larger than its slot")
         }
     }
 
