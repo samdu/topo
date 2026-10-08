@@ -1024,8 +1024,8 @@ jobs:
   #                         is a required check on main, and one that passed
   #                         with no verdict would let the PR past branch
   #                         protection on its own, whatever this run concluded.
-  #                         (A suite or post_feedback red beside a reviewer
-  #                         that did conclude leaves reviewer_ran red too, and
+  #                         (post_feedback red beside a reviewer that did
+  #                         conclude leaves reviewer_ran red too, and
   #                         review_gate then says what the verdict was.)
   #   review_gate    red, reviewer_ran green
   #                       ⇒ the reviewer ran and its verdict blocks, or it
