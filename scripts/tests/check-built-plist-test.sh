@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT
 
 keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription
       NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription
-      NSLocalNetworkUsageDescription)
+      NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription)
 
 # A product with everything the check reads.
 make_app() {

@@ -16,8 +16,8 @@
 # Info.plist would beat it silently, so every build would carry the same number.
 #
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
-# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location or
-# HomeKit with no string saying why, and nothing shows it until the first call that asks.
+# the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location,
+# HomeKit or Photos with no string saying why, and nothing shows it until the first call that asks.
 #
 # `NSLocalNetworkUsageDescription` is one of them: a control's request to a device on the home
 # network is what asks for local network access. `NSAllowsArbitraryLoads` under
@@ -105,7 +105,7 @@ done
 
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
            NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \
-           NSLocalNetworkUsageDescription; do
+           NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription; do
     value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
     if [ -z "${value//[[:space:]]/}" ]; then
         echo "$app/Info.plist has no $key; the first tool call that asks for it would end the app" >&2
@@ -160,5 +160,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' six usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

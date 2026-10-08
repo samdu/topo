@@ -58,6 +58,7 @@
 		1C49C1D14312256AA875AB85 /* accessoryInline-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 627B4F992CADC996107E080C /* accessoryInline-dark.png */; };
 		1D140B525C65657092DF3B10 /* TopoBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2093D9815FF009868258903B /* TopoBadge.swift */; };
 		1D4C9A77699BCA4EBD01C452 /* TopoBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2093D9815FF009868258903B /* TopoBadge.swift */; };
+		1D5A416568CC257DD6F51F1D /* HomeFile.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1331DD9A0C14E9AC8FDD78E /* HomeFile.swift */; };
 		1D73AAE6A762D9EB73E58C16 /* Speaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18A1A7F63DF3D04E332620C0 /* Speaker.swift */; };
 		1E6472BE7B0F51AC2B8B0D30 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		1E726715C9BE92C093BC2932 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
@@ -118,12 +119,14 @@
 		3DACBB555F2EC78AAE73038D /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */; };
 		3E0191DE9AE9C06EF5B40374 /* models.json in Resources */ = {isa = PBXBuildFile; fileRef = D7E1A5F0E00768D69191A35A /* models.json */; };
 		3E4DF9BB0BB232BB35382935 /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
+		3E623C9ECC3D2014C7EAB9A9 /* FilesTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C9781748E990C71B5291594 /* FilesTool.swift */; };
 		3EDEA0AE55B3392DF2489188 /* Vocabulary.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2DC2072C5D784DECA9AEAE0 /* Vocabulary.swift */; };
 		3F313B39A4E9D56573A14C46 /* TurnRowRenderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D340E2EBD4E7079577777054 /* TurnRowRenderTests.swift */; };
 		3F631DF7F5E2E65CCCC2C53F /* RootfsInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3A3C4700E7D184EF8B26C0A /* RootfsInstallerTests.swift */; };
 		3FD6601DD9ABAC3CC53FD7B5 /* TopoTurn in Frameworks */ = {isa = PBXBuildFile; productRef = FE39E35328B7F68962D1C4D7 /* TopoTurn */; };
 		401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C9A782EE9118805036640C7 /* ReplayTests.swift */; };
 		40BC1BBB8875382EE324637F /* DraftRowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */; };
+		40E23CCF71FAD376F271311A /* PhotosToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DA33EA8462B1B0879858056 /* PhotosToolTests.swift */; };
 		4149E2850FF4A49832575A2D /* VaultDownloadsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06052E671D055E9B658BCFAE /* VaultDownloadsTests.swift */; };
 		41A8C81F4F27B0107E5170B3 /* accessoryCircular-light.png in Resources */ = {isa = PBXBuildFile; fileRef = 6C2CA7A5988383E398431185 /* accessoryCircular-light.png */; };
 		422EFA35BED87AC91682AF97 /* StreamJSONTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3103735350B8C5C4A6CE6F11 /* StreamJSONTests.swift */; };
@@ -207,6 +210,7 @@
 		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
+		77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */; };
 		788F2C849A097A30DF3EE412 /* SurfaceReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
@@ -404,6 +408,7 @@
 		DB93D682AD7474FEACC07E85 /* LozengeControlsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD9D8E7E355BCF529897DB99 /* LozengeControlsTests.swift */; };
 		DBF301F96AA4B4AB1BD70913 /* LocationTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84E8FFDC241EE10C721569CE /* LocationTool.swift */; };
 		DC25633B35DCEE9FC4CAF4DA /* MascotPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D347C50B63441358B49281F4 /* MascotPlacementTests.swift */; };
+		DC666B236B6D9E0AAB52CF9F /* PhotosTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F58195D812623D0E6E9353 /* PhotosTool.swift */; };
 		DD64D1E2A148897696D8D976 /* MediaServicesResetTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07CEEB7CCB0CBAF9BBB7D520 /* MediaServicesResetTests.swift */; };
 		DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */; };
 		DD907806586C00822627ED3D /* WidgetStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8108B3927AEA30E13C582080 /* WidgetStoreTests.swift */; };
@@ -561,6 +566,7 @@
 		11800CD3827F773B71C8B1B7 /* QRImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QRImage.swift; sourceTree = "<group>"; };
 		12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadAloudTests.swift; sourceTree = "<group>"; };
 		12EC0E03337F0E06A56F49CE /* systemMedium-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemMedium-dark.png"; sourceTree = "<group>"; };
+		12F58195D812623D0E6E9353 /* PhotosTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotosTool.swift; sourceTree = "<group>"; };
 		13B1C43B8F1C775A87CD4F70 /* ContactsTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContactsTool.swift; sourceTree = "<group>"; };
 		13ECC73FF9E6B054343D56C5 /* TopoWatch.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TopoWatch.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		168BFCB3EC9C31AD43D68959 /* NextTurn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextTurn.swift; sourceTree = "<group>"; };
@@ -569,6 +575,7 @@
 		18A1A7F63DF3D04E332620C0 /* Speaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speaker.swift; sourceTree = "<group>"; };
 		1A7B76958213F991C66478F1 /* DefaultSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DefaultSurface.swift; sourceTree = "<group>"; };
 		1AF008F3C113182739CEB6D7 /* SignOutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignOutTests.swift; sourceTree = "<group>"; };
+		1C9781748E990C71B5291594 /* FilesTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesTool.swift; sourceTree = "<group>"; };
 		1D550B30D535A628FF48FCC4 /* WidgetTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetTool.swift; sourceTree = "<group>"; };
 		1DABB17BCD6602885282D24F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		1FBDF863613C6427982D813B /* accessoryCircular.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = accessoryCircular.json; sourceTree = "<group>"; };
@@ -638,6 +645,7 @@
 		5C412163D6089D2EB33C5B57 /* MapsToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapsToolTests.swift; sourceTree = "<group>"; };
 		5C5D5EA3AC974059B62B6B47 /* NextTurnTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NextTurnTests.swift; sourceTree = "<group>"; };
 		5D8D9234166E53AA4FC71B31 /* TopoUserlandBrakeTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUserlandBrakeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		5DA33EA8462B1B0879858056 /* PhotosToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotosToolTests.swift; sourceTree = "<group>"; };
 		5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestConcurrencyTests.swift; sourceTree = "<group>"; };
 		5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeGuestTests.swift; sourceTree = "<group>"; };
 		5FA3798B7F6069020E5A4DA0 /* womble.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = womble.js; sourceTree = "<group>"; };
@@ -741,6 +749,7 @@
 		BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabularyTests.swift; sourceTree = "<group>"; };
 		BEE1B3C3847A7B4EB6616526 /* EarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EarTests.swift; sourceTree = "<group>"; };
 		C07F833992D5F5D8B519F030 /* systemMedium-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemMedium-light.png"; sourceTree = "<group>"; };
+		C1331DD9A0C14E9AC8FDD78E /* HomeFile.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeFile.swift; sourceTree = "<group>"; };
 		C273B9B05389AA1C5777F528 /* TopoWidgets.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWidgets.swift; sourceTree = "<group>"; };
 		C29E502597377F5D2A77876B /* womble.css */ = {isa = PBXFileReference; lastKnownFileType = text.css; path = womble.css; sourceTree = "<group>"; };
 		C3A55F344E7F7783741D58B4 /* accessoryRectangular.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = accessoryRectangular.json; sourceTree = "<group>"; };
@@ -817,6 +826,7 @@
 		F52168070427DC1C05968A95 /* TranscriptStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TranscriptStoreTests.swift; sourceTree = "<group>"; };
 		F59AA6D01DD8D8703F00072C /* LookScreenshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookScreenshots.swift; sourceTree = "<group>"; };
 		F5A13FD41A080E7B11883AD6 /* StatusNoticeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatusNoticeTests.swift; sourceTree = "<group>"; };
+		F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilesToolTests.swift; sourceTree = "<group>"; };
 		FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioSession.swift; sourceTree = "<group>"; };
 		FDE1B5AC935DE7F86F1C6126 /* ConnectionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConnectionsView.swift; sourceTree = "<group>"; };
 		FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessTests.swift; sourceTree = "<group>"; };
@@ -1206,13 +1216,16 @@
 				13B1C43B8F1C775A87CD4F70 /* ContactsTool.swift */,
 				667A80E4EEE18FB3F1494035 /* ControlTool.swift */,
 				93B5621388A948B9C5F0BD7B /* EventKitTools.swift */,
+				1C9781748E990C71B5291594 /* FilesTool.swift */,
 				9FFBCB76953EE398AF63FB9D /* GitHubTool.swift */,
+				C1331DD9A0C14E9AC8FDD78E /* HomeFile.swift */,
 				EB40574A451BCD56247E1E50 /* HomeTool.swift */,
 				84E8FFDC241EE10C721569CE /* LocationTool.swift */,
 				D237ABF387E8A76064A494FA /* LookTool.swift */,
 				CF31113B87FCBEE95414EAD2 /* MapsTool.swift */,
 				5AEBDE5DBDF558DA07A77435 /* NotifyTool.swift */,
 				570E29C16DA2E655E25483F5 /* PhoneTool.swift */,
+				12F58195D812623D0E6E9353 /* PhotosTool.swift */,
 				38D69076CBD5D984124A297F /* SecretTool.swift */,
 				1D550B30D535A628FF48FCC4 /* WidgetTool.swift */,
 			);
@@ -1237,6 +1250,7 @@
 				F3D543E552C5A46713503953 /* DebugRunTests.swift */,
 				17DE2B33A2255E112B603120 /* DraftTests.swift */,
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
+				F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
 				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
 				7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */,
@@ -1271,6 +1285,7 @@
 				6C3603530275DA0379CCB96F /* PanePresenceTests.swift */,
 				CEDD5FD329B5A00DAD3FC0A8 /* PerfRunTests.swift */,
 				DFD4F34ACF1BC2A1F5010F79 /* PhoneToolsTests.swift */,
+				5DA33EA8462B1B0879858056 /* PhotosToolTests.swift */,
 				61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */,
 				12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */,
 				9C9A782EE9118805036640C7 /* ReplayTests.swift */,
@@ -2196,6 +2211,7 @@
 				EE1815E88BB3116D66FAEB4D /* DebugRunTests.swift in Sources */,
 				3206D9DBBF68C9BB6CB43B2B /* DraftTests.swift in Sources */,
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
+				77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
 				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
 				8EA97D2374B9441BEDDBF412 /* GuestImageStoreTests.swift in Sources */,
@@ -2230,6 +2246,7 @@
 				98351458B1674AC1309DA106 /* PanePresenceTests.swift in Sources */,
 				B992585D5C4DDF8B56FBF510 /* PerfRunTests.swift in Sources */,
 				B00ABBD6436E3FC4EBE99846 /* PhoneToolsTests.swift in Sources */,
+				40E23CCF71FAD376F271311A /* PhotosToolTests.swift in Sources */,
 				51836B7F6FB4BD51CBA11825 /* PressRefusalTests.swift in Sources */,
 				75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */,
 				401B6A2FC58B0C8B9816E808 /* ReplayTests.swift in Sources */,
@@ -2307,6 +2324,7 @@
 				05181E51E2692924DC542776 /* DiagnosticsView.swift in Sources */,
 				366808E32D484A6F8AB966CE /* Ear.swift in Sources */,
 				39364B8313D4E6AADE4CBF6B /* EventKitTools.swift in Sources */,
+				3E623C9ECC3D2014C7EAB9A9 /* FilesTool.swift in Sources */,
 				01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */,
 				D4813369C6BE1682D0651573 /* GitHubTool.swift in Sources */,
 				C08A5D6C1841DCA6CFD4BA4F /* GuestBridge.swift in Sources */,
@@ -2315,6 +2333,7 @@
 				DFE6FD39A75F554D4799ED75 /* GuestResident.swift in Sources */,
 				CC49A0C7A2E6F3B755DD2ABB /* GuestResolver.swift in Sources */,
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
+				1D5A416568CC257DD6F51F1D /* HomeFile.swift in Sources */,
 				C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */,
 				DBF301F96AA4B4AB1BD70913 /* LocationTool.swift in Sources */,
 				3823B3829FF33312ACBCE0B1 /* Look.swift in Sources */,
@@ -2338,6 +2357,7 @@
 				571D43A8EC3AE36CAF726E6F /* OnePassword.swift in Sources */,
 				C66ECBF53D8F849FA6442A18 /* PerfRun.swift in Sources */,
 				9294C1318A365C25A2DD50C4 /* PhoneTool.swift in Sources */,
+				DC666B236B6D9E0AAB52CF9F /* PhotosTool.swift in Sources */,
 				CB95DF525A42DFB75D528726 /* PrimaryReader.swift in Sources */,
 				815C061D9BB10A6B9FFCEB3B /* RoleSelector.swift in Sources */,
 				1BEC39172B57A4B26C11F530 /* RootView.swift in Sources */,
@@ -2495,6 +2515,8 @@
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Topo sends the requests your controls make to devices on your home network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Topo checks where you are when you ask something that depends on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Topo saves a picture to your photos when you ask it to.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Topo finds and looks at your photos when you ask it to, and saves a picture when you ask for one.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Topo reads and adds your reminders when you ask it to.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
@@ -2748,6 +2770,8 @@
 				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Topo sends the requests your controls make to devices on your home network.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Topo checks where you are when you ask something that depends on it.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Topo listens when you press the microphone, so it can hear what you forgot.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Topo saves a picture to your photos when you ask it to.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Topo finds and looks at your photos when you ask it to, and saves a picture when you ask for one.";
 				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Topo reads and adds your reminders when you ask it to.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
