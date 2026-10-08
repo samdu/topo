@@ -511,19 +511,20 @@ import TopoAuth
         #expect(logs.lines.contains { $0.contains("refused: the path is still percent-encoded") })
     }
 
-    /// A pathological target is refused at once: decoding it layer by layer would read the whole
-    /// target once per layer.
+    /// A pathological target is refused at the bound: decoding it layer by layer would read the
+    /// whole target once per layer, and one decoded to its end is not refused at all. Held by the
+    /// refusal and its reason and not by a stopwatch, which under the one-thread pool the suite
+    /// runs on times the tests beside this one.
     @Test func aDeeplyEncodedTargetIsRefusedWithoutDecodingItAll() async throws {
         let target = "/v1/%25" + String(repeating: "25", count: 30_000)
         let upstream = StubUpstream()
-        let (proxy, port, _) = try await startedProxy(upstream)
+        let (proxy, port, logs) = try await startedProxy(upstream)
         defer { Task { await proxy.stop() } }
         let client = try await WireClient(port: port)
-        let started = ContinuousClock.now
         try await client.send(post(target, body: #"{"model":"claude-opus-5"}"#))
         #expect(try await client.readResponse().head.status == 400)
-        #expect(ContinuousClock.now - started < .seconds(1))
         #expect(upstream.requests.isEmpty)
+        #expect(logs.lines.contains { $0.contains("refused: the path is still percent-encoded after \(Forwarder.decodePasses) decodes") })
     }
 
     /// Only the messages endpoint is the pin's: another path's body goes through as it was sent.
