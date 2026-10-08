@@ -299,7 +299,8 @@ enum Markdown {
     }
 
     /// The image `written` is, when it is one: `![alt](source)` or `![alt](<source>)`, with a
-    /// title or without, and whatever words follow it.
+    /// title or without, and whatever words follow it. A source not in angle brackets may hold
+    /// parentheses that balance, as CommonMark has it: `charts/plot(1).png` is one source.
     private static func image(writtenAs written: ArraySlice<UInt8>) -> Kind? {
         guard written.starts(with: Array("![".utf8)) else { return nil }
         let text = String(decoding: written.dropFirst(2), as: UTF8.self)
@@ -312,7 +313,12 @@ enum Markdown {
             guard let end = rest.firstIndex(of: ">") else { return nil }
             source = rest[..<end]
         } else {
-            source = rest.prefix(while: { $0 != ")" && $0 != " " && $0 != "\t" })
+            var open = 0
+            source = rest.prefix(while: { character in
+                if character == "(" { open += 1 }
+                if character == ")" { open -= 1 }
+                return open >= 0 && character != " " && character != "\t"
+            })
         }
         guard !source.isEmpty else { return nil }
         return .image(source: source.replacingOccurrences(of: " ", with: "%20"),

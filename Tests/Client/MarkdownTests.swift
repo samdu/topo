@@ -333,6 +333,9 @@ final class MarkdownTests: XCTestCase {
         // A source in angle brackets, and one escaped so that it is no image at all.
         XCTAssertEqual(pictured("[![a](<my chart.png>)](https://example.com)"), ["a", "image a <- my%20chart.png"])
         XCTAssertEqual(pictured("[![a](c.png \"A title\")](https://example.com)"), ["a", "image a <- c.png"])
+        // Parentheses that balance are part of a source, as they are of one not in a link.
+        XCTAssertEqual(pictured("[![chart](charts/plot(1).png)](https://example.com)"), ["chart", "image chart <- charts/plot(1).png"])
+        XCTAssertEqual(pictured("![chart](charts/plot(1).png)"), ["image chart <- charts/plot(1).png"])
     }
 
     /// A reply of the shapes that begin like a linked image and never end is read as fast as
