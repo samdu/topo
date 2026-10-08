@@ -65,8 +65,13 @@ struct RemindersTool: Tool {
     let name = "reminders"
     let summary = "the person's reminders: list them, add one, mark one done"
     let usage = """
+    topo reminders                      the reminders not yet done that have a due date, soonest first, one a line,
+                                        id first, 24 KB of them at most; then, when there are any, a line counting
+                                        the later ones left out and a line counting the ones with no due date
+    topo reminders --all                every reminder not yet done, the ones with no due date last
     topo reminders [--list NAME] [--due-before DATE] [--done]
-                                        the reminders not yet done (with --done, the ones done), one a line, id first
+                                        one list's, the ones due before DATE, or (--done) the ones done: each
+                                        whole, with no due date included unless --due-before is given
     topo reminders lists                the lists, id first, each with its account: --list takes the id,
                                         or Work (iCloud) or Work when that names only one
     topo reminders add TITLE [--list NAME] [--due DATE] [--notes TEXT]
@@ -77,7 +82,9 @@ struct RemindersTool: Tool {
     """
 
     enum Call: Equatable {
-        case reminders(list: String?, before: Date?, done: Bool)
+        /// `undated` false leaves out the ones with no due date and counts them on a last line:
+        /// the call with nothing after it, which is the one that has to fit a screen.
+        case reminders(list: String?, before: Date?, done: Bool, undated: Bool)
         case lists
         case add(title: String, list: String?, due: ToolDates.Reading?, notes: String?)
         case done(id: String)
@@ -86,13 +93,15 @@ struct RemindersTool: Tool {
     func run(_ arguments: [String]) async -> ToolReply {
         await PhoneTool.run(authorizer, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
             switch call {
-            case let .reminders(list, before, done):
+            case let .reminders(list, before, done, undated):
                 var records = try await store.reminders(list: list, done: done)
                 if let before {
                     records = records.filter { ($0.due?.date).map { $0 < before } ?? false }
                 }
                 records.sort { ($0.due?.date ?? .distantFuture, $0.title) < ($1.due?.date ?? .distantFuture, $1.title) }
-                return .ok(PhoneTool.lines(records.map(Self.line), none: "no reminders"))
+                guard !undated else { return .ok(PhoneTool.lines(records.map(Self.line), none: "no reminders")) }
+                let dated = records.filter { $0.due != nil }
+                return .ok(Self.bare(dated.map(Self.line), undated: records.count - dated.count))
             case .lists:
                 return .ok(PhoneTool.lines(try await store.lists().map(\.line), none: "no lists"))
             case let .add(title, list, due, notes):
@@ -105,13 +114,15 @@ struct RemindersTool: Tool {
 
     /// The call the arguments make, or why they make none: nothing here needs the permission.
     func parse(_ arguments: [String]) throws -> Call {
-        let parsed = try Arguments(arguments, options: ["list", "due-before", "due", "notes"], flags: ["done"])
+        let parsed = try Arguments(arguments, options: ["list", "due-before", "due", "notes"], flags: ["done", "all"])
         switch parsed.words.first {
         case nil, "list":
             guard parsed.words.count <= 1 else { throw Misuse("reminders takes no \(parsed.words[1])") }
-            try parsed.only(["list", "due-before", "done"], for: "reminders")
+            try parsed.only(["list", "due-before", "done", "all"], for: "reminders")
+            // Anything that says which part is wanted is answered whole; only the bare call is cut.
+            let whole = !parsed.options.isEmpty || !parsed.flags.isEmpty
             return .reminders(list: parsed.options["list"], before: try PhoneTool.date(parsed.options["due-before"], "--due-before")?.date,
-                              done: parsed.flags.contains("done"))
+                              done: parsed.flags.contains("done"), undated: whole)
         case "lists":
             guard parsed.words.count == 1 else { throw Misuse("reminders lists takes no \(parsed.words[1])") }
             try parsed.only([], for: "reminders lists")
@@ -133,6 +144,34 @@ struct RemindersTool: Tool {
     static func line(_ record: ReminderRecord) -> String {
         PhoneTool.line([record.id, record.title, record.list, due(record.due), record.done ? "done" : nil,
                         record.notes.map { "notes: " + $0.replacingOccurrences(of: "\n", with: " ") }])
+    }
+
+    /// The most the call with nothing after it answers, in bytes, and the room kept in that for
+    /// its two counting lines: under the size at which Claude Code hands the mind a file instead
+    /// of the answer.
+    static let budget = 24 * 1024
+    static let countingRoom = 256
+
+    /// The bare call's answer: the dated lines whole, soonest first, until the next would pass the
+    /// budget; a line counting the later ones that left out; and a line counting the ones with no
+    /// due date. Each counting line is there only when it has something to count.
+    static func bare(_ dated: [String], undated: Int) -> String {
+        var kept: [String] = []
+        var bytes = 0
+        for line in dated {
+            let size = line.utf8.count + 1
+            guard bytes + size <= budget - countingRoom else { break }
+            kept.append(line)
+            bytes += size
+        }
+        var lines = kept
+        if kept.count < dated.count {
+            lines.append("… \(dated.count - kept.count) more due later, cut at 24 KB — topo reminders --due-before DATE lists the ones due before a day")
+        }
+        if undated > 0 {
+            lines.append("\(dated.isEmpty ? "" : "and ")\(undated) with no due date — topo reminders --all lists them")
+        }
+        return PhoneTool.lines(lines, none: "no reminders")
     }
 
     static func due(_ due: ToolDates.Reading?) -> String {
