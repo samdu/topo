@@ -314,25 +314,35 @@ final class MarkdownTests: XCTestCase {
         XCTAssertEqual(pictured(source), ["chart", "image chart <- chart.png"])
         let among = "See [![a chart](/tmp/c.png)](https://example.com/c) and [the docs](https://example.com/c) and ![b](b.png)."
         XCTAssertEqual(links(among), ["a chart -> https://example.com/c", "the docs -> https://example.com/c"])
-        XCTAssertEqual(pictured(among), ["See a chart and the docs and .", "image b <- b.png", "image a chart <- /tmp/c.png"])
-        // Written in code it is words, with no link of its own to hang an image on.
-        XCTAssertEqual(pictured("`[![x](x.png)](https://example.com)` and [x](https://example.org)"),
+        // The images of a block are drawn in the order they were written, linked or not.
+        XCTAssertEqual(pictured(among), ["See a chart and the docs and .", "image a chart <- /tmp/c.png", "image b <- b.png"])
+        XCTAssertEqual(pictured("![one](1.png) [![two](2.png)](https://example.com) ![three](3.png) [![four](4.png)](https://example.com)"),
+                       ["two  four", "image one <- 1.png", "image two <- 2.png", "image three <- 3.png", "image four <- 4.png"])
+        // Written in code it is words, and no image of a link to the same address beside it: an
+        // image is one by where it was written, not by an address it shares.
+        XCTAssertEqual(pictured("`[![x](x.png)](https://example.com)` and [x](https://example.com)"),
                        ["[![x](x.png)](https://example.com) and x"])
+        XCTAssertEqual(pictured("```\n[![x](x.png)](https://example.com)\n```\n\n[x](https://example.com)"),
+                       ["[![x](x.png)](https://example.com)", "x"])
+        XCTAssertEqual(pictured("First [a](https://e.com) link.\n\nThen [![a](x.png)](https://e.com)."),
+                       ["First a link.", "Then a.", "image a <- x.png"])
+        XCTAssertEqual(pictured("\\[![a](x.png)](https://e.com) and [a](https://e.com)"), ["[](https://e.com) and a", "image a <- x.png"])
+        // With no alternative text, with words beside it in the link, and in a table's cell.
+        XCTAssertEqual(pictured("[![](c.png) words](https://example.com)"), [" words", "image  <- c.png"])
+        XCTAssertEqual(pictured("| a |\n|---|\n| [![t](t.png)](https://e.com) é [d](https://e.com) |"), ["", "image t <- t.png"])
         // A source in angle brackets, and one escaped so that it is no image at all.
         XCTAssertEqual(pictured("[![a](<my chart.png>)](https://example.com)"), ["a", "image a <- my%20chart.png"])
         XCTAssertEqual(pictured("[![a](c.png \"A title\")](https://example.com)"), ["a", "image a <- c.png"])
     }
 
-    /// Reading a reply for its linked images is one pass, whatever the reply holds: the shapes
-    /// that begin like one and never end are read no further than a part's limit each.
-    func testAReplyOfUnfinishedLinkedImagesIsReadInOnePass() {
+    /// A reply of the shapes that begin like a linked image and never end is read as fast as
+    /// the parse itself reads it: finding the images adds nothing that grows with them.
+    func testAReplyOfUnfinishedLinkedImagesCostsWhatItsParseCosts() {
         let sources = [
             String(repeating: "[![a](", count: 20_000),
             "[![a](data:image/png;base64," + String(repeating: "QUJD", count: 50_000) + ") and words",
-            String(repeating: "[![", count: 40_000),
-            String(repeating: "[![a](x.png)", count: 20_000),
             String(repeating: "[![a](x.png)](", count: 20_000),
-            "[![" + String(repeating: "a", count: 200_000),
+            String(repeating: "[![a](x.png)](https://e.com) ", count: 5_000),
         ]
         for source in sources {
             let began = Date()
@@ -340,7 +350,6 @@ final class MarkdownTests: XCTestCase {
             let parse = Date()
             _ = try? Markdown.parse(source)
             let alone = Date().timeIntervalSince(parse)
-            // The parse itself is the measure: the reading for linked images adds little to it.
             XCTAssertLessThan(parse.timeIntervalSince(began), max(alone * 4, 0.5), "\(source.prefix(16))… ×\(source.count)")
         }
     }
@@ -434,12 +443,15 @@ final class MarkdownTests: XCTestCase {
             ("my%20chart.png", "my chart.png"), ("/tmp/x.png", "/tmp/x.png"), ("/home/topo/x.png", "/home/topo/x.png"),
             ("/memory/notes/x.png", "/memory/notes/x.png"), ("memory/x.png", "memory/x.png"), ("../x.png", "../x.png"),
             ("~/x.png", "~/x.png"), ("  a.png ", "a.png"),
+            // Only the web's is an address: a colon is a character a name may have.
+            ("chart 12:30.png", "chart 12:30.png"), ("a:b.png", "a:b.png"), ("notes:2026/x.png", "notes:2026/x.png"),
+            ("file:///etc/hosts", "file:///etc/hosts"), ("data:image/png;base64,AAAA", "data:image/png;base64,AAAA"),
+            ("https:///a.png", "https:///a.png"), ("ftp://example.com/a.png", "ftp://example.com/a.png"),
         ]
         for (source, path) in files {
             XCTAssertEqual(Markdown.place(ofImage: source), .file(path), source)
         }
-        for source in ["", "   ", "file:///etc/hosts", "file:a.png", "data:image/png;base64,AAAA", "topo://a.png",
-                       "ftp://example.com/a.png", "https:///a.png", "a%00.png"] {
+        for source in ["", "   ", "a%00.png", String(repeating: "a", count: Markdown.pathLimit + 1)] {
             XCTAssertEqual(Markdown.place(ofImage: source), .neither, source.debugDescription)
         }
         XCTAssertEqual(Markdown.place(ofImage: "https://example.com/i.png"), .web(URL(string: "https://example.com/i.png")!))
@@ -460,11 +472,11 @@ final class MarkdownTests: XCTestCase {
             XCTAssertEqual(drawn, .missing(.onTheWeb(URL(string: source)!)))
             XCTAssertEqual(ReplyImage.settled(source, kept: { asked.add($0); return nil }), .missing(.onTheWeb(URL(string: source)!)))
         }
-        for source in ["file:///etc/hosts", "data:image/png;base64,AAAA", "ftp://example.com/a.png", ""] {
+        for source in ["", "data:image/png;base64," + String(repeating: "QUJD", count: 2000)] {
             let drawn = await ReplyImage.resolve(source, read: read)
-            XCTAssertEqual(drawn, .missing(.neither), source)
+            XCTAssertEqual(drawn, .missing(.neither), source.prefix(24).description)
         }
-        XCTAssertEqual(asked.paths, [], "an address that is not a path was read")
+        XCTAssertEqual(asked.paths, [], "a web address, or what is no path, was read")
 
         for source in ["../x.png", "/etc/hosts", "/tmp/gone.png", "charts/gone.png", "notes.txt"] {
             let drawn = await ReplyImage.resolve(source, read: read)

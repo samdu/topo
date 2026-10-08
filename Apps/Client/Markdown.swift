@@ -107,8 +107,9 @@ enum Markdown {
             return [Block(kind: .paragraph, depth: 0, text: AttributedString(source))]
         }
         var blocks: [Block] = []
-        /// The images written as a link's words, which the parse keeps as that link alone.
-        var linked = linkedImages(in: source)
+        /// The reply as written, a line at a time, which an image written as a link's words is
+        /// read back from (`images(in:lines:)`).
+        let lines = source.utf8.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: false).map(Array.init)
         /// The list items whose marker has been drawn, so a second paragraph of one draws none.
         var marked: Set<Int> = []
         /// The code blocks so far, which numbers the next.
@@ -149,7 +150,8 @@ enum Markdown {
 
         for (intent, range) in parsed.runs[\.presentationIntent] {
             var text = lineBroken(parsed[range])
-            let images = takeImages(from: &text) + linkedImages(in: text, of: &linked)
+            let images = images(in: parsed[range], lines: lines)
+            takeImages(from: &text)
             let components = intent?.components ?? []
             let isList = { (kind: PresentationIntent.Kind) in kind == .orderedList || kind == .unorderedList }
             let depth = components.filter { isList($0.kind) }.count
@@ -231,125 +233,90 @@ enum Markdown {
     static func parse(_ source: String) throws -> AttributedString {
         try AttributedString(markdown: source, options: .init(
             allowsExtendedAttributes: false, interpretedSyntax: .full,
-            failurePolicy: .returnPartiallyParsedIfPossible))
+            failurePolicy: .returnPartiallyParsedIfPossible,
+            // Where each run was written, which is how an image inside a link is found.
+            appliesSourcePositionAttributes: true))
     }
 
-    /// Takes the images out of a block's words, in order, and trims the space they leave at its
-    /// ends. The parse marks an image as a run carrying its source whose characters are its
-    /// alternative text, or the object replacement character when it has none.
-    private static func takeImages(from text: inout AttributedString) -> [Kind] {
-        var images: [Kind] = []
-        var ranges: [Range<AttributedString.Index>] = []
-        for (source, range) in text.runs[\.imageURL] {
-            guard let source else { continue }
-            let alt = String(text[range].characters).replacingOccurrences(of: "\u{FFFC}", with: "")
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            images.append(.image(source: source.relativeString, alt: alt))
-            ranges.append(range)
-        }
-        guard !images.isEmpty else { return [] }
+    /// Takes the images out of a block's words and trims the space they leave at its ends. The
+    /// parse marks an image as a run carrying its source whose characters are its alternative
+    /// text, or the object replacement character when it has none.
+    private static func takeImages(from text: inout AttributedString) {
+        let ranges = text.runs[\.imageURL].compactMap { source, range in source == nil ? nil : range }
+        guard !ranges.isEmpty else { return }
         for range in ranges.reversed() { text.removeSubrange(range) }
         while text.characters.first?.isWhitespace == true { text.characters.removeFirst() }
         while text.characters.last?.isWhitespace == true { text.characters.removeLast() }
-        return images
     }
 
-    /// An image written as a link's words, `[![alt](source)](address)`: its alternative text,
-    /// its source and the link's address, as the reply wrote them.
-    private struct LinkedImage {
-        var alt: String
-        var source: String
-        var address: String
-    }
-
-    /// The images `source` writes as a link's words, in order. The parse keeps such an image
-    /// as its alternative text on the link's run and says nothing of its source, so the source
-    /// is read from the reply as written: the plain form of it, `[![alt](source)](address)`
-    /// on one line with no bracket nested in it. One written another way is still its words
-    /// and its link, and so is one written where it is not a link at all — in code — which
-    /// this cannot tell apart, so it is matched to a link only by that link's own address and
-    /// words (`linkedImages(in:of:)`).
+    /// The images written in one block of the parse, in the order they were written.
     ///
-    /// It is one pass over the reply's bytes: each `[![` is read forward a part at a time, each
-    /// part to a length it may not pass, and a part that does not fit ends that reading there.
-    private static func linkedImages(in source: String) -> [LinkedImage] {
-        guard source.contains("[![") else { return [] }
-        let bytes = Array(source.utf8)
-        let (open, close, round, unround, less, more, bang, slash, line) =
-            (UInt8(ascii: "["), UInt8(ascii: "]"), UInt8(ascii: "("), UInt8(ascii: ")"), UInt8(ascii: "<"),
-             UInt8(ascii: ">"), UInt8(ascii: "!"), UInt8(ascii: "\\"), UInt8(ascii: "\n"))
-        func isSpace(_ byte: UInt8) -> Bool { byte == 0x20 || byte == 0x09 }
-        /// From `at`, the bytes up to the first of `ends`, and where that is: nil when one of
-        /// `never`, a line's end, the text's end or the part's limit comes first.
-        func part(from at: Int, to ends: [UInt8], never: [UInt8], limit: Int) -> (text: String, end: Int)? {
-            var index = at
-            while index < bytes.count, index - at <= limit {
-                let byte = bytes[index]
-                if ends.contains(byte) { return (String(decoding: bytes[at..<index], as: UTF8.self), index) }
-                if byte == line || never.contains(byte) { return nil }
-                index += 1
-            }
-            return nil
+    /// An image the parse kept is a run carrying its source. One written as a link's words,
+    /// `[![alt](source)](address)`, the parse keeps as the link alone — its alternative text on
+    /// the link's run, its source nowhere — so that one is read back from the reply as
+    /// written, at the place the parse says the run was written: a linked run written as
+    /// `![…](…)` is an image, by where it stands and not by what it says, so the same text in
+    /// code, or the same address on another link, is none. The link stays on its words.
+    private static func images(in slice: AttributedSubstring, lines: [[UInt8]]) -> [Kind] {
+        var images: [Kind] = []
+        /// The image the runs being read belong to — one image styled into several runs is one
+        /// image, its runs side by side with its source and its place — and its words so far.
+        var open: (source: URL, place: AttributedString.MarkdownSourcePosition?, alt: String)?
+        var linked: AttributedString.MarkdownSourcePosition?
+        func close() {
+            guard let image = open else { return }
+            open = nil
+            let alt = image.alt.replacingOccurrences(of: "\u{FFFC}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+            images.append(.image(source: image.source.relativeString, alt: alt))
         }
-        /// An address in round brackets from the byte after the `(`: bare, or in angle brackets.
-        func address(from at: Int) -> (text: String, end: Int)? {
-            var index = at
-            while index < bytes.count, isSpace(bytes[index]) { index += 1 }
-            guard index < bytes.count else { return nil }
-            if bytes[index] == less {
-                guard let found = part(from: index + 1, to: [more], never: [less], limit: partLimit) else { return nil }
-                return found.text.isEmpty ? nil : (found.text.replacingOccurrences(of: " ", with: "%20"), found.end + 1)
-            }
-            guard let found = part(from: index, to: [unround, 0x20, 0x09], never: [open, close, round, less], limit: partLimit),
-                  !found.text.isEmpty else { return nil }
-            return found
-        }
-        var images: [LinkedImage] = []
-        var index = 0
-        while index + 2 < bytes.count {
-            guard bytes[index] == open, bytes[index + 1] == bang, bytes[index + 2] == open,
-                  index == 0 || bytes[index - 1] != slash else {
-                index += 1
+        for run in slice.runs {
+            let place = run.markdownSourcePosition
+            if let source = run.imageURL {
+                if open?.source != source || open?.place != place {
+                    close()
+                    open = (source, place, "")
+                }
+                open?.alt += String(slice[run.range].characters)
                 continue
             }
-            let start = index
-            index += 3
-            guard let alt = part(from: start + 3, to: [close], never: [open], limit: partLimit),
-                  alt.end + 1 < bytes.count, bytes[alt.end + 1] == round,
-                  let source = address(from: alt.end + 2),
-                  // A title, if there is one, and the bracket that closes the image.
-                  let closed = part(from: source.end, to: [unround], never: [round], limit: partLimit),
-                  // Whatever else the link's words are, and the bracket that closes them.
-                  let label = part(from: closed.end + 1, to: [close], never: [open], limit: partLimit),
-                  label.end + 1 < bytes.count, bytes[label.end + 1] == round,
-                  let link = address(from: label.end + 2) else { continue }
-            images.append(LinkedImage(alt: alt.text, source: source.text, address: link.text))
-            index = link.end
+            close()
+            if run.link != nil, let place, place != linked, let written = written(at: place, in: lines),
+               let image = image(writtenAs: written) {
+                linked = place
+                images.append(image)
+            }
         }
+        close()
         return images
     }
 
-    /// The most bytes any one part of a linked image — its alternative text, its source, its
-    /// address — is read to.
-    private static let partLimit = 2048
+    /// The bytes of the reply at `place`, where that is within one line.
+    private static func written(at place: AttributedString.MarkdownSourcePosition, in lines: [[UInt8]]) -> ArraySlice<UInt8>? {
+        guard place.startLine == place.endLine, lines.indices.contains(place.startLine - 1) else { return nil }
+        let line = lines[place.startLine - 1]
+        guard place.startColumn >= 1, place.endColumn <= line.count, place.startColumn <= place.endColumn else { return nil }
+        return line[(place.startColumn - 1)..<place.endColumn]
+    }
 
-    /// The image blocks for the links of `text` that were written round an image: each linked
-    /// run whose address and words are those of one still in `pending`, which leaves it. The
-    /// run stays as it is — the image's alternative text, linked — and the image is drawn
-    /// after its block as any other.
-    private static func linkedImages(in text: AttributedString, of pending: inout [LinkedImage]) -> [Kind] {
-        guard !pending.isEmpty else { return [] }
-        var images: [Kind] = []
-        for (link, range) in text.runs[\.link] {
-            guard let link else { continue }
-            let words = String(text[range].characters)
-            guard let found = pending.firstIndex(where: {
-                URL(string: $0.address) == link && words.contains($0.alt.trimmingCharacters(in: .whitespaces))
-            }) else { continue }
-            let image = pending.remove(at: found)
-            images.append(.image(source: image.source, alt: image.alt.trimmingCharacters(in: .whitespaces)))
+    /// The image `written` is, when it is one: `![alt](source)` or `![alt](<source>)`, with a
+    /// title or without, and whatever words follow it.
+    private static func image(writtenAs written: ArraySlice<UInt8>) -> Kind? {
+        guard written.starts(with: Array("![".utf8)) else { return nil }
+        let text = String(decoding: written.dropFirst(2), as: UTF8.self)
+        guard let close = text.range(of: "](") else { return nil }
+        let alt = String(text[..<close.lowerBound])
+        var rest = text[close.upperBound...].drop(while: { $0 == " " || $0 == "\t" })
+        let source: Substring
+        if rest.first == "<" {
+            rest = rest.dropFirst()
+            guard let end = rest.firstIndex(of: ">") else { return nil }
+            source = rest[..<end]
+        } else {
+            source = rest.prefix(while: { $0 != ")" && $0 != " " && $0 != "\t" })
         }
-        return images
+        guard !source.isEmpty else { return nil }
+        return .image(source: source.replacingOccurrences(of: " ", with: "%20"),
+                      alt: alt.trimmingCharacters(in: .whitespaces))
     }
 
     /// Where an image's source says its bytes are.
@@ -360,23 +327,27 @@ enum Markdown {
         /// A web address, which is never fetched: its picture is not drawn, and the address is
         /// offered as a link.
         case web(URL)
-        /// Neither: another scheme's address, or nothing at all.
+        /// Neither: nothing at all, or nothing a path can be.
         case neither
     }
 
-    /// Where the image a reply names by `source` is: a web address, which is recognised and
-    /// not fetched, or a path, as the reply wrote it with its percent escapes read. A path is
-    /// not judged here — whether there is a file at it, and whether it may be read, is the
-    /// guest's own answer (`ReplyImage`).
+    /// Where the image a reply names by `source` is: a web address — `http` or `https` with a
+    /// host — which is recognised and not fetched, or else a path, as the reply wrote it with
+    /// its percent escapes read. Nothing else is an address here: a name with a colon in it is
+    /// a name, and a path is not judged — whether there is a file at it, and whether it may be
+    /// read, is the guest's own answer (`ReplyImage`).
     static func place(ofImage source: String) -> ImagePlace {
         let source = source.trimmingCharacters(in: .whitespaces)
-        if let url = URL(string: source), url.scheme != nil {
-            return opens(url) ? .web(url) : .neither
-        }
+        if let url = URL(string: source), opens(url) { return .web(url) }
         let path = source.removingPercentEncoding ?? source
-        guard !path.isEmpty, !path.unicodeScalars.contains(where: { $0.value == 0 }) else { return .neither }
+        guard !path.isEmpty, path.utf8.count <= pathLimit, !path.unicodeScalars.contains(where: { $0.value == 0 }) else {
+            return .neither
+        }
         return .file(path)
     }
+
+    /// The longest a path may be, in bytes: the most a path is on the guest's filesystems.
+    static let pathLimit = 4096
 
     /// Whether a link is one a tap may follow: a web address, `http` or `https` with a host. Any
     /// other scheme — the app's own, another app's, `file`, `tel`, `javascript` — would hand a
@@ -390,6 +361,8 @@ enum Markdown {
     /// so the lines of a paragraph break where they were written.
     private static func lineBroken(_ slice: AttributedSubstring) -> AttributedString {
         var text = AttributedString(slice)
+        // Where a run was written is the parse's to know and no part of the words.
+        text.markdownSourcePosition = nil
         // A link stays on its run only where it is one a tap may follow (`opens`); any other is
         // its words.
         for (link, range) in text.runs[\.link] where link.map(opens) == false {
