@@ -379,7 +379,9 @@ extension DebugRun {
 
     /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:
     /// a press runs the whole of `VoiceInput` (the tap, the sample sink, the caption loop, the
-    /// decode at the release) over an engine that hears nothing. `TOPO_DEBUG_EAR=loading` is one
+    /// decode at the release) over an engine that hears nothing, and `TOPO_DEBUG_EAR=stub:` followed by
+    /// words is the same over an engine that hears those words in any audio it is given, which is
+    /// how a test has something heard without a recogniser. `TOPO_DEBUG_EAR=loading` is one
     /// whose load never finishes, so every press is refused with the ear's reason, however fast
     /// the real models would have downloaded. `TOPO_DEBUG_EAR=` an
     /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
@@ -396,8 +398,8 @@ extension DebugRun {
             say("ear: loading, and never resident, so every press is refused")
             return ear
         }
-        if choice == "stub" {
-            let ear = Ear(engine: StubEngine())
+        if choice == "stub" || choice.hasPrefix("stub:") {
+            let ear = Ear(engine: StubEngine(hears: String(choice.dropFirst("stub:".count))))
             let nowhere = URL(fileURLWithPath: "/dev/null")
             ear.load(parakeet: nowhere, ctc: nowhere)
             say("ear: a stub, resident without a model")
@@ -536,12 +538,14 @@ extension DebugRun {
     /// from its load, which holds the ear at `loading`.
     struct StubEngine: SpeechEngine {
         var loads = true
+        /// What it hears in any audio at all; nothing by default.
+        var hears = ""
         func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
             guard !loads else { return }
             while true { try await Task.sleep(for: .seconds(3600)) }
         }
         func rebuild(terms: [String], version: Int) async throws {}
-        func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
+        func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { samples.isEmpty ? "" : hears }
     }
 }
 #endif

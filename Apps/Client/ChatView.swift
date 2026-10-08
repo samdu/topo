@@ -338,8 +338,8 @@ struct ChatView: View {
         }
     }
 
-    /// What the chat says it is doing, in the navigation bar beside the badge (`ChatNotices`).
-    /// The item is there only while there is something to say: an item the bar first laid out
+    /// What the chat says it is doing, in the navigation bar between the controls and the badge
+    /// (`ChatNotices`). The item is there only while there is something to say: an item the bar first laid out
     /// empty is one it never draws, whatever it later holds.
     @ToolbarContentBuilder private var notices: some ToolbarContent {
         let said = shownNotices
@@ -683,8 +683,15 @@ struct ChatNotices: View {
     static let identifier = "topo-notices"
 
     /// The most lines the notice takes: the bar holds two beside the badge, and every notice the
-    /// harness writes fits two at the largest `noticeFont` on the narrowest phone.
+    /// harness writes fits two at the largest `noticeFont` on the narrowest phone, drawn no
+    /// smaller than `look.transcript.noticeLeastScale` of it.
     static let lines = 2
+
+    /// The room a notice has in the bar on the narrowest phone, between the model and the mute and
+    /// the badge: measured, since the bar lays its items out and says nothing of how. A turn in
+    /// flight has that less the spinner and the room beside it.
+    static let room: CGFloat = 184
+    static let spinner: CGFloat = 28
 
     /// The largest text setting the notices follow. The bar is a fixed height, so past this the
     /// words would reach down over the transcript; the system's own bar titles stop growing too.
@@ -698,9 +705,13 @@ struct ChatNotices: View {
             case .progress(let where_, let queued):
                 HStack {
                     ProgressView()
-                    Text(where_)
+                    // One text, so the turns behind wrap with the status and take no width of
+                    // their own beside it: between the bar's controls and the badge there is not
+                    // the room for the longest status in two lines and a count beside it.
                     if let queued {
-                        Text(queued).foregroundStyle(look.transcript.caption)
+                        Text("\(Text(where_)) \(Text(queued).foregroundStyle(look.transcript.caption))")
+                    } else {
+                        Text(where_)
                     }
                 }
             case .info(let info):
@@ -711,6 +722,10 @@ struct ChatNotices: View {
         }
         .font(look.transcript.noticeFont)
         .lineLimit(lineLimit)
+        // Between the bar's controls and the badge there is not the room for the longest notice
+        // at the largest font in two lines, so one that does not fit is drawn smaller before
+        // any of it is cut.
+        .minimumScaleFactor(look.transcript.noticeLeastScale)
         .truncationMode(.tail)
         .dynamicTypeSize(...Self.largestType)
         .multilineTextAlignment(.center)

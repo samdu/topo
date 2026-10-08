@@ -174,6 +174,7 @@ enum LookDocument {
         r.font("bodyFont", &value.bodyFont)
         r.font("labelFont", &value.labelFont)
         r.font("noticeFont", &value.noticeFont, largest: Look.Transcript.largestNotice)
+        r.leastScale("noticeLeastScale", &value.noticeLeastScale)
         r.colour("text", &value.text)
         r.colour("caption", &value.caption)
         r.colour("trouble", &value.trouble)
@@ -487,6 +488,15 @@ enum LookDocument {
         /// than the stroke it walls is a mark with no floor left in it.
         func fractionOfOne(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0...0.25, "a share between 0 and 0.25") {
+                took(key)
+                value = CGFloat(number)
+            }
+        }
+
+        /// The least words are drawn at to fit, as a share of their size. Bounded below at a half:
+        /// under that they are not words anyone reads.
+        func leastScale(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0.5...1, "a share between 0.5 and 1") {
                 took(key)
                 value = CGFloat(number)
             }

@@ -118,15 +118,21 @@ struct Composer: View {
     var body: some View {
         let row = draft.row
         let geometry = ComposerGeometry.of(look.composer, row: row)
-        // The same views in the same order in both forms, each placed by what it is: a view that
-        // was one of two would be a second field, and the keyboard would fall between them.
+        // The well, the control and the field are the same views in both forms, each placed by
+        // what it is: a field that was one of two would be a second field, and the keyboard would
+        // fall between them. The send is the row's and the way to the keyboard the resting
+        // pane's, and each is there only in its own form, so neither is pressed or read in the
+        // other.
         ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry) {
             micButton(geometry).layoutValue(key: ComposerPart.self, value: .well)
             more.layoutValue(key: ComposerPart.self, value: .more)
             field(shown: row).layoutValue(key: ComposerPart.self, value: .field)
             line.layoutValue(key: ComposerPart.self, value: .line)
-            send(shown: row).layoutValue(key: ComposerPart.self, value: .send)
-            keyboard(shown: !row).layoutValue(key: ComposerPart.self, value: .keyboard)
+            if row {
+                send.layoutValue(key: ComposerPart.self, value: .send)
+            } else {
+                keyboard.layoutValue(key: ComposerPart.self, value: .keyboard)
+            }
         }
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
         // The whole pane is off limits to Topo, at every presence.
@@ -185,16 +191,14 @@ struct Composer: View {
 
     /// The way to the keyboard, on the resting pane. The way back from it is a drag down the
     /// transcript or a tap on its empty space, so the row has no place for this and it is not
-    /// there to be pressed or read.
-    private func keyboard(shown: Bool) -> some View {
+    /// there.
+    private var keyboard: some View {
         Button { draft.typing = true } label: {
             Image(systemName: look.composer.flank.keyboard).font(look.composer.flank.font)
         }
         .accessibilityLabel("Type instead")
         .etched(look.composer.flank, ink: ink)
-        .opacity(shown ? besideOpacity : 0)
-        .allowsHitTesting(shown)
-        .accessibilityHidden(!shown)
+        .opacity(besideOpacity)
     }
 
     /// What is written, as the field holds it: nothing while the row at the end of the transcript
@@ -207,8 +211,9 @@ struct Composer: View {
 
     /// The field the next turn is written in, in the draft's own enclosure and the transcript's
     /// own type: one line, growing a line at a time to `maximumLines` and scrolling inside itself
-    /// past that. It is the row's alone: at rest it is not drawn, pressed or read, and it stays
-    /// where it is so the keyboard has one field to rise for.
+    /// past that. It is the row's alone: at rest it is not drawn or pressed, and it stays where it
+    /// is so the keyboard has one field to rise for. The system's text view stays in the
+    /// accessibility tree in both forms; activating it there is a way to the keyboard.
     private func field(shown: Bool) -> some View {
         let enclosure = look.draft.written
         return TextField("", text: written, axis: .vertical)
@@ -240,7 +245,7 @@ struct Composer: View {
 
     /// Sends what is written, as a typed turn. With nothing but space written it says so rather
     /// than being pressed and doing nothing.
-    private func send(shown: Bool) -> some View {
+    private var send: some View {
         let nothing = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return Button(action: draft.send) {
             Image(systemName: look.draft.sendSymbol)
@@ -253,9 +258,7 @@ struct Composer: View {
         .buttonStyle(.borderless)
         .disabled(nothing)
         .accessibilityLabel("Send")
-        .opacity(shown ? besideOpacity : 0)
-        .allowsHitTesting(shown)
-        .accessibilityHidden(!shown)
+        .opacity(besideOpacity)
     }
 
     /// The system's glass where there is any, a material of the same shape below it. The tint

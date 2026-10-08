@@ -108,6 +108,10 @@ struct Look: Equatable, Sendable {
         /// The largest `noticeFont` a document sets, in points: two lines of it fit the navigation
         /// bar beside the badge, so a notice there never reaches down over the transcript.
         static let largestNotice: Double = 15
+        /// The least a notice in the bar is drawn at, as a share of `noticeFont`: one whose words
+        /// do not fit its two lines between the bar's controls and the badge is drawn smaller,
+        /// down to this, before any of it is cut.
+        var noticeLeastScale: CGFloat = 0.65
         /// A turn's words.
         var text: Color = Theme.text
         /// A time, and the notice.

@@ -343,6 +343,23 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(high.look.composer.compactShare, 1)
     }
 
+    /// The least a notice is drawn at is a share from a half to 1, and one outside that is refused
+    /// with the rest of the transcript standing.
+    func testTheNoticesLeastScaleIsReadFromAHalfToOne() {
+        XCTAssertEqual(Look().transcript.noticeLeastScale, 0.65)
+        for (given, taken) in [("0.5", 0.5), ("1", 1), ("0.8", 0.8)] {
+            let read = LookDocument.read(#"{"transcript": {"noticeLeastScale": \#(given), "spacing": 3}}"#)
+            XCTAssertEqual(read.look.transcript.noticeLeastScale, CGFloat(taken), accuracy: 1e-9)
+            XCTAssertTrue(read.notes.isEmpty, "\(read.notes)")
+        }
+        for refused in ["0.49", "1.01", "\"small\""] {
+            let read = LookDocument.read(#"{"transcript": {"noticeLeastScale": \#(refused), "spacing": 3}}"#)
+            XCTAssertEqual(read.look.transcript.noticeLeastScale, 0.65, refused)
+            XCTAssertEqual(read.look.transcript.spacing, 3, "a refused scale took the spacing with it")
+            XCTAssertEqual(read.notes.count, 1, "\(refused): \(read.notes)")
+        }
+    }
+
     /// A document written for the model slider and the keyboard's second mark still reads: the
     /// keys the look no longer has are passed over, whatever they hold, with no note, and every
     /// field beside them is taken.
