@@ -52,6 +52,84 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: answeredInput, in: Array(lines[...text])), .answered("marmalade"))
     }
 
+    private static func assistant(_ id: String, _ block: String, stop: String, more: String = "") -> String {
+        #"{"type":"assistant"\#(more),"message":{"id":"\#(id)","model":"claude-haiku-4-5","content":[\#(block)],"stop_reason":"\#(stop)"}}"#
+    }
+    private static func text(_ words: String) -> String { #"{"type":"text","text":"\#(words)"}"# }
+    private static let thinking = #"{"type":"thinking","thinking":""}"#
+    private static let toolUse = #"{"type":"tool_use","name":"Bash"}"#
+    private static let toolResult = #"{"type":"user","uuid":"r","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}"#
+    private static let input = #"{"type":"user","uuid":"in-1","message":{"role":"user","content":"where is it?"}}"#
+
+    /// A turn of two messages round a tool call, as Claude Code writes it — an entry per
+    /// content block, each carrying its message's stop reason.
+    private static let twoMessages = [
+        input,
+        assistant("m1", thinking, stop: "tool_use"),
+        assistant("m1", text("Let me look. "), stop: "tool_use"),
+        assistant("m1", toolUse, stop: "tool_use"),
+        toolResult,
+        assistant("m2", thinking, stop: "end_turn"),
+        assistant("m2", text("It is on the shelf."), stop: "end_turn"),
+    ]
+
+    /// The reply is every message's words: what was said before the tool call and what was said
+    /// after it, in order, one blank line between.
+    func testAReplyIsTheWordsOfEveryMessageOfTheTurn() {
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: Self.twoMessages),
+                       .answered("Let me look. \n\nIt is on the shelf."))
+    }
+
+    /// Words before a tool call do not make a reply of a turn that never finished: cut before
+    /// the final message, or after its thinking and before its words, it is unresolved still.
+    func testWordsBeforeAToolCallAreNoReplyUntilTheLastMessageHasItsOwn() {
+        for cut in 2..<Self.twoMessages.count {
+            XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: Array(Self.twoMessages.prefix(cut))), .unresolved,
+                           "cut after \(cut) lines")
+        }
+        // A last message that finished with no words of its own is no reply either, whatever
+        // was said before it.
+        let wordless = Array(Self.twoMessages.dropLast())
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: wordless), .unresolved)
+    }
+
+    /// A sub-agent's entry is named by the tool call it was written inside (`parent_tool_use_id`)
+    /// whether or not it is marked a sidechain, and its words are not the reply's.
+    func testASubagentsEntryByItsParentToolCallIsNotTheReplys() {
+        let lines = [
+            Self.input,
+            Self.assistant("m1", Self.text("First"), stop: "tool_use"),
+            Self.assistant("m1", Self.toolUse, stop: "tool_use"),
+            Self.assistant("s1", Self.text("a sub-agent's words"), stop: "end_turn", more: #","parent_tool_use_id":"toolu_1""#),
+            Self.toolResult,
+            Self.assistant("m2", Self.text("Last"), stop: "end_turn"),
+        ]
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: lines), .answered("First\n\nLast"))
+        // A sub-agent's finished message is not the turn's last: the turn has not answered.
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: Array(lines.dropLast())), .unresolved)
+    }
+
+    /// A message's text blocks run on, a message with no words adds no break, and a sub-agent's
+    /// words and a synthetic error's are not the reply's.
+    func testWhichWordsAreTheReplys() {
+        let lines = [
+            Self.input,
+            Self.assistant("m1", Self.text("One, "), stop: "tool_use"),
+            Self.assistant("m1", Self.text("two."), stop: "tool_use"),
+            Self.assistant("m1", Self.toolUse, stop: "tool_use"),
+            Self.assistant("s1", Self.text("a sub-agent's words"), stop: "end_turn", more: #","isSidechain":true"#),
+            Self.toolResult,
+            Self.assistant("m2", Self.toolUse, stop: "tool_use"),
+            Self.toolResult,
+            #"{"type":"assistant","isApiErrorMessage":true,"message":{"id":"e","model":"<synthetic>","content":[{"type":"text","text":"API Error: 500"}],"stop_reason":"stop_sequence"}}"#,
+            Self.assistant("m3", Self.text("  "), stop: "tool_use"),
+            Self.assistant("m3", Self.toolUse, stop: "tool_use"),
+            Self.toolResult,
+            Self.assistant("m4", Self.text("Three."), stop: "end_turn"),
+        ]
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: lines), .answered("One, two.\n\nThree."))
+    }
+
     /// An error Claude Code wrote in the model's place is no reply.
     func testASyntheticErrorIsNoReply() {
         let lines = [

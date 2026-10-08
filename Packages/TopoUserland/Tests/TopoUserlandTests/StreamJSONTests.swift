@@ -19,7 +19,7 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(results.count, 2)
         XCTAssertTrue(results.allSatisfy { !$0.isError && $0.subtype == "success" && $0.session == session })
         XCTAssertEqual(results.last?.text, "marmalade")
-        XCTAssertTrue(events.contains(.text("marmalade")))
+        XCTAssertTrue(events.contains { if case .text("marmalade", message: .some) = $0 { true } else { false } })
         let usage = events.compactMap { if case .usage(let usage) = $0 { return usage } else { return nil } }
         XCTAssertFalse(usage.isEmpty)
         XCTAssertTrue(usage.allSatisfy { $0.model == "claude-haiku-4-5-20251001" && $0.context > 0 })
@@ -116,6 +116,34 @@ final class StreamJSONTests: XCTestCase {
         XCTAssertEqual(StreamJSON.events(in: "   "), [])
         let long = String(repeating: "x", count: 500)
         XCTAssertEqual(StreamJSON.events(in: long), [.malformed(String(repeating: "x", count: 200) + "…")])
+    }
+
+    /// A text block carries the id of the message it is a block of, which is what tells one
+    /// message's words from the next's.
+    func testATextBlockNamesItsMessage() {
+        let line = #"{"type":"assistant","parent_tool_use_id":null,"message":{"id":"msg_1","model":"claude-haiku-4-5","content":[{"type":"text","text":"Let me look."},{"type":"tool_use","name":"Bash","input":{}}]}}"#
+        XCTAssertEqual(StreamJSON.events(in: line), [.text("Let me look.", message: "msg_1"), .toolUse(name: "Bash")])
+        XCTAssertEqual(StreamJSON.events(in: #"{"type":"assistant","message":{"content":[{"type":"text","text":"x"}]}}"#),
+                       [.text("x", message: nil)])
+    }
+
+    /// A sub-agent's message is written inside a tool call of the turn's (`parent_tool_use_id`),
+    /// and an error is written by Claude Code in the model's place: neither is the reply's
+    /// words, whole or a piece at a time, though what a sub-agent does is still seen.
+    func testASubagentsWordsAndASyntheticMessageAreNoTextOfTheReply() {
+        let subagent = #"{"type":"assistant","parent_tool_use_id":"toolu_1","message":{"id":"msg_s","model":"claude-haiku-4-5","content":[{"type":"thinking","thinking":""},{"type":"text","text":"sub-agent words"},{"type":"tool_use","name":"Read","input":{}}]}}"#
+        XCTAssertEqual(StreamJSON.events(in: subagent), [.thinking, .toolUse(name: "Read")])
+        for event in [#"{"type":"message_start","message":{}}"#,
+                      #"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"sub"}}"#] {
+            XCTAssertEqual(StreamJSON.events(in: #"{"type":"stream_event","parent_tool_use_id":"toolu_1","event":\#(event)}"#),
+                           [.other("stream_event")], event)
+            XCTAssertNotEqual(StreamJSON.events(in: #"{"type":"stream_event","parent_tool_use_id":null,"event":\#(event)}"#),
+                              [.other("stream_event")], event)
+        }
+        let synthetic = #"{"type":"assistant","message":{"id":"x","model":"<synthetic>","content":[{"type":"text","text":"API Error: 500"}]}}"#
+        XCTAssertEqual(StreamJSON.events(in: synthetic), [])
+        let error = #"{"type":"assistant","isApiErrorMessage":true,"message":{"id":"x","model":"claude-haiku-4-5","content":[{"type":"text","text":"API Error: 500"}]}}"#
+        XCTAssertEqual(StreamJSON.events(in: error), [])
     }
 
     func testAMessageAsItIsWrittenIsItsTextAPieceAtATime() {

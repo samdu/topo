@@ -263,12 +263,56 @@ public final class Guest: Sendable {
                     environment: [String: String] = Guest.environment) async throws -> Exit {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                continuation.resume(with: Result { try Self.runToEnd(path, arguments, environment) })
+                continuation.resume(with: Result {
+                    let ran = try Self.runToEnd(path, arguments, environment)
+                    return Exit(status: ran.status, output: String(decoding: ran.output, as: UTF8.self),
+                                errors: String(decoding: ran.errors, as: UTF8.self))
+                })
             }
         }
     }
 
-    private static func runToEnd(_ path: String, _ arguments: [String], _ environment: [String: String]) throws -> Exit {
+    /// The longest a file's read may take, in seconds: longer than the vault's own wait for a
+    /// coordinated open (`TOPO_ISH_VAULT_WAIT_SECONDS`, 20 s), so a file in the memory that is
+    /// slow to come down is read or refused by the vault and not cut off by this.
+    public static let readSeconds = 25
+
+    /// The bytes of the regular file the guest sees at `path`, or nil: no such file, something
+    /// that is not a regular file (a directory, a pipe, which would hold a read open), one of
+    /// more than `limit` bytes, or a read that failed or was ended. The path is the guest's
+    /// own, resolved by the guest — its mounts, its links, its permissions — a relative one
+    /// against `directory`, so what is read is what a program in the guest reads there and
+    /// nothing else: a file in the memory is opened through the vault's filesystem and its
+    /// coordination like any guest read.
+    ///
+    /// It is one short-lived program beside whatever else the guest runs, bounded in bytes
+    /// (`head`) and in time (`timeout`, `readSeconds`, with the signal nothing parked in a read
+    /// outlasts); nothing here can end it sooner, and a teardown that ends every guest process
+    /// ends it too, which is a nil. Each call holds a thread of the shared queue until its
+    /// program ends, so a caller with many to make makes them one at a time (`GuestImages`).
+    public func contents(ofFile path: String, from directory: String, limit: Int) async throws -> Data? {
+        guard !path.isEmpty, !path.utf8.contains(0) else { return nil }
+        // A relative path is anchored so that one opening with a dash is a path and no option.
+        let named = path.hasPrefix("/") ? path : "./" + path
+        let script = #"cd "$1" && [ -f "$2" ] && exec timeout -s KILL "$3" head -c "$4" -- "$2""#
+        let arguments = ["-c", script, "sh", directory, named, String(Self.readSeconds), String(limit + 1)]
+        let ran: Ran = try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                continuation.resume(with: Result { try Self.runToEnd("/bin/sh", arguments, Guest.environment) })
+            }
+        }
+        guard ran.status == 0, ran.output.count <= limit else { return nil }
+        return ran.output
+    }
+
+    /// What a program left, as the bytes it wrote.
+    private struct Ran: Sendable {
+        var status: Int32
+        var output: Data
+        var errors: Data
+    }
+
+    private static func runToEnd(_ path: String, _ arguments: [String], _ environment: [String: String]) throws -> Ran {
         let argv = [path] + arguments
         let envp = environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         var out: Int32 = -1, err: Int32 = -1
@@ -291,9 +335,7 @@ public final class Guest: Sendable {
         let waited = topo_ish_wait(pid, &status)
         reads.wait()
         guard waited == 0 else { throw Failure.wait(waited) }
-        return Exit(status: status,
-                    output: String(decoding: collected.output, as: UTF8.self),
-                    errors: String(decoding: collected.errors, as: UTF8.self))
+        return Ran(status: status, output: collected.output, errors: collected.errors)
     }
 
     private final class Collected: @unchecked Sendable {

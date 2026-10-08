@@ -119,6 +119,39 @@ enum PreviewTurns {
         """),
     ])
 
+    /// Replies with a link in them: one whose first words are not the link, and one whose linked
+    /// words run past the end of a line on any phone, so the link is on two lines. What a UI
+    /// suite taps to hold that the linked words are the tap target and the words round them are
+    /// not (`TOPO_DEBUG_TRANSCRIPT=links`).
+    static let links: [Turn] = make([
+        (.person, "Where is it written down?"),
+        (.assistant, "see the [docs](https://example.com/docs)"),
+        (.assistant, "Before it [\(wrappedLinkWords)](https://example.com/wrapped)"),
+    ])
+
+    static let wrappedLinkWords = "the linked words of this reply run on for long enough that they wrap onto another line"
+
+    /// One reply holding each kind of block a reply can: words before and after a break as a
+    /// turn with a tool call in the middle of it lands, a link, a table, and an image.
+    static let blocks: [Turn] = make([
+        (.person, "How big are the look files?"),
+        (.assistant, """
+        Let me look at the folder.
+
+        Three files, and the [look document](https://example.com/look) explains the fields:
+
+        | file | size | kept |
+        |:-----|-----:|:----:|
+        | look.json | 2 KB | yes |
+        | notes.md | 14 KB | yes |
+        | old-look.json |  | no |
+
+        ![A chart of the three sizes](/home/topo/charts/sizes.png)
+
+        ![A chart from the web](https://example.com/chart.png)
+        """),
+    ])
+
     private static func make(_ lines: [(TurnRole, String)]) -> [Turn] {
         var turns: [Turn] = []
         var previous: TurnRef?

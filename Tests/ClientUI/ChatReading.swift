@@ -16,6 +16,10 @@ enum ChatReading {
         var overridePin: [Double]?
         var presence: Double?
         var contentBottom: Double?
+        /// The addresses taps on a reply's links asked to be opened, in order.
+        var opened: [String]?
+        /// Whether the guest's home is mounted in this launch.
+        var guestHome: Bool?
     }
 
     struct Topo: Decodable, CustomStringConvertible {

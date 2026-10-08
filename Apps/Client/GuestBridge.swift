@@ -509,6 +509,9 @@ actor GuestBridge: Brain {
         let answering = request.answering.map(\.ref)
         await observe(.began(pid: pid, answering: answering))
         var model: String?, usage: StreamEvent.Usage?, end: GuestSession.TurnEnd?
+        // Every message's words, the ones said before a tool call included: the result line
+        // carries the last message's alone.
+        var words = ReplyWords()
         for await update in updates {
             await observe(.update(update))
             switch update {
@@ -523,6 +526,8 @@ actor GuestBridge: Brain {
                 provenance[request.nonce] = (started, pid)
             case .event(.usage(let reported)):
                 usage = reported
+            case .event(.text(let text, let message)):
+                words.append(text, of: message)
             case .ended(let ended):
                 end = ended
             case .event:
@@ -542,12 +547,14 @@ actor GuestBridge: Brain {
             throw CancellationError()
         }
         if case .answered(let result) = end {
+            // The result's own text only for a turn whose stream carried no words at all.
+            let said = words.text.isEmpty ? result.text ?? "" : words.text
             if ledger.pending?.input == id {
                 ledger.pending?.state = .answered
-                ledger.pending?.text = result.text ?? ""
+                ledger.pending?.text = said
                 try? save()
             }
-            return reply(result.text ?? "", to: request, usage: usage, model: model)
+            return reply(said, to: request, usage: usage, model: model)
         }
         if case .failed(.result) = end {
             // An error result is Claude Code's own word that it received the turn and ended it
@@ -786,6 +793,8 @@ actor GuestBridge: Brain {
         await heardObserver(.began(nonce))
         await observe(.began(pid: pid, answering: []))
         var model: String?, usage: StreamEvent.Usage?, end: GuestSession.TurnEnd?
+        // Every message's words, as `answer` gathers them.
+        var words = ReplyWords()
         for await update in updates {
             await observe(.update(update))
             switch update {
@@ -803,6 +812,8 @@ actor GuestBridge: Brain {
                 try? save()
             case .event(.usage(let reported)):
                 usage = reported
+            case .event(.text(let text, let message)):
+                words.append(text, of: message)
             case .ended(let ended):
                 end = ended
             case .event:
@@ -816,7 +827,7 @@ actor GuestBridge: Brain {
             flown[id] = (model, usage)
             switch end {
             case .answered(let result):
-                reply = result.text ?? ""
+                reply = words.text.isEmpty ? result.text ?? "" : words.text
                 conclude(id, .answered, text: reply)
             case .failed(.result):
                 // Claude Code's own word that it received the turn and ended it unanswered.

@@ -181,6 +181,7 @@ enum LookDocument {
         r.font("heading3Font", &value.heading3Font)
         r.font("codeFont", &value.codeFont)
         r.colour("codeInk", &value.codeInk)
+        r.colour("linkInk", &value.linkInk)
         r.object("codeBlock") { enclosure(&value.codeBlock, $0) }
         r.codeOverflow("codeOverflow", &value.codeOverflow)
         r.colour("quoteBar", &value.quoteBar)
@@ -189,6 +190,14 @@ enum LookDocument {
         r.colour("quoteText", &value.quoteText)
         r.colour("marker", &value.marker)
         r.indent("ruleWidth", &value.ruleWidth)
+        r.font("tableHeaderFont", &value.tableHeaderFont)
+        r.indent("tableColumnSpacing", &value.tableColumnSpacing)
+        r.indent("tableRowSpacing", &value.tableRowSpacing)
+        r.colour("tableRule", &value.tableRule)
+        r.indent("tableRuleWidth", &value.tableRuleWidth)
+        r.bounded("tableCellMaxWidth", &value.tableCellMaxWidth, in: Look.Markdown.cellWidths)
+        r.bounded("imageMaxHeight", &value.imageMaxHeight, in: Look.Markdown.imageHeights)
+        r.length("imageCornerRadius", &value.imageCornerRadius)
         r.object("codePulse") { pulse(&value.codePulse, $0) }
     }
 

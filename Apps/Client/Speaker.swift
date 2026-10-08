@@ -82,7 +82,7 @@ final class Speaker {
     /// Sentences of the current reply not yet made.
     private var making = 0
     /// The reply being read while the guest is still writing it (`speak(writing:answering:)`):
-    /// the spoken turn it answers, what of the message had settled into sentences at the last
+    /// the spoken turn it answers, what of the reply had settled into sentences at the last
     /// call and how many of those are queued, and whether it is still being read. One that was
     /// stopped keeps its turn, so what is written after the stop is not read from the top.
     private var written: (nonce: String, settled: String, queued: Int, live: Bool)?
@@ -318,12 +318,13 @@ final class Speaker {
         return begin(text, answering: nonce, reply: reply, reading: true)
     }
 
-    /// What the guest has written so far of the message that answers the spoken turn `nonce`.
+    /// What the guest has written so far of the reply to the spoken turn `nonce`: every message
+    /// of the turn's words, each call's text extending the last's (`Harness.follow`).
     /// The sentences that have settled (`settled`) are read as they come, behind one another,
     /// so the voice starts at the first sentence rather than once the reply is whole and in the
     /// log; `speak` is still called with the reply when it lands, and reads what is left. The
-    /// guest's next message of the turn begins with nothing written (the harness says so at
-    /// `writingBegan`), and is read from its first sentence, behind what was read of the last. Nothing begins while a microphone
+    /// guest's next message of the turn is more of the same text after a paragraph break, so
+    /// its sentences are read behind the last message's, each once. Nothing begins while a microphone
     /// is open or the voice is not resident: the reply is offered whole when it lands, as ever.
     func speak(writing text: String, answering nonce: String) {
         let settled = Self.settled(text)
@@ -534,8 +535,14 @@ final class Speaker {
     /// As much of a message still being written as will not change in the reading: up to its
     /// last line break, or its last sentence-final punctuation followed by whitespace, and no
     /// further than the opening of a code fence that has not closed, since what a block is read
-    /// as is decided by the whole of it.
+    /// as is decided by the whole of it, nor than an image in a block still being written.
     static func settled(_ text: String) -> String {
+        // An image is read after the block it was written in, as it is drawn, so the words
+        // written after it in that block are read before it: from an image on, a block is not
+        // settled until a blank line ends it. That also keeps an image half written — its
+        // brackets open, its alternative text read as words — from being read at all.
+        let block = text.range(of: "\n\n", options: .backwards)?.upperBound ?? text.startIndex
+        let text = text[..<(text.range(of: "![", range: block..<text.endIndex)?.lowerBound ?? text.endIndex)]
         var end = text.startIndex
         var previous: Character?
         for index in text.indices {
@@ -549,11 +556,13 @@ final class Speaker {
         let fences = settled.components(separatedBy: "```")
         if fences.count % 2 == 0 { settled = fences.dropLast().joined(separator: "```") }
         // A table is read as the count of its rows, which every further row changes: none of
-        // it is settled until a line that is no row follows it.
+        // it is settled until a line that is no row follows it. A row is a line that opens
+        // with a bar, which is known at its first character, so no line is half read and then
+        // taken back; a bar further along a line of prose is prose.
         var lines = settled.split(separator: "\n", omittingEmptySubsequences: false)
         var whole = false
         if lines.last == "" { lines.removeLast(); whole = true }
-        while let last = lines.last, last.contains("|") { lines.removeLast(); whole = true }
+        while let last = lines.last, last.drop(while: { " \t>".contains($0) }).hasPrefix("|") { lines.removeLast(); whole = true }
         return lines.isEmpty ? "" : lines.joined(separator: "\n") + (whole ? "\n" : "")
     }
 
