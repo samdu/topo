@@ -22,7 +22,7 @@ final class StatusNoticeTests: XCTestCase {
         XCTAssertTrue(flank.waitForExistence(timeout: 60), "the chat screen, with the glass under it")
         flank.tap()
         let field = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'What to say'")).firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 10), "the flank put no row at the end of the transcript")
+        XCTAssertTrue(field.waitForExistence(timeout: 10), "the mark put no field in the glass")
         field.typeText("What's the weather like?")
         app.buttons["Send"].tap()
 
@@ -46,8 +46,8 @@ final class StatusNoticeTests: XCTestCase {
         attach(app)
         XCTAssertLessThanOrEqual(abs(words.frame.midY - badge.frame.midY), badge.frame.height / 2,
                                  "the notice \"\(words.label)\" at \(words.frame) is not in the bar beside the badge at \(badge.frame)")
-        let inFlight = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'What to say'")).firstMatch
-        XCTAssertTrue(inFlight.waitForExistence(timeout: 10), "the row left the transcript when the turn went")
+        let inFlight = app.descendants(matching: .any)["draft-row"]
+        XCTAssertTrue(inFlight.waitForExistence(timeout: 10), "the turn on its way is not drawn at the end of the transcript")
         XCTAssertLessThanOrEqual(words.frame.maxY, inFlight.frame.minY,
                                  "the notice at \(words.frame) is under the row at \(inFlight.frame)")
     }
@@ -93,15 +93,22 @@ final class StatusNoticeTests: XCTestCase {
 
     // MARK: -
 
-    /// Each text drawn whole: as many lines tall as its words take at its width in `font`. The
-    /// accessibility label is the whole string whatever the bar drew, so what is measured is the
-    /// drawing — a notice cut short by the line limit is drawn fewer lines tall than its words need.
+    /// The least a notice is drawn at, as a share of its font (`look.transcript.noticeLeastScale`):
+    /// between the bar's controls and the badge a notice that does not fit its two lines is
+    /// drawn smaller before any of it is cut.
+    private static let leastScale: CGFloat = 0.65
+
+    /// Each text drawn whole: as many lines tall as its words take at its width in `font` at the
+    /// least the bar draws it. The accessibility label is the whole string whatever the bar drew,
+    /// so what is measured is the drawing — a notice cut short by the line limit is drawn fewer
+    /// lines tall than its words need even at their smallest.
     private func whole(_ texts: [XCUIElement], in font: UIFont, _ fixture: String) {
+        let nominal = font, font = font.withSize(font.pointSize * Self.leastScale)
         for text in texts {
             let needed = (text.label as NSString).boundingRect(
                 with: CGSize(width: text.frame.width + 1, height: .greatestFiniteMagnitude),
                 options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
-            let lines = (needed.height / font.lineHeight).rounded(), drawn = (text.frame.height / font.lineHeight).rounded()
+            let lines = (needed.height / font.lineHeight).rounded(), drawn = (text.frame.height / nominal.lineHeight).rounded()
             XCTAssertLessThanOrEqual(lines, drawn,
                                      "\(fixture): \"\(text.label)\" takes \(lines) lines at \(text.frame.width) pt wide and was drawn \(drawn) lines tall (\(text.frame)), cut short")
         }
@@ -117,14 +124,14 @@ final class StatusNoticeTests: XCTestCase {
 
     /// `TOPO_DEBUG_NOTICES`'s fixtures and the words each has to show, in order.
     private static let fixtures: [(String, [String])] = [
-        ("busy", ["Reaching iCloud…", "· 2 waiting"]),
+        ("busy", ["Reaching iCloud… · 2 waiting"]),
         // The longest status the harness sets, beside the spinner and a two-digit count.
-        ("busy-long", ["Checking this device is primary…", "· 11 waiting"]),
+        ("busy-long", ["Checking this device is primary… · 11 waiting"]),
         ("error", ["iCloud refused the read. Check you're signed in on this device."]),
         ("info", ["Saved. Another device will answer here."]),
         // A turn left for another primary while the next is on its way: the bar holds one notice,
         // and the turn in flight is it.
-        ("busy-info", ["Reaching iCloud…", "· 1 waiting"]),
+        ("busy-info", ["Reaching iCloud… · 1 waiting"]),
         // A failure while a turn is on its way is the one notice.
         ("error-busy", ["iCloud refused the read. Check you're signed in on this device."]),
     ]
@@ -142,11 +149,15 @@ final class StatusNoticeTests: XCTestCase {
         return notices.staticTexts.allElementsBoundByIndex
     }
 
-    /// Every line of words level with the badge, wholly to its leading side, and above the
-    /// transcript's frame as the chat reports it.
+    /// Every line of words level with the badge, wholly to its leading side and to the trailing
+    /// side of the model and the mute, which are in the bar with it, and above the transcript's
+    /// frame as the chat reports it.
     private func holdInTheBar(_ app: XCUIApplication, _ texts: [XCUIElement], _ fixture: String) throws {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "\(fixture): no badge in the navigation bar")
+        let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"]
+        XCTAssertTrue(model.exists && mute.exists, "\(fixture): the bar is without its model or its mute")
+        XCTAssertLessThanOrEqual(model.frame.maxX, mute.frame.minX + 0.5, "\(fixture): the model at \(model.frame) is over the mute at \(mute.frame)")
         let mic = ChatReading.microphone(app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "\(fixture): the chat screen")
         let (_, topo) = try ChatReading.wait(app, "reporting the transcript's frame") { _, topo in
@@ -160,6 +171,8 @@ final class StatusNoticeTests: XCTestCase {
                                      "\(fixture): \"\(text.label)\" at \(frame) is not level with the badge at \(badge.frame)")
             XCTAssertLessThanOrEqual(frame.maxX, badge.frame.minX,
                                      "\(fixture): \"\(text.label)\" at \(frame) runs into the badge at \(badge.frame)")
+            XCTAssertGreaterThanOrEqual(frame.minX, mute.frame.maxX,
+                                        "\(fixture): \"\(text.label)\" at \(frame) runs under the mute at \(mute.frame)")
             XCTAssertLessThanOrEqual(frame.maxY, transcript.minY + 0.5,
                                      "\(fixture): \"\(text.label)\" at \(frame) reaches down over the transcript at \(transcript)")
         }
