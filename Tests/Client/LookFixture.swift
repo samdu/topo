@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 219
+    static let fields = 229
 
     static let full = """
     {
@@ -111,6 +111,8 @@ enum LookFixture {
         "minimumWidth": 90,
         "spacing": 17,
         "slot": 48,
+        "maximumLines": 3,
+        "sendSymbol": "arrow.up",
         "sendFont": { "style": "footnote", "weight": "thin" },
         "sendInk": ["#AA00AA", "#00AAAA"],
         "sendRestingOpacity": 0.8
@@ -131,11 +133,14 @@ enum LookFixture {
       "settings": { "tint": ["#336699", "#99CCFF"], "codeFont": { "style": "largeTitle", "weight": "black" } },
       "composer": {
         "widthFraction": 0.55,
+        "typingWidthFraction": 0.7,
         "bottomPadding": 22,
         "horizontalInset": 30,
         "verticalInset": 14,
         "cornerRadius": 10,
         "spacing": 6,
+        "jewelInset": 41,
+        "perchInset": 63,
         "surface": "flat",
         "tint": ["#B3002D", "#FF6680"],
         "tintOpacity": 0.95,
@@ -154,6 +159,8 @@ enum LookFixture {
           "etchLight": { "color": "#AABBCCDD", "radius": 3, "x": 1, "y": 2 },
           "etchShade": { "color": "#DDCCBBAA", "radius": 2, "x": -1, "y": -3 },
           "heldOpacity": 0.85,
+          "slot": 31,
+          "more": "plus.circle",
           "keyboard": "pencil",
           "keyboardDown": "pencil.slash",
           "speaking": "bell",
@@ -213,7 +220,8 @@ enum LookFixture {
           "hairline": 0.25
         }
       },
-      "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" }
+      "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" },
+      "bar": { "font": { "style": "caption", "weight": "heavy" }, "ink": ["#102030", "#D0E0F0"], "spacing": 3 }
     }
     """
 

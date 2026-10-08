@@ -374,6 +374,50 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(taken.look.composer.flank.muted, "bell.slash")
     }
 
+    /// The row's fields are read in ranges of their own, and one refused costs itself alone: a
+    /// width outside the resting one's range, a count of lines that is not a whole number from
+    /// one to twenty, and a send or a mark the system has no symbol for.
+    func testTheRowsFieldsAreReadInTheirOwnRanges() {
+        let refused = [#"{"composer": {"typingWidthFraction": 0.05}}"#, #"{"composer": {"typingWidthFraction": 1.2}}"#,
+                       #"{"composer": {"jewelInset": -1}}"#, #"{"composer": {"perchInset": 201}}"#,
+                       #"{"composer": {"flank": {"slot": 4}}}"#, #"{"composer": {"flank": {"more": "pluss"}}}"#,
+                       #"{"draft": {"maximumLines": 0}}"#, #"{"draft": {"maximumLines": 21}}"#,
+                       #"{"draft": {"maximumLines": 2.5}}"#, #"{"draft": {"maximumLines": true}}"#,
+                       #"{"draft": {"sendSymbol": "paperplan"}}"#]
+        for document in refused {
+            let reading = LookDocument.read(document)
+            XCTAssertEqual(reading.look, Look(), "\(document) was taken")
+            XCTAssertEqual(reading.notes.count, 1, "\(document): \(reading.notes)")
+        }
+        let taken = LookDocument.read("""
+        { "composer": { "typingWidthFraction": 1, "jewelInset": 0, "perchInset": 200,
+                        "flank": { "slot": 8, "more": "plus.circle" } },
+          "draft": { "maximumLines": 20, "sendSymbol": "arrow.up", "slot": 0 } }
+        """)
+        XCTAssertEqual(taken.notes.count, 1, "the slot alone is refused: \(taken.notes)")
+        XCTAssertEqual(taken.state, .read(fields: 7))
+        XCTAssertEqual(taken.look.composer.typingWidthFraction, 1)
+        XCTAssertEqual(taken.look.composer.jewelInset, 0)
+        XCTAssertEqual(taken.look.composer.perchInset, 200)
+        XCTAssertEqual(taken.look.composer.flank.slot, 8)
+        XCTAssertEqual(taken.look.composer.flank.more, "plus.circle")
+        XCTAssertEqual(taken.look.draft.maximumLines, 20)
+        XCTAssertEqual(taken.look.draft.sendSymbol, "arrow.up")
+        XCTAssertEqual(LookDocument.read(#"{"draft": {"maximumLines": 1}}"#).look.draft.maximumLines, 1)
+    }
+
+    /// The send is drawn in the message's colour, as the field's outline is, and stays a field
+    /// of its own: a document that sets it moves it alone.
+    func testTheSendIsTheMessagesColourUntilADocumentSaysOtherwise() throws {
+        var same = Look()
+        same.draft.sendInk = same.draft.written.accent
+        XCTAssertEqual(try LookCensus.different(Look(), same), [])
+
+        let reading = LookDocument.read(##"{"draft": {"sendInk": "#123456"}}"##)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(try LookCensus.different(Look(), reading.look), ["draft.sendInk"])
+    }
+
     func testABooleanIsNotANumber() {
         let reading = LookDocument.read("""
         { "bubble": { "strokeWidth": true } }
