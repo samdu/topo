@@ -148,8 +148,9 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// asked of the database bounded by `timing.patience`
 /// (`RecordDatabase.answering(within:)`), and one that runs out is a
 /// transport failure like any other: nothing is forgotten, and the write
-/// may have landed after all. A renewal that did is found by the next call
-/// as this instance's own, since nobody takes a lease without moving its
+/// may have landed after all. A renewal that did is found by the next
+/// heartbeat, batch or `acquire()` as this instance's own (`takeOver()`
+/// claims over it instead), since nobody takes a lease without moving its
 /// epoch: the record at the epoch held is the lease held, whatever its
 /// version. A claim that did is not: the record names a device and an
 /// endpoint, not an instance, so this device's lease at a later epoch this
@@ -185,8 +186,8 @@ public actor PrimaryLease {
     private var yieldedTo: Lease?
     /// The epoch this instance held, or held when its lease lapsed, when a record that may be
     /// a claim of its own made it forget that lease (`disown`): what such a record is past
-    /// while nothing is held. Nil once this device holds a lease again, has yielded, or has
-    /// abandoned its claim.
+    /// while nothing is held. Nil once this device holds a lease again, has yielded or
+    /// deferred to a holder that answered its probe, or has abandoned its claim.
     private var disownedAt: Int64?
     private var heartbeatTask: Task<Void, Never>?
     /// The highest epoch this instance has sent a write of, answered or not. A lease of this
@@ -310,6 +311,7 @@ public actor PrimaryLease {
             guard generation == began else { return .contended }
             if alive {
                 forget()
+                disownedAt = nil
                 return .held(by: lease)
             }
 

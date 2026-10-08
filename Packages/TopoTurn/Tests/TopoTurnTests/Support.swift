@@ -172,14 +172,27 @@ final class Marks: @unchecked Sendable {
     var add: @Sendable (String) -> Void { { [self] name in lock.withLock { names.append(name) } } }
 }
 
-/// A database that fails the next fetch of the lease as an unreachable CloudKit does.
+/// A database that fails one call on request as an unreachable CloudKit does: the next fetch of
+/// the lease, the next read of the log, or the next save, which does not reach the store.
 final class LosesALeaseFetch: RecordDatabase, @unchecked Sendable {
     private let inner: InMemoryRecordDatabase
     private let lock = NSLock()
-    private var lose = false
+    private var lose = false, loseRead = false, loseSave = false
+    /// Runs before each read of the log.
+    var beforeRead: (@Sendable () async -> Void)?
     init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
     func loseNextLeaseFetch() { lock.withLock { lose = true } }
-    func save(_ records: [Record]) async throws -> [Record] { try await inner.save(records) }
+    func loseNextRead() { lock.withLock { loseRead = true } }
+    func loseNextSave() { lock.withLock { loseSave = true } }
+    private func away() -> any Error { RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+    private func read() async throws {
+        await beforeRead?()
+        if lock.withLock({ () -> Bool in defer { loseRead = false }; return loseRead }) { throw away() }
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if lock.withLock({ () -> Bool in defer { loseSave = false }; return loseSave }) { throw away() }
+        return try await inner.save(records)
+    }
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
         if ids.contains(Lease.recordID) {
             let lost = lock.withLock { () -> Bool in defer { lose = false }; return lose }
@@ -187,8 +200,8 @@ final class LosesALeaseFetch: RecordDatabase, @unchecked Sendable {
         }
         return try await inner.fetch(ids)
     }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await read(); return try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await read(); return try await inner.records(ofType: type) }
 }
 
 /// True once `condition` holds, asked a bounded number of times: a wait that fails instead of
