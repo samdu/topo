@@ -367,8 +367,9 @@ final class MascotPlacementTests: XCTestCase {
     }
 
     /// A look that moves only the perch moves a Topo on the glass, with no other geometry
-    /// changing: a glide to the new inset from the pane's leading edge, on the pane's top edge
-    /// still. One roaming or pinned stands where he stood, the perch being no part of his place.
+    /// changing: on the resting pane a glide to the new inset from the pane's leading edge, on
+    /// the pane's top edge still. One roaming or pinned stands where he stood, the perch being
+    /// no part of his place.
     func testANewPerchInsetMovesATopoOnTheGlassAndNoOther() throws {
         var time = 0.0
         let field = Self.field()
@@ -398,6 +399,28 @@ final class MascotPlacementTests: XCTestCase {
             XCTAssertNil(standing.move, "\(placement): a new perch moved a Topo who is not on the glass")
             XCTAssertEqual(standing.picture, stood)
         }
+    }
+
+    /// The same change with a keyboard in the field: on the short pane he is put at the new
+    /// inset at once and glides nowhere, a glide there crossing the well.
+    func testANewPerchInsetOverAKeyboardPutsHimThereAtOnce() throws {
+        var time = 0.0
+        let field = Self.field(keyboard: true)
+        var roam = settled(Self.settings(.glass), [field], time: &time)
+        let before = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(before, MascotPerch.glass(field, size: Self.size, inset: Self.settings(.glass).perch, reach: Self.reach))
+        let moves = roam.moves
+
+        var moved = Self.settings(.glass)
+        moved.perch = 120
+        roam.use(moved)
+        XCTAssertNil(roam.move, "a new perch over a keyboard is a glide across the well")
+        XCTAssertEqual(roam.moves, moves, "a placement counted as a glide")
+        let after = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(after, MascotPerch.glass(field, size: Self.size, inset: 120, reach: Self.reach))
+        XCTAssertNotEqual(after, before, "a new perch over a keyboard left him at the old one")
+        XCTAssertEqual(after.minY, before.minY, "the perch moved him off the pane's top edge")
+        XCTAssertEqual(roam.roost.name, "glass")
     }
 
     // MARK: A drag
