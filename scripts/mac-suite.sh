@@ -324,7 +324,7 @@ suite_others() {
   # Named, not globbed, so a test that disappears fails here.
   for test in simulator-run perf-run review-verdict ci-select-lane ci-audio-lane ci-select-suites \
               suite-gate ci-require-tests check-built-plist maps-opens-nothing build-ish \
-              model-manifest review-prompt review-cap janitor validate-and-push; do
+              model-manifest review-prompt review-cap janitor validate-and-push mac-suite; do
     say "scripts/tests/$test-test.sh"
     if [ ! -x "scripts/tests/$test-test.sh" ]; then
       err "scripts/tests/$test-test.sh is missing."
