@@ -11,7 +11,9 @@
 # red suite pushes nothing and posts nothing, unless origin's branch was already at the commit,
 # when it posts what happened; a suite that wrote no result is a failure; a push origin refuses
 # and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
-# branch is not at before any suite runs; a held lock is waited on and then given up on; and the
+# branch is not at before any suite runs; a held lock is waited on and then given up on; a suite an earlier
+# run left going is not started beside; a suite with two results is red; a description keeps the
+# logs' path; and the
 # `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
 #
 #   scripts/tests/validate-and-push-test.sh
@@ -54,6 +56,10 @@ while [ $# -gt 0 ]; do
 done
 { echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=${suites[*]}"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD"
 [ "${FAKE_SUITES-}" != died ] || exit 1
+if [ "${FAKE_SUITES-}" = twice ]; then
+  for suite in "${suites[@]}"; do echo "$suite=failure" >> "$results/suites.txt"; echo "$suite=success" >> "$results/suites.txt"; done
+  exit 1
+fi
 status=0
 for suite in "${suites[@]}"; do
   case " ${FAKE_SUITES-} " in *" $suite=failure "*) echo "$suite=failure" >> "$results/suites.txt"; status=1 ;; *) echo "$suite=success" >> "$results/suites.txt" ;; esac
@@ -217,14 +223,48 @@ is "red suite: no rerun" "$(grep -c '^run rerun' "$GH_CALLS")" 0
 # Another validation holds the Mac: waited on, then given up on, with no suite run.
 scratch locked Apps/Client/SettingsView.swift
 mkdir -p "$TOPO_VALIDATE_CACHE"
-lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "touch '$work/locked/held'; exec sleep 60" &
+lockf -k "$TOPO_VALIDATE_CACHE/lock" sh -c "echo \$\$ > '$work/locked/held'; exec sleep 60" &
 holder=$!
-until [ -e "$work/locked/held" ]; do :; done
+for _ in $(seq 100); do [ -s "$work/locked/held" ] && break; sleep 0.1; done
+[ -s "$work/locked/held" ] || fail "locked: the holder never took the lock"
 LOCK_WAIT=1 validate
 is "locked: exits 2" "$status" 2
 is "locked: no suite ran" "$(recorded head)" ""
 is "locked: nothing pushed" "$(origin_head)" ""
-pkill -P "$holder" 2>/dev/null; kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+kill "$(cat "$work/locked/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+
+# A suite whose script was killed outright is still running with the lock free: the next run
+# refuses to start beside it, and runs once it has gone.
+scratch orphan Apps/Client/SettingsView.swift
+mkdir -p "$TOPO_VALIDATE_CACHE"
+sleep 60 &
+orphan=$!
+{ echo "$orphan"; ps -o lstart= -p "$orphan"; } > "$TOPO_VALIDATE_CACHE/suite"
+validate
+is "orphan suite: exits 2" "$status" 2
+is "orphan suite: no suite ran" "$(recorded head)" ""
+is "orphan suite: nothing pushed" "$(origin_head)" ""
+case "$out" in *"kill $orphan"*) ok "orphan suite: names the pid to end" ;; *) fail "orphan suite: does not name pid $orphan: $out" ;; esac
+kill "$orphan" 2>/dev/null; wait "$orphan" 2>/dev/null
+validate
+is "orphan gone: exits 0" "$status" 0
+is "orphan gone: pushed" "$(origin_head)" "$sha"
+[ ! -e "$TOPO_VALIDATE_CACHE/suite" ] && ok "a finished run leaves no suite on record" || fail "a finished run left $TOPO_VALIDATE_CACHE/suite"
+
+# Two words for one suite, a failure and then a success: red, and posted as red.
+scratch twice Packages/TopoLink/Package.swift
+git -C "$repo" push -q origin topic
+FAKE_SUITES="twice" validate
+is "two results for a suite: exits 1" "$status" 1
+is "two results for a suite: posted as failure" "$(posted)" "local/others=failure "
+
+# A description keeps the whole path of the logs inside GitHub's 140 characters.
+scratch describe Apps/Client/Ear.swift
+mkdir -p "$work/describe/home"
+HOME="$work/describe/home" TOPO_VALIDATE_LOGS="$work/describe/home/Library/Logs/topo-validate" validate
+long="$(sed -n 's/.* -f description=//p' "$GH_CALLS" | awk '{ if (length($0) > 140) n++ } END { print n + 0 }')"
+is "descriptions: none over 140 characters" "$long" 0
+is "descriptions: each names the commit's logs" "$(grep -c "description=.*logs ~/Library/Logs/topo-validate/$sha\$" "$GH_CALLS")" 4
 
 # main is never pushed from here, and a detached HEAD has no branch to push to.
 scratch main docs/design.md

@@ -273,7 +273,8 @@ jobs:
   # and no longer, since a commit pushed without the script never gets one
   # and every minute here is billed. A `failure` or `error` is red at once. A
   # head validated after its push (`scripts/validate-and-push.sh` on a commit
-  # the branch already holds) has this job re-run by that script.
+  # the branch already holds) has this job re-run by that script, when every
+  # suite passed and this run had concluded.
   #
   # A status is the word of whoever holds a token that can write one, which
   # is the same-repo trust the header accepts: the gate is that the suites'
@@ -354,7 +355,7 @@ jobs:
               exit 0
             fi
             if [ "$SECONDS" -ge "$deadline" ]; then
-              echo "::error::No passing status on $HEAD_SHA for:$waiting. Run scripts/validate-and-push.sh on buddybox at that commit; it runs the suites, posts their statuses and re-runs this job."
+              echo "::error::No passing status on $HEAD_SHA for:$waiting. Run scripts/validate-and-push.sh on buddybox at that commit; it runs the suites, posts their statuses and, when they pass, re-runs this job."
               exit 1
             fi
             echo "Waiting for:$waiting"

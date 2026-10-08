@@ -236,7 +236,7 @@ def decide_pr(pr, run, jobs, state, now, require_label=False):
     def report(cond, text):
         out.append({"kind": "report", "key": f"{n}:{cond}:{head}", "text": text})
 
-    # A draft is at gate one, the coordinator's: its suites run, the reviewer
+    # A draft is at gate one, the coordinator's: its `test` reads its suites, the reviewer
     # waits for ready, and nothing about it is the janitor's to say.
     if pr["isDraft"]:
         return out

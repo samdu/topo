@@ -36,8 +36,13 @@
 #
 # Each status's description says pass or fail, the lane, the minutes and where the logs are:
 # ~/Library/Logs/topo-validate/<sha>/ on this Mac, kept for the ten newest commits. It exits 0
-# when every suite passed and the statuses are posted, 1 on a red suite, and 2 on anything that
-# stopped it earlier.
+# when every suite passed and the statuses are posted, 1 on a red suite, 2 on anything that
+# stopped it earlier, and 143 when a signal ended it, its suite ended with it.
+#
+# A SIGKILL ends the script and not its suite, and the kernel drops the lock with the script.
+# So the suite's pid is on record beside the lock ($cache/suite), and a run that finds that
+# suite still going refuses to start beside it: two suites in the one checkout and the one
+# logs directory would each answer for the other.
 set -euo pipefail
 
 cache="${TOPO_VALIDATE_CACHE:-$HOME/Library/Caches/topo-validate}"
@@ -55,7 +60,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --no-push) push=no; shift ;;
     --suites) suites_arg="${2:-}"; [ -n "$suites_arg" ] || { echo "--suites takes suite names, all or none" >&2; exit 2; }; shift 2 ;;
-    --lane) lane_arg="${2:-}"; shift 2 ;;
+    --lane) lane_arg="${2:-}"; [ -n "$lane_arg" ] || { echo "--lane takes full or fast" >&2; exit 2; }; shift 2 ;;
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -134,6 +139,14 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     echo "Another validation holds this Mac ($(cat "$cache/holder" 2>/dev/null || echo unknown)); waiting up to $((LOCK_WAIT / 60)) min."
     lockf -s -t "$LOCK_WAIT" 8 || die "another validation still holds this Mac after $((LOCK_WAIT / 60)) min ($(cat "$cache/holder" 2>/dev/null || echo unknown))."
   fi
+  # A suite whose script was killed outright is still running with the lock free. A pid alone
+  # can be recycled, so it is held to when it began (ps's lstart).
+  if [ -s "$cache/suite" ]; then
+    orphan="$(sed -n 1p "$cache/suite")"
+    if [ -n "$orphan" ] && [ "$(ps -o lstart= -p "$orphan" 2>/dev/null)" = "$(sed -n 2p "$cache/suite")" ]; then
+      die "the suite of an earlier validation is still running without its script (pid $orphan; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill $orphan\`, which stops its lane and deletes its simulators, and run again."
+    fi
+  fi
   echo "$branch $short, pid $$, since $(date '+%H:%M')" > "$cache/holder"
 
   checkout="$cache/checkout"
@@ -158,10 +171,12 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "${chosen[@]}") \
     > "$logs/mac-suite.log" 2>&1 8>&- &
   suite_pid=$!
+  { echo "$suite_pid"; ps -o lstart= -p "$suite_pid"; } > "$cache/suite"
   trap 'kill "$suite_pid" 2>/dev/null; wait "$suite_pid" 2>/dev/null; exit 143' TERM INT HUP
   suite_status=0
   wait "$suite_pid" || suite_status=$?
   trap - TERM INT HUP
+  rm -f "$cache/suite"
   minutes=$(((SECONDS - started) / 60))
   results="$(cat "$logs/suites.txt" 2>/dev/null || true)"
   # Every suite asked for has a line, or it failed: a run that died early wrote none.
@@ -207,12 +222,19 @@ post() {
   done
   die "could not post $1 to $short; run again with --no-push once GitHub answers."
 }
+# The logs as a description names them, short enough that the 140 characters keep the path.
+where="~${logs#"$HOME"}"
+[ "$where" != "~$logs" ] || where="$logs"
 for suite in ${chosen[@]+"${chosen[@]}"}; do
-  state="$(sed -n "s/^$suite=//p" <<<"$results" | tail -n 1)"
-  if [ "$state" = success ]; then said=passed; else said=failed; fi
-  post "local/$suite" "$state" "$suite $said on $host, lane $lane, run of $minutes min; logs $host:$logs"
+  # Red by any line that says so, as `red` above is read: never the last word of several.
+  if grep -q "^$suite=failure$" <<<"$results" || ! grep -q "^$suite=success$" <<<"$results"; then
+    state=failure said=failed
+  else
+    state=success said=passed
+  fi
+  post "local/$suite" "$state" "$suite $said, $lane lane, $minutes min on $host; logs $where"
   if [ "$suite" = topo_ui ] && [ "$lane" = full ] && [ "$state" = success ]; then
-    post local/real_ear success "Parakeet heard the fixture on $host; logs $host:$logs"
+    post local/real_ear success "Parakeet heard the fixture on $host; logs $where"
   fi
 done
 

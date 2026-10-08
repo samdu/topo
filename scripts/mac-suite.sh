@@ -28,11 +28,13 @@
 # pinned downloads between runs.
 #
 # Other sessions share this Mac (CLAUDE.md, *Working here*), so each suite runs on a simulator
-# this run created and deletes, nothing is killed by name, and `mac-suite.pids` in --results
+# this run created and deletes, this script kills nothing by name (the audio lane restarts
+# coreaudiod, by name, when it has just installed its driver), and `mac-suite.pids` in --results
 # lists this script's pid and then each command it is waiting on: `kill $(head -1 <file>)` ends
-# the run, which stops that command, the audio lane it started and its simulators. The audio
-# lane is one per Mac and `start` refuses a second, so two runs at once are the caller's to
-# queue; validate-and-push.sh holds one lock for the whole run.
+# the run, which stops that command, the audio lane it started and its simulators. A second
+# signal while that is under way, or a SIGKILL, ends it with them left behind. The audio lane is
+# one per Mac and `start` refuses a second, so two runs at once are the caller's to queue;
+# validate-and-push.sh holds one lock for the whole run.
 set -uo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -115,11 +117,13 @@ run() {
 }
 
 # bounded <seconds> <command>... — the command, ended by SIGALRM past its bound: a hang is a
-# failure with a log, minutes in.
+# failure with a log, minutes in. Only ever under `run`, whose background subshell this `exec`
+# replaces, so the pid `run` records and a signal reaches is the command's own and not a shell
+# left waiting on it.
 bounded() {
   local seconds="$1"
   shift
-  perl -e 'alarm shift; exec @ARGV or die "exec: $!\n"' "$seconds" "$@"
+  exec perl -e 'alarm shift; exec @ARGV or die "exec: $!\n"' "$seconds" "$@"
 }
 
 # new_simulator <label> <runtime> <name prefix> — a device of this run's own, of the type of the
@@ -204,7 +208,7 @@ suite_topo_unit() {
     # than on a phone.
     say "xcodebuild test (Topo, unit and userland)"
     rm -rf "$RESULTS/Topo-unit.xcresult"
-    run "$RESULTS/Topo-unit.log" env \
+    run "$RESULTS/Topo-unit.log" bounded 2400 env \
       "TEST_RUNNER_TOPO_USERLAND_ROOTFS=$rootfs" "TEST_RUNNER_TOPO_USERLAND_SHELL=$shell" \
       "TEST_RUNNER_TOPO_USERLAND_CLAUDE=$claude" TEST_RUNNER_LIBDISPATCH_COOPERATIVE_POOL_STRICT=1 \
       xcodebuild test-without-building \
@@ -232,14 +236,19 @@ suite_topo_ui() {
     # one long-lived feeder. It starts before the simulator boots, because a simulator's audio
     # binds to the coreaudiod it booted against and the lane restarts coreaudiod.
     say "Audio loopback for the microphone test"
+    # Ours to stop from the moment `start` is called, not from its success: one that fails
+    # after pinning the devices, or a signal while it is under way, leaves a feeder and the
+    # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
+    # found another run's lane, which is not this run's to stop.
+    lane_started=yes
     scripts/ci-audio-lane.sh start
     lane_status=$?
     if [ "$lane_status" = 3 ]; then
+      lane_started=no
       err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
       return 1
     fi
     [ "$lane_status" = 0 ] || return 1
-    lane_started=yes
 
     new_simulator ui "$IOS_SIMULATOR_RUNTIME" iPhone || return 1
     xcrun simctl boot "$udid" || return 1
@@ -281,7 +290,7 @@ suite_topo_ui() {
     # for want of an input and holds the prompt count exact.
     local runner=(TEST_RUNNER_TOPO_UITEST_AUDIO_INPUT=1 TEST_RUNNER_TOPO_UITEST_PRIVACY_RESET=1)
     [ -z "$models" ] || runner+=("TEST_RUNNER_TOPO_UITEST_EAR_MODELS=$models")
-    run "$RESULTS/Topo-ui.log" env "${runner[@]}" xcodebuild test-without-building \
+    run "$RESULTS/Topo-ui.log" bounded 3600 env "${runner[@]}" xcodebuild test-without-building \
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" \
       "${select[@]}" \
@@ -356,7 +365,7 @@ suite_others() {
   say "xcodebuild test (Womble)"
   rm -rf "$RESULTS/Womble.xcresult"
   if new_simulator womble "$IOS_SIMULATOR_RUNTIME" iPhone; then
-    run "$RESULTS/Womble.log" xcodebuild test \
+    run "$RESULTS/Womble.log" bounded 1200 xcodebuild test \
       -project Womble/Womble.xcodeproj -scheme Womble \
       -destination "platform=iOS Simulator,id=$udid" \
       -resultBundlePath "$RESULTS/Womble.xcresult" || status=1
