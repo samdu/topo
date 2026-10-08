@@ -232,8 +232,14 @@ struct Composer: View {
             .padding(.vertical, enclosure.verticalPadding)
             .background { TurnShape.fill(enclosure).opacity(besideOpacity) }
             .opacity(shown ? 1 : 0)
-            .allowsHitTesting(shown)
+            // A field that holds focus keeps its touches whatever the pane is: a text view whose
+            // touches are taken away gives up the keyboard, so a pane gone to rest under a field
+            // still being typed in — a hardware keyboard connected — would end the typing, and
+            // the pane could never take the focus as its row again.
+            .allowsHitTesting(shown || writing)
             .accessibilityHidden(!shown)
+            // At rest the words are the transcript row's to read, and the field says none.
+            .accessibilityValue(shown ? draft.text : "")
     }
 
     /// One line of the field, which is not drawn: the height the row is laid out round, so a

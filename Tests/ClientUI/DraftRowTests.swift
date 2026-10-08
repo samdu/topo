@@ -180,9 +180,17 @@ final class DraftRowTests: XCTestCase {
         XCTAssertTrue(app.keyboards.element.exists, "a tap on a turn's words lowered the keyboard")
         XCTAssertTrue(ChatReading.fieldShown(app), "a tap on a turn's words took the field away")
 
+        // What is written and left when the keyboard is lowered is the transcript row's to draw
+        // and to read: the field at rest says none of it.
+        ChatReading.field(app).typeText("bins")
         ChatReading.lowerKeyboard(app)
         XCTAssertTrue(app.buttons["Type instead"].waitForExistence(timeout: 5), "the pane did not go back to rest after the tap")
         XCTAssertFalse(ChatReading.fieldShown(app))
+        let left = app.descendants(matching: .any)[Self.row]
+        XCTAssertTrue(left.waitForExistence(timeout: 5), "what was written left the screen with the keyboard")
+        XCTAssertEqual(left.label, "bins")
+        let reads = app.descendants(matching: .any).matching(NSPredicate(format: "label == 'bins' OR value == 'bins'")).count
+        XCTAssertEqual(reads, 1, "what was written is read \(reads) times at rest")
 
         ChatReading.raiseKeyboard(app)
         let window = app.windows.firstMatch

@@ -434,6 +434,25 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(try LookCensus.different(Look(), reading.look), ["draft.sendInk"])
     }
 
+    /// A value the bar or the send cannot be drawn with is refused with a note, costs that field
+    /// alone, and leaves the fields beside it taken.
+    func testTheBarsFieldsAndTheSendsInkAreRefusedOneAtATime() throws {
+        let refused: [(String, String, String)] = [
+            ("bar", #""font": "enormous", "spacing": 3"#, "bar.spacing"),
+            ("bar", #""ink": 7, "spacing": 3"#, "bar.spacing"),
+            ("bar", ##""spacing": -1, "ink": "#123456""##, "bar.ink"),
+            ("bar", ##""spacing": "wide", "ink": "#123456""##, "bar.ink"),
+            ("draft", #""sendInk": 7, "maximumLines": 3"#, "draft.maximumLines"),
+            ("draft", #""sendInk": "puce-ish", "maximumLines": 3"#, "draft.maximumLines"),
+        ]
+        for (object, fields, kept) in refused {
+            let reading = LookDocument.read("{\"\(object)\": {\(fields)}}")
+            XCTAssertEqual(reading.notes.count, 1, "\(fields): \(reading.notes)")
+            XCTAssertEqual(try LookCensus.different(Look(), reading.look), [kept],
+                           "\(fields): the refused field was taken, or took the one beside it down")
+        }
+    }
+
     func testABooleanIsNotANumber() {
         let reading = LookDocument.read("""
         { "bubble": { "strokeWidth": true } }

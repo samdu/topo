@@ -218,6 +218,54 @@ final class ComposerGeometryTests: XCTestCase {
         }
     }
 
+    /// A field holding focus keeps it when the pane goes to rest under it — a keyboard leaving a
+    /// field still being typed in — so the pane can take the focus as its row again, and what is
+    /// typed meanwhile lands. A field that does not hold focus takes no touch at rest.
+    func testAFieldHoldingFocusKeepsItWhenThePaneGoesToRest() throws {
+        final class Form: ObservableObject { @Published var row = true }
+        struct Stage: View {
+            @ObservedObject var form: Form
+            @State var text = "Hello"
+            var body: some View { Composer(draft: Draft(text: $text, typing: .constant(true), row: form.row)) }
+        }
+        var look = Look()
+        look.composer.surface = .flat
+        let form = Form()
+        let view = VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Stage(form: form)
+        }
+        .environment(\.look, look)
+        .transaction { $0.animation = nil }
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: narrowest)
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let settle = { window.layoutIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.1)) }
+        settle()
+        func find(_ view: UIView) -> UITextView? {
+            (view as? UITextView) ?? view.subviews.lazy.compactMap(find).first
+        }
+        let field = try XCTUnwrap(find(window), "no text view in the composer")
+        XCTAssertTrue(field.isFirstResponder || field.becomeFirstResponder(), "the field would not take focus")
+        defer { field.resignFirstResponder() }
+        settle()
+
+        form.row = false
+        for _ in 0..<5 { settle() }
+        XCTAssertTrue(field.isFirstResponder, "the pane going to rest took the keyboard from a field being typed in")
+        field.insertText("!")
+        settle()
+        XCTAssertEqual(field.text, "Hello!", "what was typed at rest did not land")
+
+        field.resignFirstResponder()
+        for _ in 0..<3 { settle() }
+        let closed = sequence(first: field as UIView, next: \.superview).contains { !$0.isUserInteractionEnabled }
+        XCTAssertTrue(closed, "a field at rest and out of focus takes touches")
+    }
+
     /// The draft and the field's own text once `letters` have been typed, one at a time, into a
     /// composer whose field holds focus over `held`.
     private func typing(_ letters: String, over held: String, row: Bool) throws -> (draft: String, field: String) {
