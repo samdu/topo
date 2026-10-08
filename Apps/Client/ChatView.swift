@@ -336,7 +336,8 @@ struct ChatView: View {
                                                         overridePin: Tuning.shared.pin,
                                                         presence: panePresence,
                                                         contentBottom: contentBottomInTranscript,
-                                                        opened: debugOpened))
+                                                        opened: debugOpened,
+                                                        guestHome: GuestImages.Mounts.shared.home))
                 #endif
         }
     }

@@ -467,6 +467,9 @@ extension DebugRun {
         /// The addresses a tap on a reply's link asked to be opened, in order, over a fixture
         /// transcript (`TOPO_DEBUG_TRANSCRIPT`), where they are recorded and not opened.
         var opened: [String] = []
+        /// Whether the guest's home is mounted: whether there is a guest for a reply's image
+        /// to be read from in this launch.
+        var guestHome = false
     }
 
     struct TurnReport: Codable, Equatable {
@@ -488,7 +491,8 @@ extension DebugRun {
                            facing: MascotFacing = .left, clearance: CGFloat? = nil,
                            placed: Look.Mascot? = nil, overridePlacement: Look.Mascot.Placement? = nil,
                            overridePin: CGPoint? = nil, presence: Double? = nil,
-                           contentBottom: CGFloat? = nil, opened: [URL] = []) -> String {
+                           contentBottom: CGFloat? = nil, opened: [URL] = [],
+                           guestHome: Bool = false) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
                                 facing: facing.rawValue, clearance: clearance.map(Double.init))
         func point(_ point: CGPoint) -> [Double] { [Double(point.x), Double(point.y)] }
@@ -499,6 +503,7 @@ extension DebugRun {
         report.presence = presence
         report.contentBottom = contentBottom.map(Double.init)
         report.opened = opened.map(\.absoluteString)
+        report.guestHome = guestHome
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)
