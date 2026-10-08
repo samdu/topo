@@ -1,11 +1,11 @@
 #if os(iOS)
 import SwiftUI
 
-/// The two controls at the leading edge of the chat's navigation bar: the model, a menu of what
-/// the chat offers under the look's names, and the mute. They are the bar's and not the glass's,
-/// so they are drawn plainly in `Look.Bar` and are there whatever the pane under the transcript
-/// is doing. The menu is the system's, so a model is chosen as anything else in a bar is.
-struct ChatBar: View {
+/// The chat's controls in its navigation bar: the model, a control that opens the model slider
+/// across the middle of the bar and shuts it again, and the mute. They are the bar's and not the
+/// glass's, so they are drawn plainly in `Look.Bar` and are there whatever the pane under the
+/// transcript is doing, and each is an item of the bar's own, standing apart from the other.
+enum ChatBar {
     /// A model the chat offers: its alias, which is what `choose` is handed, and what the look
     /// calls it.
     struct Model: Equatable, Identifiable, Sendable {
@@ -13,50 +13,192 @@ struct ChatBar: View {
         var name: String
     }
 
-    /// Smallest first.
-    var models: [Model]
-    /// The alias of the one chosen.
-    var chosen: String
-    var choose: (String) -> Void = { _ in }
-    /// Replies to spoken turns are read aloud. The mute says so and asks for the other; what
-    /// muting ends is the chat's.
-    var readsAloud = true
-    var setReadsAloud: (Bool) -> Void = { _ in }
-    @Environment(\.look) private var look
-
-    /// What the UI suites find the two controls by.
+    /// What the UI suites find the controls by: the model's control, the slider it opens, a stop
+    /// of the slider by its model's alias, and the mute.
     static let model = "chat-model"
+    static let models = "chat-models"
+    static func stop(_ alias: String) -> String { "chat-model-\(alias)" }
     static let mute = "chat-mute"
 
-    var body: some View {
-        let flank = look.composer.flank
-        HStack(spacing: look.bar.spacing) {
-            Menu {
-                Picker("Model", selection: Binding(get: { chosen }, set: choose)) {
-                    ForEach(models) { Text($0.name).tag($0.id) }
-                }
-            } label: {
-                Image(systemName: flank.models)
-            }
-            .accessibilityIdentifier(Self.model)
-            .accessibilityLabel("Model")
-            .accessibilityValue(models.first { $0.id == chosen }?.name ?? "")
-            Button { setReadsAloud(!readsAloud) } label: {
+    /// Where the slider's stops are along it: what the slider is laid out by, what a finger on
+    /// the line is judged by, and what Topo is put under (`MascotPerch.under`), so the three
+    /// cannot disagree.
+    struct Stops: Equatable, Sendable {
+        var count: Int
+        /// The slider's own width, and from each of its ends to the first and last stop's centre.
+        var width: CGFloat
+        var inset: CGFloat
+
+        /// The look's inset, and no more than leaves the stops half the slider to stand along.
+        init(count: Int, width: CGFloat, inset: CGFloat) {
+            self.count = count
+            self.width = width.isFinite ? max(width, 0) : 0
+            self.inset = min(max(inset.isFinite ? inset : 0, 0), self.width / 4)
+        }
+
+        var span: CGFloat { max(width - 2 * inset, 0) }
+
+        /// How far along the line stop `index` is, 0 to 1; the middle for a lone stop.
+        func share(of index: Int) -> CGFloat {
+            count > 1 ? CGFloat(index) / CGFloat(count - 1) : 0.5
+        }
+
+        /// The centre of stop `index`, from the slider's leading edge.
+        func x(of index: Int) -> CGFloat { inset + span * share(of: index) }
+
+        /// A stop's column: as wide as the room between two stops, no wider than leaves an end
+        /// stop's inside the slider, and never narrower than `least`, which is what is pressed.
+        func column(least: CGFloat) -> CGFloat {
+            max(min(count > 1 ? span / CGFloat(count - 1) : width, 2 * inset), least)
+        }
+
+        /// The stop nearest `x`: where a finger on the line is.
+        func nearest(to x: CGFloat) -> Int? {
+            guard count > 0, x.isFinite else { return nil }
+            guard count > 1 else { return 0 }
+            let share = min(max((x - inset) / max(span, 1), 0), 1)
+            return Int((share * CGFloat(count - 1)).rounded())
+        }
+
+        /// Stop `index`'s column in the space `slider` is in, for a slider drawn there.
+        func frame(of index: Int, in slider: CGRect, least: CGFloat) -> CGRect {
+            let column = column(least: least)
+            return CGRect(x: slider.minX + x(of: index) - column / 2, y: slider.minY, width: column, height: slider.height)
+        }
+    }
+
+    /// The model's control: it opens the slider and shuts it again, and says the model chosen as
+    /// its value.
+    struct ModelButton: View {
+        /// What the look calls the model chosen.
+        var chosen: String
+        var open: Bool
+        var setOpen: (Bool) -> Void = { _ in }
+        @Environment(\.look) private var look
+
+        var body: some View {
+            let flank = look.composer.flank
+            Button { setOpen(!open) } label: {
                 // Both marks are laid out and one is drawn, so the control is one size either way.
+                ZStack {
+                    Image(systemName: flank.models).opacity(open ? 0 : 1)
+                    Image(systemName: flank.modelsOpen).opacity(open ? 1 : 0)
+                }
+            }
+            .accessibilityIdentifier(ChatBar.model)
+            .accessibilityLabel(open ? "Close the model slider" : "Choose the model")
+            .accessibilityValue(chosen)
+            .barControl(look.bar)
+        }
+    }
+
+    /// The mute: one control with two marks, which says whether replies to spoken turns are read
+    /// aloud and asks for the other; what muting ends is the chat's.
+    struct Mute: View {
+        var readsAloud = true
+        var setReadsAloud: (Bool) -> Void = { _ in }
+        @Environment(\.look) private var look
+
+        var body: some View {
+            let flank = look.composer.flank
+            Button { setReadsAloud(!readsAloud) } label: {
                 ZStack {
                     Image(systemName: flank.speaking).opacity(readsAloud ? 1 : 0)
                     Image(systemName: flank.muted).opacity(readsAloud ? 0 : 1)
                 }
             }
-            .accessibilityIdentifier(Self.mute)
+            .accessibilityIdentifier(ChatBar.mute)
             .accessibilityLabel(readsAloud ? "Mute replies" : "Read replies aloud")
+            .barControl(look.bar)
         }
-        .font(look.bar.font)
-        // The bar is a fixed height, so its controls stop growing with the text setting where
-        // its notice does.
-        .dynamicTypeSize(...ChatNotices.largestType)
-        .tint(look.bar.ink)
-        .foregroundStyle(look.bar.ink)
+    }
+
+    /// The model slider: a line with a stop for each model, smallest first, each model's name
+    /// under its stop and a knob on the one chosen. A tap on a stop or its name chooses it, and
+    /// so does a finger drawn along the line, at the stop it is nearest. It reports where its
+    /// chosen stop is on the screen, which is what Topo comes to hang under.
+    struct Slider: View {
+        /// Smallest first.
+        var models: [Model]
+        /// The alias of the one chosen.
+        var chosen: String
+        var choose: (String) -> Void = { _ in }
+        /// The chosen stop's column in the global space, as laid out.
+        var stop: (CGRect) -> Void = { _ in }
+        @Environment(\.look) private var look
+
+        var body: some View {
+            let slider = look.bar.slider
+            let ink = look.bar.ink
+            let at = models.firstIndex { $0.id == chosen }
+            GeometryReader { proxy in
+                let stops = Stops(count: models.count, width: proxy.size.width, inset: slider.inset)
+                // The knob no taller than the slider, so the line it is on is inside it.
+                let knob = min(slider.knob, proxy.size.height)
+                let line = knob / 2
+                let column = stops.column(least: knob)
+                ZStack(alignment: .topLeading) {
+                    Capsule().fill(ink.opacity(slider.restOpacity))
+                        .frame(width: stops.span, height: slider.track)
+                        .offset(x: stops.inset, y: line - slider.track / 2)
+                    ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
+                        let own = index == at
+                        Button { choose(model.id) } label: {
+                            VStack(spacing: slider.labelSpacing) {
+                                // The knob stands on the chosen stop, so its own mark is not drawn.
+                                Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
+                                    .frame(width: min(slider.stop, knob), height: min(slider.stop, knob))
+                                    .frame(height: knob)
+                                Text(model.name).font(slider.labelFont).lineLimit(1)
+                                    .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
+                            }
+                            .frame(width: column, height: proxy.size.height, alignment: .top)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier(ChatBar.stop(model.id))
+                        .accessibilityLabel(model.name)
+                        .accessibilityAddTraits(own ? .isSelected : [])
+                        .position(x: stops.x(of: index), y: proxy.size.height / 2)
+                    }
+                    if let at {
+                        Circle().fill(ink)
+                            .frame(width: knob, height: knob)
+                            .position(x: stops.x(of: at), y: line)
+                            .allowsHitTesting(false)
+                            .animation(.easeInOut(duration: look.composer.duration), value: at)
+                    }
+                }
+                .contentShape(Rectangle())
+                // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
+                .simultaneousGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
+                    guard let index = stops.nearest(to: drag.location.x), index != at else { return }
+                    choose(models[index].id)
+                })
+                .onChange(of: at.map { stops.frame(of: $0, in: proxy.frame(in: .global), least: knob) }, initial: true) { _, frame in
+                    if let frame { stop(frame) }
+                }
+            }
+            // No wider than the look's width, and as narrow as the bar leaves it: nothing of it
+            // is drawn outside its own frame, whatever the look asks of what is inside.
+            .frame(maxWidth: slider.width)
+            .frame(height: slider.height)
+            .clipped()
+            .dynamicTypeSize(...ChatNotices.largestType)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(ChatBar.models)
+        }
+    }
+}
+
+private extension View {
+    /// One of the bar's own controls, in the bar's font and ink. The bar is a fixed height, so
+    /// its controls stop growing with the text setting where its notice does.
+    func barControl(_ bar: Look.Bar) -> some View {
+        font(bar.font)
+            .dynamicTypeSize(...ChatNotices.largestType)
+            .tint(bar.ink)
+            .foregroundStyle(bar.ink)
     }
 }
 #endif
