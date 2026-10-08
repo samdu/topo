@@ -93,6 +93,22 @@ final class GuestTranscriptTests: XCTestCase {
         XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: wordless), .unresolved)
     }
 
+    /// A sub-agent's entry is named by the tool call it was written inside (`parent_tool_use_id`)
+    /// whether or not it is marked a sidechain, and its words are not the reply's.
+    func testASubagentsEntryByItsParentToolCallIsNotTheReplys() {
+        let lines = [
+            Self.input,
+            Self.assistant("m1", Self.text("First"), stop: "tool_use"),
+            Self.assistant("m1", Self.toolUse, stop: "tool_use"),
+            Self.assistant("s1", Self.text("a sub-agent's words"), stop: "end_turn", more: #","parent_tool_use_id":"toolu_1""#),
+            Self.toolResult,
+            Self.assistant("m2", Self.text("Last"), stop: "end_turn"),
+        ]
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: lines), .answered("First\n\nLast"))
+        // A sub-agent's finished message is not the turn's last: the turn has not answered.
+        XCTAssertEqual(GuestTranscript.verdict(for: "in-1", in: Array(lines.dropLast())), .unresolved)
+    }
+
     /// A message's text blocks run on, a message with no words adds no break, and a sub-agent's
     /// words and a synthetic error's are not the reply's.
     func testWhichWordsAreTheReplys() {

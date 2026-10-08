@@ -164,8 +164,9 @@ public enum StreamJSON {
     static let synthetic = "<synthetic>"
 
     /// Whether a line is a sub-agent's: one written inside a tool call (`parent_tool_use_id`),
-    /// which Claude Code's transcript keeps as a sidechain.
-    private static func isSubagents(_ object: [String: Any]) -> Bool {
+    /// which Claude Code's transcript keeps as a sidechain. `GuestTranscript` reads an entry of
+    /// the transcript by the same rule, so a recovered reply holds the words the live one did.
+    static func isSubagents(_ object: [String: Any]) -> Bool {
         object["parent_tool_use_id"] is String
     }
 

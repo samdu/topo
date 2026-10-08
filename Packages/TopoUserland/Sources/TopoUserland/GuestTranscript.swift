@@ -50,7 +50,7 @@ public enum GuestTranscript {
                 continue
             }
             if type == "user", isPrompt(entry) { break }
-            guard type == "assistant", entry["isSidechain"] as? Bool != true,
+            guard type == "assistant", entry["isSidechain"] as? Bool != true, !StreamJSON.isSubagents(entry),
                   entry["isApiErrorMessage"] as? Bool != true,
                   let message = entry["message"] as? [String: Any],
                   message["model"] as? String != StreamJSON.synthetic else { continue }
