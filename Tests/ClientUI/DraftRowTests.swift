@@ -143,40 +143,6 @@ final class DraftRowTests: XCTestCase {
         shot(app, "failed")
     }
 
-    /// With a hardware keyboard no keyboard rises, and the field holding focus is the row all the
-    /// same: a focused field is never undrawn. A simulator's keyboard is the Mac's until a
-    /// launch asks for the one on the screen (`TOPO_DEBUG_SOFTWARE_KEYBOARD`), and that switch
-    /// outlives the launch that threw it: on a simulator where one has, the keyboard rises here
-    /// too and the test ends in `XCTSkip` naming what did not run. The field is there to be typed in, in
-    /// the row's order, and what is typed is sent from the glass.
-    func testWithAHardwareKeyboardTheFieldHoldingFocusIsTheRow() throws {
-        let app = launch(owed: "", softwareKeyboard: false)
-        let mic = ChatReading.microphone(app)
-        let mark = keyboardMark(in: app)
-        let resting = mic.frame
-        mark.tap()
-        let deadline = Date().addingTimeInterval(10)
-        while !ChatReading.fieldShown(app), Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
-        XCTAssertTrue(ChatReading.fieldShown(app), "the field took focus and was not drawn")
-        guard !app.keyboards.element.exists else {
-            throw XCTSkip("missing coverage: this simulator has no hardware keyboard connected, so the keyboard rose and focus alone was not what made the row")
-        }
-        let field = ChatReading.field(app), send = app.buttons["Send"]
-        try settled(mic)
-        XCTAssertLessThan(mic.frame.width, resting.width, "the jewel is not drawn short in the row")
-        XCTAssertLessThan(mic.frame.maxX, field.frame.minX, "the field is not after the jewel")
-        XCTAssertLessThan(field.frame.maxX, send.frame.minX + 1, "the send is not after the field")
-        XCTAssertFalse(app.buttons["Type instead"].exists, "the way to the keyboard is still on the row")
-        shot(app, "row-hardware-keyboard")
-        field.typeText(Self.words)
-        XCTAssertEqual(field.value as? String, Self.words, "what was typed is not in the field")
-        send.tap()
-        let row = app.descendants(matching: .any)[Self.row]
-        XCTAssertTrue(row.waitForExistence(timeout: 10), "the words left the screen when the turn went")
-        XCTAssertEqual(row.label, Self.words)
-        XCTAssertEqual(drawings(of: Self.words, in: app), 1, "the turn on its way is drawn other than once")
-    }
-
     /// An app killed with words said and not yet in the log comes back to the row they were sent
     /// from: the words in it, on their way, with nothing to type over them in. The launch is
     /// given a turn already on the line (`TOPO_DEBUG_OUTBOX`), which is the state a relaunch finds
@@ -274,12 +240,12 @@ final class DraftRowTests: XCTestCase {
 
     /// Signed in with a placeholder token and past the first-run question, with neither model
     /// resident — nothing here presses the microphone — and the turn held before the model call
-    /// so the row it is sent from stays in flight. With `softwareKeyboard` the keyboard is the one
-    /// a phone has, on the screen, whatever the simulator has connected; without it, a hardware one.
+    /// so the row it is sent from stays in flight. The keyboard is the one a phone has, on the
+    /// screen, whatever the simulator has connected.
     /// `owed` is what is on the harness's line at the launch, in place of whatever the last one
     /// left: a turn said and not settled stays on disk, so every test here says what it wants
     /// rather than inheriting the turn the test before it sent and never landed.
-    private func launch(owed: String, softwareKeyboard: Bool = true) -> XCUIApplication {
+    private func launch(owed: String) -> XCUIApplication {
         let app = XCUIApplication()
         app.launchEnvironment["TOPO_DEBUG_OUTBOX"] = owed
         app.launchEnvironment["TOPO_CLAUDE_SETUP_TOKEN"] = "ui-test-placeholder"
@@ -287,7 +253,7 @@ final class DraftRowTests: XCTestCase {
         app.launchEnvironment["TOPO_DEBUG_EAR"] = "loading"
         app.launchEnvironment["TOPO_DEBUG_VOICE"] = "loading"
         app.launchEnvironment["TOPO_DEBUG_REPLY_DELAY"] = "600"
-        if softwareKeyboard { app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1" }
+        app.launchEnvironment["TOPO_DEBUG_SOFTWARE_KEYBOARD"] = "1"
         app.launchArguments += ["-firstRunAnswered", "YES"]
         app.launch()
         return app

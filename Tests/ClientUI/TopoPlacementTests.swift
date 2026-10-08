@@ -185,7 +185,7 @@ final class TopoPlacementTests: XCTestCase {
     // MARK: Helpers
 
     /// On the glass: the engine's shelf — 68 art pixels below his box's top at a scale of 1 — on
-    /// the pane's top edge, his box in the trailing flank, clear of the well.
+    /// the pane's top edge, his box at the leading end, clear of the well.
     private func assertOnTheGlass(_ topo: ChatReading.Topo, _ label: String,
                                   file: StaticString = #filePath, line: UInt = #line) throws {
         let box = try XCTUnwrap(topo.box, file: file, line: line)

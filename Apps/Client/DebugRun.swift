@@ -534,8 +534,8 @@ extension DebugRun {
         environment[keepSpokenVariable] == "1"
     }
 
-    /// Loads nothing, builds no session, hears nothing. One that `loads: false` never returns
-    /// from its load, which holds the ear at `loading`.
+    /// Loads nothing, builds no session, and hears `hears` in any audio it is given. One that
+    /// `loads: false` never returns from its load, which holds the ear at `loading`.
     struct StubEngine: SpeechEngine {
         var loads = true
         /// What it hears in any audio at all; nothing by default.

@@ -11,8 +11,8 @@ import XCTest
 /// and not the view's: a value nothing outside the source can change is a value the mind cannot
 /// reach, which is the whole point of `Look`.
 ///
-/// Every field of `Look.Composer` is varied here except four, and each of the four was shown to
-/// render byte for byte the same picture before it was left out rather than assumed to:
+/// Every field of `Look.Composer` is varied here except those below, and each of them was shown
+/// to render byte for byte the same picture before it was left out rather than assumed to:
 ///
 /// - `duration` and `presenceDuration` are times, so a still frame is the
 ///   same either way. Nothing tests them.

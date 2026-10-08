@@ -277,7 +277,17 @@ struct ChatView: View {
         // draft for a turn that will be sent on the release, after what was written for one that
         // will not.
         .onChange(of: voice.text) { _, text in
-            if voice.owner == .chat, !text.isEmpty { row.text = dictation.written(hearing: text) }
+            guard voice.owner == .chat, !text.isEmpty, dictation.standing(in: row.text) else { return }
+            let written = dictation.written(hearing: text)
+            dictation.wrote = written
+            row.text = written
+        }
+        // Typing into a draft the microphone is dictating into ends the dictation, as raising
+        // the keyboard ends a spoken turn: what was heard so far stays, and what is typed is not
+        // written over by the next caption.
+        .onChange(of: row.text) { _, text in
+            guard voice.owner == .chat, voice.listening, !dictation.standing(in: text) else { return }
+            voice.cancel(.chat)
         }
         // The row holds the turn's words until the turn is in the log, and the log is what ends
         // it: a turn whose reply failed is in the log like any other, so the row clears and the
@@ -403,9 +413,16 @@ struct ChatView: View {
     /// What a session of the microphone heard, sent where the session was going when it began
     /// (`Dictation`). One begun over the row is written after what was there and sends nothing:
     /// the send in the glass sends it, as the typed turn it is.
-    private func heard(_ heard: String, _ dictation: Dictation) async {
-        guard dictation.sends else {
-            row.text = dictation.written(hearing: heard)
+    private func heard(_ heard: String, _ going: Dictation) async {
+        guard going.sends else {
+            // What the session last wrote is the screen's to know, where its captions went; a
+            // draft typed into since is left as it is.
+            var session = going
+            if dictation.over == going.over { session.wrote = dictation.wrote }
+            guard session.standing(in: row.text) else { return }
+            let written = session.written(hearing: heard)
+            if dictation.over == going.over { dictation.wrote = written }
+            row.text = written
             return
         }
         await sendSpoken(heard)
@@ -686,12 +703,6 @@ struct ChatNotices: View {
     /// harness writes fits two at the largest `noticeFont` on the narrowest phone, drawn no
     /// smaller than `look.transcript.noticeLeastScale` of it.
     static let lines = 2
-
-    /// The room a notice has in the bar on the narrowest phone, between the model and the mute and
-    /// the badge: measured, since the bar lays its items out and says nothing of how. A turn in
-    /// flight has that less the spinner and the room beside it.
-    static let room: CGFloat = 184
-    static let spinner: CGFloat = 28
 
     /// The largest text setting the notices follow. The bar is a fixed height, so past this the
     /// words would reach down over the transcript; the system's own bar titles stop growing too.

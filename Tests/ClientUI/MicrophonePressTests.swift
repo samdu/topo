@@ -194,6 +194,29 @@ final class MicrophonePressTests: XCTestCase {
             add(shot)
         }
 
+        // Typing into the draft while the microphone is open over it, left open by a tap, ends
+        // the dictation: what is typed stays, and what the session would have written after
+        // what it began over is not written over it.
+        let before = try report(app)
+        mic.press(forDuration: 0.1)
+        let open = try waitForReport(app, timeout: 15, "the tap reached VoiceInput") { $0.presses == before.presses + 1 }
+        XCTAssertTrue(app.images["Listening; press to send"].waitForExistence(timeout: 15),
+                      "the tap left no hands-free session open: \(open.raw)")
+        // Its caption is written first, so what is typed is typed after a caption and the close
+        // that would have followed has something to write over.
+        written += " and the bins"
+        let captioned = Date().addingTimeInterval(15)
+        while field.value as? String != written, Date() < captioned { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+        XCTAssertEqual(field.value as? String, written, "the open microphone's caption is not after what was written")
+        field.typeText(" typed")
+        written += " typed"
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15),
+                      "typing into the draft left the microphone dictating into it")
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertEqual(field.value as? String, written, "what was typed during a dictation was written over")
+        XCTAssertTrue(app.keyboards.element.exists, "typing during a dictation took the keyboard down")
+        XCTAssertFalse(row.exists || sending.exists, "typing during a dictation sent a turn")
+
         app.buttons["Send"].tap()
         XCTAssertTrue(sending.waitForExistence(timeout: 10), "the send in the glass sent nothing")
         XCTAssertEqual(row.label, written, "what was typed and dictated did not go as one turn")

@@ -399,7 +399,8 @@ struct Draft {
     /// A turn on its way is the row's, whatever form the pane is in: the field is closed to it.
     /// What is being written is the field's while the pane is a row, and the row's otherwise,
     /// where there is anything to draw: a caption the microphone is writing with the keyboard
-    /// down.
+    /// down, words typed and left when the keyboard was lowered, or words typed with a hardware
+    /// keyboard in the moment before the pane takes the focus as its row.
     var drawer: Drawer {
         switch state {
         case .hidden: .none

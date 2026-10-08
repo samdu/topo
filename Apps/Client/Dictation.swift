@@ -12,6 +12,8 @@ import Foundation
 struct Dictation: Equatable, Sendable {
     /// What was written when a session began over the row; nil for a spoken turn.
     var over: String?
+    /// What the session last wrote into the draft; nil until it has written.
+    var wrote: String?
 
     /// A spoken turn.
     static let spoken = Dictation(over: nil)
@@ -32,6 +34,16 @@ struct Dictation: Equatable, Sendable {
         guard !heard.isEmpty else { return written }
         guard let last = written.last else { return heard }
         return last.isWhitespace ? written + heard : written + " " + heard
+    }
+
+    /// Whether the draft, holding `current`, is still as a dictation left it: what it last wrote,
+    /// or what was there when it began. Anything else is the person's typing since, and the
+    /// draft is then theirs: a caption written after what the session began over would take
+    /// their words out, so the session writes nothing more and is ended. A spoken turn's draft
+    /// is the session's own throughout.
+    func standing(in current: String) -> Bool {
+        guard let over else { return true }
+        return current == (wrote ?? over)
     }
 
     /// Whether a press on the microphone, drawn as `drawn`, begins a session: a press down on a

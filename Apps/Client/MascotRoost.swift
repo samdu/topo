@@ -381,7 +381,7 @@ enum MascotRoost: Equatable, Sendable {
     /// A place in the transcript, and the frame of his picture in it: a gap clear of the words, or
     /// where none is, the least covered place (`Decision.choice.clears` says which).
     case gap(CGRect)
-    /// The composer's trailing flank, placed `glass`.
+    /// The composer's leading end, placed `glass`.
     case glass(CGRect)
     /// Where a person pinned him, placed `pinned`, or where a drag has him now.
     case pinned(CGRect)

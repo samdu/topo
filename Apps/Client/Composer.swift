@@ -201,12 +201,15 @@ struct Composer: View {
         .opacity(besideOpacity)
     }
 
-    /// What is written, as the field holds it: nothing while the row at the end of the transcript
-    /// is what draws the words — a turn on its way, a caption with the keyboard down — so they
-    /// are drawn once and read once, and a field that draws nothing writes nothing back.
+    /// What is written, as the field holds it: the draft, and nothing while a turn is on its
+    /// way, which is the transcript row's and closed to the field. A pane at rest does not draw
+    /// its field or let it be read, so words the row is drawing are drawn and read once; the
+    /// field holds them all the same, because it can take focus at rest — with a hardware
+    /// keyboard the pane is at rest for a moment after it does — and letters typed into a field
+    /// emptied under the draft would replace the draft or be lost.
     private var written: Binding<String> {
-        Binding(get: { draft.drawer == .row ? "" : draft.text },
-                set: { if draft.drawer != .row { draft.text = $0 } })
+        Binding(get: { draft.state == .inFlight ? "" : draft.text },
+                set: { if draft.state != .inFlight { draft.text = $0 } })
     }
 
     /// The field the next turn is written in, in the draft's own enclosure and the transcript's
@@ -256,7 +259,8 @@ struct Composer: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
-        .disabled(nothing)
+        // A turn on its way has the words until it lands: a second press would be a second turn.
+        .disabled(nothing || draft.state == .inFlight)
         .accessibilityLabel("Send")
         .opacity(besideOpacity)
     }
@@ -373,11 +377,12 @@ struct ComposerRow: Layout {
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        // Never narrower than what it holds side by side with everything yielded, whatever it is
-        // offered: a look whose share of the screen is less than that has a pane wider than its
-        // share and not one whose controls stand on each other.
+        // Offered a width, the pane is that wide, and never wider than its container; offered
+        // none — a renderer with no container — it is the narrowest that holds what it holds
+        // side by side with everything yielded.
         let floor = ComposerPlan.floor(composer, draft: draft, geometry: geometry, row: row)
-        return plan(width: max(proposal.width ?? floor, floor), subviews).size
+        let offered = proposal.width.flatMap { $0 >= 1 && $0.isFinite ? $0 : nil }
+        return plan(width: offered ?? floor, subviews).size
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

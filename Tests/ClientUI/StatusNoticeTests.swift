@@ -98,20 +98,32 @@ final class StatusNoticeTests: XCTestCase {
     /// drawn smaller before any of it is cut.
     private static let leastScale: CGFloat = 0.65
 
-    /// Each text drawn whole: as many lines tall as its words take at its width in `font` at the
-    /// least the bar draws it. The accessibility label is the whole string whatever the bar drew,
-    /// so what is measured is the drawing — a notice cut short by the line limit is drawn fewer
-    /// lines tall than its words need even at their smallest.
+    /// Each text drawn whole. The accessibility label is the whole string whatever the bar drew,
+    /// so what is measured is the drawing. Words that fit the bar's two lines in `font` at the
+    /// text's width are drawn as many lines tall as they take. Words that do not are drawn
+    /// smaller, so shorter than two lines of `font` — a notice cut short by the line limit is
+    /// exactly two tall — and they fit the two lines at the least the bar draws them.
     private func whole(_ texts: [XCUIElement], in font: UIFont, _ fixture: String) {
-        let nominal = font, font = font.withSize(font.pointSize * Self.leastScale)
         for text in texts {
-            let needed = (text.label as NSString).boundingRect(
-                with: CGSize(width: text.frame.width + 1, height: .greatestFiniteMagnitude),
-                options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
-            let lines = (needed.height / font.lineHeight).rounded(), drawn = (text.frame.height / nominal.lineHeight).rounded()
-            XCTAssertLessThanOrEqual(lines, drawn,
-                                     "\(fixture): \"\(text.label)\" takes \(lines) lines at \(text.frame.width) pt wide and was drawn \(drawn) lines tall (\(text.frame)), cut short")
+            let said = "\(fixture): \"\(text.label)\" at \(text.frame)"
+            let lines = Self.lines(text.label, in: font, wide: text.frame.width)
+            guard lines > 2 else {
+                let drawn = (text.frame.height / font.lineHeight).rounded()
+                XCTAssertLessThanOrEqual(lines, drawn, "\(said) takes \(lines) lines and was drawn \(drawn) tall, cut short")
+                continue
+            }
+            XCTAssertLessThan(text.frame.height, 2 * font.lineHeight - 1,
+                              "\(said) takes \(lines) lines at its font and is two of them tall: cut short and not drawn smaller")
+            let least = Self.lines(text.label, in: font.withSize(font.pointSize * Self.leastScale), wide: text.frame.width)
+            XCTAssertLessThanOrEqual(least, 2, "\(said) does not fit two lines at the least the bar draws it")
         }
+    }
+
+    private static func lines(_ words: String, in font: UIFont, wide: CGFloat) -> CGFloat {
+        let needed = (words as NSString).boundingRect(
+            with: CGSize(width: wide + 1, height: .greatestFiniteMagnitude),
+            options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
+        return (needed.height / font.lineHeight).rounded()
     }
 
     /// What a turn held before the model call can say: where it is, or iCloud's refusal on a

@@ -39,6 +39,26 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(Dictation(over: "").written(hearing: "bins"), "bins")
     }
 
+    /// A dictation over the row writes only into a draft that is as it left it. Words typed since
+    /// the press are the person's, and a caption written after what the session began over would
+    /// take them out, so the session writes nothing more.
+    func testADraftTypedIntoSinceIsNotTheDictationsToWrite() {
+        var dictation = Dictation(over: "Remind me")
+        XCTAssertTrue(dictation.standing(in: "Remind me"), "nothing has been typed since the press")
+        XCTAssertFalse(dictation.standing(in: "Remind me to"), "typing before the first caption was written over")
+
+        dictation.wrote = dictation.written(hearing: "to water")
+        XCTAssertTrue(dictation.standing(in: "Remind me to water"), "the session's own caption ended it")
+        XCTAssertFalse(dictation.standing(in: "Remind me to water the"), "typing after a caption was written over")
+        XCTAssertFalse(dictation.standing(in: "Remind me"), "a caption deleted was written back")
+        XCTAssertFalse(dictation.standing(in: ""), "a draft cleared was written back")
+
+        var spoken = Dictation.spoken
+        XCTAssertTrue(spoken.standing(in: "anything"), "a spoken turn's draft is its own")
+        spoken.wrote = "bins"
+        XCTAssertTrue(spoken.standing(in: "bins on"))
+    }
+
     /// A session begins on a press down on a microphone that is shut. The release, the press that
     /// closes a microphone left open, and a press on Stop begin none, so each follows the session
     /// it belongs to.

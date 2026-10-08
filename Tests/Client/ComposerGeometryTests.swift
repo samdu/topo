@@ -202,6 +202,68 @@ final class ComposerGeometryTests: XCTestCase {
                 try XCTUnwrap(probe.well, "\(composer): no well was laid out"))
     }
 
+    // MARK: Typed
+
+    /// What is typed into the field is the draft's in either of the pane's forms. With a hardware
+    /// keyboard the pane is at rest for a moment after the field takes focus, and the first
+    /// letter typed then makes the draft the transcript row's to draw: the letters after it are
+    /// still the field's to write, each of them, and the field is not emptied under them.
+    func testEveryLetterTypedIsTheDraftsWhateverFormThePaneIsIn() throws {
+        for row in [false, true] {
+            for held in ["", "bins on Tuesday"] {
+                let typed = try typing("hi there", over: held, row: row)
+                XCTAssertEqual(typed.draft, held + "hi there", "row \(row), over \"\(held)\": letters typed did not reach the draft")
+                XCTAssertEqual(typed.field, held + "hi there", "row \(row), over \"\(held)\": the field does not hold what was typed into it")
+            }
+        }
+    }
+
+    /// The draft and the field's own text once `letters` have been typed, one at a time, into a
+    /// composer whose field holds focus over `held`.
+    private func typing(_ letters: String, over held: String, row: Bool) throws -> (draft: String, field: String) {
+        final class Written { var text = "" }
+        struct Stage: View {
+            let written: Written
+            let row: Bool
+            @State var text: String
+            var body: some View {
+                Composer(draft: Draft(text: $text, typing: .constant(true), row: row))
+                    .onChange(of: text, initial: true) { _, text in written.text = text }
+            }
+        }
+        var look = Look()
+        look.composer.surface = .flat
+        let written = Written()
+        let view = VStack(spacing: 0) {
+            Spacer(minLength: 0)
+            Stage(written: written, row: row, text: held)
+        }
+        .environment(\.look, look)
+        .transaction { $0.animation = nil }
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        window.frame = CGRect(origin: .zero, size: narrowest)
+        window.rootViewController = UIHostingController(rootView: view)
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let settle = { window.layoutIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+        settle()
+        func find(_ view: UIView) -> UITextView? {
+            (view as? UITextView) ?? view.subviews.lazy.compactMap(find).first
+        }
+        let field = try XCTUnwrap(find(window), "no text view in the composer")
+        XCTAssertTrue(field.isFirstResponder || field.becomeFirstResponder(), "the field would not take focus")
+        settle()
+        field.selectedRange = NSRange(location: (field.text as NSString).length, length: 0)
+        for letter in letters {
+            field.insertText(String(letter))
+            settle()
+        }
+        defer { field.resignFirstResponder() }
+        return (written.text, field.text)
+    }
+
     /// An anchor's rectangle in the window's space, so the resting and the short layouts, whose
     /// composers are of different heights, are compared on one set of axes.
     private static func global(_ anchor: Anchor<CGRect>?, _ proxy: GeometryProxy) -> CGRect? {
