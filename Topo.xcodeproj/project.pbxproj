@@ -135,6 +135,7 @@
 		447E5988846796C166E2407C /* AudioSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC3B61ECC19FAAEF88997BC8 /* AudioSession.swift */; };
 		451D5461A5BC39C82450FAB4 /* SpokenReplyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3900902B180055DC8BBE866B /* SpokenReplyTests.swift */; };
 		454E7BD87EC59EA7652916BC /* TopoAppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */; };
+		46554CCDE1895C6F185EAA3F /* LogTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78251DBFCA77E7486D47E3C0 /* LogTool.swift */; };
 		46900B879C0B64EE7C9F2995 /* ControlDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BD599AC4315251579CE778 /* ControlDefaults.swift */; };
 		46E8500C0C4AD6DBF1BCCCEA /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333D38923B458890391C4F4C /* MascotView.swift */; };
 		473D96F72E5B9C40C4975D6A /* Mascot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F572EF397E4BF9E7FF6685 /* Mascot.swift */; };
@@ -300,6 +301,7 @@
 		A399F66B2B5BFE21E44EE31E /* VocabularyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */; };
 		A3D661B5CE177C2B33F05C6F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
 		A56C590D71541D09A430FDF9 /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */; };
+		A5C08588714126ACE17E504A /* LogToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01E2AA2FBC22C4A180D4E383 /* LogToolTests.swift */; };
 		A68A33D087A975DCF766B663 /* TopoWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 806C5B7DBD88E2CC3F7E98BE /* TopoWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A761DE65D0A972E58E828818 /* TopoWatchWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 738BC8AD7B6AE57B9135A057 /* TopoWatchWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A76EE7D068D4DD456A0343EE /* MarkdownText.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7AB34A8DDAD58852FF0949E /* MarkdownText.swift */; };
@@ -546,6 +548,7 @@
 		004642A0824EA785157BF757 /* FirstRunView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FirstRunView.swift; sourceTree = "<group>"; };
 		011C3E458182B06895F173DA /* TopoMomentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoMomentTests.swift; sourceTree = "<group>"; };
 		017C0E3316F8178AF19904AE /* TopoTalkTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoTalkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		01E2AA2FBC22C4A180D4E383 /* LogToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogToolTests.swift; sourceTree = "<group>"; };
 		0218040D6E213DF4C1424647 /* WidgetSnapshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetSnapshotTests.swift; sourceTree = "<group>"; };
 		0364BEBF4B83A52C1E950A08 /* LookFixture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LookFixture.swift; sourceTree = "<group>"; };
 		055408BFEC002888603D7515 /* GuestVaultMountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestVaultMountTests.swift; sourceTree = "<group>"; };
@@ -674,6 +677,7 @@
 		766030764883BAAC87FAA3B1 /* ChatNoticesRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNoticesRenderTests.swift; sourceTree = "<group>"; };
 		768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAppDelegate.swift; sourceTree = "<group>"; };
 		771746CA069BC2B3B60EC32C /* GuestClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClock.swift; sourceTree = "<group>"; };
+		78251DBFCA77E7486D47E3C0 /* LogTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTool.swift; sourceTree = "<group>"; };
 		7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestPidfdTests.swift; sourceTree = "<group>"; };
 		7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftRowTests.swift; sourceTree = "<group>"; };
 		7A4CB88ED3E53A495B415761 /* NotePush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotePush.swift; sourceTree = "<group>"; };
@@ -1221,6 +1225,7 @@
 				9FFBCB76953EE398AF63FB9D /* GitHubTool.swift */,
 				EB40574A451BCD56247E1E50 /* HomeTool.swift */,
 				84E8FFDC241EE10C721569CE /* LocationTool.swift */,
+				78251DBFCA77E7486D47E3C0 /* LogTool.swift */,
 				D237ABF387E8A76064A494FA /* LookTool.swift */,
 				CF31113B87FCBEE95414EAD2 /* MapsTool.swift */,
 				5AEBDE5DBDF558DA07A77435 /* NotifyTool.swift */,
@@ -1258,6 +1263,7 @@
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
 				834457A014E7809E1A052937 /* LicenceTests.swift */,
+				01E2AA2FBC22C4A180D4E383 /* LogToolTests.swift */,
 				3B4AAF2BA51E20FAEF2AB1FA /* LookDocumentTests.swift */,
 				0364BEBF4B83A52C1E950A08 /* LookFixture.swift */,
 				3BE447F6D164A10E8BC7A28E /* LookLiveTests.swift */,
@@ -2222,6 +2228,7 @@
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
 				3C29782D202AC24F494EB20A /* LicenceTests.swift in Sources */,
+				A5C08588714126ACE17E504A /* LogToolTests.swift in Sources */,
 				2F2C24F4D930E90272D6ED1D /* LookDocumentTests.swift in Sources */,
 				D2F8B1E1223894485901C980 /* LookFixture.swift in Sources */,
 				2D6A036BCDB473F05062F65E /* LookLiveTests.swift in Sources */,
@@ -2337,6 +2344,7 @@
 				5E1111510510B24B236906B5 /* Harness.swift in Sources */,
 				C133BF5CB55B8F346380C2C0 /* HomeTool.swift in Sources */,
 				DBF301F96AA4B4AB1BD70913 /* LocationTool.swift in Sources */,
+				46554CCDE1895C6F185EAA3F /* LogTool.swift in Sources */,
 				3823B3829FF33312ACBCE0B1 /* Look.swift in Sources */,
 				9107FEAD3FE82BD92D841883 /* LookDocument.swift in Sources */,
 				E2952F8F672806D95C01C341 /* LookTool.swift in Sources */,
