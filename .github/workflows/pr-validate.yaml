@@ -517,8 +517,9 @@ jobs:
   codex:
     needs: [select, test, codex_wait]
     # Same-repo branches only: a fork PR carries untrusted content and must
-    # never meet the login. (A fork PR then has no verdict, reviewer_ran goes
-    # red, and it stays a human merge.)
+    # never meet the login. (A fork PR then has no verdict, reviewer_ran and
+    # review_gate go red, and it stays a human merge, made past the required
+    # check with `gh pr merge --admin`.)
     #
     # `!cancelled()` in place of the implicit `success()`, so every
     # `needs.<job>.result` is spelled out — without them, a red `test` would
@@ -1018,10 +1019,14 @@ jobs:
   #
   #   reviewer_ran   red  ⇒ no verdict exists. Infrastructure or a draft.
   #                         Re-runnable; not a statement about the code.
+  #                         With the reviewer job not concluded `success`,
   #                         review_gate is red beside it and adds nothing: it
-  #                         is main's required check, and a check that passed
+  #                         is a required check on main, and one that passed
   #                         with no verdict would let the PR past branch
   #                         protection on its own, whatever this run concluded.
+  #                         (A suite or post_feedback red beside a reviewer
+  #                         that did conclude leaves reviewer_ran red too, and
+  #                         review_gate then says what the verdict was.)
   #   review_gate    red, reviewer_ran green
   #                       ⇒ the reviewer ran and its verdict blocks, or it
   #                         answered with nothing usable. A review decision.
@@ -1119,13 +1124,14 @@ jobs:
   # The verdict, and deliberately after post_feedback: a blocking verdict must
   # still reach the PR (and through it the session) before it fails the run.
   #
-  # It is red whenever no verdict exists, as reviewer_ran is: this job is the
-  # required check, so it is the one branch protection reads, and it must
-  # never be green on a head nobody reviewed — a reviewer that failed after an
-  # earlier blocking verdict included. reviewer_ran says why there is none;
-  # the guard below fails closed if reviewer_ran passed with no verdict.
+  # It is red whenever the reviewer job did not conclude `success`: branch
+  # protection reads this job, not the run, so it must not pass on a head whose
+  # reviewer produced no verdict — a reviewer that failed after an earlier
+  # blocking verdict, or after uploading this one, included. reviewer_ran says
+  # why there is none; the guard below names the split as broken if
+  # reviewer_ran passed with no verdict.
   #
-  # This is the required status check on main.
+  # This is a required status check on main, beside `test`.
   review_gate:
     needs: [reviewer_ran, select, test, review_cap, codex, post_feedback]
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
@@ -1194,10 +1200,9 @@ jobs:
 
           if [ "$CODEX_RESULT" != "success" ]; then
             # No verdict exists, so there is no review decision to report and
-            # this check must not read as one. reviewer_ran owns the reason.
-            # Assert it actually took the failure: if it is green here the split
-            # has broken and the run would otherwise conclude success with
-            # nothing reviewed, so fail closed instead.
+            # this check must not read as one. reviewer_ran owns the reason, and
+            # if it is green here the split has broken: this job fails either
+            # way, and says which.
             if [ "$PRECHECK_RESULT" = "success" ]; then
               echo "::error::No verdict exists (reviewer: $CODEX_RESULT) but reviewer_ran passed. The gate split is broken; failing closed."
               finish block "gate split broken: no verdict but reviewer_ran passed" 1
