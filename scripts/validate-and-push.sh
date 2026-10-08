@@ -183,7 +183,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   else
     rm -f "$cache/suite"
   fi
-  trap 'kill "$suite_pid" 2>/dev/null; wait "$suite_pid" 2>/dev/null; exit 143' TERM INT HUP
+  trap 'kill "$suite_pid" 2>/dev/null; wait "$suite_pid" 2>/dev/null; rm -f "$cache/suite"; exit 143' TERM INT HUP
   suite_status=0
   wait "$suite_pid" || suite_status=$?
   trap - TERM INT HUP
