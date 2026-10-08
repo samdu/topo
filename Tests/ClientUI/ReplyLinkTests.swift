@@ -1,9 +1,10 @@
 import XCTest
 
-/// A reply's link is the one part of its words that is a tap target, and the target is the linked
-/// words alone: a tap on them asks for the link's address to be opened, once, and a tap on the
-/// words round them asks for nothing. Only a running app routes a touch to a run of a text, so
-/// this is a UI test.
+/// A reply's link is the one part of its words that is a tap target: a tap on the linked words
+/// asks for the link's address to be opened, once, and a tap on the words before them asks for
+/// nothing. Only a running app routes a touch to a run of a text, so this is a UI test. The
+/// region is `Text`'s own and these taps are on words: what a touch in the blank space beside a
+/// run does is not asked here (it goes to the nearest glyph, `docs/chat.md`).
 ///
 /// The chat is launched over the `links` fixture (`PreviewTurns.links`), where the taps a link
 /// takes are recorded on the chat's report and nothing is opened (`DebugRun.ChatReport.opened`).
