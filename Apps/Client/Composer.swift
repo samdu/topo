@@ -1,24 +1,29 @@
 #if os(iOS)
 import SwiftUI
 
-/// The bar under the transcript: a floating pane of glass with the microphone set into the
-/// middle of it and its controls at each end — the keyboard and the mute on the leading flank,
-/// the model on the trailing one, which opens the model slider across the top of the pane. It
-/// holds no state of its own beyond what it is handed, so a canvas can show every state it has.
+/// The bar under the transcript: a floating pane of glass in one of two forms. At rest the
+/// microphone is set into the middle of it, with the control for everything else on the leading
+/// flank and the way to the keyboard on the trailing one. With the keyboard up it is one row:
+/// the microphone in its leading end, then the control for everything else, the field the next
+/// turn is written in, and the send. It holds nothing of its own beyond the field's focus, so a
+/// canvas can show every state it has.
+///
+/// The two forms are one layout over the same views (`ComposerRow`), so the field is one field
+/// and the form changing is every view moving to its other place: it changes in the transaction
+/// the keyboard's rise and fall is animated in, and nothing here animates it on a curve of its
+/// own, so the pane widens and goes short on the keyboard's curve and in step with it.
 ///
 /// The glass is what says the microphone is open. A thumb on the microphone covers the jewel,
 /// so the pane takes Topo's colour, the jewel goes pale under the thumb and the glow spills onto
 /// the transcript behind: the state reads at the edges, where the hand is not. Every value it
-/// draws with is a field of `Look.Composer`, so the pane, the etch, the well and both states of
-/// the jewel are reachable from outside the source.
-///
-/// Words are not written here. The person's next turn is written at the end of the transcript,
-/// in the bubble it is about to become (`DraftRow`); this raises the keyboard for it and holds
-/// the microphone. While the keyboard is up the pane is shorter: the microphone is drawn at
-/// `compactShare` of its size and the flanks at theirs (`ComposerGeometry`).
+/// draws with is a field of `Look`, so the pane, the etch, the well, both states of the jewel,
+/// the field and the send are reachable from outside the source.
 struct Composer: View {
-    /// The keyboard is up, and the row at the end of the transcript has it.
-    @Binding var typing: Bool
+    /// The person's next turn: what is written, whether the keyboard is asked for, and whether
+    /// the pane is a row (`Draft.row`), which is the keyboard on screen as the keyboard's own
+    /// safe area says (`KeyboardInset`) or the field holding focus with no keyboard to come
+    /// (`ComposerForm`).
+    var draft: Draft
     /// What the microphone is doing, read off `VoiceInput` by the chat screen.
     var mic: MicState = .init()
     /// How much of a pane the pane is, 0 to 1: the surface, its edge and the glow it spills are
@@ -26,12 +31,6 @@ struct Composer: View {
     /// and nothing else. The chat works it out from the transcript's scroll geometry
     /// (`PanePresence`); a screen with no geometry to read hands over 1, which is the pane whole.
     var presence: Double = 1
-    /// The keyboard is on screen, as the keyboard's own safe area says (`KeyboardInset`), not
-    /// `typing`, which is what was asked for and outlives the field while a turn is on its way.
-    /// The pane is drawn short under it. It changes in the transaction the keyboard's rise and
-    /// fall is animated in, and nothing here animates it on a curve of its own, so the pane goes
-    /// short and tall again on the keyboard's curve and in step with it.
-    var keyboard = false
     /// Called with true on the press and false on the release, and the state the microphone was
     /// drawn in when it came: the press is what the person saw. The session logic is
     /// `VoiceInput`'s, and a press on Stop is a stop (`MicPress`); this passes the press on and
@@ -40,49 +39,21 @@ struct Composer: View {
     /// What the UI test decodes after a press (`VoiceInput.Report` as JSON), read from the
     /// microphone's accessibility value in a debug build only.
     var micReport: String?
-    /// Replies to spoken turns are read aloud. The mute on the leading flank says so and asks for
-    /// the other; what muting ends is the chat's.
-    var readsAloud = true
-    var setReadsAloud: (Bool) -> Void = { _ in }
-    /// The models the chat offers and the one chosen, or nil where there is no choice to make.
-    var models: Models?
+    /// Told whether the field holds focus. `Draft.typing` is what was asked for and outlives the
+    /// field while a turn is on its way; this is what is, and it is what the glass is present
+    /// for.
+    var focused: @MainActor (Bool) -> Void = { _ in }
+    /// The room the pane has to grow in: from the transcript's top edge, under the navigation
+    /// bar, to the keyboard. The field takes no more lines than leave the pane inside it
+    /// (`ComposerPlan.lines`), and the row is no taller than it whatever it holds. Nil where
+    /// nothing measured it, which is the look's lines alone and a row as tall as what it holds.
+    var room: CGFloat?
     @Environment(\.look) private var look
-
-    /// The model slider as the glass draws it: the stops, smallest model first, the one chosen,
-    /// and whether the slider is open. A value the chat makes and two things it is told, so the
-    /// glass knows no model by name.
-    struct Models {
-        struct Stop: Equatable, Identifiable, Sendable {
-            /// The model's alias, which is what `choose` is handed.
-            var id: String
-            /// What the look calls it.
-            var name: String
-        }
-
-        var stops: [Stop]
-        var chosen: String
-        var open = false
-        var setOpen: (Bool) -> Void = { _ in }
-        var choose: (String) -> Void = { _ in }
-
-        /// The stop nearest `x` on a line `width` long whose first and last stops are `inset`
-        /// from its ends: where a finger on the line is.
-        static func nearest(to x: CGFloat, width: CGFloat, inset: CGFloat, count: Int) -> Int? {
-            guard count > 0, x.isFinite, width.isFinite else { return nil }
-            guard count > 1 else { return 0 }
-            let span = max(width - 2 * inset, 1)
-            let share = min(max((x - inset) / span, 0), 1)
-            return Int((share * CGFloat(count - 1)).rounded())
-        }
-
-        /// How far along the line stop `index` of `count` is, 0 to 1; the middle for a lone stop.
-        static func share(of index: Int, count: Int) -> CGFloat {
-            count > 1 ? CGFloat(index) / CGFloat(count - 1) : 0.5
-        }
-    }
-
-    /// The slider is drawn: open, and with no keyboard up, under which the pane is short.
-    private var sliderShown: Bool { models?.open ?? false }
+    /// How tall one line of the field's words is, measured off the line the row is laid out
+    /// round: what turns the room into a number of lines.
+    @State private var textLine: CGFloat?
+    /// The field takes the keyboard while the keyboard is asked for, and lets it go with it.
+    @FocusState private var writing: Bool
 
     /// What the microphone is doing, and which of the five the glass draws for it. The chat
     /// screen reads four facts off `VoiceInput` and one off `Speaker`, and this decides what they
@@ -104,7 +75,7 @@ struct Composer: View {
         enum Appearance: String, Equatable, Sendable, CaseIterable {
             /// Nothing is open and a press would open something.
             case idle
-            /// A thumb is on the microphone: the flanks go, because nothing beside it is
+            /// A thumb is on the microphone: what is beside it goes, because nothing there is
             /// reachable under that hand.
             case held
             /// Opened by a tap and left open, so the hand is off the glass.
@@ -153,42 +124,54 @@ struct Composer: View {
     }
 
     var body: some View {
-        let geometry = ComposerGeometry.of(look.composer, keyboard: keyboard)
-        VStack(spacing: look.composer.models.spacing) {
-            if sliderShown, let models {
-                ModelSlider(models: models, ink: ink)
-                    .padding(.top, look.composer.models.topInset)
-                    .opacity(flankOpacity)
-                    .transition(.opacity)
+        let row = draft.row
+        let geometry = ComposerGeometry.of(look.composer, row: row)
+        // The well, the control and the field are the same views in both forms, each placed by
+        // what it is: a field that was one of two would be a second field, and the keyboard would
+        // fall between them. The send is the row's and the way to the keyboard the resting
+        // pane's, and each is there only in its own form, so neither is pressed or read in the
+        // other.
+        ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry, most: tallest) {
+            micButton(geometry).layoutValue(key: ComposerPart.self, value: .well)
+            more.drawn(as: .more)
+            field(shown: row).drawn(as: .field)
+            line.layoutValue(key: ComposerPart.self, value: .line)
+            if row {
+                send.drawn(as: .send)
+            } else {
+                keyboard.drawn(as: .keyboard)
             }
-            HStack(spacing: look.composer.spacing) {
-                // The two ends take the same width, which is what keeps the microphone in the
-                // middle of the glass. A control that has gone keeps its place, so the glass
-                // never changes size.
-                leading
-                    .etched(look.composer.flank, ink: ink)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                    .opacity(flankOpacity)
-                micButton(geometry)
-                trailing
-                    .etched(look.composer.flank, ink: ink)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(flankOpacity)
-            }
-            .padding(.horizontal, look.composer.horizontalInset)
         }
-        .padding(.vertical, geometry.verticalInset)
+        // A row held to the room is cut at its own edges: a mark or a line of type taller than
+        // the room is drawn inside the pane and over nothing above it.
+        .clipShape(RowCut(most: tallest))
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
         // The whole pane is off limits to Topo, at every presence.
         .mascotPane()
         .background(lozenge(geometry).opacity(max(presence, Self.leastSurface)).allowsHitTesting(presence > 0))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
-        .containerRelativeFrame(.horizontal) { width, _ in width * look.composer.widthFraction }
-        .padding(.bottom, look.composer.bottomPadding)
+        .containerRelativeFrame(.horizontal) { width, _ in
+            ComposerGeometry.width(look.composer, draft: look.draft, column: look.transcript.maximumLineWidth, in: width, row: row)
+        }
+        .padding(.bottom, foot)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
-        .animation(.easeInOut(duration: look.composer.duration), value: typing)
-        .animation(.easeInOut(duration: look.composer.duration), value: sliderShown)
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
+        .onAppear { writing = draft.typing }
+        .onChange(of: draft.typing) { _, wanted in writing = wanted }
+        // A turn on its way closes the field, which takes the keyboard with it. The keyboard is
+        // the person's until they put it down, so it comes back the moment the turn lands and
+        // there is somewhere to type again.
+        .onChange(of: draft.state) { _, now in if now != .inFlight, draft.typing { writing = true } }
+        // The keyboard lowered from anywhere — a drag down the transcript, another screen — is
+        // the field saying so, which is what keeps the control that raised it honest. The field
+        // closing to a turn on its way is not that, and says nothing about what the person
+        // wants next.
+        .onChange(of: writing) { _, held in
+            focused(held)
+            guard draft.state != .inFlight else { return }
+            draft.typing = held
+        }
+        .onDisappear { focused(false) }
     }
 
     /// The least the surface is drawn at, which is not nothing: at nothing SwiftUI takes it out of
@@ -198,63 +181,151 @@ struct Composer: View {
     /// takes no touch while the presence is nothing, as a surface that is not drawn takes none.
     static let leastSurface = 0.001
 
-    /// How much of the two ends is drawn: all of it, except under a thumb on the microphone.
-    private var flankOpacity: Double { mic.holding ? look.composer.flank.heldOpacity : 1 }
+    /// How much of what is beside the microphone is drawn: all of it, except under a thumb on the
+    /// microphone. It keeps its place either way, so the glass never changes size.
+    private var besideOpacity: Double { mic.holding ? look.composer.flank.heldOpacity : 1 }
 
-    /// The ink both ends are etched in: Topo's colour on clear glass, white once the glass
+    /// The ink the controls are etched in: Topo's colour on clear glass, white once the glass
     /// itself has taken that colour.
     private var ink: Color { mic.open ? look.composer.flank.openInk : look.composer.flank.ink }
 
-    /// The model: the control that opens the slider across the top of the pane and shuts it
-    /// again, which says the model chosen as its value. Nothing where there is no choice to make;
-    /// the flank keeps its space either way, so the microphone stays in the middle.
-    @ViewBuilder private var trailing: some View {
-        if let models {
-            let flank = look.composer.flank
-            HStack(spacing: 0) {
-                Button { models.setOpen(!models.open) } label: {
-                    Self.mark(flank.models, flank.modelsOpen, second: sliderShown).font(flank.font)
+    /// The control for everything else, which opens nothing yet: in both forms, beside the well.
+    private var more: some View {
+        Button {} label: {
+            // Laid out in the slot the plan gives it and no larger, so a mark larger than its
+            // slot is cut at the slot's edge and stands over nothing.
+            Cut { Image(systemName: look.composer.flank.more).font(look.composer.flank.font) }
+                .clipped()
+                .contentShape(Rectangle())
+        }
+        .accessibilityIdentifier("composer-more")
+        .accessibilityLabel("More")
+        .etched(look.composer.flank, ink: ink)
+        .opacity(besideOpacity)
+    }
+
+    /// The way to the keyboard, on the resting pane. The way back from it is a drag down the
+    /// transcript or a tap on its empty space, so the row has no place for this and it is not
+    /// there.
+    private var keyboard: some View {
+        Button { draft.typing = true } label: {
+            Image(systemName: look.composer.flank.keyboard).font(look.composer.flank.font)
+        }
+        .accessibilityLabel("Type instead")
+        .etched(look.composer.flank, ink: ink)
+        .opacity(besideOpacity)
+    }
+
+    /// What is written, as the field holds it: the draft, and nothing while a turn is on its
+    /// way, which is the transcript row's and closed to the field. A pane at rest does not draw
+    /// its field or let it be read, so words the row is drawing are drawn and read once; the
+    /// field holds them all the same, because it can take focus at rest — with a hardware
+    /// keyboard the pane is at rest for a moment after it does — and letters typed into a field
+    /// emptied under the draft would replace the draft or be lost.
+    private var written: Binding<String> {
+        Binding(get: { draft.state == .inFlight ? "" : draft.text },
+                set: { if draft.state != .inFlight { draft.text = $0 } })
+    }
+
+    /// The field the next turn is written in, in the draft's own enclosure and the transcript's
+    /// own type: one line, growing a line at a time to `maximumLines`, its frame growing no further
+    /// past that. It is the row's alone: at rest it is not drawn or pressed, and it stays where it
+    /// is so the keyboard has one field to rise for. The system's text view stays in the
+    /// accessibility tree in both forms; activating it there is a way to the keyboard.
+    private func field(shown: Bool) -> some View {
+        let enclosure = look.draft.written
+        // The enclosure's padding is the look's wherever the field has the room for it, and
+        // never more than leaves the words half of what the field is given (`Inset`).
+        return Inset(horizontal: enclosure.horizontalPadding, vertical: enclosure.verticalPadding) {
+            TextField("", text: written, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(look.transcript.bodyFont)
+                .foregroundStyle(look.transcript.text)
+                .lineLimit(1...lines)
+                .focused($writing)
+                .disabled(draft.state == .inFlight)
+                .onSubmit(draft.send)
+                .accessibilityLabel("What to say")
+        }
+            .clipped()
+            .background { TurnShape.fill(enclosure).opacity(besideOpacity) }
+            .opacity(shown ? 1 : 0)
+            // A field that holds focus keeps its touches whatever the pane is: a text view whose
+            // touches are taken away gives up the keyboard, so a pane gone to rest under a field
+            // still being typed in — a hardware keyboard connected — would end the typing, and
+            // the pane could never take the focus as its row again.
+            .allowsHitTesting(shown || writing)
+            .accessibilityHidden(!shown)
+            // The words are read where they are drawn: the field says them only while it is what
+            // draws them, and none at rest or while a turn is on its way, which are the
+            // transcript row's.
+            .accessibilityValue(draft.fieldValue)
+    }
+
+    /// The tallest the row is laid out: the room it has, less the room kept under the pane,
+    /// and never less than the well can be pressed in. Nil at rest and with no room measured.
+    private var tallest: CGFloat? {
+        guard draft.row, let room else { return nil }
+        return max(room - foot, Look.Composer.Well.pressable)
+    }
+
+    /// The room kept under the pane: the look's, and in a row with a room to stay inside no
+    /// more of that room than leaves the well pressable.
+    private var foot: CGFloat {
+        let asked = look.composer.bottomPadding
+        guard draft.row, let room else { return asked }
+        return min(asked, max(room - Look.Composer.Well.pressable, 0))
+    }
+
+    /// The most lines the field's frame grows to: the look's, and no more
+    /// than leave the pane inside the room it has. The band is the row at one line — the taller
+    /// of the well, the send's slot and the field's one line, and the room above and below.
+    private var lines: Int {
+        let most = max(look.draft.maximumLines, 1)
+        guard let room, let textLine else { return most }
+        let geometry = ComposerGeometry.of(look.composer, row: true)
+        let band = max(geometry.well, look.draft.slot, textLine + 2 * look.draft.written.verticalPadding)
+            + 2 * geometry.verticalInset
+        // A row's height of the room is left to the transcript, which has a least height of its
+        // own: a pane and a transcript that together outgrow the column are pushed past both
+        // of its ends, under the bar and under the keyboard.
+        return ComposerPlan.lines(most: most, room: room - foot - band, band: band, line: textLine)
+    }
+
+    /// One line of the field, which is not drawn: the height the row is laid out round, so a
+    /// field of one line stands level with the well and one of more grows upward from there.
+    private var line: some View {
+        Text(" ")
+            .font(look.transcript.bodyFont)
+            .background {
+                GeometryReader { text in
+                    Color.clear.onChange(of: text.size.height, initial: true) { _, tall in textLine = tall }
                 }
-                .accessibilityIdentifier("composer-model")
-                .accessibilityLabel(sliderShown ? "Close the model slider" : "Choose the model")
-                .accessibilityValue(models.stops.first { $0.id == models.chosen }?.name ?? "")
-                .frame(maxWidth: .infinity)
-                // The far half is nobody's, which is what mirrors the keyboard's across the well.
-                Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
             }
-        } else {
-            Color.clear.frame(width: 0, height: 0)
-        }
+            .padding(.vertical, look.draft.written.verticalPadding)
+            .hidden()
+            .accessibilityHidden(true)
     }
 
-    /// The way to the keyboard, and back from it, and beside it the mute. The keyboard's is one
-    /// control with two states rather than two controls, since the row it raises the keyboard for
-    /// is the only thing it has to undo; the mute is the same, replies read aloud or not.
-    private var leading: some View {
-        let flank = look.composer.flank
-        return HStack(spacing: 0) {
-            Button { typing.toggle() } label: {
-                Self.mark(flank.keyboard, flank.keyboardDown, second: typing).font(flank.font)
+    /// Sends what is written, as a typed turn. With nothing but space written it says so rather
+    /// than being pressed and doing nothing.
+    private var send: some View {
+        let nothing = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return Button(action: draft.send) {
+            Cut {
+                Image(systemName: look.draft.sendSymbol)
+                    .font(look.draft.sendFont)
+                    .foregroundStyle(look.draft.sendInk)
+                    .opacity(nothing ? look.draft.sendRestingOpacity : 1)
             }
-            .accessibilityLabel(typing ? "Hide the keyboard" : "Type instead")
-            .frame(maxWidth: .infinity)
-            Button { setReadsAloud(!readsAloud) } label: {
-                Self.mark(flank.speaking, flank.muted, second: !readsAloud).font(flank.font)
-            }
-            .accessibilityIdentifier("composer-mute")
-            .accessibilityLabel(readsAloud ? "Mute replies" : "Read replies aloud")
-            .frame(maxWidth: .infinity)
+                .clipped()
+                .contentShape(Rectangle())
         }
-    }
-
-    /// A control with two states: both marks are laid out and one is drawn, so the control is the
-    /// size of the larger of them either way. The keyboard's second mark is taller than its first,
-    /// and a flank that grew as the keyboard rose would hold up a pane that is meant to go short.
-    private static func mark(_ first: String, _ other: String, second: Bool) -> some View {
-        ZStack {
-            Image(systemName: first).opacity(second ? 0 : 1)
-            Image(systemName: other).opacity(second ? 1 : 0)
-        }
+        .buttonStyle(.borderless)
+        // A turn on its way has the words until it lands: a second press would be a second turn.
+        .disabled(nothing || draft.state == .inFlight)
+        .accessibilityLabel("Send")
+        .opacity(besideOpacity)
     }
 
     /// The system's glass where there is any, a material of the same shape below it. The tint
@@ -334,81 +405,138 @@ struct Composer: View {
             // VoiceOver on a release build hears the label alone.
             .accessibilityValue(micReport ?? "")
             #endif
-            // The well keeps its resting width in the row at every share, so the flanks stay
-            // where they are and the pane, whose width a wide look's content can set, never
-            // narrows under the keyboard.
-            .frame(width: geometry.slot)
     }
 }
 
-/// The model slider: a line across the top of the pane with a stop for each model, smallest
-/// first, each model's name under its stop and a knob on the one chosen. A tap on a stop or its
-/// name chooses it, and so does a finger drawn along the line, at the stop it is nearest. The
-/// chosen stop reports where it is, which is where Topo sits (`mascotStop`).
-private struct ModelSlider: View {
-    let models: Composer.Models
-    let ink: Color
-    @Environment(\.look) private var look
+/// What each view of the pane is, which is what `ComposerRow` places it by.
+enum ComposerPart: LayoutValueKey {
+    case well, more, field, line, send, keyboard
+    static let defaultValue: ComposerPart? = nil
+}
 
-    var body: some View {
-        let slider = look.composer.models
-        let count = models.stops.count
-        let chosen = models.stops.firstIndex { $0.id == models.chosen }
-        GeometryReader { proxy in
-            // The look's inset, and no more than leaves the stops half the pane to stand along.
-            let inset = min(slider.inset, proxy.size.width / 4)
-            let span = max(proxy.size.width - 2 * inset, 0)
-            let x = { (index: Int) in inset + span * Composer.Models.share(of: index, count: count) }
-            let line = slider.knob / 2
-            // A stop's column: as wide as the room between two stops, no wider than leaves an end
-            // stop's inside the pane, and never too narrow to press.
-            let column = max(min(count > 1 ? span / CGFloat(count - 1) : proxy.size.width, 2 * inset), slider.knob)
-            ZStack(alignment: .topLeading) {
-                Capsule().fill(ink.opacity(slider.restOpacity))
-                    .frame(width: span, height: slider.track)
-                    .offset(x: inset, y: line - slider.track / 2)
-                ForEach(Array(models.stops.enumerated()), id: \.element.id) { index, stop in
-                    let own = index == chosen
-                    Button { models.choose(stop.id) } label: {
-                        VStack(spacing: slider.labelSpacing) {
-                            // The knob stands on the chosen stop, so its own mark is not drawn.
-                            Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
-                                .frame(width: slider.stop, height: slider.stop)
-                                .frame(height: slider.knob)
-                            Text(stop.name).font(slider.labelFont).lineLimit(1)
-                                .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
-                        }
-                        .frame(width: column, height: proxy.size.height, alignment: .top)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("composer-model-\(stop.id)")
-                    .accessibilityLabel(stop.name)
-                    .accessibilityAddTraits(own ? .isSelected : [])
-                    .mascotStop(own)
-                    .position(x: x(index), y: proxy.size.height / 2)
-                }
-                if let chosen {
-                    Circle().fill(ink)
-                        .frame(width: slider.knob, height: slider.knob)
-                        .position(x: x(chosen), y: line)
-                        .allowsHitTesting(false)
-                        .animation(.easeInOut(duration: look.composer.duration), value: chosen)
-                }
-            }
-            .contentShape(Rectangle())
-            // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
-            .simultaneousGesture(DragGesture(minimumDistance: slider.knob / 2).onChanged { drag in
-                guard let index = Composer.Models.nearest(to: drag.location.x, width: proxy.size.width,
-                                                          inset: inset, count: count),
-                      index != chosen else { return }
-                models.choose(models.stops[index].id)
-            })
-        }
-        .frame(height: slider.height)
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("composer-models")
+/// The pane's two forms as one layout: the same views, each put where `ComposerPlan` says it
+/// stands in the form asked for. The pane is as wide as it is offered and as tall as the plan
+/// makes it, which in the row is as tall as what is written.
+struct ComposerRow: Layout {
+    var row: Bool
+    var composer: Look.Composer
+    var draft: Look.Draft
+    var geometry: ComposerGeometry
+    /// The tallest the row is laid out, or nil for as tall as what it holds.
+    var most: CGFloat?
+
+    private func part(_ part: ComposerPart, of subviews: Subviews) -> LayoutSubview? {
+        subviews.first { $0[ComposerPart.self] == part }
     }
+
+    private func plan(width: CGFloat, _ subviews: Subviews) -> ComposerPlan {
+        let size = { (wanted: ComposerPart) in part(wanted, of: subviews)?.sizeThatFits(.unspecified) ?? .zero }
+        // A mark is no larger than the slot it is given, so each is asked how tall it is in the
+        // look's.
+        let mark = { (wanted: ComposerPart, slot: CGFloat) in
+            part(wanted, of: subviews)?.sizeThatFits(ProposedViewSize(width: slot, height: slot)).height ?? 0
+        }
+        let flank = composer.flank.slot
+        let marks = max(mark(.more, flank), row ? mark(.send, draft.slot) : mark(.keyboard, flank))
+        guard row else {
+            return .resting(composer, geometry: geometry, width: width, marks: marks, line: size(.line).height,
+                            wide: max(size(.more).width, size(.keyboard).width))
+        }
+        return .row(composer, draft: draft, geometry: geometry, width: width, marks: marks,
+                    line: size(.line).height, most: most) { wide in
+            part(.field, of: subviews)?.sizeThatFits(ProposedViewSize(width: wide, height: nil)).height ?? 0
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        // Offered a width, the pane is that wide, and never wider than its container; offered
+        // none — a renderer with no container — it is the narrowest that holds what it holds
+        // side by side with everything yielded.
+        let floor = ComposerPlan.floor(composer, draft: draft, geometry: geometry, row: row)
+        let offered = proposal.width.flatMap { $0 >= 1 && $0.isFinite ? $0 : nil }
+        return plan(width: offered ?? floor, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let plan = plan(width: bounds.width, subviews)
+        let at = { (point: CGPoint) in CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y) }
+        part(.well, of: subviews)?.place(at: at(plan.well.center), anchor: .center,
+                                         proposal: ProposedViewSize(plan.well.size))
+        // Each mark is given the slot the plan has for it, and is no larger.
+        part(.more, of: subviews)?.place(at: at(plan.more), anchor: .center,
+                                         proposal: ProposedViewSize(width: plan.moreSlot, height: composer.flank.slot))
+        part(.send, of: subviews)?.place(at: at(plan.send), anchor: .center,
+                                         proposal: ProposedViewSize(width: plan.sendSlot, height: draft.slot))
+        part(.keyboard, of: subviews)?.place(at: at(plan.keyboard), anchor: .center,
+                                             proposal: ProposedViewSize(width: plan.sendSlot, height: composer.flank.slot))
+        part(.field, of: subviews)?.place(at: at(plan.field.origin), anchor: .topLeading,
+                                          proposal: ProposedViewSize(plan.field.size))
+        part(.line, of: subviews)?.place(at: at(plan.field.origin), anchor: .topLeading, proposal: .unspecified)
+    }
+}
+
+private extension CGRect {
+    var center: CGPoint { CGPoint(x: midX, y: midY) }
+}
+
+/// A mark at its own size, or the size it is offered where that is less: what it is drawn in is
+/// never larger than the slot the plan gave it, and its clip cuts what is over.
+struct Cut: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let own = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        let within = { (own: CGFloat, offered: CGFloat?) -> CGFloat in
+            guard let offered, offered.isFinite else { return own }
+            return min(own, max(offered, 0))
+        }
+        return CGSize(width: within(own.width, proposal.width), height: within(own.height, proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.center, anchor: .center, proposal: .unspecified)
+    }
+}
+
+/// The room an enclosure keeps round its words: the look's padding, and no more of what it is
+/// offered than leaves the words half of it, across and down.
+struct Inset: Layout {
+    var horizontal: CGFloat
+    var vertical: CGFloat
+
+    /// The padding kept of `asked` in a length `offered`: all of it, or a quarter of the length.
+    static func kept(_ asked: CGFloat, in offered: CGFloat?) -> CGFloat {
+        let asked = asked.isFinite ? max(asked, 0) : 0
+        guard let offered, offered.isFinite else { return asked }
+        return min(asked, max(offered, 0) / 4)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (across, down) = (Self.kept(horizontal, in: proposal.width), Self.kept(vertical, in: proposal.height))
+        let inner = ProposedViewSize(width: proposal.width.map { max($0 - 2 * across, 0) },
+                                     height: proposal.height.map { max($0 - 2 * down, 0) })
+        let own = subviews.first?.sizeThatFits(inner) ?? .zero
+        return CGSize(width: own.width + 2 * across, height: own.height + 2 * down)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (across, down) = (Self.kept(horizontal, in: bounds.width), Self.kept(vertical, in: bounds.height))
+        subviews.first?.place(at: bounds.center, anchor: .center,
+                              proposal: ProposedViewSize(width: max(bounds.width - 2 * across, 0),
+                                                         height: max(bounds.height - 2 * down, 0)))
+    }
+}
+
+/// The row's own bounds as a clip while it is held to the room it has, and no clip otherwise:
+/// the microphone's light is drawn past the pane's edge wherever the pane is not at its bound.
+struct RowCut: Shape {
+    var most: CGFloat?
+
+    func path(in rect: CGRect) -> Path {
+        guard let most, rect.height >= most - 0.5 else { return Path(rect.insetBy(dx: -Self.open, dy: -Self.open)) }
+        return Path(rect)
+    }
+
+    /// How far past the row an unbounded clip reaches, which is further than anything is drawn.
+    static let open: CGFloat = 10_000
 }
 
 /// Where the pane and the well are, as laid out, for whatever is drawn over the composer to read:
@@ -428,20 +556,36 @@ enum ComposerFrames {
             value = value ?? nextValue()
         }
     }
+
+    /// The control, the field, the send and the way to the keyboard, as drawn: what a test
+    /// holds apart from each other and inside the pane, off the layout and not off the plan.
+    struct Parts: PreferenceKey {
+        static let defaultValue: [ComposerPart: Anchor<CGRect>] = [:]
+        static func reduce(value: inout [ComposerPart: Anchor<CGRect>], nextValue: () -> [ComposerPart: Anchor<CGRect>]) {
+            value.merge(nextValue()) { first, _ in first }
+        }
+    }
 }
 
-/// How big the microphone is drawn, and the room above and below it, at rest and under the
-/// keyboard. A pure function of the look, so what the pane does under the keyboard is arithmetic
-/// a test holds at every end of the document's ranges rather than a screen it has to photograph.
+private extension View {
+    /// One of the pane's parts: placed by what it is, and its drawn bounds published under it.
+    func drawn(as part: ComposerPart) -> some View {
+        anchorPreference(key: ComposerFrames.Parts.self, value: .bounds) { [part: $0] }
+            .layoutValue(key: ComposerPart.self, value: part)
+    }
+}
+
+/// How big the microphone is drawn, and the room above and below it, at rest and as a row. A
+/// pure function of the look, so what the pane does under the keyboard is arithmetic a test holds
+/// at every end of the document's ranges rather than a screen it has to photograph.
 ///
-/// Under the keyboard the well, the jewel and the mark are drawn at `compactShare` of their
-/// resting size, and the vertical inset and the pane's corner radius with them, so the pane is that
-/// share of its resting height wherever the well is what sets it. The flanks keep their size: a pane whose flanks are taller
-/// than its short well is as short as they let it be. The well keeps its resting width in the row
-/// (`slot`), so the flanks do not move and neither does the pane's width, even on a look whose
-/// content is wider than its share of the screen. The well is never drawn under
-/// `Look.Composer.Well.pressable` for the keyboard — one a look makes smaller than that at rest
-/// stays at its own size — so the share the whole microphone is drawn at is the larger of the two.
+/// As a row the well, the jewel and the mark are drawn at `compactShare` of their resting size,
+/// and the vertical inset and the pane's corner radius with them, so the pane is that share of
+/// its resting height wherever the well is what sets it. The controls keep their size: a pane
+/// whose controls are taller than its short well is as short as they let it be. The well is
+/// never drawn under `Look.Composer.Well.pressable` for the row — one a look makes smaller than
+/// that at rest stays at its own size — so the share the whole microphone is drawn at is the
+/// larger of the two. Where everything stands is `ComposerPlan`.
 struct ComposerGeometry: Equatable, Sendable {
     /// The share of its resting size the microphone is drawn at: 1 at rest.
     var scale: CGFloat
@@ -451,8 +595,7 @@ struct ComposerGeometry: Equatable, Sendable {
     var restingJewel: CGFloat
     /// The room above and below the row, as drawn.
     var verticalInset: CGFloat
-    /// The width the well takes in the row: its resting size at every share, so the flanks and
-    /// the pane's width do not move under the keyboard.
+    /// The width the flanks keep clear for the well: its resting size.
     var slot: CGFloat
     /// The pane's corner radius as drawn: the resting radius at the same share as the well, since
     /// the short pane is the resting one scaled.
@@ -461,10 +604,23 @@ struct ComposerGeometry: Equatable, Sendable {
     /// The jewel as drawn.
     var jewel: CGFloat { restingJewel * scale }
 
-    static func of(_ composer: Look.Composer, keyboard: Bool) -> ComposerGeometry {
+    /// How wide the pane is on a screen `screen` wide: its share of it at rest, and as a row its
+    /// own share and no wider than the transcript's column — but never narrower than what holds
+    /// the well, the control, the field at its least and the send side by side
+    /// (`ComposerPlan.floor`), where the screen is that wide, and never wider than the screen. A
+    /// look's share is a wish; a row whose send stands on its well is not a row.
+    static func width(_ composer: Look.Composer, draft: Look.Draft, column: CGFloat, in screen: CGFloat, row: Bool) -> CGFloat {
+        guard row else { return screen * composer.widthFraction }
+        let share = screen * composer.typingWidthFraction
+        let wanted = column.isNaN ? share : min(share, max(column, 0))
+        let floor = ComposerPlan.floor(composer, draft: draft, geometry: of(composer, row: true), row: true)
+        return min(max(wanted, floor.isFinite ? floor : 0), max(screen, 0))
+    }
+
+    static func of(_ composer: Look.Composer, row: Bool) -> ComposerGeometry {
         let resting = composer.well.size
         let jewel = min(composer.well.jewelSize, resting)
-        guard keyboard, resting > 0 else {
+        guard row, resting > 0 else {
             return ComposerGeometry(scale: 1, well: resting, restingJewel: jewel, verticalInset: composer.verticalInset,
                                     slot: resting, cornerRadius: composer.cornerRadius)
         }
@@ -473,6 +629,225 @@ struct ComposerGeometry: Equatable, Sendable {
         return ComposerGeometry(scale: scale, well: short, restingJewel: jewel,
                                 verticalInset: composer.verticalInset * scale, slot: resting,
                                 cornerRadius: composer.cornerRadius * scale)
+    }
+}
+
+/// Where each view of the pane stands in each of its forms, in the pane's own coordinates. A
+/// pure function of the look, the width the pane is given and the sizes of what it holds, so
+/// what the two forms are is arithmetic a test holds at every end of the document's ranges
+/// rather than a screen it has to photograph.
+///
+/// At rest the well is in the middle, and the two flanks run from it to the pane's ends: the
+/// control for everything else stands in the middle of the leading flank's inner half, and the
+/// way to the keyboard mirrors it across the well.
+///
+/// As a row the well's middle is `jewelInset` from the leading end, the control for everything
+/// else `spacing` past the well's edge, and the send `spacing` in from the trailing end; the
+/// field has what is between them, `Look.Draft.spacing` clear of each. No control is drawn past
+/// the pane's end or over its neighbour for a value the look gives, so each of those is at least
+/// half the room the control takes. Where that leaves the field under `Look.Draft.minimumWidth`
+/// the look's values yield in order — the spacing, then the jewel's inset, then the room either
+/// side of the field — and only a pane narrower than all of that takes the field under its
+/// minimum. The row is one line tall where the well lets it be, so a field of one line stands
+/// level with the well; what is written past that grows the field and the pane upward, with the
+/// well, the control and the send staying on the bottom line.
+struct ComposerPlan: Equatable, Sendable {
+    var size: CGSize
+    /// The well as drawn, which is the area the press lands in.
+    var well: CGRect
+    /// The middle of the control for everything else.
+    var more: CGPoint
+    /// The field. At rest, where it is not drawn, it keeps the trailing flank, so it grows out
+    /// of the way to the keyboard.
+    var field: CGRect
+    /// The middle of the send.
+    var send: CGPoint
+    /// The middle of the way to the keyboard. In the row, where it is not drawn, the field's.
+    var keyboard: CGPoint
+    /// The room the control and the send each stand in, across: the look's, or in a row too
+    /// narrow for the well and both of them, what the row has left for each.
+    var moreSlot: CGFloat
+    var sendSlot: CGFloat
+
+    /// `wide` is the wider of the two marks as drawn.
+    static func resting(_ composer: Look.Composer, geometry: ComposerGeometry, width: CGFloat,
+                        marks: CGFloat, line: CGFloat, wide: CGFloat = 0) -> ComposerPlan {
+        let height = max(geometry.well, marks) + 2 * geometry.verticalInset
+        let middle = CGPoint(x: width / 2, y: height / 2)
+        // The leading flank, from the pane's inset to the room kept beside the well.
+        let inner = max(middle.x - geometry.slot / 2 - composer.spacing, 0)
+        let outer = min(max(composer.horizontalInset, 0), inner)
+        let flank = inner - outer
+        // A mark's middle is never nearer the pane's end than half the room it stands in, or
+        // half the mark where that is wider, so a spacing wider than the pane puts neither off it.
+        let half = min(max(composer.flank.slot, wide.isFinite ? wide : 0, 0), max(width, 0) / 2) / 2
+        return ComposerPlan(size: CGSize(width: width, height: height),
+                            well: CGRect(x: middle.x - geometry.well / 2, y: middle.y - geometry.well / 2,
+                                         width: geometry.well, height: geometry.well),
+                            more: CGPoint(x: max(inner - flank / 4, half), y: middle.y),
+                            field: CGRect(x: width - inner, y: middle.y - line / 2, width: flank, height: line),
+                            send: CGPoint(x: width - outer - flank / 4, y: middle.y),
+                            keyboard: CGPoint(x: min(width - inner + flank / 4, width - half), y: middle.y),
+                            moreSlot: composer.flank.slot, sendSlot: composer.flank.slot)
+    }
+
+    /// `marks` is the taller of the two controls and `line` the field at one line; `written`
+    /// answers how tall the field is at a width, which is how many lines are in it.
+    ///
+    /// `most` is the tallest the row may be, where it has a room to stay inside: the band and
+    /// then the field are held to it, so a line of type, a mark or an inset taller than the room
+    /// is a row as tall as the room and no taller.
+    static func row(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat,
+                    marks: CGFloat, line: CGFloat, most: CGFloat? = nil, written: (CGFloat) -> CGFloat) -> ComposerPlan {
+        let columns = Columns(composer, draft: draft, geometry: geometry, width: width)
+        let most = most.flatMap { $0.isFinite ? max($0, 0) : nil } ?? .infinity
+        let band = min(max(geometry.well, marks, line) + 2 * geometry.verticalInset, most)
+        let margin = max((band - line) / 2, 0)
+        let asked = written(columns.field.upperBound - columns.field.lowerBound)
+        let height = min(max(asked.isFinite ? asked : line, line) + 2 * margin, most)
+        let tall = max(height - 2 * margin, 0)
+        let level = height - band / 2
+        let field = CGRect(x: columns.field.lowerBound, y: margin,
+                           width: columns.field.upperBound - columns.field.lowerBound, height: tall)
+        return ComposerPlan(size: CGSize(width: width, height: height),
+                            well: CGRect(x: columns.well - geometry.well / 2, y: level - geometry.well / 2,
+                                         width: geometry.well, height: geometry.well),
+                            more: CGPoint(x: columns.more, y: level),
+                            field: field,
+                            send: CGPoint(x: columns.send, y: level),
+                            keyboard: CGPoint(x: field.midX, y: level),
+                            moreSlot: columns.control, sendSlot: columns.sending)
+    }
+
+    /// How many lines a field takes in a pane with `room` to grow in: a row of one line is `band`
+    /// tall and each line more is `line`, so it is the lines that fit, at least one and at most
+    /// `most`. A room that is not a number, or a line that is not a height, is the look's lines.
+    static func lines(most: Int, room: CGFloat, band: CGFloat, line: CGFloat) -> Int {
+        let most = max(most, 1)
+        guard room.isFinite, band.isFinite, line.isFinite, line > 0 else { return most }
+        let fit = ((room - band) / line).rounded(.down)
+        return min(max(1 + Int(max(min(fit, CGFloat(most)), 0)), 1), most)
+    }
+
+    /// The narrowest a pane is laid out: at rest the well's room with the spacing and a control's
+    /// room either side of it, and as a row the well, the two controls and the field at its
+    /// minimum with everything that yields gone.
+    static func floor(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, row: Bool) -> CGFloat {
+        guard row else { return geometry.slot + 2 * (max(composer.spacing, 0) + composer.flank.slot) }
+        return geometry.well + composer.flank.slot + max(draft.minimumWidth, 0) + draft.slot
+    }
+
+    /// The narrowest pane that holds the row with nothing yielded.
+    static func least(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry) -> CGFloat {
+        Columns.taken(composer, draft: draft, geometry: geometry) + max(draft.minimumWidth, 0)
+    }
+
+    /// The row across: the middles of the well, the control and the send, and the field's span.
+    struct Columns: Equatable, Sendable {
+        var well: CGFloat
+        var more: CGFloat
+        var field: ClosedRange<CGFloat>
+        var send: CGFloat
+        /// The room the control and the send stand in: the look's slots, or less of each, in
+        /// proportion, in a row too narrow to hold the well and both.
+        var control: CGFloat
+        var sending: CGFloat
+
+        /// What the row keeps of its width for everything but the field, as the look gives it.
+        static func taken(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry) -> CGFloat {
+            let half = geometry.well / 2
+            return max(composer.jewelInset, half) + half
+                + max(composer.spacing, composer.flank.slot / 2) + composer.flank.slot / 2
+                + max(composer.spacing, draft.slot / 2) + draft.slot / 2
+                + 2 * max(draft.spacing, 0)
+        }
+
+        /// The least a slot yields to for the field's sake: a control's reach, or the look's
+        /// slot where that is less.
+        static let reach: CGFloat = 44
+
+        init(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat) {
+            // A row narrower than the well and both slots shares what is past the well between
+            // them, so the three stay in order and inside the row whatever the look asks for.
+            let room = max(width - geometry.well, 0)
+            var (wide, send) = (max(composer.flank.slot, 0), max(draft.slot, 0))
+            if wide + send > room {
+                // The smaller keeps its slot where that is no more than half of what there is,
+                // and the larger has the rest: one absurd slot does not cost the other its own.
+                if wide <= room / 2 { send = room - wide } else if send <= room / 2 { wide = room - send } else { (wide, send) = (room / 2, room / 2) }
+            }
+            var short: CGFloat = 0
+            self.init(composer, draft: draft, geometry: geometry, width: width, control: wide, sending: send, short: &short)
+            // The slots are the last to yield, and only as far as a control's reach: what either
+            // has over that goes to a field still under its minimum.
+            let (over, above) = (max(wide - Self.reach, 0), max(send - Self.reach, 0))
+            guard short > 0, over + above > 0 else { return }
+            let given = min(short, over + above)
+            self.init(composer, draft: draft, geometry: geometry, width: width,
+                      control: wide - given * over / (over + above), sending: send - given * above / (over + above), short: &short)
+        }
+
+        /// The row with the control and the send in the room given each. `short` is what the
+        /// field is left under its minimum by, once everything else has yielded.
+        private init(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat,
+                     control wide: CGFloat, sending send: CGFloat, short left: inout CGFloat) {
+            let half = geometry.well / 2
+            self.control = wide
+            self.sending = send
+            let (control, sending) = (self.control / 2, self.sending / 2)
+            var lead = max(composer.jewelInset, half)
+            var past = max(composer.spacing, control)
+            var trail = max(composer.spacing, sending)
+            var gap = max(draft.spacing, 0)
+            // What the field is short of its minimum by, taken from each in turn as far as it goes.
+            var short = max(draft.minimumWidth, 0)
+                - (width - (lead + half + past + control + trail + sending + 2 * gap))
+            let give = { (slack: CGFloat) -> CGFloat in
+                let given = min(max(short, 0), max(slack, 0))
+                short -= given
+                return given
+            }
+            let (first, second) = (past - control, trail - sending)
+            let spacing = give(first + second)
+            if first + second > 0 {
+                past -= spacing * first / (first + second)
+                trail -= spacing * second / (first + second)
+            }
+            lead -= give(lead - half)
+            gap -= give(2 * gap) / 2
+
+            left = max(short, 0)
+            well = lead
+            more = lead + half + past
+            self.send = width - trail
+            let from = more + control + gap
+            field = from...max(self.send - sending - gap, from)
+        }
+    }
+}
+
+/// Which of its two forms the pane is in. The keyboard on screen is the row, and so is the field
+/// holding focus with no keyboard: a hardware keyboard, or one floating over the pad, raises
+/// nothing the safe area says. A keyboard that is going to rise does so a few frames after the
+/// field takes focus, and the pane changes form in the keyboard's own transaction so as to move
+/// on its curve, so focus alone is the row only once it has been held `patience` with no
+/// keyboard come.
+enum ComposerForm {
+    /// How long focus is held with no keyboard before the pane takes it that none is coming.
+    static let patience: Duration = .milliseconds(250)
+
+    /// What `alone` is the moment the focus or the keyboard changes, or nil where it is not known
+    /// until `patience` has passed: without focus nothing is alone, and under a keyboard the focus
+    /// is not, however late the keyboard came. A keyboard that fell with the focus still called
+    /// alone would leave the pane a row through the keyboard's own transaction, to go to rest off
+    /// its curve when the field lets go.
+    static func alone(focused: Bool, keyboard: Bool) -> Bool? {
+        focused && !keyboard ? nil : false
+    }
+
+    /// `alone` is the field having held focus `patience` with no keyboard on screen.
+    static func isRow(keyboard: Bool, focused: Bool, alone: Bool) -> Bool {
+        keyboard || (focused && alone)
     }
 }
 
@@ -497,14 +872,14 @@ enum KeyboardInset {
 /// is a share and not a step, so the surface arrives as the content does.
 ///
 /// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
-/// open, and that must not depend on how much has been said. So is the keyboard: the pane goes
-/// short under it, and a pane that is not there cannot be seen to.
-/// So is a pane Topo sits on (`holdsTopo`: the look's `glass` placement, or the model slider open): a Topo on invisible glass
-/// is a Topo floating.
+/// open, and that must not depend on how much has been said. So is the keyboard: the pane is a
+/// row under it, and a pane that is not there cannot be seen to be.
+/// So is a pane Topo sits on (`holdsTopo`: the look's `glass` placement): a Topo on invisible
+/// glass is a Topo floating.
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing
     /// is the step the share cannot express: a pane, or none, with nothing in between. `keyboard`
-    /// is the row's field holding focus, which is the keyboard asked for.
+    /// is the pane's field holding focus, which is the keyboard asked for.
     static func of(contentBottom: CGFloat, paneTop: CGFloat, rise: CGFloat, open: Bool,
                    keyboard: Bool, holdsTopo: Bool = false) -> Double {
         if open || keyboard || holdsTopo { return 1 }
@@ -557,12 +932,12 @@ private extension View {
 }
 
 #if DEBUG
-/// The row as the canvas drives it: send puts the turn in flight, and holding it gives the words
-/// back, which is what the chat does with an outbox entry it takes off the line.
+/// The draft as the canvas drives it: send puts the turn in flight, and holding it gives the
+/// words back, which is what the chat does with an outbox entry it takes off the line.
 @MainActor private func previewDraft(draft: Binding<String>, typing: Binding<Bool>,
                                      sending: Binding<Bool>) -> Draft {
     let give: @MainActor () -> Void = { sending.wrappedValue = false }
-    return Draft(text: draft, typing: typing, sending: sending.wrappedValue,
+    return Draft(text: draft, typing: typing, sending: sending.wrappedValue, row: typing.wrappedValue,
                  send: { sending.wrappedValue = true },
                  edit: sending.wrappedValue ? give : nil)
 }
@@ -577,17 +952,15 @@ private extension View {
 
     VStack(spacing: 0) {
         NavigationStack {
-            TranscriptView(turns: PreviewTurns.long, draft: previewDraft(draft: $draft,
-                                                                          typing: $typing,
-                                                                          sending: $sending))
+            let next = previewDraft(draft: $draft, typing: $typing, sending: $sending)
+            TranscriptView(turns: PreviewTurns.long, draft: next)
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .topBarTrailing) { TopoBadge() } }
                 .safeAreaInset(edge: .bottom) {
-                    Composer(typing: $typing,
+                    Composer(draft: next,
                              mic: .init(canListen: canListen, listening: listening,
-                                        owner: listening ? .chat : nil, handsFree: handsFree),
-                             keyboard: typing)
+                                        owner: listening ? .chat : nil, handsFree: handsFree))
                 }
         }
         Divider()

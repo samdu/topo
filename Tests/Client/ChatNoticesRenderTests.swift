@@ -52,11 +52,13 @@ final class ChatNoticesRenderTests: XCTestCase {
         XCTAssertNil(DebugRun.notices([:]))
     }
 
-    /// Every notice the harness writes in its own words fits the two lines the bar holds at the
-    /// largest `noticeFont`, on the narrowest phone: the bar's middle there is 272 points wide,
-    /// measured on an iPhone 17e with the badge beside it. A failure carrying the system's own
-    /// words (a guest's reason, a localized error) is not the harness's to shorten, and past two
-    /// lines it is cut at the tail.
+    /// Every notice the harness writes in its own words can be drawn whole in the two lines the
+    /// bar holds, on the narrowest phone at the largest `noticeFont`: the bar leaves a notice
+    /// the room measured (`room`) between the model and the mute and the badge, and one that does not fit
+    /// there is drawn smaller, down to `look.transcript.noticeLeastScale`, before any of it is
+    /// cut. So what is held is that each fits two lines at that least size. A failure carrying
+    /// the system's own words (a guest's reason, a localized error) is not the harness's to
+    /// shorten, and past two lines it is cut with an ellipsis.
     func testEveryNoticeTheHarnessWritesFitsTwoLinesOfTheBar() {
         let hub = Lease(holder: DeviceID("phone-1A2B3C4D"), endpoint: nil, epoch: 2, expiresAt: Date())
         let outcomes: [LeaseOutcome] = [.primary(hub), .held(by: hub), .unreachable(hub), .contended]
@@ -69,40 +71,61 @@ final class ChatNoticesRenderTests: XCTestCase {
             Harness.describe(GuestBridgeError.unresolved),
             "Saving what you said…", "Reaching iCloud…",
         ]
-        let font = UIFont.systemFont(ofSize: CGFloat(Look.Transcript.largestNotice))
         for line in lines {
-            let needed = (line as NSString).boundingRect(
-                with: CGSize(width: 272, height: CGFloat.greatestFiniteMagnitude),
-                options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
-            XCTAssertLessThanOrEqual((needed.height / font.lineHeight).rounded(), CGFloat(ChatNotices.lines),
-                                     "\"\(line)\" is more than two lines of the bar")
+            XCTAssertLessThanOrEqual(Self.linesAtTheLeast(line, in: Self.room), CGFloat(ChatNotices.lines),
+                                     "\"\(line)\" is more than two lines of the bar at its least size")
         }
     }
 
-    /// The busy notice is the spinner, where the turn is and the count behind it on one row, so
-    /// what has to fit is the row, not the words alone: every status the harness sets, with each
-    /// model's name, and nothing, one or many waiting, laid out at the largest `noticeFont` in the
-    /// 17e's 272 points is the same size bounded to two lines as unbounded — the bound cut nothing.
+    /// The busy notice is the spinner and one text, where the turn is and then the count behind
+    /// it, so what has to fit is the status with its count in the room the spinner leaves: every
+    /// status the harness sets, with each model's name, and nothing, one or many waiting.
     func testEveryBusyNoticeFitsTwoLinesOfTheBarWithTheSpinnerAndTheCount() {
         let statuses = ["Reaching iCloud…", "Checking this device is primary…", "Saving what you said…",
                         "Saving the reply…", "Working…"] + ClaudeModel.allCases.map { "Asking \($0.displayName)…" }
-        var look = Look()
-        look.transcript.noticeFont = .system(size: CGFloat(Look.Transcript.largestNotice))
         for status in statuses {
             for waiting in [1, 2, 12] {
-                let said = ChatNotices.Said(busy: true, status: status, waiting: waiting)
-                let bounded = size(ChatNotices(notices: said), look: look)
-                let whole = size(ChatNotices(notices: said, lineLimit: nil), look: look)
-                XCTAssertEqual(bounded, whole, "\"\(status)\" with \(waiting) on the line is cut short in the bar")
-                XCTAssertLessThanOrEqual(whole.height, 2 * UIFont.systemFont(ofSize: 15).lineHeight + 1,
-                                         "\"\(status)\" with \(waiting) on the line is more than two lines of the bar")
+                guard case .progress(let words, let queued) = ChatNotices.Said(busy: true, status: status, waiting: waiting).notice else {
+                    return XCTFail("a turn in flight is not a progress notice")
+                }
+                let line = [words, queued].compactMap { $0 }.joined(separator: " ")
+                XCTAssertLessThanOrEqual(Self.linesAtTheLeast(line, in: Self.room - Self.spinner),
+                                         CGFloat(ChatNotices.lines),
+                                         "\"\(line)\" is more than two lines of the bar beside the spinner")
             }
         }
     }
 
-    private func size(_ view: ChatNotices, look: Look) -> CGSize {
-        UIHostingController(rootView: view.environment(\.look, look))
-            .sizeThatFits(in: CGSize(width: 272, height: CGFloat.greatestFiniteMagnitude))
+    /// At the default font, the statuses a turn passes through are drawn at their own size: none
+    /// of them is long enough to be scaled.
+    func testAStatusIsDrawnAtItsOwnSizeAtTheDefaultFont() {
+        let font = UIFont.preferredFont(forTextStyle: .caption1)
+        for status in ["Reaching iCloud…", "Checking this device is primary…", "Saving what you said…", "Saving the reply…", "Working…"] {
+            XCTAssertLessThanOrEqual(Self.lines(status, font: font, in: Self.room - Self.spinner), CGFloat(ChatNotices.lines), status)
+        }
+    }
+
+    /// The room a notice has in the bar on a 390-point phone, between the model and the mute and
+    /// the badge: the 196 points the running bar leaves it on a 402-point one, measured, since
+    /// the bar lays its items out and says nothing of how, less the 12 the screen is narrower
+    /// by. A turn in flight has that less the spinner and the room beside it. This suite is
+    /// arithmetic over the harness's words; that the running bar draws a notice smaller before
+    /// it cuts it is `TopoUITests/StatusNoticeTests`.
+    private static let room: CGFloat = 184
+    private static let spinner: CGFloat = 28
+
+    /// How many lines `words` take in `width` at the largest `noticeFont` drawn at the look's
+    /// least scale.
+    private static func linesAtTheLeast(_ words: String, in width: CGFloat) -> CGFloat {
+        let size = CGFloat(Look.Transcript.largestNotice) * Look().transcript.noticeLeastScale
+        return lines(words, font: UIFont.systemFont(ofSize: size), in: width)
+    }
+
+    private static func lines(_ words: String, font: UIFont, in width: CGFloat) -> CGFloat {
+        let needed = (words as NSString).boundingRect(
+            with: CGSize(width: width, height: CGFloat.greatestFiniteMagnitude),
+            options: .usesLineFragmentOrigin, attributes: [.font: font], context: nil)
+        return (needed.height / font.lineHeight).rounded()
     }
 
     func testTheFailureIsDrawnInTheLooksTrouble() throws {

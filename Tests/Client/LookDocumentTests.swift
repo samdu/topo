@@ -343,22 +343,38 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(high.look.composer.compactShare, 1)
     }
 
-    /// The model slider's lengths are read in ranges of their own: an inset that leaves the stops
-    /// no column to be pressed in, a row too short to hold them and a stop too small or too big
-    /// are refused, and the ends of each range are taken.
-    func testTheModelSliderIsReadInItsOwnRanges() {
-        for (field, low, high) in [("inset", 16.0, 160.0), ("height", 32, 200), ("stop", 2, 44), ("knob", 2, 44)] {
-            for outside in [low - 1, high + 1, 0] {
-                let refused = LookDocument.read(#"{"composer": {"models": {"\#(field)": \#(outside)}}}"#)
-                XCTAssertEqual(refused.look, Look(), "\(field) \(outside) was taken")
-                XCTAssertEqual(refused.notes.count, 1, refused.notes.description)
-            }
-            for end in [low, high] {
-                let taken = LookDocument.read(#"{"composer": {"models": {"\#(field)": \#(end)}}}"#)
-                XCTAssertEqual(taken.notes, [], "\(field) \(end)")
-                XCTAssertNotEqual(taken.look, Look(), "\(field) \(end) was not taken")
-            }
+    /// The least a notice is drawn at is a share from a half to 1, and one outside that is refused
+    /// with the rest of the transcript standing.
+    func testTheNoticesLeastScaleIsReadFromAHalfToOne() {
+        XCTAssertEqual(Look().transcript.noticeLeastScale, 0.65)
+        for (given, taken) in [("0.5", 0.5), ("1", 1), ("0.8", 0.8)] {
+            let read = LookDocument.read(#"{"transcript": {"noticeLeastScale": \#(given), "spacing": 3}}"#)
+            XCTAssertEqual(read.look.transcript.noticeLeastScale, CGFloat(taken), accuracy: 1e-9)
+            XCTAssertTrue(read.notes.isEmpty, "\(read.notes)")
         }
+        for refused in ["0.49", "1.01", "\"small\""] {
+            let read = LookDocument.read(#"{"transcript": {"noticeLeastScale": \#(refused), "spacing": 3}}"#)
+            XCTAssertEqual(read.look.transcript.noticeLeastScale, 0.65, refused)
+            XCTAssertEqual(read.look.transcript.spacing, 3, "a refused scale took the spacing with it")
+            XCTAssertEqual(read.notes.count, 1, "\(refused): \(read.notes)")
+        }
+    }
+
+    /// A document written for the model slider and the keyboard's second mark still reads: the
+    /// keys the look no longer has are passed over, whatever they hold, with no note, and every
+    /// field beside them is taken.
+    func testTheKeysOfTheSliderThatWentRefuseNothing() {
+        let reading = LookDocument.read("""
+        { "composer": { "spacing": 31,
+                        "models": { "inset": 52, "height": 61, "stop": "not a number", "labelFont": 7 },
+                        "flank": { "keyboardDown": "pencil.slash", "modelsOpen": "no such symbol", "muted": "bell.slash" } },
+          "mascot": { "swimSpeed": 310, "roamSpeed": 60 } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(reading.state, .read(fields: 3))
+        XCTAssertEqual(reading.look.composer.spacing, 31)
+        XCTAssertEqual(reading.look.composer.flank.muted, "bell.slash")
+        XCTAssertEqual(reading.look.mascot.roamSpeed, 60)
     }
 
     /// A control's mark is a symbol the system has: a name it has not is refused and the compiled
@@ -372,6 +388,69 @@ final class LookDocumentTests: XCTestCase {
         let taken = LookDocument.read(#"{"composer": {"flank": {"muted": "bell.slash"}}}"#)
         XCTAssertEqual(taken.notes, [])
         XCTAssertEqual(taken.look.composer.flank.muted, "bell.slash")
+    }
+
+    /// The row's fields are read in ranges of their own, and one refused costs itself alone: a
+    /// width outside the resting one's range, a count of lines that is not a whole number from
+    /// one to twenty, and a send or a mark the system has no symbol for.
+    func testTheRowsFieldsAreReadInTheirOwnRanges() {
+        let refused = [#"{"composer": {"typingWidthFraction": 0.05}}"#, #"{"composer": {"typingWidthFraction": 1.2}}"#,
+                       #"{"composer": {"jewelInset": -1}}"#, #"{"composer": {"perchInset": 201}}"#,
+                       #"{"composer": {"flank": {"slot": 4}}}"#, #"{"composer": {"flank": {"more": "pluss"}}}"#,
+                       #"{"draft": {"maximumLines": 0}}"#, #"{"draft": {"maximumLines": 21}}"#,
+                       #"{"draft": {"maximumLines": 2.5}}"#, #"{"draft": {"maximumLines": true}}"#,
+                       #"{"draft": {"sendSymbol": "paperplan"}}"#]
+        for document in refused {
+            let reading = LookDocument.read(document)
+            XCTAssertEqual(reading.look, Look(), "\(document) was taken")
+            XCTAssertEqual(reading.notes.count, 1, "\(document): \(reading.notes)")
+        }
+        let taken = LookDocument.read("""
+        { "composer": { "typingWidthFraction": 1, "jewelInset": 0, "perchInset": 200,
+                        "flank": { "slot": 8, "more": "plus.circle" } },
+          "draft": { "maximumLines": 20, "sendSymbol": "arrow.up", "slot": 0 } }
+        """)
+        XCTAssertEqual(taken.notes.count, 1, "the slot alone is refused: \(taken.notes)")
+        XCTAssertEqual(taken.state, .read(fields: 7))
+        XCTAssertEqual(taken.look.composer.typingWidthFraction, 1)
+        XCTAssertEqual(taken.look.composer.jewelInset, 0)
+        XCTAssertEqual(taken.look.composer.perchInset, 200)
+        XCTAssertEqual(taken.look.composer.flank.slot, 8)
+        XCTAssertEqual(taken.look.composer.flank.more, "plus.circle")
+        XCTAssertEqual(taken.look.draft.maximumLines, 20)
+        XCTAssertEqual(taken.look.draft.sendSymbol, "arrow.up")
+        XCTAssertEqual(LookDocument.read(#"{"draft": {"maximumLines": 1}}"#).look.draft.maximumLines, 1)
+    }
+
+    /// The send is drawn in the message's colour, as the field's outline is, and stays a field
+    /// of its own: a document that sets it moves it alone.
+    func testTheSendIsTheMessagesColourUntilADocumentSaysOtherwise() throws {
+        var same = Look()
+        same.draft.sendInk = same.draft.written.accent
+        XCTAssertEqual(try LookCensus.different(Look(), same), [])
+
+        let reading = LookDocument.read(##"{"draft": {"sendInk": "#123456"}}"##)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(try LookCensus.different(Look(), reading.look), ["draft.sendInk"])
+    }
+
+    /// A value the bar or the send cannot be drawn with is refused with a note, costs that field
+    /// alone, and leaves the fields beside it taken.
+    func testTheBarsFieldsAndTheSendsInkAreRefusedOneAtATime() throws {
+        let refused: [(String, String, String)] = [
+            ("bar", #""font": "enormous", "spacing": 3"#, "bar.spacing"),
+            ("bar", #""ink": 7, "spacing": 3"#, "bar.spacing"),
+            ("bar", ##""spacing": -1, "ink": "#123456""##, "bar.ink"),
+            ("bar", ##""spacing": "wide", "ink": "#123456""##, "bar.ink"),
+            ("draft", #""sendInk": 7, "maximumLines": 3"#, "draft.maximumLines"),
+            ("draft", #""sendInk": "puce-ish", "maximumLines": 3"#, "draft.maximumLines"),
+        ]
+        for (object, fields, kept) in refused {
+            let reading = LookDocument.read("{\"\(object)\": {\(fields)}}")
+            XCTAssertEqual(reading.notes.count, 1, "\(fields): \(reading.notes)")
+            XCTAssertEqual(try LookCensus.different(Look(), reading.look), [kept],
+                           "\(fields): the refused field was taken, or took the one beside it down")
+        }
     }
 
     func testABooleanIsNotANumber() {
@@ -579,6 +658,34 @@ final class LookDocumentTests: XCTestCase {
         """)
         XCTAssertEqual(sized.look.transcript.bodyFont, Font.system(size: 22).weight(.semibold))
         XCTAssertEqual(sized.state, .read(fields: 1), "a font counts as the one field it is")
+    }
+
+    /// The bar's controls are drawn in the navigation bar, which is a fixed height and holds them
+    /// beside the notice and the badge: a size past `Look.Bar.largestFont` is drawn at that, and
+    /// a larger style is refused, so no document puts the model or the mute out of the bar.
+    func testTheBarsFontIsNoLargerThanTheBarHolds() {
+        let huge = LookDocument.read(#"{ "bar": { "font": { "size": 400, "weight": "heavy" } } }"#)
+        XCTAssertEqual(huge.look.bar.font, Font.system(size: CGFloat(Look.Bar.largestFont)).weight(.heavy))
+        XCTAssertEqual(huge.state, .read(fields: 1), "the size is drawn at the most, not refused")
+        XCTAssertEqual(huge.notes.count, 1, "and the document is told so: \(huge.notes)")
+
+        let most = LookDocument.read(#"{ "bar": { "font": { "size": 22 } } }"#)
+        XCTAssertEqual(most.look.bar.font, Font.system(size: 22))
+        XCTAssertEqual(most.notes, [])
+        let least = LookDocument.read(#"{ "bar": { "font": { "size": 4 } } }"#)
+        XCTAssertEqual(least.look.bar.font, Font.system(size: 4))
+        XCTAssertEqual(least.notes, [])
+
+        // The room between the controls is read no wider than leaves the notice its place on the
+        // narrowest phone.
+        XCTAssertEqual(LookDocument.read(#"{ "bar": { "spacing": 32 } }"#).look.bar.spacing, 32)
+        let wide = LookDocument.read(#"{ "bar": { "spacing": 33 } }"#)
+        XCTAssertEqual(wide.look.bar.spacing, Look().bar.spacing, "a spacing past the bar's is kept")
+        XCTAssertEqual(wide.notes.count, 1, "a spacing past the bar's is refused with nothing said")
+        let title = LookDocument.read(#"{ "bar": { "font": "largeTitle" } }"#)
+        XCTAssertEqual(title.look.bar.font, Look().bar.font)
+        XCTAssertEqual(title.notes.count, 1, "\(title.notes)")
+        XCTAssertEqual(LookDocument.read(#"{ "bar": { "font": "title3" } }"#).notes, [], "a style the bar holds was refused")
     }
 
     /// The notice's font is drawn in the navigation bar beside the badge, which holds two lines of

@@ -54,6 +54,23 @@ final class NextTurn {
         return send(via: harness)
     }
 
+    /// What the microphone has heard so far, written into the row — unless the row is holding a
+    /// turn on its way, whose words are the row's until it lands: a caption over them, or the
+    /// nothing a silent release leaves, would be a row drawing something other than the turn it
+    /// holds. Answers whether it was written.
+    @discardableResult
+    func caption(_ words: String) -> Bool {
+        guard sent == nil else { return false }
+        text = words
+        return true
+    }
+
+    /// A spoken release that sends nothing — nothing heard, or a debug run keeping what was —
+    /// takes its caption out of the row, and leaves a turn on its way as it is.
+    func endCaption() {
+        if sent == nil { text = "" }
+    }
+
     /// The turn the row is holding has reached the log, so the row is done with it — answered, or
     /// answered by nothing, which are the same thing to the row: the words are said either way
     /// and a second send would be a second turn. Answers whether it was holding one.

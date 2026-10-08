@@ -330,8 +330,8 @@ final class Harness {
 
     /// The model setting. A change reaches the brain at once, which for the guest replaces the
     /// resident process at its next idle moment, never in the middle of a turn. What the brain is
-    /// told is the setting as it is when the telling runs, not as it was set: a finger drawn
-    /// along the slider sets it twice in a moment, and the last of them is what must stand.
+    /// told is the setting as it is when the telling runs, not as it was set: two choices made
+    /// in a moment set it twice, and the last of them is what must stand.
     var model: ClaudeModel {
         get { defaults.string(forKey: Self.modelKey).flatMap(ClaudeModel.init(setting:)) ?? .default }
         set {
