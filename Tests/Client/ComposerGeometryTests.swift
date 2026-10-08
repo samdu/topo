@@ -510,7 +510,8 @@ final class ComposerGeometryTests: XCTestCase {
     }
 
     /// The room the pane grows in is what the column has left once a line under the transcript
-    /// and a card over the pane have taken theirs: on the smallest screen with a keyboard up, the
+    /// and a card over the pane have taken theirs: in a column as short as the smallest screen's above a keyboard, told
+    /// the keyboard is down so that the card is drawn, with the
     /// look's most lines at the most the reader takes and a draft longer than all of them, the
     /// pane with the memory's offer over it, with a line to send again under the transcript, and
     /// with both, stays under the column's top with the line still above the card.
@@ -529,7 +530,7 @@ final class ComposerGeometryTests: XCTestCase {
         var heights: [String: CGFloat] = [:]
         for (name, line, card) in [("neither", false, false), ("the card", false, true), ("the line", true, false), ("both", true, true)] {
             let drawn = Drawn()
-            let view = ChatColumn {
+            let view = ChatColumn(keyboard: false) {
                 Color.clear.background { mark("transcript", drawn) }
             } line: {
                 if line {
@@ -593,20 +594,27 @@ final class ComposerGeometryTests: XCTestCase {
         return look
     }
 
+    private func frame(_ name: String, _ drawn: Drawn) -> some View {
+        GeometryReader { proxy in
+            Color.clear.onChange(of: proxy.frame(in: .global), initial: true) { _, rect in drawn.named[name] = rect }
+        }
+    }
+
     /// The chat's column as drawn in a window of `size`, with the pane, its parts, the well and
     /// the field's own text view, each in the window's space.
     private func column(_ look: Look, row: Bool = true, card: Bool = false, line: Bool = false,
                         words: String = "bins", size: CGSize = above, type: DynamicTypeSize = .large) throws -> Drawn {
         let drawn = Drawn()
-        let view = ChatColumn {
+        let view = ChatColumn(keyboard: row) {
             Color.clear
         } line: {
             if line {
                 Button {} label: { Label("Send \"bins on Tuesday\" again", systemImage: "arrow.clockwise").lineLimit(1) }
                     .buttonStyle(.bordered).font(.footnote).padding(.bottom, 8)
+                    .background { frame("line", drawn) }
             }
         } card: {
-            if card { MemoryOfferCard(choose: {}, notNow: {}) }
+            if card { MemoryOfferCard(choose: {}, notNow: {}).background { frame("card", drawn) } }
         } pane: { room in
             Composer(draft: Draft(text: .constant(words), typing: .constant(false), row: row), room: room)
                 .overlayPreferenceValue(ComposerFrames.Pane.self) { pane in
@@ -674,18 +682,29 @@ final class ComposerGeometryTests: XCTestCase {
         }
     }
 
-    /// At the text sizes past the largest, with a draft longer than the field's lines: the pane
-    /// is inside the column alone at every size, and with the card and the line to the third
-    /// accessibility size. Past that the card and the line leave less than the well's reach.
+    /// At the text sizes past the largest, with a draft longer than the field's lines, over a
+    /// keyboard: the pane is inside the column at every size, alone, with the line, and with the
+    /// card offered and the line shown, since the card is not drawn while the keyboard is up.
     func testThePaneStaysInsideTheColumnAtTheAccessibilityTextSizes() throws {
-        let sizes: [(DynamicTypeSize, Bool)] = [(.accessibility1, false), (.accessibility1, true), (.accessibility3, false),
-                                                (.accessibility3, true), (.accessibility5, false)]
-        for (type, siblings) in sizes {
-            let drawn = try column(look { _ in }, card: siblings, line: siblings, words: Self.long, type: type)
-            let pane = try XCTUnwrap(drawn.pane, "\(type): no pane")
-            XCTAssertGreaterThanOrEqual(pane.minY, -0.5, "\(type), siblings \(siblings): the pane is past the column's top")
-            XCTAssertLessThanOrEqual(pane.maxY, Self.above.height + 0.5, "\(type), siblings \(siblings): the pane is past the column's foot")
+        for type in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
+            for (card, line) in [(false, false), (false, true), (true, true)] {
+                let drawn = try column(look { _ in }, card: card, line: line, words: Self.long, type: type)
+                let what = "\(type), card offered \(card), line \(line)"
+                let pane = try XCTUnwrap(drawn.pane, "\(what): no pane")
+                XCTAssertGreaterThanOrEqual(pane.minY, -0.5, "\(what): the pane is past the column's top")
+                XCTAssertLessThanOrEqual(pane.maxY, Self.above.height + 0.5, "\(what): the pane is past the column's foot")
+                XCTAssertGreaterThanOrEqual(pane.height, Look.Composer.Well.pressable - 0.5, "\(what): the pane is under the well's reach")
+                XCTAssertNil(drawn.named["card"], "\(what): the card is drawn over a keyboard")
+                if line {
+                    let line = try XCTUnwrap(drawn.named["line"], "\(what): no line")
+                    XCTAssertGreaterThanOrEqual(line.minY, -0.5, "\(what): the line is past the column's top")
+                    XCTAssertLessThanOrEqual(line.maxY, pane.minY + 0.5, "\(what): the line is under the pane")
+                }
+            }
         }
+        // With the keyboard down the card is drawn, over the pane.
+        let rest = try column(look { _ in }, row: false, card: true, size: CGSize(width: 320, height: 568 - 20 - 44))
+        XCTAssertLessThanOrEqual(try XCTUnwrap(rest.named["card"], "the card is not drawn at rest").maxY, try XCTUnwrap(rest.pane).minY + 0.5)
     }
 
     /// The enclosure's padding leaves the field its words: at a padding wider than the field the

@@ -228,7 +228,7 @@ struct Composer: View {
     }
 
     /// The field the next turn is written in, in the draft's own enclosure and the transcript's
-    /// own type: one line, growing a line at a time to `maximumLines` and scrolling inside itself
+    /// own type: one line, growing a line at a time to `maximumLines`, its frame growing no further
     /// past that. It is the row's alone: at rest it is not drawn or pressed, and it stays where it
     /// is so the keyboard has one field to rise for. The system's text view stays in the
     /// accessibility tree in both forms; activating it there is a way to the keyboard.
@@ -277,7 +277,7 @@ struct Composer: View {
         return min(asked, max(room - Look.Composer.Well.pressable, 0))
     }
 
-    /// The most lines the field takes before it scrolls inside itself: the look's, and no more
+    /// The most lines the field's frame grows to: the look's, and no more
     /// than leave the pane inside the room it has. The band is the row at one line — the taller
     /// of the well, the send's slot and the field's one line, and the room above and below.
     private var lines: Int {

@@ -754,7 +754,7 @@ struct Look: Equatable, Sendable {
         /// The room the send takes in the glass, and the spinner beside the row while the turn
         /// is on its way.
         var slot: CGFloat = 36
-        /// The most lines the field grows to before it scrolls inside itself.
+        /// The most lines the field grows to; past them its frame stops growing.
         var maximumLines = 5
         /// What `maximumLines` is read in.
         static let lines: ClosedRange<Int> = 1...20

@@ -117,7 +117,7 @@ struct ChatView: View {
     private func chat(keyboard: Bool, keyboardTop: CGFloat?) -> some View {
         let draft = draft(row: ComposerForm.isRow(keyboard: keyboard, focused: focused, alone: alone))
         return NavigationStack {
-            ChatColumn {
+            ChatColumn(keyboard: keyboard) {
                 transcript(draft)
             } line: {
                 if harness.hasWaiting {
@@ -955,10 +955,14 @@ enum ChatColumnRoom {
 /// The chat's column: the transcript with a line under it, and the pane as a bar under both
 /// with a card over it. It measures the room the pane has to grow in and hands it to the pane.
 struct ChatColumn<Transcript: View, Line: View, Card: View, Pane: View>: View {
+    /// Whether the keyboard is on the screen, when the card is not drawn: with the keyboard up
+    /// the column has room for the transcript, the line and the pane and for no more, and an
+    /// offer nobody answered is still there when the keyboard goes down.
+    var keyboard: Bool
     @ViewBuilder var transcript: Transcript
     /// What stands under the transcript, or nothing: a turn to send or ask again.
     @ViewBuilder var line: Line
-    /// What stands over the pane, or nothing: the memory's offer.
+    /// What stands over the pane while the keyboard is down, or nothing: the memory's offer.
     @ViewBuilder var card: Card
     /// The pane, given the room it has to grow in.
     @ViewBuilder var pane: (CGFloat?) -> Pane
@@ -986,7 +990,7 @@ struct ChatColumn<Transcript: View, Line: View, Card: View, Pane: View>: View {
             // pane is the presence, and not the modifier.
             .safeAreaInset(edge: .bottom) {
                 VStack(spacing: 0) {
-                    VStack(spacing: 0) { card }
+                    VStack(spacing: 0) { if !keyboard { card } }
                         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardTall = $0 }
                     pane(ChatColumnRoom.left(of: column.size.height, line: lineTall, card: cardTall))
                 }

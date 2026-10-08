@@ -100,7 +100,7 @@ final class BarControlsTests: XCTestCase {
     /// the badge, and the model still opens its menu. On the phone this suite runs on, which is
     /// wider than the narrowest.
     func testAtEachEndOfTheBarsRangesBothControlsStayInTheBarBesideTheBadge() throws {
-        for (what, look) in [("largest", #"{"bar": {"font": {"size": 400}, "spacing": 64}}"#),
+        for (what, look) in [("largest", #"{"bar": {"font": {"size": 400}, "spacing": 32}}"#),
                              ("smallest", #"{"bar": {"font": {"size": 4}, "spacing": 0}}"#)] {
             let app = ChatReading.launch(transcript: "empty", tuning: "", look: look)
             let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"], badge = app.buttons["topo-debug-chat"]

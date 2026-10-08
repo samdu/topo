@@ -65,7 +65,7 @@ final class DraftRowTests: XCTestCase {
 
     /// What is typed on the keyboard is in the field, and what is written past one line grows the
     /// field and the pane upward, the jewel and the send staying on the pane's bottom line, until
-    /// the field has the look's most lines and scrolls inside itself.
+    /// the field has the look's most lines and its frame grows no further.
     func testWhatIsWrittenGrowsThePaneUpwardToTheLooksLines() throws {
         let app = launch(owed: "")
         keyboardMark(in: app).tap()
@@ -99,7 +99,7 @@ final class DraftRowTests: XCTestCase {
         field.typeText(" " + Self.long + " " + Self.long)
         try settled(mic)
         XCTAssertEqual(field.frame.height, tall.height, accuracy: 1,
-                       "the field grew past the look's lines instead of scrolling inside itself")
+                       "the field grew past the look's lines")
         XCTAssertLessThan(field.frame.height, empty.height * 6, "the field is taller than the look's five lines")
         XCTAssertGreaterThan(field.frame.minY, 80, "the pane grew up into the navigation bar")
         XCTAssertEqual(field.value as? String, "Hi " + Self.long + " " + Self.long + " " + Self.long,
