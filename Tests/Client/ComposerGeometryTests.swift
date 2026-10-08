@@ -726,13 +726,10 @@ final class ComposerGeometryTests: XCTestCase {
             XCTAssertGreaterThanOrEqual(try XCTUnwrap(drawn.parts[.more]).minX, pane.minX - 0.5, "\(spacing): the control is past the pane's leading end")
             XCTAssertLessThanOrEqual(try XCTUnwrap(drawn.parts[.keyboard]).maxX, pane.maxX + 0.5, "\(spacing): the way to the keyboard is past the pane's end")
         }
-        // A mark at the largest font the reader takes is its slot's size at rest too.
+        // The control at the largest font the reader takes is its slot's size at rest too.
         let drawn = try column(look { $0.composer.flank.font = .system(size: 400) }, row: false, size: CGSize(width: 320, height: 568 - 20 - 44))
-        let slot = Look().composer.flank.slot
-        for part in [ComposerPart.more, .keyboard] {
-            let mark = try XCTUnwrap(drawn.parts[part])
-            XCTAssertLessThanOrEqual(max(mark.width, mark.height), slot + 0.5, "\(part): a mark at rest is larger than its slot")
-        }
+        let mark = try XCTUnwrap(drawn.parts[.more])
+        XCTAssertLessThanOrEqual(max(mark.width, mark.height), Look().composer.flank.slot + 0.5, "the control at rest is larger than its slot")
     }
 
     /// An anchor's rectangle in the window's space, so the resting and the short layouts, whose

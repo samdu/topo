@@ -209,9 +209,7 @@ struct Composer: View {
     /// there.
     private var keyboard: some View {
         Button { draft.typing = true } label: {
-            Cut { Image(systemName: look.composer.flank.keyboard).font(look.composer.flank.font) }
-                .clipped()
-                .contentShape(Rectangle())
+            Image(systemName: look.composer.flank.keyboard).font(look.composer.flank.font)
         }
         .accessibilityLabel("Type instead")
         .etched(look.composer.flank, ink: ink)
@@ -441,7 +439,8 @@ struct ComposerRow: Layout {
         let flank = composer.flank.slot
         let marks = max(mark(.more, flank), row ? mark(.send, draft.slot) : mark(.keyboard, flank))
         guard row else {
-            return .resting(composer, geometry: geometry, width: width, marks: marks, line: size(.line).height)
+            return .resting(composer, geometry: geometry, width: width, marks: marks, line: size(.line).height,
+                            wide: max(size(.more).width, size(.keyboard).width))
         }
         return .row(composer, draft: draft, geometry: geometry, width: width, marks: marks,
                     line: size(.line).height, most: most) { wide in
@@ -670,17 +669,18 @@ struct ComposerPlan: Equatable, Sendable {
     var moreSlot: CGFloat
     var sendSlot: CGFloat
 
+    /// `wide` is the wider of the two marks as drawn.
     static func resting(_ composer: Look.Composer, geometry: ComposerGeometry, width: CGFloat,
-                        marks: CGFloat, line: CGFloat) -> ComposerPlan {
+                        marks: CGFloat, line: CGFloat, wide: CGFloat = 0) -> ComposerPlan {
         let height = max(geometry.well, marks) + 2 * geometry.verticalInset
         let middle = CGPoint(x: width / 2, y: height / 2)
         // The leading flank, from the pane's inset to the room kept beside the well.
         let inner = max(middle.x - geometry.slot / 2 - composer.spacing, 0)
         let outer = min(max(composer.horizontalInset, 0), inner)
         let flank = inner - outer
-        // A mark's middle is never nearer the pane's end than half the room it stands in, so a
-        // spacing wider than the pane puts neither mark off it.
-        let half = min(max(composer.flank.slot, 0), max(width, 0) / 2) / 2
+        // A mark's middle is never nearer the pane's end than half the room it stands in, or
+        // half the mark where that is wider, so a spacing wider than the pane puts neither off it.
+        let half = min(max(composer.flank.slot, wide.isFinite ? wide : 0, 0), max(width, 0) / 2) / 2
         return ComposerPlan(size: CGSize(width: width, height: height),
                             well: CGRect(x: middle.x - geometry.well / 2, y: middle.y - geometry.well / 2,
                                          width: geometry.well, height: geometry.well),
