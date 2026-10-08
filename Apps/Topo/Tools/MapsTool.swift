@@ -262,7 +262,8 @@ struct MapsTool: Tool {
       eta     eta | FROM | TO | by | DISTANCE_M | EXPECTED_S | DEPART | ARRIVE
               link | URL
     DISTANCE_M of a place is from the region's centre. A last line starting "…" says what was left out.
-    The link line is the same search or the same directions in Apple Maps, for the person to tap: put
+    The link line is the same search or the same directions in Apple Maps, for the person to tap (a
+    search whose QUERY is too long to link whole has none): put
     it in your reply when they would want the map or turn-by-turn. Nothing here opens it. By transit
     it is the only way to the route itself. A --from that was here is left out of it, so it starts
     from wherever the phone is when tapped.

@@ -864,6 +864,13 @@ final class MapsToolTests: XCTestCase {
             XCTAssertEqual(components?.queryItems?.first { $0.name == "q" }?.value, query)
             XCTAssertEqual(components?.queryItems?.first { $0.name == "sll" }?.value, "37.75990,-122.41480")
         }
+        // A last mark of punctuation is written as its escape, so text drawn as a link keeps it.
+        for (query, end) in [("coffee?", "coffee%3F"), ("St. John's.", "St.%20John's%2E"), ("(bar)", "(bar%29"), ("?", "%3F"),
+                             ("wow!", "wow%21"), ("a_", "a%5F"), ("a*", "a%2A"), ("a;", "a%3B"), ("50%", "50%25")] {
+            let link = MapsLink.search(query, near: nil)
+            XCTAssertEqual(link, "https://maps.apple.com/?q=" + end)
+            XCTAssertEqual(link.flatMap(URLComponents.init(string:))?.queryItems?.first?.value, query)
+        }
         XCTAssertNil(MapsLink.search(String(repeating: "é", count: 140), near: nil))
         XCTAssertEqual(MapsLink.line(nil), [])
         XCTAssertEqual(MapsLink.line("https://maps.apple.com/?q=a"), ["link | https://maps.apple.com/?q=a"])
