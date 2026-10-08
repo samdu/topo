@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 229
+    static let fields = 215
 
     static let full = """
     {
@@ -162,24 +162,9 @@ enum LookFixture {
           "slot": 31,
           "more": "plus.circle",
           "keyboard": "pencil",
-          "keyboardDown": "pencil.slash",
           "speaking": "bell",
           "muted": "bell.slash",
-          "models": "gearshape",
-          "modelsOpen": "xmark"
-        },
-        "models": {
-          "inset": 52,
-          "height": 61,
-          "spacing": 9,
-          "topInset": 7,
-          "track": 5,
-          "stop": 11,
-          "knob": 27,
-          "restOpacity": 0.6,
-          "restLabelOpacity": 0.9,
-          "labelFont": { "style": "footnote", "weight": "light" },
-          "labelSpacing": 13
+          "models": "gearshape"
         },
         "well": {
           "size": 96,
@@ -202,7 +187,6 @@ enum LookFixture {
         "scale": 2,
         "clearance": 12,
         "roamSpeed": 60,
-        "swimSpeed": 310,
         "roamSettle": 1.5,
         "hurry": 4,
         "frameInterval": 0.05,

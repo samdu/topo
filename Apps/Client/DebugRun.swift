@@ -470,6 +470,12 @@ extension DebugRun {
         /// Whether the guest's home is mounted: whether there is a guest for a reply's image
         /// to be read from in this launch.
         var guestHome = false
+        /// The model the bar's menu last set (`Harness.model`), by its alias: the setting, which
+        /// no pin changes.
+        var model: String?
+        /// The model a request carries for that setting (`ClaudeModel.effective`), which in a
+        /// debug build is the pin whatever the setting.
+        var effectiveModel: String?
     }
 
     struct TurnReport: Codable, Equatable {
@@ -492,7 +498,7 @@ extension DebugRun {
                            placed: Look.Mascot? = nil, overridePlacement: Look.Mascot.Placement? = nil,
                            overridePin: CGPoint? = nil, presence: Double? = nil,
                            contentBottom: CGFloat? = nil, opened: [URL] = [],
-                           guestHome: Bool = false) -> String {
+                           guestHome: Bool = false, model: ClaudeModel? = nil) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
                                 facing: facing.rawValue, clearance: clearance.map(Double.init))
         func point(_ point: CGPoint) -> [Double] { [Double(point.x), Double(point.y)] }
@@ -504,6 +510,8 @@ extension DebugRun {
         report.contentBottom = contentBottom.map(Double.init)
         report.opened = opened.map(\.absoluteString)
         report.guestHome = guestHome
+        report.model = model?.rawValue
+        report.effectiveModel = model.map { ClaudeModel.effective($0).rawValue }
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)

@@ -298,7 +298,7 @@ enum LookDocument {
         r.seconds("presenceDuration", &value.presenceDuration)
         r.compactShare("compactShare", &value.compactShare)
         r.object("flank") { flank(&value.flank, $0) }
-        r.object("models") { models(&value.models, $0) }
+        r.retired("models")
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
         r.object("openJewel") { jewel(&value.openJewel, $0) }
@@ -310,7 +310,7 @@ enum LookDocument {
         r.pixelScale("scale", &value.scale)
         r.clearance("clearance", &value.clearance)
         r.roamSpeed("roamSpeed", &value.roamSpeed)
-        r.roamSpeed("swimSpeed", &value.swimSpeed)
+        r.retired("swimSpeed")
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
@@ -342,25 +342,11 @@ enum LookDocument {
         r.reach("slot", &value.slot)
         r.symbol("more", &value.more)
         r.symbol("keyboard", &value.keyboard)
-        r.symbol("keyboardDown", &value.keyboardDown)
+        r.retired("keyboardDown")
         r.symbol("speaking", &value.speaking)
         r.symbol("muted", &value.muted)
         r.symbol("models", &value.models)
-        r.symbol("modelsOpen", &value.modelsOpen)
-    }
-
-    private static func models(_ value: inout Look.Composer.Models, _ r: Reader) {
-        r.bounded("inset", &value.inset, in: 16...160)
-        r.bounded("height", &value.height, in: 32...200)
-        r.length("spacing", &value.spacing)
-        r.indent("topInset", &value.topInset)
-        r.outline("track", &value.track)
-        r.bounded("stop", &value.stop, in: 2...44)
-        r.bounded("knob", &value.knob, in: 2...44)
-        r.alpha("restOpacity", &value.restOpacity)
-        r.alpha("restLabelOpacity", &value.restLabelOpacity)
-        r.font("labelFont", &value.labelFont)
-        r.length("labelSpacing", &value.labelSpacing)
+        r.retired("modelsOpen")
     }
 
     private static func well(_ value: inout Look.Composer.Well, _ r: Reader) {

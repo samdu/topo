@@ -551,8 +551,6 @@ struct Look: Equatable, Sendable {
         var compactShare: CGFloat = 2.0 / 3
 
         var flank = Flank()
-        /// The slider the trailing flank's control opens: the models, smallest to largest.
-        var models = Models()
         var well = Well()
         var glyph = Glyph()
 
@@ -597,35 +595,6 @@ struct Look: Equatable, Sendable {
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"
             var models = "slider.horizontal.3"
-            var keyboardDown = "keyboard.chevron.compact.down"
-            var modelsOpen = "chevron.down"
-        }
-
-        /// The model slider: a row across the top of the pane while it is open, a stop for each
-        /// model the chat offers, smallest at the leading end, with the model's name under its
-        /// stop and a knob on the one chosen. Topo sits on the pane's top edge over the knob, so
-        /// the head he wears is over the model that gives it him.
-        struct Models: Equatable, Sendable {
-            /// From each end of the pane to the first and last stop's centre: far enough in that
-            /// Topo, at his own size, sits over an end stop with his reach inside the screen.
-            var inset: CGFloat = 40
-            /// The row's own height, the room between it and the row the microphone is in, and
-            /// the room above it, over the pane's own inset.
-            var height: CGFloat = 44
-            var spacing: CGFloat = 2
-            var topInset: CGFloat = 4
-            /// The line the stops are on, a stop's mark on it and the knob.
-            var track: CGFloat = 3
-            var stop: CGFloat = 7
-            var knob: CGFloat = 18
-            /// The line and the stops not chosen, as a share of the flank's ink, and the names
-            /// of the models not chosen, which have to be read.
-            var restOpacity = 0.35
-            var restLabelOpacity = 0.7
-            /// A model's name under its stop.
-            var labelFont: Font = .caption2.weight(.semibold)
-            /// Between the line and the names.
-            var labelSpacing: CGFloat = 5
         }
 
         /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
@@ -701,10 +670,6 @@ struct Look: Equatable, Sendable {
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
         var roamSpeed: CGFloat = 40
-        /// How fast he goes to the model slider when it opens, along it as the model changes and,
-        /// where the look places him, home when it shuts, in points a second: a swim, since he was called and is not
-        /// strolling.
-        var swimSpeed: CGFloat = 240
         /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
         /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
         var hurry: CGFloat = 10

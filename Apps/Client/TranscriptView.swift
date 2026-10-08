@@ -13,9 +13,10 @@ struct TranscriptView: View {
     /// What holding one of the person's own turns offers beyond copy. The default offers
     /// nothing, which is what a screen with no draft to put the words back into shows.
     var actions = TurnActions()
-    /// The person's next turn, drawn at the end of the transcript so it wraps as the turn it is
-    /// about to become. Nil on a screen with nothing to write with — the watch, the television,
-    /// a viewer — and the row is then never drawn.
+    /// The person's next turn, drawn at the end of the transcript while the glass under it has
+    /// no field for it, so it wraps as the turn it is about to become. Nil on a screen with
+    /// nothing to write with — the watch, the television, a viewer — and the row is then never
+    /// drawn.
     var draft: Draft?
     /// Turns on their way that the row is not holding: said before its own, and said after it.
     /// Each is drawn in the draft's sending colour until the log has it and it is a turn.
@@ -31,6 +32,9 @@ struct TranscriptView: View {
     /// own place, and the block waiting on its row to be made; a reference, so a row coming and
     /// going redraws nothing.
     @State private var made = MadeRows()
+    /// How tall the scroll view is, which is how far past the last turn a tap still lowers the
+    /// keyboard.
+    @State private var height: CGFloat = 0
 
     final class MadeRows {
         var turns: Set<TurnRef> = []
@@ -40,10 +44,10 @@ struct TranscriptView: View {
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                // The row being written is outside the lazy stack, so it is always made: with
-                // the keyboard up over a transcript taller than the screen, a row inside a lazy
-                // stack scrolled to it loads, grows the stack, is scrolled out, unloads and
-                // shrinks it again inside one layout pass, which never ends and freezes the app.
+                // The draft's row is outside the lazy stack, so it is always made: over a
+                // transcript taller than the screen, a row inside a lazy stack scrolled to it
+                // loads, grows the stack, is scrolled out, unloads and shrinks it again inside
+                // one layout pass, which never ends and freezes the app.
                 VStack(alignment: .leading, spacing: look.transcript.spacing) {
                     LazyVStack(alignment: .leading, spacing: look.transcript.spacing) {
                         if let notice {
@@ -61,7 +65,7 @@ struct TranscriptView: View {
                         }
                     }
                     ForEach(queued.before) { queued($0) }
-                    if let draft, draft.state != .hidden {
+                    if let draft, draft.drawer == .row {
                         DraftRow(draft: draft).id(Self.draftID)
                     }
                     if let answer { TurnRow(turn: answer, replay: replay, actions: actions).id(answer.ref) }
@@ -71,13 +75,21 @@ struct TranscriptView: View {
                 .padding(.vertical, look.transcript.spacing)
                 .frame(maxWidth: look.transcript.maximumLineWidth, alignment: .leading)
                 .frame(maxWidth: .infinity, alignment: .center)
+                #if os(iOS)
+                .background(alignment: .top) { lowering }
+                #endif
             }
+            #if os(iOS)
+            // A drag down the transcript takes the keyboard down with the finger.
+            .scrollDismissesKeyboard(.interactively)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
+            #endif
             // Where Topo may stand, on a screen that draws him: the frame the turns scroll in.
             .mascotVisible()
             .onAppear { scroll(proxy, animated: false) }
             .onChange(of: turns.last?.ref) { _, _ in scroll(proxy, animated: true) }
             // The row appearing, and each line it grows by, keep it where the newest turn was.
-            .onChange(of: draft?.state) { _, _ in scroll(proxy, animated: true) }
+            .onChange(of: draft?.drawer) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: draft?.text) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.before.last?.id) { _, _ in scroll(proxy, animated: true) }
             .onChange(of: queued.after.last?.id) { _, _ in scroll(proxy, animated: true) }
@@ -112,6 +124,23 @@ struct TranscriptView: View {
     /// The row being written, as the transcript scrolls to it.
     static let draftID = "draft"
 
+    #if os(iOS)
+    /// A tap on the transcript's own empty space puts the keyboard down. It is a view behind the
+    /// turns and not a gesture on them, so a turn's words, its links and its held menu are no
+    /// part of it: a tap that lands on any of them never reaches what is behind. It runs the
+    /// scroll view's height past the last turn, which is the empty space a short chat has most
+    /// of, without the content being any taller for it.
+    @ViewBuilder private var lowering: some View {
+        if let draft {
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture { draft.typing = false }
+                .padding(.bottom, -height)
+                .accessibilityHidden(true)
+        }
+    }
+    #endif
+
     /// What the transcript scrolls to: whatever is drawn last. That is a turn on its way said
     /// after the row's, or the guest's reply to it; then the reply to the row's own words, then
     /// the row while it is shown, then a turn on its way said before it or its reply, then the
@@ -121,7 +150,7 @@ struct TranscriptView: View {
     var end: AnyHashable? {
         if let last = queued.after.last { return Self.end(of: last) }
         if let answer { return AnyHashable(answer.ref) }
-        if (draft?.state ?? .hidden) != .hidden { return AnyHashable(Self.draftID) }
+        if draft?.drawer == .row { return AnyHashable(Self.draftID) }
         if let last = queued.before.last { return Self.end(of: last) }
         return turns.last.map { AnyHashable($0.ref) }
     }
@@ -320,37 +349,32 @@ enum TurnShape {
     }
 }
 
-/// The person's next turn, before it is one: what is written, and what has become of it. The row
-/// is drawn from this and nothing else, so each of its states is a value a test can make rather
-/// than a screen a test has to photograph.
+/// The person's next turn, before it is one: what is written, what has become of it, and which
+/// of the two places that can draw it does. The field in the glass and the row at the end of
+/// the transcript are both drawn from this and nothing else, so each state is a value a test can
+/// make rather than a screen a test has to photograph.
 struct Draft {
-    /// What is written. Bound, because the row is where it is typed and where a caption from the
-    /// microphone appears.
+    /// What is written. Bound, because the field is where it is typed and a caption from the
+    /// microphone is written into it.
     @Binding var text: String
-    /// The keyboard is up, so the row is shown for it with nothing written yet. Bound both ways:
-    /// the control that raised the keyboard set it, and the keyboard going down clears it.
+    /// The keyboard is asked for. Bound both ways: the control that raises the keyboard sets it,
+    /// a tap on the row does, and the keyboard going down clears it.
     @Binding var typing: Bool
     /// The turn is said and on its way, and not yet in the log.
     var sending = false
+    /// The pane under the transcript is a row, so its field has what is written
+    /// (`ComposerForm`).
+    var row = false
     /// Sends what is written.
     var send: @MainActor () -> Void = {}
     /// Takes the turn on its way back, so its words can be changed and said once. Nil while
     /// there is nothing to take back — nothing on its way, an attempt in flight that may be
     /// landing as it is asked, or a turn already known to be in the log.
     var edit: (@MainActor () -> Void)?
-    /// Told whether the row's field holds focus, which is whether the keyboard is on screen.
-    /// `typing` is what was asked for and outlives the field while a turn is on its way; this is
-    /// what is, and it is what the glass is present for. Whether the glass is short is the
-    /// keyboard's own safe area, which moves on the keyboard's curve (`KeyboardInset`).
-    var focused: @MainActor (Bool) -> Void = { _ in }
-    /// The row's field still holds the keyboard. The row stays while it does, however it was
-    /// asked to go: a field taken out of the window while it holds the keyboard drops the keyboard
-    /// with no animation at all, so the keyboard is let go of first and the row goes after it.
-    var holdsKeyboard = false
 
-    /// The three states of the row, and the whole of what it draws.
+    /// The three states of the draft.
     enum State: String, Equatable, Sendable {
-        /// Nothing written and no keyboard: the transcript ends at the last turn.
+        /// Nothing written and no keyboard asked for.
         case hidden
         /// Being written, or holding what the microphone has heard so far.
         case writing
@@ -360,63 +384,68 @@ struct Draft {
 
     var state: State {
         if sending { return .inFlight }
-        return typing || holdsKeyboard || !text.isEmpty ? .writing : .hidden
+        return typing || !text.isEmpty ? .writing : .hidden
+    }
+
+    /// Where what is written is drawn, which is in one place or none.
+    enum Drawer: String, Equatable, Sendable {
+        case none
+        /// The field in the glass.
+        case pane
+        /// The row at the end of the transcript.
+        case row
+    }
+
+    /// A turn on its way is the row's, whatever form the pane is in: the field is closed to it.
+    /// What is being written is the field's while the pane is a row, and the row's otherwise,
+    /// where there is anything to draw: a caption the microphone is writing with the keyboard
+    /// down.
+    var drawer: Drawer {
+        switch state {
+        case .hidden: .none
+        case .inFlight: .row
+        case .writing: row ? .pane : text.isEmpty ? .none : .row
+        }
     }
 }
 
-/// The person's next turn at the end of the transcript, drawn at the size the turn will be: the
-/// same type, the same width for the same words, an enclosure of the same shape, so nothing
-/// moves when it lands. What it is not yet is a turn, and the colour says so: it is drawn in
-/// `look.draft.written` while it is being written and in `look.draft.sending` while it is on its
-/// way, and becomes the person's own `look.bubble` by landing in the log.
+/// The person's next turn at the end of the transcript, while the glass has no field for it: a
+/// caption the microphone is writing with the keyboard down, and the turn on its way. It is
+/// drawn at the size the turn will be — the same type, the same width for the same words, an
+/// enclosure of the same shape — so nothing moves when it lands. What it is not yet is a turn,
+/// and the colour says so: it is drawn in `look.draft.written` while it is being written and in
+/// `look.draft.sending` while it is on its way, and becomes the person's own `look.bubble` by
+/// landing in the log.
 ///
-/// The control beside it says the same thing a second way — a spinner where the send was — and
-/// the field cannot be typed into. Holding the row is the way back from that: it takes the words
-/// out of the outbox and puts them back to be changed, so what is said again is one turn and not
-/// two.
+/// It is words and no field. A tap on what is being written raises the keyboard, and the words
+/// are then the glass's field's. A spinner beside a turn on its way says so a second way, and
+/// holding the row is the way back from that: it takes the words out of the outbox and puts them
+/// back to be changed, so what is said again is one turn and not two.
 struct DraftRow: View {
     var draft: Draft
     @Environment(\.look) private var look
-    /// The field takes the keyboard while the keyboard is asked for, and lets it go with it.
-    @FocusState private var writing: Bool
 
     var body: some View {
         // Indented as the person's turn it is about to become, so it wraps where that will, as
-        // far as leaves the bubble its minimum width and the control its slot.
+        // far as leaves the bubble its minimum width and the spinner its slot.
         DraftInset(inset: look.transcript.personLeadingInset, keep: Self.kept(look.draft)) {
             HStack(alignment: .bottom, spacing: look.draft.spacing) {
                 bubble
-                control
+                spinner
             }
             .mascotObstacle()
         }
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .onAppear { writing = draft.typing }
-        .onChange(of: draft.typing) { _, wanted in writing = wanted }
-        // A turn on its way closes the field, which takes the keyboard with it. The keyboard is
-        // the person's until they put it down, so it comes back with the row the moment the turn
-        // lands and there is somewhere to type again.
-        .onChange(of: draft.state) { _, now in if now != .inFlight, draft.typing { writing = true } }
-        // The keyboard lowered from anywhere — a swipe, another screen — is the row saying so,
-        // which is what keeps the control that raised it honest. The field closing to a turn on
-        // its way is not that, and says nothing about what the person wants next.
-        .onChange(of: writing) { _, focused in
-            draft.focused(focused)
-            guard draft.state != .inFlight else { return }
-            draft.typing = focused
-        }
-        // A row taken off the screen holds no focus, whatever the last change said.
-        .onDisappear { draft.focused(false) }
     }
 
     /// What the row keeps of its width whatever the person's inset: the bubble at its minimum,
-    /// the room beside it and the control's slot.
+    /// the room beside it and the spinner's slot.
     static func kept(_ draft: Look.Draft) -> CGFloat {
         draft.minimumWidth + draft.spacing + draft.slot
     }
 
     /// The person's inset as the row takes it in `width`: all of it where it leaves `kept`, and
-    /// only as much as does where it would not, so the inset yields and the control stays in
+    /// only as much as does where it would not, so the inset yields and the spinner stays in
     /// the column.
     static func inset(_ inset: CGFloat, keeping kept: CGFloat, in width: CGFloat) -> CGFloat {
         guard inset.isFinite, width.isFinite else { return 0 }
@@ -430,65 +459,43 @@ struct DraftRow: View {
         draft.sending ? look.draft.sending : look.draft.written
     }
 
-    /// The words, in a field laid over a `Text` that is not drawn and is the whole reason the
-    /// bubble is the size it is: a field asked for its own width takes every point on offer,
-    /// where a `Text` takes what the words need. The field is given that `Text`'s size rather
-    /// than asked for one, so the row hugs its words and breaks its lines where the landed turn
-    /// will — in the width the row has, which is the transcript's less the control beside it.
+    /// What the UI suites find the row's words by.
+    static let identifier = "draft-row"
+
+    /// The words, hugged by the bubble and broken where the landed turn will break them: in the
+    /// width the row has, which is the transcript's less the slot beside it.
     private var bubble: some View {
-        Text(draft.text.isEmpty ? " " : draft.text)
+        Text(draft.text)
             .font(look.transcript.bodyFont)
+            .foregroundStyle(look.transcript.text)
             .fixedSize(horizontal: false, vertical: true)
-            .hidden()
-            .accessibilityHidden(true)
-            .overlay(alignment: .topLeading) {
-                TextField("", text: draft.$text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(look.transcript.bodyFont)
-                    .foregroundStyle(look.transcript.text)
-                    .focused($writing)
-                    .disabled(draft.state == .inFlight)
-                    .onSubmit(draft.send)
-                    .accessibilityLabel("What to say")
-            }
-        .padding(.horizontal, enclosure.horizontalPadding)
-        .padding(.vertical, enclosure.verticalPadding)
-        .frame(minWidth: look.draft.minimumWidth, alignment: .leading)
-        .background { TurnShape.fill(enclosure) }
-        #if os(iOS)
-        .contextMenu {
-            if let edit = draft.edit {
-                Button { edit() } label: { Label("Edit", systemImage: "pencil") }
-            }
-        }
-        #endif
-    }
-
-    /// One slot, whichever of the two is in it, so the row does not move when the turn goes.
-    private var control: some View {
-        Group {
-            if draft.state == .inFlight {
-                ProgressView()
-                    .tint(look.draft.sendInk)
-                    .accessibilityLabel("Sending")
-            } else {
-                Button(action: draft.send) {
-                    Image(systemName: "arrow.up.circle.fill")
-                        .font(look.draft.sendFont)
-                        .foregroundStyle(look.draft.sendInk)
-                        .opacity(nothingToSend ? look.draft.sendRestingOpacity : 1)
+            .padding(.horizontal, enclosure.horizontalPadding)
+            .padding(.vertical, enclosure.verticalPadding)
+            .background { TurnShape.fill(enclosure) }
+            .accessibilityIdentifier(Self.identifier)
+            #if os(iOS)
+            .contextMenu {
+                if let edit = draft.edit {
+                    Button { edit() } label: { Label("Edit", systemImage: "pencil") }
                 }
-                .disabled(nothingToSend)
-                .accessibilityLabel("Send")
             }
-        }
-        .frame(width: look.draft.slot, height: look.draft.slot)
+            // What is being written goes on being written in the glass; a turn on its way is
+            // not to be typed into.
+            .onTapGesture { if draft.state != .inFlight { draft.typing = true } }
+            #endif
     }
 
-    /// An empty row has nothing to send, and the control says so rather than being pressed and
-    /// doing nothing.
-    private var nothingToSend: Bool {
-        draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// One slot beside the bubble at every state, so the row does not move when the turn goes.
+    private var spinner: some View {
+        Color.clear
+            .frame(width: look.draft.slot, height: look.draft.slot)
+            .overlay {
+                if draft.state == .inFlight {
+                    ProgressView()
+                        .tint(look.draft.sendInk)
+                        .accessibilityLabel("Sending")
+                }
+            }
     }
 }
 

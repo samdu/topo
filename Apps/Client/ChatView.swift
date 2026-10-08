@@ -4,8 +4,8 @@ import TopoAuth
 import TopoCore
 import TopoTurn
 
-/// Single-device chat: the transcript from the log, the row at the end of it the next turn is
-/// written in, and the glass under it holding the microphone.
+/// Single-device chat: the transcript from the log, the glass under it holding the microphone
+/// and the field the next turn is written in, and the model and the mute in the bar above.
 struct ChatView: View {
     @Environment(Harness.self) private var harness
     @Environment(SignIn.self) private var signIn
@@ -20,19 +20,24 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
     @AppStorage(Mute.key) private var readAloud = true
-    /// The model chosen on the glass's slider, which is the head Topo wears between the guest's turns
+    /// The model chosen in the bar's menu, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
-    /// The row at the end of the transcript: what is written, whether the keyboard has it, and
-    /// the turn those words are on their way under. It is a `NextTurn` rather than this screen's
-    /// own state because what the row holds outlives the screen — an app killed with words on the
-    /// line comes back to the row they were sent from.
+    /// The person's next turn: what is written, whether the keyboard is asked for, and the turn
+    /// those words are on their way under. It is a `NextTurn` rather than this screen's own
+    /// state because what it holds outlives the screen — an app killed with words on the line
+    /// comes back to the row they were sent from.
     @State private var row = NextTurn()
-    /// The row's field holds focus: the pane is present while it does. Not `row.typing`, which
+    /// The pane's field holds focus: the pane is present while it does. Not `row.typing`, which
     /// outlives the field while a turn is on its way. It is the presence's and not the pane's
-    /// height, because it changes in a transaction of its own ahead of the keyboard, so the
+    /// form, because it changes in a transaction of its own ahead of the keyboard, so the
     /// surface fades in on the presence's time where it stands and then rides up with the pane.
     @State private var focused = false
+    /// The field has held focus `ComposerForm.patience` with no keyboard on screen, so none is
+    /// coming and the pane is a row for the focus alone.
+    @State private var alone = false
+    /// Where what the microphone hears goes, taken when its session began.
+    @State private var dictation = Dictation.spoken
     /// Which way the press on the microphone went, so its release follows it.
     @State private var micPress = MicPress()
     /// The bottom of the screen's safe area with no keyboard in it, which is what the keyboard's
@@ -57,8 +62,6 @@ struct ChatView: View {
     /// The offer card's answer, once and for good: Choose folder or Not now. It is the chat's
     /// rather than the sheet's, because the card it answers is drawn here.
     @AppStorage("memoryOfferAnswered") private var memoryOfferAnswered = false
-    /// The model slider is open on the glass.
-    @State private var modelsOpen = false
     #if DEBUG
     /// The last spoken turn's nonce, for the badge's debug report.
     @State private var spokenNonce: String?
@@ -86,6 +89,19 @@ struct ChatView: View {
             let keyboard = KeyboardInset.isUp(bottom: screen.safeAreaInsets.bottom, resting: restingBottomInset)
             // The keyboard's top edge is the bottom of this reader's frame while it is up.
             chat(keyboard: keyboard, keyboardTop: keyboard ? screen.frame(in: .global).maxY : nil)
+                // A keyboard that is coming is on screen within a few frames of the focus; one
+                // that has not come by then is not coming (`ComposerForm`). The pane takes the
+                // focus alone on a curve of its own, there being no keyboard's to move on.
+                .task(id: [focused, keyboard]) {
+                    let take = { (now: Bool) in
+                        guard alone != now else { return }
+                        withAnimation(.easeInOut(duration: look.composer.duration)) { alone = now }
+                    }
+                    guard focused else { return take(false) }
+                    guard !keyboard else { return }
+                    do { try await Task.sleep(for: ComposerForm.patience) } catch { return }
+                    take(true)
+                }
         }
         // The same inset with the keyboard's region ignored, which is the screen's own.
         .background {
@@ -99,9 +115,10 @@ struct ChatView: View {
     }
 
     private func chat(keyboard: Bool, keyboardTop: CGFloat?) -> some View {
-        NavigationStack {
+        let draft = draft(row: ComposerForm.isRow(keyboard: keyboard, focused: focused, alone: alone))
+        return NavigationStack {
             VStack(spacing: 0) {
-                transcript
+                transcript(draft)
                 if harness.hasWaiting {
                     // The line stopped on a failure; what was said is kept and goes again from here.
                     lineButton(harness.waiting.count == 1 ? "Send \"\(harness.waiting[0])\" again"
@@ -133,7 +150,7 @@ struct ChatView: View {
                         })
                         .mascotObstacle()
                     }
-                    composer(keyboard: keyboard)
+                    composer(draft)
                 }
             }
             // The one space the transcript's content bottom and the pane's top edge are both
@@ -141,7 +158,7 @@ struct ChatView: View {
             .coordinateSpace(.named(Self.space))
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
             // under them and the glass leave him room, on the glass, or at a pin.
-            .mascotRoams(mascot.drawn, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+            .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
                          ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
@@ -152,6 +169,7 @@ struct ChatView: View {
             .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                bar
                 notices
                 // The jewel is the glass here, so from iOS 26 on the bar puts none of its own
                 // behind it. That is a shape the bar draws rather than a value the badge does,
@@ -255,9 +273,12 @@ struct ChatView: View {
         .onChange(of: harnessFacts, initial: true) { _, facts in
             mascot.harness(model: facts.model, tokens: facts.context)
         }
-        // And over the open model slider, the model chosen there, which no turn's events change.
-        .onChange(of: sliderChoice, initial: true) { _, chosen in mascot.chosen = chosen }
-        .onChange(of: voice.text) { _, text in if voice.owner == .chat, !text.isEmpty { row.text = text } }
+        // What the microphone has heard so far is written where its session is going: over the
+        // draft for a turn that will be sent on the release, after what was written for one that
+        // will not.
+        .onChange(of: voice.text) { _, text in
+            if voice.owner == .chat, !text.isEmpty { row.text = dictation.written(hearing: text) }
+        }
         // The row holds the turn's words until the turn is in the log, and the log is what ends
         // it: a turn whose reply failed is in the log like any other, so the row clears and the
         // bubble that lands is the one that was being written in. A turn that never reached the
@@ -267,7 +288,7 @@ struct ChatView: View {
             row.clearIfLanded(in: harness)
         }
         // The keyboard coming up ends a hands-free session: a person who has started typing is
-        // not still talking. What was heard stays in the row, to be finished by hand.
+        // not still talking. What was heard stays in the draft, to be finished by hand.
         .onChange(of: row.typing) { _, up in
             guard up else { return }
             voice.cancel(.chat)
@@ -296,6 +317,25 @@ struct ChatView: View {
         .font(.footnote)
         .mascotObstacle()
         .padding(.bottom, 8)
+    }
+
+    /// The model and the mute, at the bar's leading edge (`ChatBar`). The menu sets the harness's
+    /// model, which is the setting and not what a debug build's pin makes of it. Muting ends
+    /// what is being read and what was waited for, as Stop does; a reply that lands muted is
+    /// read by nobody (`SpokenReply`).
+    private var bar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            ChatBar(models: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
+                    chosen: (ClaudeModel(setting: modelSetting) ?? .default).rawValue,
+                    choose: { alias in
+                        if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
+                    },
+                    readsAloud: readAloud,
+                    setReadsAloud: { on in
+                        readAloud = on
+                        SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
+                    })
+        }
     }
 
     /// What the chat says it is doing, in the navigation bar beside the badge (`ChatNotices`).
@@ -335,7 +375,8 @@ struct ChatView: View {
                                                         presence: panePresence,
                                                         contentBottom: contentBottomInTranscript,
                                                         opened: debugOpened,
-                                                        guestHome: GuestImages.Mounts.shared.home))
+                                                        guestHome: GuestImages.Mounts.shared.home,
+                                                        model: harness.model))
                 #endif
         }
     }
@@ -357,6 +398,17 @@ struct ChatView: View {
                 forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                 forgetConnections: { connections.forget() },
                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })
+    }
+
+    /// What a session of the microphone heard, sent where the session was going when it began
+    /// (`Dictation`). One begun over the row is written after what was there and sends nothing:
+    /// the send in the glass sends it, as the typed turn it is.
+    private func heard(_ heard: String, _ dictation: Dictation) async {
+        guard dictation.sends else {
+            row.text = dictation.written(hearing: heard)
+            return
+        }
+        await sendSpoken(heard)
     }
 
     private func sendSpoken(_ heard: String) async {
@@ -391,7 +443,7 @@ struct ChatView: View {
     /// where its content ends and where its own top edge is. On iOS 17, the deployment target,
     /// there is neither: nothing is measured and the pane is drawn whole, which is the pane as
     /// it was before it had a presence. This is the one availability branch on this screen.
-    @ViewBuilder private var transcript: some View {
+    @ViewBuilder private func transcript(_ draft: Draft) -> some View {
         let view = TranscriptView(turns: shownTurns, notice: harness.notice,
                                   // Holding one of Topo's turns says it again, which is how a
                                   // typed turn's reply — never read aloud as it lands — is heard.
@@ -400,7 +452,7 @@ struct ChatView: View {
                                                  say: { speaker.speak($0.text, reply: $0.ref) },
                                                  stopSpeaking: { speaker.stop() }),
                                   actions: turnActions,
-                                  draft: draftRow, queued: row.queued(in: harness), answer: row.answer(in: harness),
+                                  draft: draft, queued: row.queued(in: harness), answer: row.answer(in: harness),
                                   cue: speaker.cue)
             // An image in a reply is read as the guest reads it, once there is a guest.
             .environment(\.replyImages, GuestImages.reader(epoch: GuestImages.Mounts.shared.epoch))
@@ -427,7 +479,7 @@ struct ChatView: View {
     }
 
     /// How much of a pane the pane is. One while any of the three edges is unmeasured: iOS 17
-    /// measures none of them, and a launch has not measured them yet. One while the row's field
+    /// measures none of them, and a launch has not measured them yet. One while the pane's field
     /// holds focus, which is the keyboard asked for, whatever the geometry, and while Topo sits
     /// on the glass.
     private var panePresence: Double {
@@ -435,7 +487,7 @@ struct ChatView: View {
         return PanePresence.of(contentBottom: transcriptTop + contentBottomInTranscript,
                                paneTop: paneTop, rise: look.composer.presenceRise,
                                open: micState.open, keyboard: focused,
-                               holdsTopo: look.mascot.placement == .glass || modelsOpen)
+                               holdsTopo: look.mascot.placement == .glass)
     }
 
     /// What the glass draws the microphone from: `VoiceInput`'s four facts and the speaker's one.
@@ -449,28 +501,24 @@ struct ChatView: View {
     /// whole of this screen's part in a session. Its own top edge is read off its
     /// geometry rather than worked out, so the offer card above it and the keyboard's rise move
     /// the edge the presence is read against.
-    @ViewBuilder private func composer(keyboard: Bool) -> some View {
-        let view = Composer(typing: Bindable(row).typing, mic: micState, presence: panePresence,
-                            keyboard: keyboard,
+    @ViewBuilder private func composer(_ draft: Draft) -> some View {
+        let view = Composer(draft: draft, mic: micState, presence: panePresence,
                             // Hold to talk and release to send; a tap opens the microphone until
                             // the next press. The session logic is `VoiceInput`'s and the routing
-                            // `MicPress`'s; this only sends what a press hands back.
+                            // `MicPress`'s; this only says where what a press hands back goes,
+                            // which is settled as the session begins and kept to its end: each
+                            // press carries it by value, so a later session's is never this one's.
                             micPressed: { down, drawn in
-                                // A thumb on the microphone takes the flanks away, and the slider
-                                // with them.
-                                if down { modelsOpen = false }
+                                var going = dictation
+                                if Dictation.begins(down: down, drawn: drawn) {
+                                    going = Dictation(over: draft.row ? row.text : nil)
+                                    dictation = going
+                                }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,
-                                                 send: { await sendSpoken($0) })
+                                                 send: { await heard($0, going) })
                             },
                             micReport: micReport,
-                            readsAloud: readAloud,
-                            // Muting ends what is being read and what was waited for, as Stop
-                            // does; a reply that lands muted is read by nobody (`SpokenReply`).
-                            setReadsAloud: { on in
-                                readAloud = on
-                                SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
-                            },
-                            models: models)
+                            focused: { focused = $0 })
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {
@@ -478,29 +526,11 @@ struct ChatView: View {
         }
     }
 
-    /// The model slider: what the chat offers under the look's names, the setting, and whether
-    /// the slider is open, which it is over the keyboard as without it.
-    private var models: Composer.Models {
-        Composer.Models(stops: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
-                        chosen: (ClaudeModel(setting: modelSetting) ?? .default).rawValue,
-                        open: modelsOpen,
-                        setOpen: { modelsOpen = $0 },
-                        choose: { alias in
-                            if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
-                        })
-    }
-
     /// What the chat's harness says of the model and the context, for Topo: the model the debug
     /// build's pin makes of the setting, since that is the model that answers.
     private var harnessFacts: HarnessFacts {
         let setting = ClaudeModel(setting: modelSetting) ?? .default
         return HarnessFacts(model: ClaudeModel.effective(setting).rawValue, context: harness.context)
-    }
-
-    /// The model chosen on the model slider while it is open, which is the head Topo wears over
-    /// it in every build and through a turn (`Mascot.chosen`); nil while it is shut.
-    private var sliderChoice: String? {
-        modelsOpen ? (ClaudeModel(setting: modelSetting) ?? .default).rawValue : nil
     }
 
     private struct HarnessFacts: Equatable {
@@ -571,14 +601,14 @@ struct ChatView: View {
         return TurnActions(edit: take)
     }
 
-    /// The person's next turn, at the end of the transcript, as the row draws it. What is written
-    /// and whether the keyboard is asked for are the row's own state, bound both ways; the rest is
-    /// read off it and off the log.
-    private var draftRow: Draft {
+    /// The person's next turn, as the glass's field and the row at the end of the transcript
+    /// draw it. What is written and whether the keyboard is asked for are `NextTurn`'s own
+    /// state, bound both ways; the rest is read off it and off the log, and `row` is the form
+    /// the pane is in.
+    private func draft(row form: Bool) -> Draft {
         let bindable = Bindable(row)
         return Draft(text: bindable.text, typing: bindable.typing,
-                     sending: row.sending(in: harness), send: send, edit: editSending,
-                     focused: { focused = $0 }, holdsKeyboard: focused)
+                     sending: row.sending(in: harness), row: form, send: send, edit: editSending)
     }
 
     /// The turn the row is holding is in the log — answered, or answered by nothing, which are

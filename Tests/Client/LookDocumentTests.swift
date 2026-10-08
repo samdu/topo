@@ -343,22 +343,21 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(high.look.composer.compactShare, 1)
     }
 
-    /// The model slider's lengths are read in ranges of their own: an inset that leaves the stops
-    /// no column to be pressed in, a row too short to hold them and a stop too small or too big
-    /// are refused, and the ends of each range are taken.
-    func testTheModelSliderIsReadInItsOwnRanges() {
-        for (field, low, high) in [("inset", 16.0, 160.0), ("height", 32, 200), ("stop", 2, 44), ("knob", 2, 44)] {
-            for outside in [low - 1, high + 1, 0] {
-                let refused = LookDocument.read(#"{"composer": {"models": {"\#(field)": \#(outside)}}}"#)
-                XCTAssertEqual(refused.look, Look(), "\(field) \(outside) was taken")
-                XCTAssertEqual(refused.notes.count, 1, refused.notes.description)
-            }
-            for end in [low, high] {
-                let taken = LookDocument.read(#"{"composer": {"models": {"\#(field)": \#(end)}}}"#)
-                XCTAssertEqual(taken.notes, [], "\(field) \(end)")
-                XCTAssertNotEqual(taken.look, Look(), "\(field) \(end) was not taken")
-            }
-        }
+    /// A document written for the model slider and the keyboard's second mark still reads: the
+    /// keys the look no longer has are passed over, whatever they hold, with no note, and every
+    /// field beside them is taken.
+    func testTheKeysOfTheSliderThatWentRefuseNothing() {
+        let reading = LookDocument.read("""
+        { "composer": { "spacing": 31,
+                        "models": { "inset": 52, "height": 61, "stop": "not a number", "labelFont": 7 },
+                        "flank": { "keyboardDown": "pencil.slash", "modelsOpen": "no such symbol", "muted": "bell.slash" } },
+          "mascot": { "swimSpeed": 310, "roamSpeed": 60 } }
+        """)
+        XCTAssertEqual(reading.notes, [])
+        XCTAssertEqual(reading.state, .read(fields: 3))
+        XCTAssertEqual(reading.look.composer.spacing, 31)
+        XCTAssertEqual(reading.look.composer.flank.muted, "bell.slash")
+        XCTAssertEqual(reading.look.mascot.roamSpeed, 60)
     }
 
     /// A control's mark is a symbol the system has: a name it has not is refused and the compiled

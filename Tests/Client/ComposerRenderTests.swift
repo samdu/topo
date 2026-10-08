@@ -20,15 +20,12 @@ import XCTest
 ///   presence it hands over, and it is `PanePresenceTests` that holds it.
 /// - `dimmedSaturation` is drawn by `.saturation`, which `ImageRenderer` does not apply. The
 ///   colour draining out of the jewel is by eye, in the dimmed screenshots on the PR.
-/// - `widthFraction` is `containerRelativeFrame`, which has no container in a renderer. How
-///   much of the screen the glass takes is by eye, in every screenshot.
-/// - `horizontalInset` is the room inside the glass for the two ends, and the ends are elastic:
-///   each takes the width left over, so the inset bounds them and moves nothing while neither
-///   is wide enough to be bounded. It is drawn and not dead, but there is no picture it changes
-///   today.
-/// - `field.ink` and `field.lineLimit` are the text inside a `TextField`, which `ImageRenderer`
-///   lays out without drawing. The font and the padding do reach the picture, through the space
-///   they take. What the words look like is by eye, in the typing screenshots on the PR.
+/// - `widthFraction` and `typingWidthFraction` are `containerRelativeFrame`, which has no
+///   container in a renderer. How much of the screen the glass takes is `ComposerGeometry.width`,
+///   held by `ComposerGeometryTests`, and by eye in every screenshot.
+/// - What is written in the field, its ink and `draft.maximumLines` are the text inside a
+///   `TextField`, which `ImageRenderer` lays out without drawing. The enclosure round it does
+///   reach the picture. What the words look like is in the UI suites' screenshots.
 ///
 /// The surface is set to `flat` in every render here. The system's own glass is drawn by the
 /// compositor and `ImageRenderer` does not draw it, so a tint laid under it would be a change
@@ -50,9 +47,10 @@ final class ComposerRenderTests: XCTestCase {
 
     /// The composer at rest, or in whatever state it is handed, as a digest: what a failure here
     /// has to say is that two pictures are the same, and the bytes are not worth printing.
-    private func raster(_ mic: Composer.MicState = .init(), typing: Bool = false,
-                        presence: Double = 1, keyboard: Bool = false, look: Look) throws -> String {
-        let view = Composer(typing: .constant(typing), mic: mic, presence: presence, keyboard: keyboard)
+    private func raster(_ mic: Composer.MicState = .init(), written: String = "",
+                        presence: Double = 1, row: Bool = false, look: Look) throws -> String {
+        let draft = Draft(text: .constant(written), typing: .constant(row), row: row)
+        let view = Composer(draft: draft, mic: mic, presence: presence)
             .environment(\.look, look)
             .frame(width: size.width, height: size.height)
             .background(Color.white)
@@ -157,26 +155,102 @@ final class ComposerRenderTests: XCTestCase {
         var tight = flatLook()
         tight.composer.spacing = 0
         XCTAssertNotEqual(try raster(look: look), try raster(look: tight),
-                          "the look's spacing does not reach the row")
+                          "the look's spacing does not reach the resting pane")
 
+        var inset = flatLook()
+        inset.composer.horizontalInset = look.composer.horizontalInset + 40
+        XCTAssertNotEqual(try raster(look: look), try raster(look: inset),
+                          "the look's horizontal inset does not reach the flanks")
     }
 
-    /// Under the keyboard the pane is short and the microphone with it, at the look's share: the
-    /// share reaches the short pane's pixels and not the resting pane's.
+    // MARK: The row
+
+    /// The row is another picture from the resting pane, and each thing in it is the look's: the
+    /// send's mark, type and ink, and the field's outline. None of them is drawn at rest. Where
+    /// each stands — the jewel's inset, the spacing, the room either side of the field — is
+    /// `ComposerPlanTests`': a renderer has no screen to give the pane its share of, so the row
+    /// here is as narrow as it is ever laid out, with everything that yields gone.
+    func testTheRowIsDrawnFromTheLook() throws {
+        let look = flatLook()
+        XCTAssertNotEqual(try raster(look: look), try raster(row: true, look: look),
+                          "the row is the resting pane's picture")
+
+        var changes: [(String, Look)] = []
+        var symbol = flatLook()
+        symbol.draft.sendSymbol = "arrow.up.circle.fill"
+        changes.append(("sendSymbol", symbol))
+        var ink = flatLook()
+        ink.draft.sendInk = Color(red: 0, green: 1, blue: 0)
+        changes.append(("sendInk", ink))
+        var font = flatLook()
+        font.draft.sendFont = .largeTitle
+        changes.append(("sendFont", font))
+        var outline = flatLook()
+        outline.draft.written.accent = Color(red: 1, green: 0, blue: 1)
+        changes.append(("written.accent", outline))
+        for (field, changed) in changes {
+            XCTAssertNotEqual(try raster(written: "bins?", row: true, look: look),
+                              try raster(written: "bins?", row: true, look: changed),
+                              "the look's \(field) does not reach the row")
+            XCTAssertEqual(try raster(look: look), try raster(look: changed),
+                           "the look's \(field) reaches the resting pane, where nothing of the row is drawn")
+        }
+    }
+
+    /// The control for everything else is in both forms, and the way to the keyboard at rest
+    /// alone: the row has no place for it.
+    func testTheWayToTheKeyboardIsTheRestingPanesAlone() throws {
+        let look = flatLook()
+        var more = flatLook()
+        more.composer.flank.more = "plus.circle.fill"
+        XCTAssertNotEqual(try raster(look: look), try raster(look: more), "the look's mark does not reach the resting pane")
+        XCTAssertNotEqual(try raster(row: true, look: look), try raster(row: true, look: more),
+                          "the look's mark does not reach the row")
+
+        var keyboard = flatLook()
+        keyboard.composer.flank.keyboard = "pencil"
+        XCTAssertNotEqual(try raster(look: look), try raster(look: keyboard),
+                          "the look's keyboard mark does not reach the resting pane")
+        XCTAssertEqual(try raster(row: true, look: look), try raster(row: true, look: keyboard),
+                       "the way to the keyboard is drawn in the row")
+    }
+
+    /// A send that would send nothing says so: with nothing but space written it is faded by the
+    /// look's own value, and with words written it is not.
+    func testASendWithNothingToSendIsFadedByTheLook() throws {
+        let look = flatLook()
+        XCTAssertNotEqual(try raster(written: "", row: true, look: look), try raster(written: "bins?", row: true, look: look),
+                          "an empty field's send is drawn as live as a written one's")
+        XCTAssertEqual(try raster(written: "", row: true, look: look), try raster(written: "   ", row: true, look: look),
+                       "space alone is drawn as something to send")
+        var solid = flatLook()
+        solid.draft.sendRestingOpacity = 1
+        XCTAssertNotEqual(try raster(written: "", row: true, look: look), try raster(written: "", row: true, look: solid),
+                          "the look's resting alpha does not reach the send")
+        XCTAssertEqual(try raster(written: "bins?", row: true, look: look), try raster(written: "bins?", row: true, look: solid),
+                       "the resting alpha reaches a send with something to send")
+    }
+
+    /// A thumb on the microphone in the row takes what is beside it — the control, the field's
+    /// outline and the send — to the look's held alpha.
+    func testTheHeldRowGoesByTheLooksAlpha() throws {
+        var visible = flatLook()
+        visible.composer.flank.heldOpacity = 1
+        XCTAssertNotEqual(try raster(held, written: "bins?", row: true, look: flatLook()),
+                          try raster(held, written: "bins?", row: true, look: visible),
+                          "the look's held alpha does not reach the row")
+    }
+
+    /// As a row the pane is short and the microphone with it, at the look's share: the share
+    /// reaches the row's pixels and not the resting pane's.
     func testTheShortPaneIsDrawnAtTheLooksShare() throws {
         let look = flatLook()
-        XCTAssertNotEqual(try raster(look: look), try raster(keyboard: true, look: look),
-                          "the keyboard does not change the pane")
         var other = flatLook()
         other.composer.compactShare = 0.9
-        XCTAssertNotEqual(try raster(keyboard: true, look: look), try raster(keyboard: true, look: other),
+        XCTAssertNotEqual(try raster(row: true, look: look), try raster(row: true, look: other),
                           "the look's share does not reach the short pane")
         XCTAssertEqual(try raster(look: look), try raster(look: other),
                        "the share reaches the pane at rest")
-        var whole = flatLook()
-        whole.composer.compactShare = 1
-        XCTAssertEqual(try raster(look: whole), try raster(keyboard: true, look: whole),
-                       "a share of one is not the resting pane")
     }
 
     /// What the open glass spills onto the transcript behind it. It is the same shadow at
@@ -303,15 +377,6 @@ final class ComposerRenderTests: XCTestCase {
         font.composer.flank.font = .largeTitle
         XCTAssertNotEqual(try raster(look: look), try raster(look: font),
                           "the look's flank font does not reach the pixels")
-    }
-
-    /// The one control the glass has says which way it goes: the keyboard up, or down again.
-    /// The words themselves are not here — they are written in the row at the end of the
-    /// transcript — so this is the whole of what `typing` changes on the glass.
-    func testTheFlankSaysWhichWayTheKeyboardGoes() throws {
-        let look = flatLook()
-        XCTAssertNotEqual(try raster(look: look), try raster(typing: true, look: look),
-                          "the flank draws the same mark whether the keyboard is up or down")
     }
 
     /// The etch is three values — how far under its ink the glyph sits, and the two catches that

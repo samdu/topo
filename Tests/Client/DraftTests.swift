@@ -5,47 +5,74 @@ import XCTest
 
 @testable import Topo
 
-/// What the row at the end of the transcript is, and what it draws. The three states are a value
-/// rather than a screen, so what the row shows in each is asserted here; what the log does under
-/// each is in `HarnessIntegrationTests`, since a row that says the right thing over the wrong log
-/// is the failure worth catching.
+/// What the person's next turn is, and which of the two places that can draw it does. The states
+/// are a value rather than a screen, so each is asserted here; what the log does under each is in
+/// `HarnessIntegrationTests`, since a draft that says the right thing over the wrong log is the
+/// failure worth catching.
 @MainActor
 final class DraftStateTests: XCTestCase {
-    private func draft(_ text: String = "", typing: Bool = false, sending: Bool = false,
-                       edit: (@MainActor () -> Void)? = nil, holdsKeyboard: Bool = false) -> Draft {
-        Draft(text: .constant(text), typing: .constant(typing), sending: sending, edit: edit,
-              holdsKeyboard: holdsKeyboard)
+    private func draft(_ text: String = "", typing: Bool = false, sending: Bool = false, row: Bool = false) -> Draft {
+        Draft(text: .constant(text), typing: .constant(typing), sending: sending, row: row)
     }
 
-    /// Nothing written and no keyboard: the transcript ends at the last turn, as it did before
-    /// there was a row at all.
-    func testAnEmptyRowWithNoKeyboardIsNotShown() {
+    /// Nothing written and no keyboard: nothing is drawn, at rest or in a pane still a row as
+    /// the keyboard falls.
+    func testAnEmptyDraftWithNoKeyboardIsDrawnNowhere() {
         XCTAssertEqual(draft().state, .hidden)
+        XCTAssertEqual(draft().drawer, .none)
+        XCTAssertEqual(draft(row: true).drawer, .none)
     }
 
-    func testTheKeyboardAloneShowsTheRow() {
+    /// The keyboard asked for is a draft being written, and it is the field's once the pane is a
+    /// row. Until then there is nothing to draw: no empty bubble stands in the transcript while
+    /// the keyboard rises.
+    func testTheKeyboardAloneIsTheFieldsOnceThePaneIsARow() {
         XCTAssertEqual(draft(typing: true).state, .writing)
+        XCTAssertEqual(draft(typing: true).drawer, .none)
+        XCTAssertEqual(draft(typing: true, row: true).drawer, .pane)
     }
 
-    /// The keyboard asked down while the field still holds it leaves the row where it is: taken
-    /// out of the window then, the field would drop the keyboard with no animation. The row goes
-    /// once the field has let the keyboard go.
-    func testTheRowStaysUntilItsFieldHasLetTheKeyboardGo() {
-        XCTAssertEqual(draft(typing: false, holdsKeyboard: true).state, .writing)
-        XCTAssertEqual(draft(typing: false, holdsKeyboard: false).state, .hidden)
-    }
-
-    /// A caption from the microphone arrives with no keyboard, and the row is what shows it.
-    func testWordsWithNoKeyboardShowTheRow() {
+    /// A caption from the microphone arrives with no keyboard, and the row at the end of the
+    /// transcript is what shows it. The same words under the keyboard are the field's.
+    func testWordsAreTheRowsAtRestAndTheFieldsInTheRowForm() {
         XCTAssertEqual(draft("purple elephants").state, .writing)
+        XCTAssertEqual(draft("purple elephants").drawer, .row)
+        XCTAssertEqual(draft("purple elephants", typing: true).drawer, .row,
+                       "the keyboard is asked for and not up yet, so the pane has no field for the words")
+        XCTAssertEqual(draft("purple elephants", typing: true, row: true).drawer, .pane)
+        XCTAssertEqual(draft("purple elephants", row: true).drawer, .pane,
+                       "the keyboard is going and the pane is still a row, so the field still has the words")
     }
 
     /// The turn is on its way whatever else is true: the keyboard may be up or down, and the
-    /// words are the ones being sent either way.
-    func testATurnOnItsWayIsInFlightAboveEverythingElse() {
+    /// words are the ones being sent either way. They are the row's in both of the pane's forms,
+    /// since the field is closed to a turn on its way.
+    func testATurnOnItsWayIsInFlightAboveEverythingElseAndIsTheRows() {
         XCTAssertEqual(draft("bins?", sending: true).state, .inFlight)
         XCTAssertEqual(draft("bins?", typing: true, sending: true).state, .inFlight)
-        XCTAssertEqual(draft(sending: true).state, .inFlight, "an empty row in flight is still in flight")
+        XCTAssertEqual(draft(sending: true).state, .inFlight, "an empty draft in flight is still in flight")
+        for row in [false, true] {
+            XCTAssertEqual(draft("bins?", typing: row, sending: true, row: row).drawer, .row)
+        }
+    }
+
+    /// What is written is drawn in one place or none, whatever the draft holds: the field has it
+    /// only in a pane that is a row, and the row has it only with something to draw.
+    func testWhatIsWrittenIsNeverDrawnTwice() {
+        for text in ["", "bins?"] {
+            for typing in [false, true] {
+                for sending in [false, true] {
+                    for row in [false, true] {
+                        let draft = draft(text, typing: typing, sending: sending, row: row)
+                        switch draft.drawer {
+                        case .pane: XCTAssertTrue(row && !sending, "the field has the words in a pane with no field shown")
+                        case .row: XCTAssertTrue(sending || !text.isEmpty, "the row is drawn with nothing in it")
+                        case .none: XCTAssertTrue(text.isEmpty || !sending)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -58,21 +85,16 @@ final class DraftStateTests: XCTestCase {
 final class DraftRowRenderTests: XCTestCase {
     private let width: CGFloat = 340
 
-    /// The look every render here is made under. The send control is the mind's side and takes
-    /// the same `primary` a landed turn does, which a render read by colour could confuse with
-    /// the bubble it sits beside — and every measurement below is of the bubble. So the control
-    /// is given an ink of its own here. That the look's ink reaches the control at all is held by
-    /// `testTheSendControlIsDrawnFromTheLook`, which names an ink of its own too, and the row
-    /// draws the shipped one.
+    /// The look every render here is made under. The spinner beside a turn on its way is tinted
+    /// with the send's ink, which is the written row's own colour, and every measurement below
+    /// is of the bubble: so the ink is given a colour of its own here.
     private static func look() -> Look {
         var look = Look()
         look.draft.sendInk = Color(red: 0, green: 1, blue: 0)
         return look
     }
 
-    /// The row under the look given, as pixels. The `TextField` in it is laid out by
-    /// `ImageRenderer` and not drawn, which is exactly why the bubble is sized by a `Text` behind
-    /// it: what is measured here is the size that `Text` gives it.
+    /// The row under the look given, as pixels.
     private func render(_ draft: Draft, look: Look = DraftRowRenderTests.look(), width: CGFloat? = nil) throws -> Raster {
         let view = DraftRow(draft: draft)
             .environment(\.look, look)
@@ -107,7 +129,7 @@ final class DraftRowRenderTests: XCTestCase {
         return try Raster(try XCTUnwrap(renderer.uiImage, "the queued turn rendered to nothing"))
     }
 
-    private func draft(_ text: String, typing: Bool = true, sending: Bool = false) -> Draft {
+    private func draft(_ text: String, typing: Bool = false, sending: Bool = false) -> Draft {
         Draft(text: .constant(text), typing: .constant(typing), sending: sending)
     }
 
@@ -196,8 +218,8 @@ final class DraftRowRenderTests: XCTestCase {
                        "the row stopped drawing its own accent")
     }
 
-    /// The words hug: a bubble sized by the field would take every point on offer, and the turn
-    /// that lands would be a different width from the row that was written.
+    /// The words hug: a bubble that took every point on offer would land as a turn of a
+    /// different width from the row that was written.
     func testTheBubbleIsTheWidthOfItsWordsAndNotOfTheRow() throws {
         let short = try box(try render(draft("ta")))
         let longer = try box(try render(draft("Remind me to water the plants")))
@@ -208,7 +230,7 @@ final class DraftRowRenderTests: XCTestCase {
     }
 
     /// The same words are the same bubble, written or landed, so nothing moves when the turn
-    /// lands. The row's bubble sits a send control's width further in, which is the whole of the
+    /// lands. The row's bubble sits the spinner's slot further in, which is the whole of the
     /// difference between them.
     func testTheBubbleIsTheSizeTheLandedTurnsWillBe() throws {
         let words = "Remind me to water"
@@ -220,29 +242,16 @@ final class DraftRowRenderTests: XCTestCase {
                        "the row's bubble is not the height the landed turn's will be")
         let slot = Int((Look().draft.slot + Look().draft.spacing) * 3)
         XCTAssertEqual(turn.right - row.right, slot, accuracy: 12,
-                       "the row's bubble is not inset from the turn's by the control beside it")
+                       "the row's bubble is not inset from the turn's by the slot beside it")
     }
 
-    /// Long words wrap into a taller bubble rather than scrolling inside a one-line field: the
-    /// row is as tall as what is written, which is what makes it the turn it is about to be.
+    /// Long words wrap into a taller bubble: the row is as tall as what is written, which is
+    /// what makes it the turn it is about to be.
     func testWordsPastOneLineMakeTheBubbleTaller() throws {
         let one = try box(try render(draft("ta")))
         let many = try box(try render(draft(String(repeating: "one more thing and another ", count: 6))))
         XCTAssertGreaterThan(many.bottom - many.top, (one.bottom - one.top) * 2,
-                             "a draft of six lines is drawn no taller than one, so it is scrolling inside itself")
-    }
-
-    /// Empty, the row still holds a bubble wide enough for a caret to sit in.
-    func testAnEmptyRowHoldsTheLooksMinimumWidth() throws {
-        let empty = try box(try render(draft("")))
-        XCTAssertEqual(empty.right - empty.left, Int(Look().draft.minimumWidth * 3), accuracy: 9,
-                       "an empty row is not the look's minimum width")
-
-        var wider = Self.look()
-        wider.draft.minimumWidth = 260
-        let widened = try box(try render(draft(""), look: wider))
-        XCTAssertGreaterThan(widened.right - widened.left, empty.right - empty.left,
-                             "the look's minimum width does not reach the empty row")
+                             "a draft of six lines is drawn no taller than one")
     }
 
     // MARK: The colour of a turn that is not one yet
@@ -337,44 +346,30 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertEqual(writing.bottom, inFlight.bottom)
     }
 
-    /// The send control goes when the turn goes, the slot keeps its space so the bubble beside
-    /// it does not move, and something is drawn in that space. What that something is, this
-    /// render cannot say: `ImageRenderer` draws a `ProgressView` in the system's own grey and not
-    /// in the tint it is given, so the ink in the slot is not the look's to check. That the thing
-    /// there is a spinner and not the send control is the running app's to show —
-    /// `TopoUITests/DraftRowTests`, where "Sending" exists and no "Send" button does.
-    func testTheSendControlGoesAndTheSlotKeepsItsSpace() throws {
+    /// The slot beside the bubble keeps its space in both states, so the bubble does not move when
+    /// the turn goes: empty while the words are being written — the send is the glass's — and
+    /// holding something while they are on their way. What that something is, this render cannot
+    /// say: `ImageRenderer` draws a `ProgressView` in the system's own grey and not in the tint
+    /// it is given. That it is a spinner is the running app's to show — `TopoUITests/DraftRowTests`,
+    /// where "Sending" exists.
+    func testTheSlotKeepsItsSpaceAndHoldsNothingUntilTheTurnGoes() throws {
         let writing = try render(draft("bins?"))
         let sent = try render(draft("bins?", sending: true))
-        let ink = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-        let light = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
-        let before = writing.pixels(matching: ink).count + writing.pixels(matching: light).count
-        let after = sent.pixels(matching: ink).count + sent.pixels(matching: light).count
-        XCTAssertGreaterThan(before, 0, "the send control is not drawn in the look's ink")
-        XCTAssertEqual(after, 0, "the send control is still drawn while the turn is on its way")
-
-        // The slot is the row's trailing edge, a `look.draft.slot` wide at the render's scale. A
-        // slot that stopped taking its space would let the bubble slide into it, which is the
-        // whole reason the control and the spinner are drawn in one frame of a fixed size.
         let slot = Int(Look().draft.slot * 3)
+        XCTAssertEqual(writing.inkInTrailing(slot), 0, "something is drawn beside a draft being written: the row has no send")
         XCTAssertGreaterThan(sent.inkInTrailing(slot), 0, "nothing at all is drawn in the slot while the turn is on its way")
         XCTAssertEqual(try box(sent, Look().draft.sending.accent).right, try box(writing).right,
                        "the bubble moved when the turn went, so the slot did not keep its space")
     }
 
-    /// The control is the look's: its ink, its type and the room it takes.
-    func testTheSendControlIsDrawnFromTheLook() throws {
-        var ink = Self.look()
-        ink.draft.sendInk = Color(red: 1, green: 0, blue: 1)
-        XCTAssertFalse(try render(draft("bins?"), look: ink).pixels(matching: .magenta).isEmpty,
-                       "the look's send ink does not reach the control")
-
+    /// The room beside the bubble is the look's: the slot and what is between it and the bubble.
+    func testTheRoomBesideTheBubbleIsTheLooks() throws {
         let shipped = try box(try render(draft("bins?")))
         var wide = Self.look()
         wide.draft.slot = 80
         let widened = try box(try render(draft("bins?"), look: wide))
         XCTAssertLessThan(widened.right, shipped.right,
-                          "the look's slot does not reach the room the control takes")
+                          "the look's slot does not reach the room beside the bubble")
 
         var apart = Self.look()
         apart.draft.spacing = 40
@@ -384,32 +379,25 @@ final class DraftRowRenderTests: XCTestCase {
     }
 
     /// The person's inset at the top of its range on a 320-point phone leaves the column 288
-    /// points, less than the inset and what the row keeps: the inset yields, and the bubble keeps
-    /// its minimum width and Send its slot, inside the column, whole.
-    func testTheInsetYieldsSoSendStaysInTheColumnAtTheTopOfItsRange() throws {
+    /// points, less than the inset and what the row keeps: the inset yields, and the bubble is
+    /// inside the column, with the slot beside it.
+    func testTheInsetYieldsSoTheBubbleStaysInTheColumnAtTheTopOfItsRange() throws {
         let column = 320 - 2 * Look().transcript.horizontalPadding
         var top = Self.look()
         top.transcript.personLeadingInset = 200
-        var none = Self.look()
-        none.transcript.personLeadingInset = 0
-        let ink = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-        let inset = try render(draft("bins?"), look: top, width: column)
-        let flush = try render(draft("bins?"), look: none, width: column)
-        let drawn = inset.pixels(matching: ink)
-        XCTAssertGreaterThan(drawn.count, 0, "Send is not drawn at the inset's top")
-        XCTAssertEqual(drawn.count, flush.pixels(matching: ink).count, "Send is cut off at the inset's top")
-        let slot = Int(Look().draft.slot * 3)
-        XCTAssertTrue(drawn.allSatisfy { $0.x >= inset.width - slot && $0.x < inset.width },
-                      "Send is not in its slot at the column's trailing edge")
+        let words = "Remind me to water the plants before the weekend, and the ones on the stairs"
+        let inset = try render(draft(words), look: top, width: column)
         let bubble = try box(inset)
-        XCTAssertGreaterThanOrEqual(bubble.right - bubble.left + 3, Int(Look().draft.minimumWidth * 3),
-                                    "the bubble lost its minimum width to the inset")
         XCTAssertGreaterThanOrEqual(bubble.left, 0)
+        XCTAssertGreaterThan(bubble.right - bubble.left, Int((Look().draft.minimumWidth - 40) * 3),
+                             "the inset took the room the row keeps for its bubble")
+        let slot = Int((Look().draft.slot + Look().draft.spacing) * 3)
+        XCTAssertEqual(inset.width - bubble.right, slot, accuracy: 6, "the slot is not kept beside the bubble")
     }
 
     /// The inset the row takes: all of it where there is room, as much as leaves the row what it
     /// keeps where there is not, and never less than none.
-    func testTheRowTakesTheInsetOnlyAsFarAsLeavesItsBubbleAndControl() {
+    func testTheRowTakesTheInsetOnlyAsFarAsLeavesItsBubbleAndSlot() {
         let kept = DraftRow.kept(Look().draft)
         XCTAssertEqual(kept, 160 + 8 + 36)
         XCTAssertEqual(DraftRow.inset(100, keeping: kept, in: 370), 100)
@@ -417,25 +405,6 @@ final class DraftRowRenderTests: XCTestCase {
         XCTAssertEqual(DraftRow.inset(200, keeping: kept, in: 150), 0)
         XCTAssertEqual(DraftRow.inset(-5, keeping: kept, in: 370), 0)
         XCTAssertEqual(DraftRow.inset(.infinity, keeping: kept, in: 370), 0)
-    }
-
-    /// A control that would send nothing says so: an empty row's send is faded by the look's
-    /// own value rather than being live to press and doing nothing.
-    func testAnEmptyRowsSendIsFadedByTheLook() throws {
-        let ink = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
-        let dark = UIColor(Self.look().draft.sendInk).resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
-        let empty = try render(draft(""))
-        let written = try render(draft("bins?"))
-        XCTAssertLessThan(empty.pixels(matching: ink).count + empty.pixels(matching: dark).count,
-                          written.pixels(matching: ink).count + written.pixels(matching: dark).count,
-                          "an empty row draws its send control as live as a written one's")
-
-        var solid = Self.look()
-        solid.draft.sendRestingOpacity = 1
-        let full = try render(draft(""), look: solid)
-        XCTAssertGreaterThan(full.pixels(matching: ink).count + full.pixels(matching: dark).count,
-                             empty.pixels(matching: ink).count + empty.pixels(matching: dark).count,
-                             "the look's resting alpha does not reach the send control")
     }
 }
 
