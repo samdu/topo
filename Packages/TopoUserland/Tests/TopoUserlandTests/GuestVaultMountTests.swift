@@ -282,7 +282,9 @@ final class GuestVaultMountTests: XCTestCase {
                         "mv \(point)/note.md \(point)/.topo/note.md"] {
             let absent = try await sh(command)
             XCTAssertNotEqual(absent.status, 0, command)
-            XCTAssertTrue(absent.errors.contains("No such file or directory"), "\(command): \(absent.errors)")
+            // The shell's own word for `ENOENT` on a redirect is "nonexistent directory".
+            XCTAssertTrue(absent.errors.contains("No such file or directory") || absent.errors.contains("nonexistent directory"),
+                          "\(command): \(absent.errors)")
         }
         let present = try await sh("[ -e \(point)/.topo ] && echo there || echo absent")
         XCTAssertEqual(present.output, "absent\n")
