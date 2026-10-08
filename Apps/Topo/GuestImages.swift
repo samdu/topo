@@ -63,7 +63,8 @@ enum GuestImages {
 ///
 /// `forget()` ends an age: what the guest can read has changed — a mount, another vault, a
 /// sign-out — so everything kept goes, and a read begun before it is neither kept nor
-/// answered when it lands, since what it read is the last age's.
+/// answered when it lands, since what it read is the last age's; a row asking for the same
+/// path in the new age starts a read of its own and does not wait on that one's answer.
 final class GuestImageStore: Sendable {
     /// The guest's answer for a path: the bytes, nil for no file that can be read, or no
     /// answer at all (`.none`) where there is no guest to ask, which is not kept.
@@ -86,9 +87,9 @@ final class GuestImageStore: Sendable {
     /// The file at `path` as the guest reads it, or nil: no guest, no such file, a read the
     /// guest did not finish, or one that an age ended under.
     func read(_ path: String) async -> Data? {
-        await line.read(path) { [self] in
+        let age = kept.age
+        return await line.read(Asking(path: path, age: age)) { [self] in
             if let held = kept.entry(for: path), Date().timeIntervalSince(held.read) < fresh { return held.data }
-            let age = kept.age
             guard let answer = await ask(path) else { return nil }
             return kept.set(answer, for: path, in: age) ? answer : nil
         }
@@ -96,12 +97,18 @@ final class GuestImageStore: Sendable {
 
     func forget() { kept.forget() }
 
-    /// The reads, one at a time, and one for a path however many ask at once.
+    /// A read under way: of a path, in an age.
+    private struct Asking: Hashable {
+        let path: String
+        let age: Int
+    }
+
+    /// The reads, one at a time, and one for a path in an age however many ask at once.
     private actor Line {
-        private var asking: [String: Task<Data?, Never>] = [:]
+        private var asking: [Asking: Task<Data?, Never>] = [:]
         private var last: Task<Data?, Never>?
 
-        func read(_ path: String, _ work: @escaping @Sendable () async -> Data?) async -> Data? {
+        func read(_ path: Asking, _ work: @escaping @Sendable () async -> Data?) async -> Data? {
             if let already = asking[path] { return await already.value }
             let before = last
             let task = Task<Data?, Never> {

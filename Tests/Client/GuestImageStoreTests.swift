@@ -73,6 +73,28 @@ final class GuestImageStoreTests: XCTestCase {
         XCTAssertNil(store.kept("/home/topo/private.png"), "bytes read before the sign-out were kept after it")
     }
 
+    /// A mount changes while a read is under way: a row asking for the same path afterwards is
+    /// answered by a read of the new mount, not by the one that began under the old.
+    func testAReadAskedAfterAMountChangeAsksTheNewMount() async {
+        let guest = FakeGuest()
+        guest.set(["/memory/chart.png": Data("first vault".utf8)])
+        let store = GuestImageStore(ask: guest.ask)
+        guest.hold()
+        let before = Task { await store.read("/memory/chart.png") }
+        await eventually("the read to reach the guest") { guest.waiting }
+
+        guest.set(["/memory/chart.png": Data("second vault".utf8)])
+        store.forget()
+        let after = Task { await store.read("/memory/chart.png") }
+        try? await Task.sleep(for: .milliseconds(100))
+        guest.release()
+        let old = await before.value, new = await after.value
+        XCTAssertNil(old, "a read from before the mount change was answered after it")
+        XCTAssertEqual(new, Data("second vault".utf8), "the new mount was not asked")
+        XCTAssertEqual(guest.paths.count, 2)
+        XCTAssertEqual(store.kept("/memory/chart.png"), Data("second vault".utf8))
+    }
+
     /// The memory mounted from another folder: what was read from the first is not what is
     /// drawn from the second, at the same path.
     func testAnotherVaultAtTheSamePathIsReadAfresh() async {
