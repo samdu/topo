@@ -18,8 +18,8 @@ final class TopoPlacementTests: XCTestCase {
     }
 
     /// On the glass: over an empty chat and a full one the pane is drawn whole (presence 1) and
-    /// his shelf is its top edge, in the trailing flank; with the keyboard up he rides the short
-    /// pane, and back down with it.
+    /// his shelf is its top edge, over its leading end, his reach inside the transcript's width; with
+    /// the keyboard up he rides the row up, over the same end, and back down with it.
     func testOnTheGlassHeSitsOnAPaneThatStays() throws {
         for transcript in ["empty", "full"] {
             let app = ChatReading.launch(transcript: transcript, tuning: #"{"mascot": {"placement": "glass"}}"#,
@@ -185,14 +185,15 @@ final class TopoPlacementTests: XCTestCase {
     // MARK: Helpers
 
     /// On the glass: the engine's shelf — 68 art pixels below his box's top at a scale of 1 — on
-    /// the pane's top edge, his box in the trailing flank, clear of the well.
+    /// the pane's top edge, his box at the leading end, clear of the well.
     private func assertOnTheGlass(_ topo: ChatReading.Topo, _ label: String,
                                   file: StaticString = #filePath, line: UInt = #line) throws {
         let box = try XCTUnwrap(topo.box, file: file, line: line)
         let pane = try XCTUnwrap(topo.paneRect, file: file, line: line)
-        let well = try XCTUnwrap(topo.wellRect, file: file, line: line)
         XCTAssertEqual(box.minY + 68, pane.minY, accuracy: 0.5, "\(label): not on the pane's top edge: \(topo)", file: file, line: line)
-        XCTAssertGreaterThanOrEqual(box.minX, well.maxX - 0.5, "\(label): over the well: \(topo)", file: file, line: line)
+        let visible = try XCTUnwrap(topo.visibleRect, file: file, line: line)
+        XCTAssertLessThan(box.midX, pane.midX, "\(label): not over the pane's leading end: \(topo)", file: file, line: line)
+        XCTAssertGreaterThanOrEqual(box.minX, visible.minX - 0.5, "\(label): past the screen's leading edge: \(topo)", file: file, line: line)
         XCTAssertLessThanOrEqual(box.maxX, pane.maxX + 0.5, "\(label): off the pane: \(topo)", file: file, line: line)
     }
 

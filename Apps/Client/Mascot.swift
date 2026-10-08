@@ -13,7 +13,7 @@ import TopoUserland
 /// him in is a thing a test can hold over recorded stream-json rather than a view reading a
 /// harness.
 struct MascotState: Equatable, Sendable {
-    /// The model as the slider's alias or the API's id names it (`sonnet`, `claude-haiku-4-5-20251001`):
+    /// The model as the setting's alias or the API's id names it (`sonnet`, `claude-haiku-4-5-20251001`):
     /// its family is the head, sonnet's and haiku's the smallest, then opus's, then fable's.
     var model: String
     /// The tokens of context the last message was written over: input and both cache counts.
@@ -197,19 +197,6 @@ final class Mascot {
 
     init(model: String = ClaudeModel.effective(.default).rawValue) {
         state = MascotState(model: model)
-    }
-
-    /// The model chosen on the open model slider, which is the head he is drawn with while it is
-    /// open, whatever the harness asks and whatever a guest's turn reports of itself: he sits
-    /// over the knob, and his head is the one it names. Nil with the slider shut.
-    var chosen: String?
-
-    /// What he is drawn as: his state, wearing the slider's model while it is open.
-    var drawn: MascotState {
-        guard let chosen else { return state }
-        var drawn = state
-        drawn.model = chosen
-        return drawn
     }
 
     /// The chat's harness: the model it asks, and the context of the last reply it got.

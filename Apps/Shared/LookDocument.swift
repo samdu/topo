@@ -147,6 +147,13 @@ enum LookDocument {
         r.object("composer") { composer(&look.composer, $0) }
         r.object("mascot") { mascot(&look.mascot, $0) }
         r.object("mind") { mind(&look.mind, $0) }
+        r.object("bar") { bar(&look.bar, $0) }
+    }
+
+    private static func bar(_ value: inout Look.Bar, _ r: Reader) {
+        r.font("font", &value.font, largest: Look.Bar.largestFont)
+        r.colour("ink", &value.ink)
+        r.barSpacing("spacing", &value.spacing)
     }
 
     private static func mind(_ value: inout Look.Mind, _ r: Reader) {
@@ -167,6 +174,7 @@ enum LookDocument {
         r.font("bodyFont", &value.bodyFont)
         r.font("labelFont", &value.labelFont)
         r.font("noticeFont", &value.noticeFont, largest: Look.Transcript.largestNotice)
+        r.leastScale("noticeLeastScale", &value.noticeLeastScale)
         r.colour("text", &value.text)
         r.colour("caption", &value.caption)
         r.colour("trouble", &value.trouble)
@@ -224,6 +232,8 @@ enum LookDocument {
         r.reach("minimumWidth", &value.minimumWidth)
         r.length("spacing", &value.spacing)
         r.reach("slot", &value.slot)
+        r.count("maximumLines", &value.maximumLines, in: Look.Draft.lines)
+        r.symbol("sendSymbol", &value.sendSymbol)
         r.font("sendFont", &value.sendFont)
         r.colour("sendInk", &value.sendInk)
         r.alpha("sendRestingOpacity", &value.sendRestingOpacity)
@@ -272,11 +282,14 @@ enum LookDocument {
 
     private static func composer(_ value: inout Look.Composer, _ r: Reader) {
         r.fraction("widthFraction", &value.widthFraction)
+        r.fraction("typingWidthFraction", &value.typingWidthFraction)
         r.length("bottomPadding", &value.bottomPadding)
         r.length("horizontalInset", &value.horizontalInset)
         r.length("verticalInset", &value.verticalInset)
         r.length("cornerRadius", &value.cornerRadius)
         r.length("spacing", &value.spacing)
+        r.inset("jewelInset", &value.jewelInset)
+        r.inset("perchInset", &value.perchInset)
         r.surface("surface", &value.surface)
         r.colour("tint", &value.tint)
         r.alpha("tintOpacity", &value.tintOpacity)
@@ -286,7 +299,7 @@ enum LookDocument {
         r.seconds("presenceDuration", &value.presenceDuration)
         r.compactShare("compactShare", &value.compactShare)
         r.object("flank") { flank(&value.flank, $0) }
-        r.object("models") { models(&value.models, $0) }
+        r.retired("models")
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
         r.object("openJewel") { jewel(&value.openJewel, $0) }
@@ -298,7 +311,7 @@ enum LookDocument {
         r.pixelScale("scale", &value.scale)
         r.clearance("clearance", &value.clearance)
         r.roamSpeed("roamSpeed", &value.roamSpeed)
-        r.roamSpeed("swimSpeed", &value.swimSpeed)
+        r.retired("swimSpeed")
         r.hurry("hurry", &value.hurry)
         r.roamSettle("roamSettle", &value.roamSettle)
         r.frameInterval("frameInterval", &value.frameInterval)
@@ -327,26 +340,14 @@ enum LookDocument {
         r.shadow("etchLight", &value.etchLight)
         r.shadow("etchShade", &value.etchShade)
         r.alpha("heldOpacity", &value.heldOpacity)
+        r.reach("slot", &value.slot)
+        r.symbol("more", &value.more)
         r.symbol("keyboard", &value.keyboard)
-        r.symbol("keyboardDown", &value.keyboardDown)
+        r.retired("keyboardDown")
         r.symbol("speaking", &value.speaking)
         r.symbol("muted", &value.muted)
         r.symbol("models", &value.models)
-        r.symbol("modelsOpen", &value.modelsOpen)
-    }
-
-    private static func models(_ value: inout Look.Composer.Models, _ r: Reader) {
-        r.bounded("inset", &value.inset, in: 16...160)
-        r.bounded("height", &value.height, in: 32...200)
-        r.length("spacing", &value.spacing)
-        r.indent("topInset", &value.topInset)
-        r.outline("track", &value.track)
-        r.bounded("stop", &value.stop, in: 2...44)
-        r.bounded("knob", &value.knob, in: 2...44)
-        r.alpha("restOpacity", &value.restOpacity)
-        r.alpha("restLabelOpacity", &value.restLabelOpacity)
-        r.font("labelFont", &value.labelFont)
-        r.length("labelSpacing", &value.labelSpacing)
+        r.retired("modelsOpen")
     }
 
     private static func well(_ value: inout Look.Composer.Well, _ r: Reader) {
@@ -440,13 +441,27 @@ enum LookDocument {
         }
 
         /// A length with a range of its own, where the one a view survives is narrower than any
-        /// length's: the model slider's stops, which are pressed, and its row, which holds them.
+        /// length's: a table's cell, an image's height.
         func bounded(_ key: String, _ value: inout CGFloat, in range: ClosedRange<Double>) {
             let what = "a length in points between \(Int(range.lowerBound)) and \(Int(range.upperBound))"
             if let number = amount(key, in: range, what) {
                 took(key)
                 value = CGFloat(number)
             }
+        }
+
+        /// A key the look reads nothing from, which a document may carry all the same: it is
+        /// passed over, whatever it holds, and is no note.
+        func retired(_ key: String) { asked.insert(key) }
+
+        /// A whole number of something, in the range its field is read in: a number with a
+        /// fraction is not one.
+        func count(_ key: String, _ value: inout Int, in range: ClosedRange<Int>) {
+            let what = "a whole number between \(range.lowerBound) and \(range.upperBound)"
+            guard let number = amount(key, in: Double(range.lowerBound)...Double(range.upperBound), what) else { return }
+            guard number == number.rounded() else { return note(key, "is \(number), and is not \(what)") }
+            took(key)
+            value = Int(number)
         }
 
         /// A length that has to stay big enough to press or to read: the well, the jewel in it,
@@ -478,11 +493,28 @@ enum LookDocument {
             }
         }
 
+        /// The least words are drawn at to fit, as a share of their size. Bounded below at a half:
+        /// under that they are not words anyone reads.
+        func leastScale(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0.5...1, "a share between 0.5 and 1") {
+                took(key)
+                value = CGFloat(number)
+            }
+        }
+
         /// How much of its resting height the pane keeps under the keyboard. Bounded below at a
         /// half, so the microphone drawn at that share is still one to press; the well has a
         /// floor of its own besides (`Look.Composer.Well.pressable`).
         func compactShare(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.5...1, "a share of the resting height between 0.5 and 1") {
+                took(key)
+                value = CGFloat(number)
+            }
+        }
+
+        /// The room between the bar's controls: none to `Look.Bar.widestSpacing`.
+        func barSpacing(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0...Look.Bar.widestSpacing, "a length in points between 0 and 32") {
                 took(key)
                 value = CGFloat(number)
             }
@@ -711,7 +743,7 @@ enum LookDocument {
 
         /// What something is called: a line of text with something in it besides space, no longer
         /// than `Look.Mind.longest` characters and with no control character, a newline among
-        /// them, since it is drawn on one line of the notice and of the slider.
+        /// them, since it is drawn on one line of the notice and of the menu.
         func title(_ key: String, _ value: inout String) {
             guard let raw = take(key) else { return }
             guard let text = raw as? String else { return note(key, "is not a name") }

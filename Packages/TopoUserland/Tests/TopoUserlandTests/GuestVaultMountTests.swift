@@ -236,6 +236,10 @@ final class GuestVaultMountTests: XCTestCase {
             "ln -s note.md \(point)/.topo",
             "mv \(point)/note.md \(point)/.topo",
             "chmod 777 \(point)/.topo",
+            "ln \(point)/note.md \(point)/.topo",
+            "ln \(point)/.topo/mirror.json \(point)/copy.json",
+            "mknod \(point)/.topo p",
+            "mkdir \(point)/.topo/made",
         ] {
             let attempt = try await sh(command)
             XCTAssertNotEqual(attempt.status, 0, "the guest reached the mirror's own folder: \(command)")
@@ -262,17 +266,20 @@ final class GuestVaultMountTests: XCTestCase {
         XCTAssertFalse(listing.output.contains(".topo"), listing.output)
         XCTAssertTrue(listing.output.contains(".obsidian") && listing.output.contains("note.md"), listing.output)
 
-        let found = try await sh("find \(point) | sort")
+        let found = try await sh("find \(point)")
         XCTAssertEqual(found.status, 0, found.errors)
-        XCTAssertEqual(found.output, [point, "\(point)/.obsidian", "\(point)/note.md", "\(point)/notes", "\(point)/notes/.topo",
-                                      "\(point)/notes/.topo/kept.md"].joined(separator: "\n") + "\n")
+        XCTAssertEqual(found.errors, "")
+        XCTAssertEqual(found.output.split(separator: "\n").map(String.init).sorted(), [point, "\(point)/.obsidian", "\(point)/note.md", "\(point)/notes", "\(point)/notes/.topo",
+                                      "\(point)/notes/.topo/kept.md"])
         let used = try await sh("du -s \(point) > /dev/null")
         XCTAssertEqual(used.status, 0, used.errors)
         let deep = try await sh("cat \(point)/notes/.topo/kept.md && ls -a \(point)/notes")
         XCTAssertEqual(deep.output, "deep\n.\n..\n.topo\n")
 
         for command in ["cat \(point)/.topo/mirror.json", "ls \(point)/.topo", "stat \(point)/.topo", "rmdir \(point)/.topo",
-                        "echo x >> \(point)/.topo/mirror.json; cat \(point)/.topo/mirror.json"] {
+                        "echo x >> \(point)/.topo/mirror.json", "touch \(point)/.topo/x", "mkdir \(point)/.topo/made",
+                        "mv \(point)/.topo \(point)/topo", "ln \(point)/.topo/mirror.json \(point)/copy.json",
+                        "mv \(point)/note.md \(point)/.topo/note.md"] {
             let absent = try await sh(command)
             XCTAssertNotEqual(absent.status, 0, command)
             XCTAssertTrue(absent.errors.contains("No such file or directory"), "\(command): \(absent.errors)")
@@ -280,7 +287,7 @@ final class GuestVaultMountTests: XCTestCase {
         let present = try await sh("[ -e \(point)/.topo ] && echo there || echo absent")
         XCTAssertEqual(present.output, "absent\n")
         for command in ["mkdir \(point)/.topo", "echo {} > \(point)/.topo", "ln -s note.md \(point)/.topo",
-                        "mv \(point)/note.md \(point)/.topo"] {
+                        "ln \(point)/note.md \(point)/.topo", "mknod \(point)/.topo p", "mv \(point)/note.md \(point)/.topo"] {
             let refused = try await sh(command)
             XCTAssertNotEqual(refused.status, 0, command)
             XCTAssertTrue(refused.errors.contains("Permission denied"), "\(command): \(refused.errors)")

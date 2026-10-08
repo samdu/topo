@@ -89,7 +89,8 @@ int topo_ish_mount(const char *host_dir, const char *point);
 /// coordination until the file is closed — and every rename, removal and creation coordinated
 /// as a write, each wait bounded (`TOPO_ISH_VAULT_WAIT_SECONDS`, then `_EIO`) and ended by a
 /// SIGKILL to the task that waits (`_EINTR`). The mirror's own `.topo` folder at the mount's root
-/// is refused `_EACCES` to every operation. 0, or a negative guest errno. Requires a booted
+/// is hidden: left out of the root's listing, `_ENOENT` to a call that names it or a path under
+/// it, `_EACCES` to one that would make that name. 0, or a negative guest errno. Requires a booted
 /// kernel.
 int topo_ish_mount_vault(const char *host_dir, const char *point);
 
