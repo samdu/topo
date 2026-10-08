@@ -56,6 +56,10 @@ while [ $# -gt 0 ]; do
 done
 { echo "head=$(git rev-parse HEAD)"; echo "lane=$lane"; echo "suites=${suites[*]}"; echo "files=$(ls | tr "\n" " ")"; echo "status=$(git status --porcelain | tr "\n" " ")"; } > "$FAKE_RECORD"
 [ "${FAKE_SUITES-}" != died ] || exit 1
+if [ "${FAKE_SUITES-}" = held ]; then
+  echo $$ > "$FAKE_HOLD"
+  while [ -s "$FAKE_HOLD" ]; do perl -e "select(undef,undef,undef,0.1)"; done
+fi
 if [ "${FAKE_SUITES-}" = twice ]; then
   for suite in "${suites[@]}"; do echo "$suite=failure" >> "$results/suites.txt"; echo "$suite=success" >> "$results/suites.txt"; done
   exit 1
@@ -234,21 +238,46 @@ is "locked: nothing pushed" "$(origin_head)" ""
 kill "$(cat "$work/locked/held")" "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
 
 # A suite whose script was killed outright is still running with the lock free: the next run
-# refuses to start beside it, and runs once it has gone.
+# refuses to start beside it, from a session in another time zone and locale as from this one,
+# and runs once it has gone. The record is the script's own, of the suite it started.
 scratch orphan Apps/Client/SettingsView.swift
-mkdir -p "$TOPO_VALIDATE_CACHE"
-sleep 60 &
-orphan=$!
-{ echo "$orphan"; ps -o lstart= -p "$orphan"; } > "$TOPO_VALIDATE_CACHE/suite"
+export FAKE_HOLD="$work/orphan/hold"
+(cd "$repo" && PATH="$work/bin:$PATH" FAKE_SUITES=held exec scripts/validate-and-push.sh) > "$work/orphan/first.out" 2>&1 &
+first=$!
+for _ in $(seq 300); do [ -s "$FAKE_HOLD" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+orphan="$(cat "$FAKE_HOLD" 2>/dev/null)"
+[ -n "$orphan" ] || fail "orphan suite: the first run's suite never started"
+kill -KILL "$first"; wait "$first" 2>/dev/null
+rm -f "$FAKE_RECORD"
 validate
 is "orphan suite: exits 2" "$status" 2
 is "orphan suite: no suite ran" "$(recorded head)" ""
 is "orphan suite: nothing pushed" "$(origin_head)" ""
 case "$out" in *"kill $orphan"*) ok "orphan suite: names the pid to end" ;; *) fail "orphan suite: does not name pid $orphan: $out" ;; esac
-kill "$orphan" 2>/dev/null; wait "$orphan" 2>/dev/null
+TZ=Asia/Tokyo LC_ALL=en_GB.UTF-8 validate
+is "orphan suite, from another zone and locale: exits 2" "$status" 2
+: > "$FAKE_HOLD"
+for _ in $(seq 100); do kill -0 "$orphan" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
 validate
 is "orphan gone: exits 0" "$status" 0
 is "orphan gone: pushed" "$(origin_head)" "$sha"
+unset FAKE_HOLD
+
+# A suite that cannot start is a red run like any other, and holds no later run off the Mac.
+scratch unstartable Apps/Client/SettingsView.swift
+chmod -x "$repo/scripts/mac-suite.sh"
+g -C "$repo" commit -qam "the suite cannot be run"
+sha="$(git -C "$repo" rev-parse HEAD)"
+validate
+is "a suite that cannot start: exits 1" "$status" 1
+is "a suite that cannot start: nothing pushed" "$(origin_head)" ""
+case "$out" in *"RED at"*) ok "a suite that cannot start: reported red" ;; *) fail "a suite that cannot start: not reported red: $out" ;; esac
+chmod +x "$repo/scripts/mac-suite.sh"
+g -C "$repo" commit -qam "the suite can be run"
+sha="$(git -C "$repo" rev-parse HEAD)"
+validate
+is "the run after it: exits 0" "$status" 0
+is "the run after it: pushed" "$(origin_head)" "$sha"
 [ ! -e "$TOPO_VALIDATE_CACHE/suite" ] && ok "a finished run leaves no suite on record" || fail "a finished run left $TOPO_VALIDATE_CACHE/suite"
 
 # Two words for one suite, a failure and then a success: red, and posted as red.

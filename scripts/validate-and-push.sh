@@ -67,6 +67,9 @@ done
 case "$lane_arg" in "" | full | fast) ;; *) echo "no such lane '$lane_arg': full or fast" >&2; exit 2 ;; esac
 
 die() { echo "error: $*" >&2; exit 2; }
+# When a pid began, as ps's lstart gives it in one zone and one locale whatever the caller's are,
+# so two runs from two sessions read the same words. Empty for a pid that is not running.
+began_of() { LC_ALL=C TZ=UTC ps -o lstart= -p "$1" 2>/dev/null || true; }
 
 top="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not in a git worktree."
 cd "$top"
@@ -140,10 +143,11 @@ if [ "${#chosen[@]}" -gt 0 ]; then
     lockf -s -t "$LOCK_WAIT" 8 || die "another validation still holds this Mac after $((LOCK_WAIT / 60)) min ($(cat "$cache/holder" 2>/dev/null || echo unknown))."
   fi
   # A suite whose script was killed outright is still running with the lock free. A pid alone
-  # can be recycled, so it is held to when it began (ps's lstart).
+  # can be recycled, so it is held to when it began; a record with no start is of nothing live.
   if [ -s "$cache/suite" ]; then
     orphan="$(sed -n 1p "$cache/suite")"
-    if [ -n "$orphan" ] && [ "$(ps -o lstart= -p "$orphan" 2>/dev/null)" = "$(sed -n 2p "$cache/suite")" ]; then
+    began="$(sed -n 2p "$cache/suite")"
+    if [ -n "$orphan" ] && [ -n "$began" ] && [ "$(began_of "$orphan")" = "$began" ]; then
       die "the suite of an earlier validation is still running without its script (pid $orphan; $(cat "$cache/holder" 2>/dev/null || echo unknown)). End it with \`kill $orphan\`, which stops its lane and deletes its simulators, and run again."
     fi
   fi
@@ -171,7 +175,14 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   (cd "$checkout" && exec scripts/mac-suite.sh --lane "$lane" --results "$logs" --cache "$cache" "${chosen[@]}") \
     > "$logs/mac-suite.log" 2>&1 8>&- &
   suite_pid=$!
-  { echo "$suite_pid"; ps -o lstart= -p "$suite_pid"; } > "$cache/suite"
+  # Written whole or not at all, and only for a suite that is running: one that could not start
+  # has no start to record, and its failure is reported below like any other.
+  began="$(began_of "$suite_pid")"
+  if [ -n "$began" ]; then
+    printf '%s\n%s\n' "$suite_pid" "$began" > "$cache/suite.$$" && mv -f "$cache/suite.$$" "$cache/suite"
+  else
+    rm -f "$cache/suite"
+  fi
   trap 'kill "$suite_pid" 2>/dev/null; wait "$suite_pid" 2>/dev/null; exit 143' TERM INT HUP
   suite_status=0
   wait "$suite_pid" || suite_status=$?

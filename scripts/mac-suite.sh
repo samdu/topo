@@ -82,6 +82,11 @@ lane_started=no
 current=""
 
 cleanup() {
+  # A signal that landed while the lane's start was under way runs this before the start's
+  # status was read: it is on record beside the results, and a refusal (3) is another run's lane.
+  if [ "$lane_started" = starting ]; then
+    [ "$(cat "$RESULTS/lane-start.status" 2>/dev/null)" = 3 ] || lane_started=yes
+  fi
   [ "$lane_started" = yes ] && scripts/ci-audio-lane.sh stop
   local udid
   for udid in ${created[@]+"${created[@]}"}; do
@@ -240,14 +245,18 @@ suite_topo_ui() {
     # after pinning the devices, or a signal while it is under way, leaves a feeder and the
     # Mac's defaults on BlackHole, and every later lane refused. A start that refuses (exit 3)
     # found another run's lane, which is not this run's to stop.
-    lane_started=yes
-    scripts/ci-audio-lane.sh start
-    lane_status=$?
+    # The start and the note of how it ended are one command to this shell, so a signal's trap
+    # cannot run between them.
+    rm -f "$RESULTS/lane-start.status"
+    lane_started=starting
+    (scripts/ci-audio-lane.sh start; echo $? > "$RESULTS/lane-start.status")
+    lane_status="$(cat "$RESULTS/lane-start.status" 2>/dev/null || echo 1)"
     if [ "$lane_status" = 3 ]; then
       lane_started=no
       err "another audio lane is running on this Mac (a sibling's --talk run or validation); this one was not started. Run again once it has stopped."
       return 1
     fi
+    lane_started=yes
     [ "$lane_status" = 0 ] || return 1
 
     new_simulator ui "$IOS_SIMULATOR_RUNTIME" iPhone || return 1

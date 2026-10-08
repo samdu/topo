@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Holds scripts/mac-suite.sh's own control flow in a scratch tree: the real script beside fakes
 # of every script it calls, with fake xcodebuild, xcodegen, swift, xcrun, nm and sw_vers ahead
-# of the real ones on PATH. Each fake logs its call; no simulator, build or audio device is
-# touched.
+# of the real ones on PATH. Each fake logs its call. A signal to this test is waited on until
+# the scratch run it has going is over, and only then is the tree removed: a run outliving its
+# fakes would find the real tools behind them.
 #
 # What it holds: the audio lane is stopped after a `start` that failed and after a signal while
 # `start` was under way, and is left alone when `start` refused because another run's lane is
 # up; a suite whose test run fails is `failure` in suites.txt with the suites after it still
-# run; a toolchain off its pin runs no suite and fails each one asked for; and a signal ends the
-# command the run is waiting on, a bounded one included, and deletes the run's simulators.
+# run; a toolchain off its pin runs no suite and fails each one asked for; a signal while the
+# lane's start is refusing another run's lane leaves that lane alone; and a signal ends the
+# command the run is waiting on, a bounded one included.
 #
 #   scripts/tests/mac-suite-test.sh
 set -uo pipefail
@@ -16,7 +18,18 @@ set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$here/../.."
 work="$(mktemp -d -t mac-suite-test)"
-trap 'rm -rf "$work"' EXIT
+running=""
+finish() {
+  if [ -n "$running" ]; then
+    kill "$running" 2>/dev/null
+    rm -f "$work"/*.hold
+    wait "$running" 2>/dev/null
+  fi
+  rm -rf "$work"
+}
+trap finish EXIT
+# Deferred by bash until the scratch run in the foreground has ended.
+trap 'exit 143' TERM INT HUP
 
 failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
@@ -125,6 +138,7 @@ signalled() {
   (cd "$tree" && PATH="$work/bin:$PATH" exec scripts/mac-suite.sh --lane fast --results "$RESULTS_DIR" --cache "$work/cache" "$3") \
     > "$work/$name.log" 2>&1 &
   pid=$!
+  running=$pid
   for _ in $(seq 300); do [ -s "$HOLD" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
   [ -s "$HOLD" ] || fail "$name: the run never reached the held command"
   held="$(cat "$HOLD" 2>/dev/null)"
@@ -135,6 +149,7 @@ signalled() {
   for _ in $(seq 30); do kill -0 "$pid" 2>/dev/null || break; perl -e 'select(undef,undef,undef,0.1)'; done
   if kill -0 "$pid" 2>/dev/null; then waited=yes; rm -f "$HOLD"; else waited=no; fi
   wait "$pid"; status=$?
+  running=""
   unset HOLD HOLD_AT
 }
 
@@ -143,6 +158,12 @@ signalled lane-signal lane topo_ui
 is "signal during the lane's start: exits 143" "$status" 143
 is "signal during the lane's start: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
 rm -f "$work/lane-signal.hold"
+
+# The same signal while the start is refusing another run's lane: that lane is left alone.
+LANE_START=3 signalled lane-signal-theirs lane topo_ui
+is "signal during a start that refuses: exits 143" "$status" 143
+is "signal during a start that refuses: the other run's lane is left alone" "$(calls 'ci-audio-lane.sh stop')" 0
+rm -f "$work/lane-signal-theirs.hold"
 
 # A signal while a bounded command runs: the command itself ends, not a shell left waiting on it,
 # and the simulators the run made are deleted.
