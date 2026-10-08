@@ -253,12 +253,19 @@ struct MapsTool: Tool {
 
     One record a line, fields apart by " | ", an absent field left empty:
       search  region | here, near or none | LAT,LON | RADIUS_M | approximate or exact | QUERY
+              link | URL
               N | name | category | address | LAT,LON | DISTANCE_M | phone | url
       route   route | FROM | TO | by | DISTANCE_M | EXPECTED_S | DEPART | ARRIVE | name
+              link | URL
               notice | text
               N | instruction | DISTANCE_M
       eta     eta | FROM | TO | by | DISTANCE_M | EXPECTED_S | DEPART | ARRIVE
+              link | URL
     DISTANCE_M of a place is from the region's centre. A last line starting "…" says what was left out.
+    The link line is the same search or the same directions in Apple Maps, for the person to tap: put
+    it in your reply when they would want the map or turn-by-turn. Nothing here opens it. By transit
+    it is the only way to the route itself. A --from that was here is left out of it, so it starts
+    from wherever the phone is when tapped.
     """
 
     /// One end of a route.
@@ -309,20 +316,23 @@ struct MapsTool: Tool {
             case let .search(query, area, limit):
                 return .ok(try await search(query, area, limit: limit))
             case let .route(from, to, mode, depart):
+                let link = Self.link(from, to, mode)
                 let (from, to) = try await ends(from, to)
                 let left = depart ?? now()
                 do {
                     let route = try await maps.route(from: from, to: to, mode: mode, depart: depart)
-                    return .ok(Self.answer(route, from: from, to: to, mode: mode, depart: left))
+                    return .ok(Self.answer(route, from: from, to: to, mode: mode, depart: left, link: link(to)))
                 } catch let failure as MapsFailure {
                     throw ToolFailure(Self.sentence(failure, mode: mode, from: from, to: to, depart: left))
                 }
             case let .eta(from, to, mode, depart):
+                let link = Self.link(from, to, mode)
                 let (from, to) = try await ends(from, to)
                 do {
                     let eta = try await maps.eta(from: from, to: to, mode: mode, depart: depart)
-                    return .ok(Self.line(["eta", from.text, to.text, mode.rawValue, Self.whole(eta.distance), Self.whole(eta.expected),
-                                          ToolDates.write(eta.depart), ToolDates.write(eta.arrive)]) + "\n")
+                    let line = Self.line(["eta", from.text, to.text, mode.rawValue, Self.whole(eta.distance), Self.whole(eta.expected),
+                                          ToolDates.write(eta.depart), ToolDates.write(eta.arrive)])
+                    return .ok(([line] + MapsLink.line(link(to))).joined(separator: "\n") + "\n")
                 } catch let failure as MapsFailure {
                     throw ToolFailure(Self.sentence(failure, mode: mode, from: from, to: to, depart: depart ?? now()))
                 }
@@ -384,7 +394,12 @@ struct MapsTool: Tool {
             }
             // Apple gives apps a transit time and no transit route, so the request is never made.
             if verb == "route", mode == .transit {
-                throw Misuse("Apple Maps gives apps a transit time but not transit steps; use topo maps eta --by transit")
+                var words = "Apple Maps gives apps a transit time but not transit steps; use topo maps eta --by transit"
+                // Maps itself has the transit route, so a destination that is a point is offered as a link.
+                if case .point(let point) = to, let link = Self.link(from, to, mode)(point) {
+                    words += ", or give the person the route in Maps: \(link)"
+                }
+                throw Misuse(words)
             }
             var depart: Date?
             if let reading = try PhoneTool.date(read.options["depart"], "--depart") {
@@ -396,6 +411,15 @@ struct MapsTool: Tool {
         default:
             throw Misuse("maps takes search, route or eta")
         }
+    }
+
+    /// The directions link of a route or a travel time, given where its destination turned out to
+    /// be: a `--from` that was `here` is left to Maps, which starts from wherever the phone is when
+    /// the link is tapped, and a `--to` that was `here` is the fix.
+    private static func link(_ from: End, _ to: End, _ mode: MapMode) -> (MapPoint) -> String? {
+        var start: MapPoint?
+        if case .point(let point) = from { start = point }
+        return { MapsLink.directions(from: start, to: $0, mode: mode) }
     }
 
     private static func end(_ text: String, _ option: String) throws -> End {
@@ -479,20 +503,22 @@ struct MapsTool: Tool {
             throw ToolFailure(Self.sentence(failure))
         }
         let header = Self.line(["region", source, region?.centre.text, region.map { String($0.radius) }, precision, query])
+        let link = MapsLink.line(MapsLink.search(query, near: region?.centre))
         let records = places.prefix(limit).enumerated().map { index, place in
             Self.line([String(index + 1), place.name, place.category, place.address, place.point.text,
                        region.map { Self.whole($0.centre.metres(to: place.point)) }, place.phone, place.url])
         }
-        return Self.fit(header: [header], records: records, more: places.count - records.count, unit: "results",
+        return Self.fit(header: [header] + link, records: records, more: places.count - records.count, unit: "results",
                         advice: "; narrow the search or lower --limit")
     }
 
-    private static func answer(_ route: MapRoute, from: MapPoint, to: MapPoint, mode: MapMode, depart: Date) -> String {
+    private static func answer(_ route: MapRoute, from: MapPoint, to: MapPoint, mode: MapMode, depart: Date, link: String?) -> String {
         // A time that is no time (not finite, negative, decades long) gives no arrival.
         let arrive = route.expected.isFinite && (0...1e9).contains(route.expected)
             ? ToolDates.write(depart.addingTimeInterval(route.expected)) : nil
         var header = [line(["route", from.text, to.text, mode.rawValue, whole(route.distance), whole(route.expected),
                             ToolDates.write(depart), arrive, route.name])]
+        header += MapsLink.line(link)
         header += route.notices.prefix(noticeCap).map { line(["notice", $0]) }
         let steps = route.steps.prefix(stepCap).enumerated().map { index, step in
             line([String(index + 1), step.instruction, whole(step.distance)])

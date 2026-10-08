@@ -22,6 +22,7 @@
 		062DCBE16220AA2952E85920 /* MascotDebugOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BABFD05E4B5C77954FF594F /* MascotDebugOverlay.swift */; };
 		07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */; };
 		07DD7564A112D8FE2FF4224F /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
+		085D8DDF4C635F1A9FDCABFE /* MapsLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0A7664872F28702F6C903A44 /* MapsLink.swift */; };
 		08756ABA4D1897A2C82100E0 /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
 		095680D4B174FA43431D2FDD /* MemoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */; };
 		095AA2E26A94E478E1E1679E /* MascotRoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6904A480352F2D00E38BFD6F /* MascotRoost.swift */; };
@@ -556,6 +557,7 @@
 		07CEEB7CCB0CBAF9BBB7D520 /* MediaServicesResetTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MediaServicesResetTests.swift; sourceTree = "<group>"; };
 		08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Acknowledgements.swift; sourceTree = "<group>"; };
 		09968228612928D31AB9FA84 /* MascotRoamTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotRoamTests.swift; sourceTree = "<group>"; };
+		0A7664872F28702F6C903A44 /* MapsLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapsLink.swift; sourceTree = "<group>"; };
 		0A7905C0DCB97E97379C3533 /* TVRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVRootView.swift; sourceTree = "<group>"; };
 		0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlDocumentTests.swift; sourceTree = "<group>"; };
 		0DDE8EBD1A90A4F76F0C5A85 /* GuestResident.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestResident.swift; sourceTree = "<group>"; };
@@ -1222,6 +1224,7 @@
 				EB40574A451BCD56247E1E50 /* HomeTool.swift */,
 				84E8FFDC241EE10C721569CE /* LocationTool.swift */,
 				D237ABF387E8A76064A494FA /* LookTool.swift */,
+				0A7664872F28702F6C903A44 /* MapsLink.swift */,
 				CF31113B87FCBEE95414EAD2 /* MapsTool.swift */,
 				5AEBDE5DBDF558DA07A77435 /* NotifyTool.swift */,
 				570E29C16DA2E655E25483F5 /* PhoneTool.swift */,
@@ -2340,6 +2343,7 @@
 				3823B3829FF33312ACBCE0B1 /* Look.swift in Sources */,
 				9107FEAD3FE82BD92D841883 /* LookDocument.swift in Sources */,
 				E2952F8F672806D95C01C341 /* LookTool.swift in Sources */,
+				085D8DDF4C635F1A9FDCABFE /* MapsLink.swift in Sources */,
 				6E0DC95021FF1C7341AACD80 /* MapsTool.swift in Sources */,
 				11453C1BBB8DB9F0C2F9EFC5 /* Markdown.swift in Sources */,
 				A76EE7D068D4DD456A0343EE /* MarkdownText.swift in Sources */,

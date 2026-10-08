@@ -149,6 +149,12 @@ final class MapsToolTests: XCTestCase {
         return text.dropLast().components(separatedBy: "\n").map { $0.components(separatedBy: " | ") }
     }
 
+    /// The lines of an answer but for its `link` line, for a test that counts or places the rest:
+    /// the link has tests of its own.
+    private func rows(_ text: String) -> [[String]] {
+        records(text).filter { $0.first != "link" }
+    }
+
     private func assertAskedNothing(_ rig: Rig, line: UInt = #line) {
         XCTAssertEqual(rig.permission.reads, 0, "Location was read", line: line)
         XCTAssertEqual(rig.permission.prompts, 0, "Location was asked for", line: line)
@@ -176,6 +182,7 @@ final class MapsToolTests: XCTestCase {
         XCTAssertEqual(rig.maps.requests, [.search("coffee", nil)])
         XCTAssertEqual(reply.text, """
         region | none |  |  |  | coffee
+        link | https://maps.apple.com/?q=coffee
         1 | Cafe 1 | Cafe | 1 Shotwell St, San Francisco | 37.76010,-122.41000 |  | +1 415 555 011 | https://example.com/1
 
         """)
@@ -222,7 +229,8 @@ final class MapsToolTests: XCTestCase {
         XCTAssertEqual(rig.permission.prompts, 1)
         XCTAssertEqual(rig.locator.asked, 1)
         XCTAssertEqual(rig.maps.requests, [.search("coffee", MapRegion(centre: Self.mission, radius: 5000))])
-        XCTAssertEqual(reply.text, "region | here | 37.75990,-122.41480 | 5000 | approximate | coffee\n")
+        XCTAssertEqual(reply.text, "region | here | 37.75990,-122.41480 | 5000 | approximate | coffee\n"
+                       + "link | https://maps.apple.com/?q=coffee&sll=37.75990,-122.41480\n")
     }
 
     func testAPromptRefusedIsARefusalAndNoSearch() async {
@@ -565,30 +573,30 @@ final class MapsToolTests: XCTestCase {
     func testSearchCapsAtTheLimitAndAtTwentyFive() async {
         let rig = rig()
         rig.maps.places = (1...60).map { Self.place($0) }
-        let ten = records(await rig.tool.run(["search", "coffee", "--anywhere"]).text)
+        let ten = rows(await rig.tool.run(["search", "coffee", "--anywhere"]).text)
         XCTAssertEqual(ten.count, 12)
         XCTAssertEqual(ten[1...10].map { $0[0] }, (1...10).map(String.init))
         XCTAssertEqual(ten.last, ["… 50 more results"])
-        let most = records(await rig.tool.run(["search", "coffee", "--anywhere", "--limit", "25"]).text)
+        let most = rows(await rig.tool.run(["search", "coffee", "--anywhere", "--limit", "25"]).text)
         XCTAssertEqual(most.count, 27)
         XCTAssertEqual(most[25], ["25", "Cafe 25", "Cafe", "25 Shotwell St, San Francisco", "37.76250,-122.41000", "", "+1 415 555 0125",
                                   "https://example.com/25"])
         XCTAssertEqual(most.last, ["… 35 more results"])
         rig.maps.places = (1...3).map { Self.place($0) }
-        let all = records(await rig.tool.run(["search", "coffee", "--anywhere", "--limit", "3"]).text)
+        let all = rows(await rig.tool.run(["search", "coffee", "--anywhere", "--limit", "3"]).text)
         XCTAssertEqual(all.count, 4, "three results of three were said to be cut")
     }
 
     func testRouteCapsAtFortyStepsAndCountsTheRest() async {
         let rig = rig()
         rig.maps.route.steps = (1...95).map { MapStep(instruction: "Turn \($0)", distance: Double($0)) }
-        let lines = records(await rig.tool.run(["route"] + Self.ocean).text)
+        let lines = rows(await rig.tool.run(["route"] + Self.ocean).text)
         XCTAssertEqual(lines.count, 42)
         XCTAssertEqual(lines[1], ["1", "Turn 1", "1"])
         XCTAssertEqual(lines[40], ["40", "Turn 40", "40"])
         XCTAssertEqual(lines.last, ["… 55 more steps"])
         rig.maps.route.notices = (1...9).map { "Notice \($0)" }
-        let noticed = records(await rig.tool.run(["route"] + Self.ocean).text)
+        let noticed = rows(await rig.tool.run(["route"] + Self.ocean).text)
         XCTAssertEqual(noticed.filter { $0[0] == "notice" }, (1...5).map { ["notice", "Notice \($0)"] })
     }
 
@@ -598,9 +606,9 @@ final class MapsToolTests: XCTestCase {
         let rig = rig()
         rig.maps.places = [Self.place(1, long)]
         rig.maps.route = MapRoute(name: long, distance: 10, expected: 10, notices: [long], steps: [MapStep(instruction: long, distance: 1)])
-        let search = records(await rig.tool.run(["search", long, "--anywhere"]).text)
+        let search = rows(await rig.tool.run(["search", long, "--anywhere"]).text)
         XCTAssertEqual(search.map(\.count), [6, 8])
-        let route = records(await rig.tool.run(["route"] + Self.ocean).text)
+        let route = rows(await rig.tool.run(["route"] + Self.ocean).text)
         XCTAssertEqual(route.map(\.count), [9, 2, 3])
         // The echoed query; the name, category, address, phone and URL; the route's name, a notice
         // and an instruction.
@@ -652,7 +660,7 @@ final class MapsToolTests: XCTestCase {
         let reply = await rig.tool.run(["search", wide, "--near", "37.7599,-122.4148", "--limit", "25"])
         XCTAssertEqual(reply.status, ToolReply.ok)
         XCTAssertLessThanOrEqual(reply.text.utf8.count, 24_576)
-        let lines = records(reply.text)
+        let lines = rows(reply.text)
         let kept = lines.count - 2
         XCTAssertGreaterThan(kept, 0)
         XCTAssertLessThan(kept, 25)
@@ -668,7 +676,7 @@ final class MapsToolTests: XCTestCase {
         XCTAssertGreaterThan(reply.text.utf8.count + lines[1].joined(separator: " | ").utf8.count + 1, 24_576 - MapsTool.lastLineRoom)
         // With more than the limit to begin with, the last line counts both.
         rig.maps.places = (1...60).map { Self.place($0, wide) }
-        let more = records(await rig.tool.run(["search", "x", "--anywhere", "--limit", "25"]).text)
+        let more = rows(await rig.tool.run(["search", "x", "--anywhere", "--limit", "25"]).text)
         XCTAssertEqual(more.last, ["… \(60 - (more.count - 2)) more results, cut at 24 KB; narrow the search or lower --limit"])
     }
 
@@ -680,7 +688,7 @@ final class MapsToolTests: XCTestCase {
         let reply = await rig.tool.run(["route"] + Self.ocean)
         XCTAssertEqual(reply.status, ToolReply.ok)
         XCTAssertLessThanOrEqual(reply.text.utf8.count, 24_576)
-        let lines = records(reply.text)
+        let lines = rows(reply.text)
         XCTAssertEqual(lines[0].count, 9)
         XCTAssertEqual(lines[0][8], wide)
         XCTAssertEqual(Array(lines[1...5]), Array(repeating: ["notice", wide], count: 5))
@@ -692,7 +700,7 @@ final class MapsToolTests: XCTestCase {
         }
         XCTAssertEqual(lines.last, ["… \(40 - kept) more steps, cut at 24 KB"])
         rig.maps.route.steps = (1...95).map { _ in MapStep(instruction: wide, distance: 150) }
-        let more = records(await rig.tool.run(["route"] + Self.ocean).text)
+        let more = rows(await rig.tool.run(["route"] + Self.ocean).text)
         XCTAssertEqual(more.last, ["… \(95 - (more.count - 7)) more steps, cut at 24 KB"])
     }
 
@@ -705,11 +713,11 @@ final class MapsToolTests: XCTestCase {
             XCTAssertLessThanOrEqual(MapsTool.field(wide).utf8.count, MapsTool.fieldBytes)
             let rig = rig()
             let region = await rig.tool.run(["search", wide, "--near", "-84.99999,-179.99999", "--radius", "50000"])
-            XCTAssertEqual(records(region.text).count, 1)
+            XCTAssertEqual(rows(region.text).count, 1)
             XCTAssertLessThanOrEqual(region.text.utf8.count, room)
             rig.maps.route = MapRoute(name: wide, distance: 1e15, expected: 1e15, notices: Array(repeating: wide, count: 9), steps: [])
             let route = await rig.tool.run(["route", "--from", "-89.99999,-179.99999", "--to", "-89.99998,-179.99998", "--by", "driving"])
-            XCTAssertEqual(records(route.text).count, 6)
+            XCTAssertEqual(rows(route.text).count, 6)
             XCTAssertLessThanOrEqual(route.text.utf8.count, room)
         }
         // And the last line fits the room kept for it, however many it counts.
@@ -748,7 +756,8 @@ final class MapsToolTests: XCTestCase {
     func testAnEmptySearchIsAnAnswerWithItsRegion() async {
         let rig = rig()
         let reply = await rig.tool.run(["search", "zxqvjwkpfy", "--near", "37.7599,-122.4148"])
-        XCTAssertEqual(reply, .ok("region | near | 37.75990,-122.41480 | 5000 | exact | zxqvjwkpfy\n"))
+        XCTAssertEqual(reply, .ok("region | near | 37.75990,-122.41480 | 5000 | exact | zxqvjwkpfy\n"
+                                 + "link | https://maps.apple.com/?q=zxqvjwkpfy&sll=37.75990,-122.41480\n"))
         XCTAssertEqual(rig.maps.requests.count, 1)
     }
 
@@ -762,10 +771,10 @@ final class MapsToolTests: XCTestCase {
                                   steps: [MapStep(instruction: "Go | north\nthen east", distance: -1), MapStep(instruction: "", distance: .nan)])
         rig.maps.eta = MapETA(distance: .infinity, expected: .nan, depart: Self.noon, arrive: Self.noon)
         var answers: [(String, [Int])] = []
-        answers.append((await rig.tool.run(["search", "a | b\nc"]).text, [6, 8, 8, 8]))
-        answers.append((await rig.tool.run(["search", "coffee", "--anywhere"]).text, [6, 8, 8, 8]))
-        answers.append((await rig.tool.run(["route"] + Self.ocean).text, [9, 2, 3, 3]))
-        answers.append((await rig.tool.run(["eta", "--to", "37.8080,-122.4177"]).text, [8]))
+        answers.append((await rig.tool.run(["search", "a | b\nc"]).text, [6, 2, 8, 8, 8]))
+        answers.append((await rig.tool.run(["search", "coffee", "--anywhere"]).text, [6, 2, 8, 8, 8]))
+        answers.append((await rig.tool.run(["route"] + Self.ocean).text, [9, 2, 2, 3, 3]))
+        answers.append((await rig.tool.run(["eta", "--to", "37.8080,-122.4177"]).text, [8, 2]))
         for (text, counts) in answers {
             XCTAssertEqual(records(text).map(\.count), counts, text)
             XCTAssertFalse(text.lowercased().contains("nan"), text)
@@ -775,15 +784,20 @@ final class MapsToolTests: XCTestCase {
         }
         let search = records(answers[0].0)
         XCTAssertEqual(search[0], ["region", "here", "37.75990,-122.41480", "5000", "exact", "a / b c"])
-        XCTAssertEqual(search[2], ["2", "", "", "", "37.80800,-122.41770", String(Int(Self.mission.metres(to: Self.wharf).rounded())), "", ""])
-        XCTAssertEqual(search[3], ["3", "A / B C", "", "/", "37.75990,-122.41480", "0", "", "https://x.example/?a/b"])
+        XCTAssertEqual(search[1], ["link", "https://maps.apple.com/?q=a%20%7C%20b%0Ac&sll=37.75990,-122.41480"])
+        XCTAssertEqual(records(answers[1].0)[1], ["link", "https://maps.apple.com/?q=coffee"])
+        XCTAssertEqual(search[3], ["2", "", "", "", "37.80800,-122.41770", String(Int(Self.mission.metres(to: Self.wharf).rounded())), "", ""])
+        XCTAssertEqual(search[4], ["3", "A / B C", "", "/", "37.75990,-122.41480", "0", "", "https://x.example/?a/b"])
         let route = records(answers[2].0)
         let left = ToolDates.write(Self.noon)
         XCTAssertEqual(route[0], ["route", "37.75990,-122.41480", "21.30690,-157.85830", "walking", "", "", left, "", ""])
-        XCTAssertEqual(route[1], ["notice", "Tolls ahead / maybe"])
-        XCTAssertEqual(route[2], ["1", "Go / north then east", ""])
-        XCTAssertEqual(route[3], ["2", "", ""])
-        XCTAssertEqual(records(answers[3].0), [["eta", "37.75990,-122.41480", "37.80800,-122.41770", "walking", "", "", left, left]])
+        XCTAssertEqual(route[1], ["link", "https://maps.apple.com/?saddr=37.75990,-122.41480&daddr=21.30690,-157.85830&dirflg=w"])
+        XCTAssertEqual(route[2], ["notice", "Tolls ahead / maybe"])
+        XCTAssertEqual(route[3], ["1", "Go / north then east", ""])
+        XCTAssertEqual(route[4], ["2", "", ""])
+        // The ETA's start was `here`: the link leaves it to Maps.
+        XCTAssertEqual(records(answers[3].0), [["eta", "37.75990,-122.41480", "37.80800,-122.41770", "walking", "", "", left, left],
+                                               ["link", "https://maps.apple.com/?daddr=37.80800,-122.41770&dirflg=w"]])
     }
 
     func testARouteSaysWhenItLeavesAndArrives() async {
@@ -792,21 +806,84 @@ final class MapsToolTests: XCTestCase {
         let leaves = Self.noon.addingTimeInterval(3600)
         XCTAssertEqual(reply.text, """
         route | 37.75990,-122.41480 | 21.30690,-157.85830 | driving | 6145 | 6597 | \(ToolDates.write(leaves)) | \(ToolDates.write(leaves.addingTimeInterval(6597))) | Polk St
+        link | https://maps.apple.com/?saddr=37.75990,-122.41480&daddr=21.30690,-157.85830&dirflg=d
         1 | Start on Folsom St | 80
         2 | Take a left onto 13th St | 120
 
         """)
         let eta = await rig.tool.run(["eta", "--by", "transit"] + Self.ocean)
-        XCTAssertEqual(eta.text, "eta | 37.75990,-122.41480 | 21.30690,-157.85830 | transit | 6874 | 2457 | \(ToolDates.write(rig.maps.eta.depart)) | \(ToolDates.write(rig.maps.eta.arrive))\n")
+        XCTAssertEqual(eta.text, "eta | 37.75990,-122.41480 | 21.30690,-157.85830 | transit | 6874 | 2457 | \(ToolDates.write(rig.maps.eta.depart)) | \(ToolDates.write(rig.maps.eta.arrive))\n"
+                       + "link | https://maps.apple.com/?saddr=37.75990,-122.41480&daddr=21.30690,-157.85830&dirflg=r\n")
+    }
+
+    // MARK: #289: a link the person can tap
+
+    /// The link is the same directions in Apple Maps: both ends when both were given, the
+    /// destination alone when the start was `here`, and the fix as the destination when that was.
+    func testADirectionsLinkLeavesAStartThatWasHereToMaps() async {
+        let rig = rig()
+        func link(_ arguments: [String]) async -> String? {
+            let reply = await rig.tool.run(arguments)
+            XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+            return records(reply.text).first { $0.first == "link" }?.last
+        }
+        let fromHere = await link(["route", "--to", "37.8080,-122.4177", "--by", "driving"])
+        XCTAssertEqual(fromHere, "https://maps.apple.com/?daddr=37.80800,-122.41770&dirflg=d")
+        let toHere = await link(["eta", "--from", "37.8080,-122.4177", "--to", "here", "--by", "transit"])
+        XCTAssertEqual(toHere, "https://maps.apple.com/?saddr=37.80800,-122.41770&daddr=37.75990,-122.41480&dirflg=r")
+        let south = await link(["eta", "--from", "-33.8568,151.2153", "--to", "-33.8915,151.2767"])
+        XCTAssertEqual(south, "https://maps.apple.com/?saddr=-33.85680,151.21530&daddr=-33.89150,151.27670&dirflg=w")
+    }
+
+    /// A transit route is refused in the app and offered in Maps, where it exists; with no
+    /// destination to name, only refused.
+    func testATransitRouteIsOfferedAsALink() async {
+        await assertRefused([["route", "--to", "37.8080,-122.4177", "--by", "transit"]],
+                            saying: ", or give the person the route in Maps: https://maps.apple.com/?daddr=37.80800,-122.41770&dirflg=r\n")
+        await assertRefused([["route", "--by", "transit"] + Self.ocean],
+                            saying: "https://maps.apple.com/?saddr=37.75990,-122.41480&daddr=21.30690,-157.85830&dirflg=r\n")
+        let rig = rig(.undetermined)
+        let toHere = await rig.tool.run(["route", "--from", "37.8080,-122.4177", "--to", "here", "--by", "transit"])
+        XCTAssertEqual(toHere.status, ToolReply.usage)
+        XCTAssertFalse(toHere.text.contains("https://"), toHere.text)
+        assertAskedNothing(rig)
+    }
+
+    /// A link is one URL whatever the query holds, and one too long to write whole is left out
+    /// rather than cut.
+    func testALinkIsOneWholeURLOrNone() {
+        XCTAssertEqual(MapsLink.search("fish & chips + 50% off? #1 | \"café\"\n東京", near: nil),
+                       "https://maps.apple.com/?q=fish%20%26%20chips%20%2B%2050%25%20off?%20%231%20%7C%20%22caf%C3%A9%22%0A%E6%9D%B1%E4%BA%AC")
+        for query in ["a b", "x=y&z", "\u{0}\t", String(repeating: "é", count: 120)] {
+            guard let link = MapsLink.search(query, near: Self.mission) else { return XCTFail("no link for \(query.prefix(12))") }
+            XCTAssertLessThanOrEqual(link.utf8.count, MapsLink.bytes)
+            XCTAssertTrue(link.allSatisfy { $0.isASCII && !$0.isWhitespace && $0 != "|" }, link)
+            let components = URLComponents(string: link)
+            XCTAssertEqual(components?.scheme, "https")
+            XCTAssertEqual(components?.host, "maps.apple.com")
+            XCTAssertEqual(components?.queryItems?.first { $0.name == "q" }?.value, query)
+            XCTAssertEqual(components?.queryItems?.first { $0.name == "sll" }?.value, "37.75990,-122.41480")
+        }
+        XCTAssertNil(MapsLink.search(String(repeating: "é", count: 140), near: nil))
+        XCTAssertEqual(MapsLink.line(nil), [])
+        XCTAssertEqual(MapsLink.line("https://maps.apple.com/?q=a"), ["link | https://maps.apple.com/?q=a"])
+    }
+
+    func testASearchWithAQueryTooLongForALinkCarriesNone() async {
+        let rig = rig()
+        rig.maps.places = [Self.place(1)]
+        let reply = await rig.tool.run(["search", String(repeating: "é", count: 140), "--anywhere"])
+        XCTAssertEqual(reply.status, ToolReply.ok)
+        XCTAssertEqual(records(reply.text).map(\.first), ["region", "1"])
     }
 
     func testCoordinatesAreFiveDecimalPlaces() async throws {
         let rig = rig()
         rig.maps.places = [MapPlace(name: "A", category: nil, address: nil, point: MapPoint(latitude: 1.0 / 3, longitude: -0.000001)!,
                                     phone: nil, url: nil)]
-        let search = records(await rig.tool.run(["search", "a", "--near", "37.759912345,-122.4"]).text)
-        let route = records(await rig.tool.run(["route", "--from", "90,180", "--to", "-0.0000001,7"]).text)
-        let eta = records(await rig.tool.run(["eta", "--to", "12.3456789,-98.7654321"]).text)
+        let search = rows(await rig.tool.run(["search", "a", "--near", "37.759912345,-122.4"]).text)
+        let route = rows(await rig.tool.run(["route", "--from", "90,180", "--to", "-0.0000001,7"]).text)
+        let eta = rows(await rig.tool.run(["eta", "--to", "12.3456789,-98.7654321"]).text)
         let written = [search[0][2], search[1][4], route[0][1], route[0][2], eta[0][1], eta[0][2]]
         XCTAssertEqual(written, ["37.75991,-122.40000", "0.33333,0.00000", "90.00000,180.00000", "0.00000,7.00000", "37.75990,-122.41480",
                                  "12.34568,-98.76543"])
