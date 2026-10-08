@@ -327,12 +327,13 @@ final class SecretToolTests: XCTestCase {
                        ["read", "--no-newline", "--", "op://Homelab/Router/password"])
         XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Router/admin/password"])?.arguments.last,
                        "op://Homelab/Router/admin/password")
-        XCTAssertEqual(SecretTool.parse(["show", "Hexagonzone Kubeconfig"])?.arguments,
-                       ["item", "get", "--format", "json", "--", "Hexagonzone Kubeconfig"])
+        // A service account is refused an item without its vault, so `show` asks for none.
+        XCTAssertNil(SecretTool.parse(["show", "Hexagonzone Kubeconfig"]))
         XCTAssertEqual(SecretTool.parse(["show", "i1", "Homelab"])?.arguments,
                        ["item", "get", "--vault", "Homelab", "--format", "json", "--", "i1"])
         // An item whose title starts with a dash is still an item: it follows `--`.
-        XCTAssertEqual(SecretTool.parse(["show", "--reveal"])?.arguments, ["item", "get", "--format", "json", "--", "--reveal"])
+        XCTAssertEqual(SecretTool.parse(["show", "--reveal", "Homelab"])?.arguments,
+                       ["item", "get", "--vault", "Homelab", "--format", "json", "--", "--reveal"])
         XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Hexagonzone Kubeconfig"]),
                        .file(vault: "Homelab", item: "Hexagonzone Kubeconfig"))
         XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Hexagonzone Kubeconfig"])?.arguments,
@@ -375,7 +376,7 @@ final class SecretToolTests: XCTestCase {
         file | kubeconfig-fresh | 2276 bytes | op://bayinlb3/6telhnrm/xwuczxfr
 
         """))
-        let router = await tool.run(["show", "i1"])
+        let router = await tool.run(["show", "i1", "Homelab"])
         XCTAssertEqual(router, .ok("""
         item | i1 | Router | LOGIN | Homelab
         field | username | STRING | USERNAME | op://Homelab/Router/username
@@ -390,15 +391,15 @@ final class SecretToolTests: XCTestCase {
             XCTAssertFalse((shown.text + router.text).contains(value), "show answered \(value)")
         }
         XCTAssertEqual(op.calls.map(\.arguments), [["item", "get", "--vault", "Homelab", "--format", "json", "--", "Hexagonzone Kubeconfig"],
-                                                   ["item", "get", "--format", "json", "--", "i1"]])
+                                                   ["item", "get", "--vault", "Homelab", "--format", "json", "--", "i1"]])
     }
 
     func testShowOfSomethingThatIsNotAnItemIsSaid() async {
         let (tool, _) = tool(OnePasswordExit(status: 0, output: "[]", errors: ""),
                              OnePasswordExit(status: 1, output: "", errors: "[ERROR] \"Nope\" isn't an item\n"))
-        let unreadable = await tool.run(["show", "x"])
+        let unreadable = await tool.run(["show", "x", "Homelab"])
         XCTAssertEqual(unreadable, .failed("op answered something unreadable\n"))
-        let refused = await tool.run(["show", "Nope"])
+        let refused = await tool.run(["show", "Nope", "Homelab"])
         XCTAssertEqual(refused, .failed("op: [ERROR] \"Nope\" isn't an item\n"))
     }
 
@@ -406,7 +407,7 @@ final class SecretToolTests: XCTestCase {
     func testShowOfAnItemHoldingTheTokenIsRefused() async {
         let holding = document.replacingOccurrences(of: "NOTE-VALUE", with: token)
         let (tool, _) = tool(OnePasswordExit(status: 0, output: holding, errors: ""))
-        let reply = await tool.run(["show", "Hexagonzone Kubeconfig"])
+        let reply = await tool.run(["show", "Hexagonzone Kubeconfig", "Homelab"])
         XCTAssertEqual(reply.status, ToolReply.failed)
         XCTAssertFalse(reply.text.contains(token))
         XCTAssertFalse(reply.text.contains("kubeconfig-fresh"))
@@ -620,7 +621,7 @@ final class SecretToolTests: XCTestCase {
     func testAnythingElseIsUsage() {
         for arguments in [[], ["read", "op://a/b/c"], ["list", "--account", "x"], ["list", ""], ["list", "a", "b"],
                           ["get"], ["get", "Homelab/Router/password"], ["get", "op://a"], ["get", "op://a/"], ["get", "op://-a/b"],
-                          ["get", "op://a//c"], ["show"], ["show", ""], ["show", "a\nb"], ["show", "a", "--vault"], ["show", "a", ""],
+                          ["get", "op://a//c"], ["show"], ["show", ""], ["show", "a"], ["show", "a\nb"], ["show", "a", "--vault"], ["show", "a", ""],
                           ["show", "a", "b", "c"],
                           ["get", "op://a/b/c/d/e"], ["get", "op://a/b/c\n"], ["get", "op://a/b/c", "--reveal"],
                           ["vaults", "x"], ["item", "delete", "x"], ["signin"]] {

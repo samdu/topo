@@ -20,9 +20,11 @@ struct SecretTool: Tool {
     let usage = """
     topo secret vaults                      the vaults the connection reaches, id first
     topo secret list [VAULT]                the items, one a line: id, title, category, vault
-    topo secret show ITEM [VAULT]           what one item holds, no values: an `item` line, then a line for each
+    topo secret show ITEM VAULT             what one item holds, no values: an `item` line, then a line for each
                                             field (label, type, purpose, section) and each file (name, size),
-                                            each ending in the reference `get` takes. ITEM is an id or a title
+                                            ending in the reference `get` takes where `op` gave one. ITEM is an
+                                            id or a title, VAULT the vault `list` names: a service account is
+                                            refused an item without its vault
     topo secret get op://VAULT/ITEM/FIELD   one field's value, or one file's text with the file's name for FIELD
     topo secret get op://VAULT/ITEM         the text of the item's one file (a Document); an item with several
                                             files is status 2 naming each, and one with none status 1
@@ -37,7 +39,7 @@ struct SecretTool: Tool {
         case list(vault: String?)
         case get(reference: String)
         /// What an item holds, its values withheld.
-        case show(item: String, vault: String?)
+        case show(item: String, vault: String)
         /// The one file of an item, by `op://VAULT/ITEM`.
         case file(vault: String, item: String)
 
@@ -48,8 +50,7 @@ struct SecretTool: Tool {
             case .list(nil): ["item", "list", "--format", "json"]
             case .list(let vault?): ["item", "list", "--vault", vault, "--format", "json"]
             case .get(let reference): Self.read(reference)
-            case .show(let item, nil): ["item", "get", "--format", "json", "--", item]
-            case .show(let item, let vault?), .file(let vault, let item):
+            case .show(let item, let vault), .file(let vault, let item):
                 ["item", "get", "--vault", vault, "--format", "json", "--", item]
             }
         }
@@ -101,7 +102,8 @@ struct SecretTool: Tool {
                             file.section?.label.map { "section " + $0 }, reference(to: file)])
         }
 
-        /// The `item` line, then a line a field and a line a file, each ending in its reference.
+        /// The `item` line, then a line a field and a line a file, each ending in its reference where
+        /// `op` gave one.
         var lines: [String] {
             [PhoneTool.line(["item", id, title, category, vault.name])]
                 + (fields ?? []).map { PhoneTool.line(["field", $0.label ?? $0.id, $0.type, $0.purpose, $0.section?.label.map { "section " + $0 },
@@ -123,9 +125,8 @@ struct SecretTool: Tool {
         case "get" where arguments.count == 2:
             guard let parts = parts(of: arguments[1]), parts.count == 2, isName(parts[0]) else { return nil }
             return .file(vault: parts[0], item: parts[1])
-        case "show" where (2...3).contains(arguments.count) && isName(arguments[1], dashed: true):
-            guard arguments.count == 3 else { return .show(item: arguments[1], vault: nil) }
-            return isName(arguments[2]) ? .show(item: arguments[1], vault: arguments[2]) : nil
+        case "show" where arguments.count == 3 && isName(arguments[1], dashed: true) && isName(arguments[2]):
+            return .show(item: arguments[1], vault: arguments[2])
         default: return nil
         }
     }
