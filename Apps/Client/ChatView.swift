@@ -36,6 +36,24 @@ struct ChatView: View {
     /// The field has held focus `ComposerForm.patience` with no keyboard on screen, so none is
     /// coming and the pane is a row for the focus alone.
     @State private var alone = false
+    /// How tall the chat's column is, from under the navigation bar to the keyboard: the room
+    /// the pane has to grow in as what is written takes more lines.
+    @State private var room: CGFloat?
+
+    /// The column as measured, and what of it is the room the pane grows in.
+    struct Room: Equatable {
+        var tall: CGFloat
+        var wide: CGFloat
+        var keyboard: Bool
+
+        /// The room once this has been measured after `was`, with `held` the room so far: the
+        /// column's height, and where neither the keyboard nor the width has changed no more
+        /// than was held.
+        func taken(after was: Room, held: CGFloat?) -> CGFloat {
+            guard let held, was.keyboard == keyboard, was.wide == wide else { return tall }
+            return min(held, tall)
+        }
+    }
     /// Where what the microphone hears goes, taken when its session began.
     @State private var dictation = Dictation.spoken
     /// Which way the press on the microphone went, so its release follows it.
@@ -151,6 +169,19 @@ struct ChatView: View {
                         .mascotObstacle()
                     }
                     composer(draft)
+                }
+            }
+            // The room the pane has to grow in, which is this column's: from under the navigation
+            // bar to the keyboard, the composer's own height included. A pane that outgrows the
+            // column pushes the column's own edges out, so within one state of the keyboard and
+            // one width the room only ever shrinks: a column grown by the pane it is the bound
+            // of would let the pane grow again.
+            .background {
+                GeometryReader { column in
+                    Color.clear.onChange(of: Room(tall: column.size.height, wide: column.size.width, keyboard: keyboard),
+                                         initial: true) { was, now in
+                        room = now.taken(after: was, held: room)
+                    }
                 }
             }
             // The one space the transcript's content bottom and the pane's top edge are both
@@ -535,7 +566,8 @@ struct ChatView: View {
                                                  send: { await heard($0, going) })
                             },
                             micReport: micReport,
-                            focused: { focused = $0 })
+                            focused: { focused = $0 },
+                            room: room)
         if #available(iOS 18, *) {
             view.topEdge(in: Self.space) { paneTop = $0 }
         } else {

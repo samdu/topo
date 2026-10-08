@@ -202,6 +202,86 @@ final class ComposerGeometryTests: XCTestCase {
                 try XCTUnwrap(probe.well, "\(composer): no well was laid out"))
     }
 
+    // MARK: The room to grow in
+
+    /// The lines a field takes are the look's and no more than the room holds: a row of one
+    /// line is the band, each line more is a line, and there is always one.
+    func testTheFieldsLinesAreTheLooksAndNoMoreThanTheRoomHolds() {
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: 288, band: 64, line: 20), 12)
+        XCTAssertEqual(ComposerPlan.lines(most: 5, room: 288, band: 64, line: 20), 5, "the room gave more lines than the look")
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: 64, band: 64, line: 20), 1)
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: 10, band: 64, line: 20), 1, "a room under one row left no line to type in")
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: -.infinity, band: 64, line: 20), 20)
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: .nan, band: 64, line: 20), 20)
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: .infinity, band: 64, line: 20), 20)
+        XCTAssertEqual(ComposerPlan.lines(most: 20, room: 288, band: 64, line: 0), 20)
+        XCTAssertEqual(ComposerPlan.lines(most: 0, room: 288, band: 64, line: 20), 1)
+        for lines in 1...20 {
+            let fit = ComposerPlan.lines(most: lines, room: 288, band: 64, line: 20)
+            XCTAssertLessThanOrEqual(64 + CGFloat(fit - 1) * 20, 288, "\(lines): the pane is taller than its room")
+        }
+    }
+
+    /// The room is the column's height, and within one state of the keyboard and one width it
+    /// only shrinks: a pane that outgrows the column pushes the column's edges out, and a room
+    /// that followed it would let the pane grow again.
+    func testTheRoomOnlyShrinksUntilTheKeyboardOrTheWidthChanges() {
+        let up = ChatView.Room(tall: 423, wide: 402, keyboard: true)
+        XCTAssertEqual(up.taken(after: ChatView.Room(tall: 724, wide: 402, keyboard: false), held: 724), 423)
+        XCTAssertEqual(ChatView.Room(tall: 436, wide: 402, keyboard: true).taken(after: up, held: 423), 423,
+                       "a column pushed out by the pane gave the pane more room")
+        XCTAssertEqual(ChatView.Room(tall: 400, wide: 402, keyboard: true).taken(after: up, held: 423), 400)
+        XCTAssertEqual(ChatView.Room(tall: 724, wide: 402, keyboard: false).taken(after: up, held: 423), 724,
+                       "the keyboard gone left the room it had left")
+        XCTAssertEqual(ChatView.Room(tall: 500, wide: 874, keyboard: true).taken(after: up, held: 423), 500)
+        XCTAssertEqual(up.taken(after: up, held: nil), 423)
+    }
+
+    /// On the smallest screen, 320 by 568, with a keyboard up and the look's most lines at the
+    /// most the reader takes, a draft longer than all of them leaves the pane inside the room
+    /// between the navigation bar and the keyboard, with every word still the field's. Without
+    /// the room the same draft is a pane taller than it, which is what the bound is for.
+    func testADraftOfTheMostLinesLeavesThePaneInsideTheRoomAboveTheKeyboard() throws {
+        // The screen, less the status bar, the navigation bar and a keyboard with its bar.
+        let room: CGFloat = 568 - 20 - 44 - 260
+        let words = String(repeating: "and then the bins, the plants on the stairs and the post, ", count: 40)
+        var look = Look()
+        look.composer.surface = .flat
+        look.draft.maximumLines = Look.Draft.lines.upperBound
+        func pane(room: CGFloat?) throws -> (height: CGFloat, field: String) {
+            let probe = FrameProbe()
+            let view = VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Composer(draft: Draft(text: .constant(words), typing: .constant(true), row: true), room: room)
+                    .overlayPreferenceValue(ComposerFrames.Pane.self) { pane in
+                        GeometryReader { proxy in
+                            Color.clear.onAppear { probe.pane = Self.global(pane, proxy) }
+                                .onChange(of: Self.global(pane, proxy)) { _, rect in probe.pane = rect }
+                        }
+                    }
+            }
+            .environment(\.look, look)
+            .transaction { $0.animation = nil }
+            let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+            let window = UIWindow(windowScene: scene)
+            window.frame = CGRect(x: 0, y: 0, width: 320, height: 568)
+            window.rootViewController = UIHostingController(rootView: view)
+            window.isHidden = false
+            defer { window.isHidden = true }
+            for _ in 0..<4 { window.layoutIfNeeded(); RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
+            func find(_ view: UIView) -> UITextView? {
+                (view as? UITextView) ?? view.subviews.lazy.compactMap(find).first
+            }
+            return (try XCTUnwrap(probe.pane, "no pane was laid out").height, try XCTUnwrap(find(window)).text)
+        }
+        let bounded = try pane(room: room)
+        XCTAssertLessThanOrEqual(bounded.height, room, "the pane grew past the room above the keyboard")
+        XCTAssertGreaterThan(bounded.height, room / 2, "the pane did not grow into the room it has")
+        XCTAssertEqual(bounded.field, words, "words past the field's lines are not the field's")
+        let unbounded = try pane(room: nil)
+        XCTAssertGreaterThan(unbounded.height, room, "twenty lines fit the room, so this holds nothing")
+    }
+
     // MARK: Typed
 
     /// What is typed into the field is the draft's in either of the pane's forms. With a hardware
@@ -348,7 +428,7 @@ final class ComposerGeometryTests: XCTestCase {
                 XCTAssertLessThanOrEqual(short.well.maxX, short.pane.maxX + 0.5, "\(composer): the well left the pane")
             }
             XCTAssertEqual(short.pane.maxY, rest.pane.maxY, accuracy: 0.5, "\(composer): the pane left its foot")
-            let width = ComposerGeometry.width(composer, column: Look().transcript.maximumLineWidth,
+            let width = ComposerGeometry.width(composer, draft: Look().draft, column: Look().transcript.maximumLineWidth,
                                                in: narrowest.width, row: true)
             XCTAssertEqual(short.pane.width, width, accuracy: 0.5, "\(composer): the row is not the width the geometry gives it")
             XCTAssertEqual(short.pane.midX, rest.pane.midX, accuracy: 0.5, "\(composer): the pane moved sideways")
@@ -381,7 +461,7 @@ final class ComposerPlanTests: XCTestCase {
 
     private func row(_ look: Look = Look(), screen: CGFloat, lines: CGFloat = 1) -> ComposerPlan {
         let geometry = ComposerGeometry.of(look.composer, row: true)
-        let width = ComposerGeometry.width(look.composer, column: look.transcript.maximumLineWidth, in: screen, row: true)
+        let width = ComposerGeometry.width(look.composer, draft: look.draft, column: look.transcript.maximumLineWidth, in: screen, row: true)
         return ComposerPlan.row(look.composer, draft: look.draft, geometry: geometry, width: width,
                                 marks: marks, line: line) { _ in self.line * lines }
     }
@@ -390,14 +470,14 @@ final class ComposerPlanTests: XCTestCase {
     /// pane its own share whatever the column.
     func testTheRowIsItsShareOfTheScreenAndNoWiderThanTheColumn() {
         let composer = Look.Composer()
-        XCTAssertEqual(ComposerGeometry.width(composer, column: .infinity, in: 400, row: true), 400 * 0.93, accuracy: 1e-9)
-        XCTAssertEqual(ComposerGeometry.width(composer, column: 700, in: 1024, row: true), 700)
-        XCTAssertEqual(ComposerGeometry.width(composer, column: 700, in: 400, row: true), 400 * 0.93, accuracy: 1e-9)
-        XCTAssertEqual(ComposerGeometry.width(composer, column: 700, in: 1024, row: false), 1024 * 0.8, accuracy: 1e-9)
+        XCTAssertEqual(ComposerGeometry.width(composer, draft: Look().draft, column: .infinity, in: 400, row: true), 400 * 0.93, accuracy: 1e-9)
+        XCTAssertEqual(ComposerGeometry.width(composer, draft: Look().draft, column: 700, in: 1024, row: true), 700)
+        XCTAssertEqual(ComposerGeometry.width(composer, draft: Look().draft, column: 700, in: 400, row: true), 400 * 0.93, accuracy: 1e-9)
+        XCTAssertEqual(ComposerGeometry.width(composer, draft: Look().draft, column: 700, in: 1024, row: false), 1024 * 0.8, accuracy: 1e-9)
         var other = composer
         other.typingWidthFraction = 0.5
-        XCTAssertEqual(ComposerGeometry.width(other, column: .infinity, in: 400, row: true), 200)
-        XCTAssertEqual(ComposerGeometry.width(other, column: .infinity, in: 400, row: false), 320)
+        XCTAssertEqual(ComposerGeometry.width(other, draft: Look().draft, column: .infinity, in: 800, row: true), 400)
+        XCTAssertEqual(ComposerGeometry.width(other, draft: Look().draft, column: .infinity, in: 400, row: false), 320)
     }
 
     /// On an ordinary phone the look's values stand as given: the jewel's middle its inset from
@@ -523,6 +603,58 @@ final class ComposerPlanTests: XCTestCase {
         }
     }
 
+    /// A look's share of the screen is a wish: the row is never narrower than what holds the
+    /// well, the control, the field at its least and the send side by side, and never wider than
+    /// the screen. At the least share the reader takes, on the narrowest phone, the send is
+    /// clear of the well and the field has its minimum; where the screen cannot hold the
+    /// field's minimum the field has what there is.
+    func testTheRowIsNeverNarrowerThanWhatItHoldsNorWiderThanTheScreen() {
+        var look = Look()
+        look.composer.typingWidthFraction = 0.1
+        let geometry = ComposerGeometry.of(look.composer, row: true)
+        let floor = ComposerPlan.floor(look.composer, draft: look.draft, geometry: geometry, row: true)
+        XCTAssertLessThan(floor, 320, "the default row does not fit the narrowest phone")
+        let narrow = row(look, screen: 320)
+        XCTAssertEqual(narrow.size.width, floor, accuracy: 1e-9, "a tenth of the screen is narrower than the row")
+        check(narrow, look, "a tenth of 320")
+        XCTAssertGreaterThanOrEqual(narrow.field.width, look.draft.minimumWidth - 1e-6)
+        XCTAssertGreaterThan(narrow.send.x - narrow.sendSlot / 2, narrow.well.maxX, "the send is over the well")
+
+        look.draft.minimumWidth = 4000
+        let wide = row(look, screen: 320)
+        XCTAssertEqual(wide.size.width, 320, "the row is wider than the screen")
+        check(wide, look, "a field of 4000 on 320")
+        XCTAssertGreaterThan(wide.field.width, 0, "the field has none of the width the screen has")
+
+        // The column caps a share, and not the floor.
+        look = Look()
+        XCTAssertEqual(ComposerGeometry.width(look.composer, draft: look.draft, column: 10, in: 1024, row: true),
+                       ComposerPlan.floor(look.composer, draft: look.draft, geometry: geometry, row: true), accuracy: 1e-9)
+    }
+
+    /// Each field of the row's own, at each end of the range it is read in, with the rest of the
+    /// look as it is, on the narrowest phone: the well, the control, the field and the send are
+    /// in order, apart and inside the pane, and the field has width.
+    func testAtEachEndOfEachOfTheRowsRangesTheNarrowestPhoneHoldsTheRow() {
+        let ends: [(String, (inout Look, CGFloat) -> Void, [CGFloat])] = [
+            ("composer.typingWidthFraction", { $0.composer.typingWidthFraction = $1 }, [0.1, 1]),
+            ("composer.jewelInset", { $0.composer.jewelInset = $1 }, [0, 200]),
+            ("composer.flank.slot", { $0.composer.flank.slot = $1 }, [8, 4000]),
+            ("draft.slot", { $0.draft.slot = $1 }, [8, 4000]),
+        ]
+        for (name, set, values) in ends {
+            for value in values {
+                var look = Look()
+                set(&look, value)
+                let plan = row(look, screen: 320, lines: 20)
+                check(plan, look, "\(name) \(value)")
+                XCTAssertLessThanOrEqual(plan.size.width, 320, "\(name) \(value): the row is wider than the screen")
+                XCTAssertLessThanOrEqual(plan.well.maxX, plan.more.x - plan.moreSlot / 2 + 1e-6, "\(name) \(value)")
+                XCTAssertGreaterThanOrEqual(plan.send.x - plan.sendSlot / 2, plan.field.maxX - 1e-6, "\(name) \(value)")
+            }
+        }
+    }
+
     private func check(_ plan: ComposerPlan, _ look: Look, _ what: String) {
         let geometry = ComposerGeometry.of(look.composer, row: true)
         let numbers = [plan.size.width, plan.size.height, plan.well.minX, plan.well.minY, plan.well.width, plan.more.x, plan.more.y,
@@ -531,12 +663,26 @@ final class ComposerPlanTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(plan.well.minX, -1e-6, "\(what): the well is past the pane's leading end")
         XCTAssertGreaterThanOrEqual(plan.well.minY, -1e-6, "\(what): the well is over the pane's top")
         XCTAssertLessThanOrEqual(plan.well.maxY, plan.size.height + 1e-6, "\(what): the well is under the pane's foot")
-        XCTAssertGreaterThanOrEqual(plan.more.x - look.composer.flank.slot / 2, plan.well.maxX - 1e-6, "\(what): the control is over the well")
-        XCTAssertGreaterThanOrEqual(plan.field.minX, plan.more.x + look.composer.flank.slot / 2 - 1e-6, "\(what): the field is under the control")
+        // The control and the send are held in the room the plan gives each, which is the look's
+        // slot wherever the row can hold the well and both.
+        XCTAssertLessThanOrEqual(plan.moreSlot, look.composer.flank.slot + 1e-6, what)
+        XCTAssertLessThanOrEqual(plan.sendSlot, look.draft.slot + 1e-6, what)
+        if plan.size.width >= geometry.well + look.composer.flank.slot + look.draft.slot {
+            XCTAssertEqual(plan.moreSlot, look.composer.flank.slot, accuracy: 1e-6, "\(what): the control's room yielded with room for it")
+            XCTAssertEqual(plan.sendSlot, look.draft.slot, accuracy: 1e-6, "\(what): the send's room yielded with room for it")
+        }
+        XCTAssertGreaterThanOrEqual(plan.more.x - plan.moreSlot / 2, plan.well.maxX - 1e-6, "\(what): the control is over the well")
+        XCTAssertGreaterThanOrEqual(plan.field.minX, plan.more.x + plan.moreSlot / 2 - 1e-6, "\(what): the field is under the control")
         XCTAssertGreaterThanOrEqual(plan.field.width, 0, what)
-        XCTAssertLessThanOrEqual(plan.send.x + look.draft.slot / 2, plan.size.width + 1e-6, "\(what): the send is past the pane's end")
-        if plan.field.width > 0 {
-            XCTAssertLessThanOrEqual(plan.field.maxX, plan.send.x - look.draft.slot / 2 + 1e-6, "\(what): the field is under the send")
+        XCTAssertLessThanOrEqual(plan.send.x + plan.sendSlot / 2, plan.size.width + 1e-6, "\(what): the send is past the pane's end")
+        // In order whatever the field's width, none included: the send is never over the field,
+        // the control or the well, wherever the pane holds the well at all — a well wider than
+        // the screen, which its own range allows, leaves no pane beside it.
+        if geometry.well <= plan.size.width {
+            XCTAssertLessThanOrEqual(plan.field.maxX, plan.send.x - plan.sendSlot / 2 + 1e-6, "\(what): the field is under the send")
+            XCTAssertLessThanOrEqual(plan.more.x + plan.moreSlot / 2, plan.send.x - plan.sendSlot / 2 + 1e-6, "\(what): the send is over the control")
+            XCTAssertLessThanOrEqual(plan.well.maxX, plan.size.width + 1e-6, "\(what): the well is past the pane's trailing end")
+            XCTAssertLessThanOrEqual(plan.well.maxX, plan.send.x - plan.sendSlot / 2 + 1e-6, "\(what): the send is over the well")
         }
         XCTAssertGreaterThanOrEqual(plan.field.minY, -1e-6, what)
         XCTAssertLessThanOrEqual(plan.field.maxY, plan.size.height + 1e-6, what)

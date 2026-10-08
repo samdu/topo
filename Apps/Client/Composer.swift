@@ -43,7 +43,15 @@ struct Composer: View {
     /// field while a turn is on its way; this is what is, and it is what the glass is present
     /// for.
     var focused: @MainActor (Bool) -> Void = { _ in }
+    /// The room the pane has to grow in: from the transcript's top edge, under the navigation
+    /// bar, to the keyboard. The field takes no more lines than leave the pane inside it, and
+    /// scrolls inside itself from there (`ComposerPlan.lines`). Nil where nothing measured it,
+    /// which is the look's lines alone.
+    var room: CGFloat?
     @Environment(\.look) private var look
+    /// How tall one line of the field's words is, measured off the line the row is laid out
+    /// round: what turns the room into a number of lines.
+    @State private var textLine: CGFloat?
     /// The field takes the keyboard while the keyboard is asked for, and lets it go with it.
     @FocusState private var writing: Bool
 
@@ -140,7 +148,7 @@ struct Composer: View {
         .background(lozenge(geometry).opacity(max(presence, Self.leastSurface)).allowsHitTesting(presence > 0))
         .shadow(look.composer.glow.at(mic.open ? presence : 0))
         .containerRelativeFrame(.horizontal) { width, _ in
-            ComposerGeometry.width(look.composer, column: look.transcript.maximumLineWidth, in: width, row: row)
+            ComposerGeometry.width(look.composer, draft: look.draft, column: look.transcript.maximumLineWidth, in: width, row: row)
         }
         .padding(.bottom, look.composer.bottomPadding)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
@@ -223,7 +231,7 @@ struct Composer: View {
             .textFieldStyle(.plain)
             .font(look.transcript.bodyFont)
             .foregroundStyle(look.transcript.text)
-            .lineLimit(1...look.draft.maximumLines)
+            .lineLimit(1...lines)
             .focused($writing)
             .disabled(draft.state == .inFlight)
             .onSubmit(draft.send)
@@ -242,11 +250,31 @@ struct Composer: View {
             .accessibilityValue(shown ? draft.text : "")
     }
 
+    /// The most lines the field takes before it scrolls inside itself: the look's, and no more
+    /// than leave the pane inside the room it has. The band is the row at one line — the taller
+    /// of the well, the send's slot and the field's one line, and the room above and below.
+    private var lines: Int {
+        let most = max(look.draft.maximumLines, 1)
+        guard let room, let textLine else { return most }
+        let geometry = ComposerGeometry.of(look.composer, row: true)
+        let band = max(geometry.well, look.draft.slot, textLine + 2 * look.draft.written.verticalPadding)
+            + 2 * geometry.verticalInset
+        // A row's height of the room is left to the transcript, which has a least height of its
+        // own: a pane and a transcript that together outgrow the column are pushed past both
+        // of its ends, under the bar and under the keyboard.
+        return ComposerPlan.lines(most: most, room: room - look.composer.bottomPadding - band, band: band, line: textLine)
+    }
+
     /// One line of the field, which is not drawn: the height the row is laid out round, so a
     /// field of one line stands level with the well and one of more grows upward from there.
     private var line: some View {
         Text(" ")
             .font(look.transcript.bodyFont)
+            .background {
+                GeometryReader { text in
+                    Color.clear.onChange(of: text.size.height, initial: true) { _, tall in textLine = tall }
+                }
+            }
             .padding(.vertical, look.draft.written.verticalPadding)
             .hidden()
             .accessibilityHidden(true)
@@ -261,7 +289,7 @@ struct Composer: View {
                 .font(look.draft.sendFont)
                 .foregroundStyle(look.draft.sendInk)
                 .opacity(nothing ? look.draft.sendRestingOpacity : 1)
-                .frame(width: look.draft.slot, height: look.draft.slot)
+                .frame(maxWidth: look.draft.slot, maxHeight: look.draft.slot)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.borderless)
@@ -372,7 +400,9 @@ struct ComposerRow: Layout {
 
     private func plan(width: CGFloat, _ subviews: Subviews) -> ComposerPlan {
         let size = { (wanted: ComposerPart) in part(wanted, of: subviews)?.sizeThatFits(.unspecified) ?? .zero }
-        let marks = max(size(.more).height, row ? size(.send).height : size(.keyboard).height)
+        // The send fills the slot it is given, so it is asked how tall it is in the look's.
+        let send = part(.send, of: subviews)?.sizeThatFits(ProposedViewSize(width: draft.slot, height: draft.slot)).height ?? 0
+        let marks = max(size(.more).height, row ? send : size(.keyboard).height)
         guard row else {
             return .resting(composer, geometry: geometry, width: width, marks: marks, line: size(.line).height)
         }
@@ -397,7 +427,8 @@ struct ComposerRow: Layout {
         part(.well, of: subviews)?.place(at: at(plan.well.center), anchor: .center,
                                          proposal: ProposedViewSize(plan.well.size))
         part(.more, of: subviews)?.place(at: at(plan.more), anchor: .center, proposal: .unspecified)
-        part(.send, of: subviews)?.place(at: at(plan.send), anchor: .center, proposal: .unspecified)
+        part(.send, of: subviews)?.place(at: at(plan.send), anchor: .center,
+                                         proposal: ProposedViewSize(width: plan.sendSlot, height: draft.slot))
         part(.keyboard, of: subviews)?.place(at: at(plan.keyboard), anchor: .center, proposal: .unspecified)
         part(.field, of: subviews)?.place(at: at(plan.field.origin), anchor: .topLeading,
                                           proposal: ProposedViewSize(plan.field.size))
@@ -458,11 +489,16 @@ struct ComposerGeometry: Equatable, Sendable {
     var jewel: CGFloat { restingJewel * scale }
 
     /// How wide the pane is on a screen `screen` wide: its share of it at rest, and as a row its
-    /// own share and no wider than the transcript's column.
-    static func width(_ composer: Look.Composer, column: CGFloat, in screen: CGFloat, row: Bool) -> CGFloat {
+    /// own share and no wider than the transcript's column — but never narrower than what holds
+    /// the well, the control, the field at its least and the send side by side
+    /// (`ComposerPlan.floor`), where the screen is that wide, and never wider than the screen. A
+    /// look's share is a wish; a row whose send stands on its well is not a row.
+    static func width(_ composer: Look.Composer, draft: Look.Draft, column: CGFloat, in screen: CGFloat, row: Bool) -> CGFloat {
         guard row else { return screen * composer.widthFraction }
         let share = screen * composer.typingWidthFraction
-        return column.isNaN ? share : min(share, max(column, 0))
+        let wanted = column.isNaN ? share : min(share, max(column, 0))
+        let floor = ComposerPlan.floor(composer, draft: draft, geometry: of(composer, row: true), row: true)
+        return min(max(wanted, floor.isFinite ? floor : 0), max(screen, 0))
     }
 
     static func of(_ composer: Look.Composer, row: Bool) -> ComposerGeometry {
@@ -512,6 +548,10 @@ struct ComposerPlan: Equatable, Sendable {
     var send: CGPoint
     /// The middle of the way to the keyboard. In the row, where it is not drawn, the field's.
     var keyboard: CGPoint
+    /// The room the control and the send each stand in, across: the look's, or in a row too
+    /// narrow for the well and both of them, what the row has left for each.
+    var moreSlot: CGFloat
+    var sendSlot: CGFloat
 
     static func resting(_ composer: Look.Composer, geometry: ComposerGeometry, width: CGFloat,
                         marks: CGFloat, line: CGFloat) -> ComposerPlan {
@@ -527,7 +567,8 @@ struct ComposerPlan: Equatable, Sendable {
                             more: CGPoint(x: inner - flank / 4, y: middle.y),
                             field: CGRect(x: width - inner, y: middle.y - line / 2, width: flank, height: line),
                             send: CGPoint(x: width - outer - flank / 4, y: middle.y),
-                            keyboard: CGPoint(x: width - inner + flank / 4, y: middle.y))
+                            keyboard: CGPoint(x: width - inner + flank / 4, y: middle.y),
+                            moreSlot: composer.flank.slot, sendSlot: composer.flank.slot)
     }
 
     /// `marks` is the taller of the two controls and `line` the field at one line; `written`
@@ -549,7 +590,18 @@ struct ComposerPlan: Equatable, Sendable {
                             more: CGPoint(x: columns.more, y: level),
                             field: field,
                             send: CGPoint(x: columns.send, y: level),
-                            keyboard: CGPoint(x: field.midX, y: level))
+                            keyboard: CGPoint(x: field.midX, y: level),
+                            moreSlot: columns.control, sendSlot: columns.sending)
+    }
+
+    /// How many lines a field takes in a pane with `room` to grow in: a row of one line is `band`
+    /// tall and each line more is `line`, so it is the lines that fit, at least one and at most
+    /// `most`. A room that is not a number, or a line that is not a height, is the look's lines.
+    static func lines(most: Int, room: CGFloat, band: CGFloat, line: CGFloat) -> Int {
+        let most = max(most, 1)
+        guard room.isFinite, band.isFinite, line.isFinite, line > 0 else { return most }
+        let fit = ((room - band) / line).rounded(.down)
+        return min(max(1 + Int(max(min(fit, CGFloat(most)), 0)), 1), most)
     }
 
     /// The narrowest a pane is laid out: at rest the well's room with the spacing and a control's
@@ -571,6 +623,10 @@ struct ComposerPlan: Equatable, Sendable {
         var more: CGFloat
         var field: ClosedRange<CGFloat>
         var send: CGFloat
+        /// The room the control and the send stand in: the look's slots, or less of each, in
+        /// proportion, in a row too narrow to hold the well and both.
+        var control: CGFloat
+        var sending: CGFloat
 
         /// What the row keeps of its width for everything but the field, as the look gives it.
         static func taken(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry) -> CGFloat {
@@ -583,14 +639,22 @@ struct ComposerPlan: Equatable, Sendable {
 
         init(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat) {
             let half = geometry.well / 2
-            let (control, sending) = (composer.flank.slot / 2, draft.slot / 2)
+            // The slots are the last to yield, and yield together: a row narrower than the well
+            // and both of them shares what is past the well between them, so the three stay in
+            // order and inside the row whatever the look asks for.
+            let slots = max(composer.flank.slot, 0) + max(draft.slot, 0)
+            let room = max(width - geometry.well, 0)
+            let kept = slots > room && slots > 0 ? room / slots : 1
+            self.control = max(composer.flank.slot, 0) * kept
+            self.sending = max(draft.slot, 0) * kept
+            let (control, sending) = (self.control / 2, self.sending / 2)
             var lead = max(composer.jewelInset, half)
             var past = max(composer.spacing, control)
             var trail = max(composer.spacing, sending)
             var gap = max(draft.spacing, 0)
             // What the field is short of its minimum by, taken from each in turn as far as it goes.
             var short = max(draft.minimumWidth, 0)
-                - (width - Self.taken(composer, draft: draft, geometry: geometry))
+                - (width - (lead + half + past + control + trail + sending + 2 * gap))
             let give = { (slack: CGFloat) -> CGFloat in
                 let given = min(max(short, 0), max(slack, 0))
                 short -= given

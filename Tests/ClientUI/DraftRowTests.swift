@@ -102,7 +102,29 @@ final class DraftRowTests: XCTestCase {
                        "the field grew past the look's lines instead of scrolling inside itself")
         XCTAssertLessThan(field.frame.height, empty.height * 6, "the field is taller than the look's five lines")
         XCTAssertGreaterThan(field.frame.minY, 80, "the pane grew up into the navigation bar")
+        XCTAssertEqual(field.value as? String, "Hi " + Self.long + " " + Self.long + " " + Self.long,
+                       "words written past the field's lines were not kept")
         shot(app, "row-at-limit")
+    }
+
+    /// A look that asks for the most lines the reader takes does not grow the pane up behind the
+    /// navigation bar: the field takes the lines the room above the keyboard holds and scrolls
+    /// inside itself from there, with all that was written kept.
+    func testTheLooksMostLinesStopUnderTheNavigationBar() throws {
+        let app = ChatReading.launch(transcript: "empty", tuning: "", look: #"{"draft": {"maximumLines": 20}}"#,
+                                     softwareKeyboard: true)
+        ChatReading.raiseKeyboard(app)
+        let field = ChatReading.field(app), mic = ChatReading.microphone(app)
+        let written = String(repeating: Self.long + " ", count: 5)
+        field.typeText(written)
+        try settled(mic)
+        let bar = app.navigationBars.firstMatch
+        XCTAssertTrue(bar.exists, "the chat has no navigation bar")
+        XCTAssertGreaterThanOrEqual(field.frame.minY, bar.frame.maxY, "the field at \(field.frame) is behind the bar at \(bar.frame)")
+        XCTAssertGreaterThan(field.frame.height, 6 * 20, "the field took no more lines than the default look's")
+        XCTAssertLessThan(field.frame.maxY, app.keyboards.element.frame.minY, "the field is under the keyboard")
+        XCTAssertEqual(field.value as? String, written, "words written past the room's lines were not kept")
+        shot(app, "row-most-lines")
     }
 
     /// Sending from the glass puts the turn on its way: the words are drawn once, in the row at
