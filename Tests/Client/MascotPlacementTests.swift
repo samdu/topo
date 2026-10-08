@@ -366,6 +366,40 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertEqual(still.picture, Self.glass(Self.field()))
     }
 
+    /// A look that moves only the perch moves a Topo on the glass, with no other geometry
+    /// changing: a glide to the new inset from the pane's leading edge, on the pane's top edge
+    /// still. One roaming or pinned stands where he stood, the perch being no part of his place.
+    func testANewPerchInsetMovesATopoOnTheGlassAndNoOther() throws {
+        var time = 0.0
+        let field = Self.field()
+        var roam = settled(Self.settings(.glass), [field], time: &time)
+        let before = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(before, Self.glass(field))
+
+        var moved = Self.settings(.glass)
+        moved.perch = 120
+        XCTAssertFalse(moved.samePlace(as: Self.settings(.glass)), "a new perch is the same place on the glass")
+        roam.use(moved)
+        XCTAssertNotNil(roam.move, "a new perch left him at the old one")
+        run(&roam, time: &time)
+        let after = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(after, MascotPerch.glass(field, size: Self.size, inset: 120, reach: Self.reach))
+        XCTAssertEqual(after.midX, try XCTUnwrap(field.pane).minX + 120, accuracy: 0.001)
+        XCTAssertEqual(after.minY, before.minY, "the perch moved him off the pane's top edge")
+        XCTAssertEqual(roam.roost.name, "glass")
+
+        for placement in [Look.Mascot.Placement.roam, .pinned] {
+            var other = Self.settings(placement)
+            other.perch = 120
+            XCTAssertTrue(other.samePlace(as: Self.settings(placement)), "\(placement): the perch is part of a place off the glass")
+            var standing = settled(Self.settings(placement), [field], time: &time)
+            let stood = standing.picture
+            standing.use(other)
+            XCTAssertNil(standing.move, "\(placement): a new perch moved a Topo who is not on the glass")
+            XCTAssertEqual(standing.picture, stood)
+        }
+    }
+
     // MARK: A drag
 
     /// A drag: picked up on his box, never on the well, carried at his size wherever the finger

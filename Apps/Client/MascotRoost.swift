@@ -810,9 +810,10 @@ struct MascotRoam: Equatable, Sendable {
         }
 
         /// The same policy and the same place: a change of either is a glide to where the new one
-        /// puts him.
+        /// puts him. A pin is the place of a pinned Topo and the perch that of one on the glass.
         func samePlace(as other: Settings) -> Bool {
             placement == other.placement && (placement != .pinned || pin == other.pin)
+                && (placement != .glass || perch == other.perch)
         }
     }
 
