@@ -528,7 +528,7 @@ struct ChatView: View {
                             micPressed: { down, drawn in
                                 var going = dictation
                                 if Dictation.begins(down: down, drawn: drawn) {
-                                    going = Dictation(over: draft.row ? row.text : nil)
+                                    going = .beginning(row: draft.row, inFlight: draft.state == .inFlight, written: row.text)
                                     dictation = going
                                 }
                                 micPress.gesture(down, drawn: drawn, speaker: speaker, voice: voice,

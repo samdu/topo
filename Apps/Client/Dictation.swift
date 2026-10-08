@@ -18,6 +18,15 @@ struct Dictation: Equatable, Sendable {
     /// A spoken turn.
     static let spoken = Dictation(over: nil)
 
+    /// The session a press begins: dictation into what is `written` where the pane is a row and
+    /// the draft is the person's to write in, and a spoken turn otherwise. A turn on its way
+    /// holds the row's words until it lands, and the pane is still a row for a moment after the
+    /// send while the keyboard goes down: words dictated after a turn in flight could not be
+    /// sent, and would go with it when it landed, so a press then is a spoken turn of its own.
+    static func beginning(row: Bool, inFlight: Bool, written: String) -> Dictation {
+        row && !inFlight ? Dictation(over: written) : .spoken
+    }
+
     /// The release sends what was heard.
     var sends: Bool { over == nil }
 

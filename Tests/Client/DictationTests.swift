@@ -39,6 +39,25 @@ final class DictationTests: XCTestCase {
         XCTAssertEqual(Dictation(over: "").written(hearing: "bins"), "bins")
     }
 
+    /// A press over the row is dictation only while the draft is the person's to write in. With a
+    /// turn on its way — the pane still a row as the keyboard goes down after the send — it is
+    /// a spoken turn: what is heard is sent on the release as a turn of its own and is not
+    /// written after the words in flight, which would be lost with them when they landed.
+    func testAPressOverATurnOnItsWayIsASpokenTurnWhateverFormThePaneIsIn() {
+        let over = Dictation.beginning(row: true, inFlight: false, written: "Remind me")
+        XCTAssertEqual(over, Dictation(over: "Remind me"))
+        XCTAssertFalse(over.sends)
+
+        let inFlight = Dictation.beginning(row: true, inFlight: true, written: "Remind me")
+        XCTAssertEqual(inFlight, .spoken, "a press over a turn on its way dictates after words it cannot send")
+        XCTAssertTrue(inFlight.sends)
+        XCTAssertEqual(inFlight.written(hearing: "and the bins"), "and the bins", "what is heard was written after the turn in flight")
+        XCTAssertTrue(inFlight.standing(in: "Remind me"))
+
+        XCTAssertEqual(Dictation.beginning(row: false, inFlight: false, written: "Remind me"), .spoken)
+        XCTAssertEqual(Dictation.beginning(row: false, inFlight: true, written: "Remind me"), .spoken)
+    }
+
     /// A dictation over the row writes only into a draft that is as it left it. Words typed since
     /// the press are the person's, and a caption written after what the session began over would
     /// take them out, so the session writes nothing more.
