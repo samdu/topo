@@ -88,6 +88,11 @@ final class LogToolTests: XCTestCase {
         XCTAssertGreaterThan(kept, 150)
         // One more line would not have fitted.
         XCTAssertGreaterThan(reply.text.utf8.count + written[1].utf8.count + 1, LogTool.budget - LogTool.firstLineRoom)
+        // The room for the first line is kept whatever the lines' length: 126 bytes and a break
+        // fill the rest exactly, and the answer with its first line is still within the budget.
+        let exact = LogTool.fit((0..<400).map { _ in String(repeating: "x", count: 126) }, none: "none")
+        XCTAssertLessThanOrEqual(exact.utf8.count, LogTool.budget)
+        XCTAssertTrue(exact.hasPrefix("… "), String(exact.prefix(40)))
         let whole = await tool(Array(lines.suffix(10))).run([])
         XCTAssertEqual(whole.text.split(separator: "\n").count, 10)
         XCTAssertFalse(whole.text.hasPrefix("…"))
@@ -100,7 +105,7 @@ final class LogToolTests: XCTestCase {
         XCTAssertEqual(LogTool.fit([huge, "newest"], none: "none"), "… 1 earlier lines left out, cut at 24 KB; narrow with --since, --category or --grep\nnewest\n")
     }
 
-    @MainActor func testTheToolAsksNoPermissionAndIsInTheTable() async {
+    @MainActor func testTheToolIsInTheTableWithItsUsage() async {
         let table = ToolTable([tool([])])
         XCTAssertTrue(table.help.contains("log  the Topo app's own log lines"), table.help)
         let usage = await table.run(["help", "log"])
@@ -126,6 +131,37 @@ final class LogToolTests: XCTestCase {
         XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
         XCTAssertTrue(reply.text.hasSuffix("| error | logtest | \(mark) ours\n"), reply.text)
         XCTAssertEqual(reply.text.split(separator: "\n").count, 1)
+    }
+
+    /// The read is of the window asked for, not of the launch: lines written before `since` are
+    /// not among what the reader hands back, so a long launch is not a long read.
+    func testTheReaderReadsOnlyTheWindow() throws {
+        let mark = "log-window-\(UUID().uuidString)"
+        let logger = Logger(subsystem: "zone.hexagon.topo", category: "logtest")
+        for index in 0..<300 { logger.error("\(mark, privacy: .public) before \(index, privacy: .public)") }
+        Thread.sleep(forTimeInterval: 1.5)
+        let since = Date()
+        logger.error("\(mark, privacy: .public) after")
+        let lines = try UnifiedLogReader().lines(since: since)
+        XCTAssertEqual(lines.filter { $0.message.contains(mark) }.map(\.message), ["\(mark) after"])
+        XCTAssertLessThan(lines.count, 100, "the read went back past its window")
+        XCTAssertTrue(lines.allSatisfy { $0.at >= since })
+    }
+
+    /// The resident's own lines, the proxy's and the tool service's among them, are in the unified
+    /// log under `resident` in every build, with a credential in one hidden: a trip to the
+    /// background that went wrong is what `topo log` is for.
+    func testTheResidentsLinesAreReadableAndHoldNoCredential() async throws {
+        let mark = "log-resident-\(UUID().uuidString)"
+        GuestResident.log("background: \(mark) ended; Claude Code exited: CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-SENTINEL Bearer abc.def ops_SENTINEL")
+        GuestResident.log("proxy: \(mark) POST /v1/messages 200 in 1.2 s")
+        let reply = await LogTool(reader: UnifiedLogReader()).run(["--since", "1", "--category", "resident", "--grep", mark])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        let lines = reply.text.split(separator: "\n").map(String.init)
+        XCTAssertEqual(lines.count, 2, reply.text)
+        XCTAssertTrue(lines[0].hasSuffix("| info | resident | background: \(mark) ended; Claude Code exited: CLAUDE_CODE_OAUTH_TOKEN=[redacted] Bearer [redacted] ops_[redacted]"), lines[0])
+        XCTAssertTrue(lines[1].hasSuffix("| info | resident | proxy: \(mark) POST /v1/messages 200 in 1.2 s"), lines[1])
+        XCTAssertFalse(reply.text.contains("SENTINEL"))
     }
 
     /// A value logged `privacy: .private` is not private from this process's own store: it reads

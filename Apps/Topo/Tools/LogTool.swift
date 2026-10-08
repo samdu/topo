@@ -38,8 +38,10 @@ struct LogTool: Tool {
                                         the app's own log lines from the last MINUTES (10 unless given, 1 to 1440),
                                         oldest first: time | level | category | message
 
-    --category keeps one category (audio, perf, tools, proxy, dns, models) and --grep the lines whose
-    message holds TEXT, whatever its case. The lines are this launch's only, since the app reads
+    --category keeps one category (resident, audio, perf, dns, models) and --grep the lines whose
+    message holds TEXT, whatever its case. resident is the guest's own running: its starts and exits,
+    each trip to the background, and the API proxy's and the tool service's lines, which start
+    "proxy:" and "tools:". The lines are this launch's only, since the app reads
     them from its own process, and the widgets' and controls' are not among them: those run in
     processes of their own. An answer is at most 24 KB, the newest lines kept; a first line
     starting "…" says how many earlier ones were left out.
@@ -59,6 +61,7 @@ struct LogTool: Tool {
             let read: [LogLine] = try await withCheckedThrowingContinuation { continuation in
                 Self.queue.async { continuation.resume(with: Result { try reader.lines(since: since) }) }
             }
+            try Task.checkCancellation()
             let kept = read.filter { line in
                 line.at >= since
                     && (call.category.map { line.category.compare($0, options: [.caseInsensitive]) == .orderedSame } ?? true)
@@ -92,10 +95,8 @@ struct LogTool: Tool {
 
     /// A moment to the millisecond, with the phone's offset.
     static func stamp(_ date: Date, in zone: TimeZone = .current) -> String {
-        let formatter = ISO8601DateFormatter()
-        formatter.timeZone = zone
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: date)
+        date.formatted(Date.ISO8601FormatStyle(dateSeparator: .dash, dateTimeSeparator: .standard, timeSeparator: .colon,
+                                                timeZoneSeparator: .colon, includingFractionalSeconds: true, timeZone: zone))
     }
 
     /// The newest lines that fit the budget, whole and oldest first, under a first line counting
@@ -122,7 +123,10 @@ struct UnifiedLogReader: LogReading {
 
     func lines(since: Date) throws -> [LogLine] {
         let store = try OSLogStore(scope: .currentProcessIdentifier)
-        let entries = try store.getEntries(at: store.position(date: since), matching: NSPredicate(format: "subsystem == %@", subsystem))
+        // The date is in the predicate because a store of this scope takes no position: without
+        // it every line of the launch is read, and the read is as long as the launch.
+        let entries = try store.getEntries(at: store.position(date: since),
+                                           matching: NSPredicate(format: "subsystem == %@ AND date >= %@", subsystem, since as NSDate))
         return entries.compactMap { entry in
             guard let entry = entry as? OSLogEntryLog, entry.subsystem == subsystem else { return nil }
             return LogLine(at: entry.date, level: Self.name(entry.level), category: entry.category, message: entry.composedMessage)
