@@ -98,8 +98,10 @@ final class StatusNoticeTests: XCTestCase {
     /// drawn smaller before any of it is cut.
     private static let leastScale: CGFloat = 0.65
 
-    /// Each text drawn whole. The accessibility label is the whole string whatever the bar drew,
-    /// so what is measured is the drawing. Words that fit the bar's two lines in `font` at the
+    /// Each text drawn at a size its words fit at. The accessibility label is the whole string
+    /// whatever the bar drew, so what is measured is the drawing's frame, and not that no word
+    /// is cut: that follows from the text being scaled before it is truncated, which is the
+    /// system's, and is not read off the pixels here. Words that fit the bar's two lines in `font` at the
     /// text's width are drawn as many lines tall as they take. Words that do not are drawn
     /// smaller, so shorter than two lines of `font` — a notice cut short by the line limit is
     /// exactly two tall — and they fit the two lines at the least the bar draws them.

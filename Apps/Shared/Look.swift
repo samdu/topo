@@ -779,7 +779,11 @@ extension Look {
     /// plainly in Topo's colour, and not etched, since the bar is not the glass. Their marks are
     /// `composer.flank`'s.
     struct Bar: Equatable, Sendable {
+        /// `look.json` sets it no larger than `largestFont`.
         var font: Font = .body
+        /// The largest `font` a document sets, in points: the bar is a fixed height and holds
+        /// the two controls beside the notice and the badge, so past this they would leave it.
+        static let largestFont: Double = 22
         var ink = Theme.primary
         /// Between one control and the next.
         var spacing: CGFloat = 14

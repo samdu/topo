@@ -94,6 +94,34 @@ final class BarControlsTests: XCTestCase {
         XCTAssertTrue(becomes(model, "value == 'Sonnet'"))
     }
 
+    /// At each end of what a document may ask of the bar — the largest font a document's size is
+    /// drawn at with the controls furthest apart, and the smallest with none between them — the
+    /// model and the mute are inside the navigation bar, in order, clear of each other and of
+    /// the badge, and the model still opens its menu. On the phone this suite runs on, which is
+    /// wider than the narrowest.
+    func testAtEachEndOfTheBarsRangesBothControlsStayInTheBarBesideTheBadge() throws {
+        for (what, look) in [("largest", #"{"bar": {"font": {"size": 400}, "spacing": 64}}"#),
+                             ("smallest", #"{"bar": {"font": {"size": 4}, "spacing": 0}}"#)] {
+            let app = ChatReading.launch(transcript: "empty", tuning: "", look: look)
+            let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"], badge = app.buttons["topo-debug-chat"]
+            XCTAssertTrue(model.waitForExistence(timeout: 60), "\(what): the bar has no model control")
+            XCTAssertTrue(mute.exists && badge.waitForExistence(timeout: 10), "\(what): the bar is without its mute or its badge")
+            let bar = app.navigationBars.firstMatch.frame
+            for (name, control) in [("model", model), ("mute", mute)] {
+                XCTAssertTrue(bar.insetBy(dx: -0.5, dy: -0.5).contains(control.frame),
+                              "\(what): the \(name) at \(control.frame) is out of the bar at \(bar)")
+                XCTAssertGreaterThan(control.frame.width, 0, "\(what): the \(name) has no width")
+            }
+            XCTAssertLessThanOrEqual(model.frame.maxX, mute.frame.minX + 0.5, "\(what): the model at \(model.frame) is over the mute at \(mute.frame)")
+            XCTAssertLessThanOrEqual(mute.frame.maxX, badge.frame.minX + 0.5, "\(what): the mute at \(mute.frame) is over the badge at \(badge.frame)")
+            ChatReading.attach(app, "bar-\(what)", to: self)
+            try choose("Opus", from: model, in: app)
+            XCTAssertTrue(becomes(model, "value == 'Opus'"), "\(what): the model's menu chose nothing")
+            try choose("Sonnet", from: model, in: app)
+            app.terminate()
+        }
+    }
+
     /// Opens the menu and presses the model called `name`.
     private func choose(_ name: String, from model: XCUIElement, in app: XCUIApplication, shot: String? = nil) throws {
         model.tap()

@@ -660,6 +660,28 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(sized.state, .read(fields: 1), "a font counts as the one field it is")
     }
 
+    /// The bar's controls are drawn in the navigation bar, which is a fixed height and holds them
+    /// beside the notice and the badge: a size past `Look.Bar.largestFont` is drawn at that, and
+    /// a larger style is refused, so no document puts the model or the mute out of the bar.
+    func testTheBarsFontIsNoLargerThanTheBarHolds() {
+        let huge = LookDocument.read(#"{ "bar": { "font": { "size": 400, "weight": "heavy" } } }"#)
+        XCTAssertEqual(huge.look.bar.font, Font.system(size: CGFloat(Look.Bar.largestFont)).weight(.heavy))
+        XCTAssertEqual(huge.state, .read(fields: 1), "the size is drawn at the most, not refused")
+        XCTAssertEqual(huge.notes.count, 1, "and the document is told so: \(huge.notes)")
+
+        let most = LookDocument.read(#"{ "bar": { "font": { "size": 22 } } }"#)
+        XCTAssertEqual(most.look.bar.font, Font.system(size: 22))
+        XCTAssertEqual(most.notes, [])
+        let least = LookDocument.read(#"{ "bar": { "font": { "size": 4 } } }"#)
+        XCTAssertEqual(least.look.bar.font, Font.system(size: 4))
+        XCTAssertEqual(least.notes, [])
+
+        let title = LookDocument.read(#"{ "bar": { "font": "largeTitle" } }"#)
+        XCTAssertEqual(title.look.bar.font, Look().bar.font)
+        XCTAssertEqual(title.notes.count, 1, "\(title.notes)")
+        XCTAssertEqual(LookDocument.read(#"{ "bar": { "font": "title3" } }"#).notes, [], "a style the bar holds was refused")
+    }
+
     /// The notice's font is drawn in the navigation bar beside the badge, which holds two lines of
     /// no more than `largestNotice` points: a larger size is drawn at that, and a larger style is
     /// refused, so no document puts a notice down over the transcript.

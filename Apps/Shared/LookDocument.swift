@@ -151,7 +151,7 @@ enum LookDocument {
     }
 
     private static func bar(_ value: inout Look.Bar, _ r: Reader) {
-        r.font("font", &value.font)
+        r.font("font", &value.font, largest: Look.Bar.largestFont)
         r.colour("ink", &value.ink)
         r.indent("spacing", &value.spacing)
     }

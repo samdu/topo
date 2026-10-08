@@ -45,6 +45,23 @@ final class MascotPlacementTests: XCTestCase {
                            keyboard: CGRect(x: 0, y: 400, width: 402, height: 474))
     }
 
+    /// At each end of the range `perchInset` is read in, on a screen 320 points wide with the
+    /// pane as a row over the keyboard: he stands on the pane's top edge with his reach inside
+    /// the transcript's width at both sides.
+    func testAtEachEndOfThePerchInsetHisReachIsInsideTheNarrowestScreen() throws {
+        let field = MascotField(visible: CGRect(x: 0, y: 0, width: 320, height: 250), obstacles: [],
+                                pane: CGRect(x: 11, y: 262, width: 298, height: 53),
+                                well: CGRect(x: 14, y: 264, width: 48, height: 48),
+                                keyboard: CGRect(x: 0, y: 320, width: 320, height: 248))
+        for inset in [0, 200] as [CGFloat] {
+            let box = try XCTUnwrap(MascotPerch.glass(field, size: Self.size, inset: inset, reach: Self.reach), "\(inset)")
+            XCTAssertGreaterThanOrEqual(box.minX - Self.reach.left, -0.001, "\(inset): his reach is past the leading edge")
+            XCTAssertLessThanOrEqual(box.maxX + Self.reach.right, 320.001, "\(inset): his reach is past the trailing edge")
+            XCTAssertEqual(box.minY + (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * Self.scale, 262, accuracy: 0.001,
+                           "\(inset): his shelf is not the pane's top edge")
+        }
+    }
+
     /// A roam under `settings` handed `fields` in turn, each left to settle.
     private func settled(_ settings: MascotRoam.Settings, _ fields: [MascotField], time: inout Double) -> MascotRoam {
         var roam = MascotRoam(settings, frame: Self.frame)
