@@ -8,7 +8,7 @@
 # Run from the worktree whose HEAD is the commit to push, on its branch. In order:
 #
 #   1. Chooses the suites and the lane as the `select` job does, from the paths the commit
-#      changes against its merge base with origin/main (fetched first), with
+#      changes against its merge base with origin/main (fetched first), with the commit's own
 #      scripts/ci-select-suites.sh and scripts/ci-select-lane.sh over the SUITE_RULES and
 #      VOICE_PATHS lists read out of the commit's own .github/workflows/pr-validate.yaml.
 #      --suites and --lane override the choice, for a head whose `test` job names a status this
@@ -103,8 +103,15 @@ list() {  # list <step id> <env name>
 rules="$(list suites SUITE_RULES)" || die "could not read SUITE_RULES from $short's workflow."
 voice="$(list lane VOICE_PATHS)" || die "could not read VOICE_PATHS from $short's workflow."
 
-selection="$(SUITE_RULES="$rules" scripts/ci-select-suites.sh --git "$base" "$sha" 2>/dev/null)" || die "scripts/ci-select-suites.sh failed."
-lane="$(VOICE_PATHS="$voice" scripts/ci-select-lane.sh --git "$base" "$sha" 2>/dev/null | sed -n 's/^lane=//p')"
+# The selectors are the commit's own too, as `select` runs them: a copy edited and not committed
+# in this worktree would choose here what the workflow does not.
+selectors="$(mktemp -d -t topo-validate-select)" || die "could not make a directory for the commit's selectors."
+trap 'rm -rf "$selectors"' EXIT
+for selector in ci-select-suites.sh ci-select-lane.sh; do
+  git show "$sha:scripts/$selector" > "$selectors/$selector" || die "$short has no scripts/$selector."
+done
+selection="$(SUITE_RULES="$rules" bash "$selectors/ci-select-suites.sh" --git "$base" "$sha" 2>/dev/null)" || die "scripts/ci-select-suites.sh failed."
+lane="$(VOICE_PATHS="$voice" bash "$selectors/ci-select-lane.sh" --git "$base" "$sha" 2>/dev/null | sed -n 's/^lane=//p')"
 case "$lane" in full | fast) ;; *) die "scripts/ci-select-lane.sh gave no lane." ;; esac
 chosen=()
 for suite in "${SUITES[@]}"; do
@@ -222,10 +229,15 @@ fi
 # post <context> <state> <description> — three tries, since a status that never lands is a
 # green run the gate cannot see.
 post() {
-  local try
+  local try said="$3 logs $where"
+  # GitHub keeps 140 characters. A path too long for them keeps its end, which is the commit.
+  if [ "${#said}" -gt 140 ]; then
+    said="logs $where"
+    [ "${#said}" -le 140 ] || said="logs ...${where: -132}"
+  fi
   for try in 1 2 3; do
     if gh api --silent -X POST "repos/$repo_slug/statuses/$sha" \
-         -f context="$1" -f state="$2" -f description="${3:0:140}" >/dev/null; then
+         -f context="$1" -f state="$2" -f description="$said" >/dev/null; then
       echo "posted $1: $2"
       return 0
     fi
@@ -233,7 +245,8 @@ post() {
   done
   die "could not post $1 to $short; run again with --no-push once GitHub answers."
 }
-# The logs as a description names them, short enough that the 140 characters keep the path.
+# The logs as a description names them, short enough that the 140 characters keep the path
+# under the default root.
 where="~${logs#"$HOME"}"
 [ "$where" != "~$logs" ] || where="$logs"
 for suite in ${chosen[@]+"${chosen[@]}"}; do
@@ -243,9 +256,9 @@ for suite in ${chosen[@]+"${chosen[@]}"}; do
   else
     state=success said=passed
   fi
-  post "local/$suite" "$state" "$suite $said, $lane lane, $minutes min on $host; logs $where"
+  post "local/$suite" "$state" "$suite $said, $lane lane, $minutes min on $host;"
   if [ "$suite" = topo_ui ] && [ "$lane" = full ] && [ "$state" = success ]; then
-    post local/real_ear success "Parakeet heard the fixture on $host; logs $where"
+    post local/real_ear success "Parakeet heard the fixture on $host;"
   fi
 done
 

@@ -120,6 +120,9 @@ is "docs: no gh call but the look for a red test job" "$(grep -vc 'actions/workf
 scratch app Apps/Client/SettingsView.swift
 echo dirty > "$repo/Apps/Client/SettingsView.swift"
 echo stray > "$repo/Untracked.swift"
+# Selectors edited and not committed, which would choose no suite and the fast lane for anything.
+printf '#!/usr/bin/env bash\nprintf "topo_unit=false\\ntopo_ui=false\\nothers=false\\nreason=edited\\n"\n' > "$repo/scripts/ci-select-suites.sh"
+printf '#!/usr/bin/env bash\necho lane=full\n' > "$repo/scripts/ci-select-lane.sh"
 validate
 is "app: exits 0" "$status" 0
 is "app: the suite ran at the commit" "$(recorded head)" "$sha"
@@ -293,7 +296,17 @@ mkdir -p "$work/describe/home"
 HOME="$work/describe/home" TOPO_VALIDATE_LOGS="$work/describe/home/Library/Logs/topo-validate" validate
 long="$(sed -n 's/.* -f description=//p' "$GH_CALLS" | awk '{ if (length($0) > 140) n++ } END { print n + 0 }')"
 is "descriptions: none over 140 characters" "$long" 0
+is "descriptions: each says what ran" "$(grep -c "description=.* lane, 0 min on .*; logs \|description=Parakeet heard the fixture on .*; logs " "$GH_CALLS")" 4
 is "descriptions: each names the commit's logs" "$(grep -c "description=.*logs ~/Library/Logs/topo-validate/$sha\$" "$GH_CALLS")" 4
+# A logs root too long for the 140 characters: the description is the path, or its end.
+for long in "$work/describe/$(printf 'l%.0s' $(seq 40))" "$work/describe/$(printf 'l%.0s' $(seq 120))"; do
+  scratch describe-long Apps/Client/Ear.swift
+  TOPO_VALIDATE_LOGS="$long" validate
+  is "a long logs root (${#long}): exits 0" "$status" 0
+  is "a long logs root (${#long}): none over 140 characters" "$(sed -n 's/.* -f description=//p' "$GH_CALLS" | awk '{ if (length($0) > 140) n++ } END { print n + 0 }')" 0
+  is "a long logs root (${#long}): each ends in the commit" "$(grep -c "description=logs .*/$sha\$" "$GH_CALLS")" 4
+  rm -rf "$work/describe-long"
+done
 
 # main is never pushed from here, and a detached HEAD has no branch to push to.
 scratch main docs/design.md
