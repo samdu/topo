@@ -125,6 +125,20 @@ final class DraftRowTests: XCTestCase {
         XCTAssertLessThan(field.frame.maxY, app.keyboards.element.frame.minY, "the field is under the keyboard")
         XCTAssertEqual(field.value as? String, written, "words written past the room's lines were not kept")
         shot(app, "row-most-lines")
+
+        // Lowered and raised again over the same draft, the pane comes back inside the same room:
+        // the room it had with the keyboard down is not the room it has over the keyboard.
+        ChatReading.lowerKeyboard(app)
+        let left = app.descendants(matching: .any)[Self.row]
+        XCTAssertTrue(left.waitForExistence(timeout: 5), "what was written left the screen with the keyboard")
+        left.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "a tap on the draft raised no keyboard")
+        try settled(mic)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertGreaterThanOrEqual(field.frame.minY, bar.frame.maxY, "raised again, the field at \(field.frame) is behind the bar at \(bar.frame)")
+        XCTAssertLessThan(field.frame.maxY, app.keyboards.element.frame.minY, "raised again, the field is under the keyboard")
+        XCTAssertEqual(field.value as? String, written)
+        shot(app, "row-most-lines-raised-again")
     }
 
     /// Sending from the glass puts the turn on its way: the words are drawn once, in the row at
