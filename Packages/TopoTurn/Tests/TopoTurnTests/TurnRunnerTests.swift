@@ -128,6 +128,42 @@ import TopoCoreTesting
         #expect(await lease.isPrimary())
     }
 
+    @Test func aFreshLeaseThatLapsesWhileThePersonsSaveWaitsBehindAHeartbeatIsClaimedAfreshInThatSave() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = HeldSave(store)
+        let clock = Elapsed()
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, clock: clock)
+        _ = try await runner.run("first", model: .sonnet)
+        // A heartbeat goes out at 5 s and its request stalls: the lease's gate is taken.
+        clock.advance(5)
+        await db.holdNextSave()
+        let beat = Task { try await lease.heartbeat() }
+        while !(await db.holding) { await Task.yield() }
+        // The turn begins on a lease fresh by this device's clocks, and its save waits behind it.
+        let steps = Steps(), marks = Marks()
+        let turn = Task {
+            try await Perf.$observer.withValue(marks.add) {
+                try await runner.run("second", model: .sonnet) { await steps.add($0) }
+            }
+        }
+        while !(await steps.all.contains(.saving)) { await Task.yield() }
+        // The stalled renewal is answered after the duration it was good for.
+        clock.advance(LeaseTiming.standard.duration + 1)
+        #expect(!(await lease.isPrimary()))
+        await db.release()
+        #expect(try await !beat.value)
+        let result = try await turn.value
+        #expect(await steps.all == [.saving, .asking(person: result.person), .savingReply])
+        // The lapse is found at the gate and claimed over in the person's own batch, one epoch on.
+        let seen = marks.all.filter { ["lease.batch.lapsed", "turn.lease.fresh", "turn.lease.acquired", "turn.person.saved"].contains($0) }
+        #expect(seen == ["lease.batch.lapsed", "turn.lease.fresh", "turn.person.saved"])
+        #expect(await lease.held?.epoch == 2)
+        #expect(await lease.isPrimary())
+        #expect(await lease.held == Lease(record: try #require(try await store.fetch([Lease.recordID])[Lease.recordID])))
+        #expect(try await TurnLog(database: store).read().ordered.map(\.text) == ["first", "one", "second", "two"])
+    }
+
     @Test func anOwedReplyIsSettledUnderALeaseTakenTheLongWay() async throws {
         let db = RecordingDatabase(inner: InMemoryRecordDatabase())
         let brain = ScriptedBrain(.success("one"), .success("two"))

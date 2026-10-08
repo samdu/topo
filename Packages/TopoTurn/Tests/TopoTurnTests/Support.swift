@@ -139,3 +139,35 @@ final class Outage: RecordDatabase, @unchecked Sendable {
     func query(_ query: RecordQuery) async throws -> [Record] { try reach(); return try await base.query(query) }
     func records(ofType type: String) async throws -> [Record] { try reach(); return try await base.records(ofType: type) }
 }
+
+/// A database whose next save waits, unsent, until the test lets it go.
+actor HeldSave: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var holdNext = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    func holdNextSave() { holdNext = true }
+    var holding: Bool { waiter != nil }
+    func release() {
+        waiter?.resume()
+        waiter = nil
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if holdNext {
+            holdNext = false
+            await withCheckedContinuation { waiter = $0 }
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// The marks one task made, in order (`Perf.observer`).
+final class Marks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: [String] = []
+    var all: [String] { lock.withLock { names } }
+    var add: @Sendable (String) -> Void { { [self] name in lock.withLock { names.append(name) } } }
+}

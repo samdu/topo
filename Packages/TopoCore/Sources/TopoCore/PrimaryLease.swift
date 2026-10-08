@@ -147,11 +147,20 @@ public enum LeaseOutcome: Hashable, Sendable {
 /// out. A request that stalls would hold every call behind it, so each is
 /// asked of the database bounded by `timing.patience`
 /// (`RecordDatabase.answering(within:)`), and one that runs out is a
-/// transport failure like any other: nothing is forgotten, and the write,
-/// if it landed after all, is found as this instance's own by the next
-/// call, which knows the epochs it has sent (`epochSent`). The bound is a
-/// request's, so a network slower than it loses every request, where an
-/// unbounded one would have been answered late.
+/// transport failure like any other: nothing is forgotten, and the write
+/// may have landed after all. A renewal that did is found by the next call
+/// as this instance's own, since nobody takes a lease without moving its
+/// epoch: the record at the epoch held is the lease held, whatever its
+/// version. A claim that did is not: the record names a device and an
+/// endpoint, not an instance, so this device's lease at a later epoch this
+/// instance has sent (`epochSent`) is its own claim or the claim of another
+/// instance of the device, made where this one's never arrived, and nothing
+/// tells the two apart. It is never taken as held. The instance stops
+/// counting itself primary at once, yields to nobody, and its next
+/// `acquire()` or `takeOver()` claims over that record as over any lease it
+/// has not yielded to. The bound is a request's, so a network slower than
+/// it loses every request, where an unbounded one would have been answered
+/// late.
 public actor PrimaryLease {
     private let database: any RecordDatabase
     private let device: DeviceID
@@ -176,7 +185,8 @@ public actor PrimaryLease {
     private var yieldedTo: Lease?
     private var heartbeatTask: Task<Void, Never>?
     /// The highest epoch this instance has sent a write of, answered or not. A lease of this
-    /// device's at an epoch past it was claimed by another instance.
+    /// device's at an epoch past it was claimed by another instance; one at an epoch up to it,
+    /// past the epoch held, may have been (`mayBeOwnClaim`).
     private var epochSent: Int64 = 0
     /// How many times the lease was abandoned. An operation reads it as it
     /// is called and checks it before every read and write it sends and
@@ -261,10 +271,10 @@ public actor PrimaryLease {
                 continue
             }
 
-            if let mine = heldRecord, mine.changeTag != record.changeTag, isOwnSinceHeld(lease) {
-                // This device's own lease at a version it has not heard of: a write of its
-                // own that landed and was never answered, a fresh claim included. Nobody
-                // took anything, and the server's version is the one to go over.
+            if let mine = heldRecord, mine.changeTag != record.changeTag, isHeldLease(lease) {
+                // The lease held, at a version this device has not heard of: a renewal of
+                // its own that landed and was never answered. Nobody took anything, and the
+                // server's version is the one to go over.
                 heldRecord = record
             }
 
@@ -277,6 +287,10 @@ public actor PrimaryLease {
                         continue
                     }
                     // Our own lease, lapsed without anyone taking it: a fresh claim.
+                } else if mayBeOwnClaim(lease) {
+                    // A claim this instance sent, or another instance's at the same epoch:
+                    // nothing is held, and it is claimed over as any lease not yielded to.
+                    forget()
                 } else {
                     yield(to: lease)
                 }
@@ -454,11 +468,11 @@ public actor PrimaryLease {
                 let current = server.flatMap(Lease.init(record:))
                 guard let server, let current, current.holder == device, current.epoch == lapsed.epoch,
                       current.endpoint == endpoint else {
-                    if let current, current.holder == device, current.endpoint == endpoint,
-                       current.epoch > lapsed.epoch, current.epoch <= epochSent {
-                        // This device's own lease at a later epoch it has sent: a claim of
-                        // its own that landed and was never answered. Nothing was given up, and the
-                        // batch is not that claim's; the next `acquire()` takes it up.
+                    if let current, mayBeOwnClaim(current) {
+                        // A claim this instance sent, or another instance's at the same
+                        // epoch. Nothing is given up to it, and the batch is not that claim's;
+                        // the next `acquire()` claims over it.
+                        forget()
                         Perf.mark("lease.batch.refused notHeld")
                         return nil
                     }
@@ -487,19 +501,13 @@ public actor PrimaryLease {
                     if heldRecord != nil { heldRecord = server }
                     continue
                 }
-                if let winner, winner.holder == device, winner.endpoint == endpoint, winner.epoch <= epochSent {
-                    // This device's own lease at a later epoch it has sent: a claim of its
-                    // own that landed and was never answered. A holder takes the server's
-                    // version as the one held and the batch goes again as its heartbeat;
-                    // after a lapse the batch is not that claim's, and nothing is given up.
-                    if heldRecord != nil, isOwnSinceHeld(winner) {
-                        heldRecord = server
-                        continue
-                    }
-                    if heldRecord == nil {
-                        Perf.mark("lease.batch.refused notHeld")
-                        return nil
-                    }
+                if let winner, mayBeOwnClaim(winner) {
+                    // A claim this instance sent, or another instance's at the same epoch:
+                    // not this batch's lease either way. Nothing is held and nothing is
+                    // given up to it; the next `acquire()` claims over it.
+                    forget()
+                    Perf.mark("lease.batch.refused notHeld")
+                    return nil
                 }
                 Perf.mark("lease.batch.refused taken")
                 yield(to: winner)
@@ -578,15 +586,26 @@ public actor PrimaryLease {
         Lease(holder: device, endpoint: endpoint, epoch: epoch, expiresAt: now() + timing.duration)
     }
 
-    /// True when `lease` is this device's own, at this endpoint, at the epoch held or a later
-    /// one this instance has sent. With one operation at a time nothing of this instance's is
-    /// in flight when a read or a conflict shows such a lease, so it is a write of its own
-    /// that landed and was never answered: a heartbeat at the epoch held, or a fresh claim
-    /// past it. An epoch this instance never sent is another instance's claim, whatever
-    /// endpoint it names.
-    private func isOwnSinceHeld(_ lease: Lease) -> Bool {
+    /// True when `lease` is the lease held, at whatever version: this device's, at this
+    /// endpoint, at the epoch held. Every claim moves the epoch on and a renewal goes only
+    /// over the version its sender holds, so nothing but this instance's own renewals writes
+    /// the record while it stays at the epoch this instance holds: a version of it this
+    /// instance has not heard of is a renewal of its own that landed and was never answered.
+    private func isHeldLease(_ lease: Lease) -> Bool {
         guard let mine = held else { return false }
-        return lease.holder == device && lease.endpoint == endpoint && lease.epoch >= mine.epoch && lease.epoch <= epochSent
+        return lease.holder == device && lease.endpoint == endpoint && lease.epoch == mine.epoch
+    }
+
+    /// True when `lease` is this device's, at this endpoint, at an epoch past the one this
+    /// instance holds, or held when its lease lapsed, and no later than one it has sent: a
+    /// claim of its own that landed and was never answered, or the claim of another instance
+    /// of this device made at an epoch this one sent and never landed. The record does not
+    /// say which, so the caller forgets what it held, holds nothing by this record, and does
+    /// not yield to it. False for an instance that has held nothing: two cold instances
+    /// creating the same lease look alike to each other, and one must lose.
+    private func mayBeOwnClaim(_ lease: Lease) -> Bool {
+        guard let mine = (heldRecord ?? lapsedRecord).flatMap(Lease.init(record:)) else { return false }
+        return lease.holder == device && lease.endpoint == endpoint && lease.epoch > mine.epoch && lease.epoch <= epochSent
     }
 
     /// Same holder and epoch; the expiry moves with every heartbeat.
@@ -600,15 +619,16 @@ public actor PrimaryLease {
     /// version, its local deadline is set, and its heartbeats are running.
     /// On a conflict the lease is forgotten and the lease that won, written
     /// just now by a device that is evidently alive, is the one this device
-    /// yields to. Unless this device holds a lease and the winner is its own
-    /// at an epoch this instance has sent: a write of its own that landed
-    /// and was never answered. The server's version is then the one held,
-    /// and since no answer set a deadline for it the write goes once more
-    /// over that version, at the later of the two epochs; `again` is false
-    /// on that second go, which answers nil if it finds the same. A record
-    /// found gone under the version held forgets the lease; any other error
-    /// propagates. Nil, with nothing sent or nothing taken, once the lease
-    /// has been abandoned.
+    /// yields to. Unless the winner is the lease this device holds, at a
+    /// version it has not heard of: a renewal of its own that landed and was
+    /// never answered. The server's version is then the one held, and since
+    /// no answer set a deadline for it the write goes once more over that
+    /// version; `again` is false on that second go, which answers nil if it
+    /// finds the same. A winner that may be a claim of this instance's
+    /// (`mayBeOwnClaim`) is neither: the lease is forgotten and nothing is
+    /// yielded to, nil. A record found gone under the version held forgets
+    /// the lease; any other error propagates. Nil, with nothing sent or
+    /// nothing taken, once the lease has been abandoned.
     private func write(_ lease: Lease, over changeTag: String?, began: Int, again: Bool = true) async throws -> Lease? {
         guard generation == began else { return nil }
         do {
@@ -619,12 +639,14 @@ public actor PrimaryLease {
         } catch RecordDatabaseError.serverRecordChanged(_, let server) {
             guard generation == began else { return nil }
             let winner = Lease(record: server)
-            if let winner, isOwnSinceHeld(winner) {
-                // Only a holder can say so; two cold instances creating the
-                // same lease look identical to each other and one must lose.
+            if let winner, isHeldLease(winner) {
                 heldRecord = server
                 guard again else { return nil }
-                return try await write(holder(epoch: max(lease.epoch, winner.epoch)), over: server.changeTag, began: began, again: false)
+                return try await write(holder(epoch: lease.epoch), over: server.changeTag, began: began, again: false)
+            }
+            if let winner, mayBeOwnClaim(winner) {
+                forget()
+                return nil
             }
             yield(to: winner)
             return nil

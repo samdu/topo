@@ -711,9 +711,10 @@ import TopoCoreTesting
         _ = try? await h.acquire()
         #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 2)
         clock.advance(1)
+        // Epoch 2 is a claim it sent and never heard of: not held, and claimed over.
         let retry = try await h.acquire()
         guard case .primary(let kept) = retry else { Issue.record("the retry answered \(retry)"); return }
-        #expect(kept.epoch == 2)
+        #expect(kept.epoch == 3)
         #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
     }
 
@@ -773,7 +774,7 @@ import TopoCoreTesting
         #expect(await db.current(Lease.recordID) == nil)
     }
 
-    @Test func aBatchAfterARenewalAndAClaimBothLandedUnansweredIsSavedUnderThatClaim() async throws {
+    @Test func aBatchAfterARenewalAndAClaimBothLandedUnansweredYieldsToNobodyAndTheNextTurnSavesIt() async throws {
         let link = LossyLinkDatabase(inner: db)
         let h = lease(hub, on: link)
         _ = try await h.takeOver()
@@ -785,11 +786,79 @@ import TopoCoreTesting
         _ = try? await h.takeOver()
         #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 2)
         clock.advance(1)
+        // Epoch 2 is this instance's own claim, and nothing in the record says so: the batch
+        // is refused with nothing held, and nothing yielded to.
         let note = Record(type: "Note", id: RecordID("note/1"))
+        #expect(try await h.heartbeat(saving: [note]) == nil)
+        #expect(await db.current(note.id) == nil)
+        #expect(!(await h.isPrimary()))
+        let turn = try await h.acquire()
+        guard case .primary(let claimed) = turn else { Issue.record("yielded to its own claim: \(turn)"); return }
+        #expect(claimed.epoch == 3)
         #expect(try await h.heartbeat(saving: [note])?.map(\.id) == [note.id])
-        #expect(await h.isPrimary())
-        #expect(await h.held?.epoch == 2)
         #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
+    /// An instance holding epoch 1 whose renewal landed unanswered and whose claim of epoch 2
+    /// never reached the store, and a second instance of the same device, with the same
+    /// endpoint, that claimed epoch 2 since: the record the first now finds is one it sent and
+    /// did not write.
+    private func anInstanceAndTheSuccessorThatClaimedTheEpochItSent(
+        probe: (PrimaryLease) -> any LeaseProbe = { _ in StubProbe.allDead }
+    ) async throws -> (old: PrimaryLease, new: PrimaryLease) {
+        let link = LossyLinkDatabase(inner: db)
+        let new = PrimaryLease(database: db, device: phone, endpoint: nil, probe: StubProbe.allDead,
+                               now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        let old = PrimaryLease(database: link, device: phone, endpoint: nil, probe: probe(new),
+                               now: clock.read, monotonic: clock.uptime, sleep: Ticker().sleep)
+        _ = try await old.takeOver()
+        clock.advance(5)
+        link.commitButDropNextSaveAck()
+        _ = try? await old.heartbeat()
+        clock.advance(1)
+        link.dropNextSaveUnsent()
+        await #expect(throws: RecordDatabaseError.self) { try await old.takeOver() }
+        #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 1)
+        guard case .primary(let claim) = try await new.takeOver() else { throw Unclaimed() }
+        #expect(claim.epoch == 2)
+        clock.advance(1)
+        #expect(await old.isPrimary(), "by its own clocks the first instance still holds epoch 1")
+        return (old, new)
+    }
+    private struct Unclaimed: Error {}
+
+    /// The successor is the one primary from here on, whatever either instance does next.
+    private func expectTheSuccessorAlone(_ old: PrimaryLease, _ new: PrimaryLease) async throws {
+        #expect(!(await old.isPrimary()))
+        #expect(await old.held == nil)
+        #expect(await new.isPrimary())
+        #expect(await new.held?.epoch == 2)
+        #expect(await new.held == Lease(record: try #require(await db.current(Lease.recordID))))
+        clock.advance(1)
+        #expect(try await new.heartbeat())
+        #expect(try await !old.heartbeat())
+        #expect(await new.held == Lease(record: try #require(await db.current(Lease.recordID))))
+    }
+
+    @Test func aBatchDoesNotTakeASuccessorsClaimAtAnEpochItSentAndNeverLandedAsItsOwn() async throws {
+        let (old, new) = try await anInstanceAndTheSuccessorThatClaimedTheEpochItSent()
+        let note = Record(type: "Note", id: RecordID("note/1"))
+        #expect(try await old.heartbeat(saving: [note]) == nil)
+        #expect(await db.current(note.id) == nil)
+        try await expectTheSuccessorAlone(old, new)
+    }
+
+    @Test func aHeartbeatDoesNotTakeASuccessorsClaimAtAnEpochItSentAndNeverLandedAsItsOwn() async throws {
+        let (old, new) = try await anInstanceAndTheSuccessorThatClaimedTheEpochItSent()
+        #expect(try await !old.heartbeat())
+        try await expectTheSuccessorAlone(old, new)
+    }
+
+    @Test func aTurnDefersToASuccessorsClaimAtAnEpochItSentAndNeverLanded() async throws {
+        let (old, new) = try await anInstanceAndTheSuccessorThatClaimedTheEpochItSent { AsksTheHolder(holder: $0) }
+        guard case .held(let by) = try await old.acquire() else { Issue.record("took the successor's claim as its own"); return }
+        #expect(by.epoch == 2)
+        try await expectTheSuccessorAlone(old, new)
     }
 
     @Test func aFirstClaimAnsweredAfterTheLeaseWasAbandonedIsFalse() async throws {
@@ -880,7 +949,7 @@ import TopoCoreTesting
         guard case .held = try await p.acquire() else { Issue.record("a phone took the lease from a live hub"); return }
     }
 
-    @Test func aTurnWhoseEarlierClaimLandsUnderItsOwnTakesThatClaimAsItsOwn() async throws {
+    @Test func aTurnWhoseEarlierClaimLandsUnderItsOwnClaimsOverIt() async throws {
         let link = LandsLate(inner: db)
         let p = lease(phone, on: link)
         _ = try await p.acquire()
@@ -891,12 +960,12 @@ import TopoCoreTesting
         // The claim at epoch 2 reaches the store between this turn's read and its write.
         let retry = try await p.acquire()
         guard case .primary(let kept) = retry else { Issue.record("the retry answered \(retry)"); return }
-        #expect(kept.epoch == 2)
+        #expect(kept.epoch == 3)
         #expect(await p.isPrimary())
         #expect(await p.held == Lease(record: try #require(await db.current(Lease.recordID))))
     }
 
-    @Test func aHeartbeatAfterARenewalAndAClaimBothLandedUnansweredKeepsTheLease() async throws {
+    @Test func aHeartbeatAfterARenewalAndAClaimBothLandedUnansweredYieldsToNobodyAndTheNextTakeOverClaims() async throws {
         let link = LossyLinkDatabase(inner: db)
         let h = lease(hub, on: link)
         _ = try await h.takeOver()
@@ -909,8 +978,11 @@ import TopoCoreTesting
         _ = try? await h.takeOver()
         #expect(Lease(record: try #require(await db.current(Lease.recordID)))?.epoch == 2)
         clock.advance(1)
-        #expect(try await h.heartbeat())
-        #expect(await h.held?.epoch == 2)
+        #expect(try await !h.heartbeat())
+        #expect(!(await h.isPrimary()))
+        let timer = try await h.takeOver()
+        guard case .primary(let claimed) = timer else { Issue.record("yielded to its own claim: \(timer)"); return }
+        #expect(claimed.epoch == 3)
         #expect(await h.held == Lease(record: try #require(await db.current(Lease.recordID))))
     }
 
