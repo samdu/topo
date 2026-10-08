@@ -34,6 +34,24 @@ final class ReplyLinkTests: XCTestCase {
         XCTAssertEqual(try settled(app), [Self.docs], "a tap on the words before the link opened something")
     }
 
+    /// With the keyboard up a tap on the transcript's empty space lowers it, and a reply's words
+    /// are not that space: a tap on the linked word still opens the link, once, a tap on the words
+    /// before it opens nothing, and neither lowers the keyboard.
+    func testWithTheKeyboardUpATapOnALinkOpensItAndLeavesTheKeyboardUp() throws {
+        let app = ChatReading.launch(transcript: "links", tuning: "", softwareKeyboard: true)
+        let words = try reply(app, "see the docs")
+        ChatReading.raiseKeyboard(app)
+        XCTAssertLessThan(words.frame.maxY, app.keyboards.element.frame.minY, "the reply is under the keyboard")
+        XCTAssertTrue(words.isHittable, "the reply is not on the screen with the keyboard up")
+
+        words.coordinate(withNormalizedOffset: CGVector(dx: 0.88, dy: 0.5)).tap()
+        XCTAssertEqual(try opened(app, count: 1), [Self.docs], "a tap on the linked word, with the keyboard up")
+        words.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)).tap()
+        XCTAssertEqual(try settled(app), [Self.docs], "a tap on the words before the link opened something")
+        XCTAssertTrue(app.keyboards.element.exists, "a tap on a reply's words lowered the keyboard")
+        XCTAssertTrue(ChatReading.fieldShown(app), "a tap on a reply's words took the field away")
+    }
+
     /// A link whose words wrap onto a second line is a tap target on both lines, and the words
     /// before it on its first line are not.
     func testALinkThatWrapsIsATapTargetOnEachOfItsLines() throws {

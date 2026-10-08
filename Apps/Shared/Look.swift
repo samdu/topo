@@ -37,8 +37,11 @@ struct Look: Equatable, Sendable {
     var settings: Settings
     /// The lozenge under the transcript, and the microphone set into it.
     var composer: Composer
-    /// The person's next turn, written at the end of the transcript.
+    /// The person's next turn: the field it is written in, in the glass, and the row it is drawn
+    /// in at the end of the transcript.
     var draft: Draft
+    /// The controls at the leading edge of the navigation bar.
+    var bar = Bar()
     /// Topo himself, over the chat.
     var mascot: Mascot
     /// What the models the chat offers are called.
@@ -105,6 +108,10 @@ struct Look: Equatable, Sendable {
         /// The largest `noticeFont` a document sets, in points: two lines of it fit the navigation
         /// bar beside the badge, so a notice there never reaches down over the transcript.
         static let largestNotice: Double = 15
+        /// The least a notice in the bar is drawn at, as a share of `noticeFont`: one whose words
+        /// do not fit its two lines between the bar's controls and the badge is drawn smaller,
+        /// down to this, before any of it is cut.
+        var noticeLeastScale: CGFloat = 0.65
         /// A turn's words.
         var text: Color = Theme.text
         /// A time, and the notice.
@@ -488,23 +495,37 @@ struct Look: Equatable, Sendable {
         /// A code the person types somewhere else, as the Connections screen shows GitHub's.
         var codeFont = Font.system(.title2, design: .monospaced)
     }
-    /// The lozenge under the transcript: a floating pane of glass carrying two flanks and, set
-    /// into the middle of it, the microphone in its well.
+    /// The lozenge under the transcript, a floating pane of glass in one of two forms. At rest it
+    /// carries two flanks and, set into the middle of it, the microphone in its well. With the
+    /// keyboard up it is one row: the well in its leading end, the control for everything else,
+    /// the field the next turn is written in, and the send.
     ///
     /// The glass is what says the microphone is open, because the thumb that opened it covers
     /// the jewel: the pane takes the colour, the jewel goes pale, and the glow spills onto the
     /// transcript behind. So the open state is two values here — a tint and another `Jewel` —
     /// rather than a branch in the view.
     struct Composer: Equatable, Sendable {
-        /// The share of the screen's width the glass takes, and how far off the bottom it floats.
+        /// The share of the screen's width the glass takes at rest, and how far off the bottom
+        /// it floats.
         var widthFraction: CGFloat = 0.8
+        /// The share it takes as a row, which is no wider than the transcript's column
+        /// (`transcript.maximumLineWidth`) either.
+        var typingWidthFraction: CGFloat = 0.93
         var bottomPadding: CGFloat = 8
         /// The room inside the glass, and its corners.
         var horizontalInset: CGFloat = 16
         var verticalInset: CGFloat = 4
         var cornerRadius: CGFloat = 32
-        /// Between a flank and the well.
+        /// Between a flank and the well. In the row, from the well's edge to the middle of the
+        /// control beside it, and from the middle of the send to the pane's trailing end.
         var spacing: CGFloat = 25
+        /// In the row, from the pane's leading end to the middle of the well: about half the
+        /// short pane's height, so the well's bevel reads as the pane's own rounded end. The well
+        /// is never drawn past the pane's end for it (`ComposerPlan.Columns`).
+        var jewelInset: CGFloat = 27
+        /// From the pane's leading edge to the axis of Topo's body where the look places him on
+        /// the glass, as far as keeps his reach inside the transcript's width (`MascotPerch`).
+        var perchInset: CGFloat = 44
         /// What the pane is made of: the system's glass where there is any, a material below it.
         var surface: Surface = .glass
         /// The colour the pane takes while the microphone is open, and the alpha it takes it at.
@@ -523,19 +544,17 @@ struct Look: Equatable, Sendable {
         var presenceRise: CGFloat = 48
         var presenceDuration = 0.2
 
-        /// The pane under the keyboard: shorter, so the keyboard and the pane take less of the
-        /// screen between them. The microphone is drawn at this share of its resting size — the
+        /// The pane as a row: shorter, so the keyboard and the pane take less of the screen
+        /// between them. The microphone is drawn at this share of its resting size — the
         /// well, the jewel in it and the mark cut into it, and the room above and below the well
         /// with them — so where the well is what sets the pane's height the pane is this share of
-        /// its resting height. The flanks keep their size. Read from a half to one, and the well
-        /// is never drawn under `Well.pressable` for it (`ComposerGeometry`).
+        /// its resting height, until what is written is taller. Read from a half to one, and the
+        /// well is never drawn under `Well.pressable` for it (`ComposerGeometry`).
         /// The change has no time of its own: it is laid out in the keyboard's own transaction,
         /// so it takes the keyboard's curve and duration.
         var compactShare: CGFloat = 2.0 / 3
 
         var flank = Flank()
-        /// The slider the trailing flank's control opens: the models, smallest to largest.
-        var models = Models()
         var well = Well()
         var glyph = Glyph()
 
@@ -570,41 +589,16 @@ struct Look: Equatable, Sendable {
             /// While the thumb is on the microphone the flanks go, keeping their space so the
             /// glass never changes size.
             var heldOpacity = 0.0
-            /// The marks: the way to the keyboard and back from it, replies read aloud and muted,
-            /// and the model slider shut and open. SF Symbol names.
+            /// The room a control takes in the row, which is what the field beside it stands
+            /// clear of.
+            var slot: CGFloat = 24
+            /// The marks: everything else, and the way to the keyboard, on the glass; and in the
+            /// navigation bar, replies read aloud and muted, and the model. SF Symbol names.
+            var more = "plus"
             var keyboard = "keyboard"
-            var keyboardDown = "keyboard.chevron.compact.down"
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"
             var models = "slider.horizontal.3"
-            var modelsOpen = "chevron.down"
-        }
-
-        /// The model slider: a row across the top of the pane while it is open, a stop for each
-        /// model the chat offers, smallest at the leading end, with the model's name under its
-        /// stop and a knob on the one chosen. Topo sits on the pane's top edge over the knob, so
-        /// the head he wears is over the model that gives it him.
-        struct Models: Equatable, Sendable {
-            /// From each end of the pane to the first and last stop's centre: far enough in that
-            /// Topo, at his own size, sits over an end stop with his reach inside the screen.
-            var inset: CGFloat = 40
-            /// The row's own height, the room between it and the row the microphone is in, and
-            /// the room above it, over the pane's own inset.
-            var height: CGFloat = 44
-            var spacing: CGFloat = 2
-            var topInset: CGFloat = 4
-            /// The line the stops are on, a stop's mark on it and the knob.
-            var track: CGFloat = 3
-            var stop: CGFloat = 7
-            var knob: CGFloat = 18
-            /// The line and the stops not chosen, as a share of the flank's ink, and the names
-            /// of the models not chosen, which have to be read.
-            var restOpacity = 0.35
-            var restLabelOpacity = 0.7
-            /// A model's name under its stop.
-            var labelFont: Font = .caption2.weight(.semibold)
-            /// Between the line and the names.
-            var labelSpacing: CGFloat = 5
         }
 
         /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
@@ -639,11 +633,11 @@ struct Look: Equatable, Sendable {
         }
     }
 
-    /// What each model the chat offers is called, by its family's alias: on the model slider, and
+    /// What each model the chat offers is called, by its family's alias: in the model's menu, and
     /// in the notice while a turn is asked of it. Words and not ids: which model an alias reaches is
     /// Claude Code's to say.
     struct Mind: Equatable, Sendable {
-        /// The longest a name may be, in characters: the notice and a slider's stop hold a word.
+        /// The longest a name may be, in characters: the notice and a menu's row hold a word.
         static let longest = 24
 
         var sonnet = "Sonnet"
@@ -680,10 +674,6 @@ struct Look: Equatable, Sendable {
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
         var roamSpeed: CGFloat = 40
-        /// How fast he goes to the model slider when it opens, along it as the model changes and,
-        /// where the look places him, home when it shuts, in points a second: a swim, since he was called and is not
-        /// strolling.
-        var swimSpeed: CGFloat = 240
         /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
         /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
         var hurry: CGFloat = 10
@@ -728,8 +718,8 @@ struct Look: Equatable, Sendable {
         enum Placement: String, Equatable, Sendable, CaseIterable {
             /// In whatever gap the words leave him, never on the glass (`MascotRoost`).
             case roam
-            /// On the composer's pane, in its trailing flank, which is then drawn whole at every
-            /// presence: a Topo on invisible glass is a Topo floating.
+            /// On the composer's pane, standing on its top edge over its leading end, which is then
+            /// drawn whole at every presence: a Topo on invisible glass is a Topo floating.
             case glass
             /// At `pin`, where a person put him; words and glass are not obstacles. The keyboard
             /// lifts him clear of itself only while it is up, and otherwise he moves only with the
@@ -738,10 +728,11 @@ struct Look: Equatable, Sendable {
         }
     }
 
-    /// The person's next turn, written at the end of the transcript rather than in the glass.
-    /// It is set in the transcript's own type (`transcript.bodyFont`) and drawn at the size the
-    /// landed turn will be, because it is that turn before it is said: what is here is only what
-    /// the row has of its own.
+    /// The person's next turn: written in the glass's field while the pane is a row, and drawn at
+    /// the end of the transcript otherwise, a caption the microphone is writing or the turn on its
+    /// way. Both are set in the transcript's own type (`transcript.bodyFont`), and the row is
+    /// drawn at the size the landed turn will be, because it is that turn before it is said: what
+    /// is here is only what the field and the row have of their own.
     ///
     /// It is not a turn yet, and its two enclosures say so. A turn a process puts into the
     /// transcript is `secondary`, and so is the person's own turn while it is still being
@@ -754,24 +745,51 @@ struct Look: Equatable, Sendable {
         /// draft leaves the bubble — and the row keeps its shape as the turn lands.
         var written: Enclosure
         var sending: Enclosure
-        /// How wide the row is with nothing written in it, so the caret has somewhere to sit.
+        /// The least width the field keeps in the glass, so the caret has somewhere to sit: the
+        /// pane's own spacing yields before the field goes under it (`ComposerPlan.Columns`).
         var minimumWidth: CGFloat = 160
-        /// Between the bubble and the control beside it.
+        /// Between the field and the control on each side of it, and between the row's bubble
+        /// and the spinner beside it.
         var spacing: CGFloat = 8
-        /// The control that sends what is written, and the spinner that stands in its place
-        /// while the turn is on its way: one slot, so the row does not move as one becomes the
-        /// other.
+        /// The room the send takes in the glass, and the spinner beside the row while the turn
+        /// is on its way.
         var slot: CGFloat = 36
+        /// The most lines the field grows to; past them its frame stops growing.
+        var maximumLines = 5
+        /// What `maximumLines` is read in.
+        static let lines: ClosedRange<Int> = 1...20
+        /// The send: its mark, an SF Symbol's name, its type, and its ink, which is the
+        /// message's colour as the field's outline is.
+        var sendSymbol = "paperplane"
         var sendFont: Font = .title2
-        var sendInk = Theme.primary
-        /// What the send control fades to with nothing to send, so an empty row's control says
-        /// it is not to be pressed rather than being pressed and doing nothing.
+        var sendInk = Theme.secondary
+        /// What the send fades to with nothing to send, so an empty field's control says it is
+        /// not to be pressed rather than being pressed and doing nothing.
         var sendRestingOpacity = 0.35
 
         init(_ screen: Screen = .current) {
             written = .draft(screen, accent: Theme.secondary)
             sending = .draft(screen, accent: Theme.signal)
         }
+    }
+}
+
+extension Look {
+    /// The controls at the leading edge of the navigation bar, the model and the mute: drawn
+    /// plainly in Topo's colour, and not etched, since the bar is not the glass. Their marks are
+    /// `composer.flank`'s.
+    struct Bar: Equatable, Sendable {
+        /// `look.json` sets it no larger than `largestFont`.
+        var font: Font = .body
+        /// The largest `font` a document sets, in points: the bar is a fixed height and holds
+        /// the two controls beside the notice and the badge, so past this they would leave it.
+        static let largestFont: Double = 22
+        var ink = Theme.primary
+        /// Between one control and the next.
+        var spacing: CGFloat = 14
+        /// The most `spacing` a document sets, in points: on a 320-point screen controls further
+        /// apart than this leave the bar no room for its notice, which it then does not show.
+        static let widestSpacing: Double = 32
     }
 }
 

@@ -379,7 +379,9 @@ extension DebugRun {
 
     /// The ear a debug build starts with. `TOPO_DEBUG_EAR=stub` is one resident without a model:
     /// a press runs the whole of `VoiceInput` (the tap, the sample sink, the caption loop, the
-    /// decode at the release) over an engine that hears nothing. `TOPO_DEBUG_EAR=loading` is one
+    /// decode at the release) over an engine that hears nothing, and `TOPO_DEBUG_EAR=stub:` followed by
+    /// words is the same over an engine that hears those words in any audio it is given, which is
+    /// how a test has something heard without a recogniser. `TOPO_DEBUG_EAR=loading` is one
     /// whose load never finishes, so every press is refused with the ear's reason, however fast
     /// the real models would have downloaded. `TOPO_DEBUG_EAR=` an
     /// absolute directory holding `parakeet-tdt-0.6b-v2` and `parakeet-ctc-110m-coreml` is the
@@ -396,8 +398,8 @@ extension DebugRun {
             say("ear: loading, and never resident, so every press is refused")
             return ear
         }
-        if choice == "stub" {
-            let ear = Ear(engine: StubEngine())
+        if choice == "stub" || choice.hasPrefix("stub:") {
+            let ear = Ear(engine: StubEngine(hears: String(choice.dropFirst("stub:".count))))
             let nowhere = URL(fileURLWithPath: "/dev/null")
             ear.load(parakeet: nowhere, ctc: nowhere)
             say("ear: a stub, resident without a model")
@@ -470,6 +472,12 @@ extension DebugRun {
         /// Whether the guest's home is mounted: whether there is a guest for a reply's image
         /// to be read from in this launch.
         var guestHome = false
+        /// The model the bar's menu last set (`Harness.model`), by its alias: the setting, which
+        /// no pin changes.
+        var model: String?
+        /// The model a request carries for that setting (`ClaudeModel.effective`), which in a
+        /// debug build is the pin whatever the setting.
+        var effectiveModel: String?
     }
 
     struct TurnReport: Codable, Equatable {
@@ -492,7 +500,7 @@ extension DebugRun {
                            placed: Look.Mascot? = nil, overridePlacement: Look.Mascot.Placement? = nil,
                            overridePin: CGPoint? = nil, presence: Double? = nil,
                            contentBottom: CGFloat? = nil, opened: [URL] = [],
-                           guestHome: Bool = false) -> String {
+                           guestHome: Bool = false, model: ClaudeModel? = nil) -> String {
         var report = ChatReport(spoken: spoken, error: error, speaker: speaker, voice: "\(voice)", mascot: mascot,
                                 facing: facing.rawValue, clearance: clearance.map(Double.init))
         func point(_ point: CGPoint) -> [Double] { [Double(point.x), Double(point.y)] }
@@ -504,6 +512,8 @@ extension DebugRun {
         report.contentBottom = contentBottom.map(Double.init)
         report.opened = opened.map(\.absoluteString)
         report.guestHome = guestHome
+        report.model = model?.rawValue
+        report.effectiveModel = model.map { ClaudeModel.effective($0).rawValue }
         switch spoken.map({ answer(to: $0, in: turns) }) {
         case .unanswered(let person):
             report.person = TurnReport(person)
@@ -524,16 +534,18 @@ extension DebugRun {
         environment[keepSpokenVariable] == "1"
     }
 
-    /// Loads nothing, builds no session, hears nothing. One that `loads: false` never returns
-    /// from its load, which holds the ear at `loading`.
+    /// Loads nothing, builds no session, and hears `hears` in any audio it is given. One that
+    /// `loads: false` never returns from its load, which holds the ear at `loading`.
     struct StubEngine: SpeechEngine {
         var loads = true
+        /// What it hears in any audio at all; nothing by default.
+        var hears = ""
         func load(parakeet: URL, ctc: URL, onProgress: @escaping @Sendable (String) -> Void) async throws {
             guard !loads else { return }
             while true { try await Task.sleep(for: .seconds(3600)) }
         }
         func rebuild(terms: [String], version: Int) async throws {}
-        func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { "" }
+        func transcribe(_ samples: [Float], boosted: Bool) async throws -> String { samples.isEmpty ? "" : hears }
     }
 }
 #endif

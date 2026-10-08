@@ -28,15 +28,38 @@ final class MascotPlacementTests: XCTestCase {
                             reduceMotion: reduceMotion, placement: placement, pin: pin)
     }
 
+    /// Where the look puts him on the glass in `field`, at this suite's size and reach.
+    static func glass(_ field: MascotField) -> CGRect? {
+        MascotPerch.glass(field, size: size, inset: Look.Composer().perchInset, reach: reach)
+    }
+
     /// An empty chat, a full one — words down the whole column — and either with the keyboard up,
-    /// the pane riding on it short and the transcript ending above it.
+    /// the pane riding on it as a row, short and wide with its well in its leading end, and the
+    /// transcript ending above it.
     static func field(full: Bool = false, keyboard: Bool = false) -> MascotField {
         let words = full ? stride(from: 12.0, to: 580, by: 44).map { CGRect(x: 16, y: $0, width: 370, height: 32) } : []
         guard keyboard else { return MascotField(visible: visible, obstacles: words, pane: pane, well: well) }
         return MascotField(visible: CGRect(x: 0, y: 0, width: 402, height: 330), obstacles: words.filter { $0.maxY < 330 },
-                           pane: CGRect(x: 40, y: 344, width: 321, height: 53),
-                           well: CGRect(x: 177, y: 346, width: 48, height: 48),
+                           pane: CGRect(x: 14, y: 344, width: 374, height: 53),
+                           well: CGRect(x: 17, y: 346, width: 48, height: 48),
                            keyboard: CGRect(x: 0, y: 400, width: 402, height: 474))
+    }
+
+    /// At each end of the range `perchInset` is read in, on a screen 320 points wide with the
+    /// pane as a row over the keyboard: he stands on the pane's top edge with his reach inside
+    /// the transcript's width at both sides.
+    func testAtEachEndOfThePerchInsetHisReachIsInsideTheNarrowestScreen() throws {
+        let field = MascotField(visible: CGRect(x: 0, y: 0, width: 320, height: 250), obstacles: [],
+                                pane: CGRect(x: 11, y: 262, width: 298, height: 53),
+                                well: CGRect(x: 14, y: 264, width: 48, height: 48),
+                                keyboard: CGRect(x: 0, y: 320, width: 320, height: 248))
+        for inset in [0, 200] as [CGFloat] {
+            let box = try XCTUnwrap(MascotPerch.glass(field, size: Self.size, inset: inset, reach: Self.reach), "\(inset)")
+            XCTAssertGreaterThanOrEqual(box.minX - Self.reach.left, -0.001, "\(inset): his reach is past the leading edge")
+            XCTAssertLessThanOrEqual(box.maxX + Self.reach.right, 320.001, "\(inset): his reach is past the trailing edge")
+            XCTAssertEqual(box.minY + (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * Self.scale, 262, accuracy: 0.001,
+                           "\(inset): his shelf is not the pane's top edge")
+        }
     }
 
     /// A roam under `settings` handed `fields` in turn, each left to settle.
@@ -57,13 +80,15 @@ final class MascotPlacementTests: XCTestCase {
 
     // MARK: Glass
 
-    /// On the glass he stands in the trailing flank — the keyboard's control and the mute being
-    /// the leading one's — his body in the middle of it and the engine's shelf on the pane's top
-    /// edge, over an empty chat, a full one, and on the short pane with the keyboard up. Once
+    /// On the glass he stands on the pane's top edge over its leading end — his body's axis the
+    /// look's inset in from the pane's leading edge, as far as keeps his reach inside the
+    /// transcript's width, and the engine's shelf on the pane's top edge — over an empty chat, a
+    /// full one, and on the row with the keyboard up. Where he stands is the pane's and the look's
+    /// alone: the well going from the middle of the pane to its end moves nothing of his. Once
     /// placed, he is put at once as the pane moves: he rides it, with no glide and no settle.
-    /// Words are not his to keep clear of there, so nothing is over him; he faces right, his
-    /// centre being right of the transcript's middle.
-    func testOnTheGlassHeSitsInTheEmptyFlankAndRidesThePane() throws {
+    /// Words are not his to keep clear of there, so nothing is over him; he faces left, his centre
+    /// being left of the transcript's middle.
+    func testOnTheGlassHeStandsOverThePanesLeadingEndAndRidesThePane() throws {
         var time = 0.0
         var roam = settled(Self.settings(.glass), [Self.field()], time: &time)
         for (label, field) in [("empty", Self.field()), ("full", Self.field(full: true)),
@@ -79,20 +104,47 @@ final class MascotPlacementTests: XCTestCase {
             XCTAssertFalse(roam.walking, label)
             XCTAssertEqual(box.minY + (CGFloat(Topo.shelfY) - MascotSprite.box.minY) * Self.scale, pane.minY,
                            accuracy: 0.001, "\(label): his shelf is not the pane's top edge")
-            XCTAssertEqual(box.midX, (well.maxX + pane.maxX) / 2, accuracy: 0.001, "\(label): not in the middle of the flank")
-            XCTAssertGreaterThanOrEqual(box.minX, well.maxX, "\(label): his box is over the well")
-            XCTAssertLessThanOrEqual(box.maxX, pane.maxX, "\(label): his box runs off the pane")
-            // What he is drawn in on the glass is the flank and nothing of the well.
+            let axis = max(pane.minX + Look.Composer().perchInset, field.visible.minX + Self.reach.left + Self.size.width / 2)
+            XCTAssertEqual(box.midX, axis, accuracy: 0.001, "\(label): his body is not the look's inset from the pane's leading edge")
+            XCTAssertGreaterThanOrEqual(box.minX - Self.reach.left, field.visible.minX - 0.001, "\(label): his reach is past the screen's edge")
+            XCTAssertLessThan(box.midX, pane.midX, "\(label): not over the pane's leading end")
+            // A function of the pane and the look alone.
+            var moved = field
+            moved.well = well.offsetBy(dx: 90, dy: 0)
+            XCTAssertEqual(Self.glass(moved), box, "\(label): the well moved him")
+            moved.well = nil
+            XCTAssertEqual(Self.glass(moved), box, "\(label): he needs a well to stand on the glass")
+            // What he is drawn in on the glass is what is above the pane, and nothing on it.
             let slot = try XCTUnwrap(MascotPerch.glassSlot(field))
+            XCTAssertFalse(MascotRoost.overlap(slot, pane), label)
             XCTAssertFalse(MascotRoost.overlap(slot, well), label)
-            XCTAssertEqual(slot.maxY, pane.maxY, accuracy: 0.001, label)
+            XCTAssertEqual(slot.maxY, pane.minY, accuracy: 0.001, label)
+            XCTAssertEqual(slot.minX, field.visible.minX, label)
+            XCTAssertEqual(slot.maxX, field.visible.maxX, label)
             XCTAssertTrue(slot.contains(CGPoint(x: box.midX, y: 0)), "\(label): the slot does not reach the top of the screen")
             XCTAssertFalse(roam.covered, "\(label): words or glass counted over him on the glass")
-            XCTAssertEqual(roam.facing, .right, label)
+            XCTAssertEqual(roam.facing, .left, label)
             run(&roam, time: &time, for: 2)
             XCTAssertEqual(roam.picture, box, "\(label): he moved off the glass on the clock")
         }
         XCTAssertEqual(roam.moves, 0)
+    }
+
+    /// The look's inset reaches where he stands, and a pane at the screen's very edge still keeps
+    /// his reach inside the transcript's width.
+    func testTheLooksInsetIsWhereHeStandsAndTheScreensEdgeHoldsHim() throws {
+        let field = Self.field()
+        let near = try XCTUnwrap(MascotPerch.glass(field, size: Self.size, inset: 60, reach: Self.reach))
+        let far = try XCTUnwrap(MascotPerch.glass(field, size: Self.size, inset: 160, reach: Self.reach))
+        XCTAssertEqual(far.midX - near.midX, 100, accuracy: 0.001)
+        XCTAssertEqual(near.midX, Self.pane.minX + 60, accuracy: 0.001)
+        var edge = field
+        edge.pane = CGRect(x: 0, y: 636, width: 402, height: 80)
+        for inset in [0, 200] as [CGFloat] {
+            let box = try XCTUnwrap(MascotPerch.glass(edge, size: Self.size, inset: inset, reach: Self.reach))
+            XCTAssertGreaterThanOrEqual(box.minX - Self.reach.left, edge.visible.minX - 0.001, "\(inset): his reach is past the leading edge")
+            XCTAssertLessThanOrEqual(box.maxX + Self.reach.right, edge.visible.maxX + 0.001, "\(inset): his reach is past the trailing edge")
+        }
     }
 
     /// With no pane to sit on he stands nowhere and is not drawn.
@@ -136,7 +188,7 @@ final class MascotPlacementTests: XCTestCase {
             XCTAssertEqual(roam.picture, box, "\(placement): he moved after he was first drawn")
             XCTAssertEqual(roam.moves, 0, "\(placement): a glide began")
             let expected = placement == .glass
-                ? MascotPerch.glass(field, size: Self.size)
+                ? Self.glass(field)
                 : MascotPerch.pinned(CGPoint(x: 0.3, y: 0.5), in: field.pinFrame, keyboard: nil, size: Self.size,
                                      reach: Self.reach, clearance: 8)
             XCTAssertEqual(box, expected, "\(placement): first drawn somewhere other than where he is placed")
@@ -311,7 +363,64 @@ final class MascotPlacementTests: XCTestCase {
         var still = settled(Self.settings(.roam, reduceMotion: true), [Self.field()], time: &time)
         still.use(Self.settings(.glass, reduceMotion: true))
         XCTAssertNil(still.move)
-        XCTAssertEqual(still.picture, MascotPerch.glass(Self.field(), size: Self.size))
+        XCTAssertEqual(still.picture, Self.glass(Self.field()))
+    }
+
+    /// A look that moves only the perch moves a Topo on the glass, with no other geometry
+    /// changing: on the resting pane a glide to the new inset from the pane's leading edge, on
+    /// the pane's top edge still. One roaming or pinned stands where he stood, the perch being
+    /// no part of his place.
+    func testANewPerchInsetMovesATopoOnTheGlassAndNoOther() throws {
+        var time = 0.0
+        let field = Self.field()
+        var roam = settled(Self.settings(.glass), [field], time: &time)
+        let before = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(before, Self.glass(field))
+
+        var moved = Self.settings(.glass)
+        moved.perch = 120
+        XCTAssertFalse(moved.samePlace(as: Self.settings(.glass)), "a new perch is the same place on the glass")
+        roam.use(moved)
+        XCTAssertNotNil(roam.move, "a new perch left him at the old one")
+        run(&roam, time: &time)
+        let after = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(after, MascotPerch.glass(field, size: Self.size, inset: 120, reach: Self.reach))
+        XCTAssertEqual(after.midX, try XCTUnwrap(field.pane).minX + 120, accuracy: 0.001)
+        XCTAssertEqual(after.minY, before.minY, "the perch moved him off the pane's top edge")
+        XCTAssertEqual(roam.roost.name, "glass")
+
+        for placement in [Look.Mascot.Placement.roam, .pinned] {
+            var other = Self.settings(placement)
+            other.perch = 120
+            XCTAssertTrue(other.samePlace(as: Self.settings(placement)), "\(placement): the perch is part of a place off the glass")
+            var standing = settled(Self.settings(placement), [field], time: &time)
+            let stood = standing.picture
+            standing.use(other)
+            XCTAssertNil(standing.move, "\(placement): a new perch moved a Topo who is not on the glass")
+            XCTAssertEqual(standing.picture, stood)
+        }
+    }
+
+    /// The same change with a keyboard in the field: on the short pane he is put at the new
+    /// inset at once and glides nowhere, a glide there crossing the well.
+    func testANewPerchInsetOverAKeyboardPutsHimThereAtOnce() throws {
+        var time = 0.0
+        let field = Self.field(keyboard: true)
+        var roam = settled(Self.settings(.glass), [field], time: &time)
+        let before = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(before, MascotPerch.glass(field, size: Self.size, inset: Self.settings(.glass).perch, reach: Self.reach))
+        let moves = roam.moves
+
+        var moved = Self.settings(.glass)
+        moved.perch = 120
+        roam.use(moved)
+        XCTAssertNil(roam.move, "a new perch over a keyboard is a glide across the well")
+        XCTAssertEqual(roam.moves, moves, "a placement counted as a glide")
+        let after = try XCTUnwrap(roam.picture)
+        XCTAssertEqual(after, MascotPerch.glass(field, size: Self.size, inset: 120, reach: Self.reach))
+        XCTAssertNotEqual(after, before, "a new perch over a keyboard left him at the old one")
+        XCTAssertEqual(after.minY, before.minY, "the perch moved him off the pane's top edge")
+        XCTAssertEqual(roam.roost.name, "glass")
     }
 
     // MARK: A drag
@@ -534,7 +643,8 @@ final class MascotPlacementTests: XCTestCase {
         window.addSubview(canvas)
         let port = MascotGlassPort()
         canvas.glass = port
-        // As SwiftUI lays them out: the flank clipping, and the stage the picture's size inside it.
+        // As SwiftUI lays them out: the clip of what is above the pane, and the stage the picture's
+        // size inside it.
         let flank = UIView()
         flank.clipsToBounds = true
         window.addSubview(flank)
@@ -543,7 +653,8 @@ final class MascotPlacementTests: XCTestCase {
         port.view = stageView
         var inside: CGRect?
         for (label, field) in [("resting", Self.field()), ("keyboard up", Self.field(keyboard: true))] {
-            let stage = try XCTUnwrap(MascotPerch.glassStage(field, size: Self.size))
+            let stage = try XCTUnwrap(MascotPerch.glassStage(field, size: Self.size, inset: Look.Composer().perchInset,
+                                                             reach: Self.reach))
             let slot = try XCTUnwrap(MascotPerch.glassSlot(field))
             let clip = CGRect(x: slot.minX, y: stage.minY, width: slot.width, height: slot.maxY - stage.minY)
             flank.frame = clip
@@ -552,12 +663,12 @@ final class MascotPlacementTests: XCTestCase {
                          settings: Self.settings(.glass), interval: Self.frame, conditions: seen)
             settle(canvas)
             XCTAssertTrue(canvas.onGlassStage, "\(label): not drawn in the glass's stage")
-            let well = try XCTUnwrap(field.well), pane = try XCTUnwrap(field.pane)
+            let pane = try XCTUnwrap(field.pane)
             let shown = canvas.shownFrame
             XCTAssertFalse(shown.isEmpty, label)
-            XCTAssertGreaterThanOrEqual(shown.minX, well.maxX - 0.001, "\(label): drawn over the well: \(shown)")
-            XCTAssertLessThanOrEqual(shown.maxX, pane.maxX + 0.001, "\(label): drawn off the pane's end: \(shown)")
-            XCTAssertEqual(canvas.drawnFrame, MascotSprite.drawn(around: try XCTUnwrap(MascotPerch.glass(field, size: Self.size))),
+            XCTAssertLessThanOrEqual(shown.maxY, pane.minY + 0.001, "\(label): drawn on the pane: \(shown)")
+            XCTAssertGreaterThanOrEqual(shown.minX, field.visible.minX - 0.001, "\(label): drawn off the screen: \(shown)")
+            XCTAssertEqual(canvas.drawnFrame, MascotSprite.drawn(around: try XCTUnwrap(Self.glass(field))),
                            "\(label): not drawn where he stands")
             let here = canvas.drawnFrame.offsetBy(dx: -stage.minX, dy: -stage.minY)
             XCTAssertEqual(here, CGRect(origin: .zero, size: stage.size), "\(label): he does not fill the stage")
@@ -570,18 +681,19 @@ final class MascotPlacementTests: XCTestCase {
         XCTAssertFalse(canvas.onGlassStage, "gliding off the glass, still in its stage")
     }
 
-    /// With no stage from SwiftUI, on the glass the picture is still drawn inside the trailing flank
-    /// only: nothing of it over the well.
-    func testOnTheGlassNothingOfHimIsDrawnOverTheWell() throws {
+    /// With no stage from SwiftUI, on the glass the picture is still drawn above the pane only:
+    /// nothing of it on the pane, where the well and the field are.
+    func testOnTheGlassNothingOfHimIsDrawnOnThePane() throws {
         let canvas = MascotCanvas(frame: CGRect(x: 0, y: 0, width: 402, height: 874))
-        let field = Self.field()
-        canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: field,
-                     settings: Self.settings(.glass), interval: Self.frame, conditions: seen)
-        settle(canvas)
-        let shown = canvas.shownFrame
-        XCTAssertFalse(shown.isEmpty)
-        XCTAssertGreaterThanOrEqual(shown.minX, Self.well.maxX - 0.001, "drawn over the well: \(shown)")
-        XCTAssertLessThanOrEqual(shown.maxX, Self.pane.maxX + 0.001, "drawn off the pane's end: \(shown)")
-        XCTAssertLessThan(canvas.drawnFrame.minX, Self.well.maxX, "the whole picture would reach the well, so the clip is what is held")
+        for field in [Self.field(), Self.field(keyboard: true)] {
+            canvas.apply(input: MascotState(model: "claude-sonnet-5").input, field: field,
+                         settings: Self.settings(.glass), interval: Self.frame, conditions: seen)
+            settle(canvas)
+            let pane = try XCTUnwrap(field.pane)
+            let shown = canvas.shownFrame
+            XCTAssertFalse(shown.isEmpty)
+            XCTAssertLessThanOrEqual(shown.maxY, pane.minY + 0.001, "drawn on the pane: \(shown)")
+            XCTAssertGreaterThan(canvas.drawnFrame.maxY, pane.minY, "the whole picture would reach the pane, so the clip is what is held")
+        }
     }
 }

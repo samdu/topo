@@ -128,15 +128,98 @@ final class MicrophonePressTests: XCTestCase {
         XCTAssertTrue(app.images["Listening; press to send"].waitForExistence(timeout: 15),
                       "the tap left no hands-free session open: \(after.raw)")
 
-        // Reaching for the keyboard ends it, and the row is what has the keyboard.
+        // Reaching for the keyboard ends it, and the field in the glass is what has the keyboard.
         app.buttons["Type instead"].tap()
         XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15),
                       "raising the keyboard left the microphone listening")
         XCTAssertTrue(app.descendants(matching: .any)["What to say"].waitForExistence(timeout: 10),
-                      "the keyboard went up with no row to type into")
+                      "the keyboard went up with no field to type into")
         let ended = try report(app)
         XCTAssertEqual(ended.sessions, after.sessions, "raising the keyboard opened a second session: \(ended.raw)")
         record("hands free, ended by the keyboard", ended)
+    }
+
+    /// Over the pane's row a press on the microphone is dictation into the draft: what was typed
+    /// stays, what is heard is written after it, a second press is written after that, and
+    /// nothing is sent until the send in the glass is pressed, which sends all of it as one turn.
+    /// The ear is the stub hearing fixed words (`TOPO_DEBUG_EAR=stub:`), so what is held is the
+    /// routing and not a recogniser. On a host with no audio input the press is refused at the
+    /// input guard: what was typed is still held to be there and unsent, and the test ends in
+    /// `XCTSkip` naming what did not run.
+    func testAPressOverTheRowDictatesIntoTheDraftAndSendsNothing() throws {
+        let app = launch(environment: ["TOPO_DEBUG_EAR": "stub:and the bins", "TOPO_DEBUG_SOFTWARE_KEYBOARD": "1",
+                                       "TOPO_DEBUG_OUTBOX": "", "TOPO_DEBUG_REPLY_DELAY": "600"])
+        let mic = microphone(in: app)
+        XCTAssertTrue(mic.waitForExistence(timeout: 60), "the chat screen, with its microphone")
+        try waitForReport(app, timeout: 30, "the stub ear is resident") { $0.ear == "ready" }
+        ChatReading.raiseKeyboard(app)
+        let field = ChatReading.field(app)
+        field.typeText("Hi")
+        XCTAssertEqual(field.value as? String, "Hi")
+        let row = app.descendants(matching: .any)["draft-row"], sending = app.descendants(matching: .any)["Sending"]
+
+        // A hold and its release, twice. On a fresh simulator the first meets the microphone
+        // prompt and starts nothing, so a press that opened no session is made again.
+        var written = "Hi"
+        for dictation in 1...2 {
+            var before = try report(app), after = before
+            for _ in 0..<2 {
+                before = try report(app)
+                mic.press(forDuration: 1.5)
+                answerOnePrompt()
+                closeHandsFree(app, mic)
+                XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 60), "the session ended and the button is back to rest")
+                after = try waitForReport(app, timeout: 30, "the hold reached VoiceInput") { $0.presses > before.presses }
+                if after.sessions > before.sessions || after.refusal != nil { break }
+            }
+            if let refusal = after.refusal {
+                XCTAssertEqual(field.value as? String, written, "a refused press changed what was written: \(after.raw)")
+                XCTAssertFalse(row.exists || sending.exists, "a refused press over the row sent something")
+                guard refusal == "no audio input" else { return XCTFail("the hold was refused for a reason that is a fault: \(after.raw)") }
+                if laneHasInput {
+                    XCTFail("this lane declares an audio input (TOPO_UITEST_AUDIO_INPUT=1), and the hold was refused for want of one: \(after.raw)")
+                }
+                throw XCTSkip("missing coverage: this host has no audio input, so the press over the row was refused at the input guard and nothing was heard to write after what was typed")
+            }
+            XCTAssertEqual(after.sessions, before.sessions + 1, "the hold's session ran its microphone: \(after.raw)")
+            written += " and the bins"
+            let deadline = Date().addingTimeInterval(15)
+            while field.value as? String != written, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+            XCTAssertEqual(field.value as? String, written, "dictation \(dictation): what was heard is not after what was written")
+            XCTAssertTrue(app.keyboards.element.exists, "dictation \(dictation) took the keyboard down")
+            XCTAssertFalse(row.exists || sending.exists, "dictation \(dictation) over the row sent a turn")
+            let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = "row-dictated-\(dictation)"
+            shot.lifetime = .keepAlways
+            add(shot)
+        }
+
+        // Typing into the draft while the microphone is open over it, left open by a tap, ends
+        // the dictation: what is typed stays, and what the session would have written after
+        // what it began over is not written over it.
+        let before = try report(app)
+        mic.press(forDuration: 0.1)
+        let open = try waitForReport(app, timeout: 15, "the tap reached VoiceInput") { $0.presses == before.presses + 1 }
+        XCTAssertTrue(app.images["Listening; press to send"].waitForExistence(timeout: 15),
+                      "the tap left no hands-free session open: \(open.raw)")
+        // Its caption is written first, so what is typed is typed after a caption and the close
+        // that would have followed has something to write over.
+        written += " and the bins"
+        let captioned = Date().addingTimeInterval(15)
+        while field.value as? String != written, Date() < captioned { RunLoop.current.run(until: Date().addingTimeInterval(0.25)) }
+        XCTAssertEqual(field.value as? String, written, "the open microphone's caption is not after what was written")
+        field.typeText(" typed")
+        written += " typed"
+        XCTAssertTrue(app.images["Hold to talk"].waitForExistence(timeout: 15),
+                      "typing into the draft left the microphone dictating into it")
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertEqual(field.value as? String, written, "what was typed during a dictation was written over")
+        XCTAssertTrue(app.keyboards.element.exists, "typing during a dictation took the keyboard down")
+        XCTAssertFalse(row.exists || sending.exists, "typing during a dictation sent a turn")
+
+        app.buttons["Send"].tap()
+        XCTAssertTrue(sending.waitForExistence(timeout: 10), "the send in the glass sent nothing")
+        XCTAssertEqual(row.label, written, "what was typed and dictated did not go as one turn")
     }
 
     /// The whole path: fixture audio looping on the host's input, captured by the simulator's
