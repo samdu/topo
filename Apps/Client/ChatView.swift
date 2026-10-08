@@ -117,7 +117,7 @@ struct ChatView: View {
     private func chat(keyboard: Bool, keyboardTop: CGFloat?) -> some View {
         let draft = draft(row: ComposerForm.isRow(keyboard: keyboard, focused: focused, alone: alone))
         return NavigationStack {
-            ChatColumn(keyboard: keyboard) {
+            ChatColumn {
                 transcript(draft)
             } line: {
                 if harness.hasWaiting {
@@ -943,20 +943,8 @@ final class MicPress {
 }
 #endif
 
-/// The column as measured, and what of it is the room the pane grows in.
-struct ChatColumnRoom: Equatable {
-    var tall: CGFloat
-    var wide: CGFloat
-    var keyboard: Bool
-
-    /// The room once this has been measured after `was`, with `held` the room so far: the
-    /// column's height, and where neither the keyboard nor the width has changed no more
-    /// than was held.
-    func taken(after was: ChatColumnRoom, held: CGFloat?) -> CGFloat {
-        guard let held, was.keyboard == keyboard, was.wide == wide else { return tall }
-        return min(held, tall)
-    }
-
+/// What of the chat's column is the room the pane grows in.
+enum ChatColumnRoom {
     /// What of a column `tall` is the pane's to grow in, with a line under the transcript and
     /// a card over the pane each taking its own height of it. A height that is not a number
     /// takes nothing.
@@ -968,49 +956,40 @@ struct ChatColumnRoom: Equatable {
 /// The chat's column: the transcript with a line under it, and the pane as a bar under both
 /// with a card over it. It measures the room the pane has to grow in and hands it to the pane.
 struct ChatColumn<Transcript: View, Line: View, Card: View, Pane: View>: View {
-    var keyboard: Bool
     @ViewBuilder var transcript: Transcript
     /// What stands under the transcript, or nothing: a turn to send or ask again.
     @ViewBuilder var line: Line
     /// What stands over the pane, or nothing: the memory's offer.
     @ViewBuilder var card: Card
-    /// The pane, given the room it has to grow in; nil until the column has been measured.
+    /// The pane, given the room it has to grow in.
     @ViewBuilder var pane: (CGFloat?) -> Pane
 
-    /// How tall the column is, from under the navigation bar to the keyboard.
-    @State private var room: CGFloat?
     @State private var lineTall: CGFloat = 0
     @State private var cardTall: CGFloat = 0
 
     var body: some View {
-        VStack(spacing: 0) {
-            transcript
-            // A stack of its own, so that a line taken away is measured as no height and not
-            // left at its last.
-            VStack(spacing: 0) { line }
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { lineTall = $0 }
-        }
-        // The composer is a bar under the transcript, and the inset is the whole of its
-        // declaration: the transcript scrolls under it while there is more to scroll, and
-        // at rest the last turn stops above it. What says whether anything is behind the
-        // pane is the presence, and not the modifier.
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 0) {
-                VStack(spacing: 0) { card }
-                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardTall = $0 }
-                pane(room.map { ChatColumnRoom.left(of: $0, line: lineTall, card: cardTall) })
-            }
-        }
         // The room the pane has to grow in is this column's: from under the navigation bar to
-        // the keyboard, the composer's own height included, less the line's and the card's. A
-        // pane that outgrows the column pushes the column's own edges out, so within one state
-        // of the keyboard and one width the room only ever shrinks: a column grown by the pane
-        // it is the bound of would let the pane grow again.
-        .background {
-            GeometryReader { column in
-                Color.clear.onChange(of: ChatColumnRoom(tall: column.size.height, wide: column.size.width, keyboard: keyboard),
-                                     initial: true) { was, now in
-                    room = now.taken(after: was, held: room)
+        // the keyboard, less the line's and the card's heights. It is read from what the column
+        // is offered and not from what it is laid out at, since a pane that outgrew the column
+        // would push the column's own edges out and be measured as room.
+        GeometryReader { column in
+            VStack(spacing: 0) {
+                transcript
+                // A stack of its own, so that a line taken away is measured as no height and
+                // not left at its last.
+                VStack(spacing: 0) { line }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { lineTall = $0 }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // The composer is a bar under the transcript, and the inset is the whole of its
+            // declaration: the transcript scrolls under it while there is more to scroll, and
+            // at rest the last turn stops above it. What says whether anything is behind the
+            // pane is the presence, and not the modifier.
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 0) {
+                    VStack(spacing: 0) { card }
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardTall = $0 }
+                    pane(ChatColumnRoom.left(of: column.size.height, line: lineTall, card: cardTall))
                 }
             }
         }

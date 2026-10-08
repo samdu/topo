@@ -44,9 +44,9 @@ struct Composer: View {
     /// for.
     var focused: @MainActor (Bool) -> Void = { _ in }
     /// The room the pane has to grow in: from the transcript's top edge, under the navigation
-    /// bar, to the keyboard. The field takes no more lines than leave the pane inside it, and
-    /// scrolls inside itself from there (`ComposerPlan.lines`). Nil where nothing measured it,
-    /// which is the look's lines alone.
+    /// bar, to the keyboard. The field takes no more lines than leave the pane inside it
+    /// (`ComposerPlan.lines`), and the row is no taller than it whatever it holds. Nil where
+    /// nothing measured it, which is the look's lines alone and a row as tall as what it holds.
     var room: CGFloat?
     @Environment(\.look) private var look
     /// How tall one line of the field's words is, measured off the line the row is laid out
@@ -131,7 +131,7 @@ struct Composer: View {
         // fall between them. The send is the row's and the way to the keyboard the resting
         // pane's, and each is there only in its own form, so neither is pressed or read in the
         // other.
-        ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry) {
+        ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry, most: tallest) {
             micButton(geometry).layoutValue(key: ComposerPart.self, value: .well)
             more.drawn(as: .more)
             field(shown: row).drawn(as: .field)
@@ -142,6 +142,9 @@ struct Composer: View {
                 keyboard.drawn(as: .keyboard)
             }
         }
+        // A row held to the room is cut at its own edges: a mark or a line of type taller than
+        // the room is drawn inside the pane and over nothing above it.
+        .clipShape(RowCut(most: tallest))
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
         // The whole pane is off limits to Topo, at every presence.
         .mascotPane()
@@ -189,10 +192,9 @@ struct Composer: View {
     /// The control for everything else, which opens nothing yet: in both forms, beside the well.
     private var more: some View {
         Button {} label: {
-            Image(systemName: look.composer.flank.more).font(look.composer.flank.font)
-                // In the row it is laid out in the slot the plan gives it and no wider, so a mark
-                // larger than its slot is cut at the slot's edge and stands over nothing.
-                .frame(maxWidth: look.composer.flank.slot)
+            // Laid out in the slot the plan gives it and no larger, so a mark larger than its
+            // slot is cut at the slot's edge and stands over nothing.
+            Cut { Image(systemName: look.composer.flank.more).font(look.composer.flank.font) }
                 .clipped()
                 .contentShape(Rectangle())
         }
@@ -207,7 +209,9 @@ struct Composer: View {
     /// there.
     private var keyboard: some View {
         Button { draft.typing = true } label: {
-            Image(systemName: look.composer.flank.keyboard).font(look.composer.flank.font)
+            Cut { Image(systemName: look.composer.flank.keyboard).font(look.composer.flank.font) }
+                .clipped()
+                .contentShape(Rectangle())
         }
         .accessibilityLabel("Type instead")
         .etched(look.composer.flank, ink: ink)
@@ -232,17 +236,20 @@ struct Composer: View {
     /// accessibility tree in both forms; activating it there is a way to the keyboard.
     private func field(shown: Bool) -> some View {
         let enclosure = look.draft.written
-        return TextField("", text: written, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(look.transcript.bodyFont)
-            .foregroundStyle(look.transcript.text)
-            .lineLimit(1...lines)
-            .focused($writing)
-            .disabled(draft.state == .inFlight)
-            .onSubmit(draft.send)
-            .accessibilityLabel("What to say")
-            .padding(.horizontal, enclosure.horizontalPadding)
-            .padding(.vertical, enclosure.verticalPadding)
+        // The enclosure's padding is the look's wherever the field has the room for it, and
+        // never more than leaves the words half of what the field is given (`Inset`).
+        return Inset(horizontal: enclosure.horizontalPadding, vertical: enclosure.verticalPadding) {
+            TextField("", text: written, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(look.transcript.bodyFont)
+                .foregroundStyle(look.transcript.text)
+                .lineLimit(1...lines)
+                .focused($writing)
+                .disabled(draft.state == .inFlight)
+                .onSubmit(draft.send)
+                .accessibilityLabel("What to say")
+        }
+            .clipped()
             .background { TurnShape.fill(enclosure).opacity(besideOpacity) }
             .opacity(shown ? 1 : 0)
             // A field that holds focus keeps its touches whatever the pane is: a text view whose
@@ -255,6 +262,13 @@ struct Composer: View {
             // draws them, and none at rest or while a turn is on its way, which are the
             // transcript row's.
             .accessibilityValue(draft.fieldValue)
+    }
+
+    /// The tallest the row is laid out: the room it has, less the room kept under the pane,
+    /// and never less than the well can be pressed in. Nil at rest and with no room measured.
+    private var tallest: CGFloat? {
+        guard draft.row, let room else { return nil }
+        return max(room - look.composer.bottomPadding, Look.Composer.Well.pressable)
     }
 
     /// The most lines the field takes before it scrolls inside itself: the look's, and no more
@@ -292,11 +306,12 @@ struct Composer: View {
     private var send: some View {
         let nothing = draft.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return Button(action: draft.send) {
-            Image(systemName: look.draft.sendSymbol)
-                .font(look.draft.sendFont)
-                .foregroundStyle(look.draft.sendInk)
-                .opacity(nothing ? look.draft.sendRestingOpacity : 1)
-                .frame(maxWidth: look.draft.slot, maxHeight: look.draft.slot)
+            Cut {
+                Image(systemName: look.draft.sendSymbol)
+                    .font(look.draft.sendFont)
+                    .foregroundStyle(look.draft.sendInk)
+                    .opacity(nothing ? look.draft.sendRestingOpacity : 1)
+            }
                 .clipped()
                 .contentShape(Rectangle())
         }
@@ -401,6 +416,8 @@ struct ComposerRow: Layout {
     var composer: Look.Composer
     var draft: Look.Draft
     var geometry: ComposerGeometry
+    /// The tallest the row is laid out, or nil for as tall as what it holds.
+    var most: CGFloat?
 
     private func part(_ part: ComposerPart, of subviews: Subviews) -> LayoutSubview? {
         subviews.first { $0[ComposerPart.self] == part }
@@ -408,14 +425,18 @@ struct ComposerRow: Layout {
 
     private func plan(width: CGFloat, _ subviews: Subviews) -> ComposerPlan {
         let size = { (wanted: ComposerPart) in part(wanted, of: subviews)?.sizeThatFits(.unspecified) ?? .zero }
-        // The send fills the slot it is given, so it is asked how tall it is in the look's.
-        let send = part(.send, of: subviews)?.sizeThatFits(ProposedViewSize(width: draft.slot, height: draft.slot)).height ?? 0
-        let marks = max(size(.more).height, row ? send : size(.keyboard).height)
+        // A mark is no larger than the slot it is given, so each is asked how tall it is in the
+        // look's.
+        let mark = { (wanted: ComposerPart, slot: CGFloat) in
+            part(wanted, of: subviews)?.sizeThatFits(ProposedViewSize(width: slot, height: slot)).height ?? 0
+        }
+        let flank = composer.flank.slot
+        let marks = max(mark(.more, flank), row ? mark(.send, draft.slot) : mark(.keyboard, flank))
         guard row else {
             return .resting(composer, geometry: geometry, width: width, marks: marks, line: size(.line).height)
         }
         return .row(composer, draft: draft, geometry: geometry, width: width, marks: marks,
-                    line: size(.line).height) { wide in
+                    line: size(.line).height, most: most) { wide in
             part(.field, of: subviews)?.sizeThatFits(ProposedViewSize(width: wide, height: nil)).height ?? 0
         }
     }
@@ -434,12 +455,13 @@ struct ComposerRow: Layout {
         let at = { (point: CGPoint) in CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y) }
         part(.well, of: subviews)?.place(at: at(plan.well.center), anchor: .center,
                                          proposal: ProposedViewSize(plan.well.size))
-        // At rest the control is its own size; in the row it is given its slot.
+        // Each mark is given the slot the plan has for it, and is no larger.
         part(.more, of: subviews)?.place(at: at(plan.more), anchor: .center,
-                                         proposal: row ? ProposedViewSize(width: plan.moreSlot, height: nil) : .unspecified)
+                                         proposal: ProposedViewSize(width: plan.moreSlot, height: composer.flank.slot))
         part(.send, of: subviews)?.place(at: at(plan.send), anchor: .center,
                                          proposal: ProposedViewSize(width: plan.sendSlot, height: draft.slot))
-        part(.keyboard, of: subviews)?.place(at: at(plan.keyboard), anchor: .center, proposal: .unspecified)
+        part(.keyboard, of: subviews)?.place(at: at(plan.keyboard), anchor: .center,
+                                             proposal: ProposedViewSize(width: plan.sendSlot, height: composer.flank.slot))
         part(.field, of: subviews)?.place(at: at(plan.field.origin), anchor: .topLeading,
                                           proposal: ProposedViewSize(plan.field.size))
         part(.line, of: subviews)?.place(at: at(plan.field.origin), anchor: .topLeading, proposal: .unspecified)
@@ -448,6 +470,66 @@ struct ComposerRow: Layout {
 
 private extension CGRect {
     var center: CGPoint { CGPoint(x: midX, y: midY) }
+}
+
+/// A mark at its own size, or the size it is offered where that is less: what it is drawn in is
+/// never larger than the slot the plan gave it, and its clip cuts what is over.
+struct Cut: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let own = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        let within = { (own: CGFloat, offered: CGFloat?) -> CGFloat in
+            guard let offered, offered.isFinite else { return own }
+            return min(own, max(offered, 0))
+        }
+        return CGSize(width: within(own.width, proposal.width), height: within(own.height, proposal.height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.center, anchor: .center, proposal: .unspecified)
+    }
+}
+
+/// The room an enclosure keeps round its words: the look's padding, and no more of what it is
+/// offered than leaves the words half of it, across and down.
+struct Inset: Layout {
+    var horizontal: CGFloat
+    var vertical: CGFloat
+
+    /// The padding kept of `asked` in a length `offered`: all of it, or a quarter of the length.
+    static func kept(_ asked: CGFloat, in offered: CGFloat?) -> CGFloat {
+        let asked = asked.isFinite ? max(asked, 0) : 0
+        guard let offered, offered.isFinite else { return asked }
+        return min(asked, max(offered, 0) / 4)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (across, down) = (Self.kept(horizontal, in: proposal.width), Self.kept(vertical, in: proposal.height))
+        let inner = ProposedViewSize(width: proposal.width.map { max($0 - 2 * across, 0) },
+                                     height: proposal.height.map { max($0 - 2 * down, 0) })
+        let own = subviews.first?.sizeThatFits(inner) ?? .zero
+        return CGSize(width: own.width + 2 * across, height: own.height + 2 * down)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (across, down) = (Self.kept(horizontal, in: bounds.width), Self.kept(vertical, in: bounds.height))
+        subviews.first?.place(at: bounds.center, anchor: .center,
+                              proposal: ProposedViewSize(width: max(bounds.width - 2 * across, 0),
+                                                         height: max(bounds.height - 2 * down, 0)))
+    }
+}
+
+/// The row's own bounds as a clip while it is held to the room it has, and no clip otherwise:
+/// the microphone's light is drawn past the pane's edge wherever the pane is not at its bound.
+struct RowCut: Shape {
+    var most: CGFloat?
+
+    func path(in rect: CGRect) -> Path {
+        guard let most, rect.height >= most - 0.5 else { return Path(rect.insetBy(dx: -Self.open, dy: -Self.open)) }
+        return Path(rect)
+    }
+
+    /// How far past the row an unbounded clip reaches, which is further than anything is drawn.
+    static let open: CGFloat = 10_000
 }
 
 /// Where the pane and the well are, as laid out, for whatever is drawn over the composer to read:
@@ -588,26 +670,34 @@ struct ComposerPlan: Equatable, Sendable {
         let inner = max(middle.x - geometry.slot / 2 - composer.spacing, 0)
         let outer = min(max(composer.horizontalInset, 0), inner)
         let flank = inner - outer
+        // A mark's middle is never nearer the pane's end than half the room it stands in, so a
+        // spacing wider than the pane puts neither mark off it.
+        let half = min(max(composer.flank.slot, 0), max(width, 0) / 2) / 2
         return ComposerPlan(size: CGSize(width: width, height: height),
                             well: CGRect(x: middle.x - geometry.well / 2, y: middle.y - geometry.well / 2,
                                          width: geometry.well, height: geometry.well),
-                            more: CGPoint(x: inner - flank / 4, y: middle.y),
+                            more: CGPoint(x: max(inner - flank / 4, half), y: middle.y),
                             field: CGRect(x: width - inner, y: middle.y - line / 2, width: flank, height: line),
                             send: CGPoint(x: width - outer - flank / 4, y: middle.y),
-                            keyboard: CGPoint(x: width - inner + flank / 4, y: middle.y),
+                            keyboard: CGPoint(x: min(width - inner + flank / 4, width - half), y: middle.y),
                             moreSlot: composer.flank.slot, sendSlot: composer.flank.slot)
     }
 
     /// `marks` is the taller of the two controls and `line` the field at one line; `written`
     /// answers how tall the field is at a width, which is how many lines are in it.
+    ///
+    /// `most` is the tallest the row may be, where it has a room to stay inside: the band and
+    /// then the field are held to it, so a line of type, a mark or an inset taller than the room
+    /// is a row as tall as the room and no taller.
     static func row(_ composer: Look.Composer, draft: Look.Draft, geometry: ComposerGeometry, width: CGFloat,
-                    marks: CGFloat, line: CGFloat, written: (CGFloat) -> CGFloat) -> ComposerPlan {
+                    marks: CGFloat, line: CGFloat, most: CGFloat? = nil, written: (CGFloat) -> CGFloat) -> ComposerPlan {
         let columns = Columns(composer, draft: draft, geometry: geometry, width: width)
-        let band = max(geometry.well, marks, line) + 2 * geometry.verticalInset
-        let margin = (band - line) / 2
+        let most = most.flatMap { $0.isFinite ? max($0, 0) : nil } ?? .infinity
+        let band = min(max(geometry.well, marks, line) + 2 * geometry.verticalInset, most)
+        let margin = max((band - line) / 2, 0)
         let asked = written(columns.field.upperBound - columns.field.lowerBound)
-        let tall = max(asked.isFinite ? asked : line, line)
-        let height = tall + 2 * margin
+        let height = min(max(asked.isFinite ? asked : line, line) + 2 * margin, most)
+        let tall = max(height - 2 * margin, 0)
         let level = height - band / 2
         let field = CGRect(x: columns.field.lowerBound, y: margin,
                            width: columns.field.upperBound - columns.field.lowerBound, height: tall)

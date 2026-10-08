@@ -676,6 +676,12 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(least.look.bar.font, Font.system(size: 4))
         XCTAssertEqual(least.notes, [])
 
+        // The room between the controls is read no wider than leaves the notice its place on the
+        // narrowest phone.
+        XCTAssertEqual(LookDocument.read(#"{ "bar": { "spacing": 32 } }"#).look.bar.spacing, 32)
+        let wide = LookDocument.read(#"{ "bar": { "spacing": 33 } }"#)
+        XCTAssertEqual(wide.look.bar.spacing, Look().bar.spacing, "a spacing past the bar's is kept")
+        XCTAssertEqual(wide.notes.count, 1, "a spacing past the bar's is refused with nothing said")
         let title = LookDocument.read(#"{ "bar": { "font": "largeTitle" } }"#)
         XCTAssertEqual(title.look.bar.font, Look().bar.font)
         XCTAssertEqual(title.notes.count, 1, "\(title.notes)")

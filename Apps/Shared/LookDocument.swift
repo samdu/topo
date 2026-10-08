@@ -153,7 +153,7 @@ enum LookDocument {
     private static func bar(_ value: inout Look.Bar, _ r: Reader) {
         r.font("font", &value.font, largest: Look.Bar.largestFont)
         r.colour("ink", &value.ink)
-        r.indent("spacing", &value.spacing)
+        r.barSpacing("spacing", &value.spacing)
     }
 
     private static func mind(_ value: inout Look.Mind, _ r: Reader) {
@@ -507,6 +507,14 @@ enum LookDocument {
         /// floor of its own besides (`Look.Composer.Well.pressable`).
         func compactShare(_ key: String, _ value: inout CGFloat) {
             if let number = amount(key, in: 0.5...1, "a share of the resting height between 0.5 and 1") {
+                took(key)
+                value = CGFloat(number)
+            }
+        }
+
+        /// The room between the bar's controls: none to `Look.Bar.widestSpacing`.
+        func barSpacing(_ key: String, _ value: inout CGFloat) {
+            if let number = amount(key, in: 0...Look.Bar.widestSpacing, "a length in points between 0 and 32") {
                 took(key)
                 value = CGFloat(number)
             }

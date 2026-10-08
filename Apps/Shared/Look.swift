@@ -521,7 +521,7 @@ struct Look: Equatable, Sendable {
         var spacing: CGFloat = 25
         /// In the row, from the pane's leading end to the middle of the well: about half the
         /// short pane's height, so the well's bevel reads as the pane's own rounded end. The well
-        /// is never drawn past the pane's end for it (`ComposerGeometry`).
+        /// is never drawn past the pane's end for it (`ComposerPlan.Columns`).
         var jewelInset: CGFloat = 27
         /// From the pane's leading edge to the axis of Topo's body where the look places him on
         /// the glass, as far as keeps his reach inside the transcript's width (`MascotPerch`).
@@ -746,7 +746,7 @@ struct Look: Equatable, Sendable {
         var written: Enclosure
         var sending: Enclosure
         /// The least width the field keeps in the glass, so the caret has somewhere to sit: the
-        /// pane's own spacing yields before the field goes under it (`ComposerGeometry`).
+        /// pane's own spacing yields before the field goes under it (`ComposerPlan.Columns`).
         var minimumWidth: CGFloat = 160
         /// Between the field and the control on each side of it, and between the row's bubble
         /// and the spinner beside it.
@@ -787,6 +787,9 @@ extension Look {
         var ink = Theme.primary
         /// Between one control and the next.
         var spacing: CGFloat = 14
+        /// The most `spacing` a document sets, in points: on a 320-point screen controls further
+        /// apart than this leave the bar no room for its notice, which it then does not show.
+        static let widestSpacing: Double = 32
     }
 }
 
