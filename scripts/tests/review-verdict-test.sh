@@ -122,20 +122,25 @@ read_outputs() {
 }
 
 # No verdict is never a pass: with the reviewer job anything but success, review_gate is red
-# whatever reviewer_ran concluded, since it is the check branch protection reads.
+# whatever reviewer_ran concluded, since it is the check branch protection reads. A passing
+# verdict the job uploaded before it failed opens nothing either.
 no_verdict() {
-  local codex precheck
+  local codex precheck uploaded has file
   for codex in failure cancelled skipped ""; do
     for precheck in failure success skipped; do
-      if PRECHECK_RESULT="$precheck" CODEX_RESULT="$codex" HAS_VERDICT="" VERDICT_FILE="$work/absent.json" CAPPED=false \
-           GITHUB_OUTPUT="$work/no-verdict.gate-output" bash "$work/gate.sh" > "$work/no-verdict.gate.log" 2>&1; then
-        fail "no verdict (codex ${codex:-empty}, reviewer_ran $precheck): the gate passed"
-      elif ! grep -q '^state=block$' "$work/no-verdict.gate-output"; then
-        fail "no verdict (codex ${codex:-empty}, reviewer_ran $precheck): the gate did not record block"
-      else
-        echo "ok   no verdict (codex ${codex:-empty}, reviewer_ran $precheck) holds the gate red"
-      fi
-      : > "$work/no-verdict.gate-output"
+      for uploaded in none passing; do
+        has="" file="$work/absent.json"
+        [ "$uploaded" = none ] || { has=true; file="$work/passing-scoped.json"; }
+        if PRECHECK_RESULT="$precheck" CODEX_RESULT="$codex" HAS_VERDICT="$has" VERDICT_FILE="$file" CAPPED=false \
+             GITHUB_OUTPUT="$work/no-verdict.gate-output" bash "$work/gate.sh" > "$work/no-verdict.gate.log" 2>&1; then
+          fail "no verdict (codex ${codex:-empty}, reviewer_ran $precheck, uploaded $uploaded): the gate passed"
+        elif ! grep -q '^state=block$' "$work/no-verdict.gate-output"; then
+          fail "no verdict (codex ${codex:-empty}, reviewer_ran $precheck, uploaded $uploaded): the gate did not record block"
+        else
+          echo "ok   no verdict (codex ${codex:-empty}, reviewer_ran $precheck, uploaded $uploaded) holds the gate red"
+        fi
+        : > "$work/no-verdict.gate-output"
+      done
     done
   done
 }
