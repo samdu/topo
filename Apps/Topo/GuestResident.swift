@@ -158,7 +158,7 @@ final class GuestResident {
             try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
             try Guest.shared.mount(home, at: ClaudeLauncher.home)
             homeMounted = true
-            GuestImages.changed()
+            GuestImages.changed(home: true)
         }
         if let toolsEnvironment { return toolsEnvironment }
         let service: ToolService
@@ -312,7 +312,7 @@ struct ResidentConversation: GuestConversation {
 
     func forget() async {
         // What was read of the guest's files for the chat goes with the login.
-        GuestImages.changed(forgetting: true)
+        GuestImages.changed()
         // The resident is ended with no replacement, and waited for; then the mount goes, and then
         // the grant on the person's iCloud Drive folder, before any process starts again: the
         // memory is not reachable from a signed-out guest, and the grant is not held past the login.
@@ -510,7 +510,10 @@ extension VaultMount.Seam {
                 try Guest.shared.mountVault($0, at: ClaudeLauncher.vault)
                 GuestImages.changed()
             },
-            unmount: { try Guest.shared.unmount(ClaudeLauncher.vault) },
+            unmount: {
+                try Guest.shared.unmount(ClaudeLauncher.vault)
+                GuestImages.changed()
+            },
             link: { try Guest.shared.link(ClaudeLauncher.vault, at: ClaudeLauncher.memory) },
             startAccess: { $0.startAccessingSecurityScopedResource() },
             stopAccess: { $0.stopAccessingSecurityScopedResource() },

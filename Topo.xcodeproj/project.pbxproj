@@ -253,6 +253,7 @@
 		8D222FB8152FB084978C9C7D /* ControlDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DC3A9F106F1809969DCA06B /* ControlDocumentTests.swift */; };
 		8D68671CC764D16A596405E9 /* SurfaceProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 297C1A9489C88545BA87293C /* SurfaceProvider.swift */; };
 		8DC7F6A8F29EFF59088C1EA9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
+		8EA97D2374B9441BEDDBF412 /* GuestImageStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */; };
 		8EFF69F6AEB8325BA0231FD0 /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
 		8F23C4CC1D002938AB5A7F2F /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
 		8F774C342A06BCBA1B0B8662 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A383104A833CDB1DFF33D305 /* Composer.swift */; };
@@ -667,6 +668,7 @@
 		7A14CA41BFE4E4DD5AE1BAD1 /* DraftRowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DraftRowTests.swift; sourceTree = "<group>"; };
 		7A4CB88ED3E53A495B415761 /* NotePush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotePush.swift; sourceTree = "<group>"; };
 		7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SurfaceStore.swift; sourceTree = "<group>"; };
+		7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestImageStoreTests.swift; sourceTree = "<group>"; };
 		7F8E7A9C85F0395AEB61379F /* MascotDriverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotDriverTests.swift; sourceTree = "<group>"; };
 		806C5B7DBD88E2CC3F7E98BE /* TopoWidgets.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = TopoWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		80D8ACCA9AB1382E8130057F /* TurnPush.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TurnPush.swift; sourceTree = "<group>"; };
@@ -1237,6 +1239,7 @@
 				BEE1B3C3847A7B4EB6616526 /* EarTests.swift */,
 				8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */,
 				5781A49D54D87338285451F9 /* GuestClockTests.swift */,
+				7A59DF2E6CA52A566C59FA66 /* GuestImageStoreTests.swift */,
 				49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */,
 				FE4AF028080DB70F273DBCD0 /* HarnessTests.swift */,
 				E8F8C8EE2AAC417D93BC731D /* HomeToolTests.swift */,
@@ -2195,6 +2198,7 @@
 				30A6F8AA414A2B4A6B62DCF4 /* EarTests.swift in Sources */,
 				DD7806911895060B60D57B63 /* GuestBridgeTests.swift in Sources */,
 				A81D71D03ADA533A62626D6A /* GuestClockTests.swift in Sources */,
+				8EA97D2374B9441BEDDBF412 /* GuestImageStoreTests.swift in Sources */,
 				046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */,
 				FE66D8B31DDB83EEF3F5FAD2 /* HarnessTests.swift in Sources */,
 				425A5715320AF00903761EB2 /* HomeToolTests.swift in Sources */,
