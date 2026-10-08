@@ -1078,4 +1078,17 @@ final class ComposerPlanTests: XCTestCase {
         XCTAssertFalse(ComposerForm.isRow(keyboard: false, focused: false, alone: true))
         XCTAssertFalse(ComposerForm.isRow(keyboard: false, focused: false, alone: false))
     }
+
+    /// Focus is alone only by waiting: a keyboard on screen ends it at once, as losing the focus
+    /// does, so a keyboard that came after the wait ran out falls from a pane that goes to rest
+    /// with it.
+    func testFocusIsNotAloneUnderAKeyboardHoweverLateItCame() {
+        XCTAssertNil(ComposerForm.alone(focused: true, keyboard: false), "focus with no keyboard is known alone before the wait")
+        XCTAssertEqual(ComposerForm.alone(focused: true, keyboard: true), false, "focus under a keyboard is still called alone")
+        XCTAssertEqual(ComposerForm.alone(focused: false, keyboard: true), false)
+        XCTAssertEqual(ComposerForm.alone(focused: false, keyboard: false), false)
+        // The keyboard came late and is now falling, the field not yet let go: at rest.
+        let late = ComposerForm.alone(focused: true, keyboard: true) ?? true
+        XCTAssertFalse(ComposerForm.isRow(keyboard: false, focused: true, alone: late))
+    }
 }

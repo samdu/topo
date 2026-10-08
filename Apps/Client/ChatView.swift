@@ -97,9 +97,15 @@ struct ChatView: View {
                         guard alone != now else { return }
                         withAnimation(.easeInOut(duration: look.composer.duration)) { alone = now }
                     }
-                    guard focused else { return take(false) }
-                    guard !keyboard else { return }
+                    // Under a keyboard the form is the keyboard's, and nothing is drawn differently
+                    // for the focus no longer being alone, so nothing is animated.
+                    if let settled = ComposerForm.alone(focused: focused, keyboard: keyboard) {
+                        if keyboard { alone = settled } else { take(settled) }
+                        return
+                    }
                     do { try await Task.sleep(for: ComposerForm.patience) } catch { return }
+                    // A wait that ran out as the keyboard came is not the keyboard not coming.
+                    guard !Task.isCancelled else { return }
                     take(true)
                 }
         }

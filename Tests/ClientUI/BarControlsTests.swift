@@ -122,11 +122,14 @@ final class BarControlsTests: XCTestCase {
         }
     }
 
-    /// Opens the menu and presses the model called `name`.
+    /// Opens the menu and presses the model called `name`, once the menu has it where a press
+    /// reaches it: an item exists from the first frame of the menu's opening, and a press on one
+    /// still on its way in chooses nothing.
     private func choose(_ name: String, from model: XCUIElement, in app: XCUIApplication, shot: String? = nil) throws {
         model.tap()
         let item = app.buttons[name]
         XCTAssertTrue(item.waitForExistence(timeout: 10), "the menu does not offer \(name)")
+        XCTAssertTrue(becomes(item, "isHittable == true"), "the menu's \(name) cannot be pressed")
         if let shot { ChatReading.attach(app, shot, to: self) }
         item.tap()
     }

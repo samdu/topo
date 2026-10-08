@@ -836,6 +836,15 @@ enum ComposerForm {
     /// How long focus is held with no keyboard before the pane takes it that none is coming.
     static let patience: Duration = .milliseconds(250)
 
+    /// What `alone` is the moment the focus or the keyboard changes, or nil where it is not known
+    /// until `patience` has passed: without focus nothing is alone, and under a keyboard the focus
+    /// is not, however late the keyboard came. A keyboard that fell with the focus still called
+    /// alone would leave the pane a row through the keyboard's own transaction, to go to rest off
+    /// its curve when the field lets go.
+    static func alone(focused: Bool, keyboard: Bool) -> Bool? {
+        focused && !keyboard ? nil : false
+    }
+
     /// `alone` is the field having held focus `patience` with no keyboard on screen.
     static func isRow(keyboard: Bool, focused: Bool, alone: Bool) -> Bool {
         keyboard || (focused && alone)
