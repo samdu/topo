@@ -171,23 +171,33 @@ enum ChatBar {
                 }
                 .contentShape(Rectangle())
                 // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
-                .simultaneousGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
+                .highPriorityGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
                     guard let index = stops.nearest(to: drag.location.x), index != at else { return }
                     choose(models[index].id)
                 })
-                .onChange(of: at.map { stops.frame(of: $0, in: proxy.frame(in: .global), least: knob) }, initial: true) { _, frame in
+                // To the eighth of a point, so a layout pass that moves nothing reports nothing new.
+                .onChange(of: at.map { stops.frame(of: $0, in: proxy.frame(in: .global), least: knob).eighths }, initial: true) { _, frame in
                     if let frame { stop(frame) }
                 }
             }
-            // No wider than the look's width, and as narrow as the bar leaves it: nothing of it
-            // is drawn outside its own frame, whatever the look asks of what is inside.
-            .frame(maxWidth: slider.width)
+            // The look's width where the bar asks what it would take, which the bar does first,
+            // and as narrow as the bar then leaves it: nothing of it is drawn outside its own
+            // frame, whatever the look asks of what is inside.
+            .frame(minWidth: 0, idealWidth: slider.width, maxWidth: slider.width)
             .frame(height: slider.height)
             .clipped()
             .dynamicTypeSize(...ChatNotices.largestType)
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier(ChatBar.models)
         }
+    }
+}
+
+private extension CGRect {
+    /// This frame with each of its numbers at the nearest eighth of a point.
+    var eighths: CGRect {
+        let near = { (value: CGFloat) in (value * 8).rounded() / 8 }
+        return CGRect(x: near(minX), y: near(minY), width: near(width), height: near(height))
     }
 }
 
