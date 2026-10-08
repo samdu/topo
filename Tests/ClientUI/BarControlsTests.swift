@@ -155,7 +155,7 @@ final class BarControlsTests: XCTestCase {
     /// drawn at with the widest and tallest slider and the largest of everything in it, and the
     /// smallest of each — the model and the mute are inside the navigation bar, in order, clear
     /// of each other and of the badge, and the open slider is inside the bar between the mute and
-    /// the badge with every stop inside it and still chosen by a press. On the phone this suite
+    /// the badge with every stop still chosen by a press. On the phone this suite
     /// runs on, which is wider than the narrowest.
     func testAtEachEndOfTheBarsRangesTheControlsAndTheSliderStayInTheBar() throws {
         let largest = #"{"bar": {"font": {"size": 400}, "slider": {"width": 320, "height": 44, "inset": 80, "stop": 28, "knob": 28, "labelSpacing": 16, "labelFont": {"size": 400}}}}"#

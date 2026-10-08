@@ -456,6 +456,13 @@ enum MascotRoost: Equatable, Sendable {
         var roost: MascotRoost { choice.map { .gap($0.frame) } ?? .none }
     }
 
+    /// Where a place is looked for from with nowhere else to look from: the room's bottom
+    /// trailing corner.
+    static func home(_ field: MascotField, size: CGSize, reach: MascotSprite.Reach = .none) -> CGPoint {
+        let open = field.room(reach)
+        return CGPoint(x: open.maxX - size.width, y: open.maxY - size.height)
+    }
+
     /// Where he stands and why, from the same things `of` is handed.
     ///
     /// Every place for his box is weighed on one lattice (below) inside `field.room(reach)`, and
@@ -481,8 +488,7 @@ enum MascotRoost: Equatable, Sendable {
                        from: CGPoint?) -> Decision {
         let margin = clearance.isFinite ? max(clearance, 0) : 0
         let open = field.room(reach)
-        let home = CGPoint(x: open.maxX - size.width, y: open.maxY - size.height)
-        let aim = from ?? home
+        let aim = from ?? home(field, size: size, reach: reach)
         let decision = Decision(field: field, size: size, clearance: margin, reach: reach, room: open, aim: aim)
         guard size.width > 0, size.height > 0, size.width.isFinite, size.height.isFinite,
               size.width <= open.width, size.height <= open.height else { return decision }
@@ -704,17 +710,20 @@ enum MascotPerch {
     /// bar as his reach lets him, and his body's axis under the stop's middle, so the head he
     /// wears is under the model that gives it him. Moved in only as far as keeps his reach
     /// inside the transcript's width, so the screen's edge holds him at an end stop. Nil with no
-    /// stop.
+    /// stop, and where his reach does not fit the room between the bar and the pane or the
+    /// keyboard (`MascotField.room`): he is not called to where he would be drawn past the
+    /// screen's edge or onto the glass.
     static func under(_ field: MascotField, size: CGSize, reach: MascotSprite.Reach = .none) -> CGRect? {
         guard let stop = field.stop, size.width > 0, size.height > 0 else { return nil }
-        let x = inside(stop.midX - size.width / 2,
-                       from: field.visible.minX + reach.left, to: field.visible.maxX - reach.right - size.width)
-        return CGRect(x: x, y: field.visible.minY + reach.top, width: size.width, height: size.height)
+        let room = field.room(reach)
+        guard room.width >= size.width, room.height >= size.height else { return nil }
+        return CGRect(x: inside(stop.midX - size.width / 2, from: room.minX, to: room.maxX - size.width),
+                      y: room.minY, width: size.width, height: size.height)
     }
 
     /// The settings he is placed by while the model slider calls him: pinned under its chosen
-    /// stop, whatever the look's placement, and going there and along the slider at `swim` rather
-    /// than the stroll. A pin and not a policy of its own, so the glide to a new stop and the way
+    /// stop, whatever the look's placement, and going there and along the slider at `swim`, or the
+    /// stroll where that is faster. A pin and not a policy of its own, so the glide to a new stop and the way
     /// back are the pin's (`MascotRoam.perch`); where the pin puts him is `under`, which the roam
     /// asks while a stop is there. The look's own settings where no stop is.
     static func sliding(_ settings: MascotRoam.Settings, under field: MascotField?, swim: CGFloat) -> MascotRoam.Settings {
@@ -723,7 +732,7 @@ enum MascotPerch {
         sliding.placement = .pinned
         sliding.pin = pin(of: box, in: field.pinFrame)
         sliding.sliding = true
-        sliding.speed = swim
+        sliding.speed = max(swim, settings.speed)
         return sliding
     }
 
@@ -1099,7 +1108,8 @@ struct MascotRoam: Equatable, Sendable {
         let parting = switched ? max(self.settings.speed / max(settings.speed, 1), 1) : 1
         let called = settings.sliding && !self.settings.sliding, released = !settings.sliding && self.settings.sliding
         if called { calledFrom = self.settings.placement == .roam ? move?.to ?? position : nil }
-        let home = released ? calledFrom : nil
+        // Called before he had a place, home is where a first place is looked for from.
+        let home = released ? calledFrom ?? field.map { MascotRoost.home($0, size: settings.size, reach: settings.reach) } : nil
         if !settings.sliding { calledFrom = nil }
         self.settings = settings
         if settings.reduceMotion, let move {
@@ -1109,8 +1119,9 @@ struct MascotRoam: Equatable, Sendable {
         // Held by a finger, he is where it has him; what it lets go of is decided then.
         if dragging { return }
         // A new policy, or a new pin, is a glide from where he stands to where it puts him, at the
-        // stroll, as a roost change is; from a pin to roaming, a roost is decided from where he
-        // stands. A new size or clearance under a placed policy places him at once, as it does
+        // speed he was kept at, as a roost change is; from a pin to roaming, a roost is decided
+        // from where he stands, and from the model slider, the one nearest where it called him
+        // from, where he hangs under the bar being nowhere he is left. A new size or clearance under a placed policy places him at once, as it does
         // when he roams. Not yet placed, he is placed at the settle.
         if settings.placement != .roam, switched || reroost {
             guard position != nil else {
@@ -1124,7 +1135,7 @@ struct MascotRoam: Equatable, Sendable {
         if switched, position != nil {
             let cut = move != nil
             move = nil
-            decide(glide: !reroost, standing: !cut, toward: home, pace: parting)
+            decide(glide: !reroost, standing: !cut && !released, toward: home, pace: parting)
             leaving = move != nil
             unsettled = true
             covered = isCovered
@@ -1343,7 +1354,7 @@ struct MascotRoam: Equatable, Sendable {
     }
 
     /// Why a placed Topo is being put somewhere: his first place, or a new size or clearance, is a
-    /// placement (`atOnce`); a new policy or pin is a glide at the stroll (`switched`); the
+    /// placement (`atOnce`); a new policy or pin is a glide (`switched`); the
     /// keyboard coming or going under a pin is a glide, at the hurry up and the stroll back
     /// (`keyboard`); any other geometry moves him with it at once, or turns a glide under way
     /// toward where he now goes (`geometry`).
@@ -1383,7 +1394,8 @@ struct MascotRoam: Equatable, Sendable {
             move = nil
             return
         }
-        let hurried = settings.placement == .pinned && field.keyboard != nil ? max(settings.hurry, 1) : 1
+        // The hurry is a pin's the keyboard came up over; under the slider he is at the swim.
+        let hurried = settings.placement == .pinned && !settings.sliding && field.keyboard != nil ? max(settings.hurry, 1) : 1
         if arrival == .switched {
             glide(from: from, to: to, pace: parting)
         } else if let move {

@@ -282,7 +282,10 @@ struct ChatView: View {
         .onChange(of: sliderChoice, initial: true) { _, chosen in mascot.chosen = chosen }
         // A failure is said in the middle of the bar, where the open slider is: it shuts.
         .onChange(of: shownNotices.notice) { _, notice in
-            if case .trouble = notice { modelsOpen = false }
+            if case .trouble = notice {
+                modelsOpen = false
+                modelStop = nil
+            }
         }
         // What the microphone has heard so far is written where its session is going: over the
         // draft for a turn that will be sent on the release, after what was written for one that

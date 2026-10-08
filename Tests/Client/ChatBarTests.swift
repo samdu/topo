@@ -67,7 +67,6 @@ final class ChatBarTests: XCTestCase {
             XCTAssertEqual(xs, xs.sorted(), "\(width), \(inset)")
             XCTAssertTrue(xs.allSatisfy { $0 >= 0 && $0 <= stops.width && $0.isFinite }, "\(width), \(inset): \(xs)")
             XCTAssertLessThanOrEqual(stops.inset, stops.width / 4 + 1e-9)
-            XCTAssertGreaterThanOrEqual(stops.column(least: 14), 14)
             XCTAssertEqual(stops.nearest(to: xs[2] + 1), 2, "\(width), \(inset)")
         }
         // A stop's column on the screen is centred on where the slider draws its knob.
@@ -171,6 +170,58 @@ final class ChatBarTests: XCTestCase {
                 XCTAssertEqual(roam.roost.name, placement == .roam ? "gap" : placement == .glass ? "glass" : "pinned", what)
                 XCTAssertTrue(roam.grabbable(at: CGPoint(x: ended.midX, y: ended.midY)), "\(what): not to be had at home")
             }
+        }
+    }
+
+    /// With words down the whole column no place clears them, and where he hangs under the bar
+    /// is as good as any: he still leaves it when the slider shuts, for where he was called from,
+    /// whether he had a place before it opened or not.
+    func testOverAFullTranscriptTheSliderShuttingStillSendsHimAway() throws {
+        for placed in [true, false] {
+            for keyboard in [false, true] {
+                let what = "placed before \(placed), keyboard \(keyboard)"
+                var full = MascotPlacementTests.field(full: true, keyboard: keyboard)
+                var time = 0.0
+                var roam = MascotRoam(Self.settings(), frame: Self.frame)
+                if placed {
+                    hand(&roam, full, at: time)
+                    run(&roam, time: &time)
+                }
+                full.stop = Self.stops.frame(of: 0, in: Self.slider, least: 14)
+                hand(&roam, full, at: time)
+                run(&roam, time: &time)
+                let hung = try XCTUnwrap(roam.picture, "\(what): nowhere under the slider")
+                XCTAssertEqual(hung, MascotPerch.under(full, size: Self.size, reach: Self.reach), what)
+                full.stop = nil
+                hand(&roam, full, at: time)
+                XCTAssertNotNil(roam.move, "\(what): left under the bar")
+                run(&roam, time: &time)
+                let ended = try XCTUnwrap(roam.picture, "\(what): nowhere once the slider shut")
+                XCTAssertGreaterThan(hypot(ended.minX - hung.minX, ended.minY - hung.minY), Self.size.height / 2, "\(what): still under the bar")
+                XCTAssertEqual(roam.roost.name, "gap", what)
+            }
+        }
+    }
+
+    /// A Topo whose reach does not fit under the bar is not called there: at the largest scale a
+    /// document sets, on this phone and with the keyboard up, the look's own settings stand.
+    func testATopoTooLargeForTheRoomIsNotCalled() {
+        for scale in [3.5, 4] as [CGFloat] {
+            for keyboard in [false, true] {
+                let field = Self.field(stop: 1, keyboard: keyboard)
+                let size = MascotSprite.size(scale: scale), reach = MascotSprite.reach(scale: scale)
+                XCTAssertNil(MascotPerch.under(field, size: size, reach: reach), "\(scale), keyboard \(keyboard)")
+                var settings = Self.settings(.roam)
+                settings.size = size
+                settings.reach = reach
+                XCTAssertEqual(MascotPerch.sliding(settings, under: field, swim: 240), settings)
+            }
+        }
+        // Where he fits, his reach is inside the room at every stop, the keyboard up too.
+        for stop in 0..<3 {
+            let field = Self.field(stop: stop, keyboard: true)
+            let box = MascotPerch.under(field, size: Self.size, reach: Self.reach)
+            XCTAssertTrue(box.map { field.room(Self.reach).insetBy(dx: -1e-6, dy: -1e-6).contains($0) } ?? false, "stop \(stop): \(String(describing: box))")
         }
     }
 

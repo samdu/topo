@@ -132,9 +132,10 @@ enum ChatBar {
             let ink = look.bar.ink
             let at = models.firstIndex { $0.id == chosen }
             GeometryReader { proxy in
-                let stops = Stops(count: models.count, width: proxy.size.width, inset: slider.inset)
-                // The knob no taller than the slider, so the line it is on is inside it.
+                // The knob no taller than the slider, so the line it is on is inside it, and an
+                // end stop no nearer the end than half the knob, so the knob on it is too.
                 let knob = min(slider.knob, proxy.size.height)
+                let stops = Stops(count: models.count, width: proxy.size.width, inset: max(slider.inset, knob / 2))
                 let line = knob / 2
                 let column = stops.column(least: knob)
                 ZStack(alignment: .topLeading) {
