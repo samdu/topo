@@ -111,38 +111,19 @@ final class RoleSelectorTests: XCTestCase {
         XCTAssertEqual(s.role, .viewer)
     }
 
-    /// A phone reinstalled while a hub holds the lease: the hub is not a primary, so the login
-    /// is kept and the phone answers when the hub sleeps.
-    func testALoginBesideAHubsLeaseMeansPrimary() async throws {
+    /// A phone reinstalled while a hub holds the lease has a new name, and the records cannot
+    /// tell it from a second device carrying an old login: a viewer, like any other.
+    func testALoginBesideAHubsLeaseMeansViewer() async throws {
         let db = InMemoryRecordDatabase()
         try await hub(db)
         let s = selector(db, signedIn: true)
         await s.decide()
-        XCTAssertEqual(s.role, .primary)
+        XCTAssertEqual(s.role, .viewer)
         // Nothing of the hub's was touched: its lease stands and no role record is written.
         let record = await db.current(Lease.recordID)
         XCTAssertEqual(Lease(record: try XCTUnwrap(record))?.holder, mac)
         let roles = try await db.records(ofType: DeviceRole.recordType)
         XCTAssertTrue(roles.isEmpty)
-    }
-
-    func testNoLoginBesideAHubsLeaseMeansViewer() async throws {
-        let db = InMemoryRecordDatabase()
-        try await hub(db)
-        let s = selector(db)
-        await s.decide()
-        XCTAssertEqual(s.role, .viewer)
-    }
-
-    /// Whether the holder is a hub or a phone cannot be told, and either guess is wrong for one
-    /// of them: the role stays open and the login stays.
-    func testALoginWhereTheHoldersDeviceRecordCannotBeReadIsUndecided() async throws {
-        let db = InMemoryRecordDatabase()
-        try await hub(db)
-        let s = selector(NoDeviceRecords(wrapped: db), signedIn: true)
-        await s.decide()
-        XCTAssertNil(s.role)
-        XCTAssertNotNil(s.trouble)
     }
 
     /// A lease record that does not parse names nobody.
@@ -379,19 +360,6 @@ private struct Failing: RecordDatabase {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { throw RecordDatabaseError.unavailable(underlying: Down()) }
     func query(_ query: RecordQuery) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Down()) }
     func records(ofType type: String) async throws -> [Record] { throw RecordDatabaseError.unavailable(underlying: Down()) }
-}
-
-/// A database that reads everything but device records.
-private struct NoDeviceRecords: RecordDatabase {
-    struct Down: Error {}
-    let wrapped: InMemoryRecordDatabase
-    func save(_ records: [Record]) async throws -> [Record] { try await wrapped.save(records) }
-    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
-        if ids.contains(where: { $0.name.hasPrefix("device/") }) { throw RecordDatabaseError.unavailable(underlying: Down()) }
-        return try await wrapped.fetch(ids)
-    }
-    func query(_ query: RecordQuery) async throws -> [Record] { try await wrapped.query(query) }
-    func records(ofType type: String) async throws -> [Record] { try await wrapped.records(ofType: type) }
 }
 
 /// A database whose zone does not exist until `open()`: every call before that is CloudKit's
