@@ -27,7 +27,7 @@ What is built, what comes next and in what order, what is parked, and the thread
 - Speed: a whole-type read asks CloudKit only for what changed, the guest and Claude Code start as the chat appears, and a reply is streamed to the row (#297), measured by marks at every step of a launch and a turn and a hands-free timed run (#296, `docs/perf.md`).
 - Womble for iOS 12 devices, viewer only.
 - The hub app skeleton (`TopoHub`), holding the lease and showing the pairing code.
-- CI: the PR check's parallel jobs with the audio lane, suites chosen by the paths a PR changes, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns an infrastructure red, republishes the install page, sweeps merged worktrees and triages new issues into `next`, `parked` and `flake` (#303).
+- CI: the three-suite PR check with the audio lane, run on buddybox before each push, suites chosen by the paths a PR changes, the Codex reviewer and its gate, the simulator runbook, OTA builds from `samdu/experiments`, and the janitor (`docs/janitor.md`) that merges what automerge missed, reruns a reviewer that never ran, republishes the install page, sweeps merged worktrees and triages new issues into `next`, `parked` and `flake` (#303).
 
 ## Next, in order
 
@@ -54,7 +54,7 @@ Beside the order, on the pipeline rather than the product: the simulator's iClou
 - **The mascot as a movement system (#177)** and the ink he splashes on a correction (#181). An extensible, agent-programmable engine with a jet, studied from game characters and NPCs; the survey comes first and is not begun.
 - **A hidden terminal onto the guest's Claude Code (#133).** An escape hatch for a prompt the app does not draw; waits until the headless path has settled.
 - **On-device storage (#309, #117, #87).** Bounding the ANE compile cache, clearing tmp on launch and the model housekeeping residue start from a fresh measurement on the phone; the voice pack's ten-minute download is the same subject.
-- **The local gate's aftermath (#312, #308).** Confirming the hosted macOS jobs are gone and rechecking the flakes seen only on hosted runners wait on the Mac suites moving to buddybox.
+- **The local gate's aftermath (#312, #308).** With the Mac suites on buddybox, what is left is confirming the hosted macOS jobs are gone and rechecking the flakes seen only on hosted runners.
 - Small ones, each a nice-to-have or hardening residue with nothing failing today: a claim change with no hold standing is still attempted from the background (#90); an empty parents list is left off the wire (#96); the same-folder guard on a move compares URLs, not directory identity (#103); a query of mostly digits is read as a number (#240); an existing fakefs never gets a package added to the manifest after import (#254); the resident keeps its own clock across a zone change until the next launch (#256).
 
 ## Open threads
