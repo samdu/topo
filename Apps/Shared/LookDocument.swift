@@ -158,8 +158,10 @@ enum LookDocument {
     }
 
     private static func slider(_ value: inout Look.Bar.Slider, _ r: Reader) {
-        r.bounded("width", &value.width, in: 96...320)
+        r.bounded("width", &value.width, in: 96...560)
         r.bounded("height", &value.height, in: 24...44)
+        r.bounded("padding", &value.padding, in: 4...24)
+        r.bounded("drop", &value.drop, in: 0...24)
         r.bounded("inset", &value.inset, in: 8...80)
         r.outline("track", &value.track)
         r.bounded("stop", &value.stop, in: 2...28)

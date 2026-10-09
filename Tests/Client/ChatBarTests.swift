@@ -102,6 +102,14 @@ final class ChatBarTests: XCTestCase {
             XCTAssertLessThanOrEqual(box.maxX + Self.reach.right, Self.visible.maxX + 1e-9, "\(x)")
         }
         XCTAssertNil(MascotPerch.under(Self.field(), size: Self.size))
+        // The slider's glass comes down over the top of the transcript: his reach's top is the
+        // foot of the glass, and with no room left under it he is not called.
+        var low = Self.field(stop: 1)
+        low.stop = CGRect(x: 100, y: Self.visible.minY + 6, width: 40, height: 60)
+        let hung = try XCTUnwrap(MascotPerch.under(low, size: Self.size, reach: Self.reach))
+        XCTAssertEqual(hung.minY - Self.reach.top, Self.visible.minY + 66, accuracy: 1e-9)
+        low.stop = CGRect(x: 100, y: Self.visible.minY, width: 40, height: low.room(Self.reach).height - Self.size.height + 1)
+        XCTAssertNil(MascotPerch.under(low, size: Self.size, reach: Self.reach))
         for placement in Look.Mascot.Placement.allCases {
             XCTAssertEqual(MascotPerch.sliding(Self.settings(placement), under: Self.field(), swim: 240), Self.settings(placement))
             XCTAssertEqual(MascotPerch.sliding(Self.settings(placement), under: nil, swim: 240), Self.settings(placement))
@@ -173,7 +181,7 @@ final class ChatBarTests: XCTestCase {
         }
     }
 
-    /// With words down the whole column no place clears them, and where he hangs under the bar
+    /// With words down the whole column no place clears them, and where he hangs under the slider
     /// is as good as any: he still leaves it when the slider shuts, for where he was called from,
     /// whether he had a place before it opened or not.
     func testOverAFullTranscriptTheSliderShuttingStillSendsHimAway() throws {

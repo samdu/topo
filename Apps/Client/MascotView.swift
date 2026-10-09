@@ -859,8 +859,7 @@ struct MascotOverChat: UIViewRepresentable {
 extension MascotScene.Value {
     /// The anchors resolved where he is drawn, or nil before the transcript has reported its frame.
     /// `keyboardTop` is the keyboard's top edge in the global space, while it is up, and `stop`
-    /// the model slider's chosen stop there, while the slider is open: the bar it is in is not
-    /// in this view's tree, so it reports no anchor.
+    /// the model slider's chosen stop there, while the slider is open.
     func field(in proxy: GeometryProxy, keyboardTop: CGFloat?, stop: CGRect? = nil) -> MascotField? {
         guard let visible else { return nil }
         let origin = proxy.frame(in: .global).origin
