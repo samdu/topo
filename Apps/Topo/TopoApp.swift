@@ -79,12 +79,13 @@ struct TopoApp: App {
             SecretTool(store: connections.store, onePassword: GuestOnePassword(), leftBehind: connections.leftBehind,
                        requests: connections.secrets),
             LocationTool(locator: CoreLocationLocator(permission: location), authorizer: LocationAuthorizer(permission: location),
-                         broker: broker),
+                         broker: broker, places: { memory.places }),
             MapsTool.standard(permission: location, broker: broker),
             homeTool,
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
+            LogTool(reader: UnifiedLogReader()),
         ]
         // A control's request to the home network asks for local network access in the
         // foreground only, since a background one while it is undetermined is denied unasked.
