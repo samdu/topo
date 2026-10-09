@@ -53,7 +53,8 @@ expected=(
   scripts/ci-require-tests.sh
   scripts/ci-select-lane.sh
   scripts/fetch-ear-models.sh
-  '.github/actions/prepare/*'
+  scripts/mac-suite.sh
+  scripts/validate-and-push.sh
   .github/workflows/pr-validate.yaml
 )
 
@@ -109,7 +110,6 @@ fi
 # pull_request event a diff it can read chooses by the paths, both sides of a rename included, and a
 # diff producer that fails — HEAD^1 missing, as in a checkout too shallow to hold the merge commit's
 # parent — chooses full and says so, rather than killing the step and leaving the run with no lane.
-# On a dispatch the inputs choose, and on the schedule the lane is full.
 step_run="$(ruby -ryaml -e '
   w = YAML.load_file(ARGV[0])
   print w.fetch("jobs").fetch("select").fetch("steps").find { |s| s["id"] == "lane" }.fetch("run")
@@ -121,7 +121,7 @@ trap 'rm -rf "$scratch"' EXIT
 run_step() {
   local name="$1" repo="$2" want="$3" match="$4" out status lane reason
   : > "$scratch/output"
-  out="$(cd "$repo" && EVENT="${STEP_EVENT:-pull_request}" DISPATCH_LANE="${STEP_LANE:-}" DISPATCH_FAIL="${STEP_FAIL:-}" VOICE_PATHS="$voice_paths" \
+  out="$(cd "$repo" && VOICE_PATHS="$voice_paths" \
     RUNNER_TEMP="$scratch" GITHUB_OUTPUT="$scratch/output" GITHUB_STEP_SUMMARY="$scratch/summary" \
     bash -eo pipefail -c "$step_run" 2>&1)" && status=0 || status=$?
   lane="$(sed -n 's/^lane=//p' "$scratch/output")"
@@ -165,14 +165,6 @@ mkdir -p "$scratch/rename/Apps/Client/Hearing"
 git -C "$scratch/rename" mv Apps/Client/Ear.swift Apps/Client/Hearing/Ear.swift
 git -C "$scratch/rename" -c user.name=t -c user.email=t@t commit -qm rename
 run_step "a voice-path file renamed off the list" "$scratch/rename" full "Apps/Client/Ear.swift is on the voice path"
-
-# The dispatch inputs. `fail=skip` means the fast lane's model-less setup with the real-ear test
-# left selected, so it takes the fast lane whatever `lane` says, and says it overrode it.
-STEP_EVENT=workflow_dispatch STEP_LANE=full STEP_FAIL=none run_step "dispatch lane=full" "$scratch/fast" full "asked for the full lane"
-STEP_EVENT=workflow_dispatch STEP_LANE=fast-benchmark STEP_FAIL=none run_step "dispatch lane=fast-benchmark" "$scratch/fast" fast "benchmark run"
-STEP_EVENT=workflow_dispatch STEP_LANE=full STEP_FAIL=skip run_step "dispatch lane=full fail=skip" "$scratch/fast" fast "fail=skip overrode lane=full"
-STEP_EVENT=workflow_dispatch STEP_LANE=fast-benchmark STEP_FAIL=skip run_step "dispatch lane=fast-benchmark fail=skip" "$scratch/fast" fast "fail=skip"
-STEP_EVENT=schedule run_step "the nightly" "$scratch/fast" full "nightly"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
