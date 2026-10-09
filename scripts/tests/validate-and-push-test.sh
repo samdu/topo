@@ -13,7 +13,7 @@
 # and a status GitHub refuses post nothing more and exit 2; --no-push refuses a commit origin's
 # branch is not at before any suite runs; a held lock is waited on and then given up on; a suite an earlier
 # run left going is not started beside; a suite with two results is red; a description keeps the
-# logs' path; and the
+# logs' path; a head run again keeps the earlier run's logs, five runs a commit; and the
 # `test` job is re-run, by job, only when the commit's newest run has concluded with it red.
 #
 #   scripts/tests/validate-and-push-test.sh
@@ -226,6 +226,19 @@ scratch redrerun Packages/TopoLink/Package.swift
 git -C "$repo" push -q origin topic
 FAKE_SUITES="others=failure" FAKE_RUN="99 completed" FAKE_TEST_JOB=4242 validate
 is "red suite: no rerun" "$(grep -c '^run rerun' "$GH_CALLS")" 0
+
+# A head run again after a red: each run has its own logs under the commit, and the red run's
+# are still there. Past five runs of a commit the oldest go.
+runs() { ls -1 "$TOPO_VALIDATE_LOGS/$sha" | wc -l | tr -d ' '; }
+red_run="$(ls -1 "$TOPO_VALIDATE_LOGS/$sha")"
+validate
+is "run again: exits 0" "$status" 0
+is "run again: two runs' logs under the commit" "$(runs)" 2
+is "run again: the red run's result is kept" "$(cat "$TOPO_VALIDATE_LOGS/$sha/$red_run/suites.txt" 2>/dev/null)" "others=failure"
+[ -f "$TOPO_VALIDATE_LOGS/$sha/$red_run/mac-suite.log" ] && ok "run again: the red run's log is kept" || fail "run again: the red run's mac-suite.log is gone"
+for _ in 1 2 3 4 5; do validate; done
+is "seven runs of a commit: five kept" "$(runs)" 5
+[ ! -e "$TOPO_VALIDATE_LOGS/$sha/$red_run" ] && ok "seven runs of a commit: the oldest is gone" || fail "seven runs of a commit: the oldest run is still there"
 
 # Another validation holds the Mac: waited on, then given up on, with no suite run.
 scratch locked Apps/Client/SettingsView.swift

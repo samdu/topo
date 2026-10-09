@@ -35,7 +35,9 @@
 #      on it.
 #
 # Each status's description says pass or fail, the lane, the minutes and where the logs are:
-# ~/Library/Logs/topo-validate/<sha>/ on this Mac, kept for the ten newest commits. It exits 0
+# ~/Library/Logs/topo-validate/<sha>/ on this Mac, one directory per run inside it (named for
+# when the run began, UTC), so a head run again after a red keeps the red run's logs. The ten
+# newest commits are kept, and each one's five newest runs. It exits 0
 # when every suite passed and the statuses are posted, 1 on a red suite, 2 on anything that
 # stopped it earlier, and 143 when a signal ended it, its suite ended with it.
 #
@@ -50,6 +52,7 @@ logs_root="${TOPO_VALIDATE_LOGS:-$HOME/Library/Logs/topo-validate}"
 repo_slug="${TOPO_VALIDATE_REPO:-samdu/topo}"
 LOCK_WAIT="${LOCK_WAIT:-10800}"
 KEEP_LOGS=10
+KEEP_RUNS=5
 POST_RETRY="${POST_RETRY:-3}"   # seconds before a status is posted again, times the try
 SUITES=(topo_unit topo_ui others)
 
@@ -136,7 +139,8 @@ esac
 [ -z "$lane_arg" ] || lane="$lane_arg"
 [ -z "$suites_arg$lane_arg" ] || echo "asked for: ${chosen[*]:-no suite}; lane $lane"
 
-logs="$logs_root/$sha"
+commit_logs="$logs_root/$sha"
+logs="$commit_logs/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 host="$(hostname -s)"
 results=""   # `<suite>=success|failure` lines, as mac-suite.sh wrote them
 minutes=0
@@ -173,7 +177,6 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   git -C "$checkout" clean --quiet -fd
   [ "$(git -C "$checkout" rev-parse HEAD)" = "$sha" ] || die "$checkout is not at $short."
 
-  rm -rf "$logs"
   mkdir -p "$logs"
   echo "Running ${chosen[*]} (lane $lane) at $short in $checkout; logs in $logs"
   started=$SECONDS
@@ -203,7 +206,10 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   done
   [ "$suite_status" = 0 ] || grep -q '=failure$' <<<"$results" || die "scripts/mac-suite.sh exited $suite_status with no suite red; see $logs/mac-suite.log."
   exec 8>&-
-  # The ten newest commits' logs are kept.
+  # The ten newest commits' logs are kept, and the five newest runs of this one.
+  ls -1t "$commit_logs" | tail -n "+$((KEEP_RUNS + 1))" | while IFS= read -r old; do
+    case "$old" in [0-9]*T[0-9]*Z-[0-9]*) rm -rf "${commit_logs:?}/$old" ;; esac
+  done
   ls -1t "$logs_root" | tail -n "+$((KEEP_LOGS + 1))" | while IFS= read -r old; do
     case "$old" in *[!0-9a-f]* | "") ;; *) rm -rf "${logs_root:?}/$old" ;; esac
   done
@@ -247,8 +253,8 @@ post() {
 }
 # The logs as a description names them, short enough that the 140 characters keep the path
 # under the default root.
-where="~${logs#"$HOME"}"
-[ "$where" != "~$logs" ] || where="$logs"
+where="~${commit_logs#"$HOME"}"
+[ "$where" != "~$commit_logs" ] || where="$commit_logs"
 for suite in ${chosen[@]+"${chosen[@]}"}; do
   # Red by any line that says so, as `red` above is read: never the last word of several.
   if grep -q "^$suite=failure$" <<<"$results" || ! grep -q "^$suite=success$" <<<"$results"; then
