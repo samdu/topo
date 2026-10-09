@@ -16,9 +16,11 @@ import TopoCore
 ///
 /// A Claude login found at first launch is one the keychain kept across a delete of the app,
 /// and the device's name did not come with it. It makes the device primary where the record
-/// names no other device or cannot be read. Where the record names another device, that device
-/// is the primary and this one a viewer, whose login the viewer screen drops: a login is not
-/// what hands primary over, the viewer's menu is.
+/// names no primary or cannot be read. A record names a primary when a phone or a pad holds
+/// it: that device is the primary and this one a viewer, whose login the viewer screen drops,
+/// since a login is not what hands primary over, the viewer's menu is. A hub is not a primary,
+/// so beside a hub's lease the login is kept and this device answers whenever the hub sleeps.
+/// A hub is known by its device record, which it registers before it claims.
 @MainActor
 @Observable
 final class RoleSelector {
@@ -89,8 +91,22 @@ final class RoleSelector {
                 return
             }
             let holder = Lease(record: record)?.holder
-            // A login decides only where the record names nobody.
-            keep(holder == device || (signedIn && holder == nil) ? .primary : .viewer)
+            guard signedIn, holder != device else {
+                keep(holder == device ? .primary : .viewer)
+                return
+            }
+            // A login decides only where the record names no primary: nobody, or a hub.
+            guard let holder else {
+                keep(.primary)
+                return
+            }
+            do {
+                keep(try await isHub(holder) ? .primary : .viewer)
+            } catch {
+                // Which the holder is cannot be told yet, and a guess either way is a second
+                // primary or a login dropped.
+                trouble = TranscriptStore.message(for: error)
+            }
         } catch {
             // With a login and no record to read, the login is the evidence there is.
             if signedIn {
@@ -99,6 +115,11 @@ final class RoleSelector {
                 trouble = TranscriptStore.message(for: error)
             }
         }
+    }
+
+    /// True when `holder` is a hub: its device record says it is a Mac.
+    private func isHub(_ holder: DeviceID) async throws -> Bool {
+        try await database.fetch(Device.recordID(for: holder)).flatMap(Device.init(record:))?.kind == .mac
     }
 
     /// The first claim: true when this device created the lease record, false when another got
