@@ -30,7 +30,8 @@ public enum VaultPlacement {
     /// the mirror or another device, is not written over. The name is given only before `$6`
     /// (seconds since 1970). `$2` is where a vault is mounted (`/proc/mounts`, read from the end of
     /// its line, since the host's path opens it) or nothing is done: after an unmount the path is a
-    /// bare folder in the home. Prints the size of what landed.
+    /// bare folder in the home. Prints the size of what landed, read without an open, which would
+    /// wait on the file's coordination again.
     static let script = #"""
     root="$2"; dir="$2/$3"; dst="$dir/$4"; tmp="$dir/.topo-pick-$$.part"
     awk -v at="$root" '$(NF-4) == at && $(NF-3) == "topo-vault" { vault = 1 } END { exit !vault }' /proc/mounts || exit 20
@@ -40,7 +41,7 @@ public enum VaultPlacement {
     [ -e "$dst" ] || [ -L "$dst" ] && exit 17
     timeout -s KILL "$5" cp -- "$1" "$tmp" || exit 22
     [ "$(date +%s)" -lt "$6" ] || exit 24
-    if ln -- "$tmp" "$dst" 2>/dev/null; then wc -c < "$dst"; exit 0; fi
+    if ln -- "$tmp" "$dst" 2>/dev/null; then stat -c %s -- "$dst"; exit 0; fi
     [ -e "$dst" ] || [ -L "$dst" ] && exit 17
     exit 23
     """#
