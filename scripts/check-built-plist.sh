@@ -34,6 +34,8 @@
 # no setting generates the key, and without it a tap on a widget's link opens nothing. The
 # widget extension is read off the product too: `PlugIns/TopoWidgets.appex`, the one the widgets
 # are, embedded in the app.
+# The share extension likewise: `PlugIns/TopoShare.appex`, a share-services extension whose
+# activation rule is the dictionary of the four things Topo takes, one of each.
 #
 # The GPL's text is read off the product too: the iSH fork linked into the app is GPL, and its
 # holders' App Store waiver (LICENSE.IOS) stands only while the app carries the licence's text.
@@ -155,6 +157,29 @@ if [ ! -f "$app/PlugIns/TopoWidgets.appex/Info.plist" ]; then
     status=1
 fi
 
+# The share extension, and that it takes only what it names: a predicate in place of the
+# dictionary would put Topo in every share sheet for everything.
+share="$app/PlugIns/TopoShare.appex/Info.plist"
+point="$(plutil -extract NSExtension.NSExtensionPointIdentifier raw -o - -- "$share" 2>/dev/null || true)"
+if [ "$point" != "com.apple.share-services" ]; then
+    echo "$app does not embed PlugIns/TopoShare.appex as a share extension (${point:-no extension}); Topo would be in no share sheet" >&2
+    status=1
+else
+    rule="NSExtension.NSExtensionAttributes.NSExtensionActivationRule"
+    if [ "$(plutil -extract "$rule" raw -o - -- "$share" 2>/dev/null | sort | tr '\n' ' ')" != "NSExtensionActivationSupportsFileWithMaxCount NSExtensionActivationSupportsImageWithMaxCount NSExtensionActivationSupportsText NSExtensionActivationSupportsWebURLWithMaxCount " ]; then
+        echo "TopoShare.appex's NSExtensionActivationRule is not the dictionary of the four things Topo takes" >&2
+        status=1
+    fi
+    for key in NSExtensionActivationSupportsFileWithMaxCount NSExtensionActivationSupportsImageWithMaxCount \
+               NSExtensionActivationSupportsWebURLWithMaxCount; do
+        count="$(plutil -extract "$rule.$key" raw -o - -- "$share" 2>/dev/null || true)"
+        if [ "$count" != "1" ]; then
+            echo "TopoShare.appex's $key is '${count:-absent}', not 1; Topo takes one thing a share" >&2
+            status=1
+        fi
+    done
+fi
+
 if ! head -2 "$app/LICENSE" 2>/dev/null | grep -q "GNU GENERAL PUBLIC LICENSE" \
     || ! head -2 "$app/LICENSE" | grep -q "Version 3"; then
     echo "$app has no LICENSE carrying the GPL-3.0's text; the iSH fork's App Store waiver needs it" >&2
@@ -169,5 +194,5 @@ if [ -n "$build" ]; then
     fi
 fi
 
-[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
+[ "$status" -eq 0 ] && echo "$app declares UIBackgroundModes $modes, UIFileSharingEnabled and LSSupportsOpeningDocumentsInPlace, the tools' eight usage strings, the topo URL scheme, NSAllowsArbitraryLoads, $entitlements, embeds TopoWidgets.appex and TopoShare.appex, carries the GPL's text${build:+, CFBundleVersion $build}"
 exit "$status"

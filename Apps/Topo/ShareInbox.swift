@@ -1,0 +1,112 @@
+import Foundation
+import TopoAuth
+import TopoUserland
+
+/// The line a share's turn is put on: the harness, or a suite's own.
+@MainActor
+protocol ShareLine: AnyObject {
+    var hasRead: Bool { get }
+    func refresh() async -> Bool
+    func willSend(_ text: String, nonce: String) -> Bool
+    func retry() async
+}
+
+extension Harness: ShareLine {}
+
+/// What the person shared from another app's share sheet (`ShareStore`, written by the share
+/// extension), made into turns: each share is put on the harness's line under the nonce the
+/// extension minted, and nothing for a nonce already there, so a drain run twice (before a
+/// removal, after a crash) is one turn. A harness that has not read the log reads it first, since
+/// before it the harness cannot know what the log holds.
+///
+/// The extension cannot bring Topo forward, so a share waits in the app group until the app next
+/// comes to the front, which is when this drains. The turn's text is written here, never by the
+/// extension: the person's note as they wrote it, then what was shared under a line that says it
+/// was shared, so nothing another app handed over reads as the person's own words. An image or a
+/// file is put in the guest's home first (`HomeFile`), under `shared/<the nonce's first eight>/`,
+/// and the turn names its path; a share whose file cannot be put there stays for the next drain.
+@MainActor
+final class ShareInbox {
+    let line: any ShareLine
+    let store: @MainActor () -> ShareStore?
+    let home: @Sendable () -> URL
+
+    /// The home's folder shared images and files are kept under.
+    nonisolated static let folder = "shared"
+    /// What a sheet that was killed left half made is taken away once it is this old.
+    static let unfinished: TimeInterval = 60 * 60
+
+    init(line: any ShareLine, store: @escaping @MainActor () -> ShareStore? = { ShareStore.shared() },
+         home: @escaping @Sendable () -> URL = { GuestResident.homeDirectory }) {
+        self.line = line
+        self.store = store
+        self.home = home
+    }
+
+    /// The login's phase or this phone's role moving: signed in, shares are taken, images and
+    /// files where the guest lives; a login ending takes away what was shared and not yet sent.
+    /// Only a login ending does: a launch that finds no token takes nothing away.
+    func follow(from was: SignIn.Phase, to phase: SignIn.Phase, guestIsHere: Bool) {
+        if phase == .signedIn {
+            try? store()?.open(files: guestIsHere)
+        } else if was == .signedIn {
+            store()?.close()
+        }
+    }
+
+    /// Puts every share on the line and sends it.
+    func drain() async {
+        guard let store = store(), store.door() != nil else { return }
+        store.clearUnfinished(olderThan: Self.unfinished)
+        guard !store.shares().isEmpty else { return }
+        if !line.hasRead {
+            guard await line.refresh() else { return }
+        }
+        var queued = false
+        for share in store.shares() {
+            var path: String?
+            if share.kind == .image || share.kind == .file {
+                guard let placed = await Self.place(share, from: store, under: home()) else { continue }
+                path = placed
+            }
+            // A sign-out while the file was being placed took the share with it.
+            guard store.door() != nil, let text = Self.text(share, path: path), line.willSend(text, nonce: share.nonce) else { continue }
+            store.remove(nonce: share.nonce)
+            queued = true
+        }
+        if queued { await line.retry() }
+    }
+
+    /// The share's image or file in the guest's home, and its path there; nil when it could not
+    /// be put there. A file already at the name is the one an earlier drain put there.
+    nonisolated static func place(_ share: Share, from store: ShareStore, under home: URL) async -> String? {
+        guard let source = store.attachment(of: share), let name = share.file else { return nil }
+        let folders = [folder, String(share.nonce.prefix(8)).lowercased()]
+        let placed = await Task.detached(priority: .userInitiated) { () -> Bool in
+            guard let data = try? Data(contentsOf: source, options: .mappedIfSafe), data.count <= Share.fileLimit else { return false }
+            try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+            return (try? HomeFile.create(data, named: name, in: folders, under: home)) != nil
+        }.value
+        return placed ? ([ClaudeLauncher.home] + folders + [name]).joined(separator: "/") : nil
+    }
+
+    /// The turn a share is: the person's note, then what was shared under a line saying so. Nil
+    /// for a share that holds nothing to say.
+    nonisolated static func text(_ share: Share, path: String?) -> String? {
+        let shared: String
+        switch share.kind {
+        case .text:
+            guard let text = share.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+            shared = "[Shared with Topo from another app: text]\n\(text)"
+        case .link:
+            guard let link = share.text?.trimmingCharacters(in: .whitespacesAndNewlines), !link.isEmpty else { return nil }
+            shared = "[Shared with Topo from another app: a link]\n\(link)"
+        case .image, .file:
+            guard let path else { return nil }
+            let what = share.kind == .image ? "an image" : "a file"
+            shared = "[Shared with Topo from another app: \(what), kept at \(path) (\(share.bytes ?? 0) bytes)]"
+        }
+        let note = share.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        return note.isEmpty ? shared : "\(note)\n\n\(shared)"
+    }
+}
