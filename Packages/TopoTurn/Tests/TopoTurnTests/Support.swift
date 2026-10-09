@@ -1,5 +1,6 @@
 import Foundation
 import TopoCore
+import TopoCoreTesting
 @testable import TopoTurn
 
 /// A brain that answers from a queue and records every request it was asked.
@@ -67,6 +68,29 @@ struct AlwaysConfirms: LeaseProbe {
     func confirms(_ lease: Lease) async -> Bool { true }
 }
 
+/// Records what reaches the store: the IDs of each fetch and the types of each saved batch.
+final class RecordingDatabase: RecordDatabase, @unchecked Sendable {
+    let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var _fetched: [[RecordID]] = []
+    private var _saved: [[String]] = []
+    init(inner: InMemoryRecordDatabase) { self.inner = inner }
+    var leaseFetches: Int { lock.withLock { _fetched.count { $0.contains(Lease.recordID) } } }
+    var saved: [[String]] { lock.withLock { _saved } }
+    func reset() { lock.withLock { _fetched = []; _saved = [] } }
+    func save(_ records: [Record]) async throws -> [Record] {
+        let out = try await inner.save(records)
+        lock.withLock { _saved.append(records.map(\.type)) }
+        return out
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        lock.withLock { _fetched.append(ids) }
+        return try await inner.fetch(ids)
+    }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+}
+
 /// Time a test moves by hand: the lease's wall clock and its monotonic one together.
 final class Elapsed: @unchecked Sendable {
     private let lock = NSLock()
@@ -114,4 +138,78 @@ final class Outage: RecordDatabase, @unchecked Sendable {
     func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try reach(); return try await base.fetch(ids) }
     func query(_ query: RecordQuery) async throws -> [Record] { try reach(); return try await base.query(query) }
     func records(ofType type: String) async throws -> [Record] { try reach(); return try await base.records(ofType: type) }
+}
+
+/// A database whose next save waits, unsent, until the test lets it go.
+actor HeldSave: RecordDatabase {
+    private let inner: InMemoryRecordDatabase
+    private var holdNext = false
+    private var waiter: CheckedContinuation<Void, Never>?
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    func holdNextSave() { holdNext = true }
+    var holding: Bool { waiter != nil }
+    func release() {
+        waiter?.resume()
+        waiter = nil
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if holdNext {
+            holdNext = false
+            await withCheckedContinuation { waiter = $0 }
+        }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] { try await inner.fetch(ids) }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await inner.records(ofType: type) }
+}
+
+/// The marks one task made, in order (`Perf.observer`).
+final class Marks: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: [String] = []
+    var all: [String] { lock.withLock { names } }
+    var add: @Sendable (String) -> Void { { [self] name in lock.withLock { names.append(name) } } }
+}
+
+/// A database that fails one call on request as an unreachable CloudKit does: the next fetch of
+/// the lease, the next read of the log, or the next save, which does not reach the store.
+final class LosesALeaseFetch: RecordDatabase, @unchecked Sendable {
+    private let inner: InMemoryRecordDatabase
+    private let lock = NSLock()
+    private var lose = false, loseRead = false, loseSave = false
+    /// Runs before each read of the log.
+    var beforeRead: (@Sendable () async -> Void)?
+    init(_ inner: InMemoryRecordDatabase) { self.inner = inner }
+    func loseNextLeaseFetch() { lock.withLock { lose = true } }
+    func loseNextRead() { lock.withLock { loseRead = true } }
+    func loseNextSave() { lock.withLock { loseSave = true } }
+    private func away() -> any Error { RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+    private func read() async throws {
+        await beforeRead?()
+        if lock.withLock({ () -> Bool in defer { loseRead = false }; return loseRead }) { throw away() }
+    }
+    func save(_ records: [Record]) async throws -> [Record] {
+        if lock.withLock({ () -> Bool in defer { loseSave = false }; return loseSave }) { throw away() }
+        return try await inner.save(records)
+    }
+    func fetch(_ ids: [RecordID]) async throws -> [RecordID: Record] {
+        if ids.contains(Lease.recordID) {
+            let lost = lock.withLock { () -> Bool in defer { lose = false }; return lose }
+            if lost { throw RecordDatabaseError.unavailable(underlying: URLError(.notConnectedToInternet)) }
+        }
+        return try await inner.fetch(ids)
+    }
+    func query(_ query: RecordQuery) async throws -> [Record] { try await read(); return try await inner.query(query) }
+    func records(ofType type: String) async throws -> [Record] { try await read(); return try await inner.records(ofType: type) }
+}
+
+/// True once `condition` holds, asked a bounded number of times: a wait that fails instead of
+/// hanging the suite.
+func eventually(_ condition: @Sendable () async -> Bool) async -> Bool {
+    for _ in 0..<100_000 {
+        if await condition() { return true }
+        await Task.yield()
+    }
+    return false
 }
