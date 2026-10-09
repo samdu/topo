@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # scripts/check-built-plist.sh against hand-made products: one carrying everything passes, and one
 # missing, or carrying an empty, usage string for each permission the phone's tools ask for fails,
-# naming the key; so does one without the topo URL scheme, NSAllowsArbitraryLoads or the widget extension. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
+# naming the key; so does one without the topo URL scheme, the key that keeps the limited photo library's sheet down, NSAllowsArbitraryLoads or the widget extension. A product signed (ad hoc) without the HomeKit entitlement fails, one signed with
 # it passes, and an unsigned one passes saying its entitlements were not read. macOS only
 # (plutil, codesign).
 #
@@ -15,7 +15,7 @@ trap 'rm -rf "$work"' EXIT
 
 keys=(NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription
       NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription
-      NSLocalNetworkUsageDescription)
+      NSLocalNetworkUsageDescription NSPhotoLibraryUsageDescription NSPhotoLibraryAddUsageDescription)
 
 # A product with everything the check reads.
 make_app() {
@@ -25,6 +25,7 @@ make_app() {
     plutil -insert UIBackgroundModes -json '["remote-notification","audio"]' "$app/Info.plist"
     plutil -insert UIFileSharingEnabled -bool YES "$app/Info.plist"
     plutil -insert LSSupportsOpeningDocumentsInPlace -bool YES "$app/Info.plist"
+    plutil -insert PHPhotoLibraryPreventAutomaticLimitedAccessAlert -bool YES "$app/Info.plist"
     plutil -insert CFBundleVersion -string 7 "$app/Info.plist"
     for usage in "${keys[@]}"; do
         plutil -insert "$usage" -string "Topo uses this when you ask it to." "$app/Info.plist"
@@ -60,6 +61,14 @@ for key in "${keys[@]}"; do
         rm -rf "$work/blank-$key"
     done
 done
+
+make_app "$work/no-alert/Topo.app"
+plutil -remove PHPhotoLibraryPreventAutomaticLimitedAccessAlert "$work/no-alert/Topo.app/Info.plist"
+if errors="$("$check" "$work/no-alert/Topo.app" 2>&1 >/dev/null)"; then
+    fail "a product that lets the limited library's sheet come up passed"
+elif [[ "$errors" != *"PHPhotoLibraryPreventAutomaticLimitedAccessAlert"* ]]; then
+    fail "the refusal of a product that lets the limited library's sheet come up does not name the key: $errors"
+fi
 
 make_app "$work/no-scheme/Topo.app"
 plutil -remove CFBundleURLTypes "$work/no-scheme/Topo.app/Info.plist"

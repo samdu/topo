@@ -82,6 +82,8 @@ struct TopoApp: App {
                          broker: broker, places: { memory.places }),
             MapsTool.standard(permission: location, broker: broker),
             homeTool,
+            PhotosTool(library: PhotoKitLibrary(), authorizer: PhotosAuthorizer(), broker: broker),
+            FilesTool(picker: DocumentPicker(), drop: GuestVaultDrop()),
             WidgetTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders)),
             ControlTool(judge: WidgetRunJudge(home: homeTool, notify: notify, reminders: reminders),
                         leftBehind: connections.leftBehind),
