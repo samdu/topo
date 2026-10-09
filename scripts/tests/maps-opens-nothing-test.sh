@@ -4,6 +4,10 @@
 # a way out of the app spelt otherwise passes it. The check is first held against fixtures of its
 # own, so a word it stopped finding fails here rather than passing every file.
 #
+# One file is let one word: MapsLink.swift writes the link an answer carries for the person to
+# tap, so it may name `maps.apple.com`, and nothing else on the list. Every other file is held to
+# the whole list, that word included.
+#
 #   scripts/tests/maps-opens-nothing-test.sh
 set -uo pipefail
 
@@ -13,13 +17,29 @@ work="$(mktemp -d -t maps-opens-nothing-test)"
 trap 'rm -rf "$work"' EXIT
 
 words=(openInMaps openMaps UIApplication 'UIApplication.shared.open' openURL 'maps://' 'maps.apple.com' MKMapView MKLookAroundScene)
+# The file that writes the link, and the one word it is let.
+link_file="MapsLink.swift"
+link_word="maps.apple.com"
 
 # found <file...>: prints every line holding one of the words, and succeeds when there is one. A
-# file that cannot be read is said as found, so it fails the check rather than passing it.
+# file named $link_file is read for every word but $link_word. A file that cannot be read is said
+# as found, so it fails the check rather than passing it.
 found() {
+  local status=1 file
+  for file in "$@"; do
+    if found_in "$file"; then status=0; fi
+  done
+  return "$status"
+}
+
+found_in() {
   local arguments=() word status
-  for word in "${words[@]}"; do arguments+=(-e "$word"); done
-  grep -nF "${arguments[@]}" -- "$@" && status=0 || status=$?
+  for word in "${words[@]}"; do
+    if [ "$(basename "$1")" = "$link_file" ] && [ "$word" = "$link_word" ]; then continue; fi
+    arguments+=(-e "$word")
+  done
+  set -- "$1"
+  grep -HnF "${arguments[@]}" -- "$@" && status=0 || status=$?
   if [ "$status" -gt 1 ]; then
     echo "grep could not read: $*"
     return 0
@@ -44,6 +64,36 @@ if found "$work/clean.swift" > /dev/null; then
 fi
 if ! found "$work/absent.swift" > /dev/null 2>&1; then
   echo "FAIL: a file that cannot be read was passed"
+  failures=$((failures + 1))
+fi
+
+# The link's file may hold its one word and no other; a file of any other name may not hold it,
+# alone or beside the link's file.
+printf 'components.host = "%s"\n' "$link_word" > "$work/$link_file"
+if found "$work/$link_file" > /dev/null; then
+  echo "FAIL: $link_file holding only $link_word was refused"
+  failures=$((failures + 1))
+fi
+for word in "${words[@]}"; do
+  [ "$word" = "$link_word" ] && continue
+  printf 'components.host = "%s"\n    item.%s(launchOptions: nil)\n' "$link_word" "$word" > "$work/$link_file"
+  if ! found "$work/$link_file" > /dev/null; then
+    echo "FAIL: $link_file holding $word was passed"
+    failures=$((failures + 1))
+  fi
+done
+printf 'components.host = "%s"\n' "$link_word" > "$work/$link_file"
+printf 'let host = "%s"\n' "$link_word" > "$work/MapsTool.swift"
+if ! found "$work/MapsTool.swift" > /dev/null; then
+  echo "FAIL: a file other than $link_file holding $link_word was passed"
+  failures=$((failures + 1))
+fi
+if ! found "$work/$link_file" "$work/MapsTool.swift" > /dev/null; then
+  echo "FAIL: $link_word in another file was passed beside $link_file"
+  failures=$((failures + 1))
+fi
+if ! found "$work/absent.swift" "$work/$link_file" > /dev/null 2>&1; then
+  echo "FAIL: a file that cannot be read was passed beside $link_file"
   failures=$((failures + 1))
 fi
 

@@ -567,7 +567,7 @@ final class PhoneToolsTests: XCTestCase {
         XCTAssertEqual(reply.status, ToolReply.ok)
         XCTAssertTrue(reply.text.hasPrefix("latitude 37.76000\nlongitude -122.42000\naccuracy 12 m (approximate"), reply.text)
         XCTAssertTrue(reply.text.contains("(3 s ago)"), reply.text)
-        XCTAssertTrue(reply.text.hasSuffix("place Mission District, San Francisco\n"), reply.text)
+        XCTAssertTrue(reply.text.hasSuffix("place (nearest address) Mission District, San Francisco\n"), reply.text)
         let reply15 = await tool.run(["precise"])
         XCTAssertEqual(reply15.status, ToolReply.usage)
     }
