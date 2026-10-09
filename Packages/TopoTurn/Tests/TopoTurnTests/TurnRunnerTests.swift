@@ -41,6 +41,328 @@ import TopoCoreTesting
         #expect(seen == [.takingLease, .saving, .asking(person: result.person), .savingReply])
     }
 
+    @Test func aDeviceWithAFreshLeaseSavesThePersonsTurnWithItsRenewalAndFetchesNoLease() async throws {
+        let db = RecordingDatabase(inner: InMemoryRecordDatabase())
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
+        _ = try await runner.run("first", model: .sonnet)
+        let tag = try await db.inner.fetch([Lease.recordID])[Lease.recordID]?.changeTag
+        db.reset()
+        let steps = Steps()
+        let asked = SavedAtAsk()
+        brain.duringAnswer = { await asked.set(db.saved) }
+        let result = try await runner.run("second", model: .sonnet) { await steps.add($0) }
+        #expect(db.leaseFetches == 0)
+        // One save before the brain is asked: the person's records and the lease together.
+        let before = await asked.saved
+        #expect(before.count == 1)
+        #expect(before.first?.contains(Lease.recordType) == true)
+        #expect(before.first?.contains(Turn.recordType) == true)
+        #expect(try await db.inner.fetch([Lease.recordID])[Lease.recordID]?.changeTag != tag)
+        #expect(await steps.all == [.saving, .asking(person: result.person), .savingReply])
+        #expect(await lease.isPrimary())
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one", "second", "two"])
+    }
+
+    @Test func aFreshLeaseAnotherDeviceClaimedSinceRefusesTheSaveAndWritesNothing() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("one"), .success("never"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
+        _ = try await runner.run("first", model: .sonnet)
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await hub.acquire() else { Issue.record("hub should claim"); return }
+        // The phone has not heartbeated since: by its own clocks it still holds the lease.
+        #expect(await lease.isPrimary())
+        let steps = Steps()
+        do {
+            _ = try await runner.run("second", model: .sonnet) { await steps.add($0) }
+            Issue.record("the turn was answered")
+        } catch TurnRunnerError.notPrimary(.held(let by)) {
+            #expect(by.holder == DeviceID("hub"))
+        }
+        // Refused with the save, then the long way, which finds the hub.
+        #expect(await steps.all == [.saving, .takingLease])
+        #expect(brain.requests.count == 1)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one"])
+        #expect(await hub.isPrimary())
+    }
+
+    @Test func aClaimLandingInsideThePersonsSaveRefusesItAndTheTurnGoesTheLongWay() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("one"), .success("never"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
+        _ = try await runner.run("first", model: .sonnet)
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        await db.setBeforeSave { records in
+            guard records.contains(where: { $0.type == Turn.recordType && $0.string("role") == "person" }) else { return }
+            await db.setBeforeSave(nil)
+            _ = try? await hub.acquire()
+        }
+        let steps = Steps()
+        do {
+            _ = try await runner.run("second", model: .sonnet) { await steps.add($0) }
+            Issue.record("the turn was answered")
+        } catch TurnRunnerError.notPrimary(.held(let by)) {
+            #expect(by.holder == DeviceID("hub"))
+        }
+        #expect(await steps.all == [.saving, .takingLease])
+        #expect(brain.requests.count == 1)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one"])
+    }
+
+    @Test func aLeaseLapsedOnThisDeviceIsTakenAgainBeforeThePersonsTurnIsSaved() async throws {
+        let db = RecordingDatabase(inner: InMemoryRecordDatabase())
+        let clock = Elapsed()
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, clock: clock)
+        _ = try await runner.run("first", model: .sonnet)
+        clock.advance(LeaseTiming.standard.duration + 1)
+        #expect(!(await lease.isPrimary()))
+        db.reset()
+        let steps = Steps()
+        let result = try await runner.run("second", model: .sonnet) { await steps.add($0) }
+        #expect(db.leaseFetches == 1)
+        #expect(await steps.all == [.takingLease, .saving, .asking(person: result.person), .savingReply])
+        #expect(await lease.isPrimary())
+    }
+
+    @Test func aFreshLeaseThatLapsesWhileThePersonsSaveWaitsBehindAHeartbeatIsClaimedAfreshInThatSave() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = HeldSave(store)
+        let clock = Elapsed()
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, clock: clock)
+        _ = try await runner.run("first", model: .sonnet)
+        // A heartbeat goes out at 5 s and its request stalls: the lease's gate is taken.
+        clock.advance(5)
+        await db.holdNextSave()
+        let beat = Task { try await lease.heartbeat() }
+        #expect(await eventually { await db.holding })
+        // The turn begins on a lease fresh by this device's clocks, and its save waits behind it.
+        let steps = Steps(), marks = Marks()
+        let turn = Task {
+            try await Perf.$observer.withValue(marks.add) {
+                try await runner.run("second", model: .sonnet) { await steps.add($0) }
+            }
+        }
+        // Its transcript is checked, which is the last thing before the batch asks for the gate.
+        let checked = await eventually { marks.all.contains("log.append.checked") }
+        #expect(checked, "the turn did not reach its save on a fresh lease")
+        #expect(await steps.all == [.saving])
+        for _ in 0..<500 { await Task.yield() }
+        // The stalled renewal is answered after the duration it was good for.
+        clock.advance(LeaseTiming.standard.duration + 1)
+        #expect(!(await lease.isPrimary()))
+        await db.release()
+        #expect(try await !beat.value)
+        let result = try await turn.value
+        #expect(await steps.all == [.saving, .asking(person: result.person), .savingReply])
+        // The lapse is found at the gate and claimed over in the person's own batch, one epoch on.
+        let seen = marks.all.filter { ["lease.batch.lapsed", "turn.lease.fresh", "turn.lease.acquired", "turn.person.saved"].contains($0) }
+        #expect(seen == ["lease.batch.lapsed", "turn.lease.fresh", "turn.person.saved"])
+        #expect(await lease.held?.epoch == 2)
+        #expect(await lease.isPrimary())
+        #expect(await lease.held == Lease(record: try #require(try await store.fetch([Lease.recordID])[Lease.recordID])))
+        #expect(try await TurnLog(database: store).read().ordered.map(\.text) == ["first", "one", "second", "two"])
+    }
+
+    @Test func aRunnerMadeOverALeaseAlreadyHeldHearsAsTheLeasesHolderDoes() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        brain.hears = true
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        #expect(await runner.standing == .unknown)
+        let steps = Steps()
+        _ = try await runner.run("first", model: .sonnet, nonce: "n1", known: []) { await steps.add($0) }
+        // The save said this device holds the lease: the brain heard, and hears ahead from here.
+        #expect(await steps.all.first == .saving)
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        #expect(await runner.standing == .mine)
+        #expect(await runner.hear("second", model: .sonnet, nonce: "n2", known: []))
+    }
+
+    @Test func aSaveWithTheRenewalThatCannotReachICloudIsUnsavedAndTheBrainHasTheWords() async throws {
+        let db = LosesALeaseFetch(InMemoryRecordDatabase())
+        let brain = ScriptedBrain(.success("one"))
+        brain.hears = true
+        let (runner, lease) = try await makeRunner(database: db, brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        db.loseNextSave()
+        do {
+            _ = try await runner.run("first", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("the turn was saved")
+        } catch TurnRunnerError.unsaved {
+        }
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        // Every turn after is heard at once until a call to the lease gets through.
+        #expect(await runner.hear("second", model: .sonnet, nonce: "n2", known: []))
+    }
+
+    @Test func aPhoneDisplacedAfterALeaseCallFailedAndASaveGotThroughHearsNothingAheadOfTheLease() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = LosesALeaseFetch(store)
+        let brain = ScriptedBrain(.success("one"), .success("two"), .success("three"))
+        brain.hears = true
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
+        _ = try await runner.run("first", model: .sonnet, nonce: "n1", known: [])
+        // A pass cannot ask the lease: iCloud is away as far as this device can tell.
+        let log = TurnLog(database: store)
+        _ = try await log.writer(for: DeviceID("watch")).append(.person, "from the wrist", continuing: try await log.read(), nonce: "w1")
+        db.loseNextLeaseFetch()
+        await #expect(throws: RecordDatabaseError.self) { try await runner.answerPending(model: .sonnet) }
+        #expect(await lease.isPrimary())
+        // The next turn's save with the renewal gets through, which is the lease answering.
+        _ = try await runner.run("second", model: .sonnet, nonce: "n2", known: [])
+        // A hub takes the lease while the third turn is answered: its reply is refused.
+        let hub = PrimaryLease(database: store, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        brain.duringAnswer = { _ = try? await hub.takeOver() }
+        do {
+            _ = try await runner.run("third", model: .sonnet, nonce: "n3", known: [])
+            Issue.record("the reply was written")
+        } catch TurnRunnerError.replyFailed(_, TurnRunnerError.displaced) {
+        }
+        brain.duringAnswer = nil
+        #expect(await runner.standing == .elsewhere)
+        #expect(!(await runner.hear("fourth", model: .sonnet, nonce: "n4", known: [])))
+        #expect(brain.heard.map(\.nonce) == ["n1", "n2", "n3"])
+    }
+
+    /// A turn in the log whose parent is not: no transcript read from here can be continued.
+    private func aHole(in store: InMemoryRecordDatabase) async throws {
+        _ = try await TurnLog(database: store).writer(for: DeviceID("watch"))
+            .append(.person, "orphan", parents: [TurnRef(device: DeviceID("ghost"), sequence: 7)], nonce: "w1")
+    }
+
+    @Test func aLogThatCannotBeContinuedOnAHeldLeaseIsToldAsTheLongWayTellsIt() async throws {
+        let store = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("never"))
+        brain.hears = true
+        let (runner, lease) = try await makeRunner(database: store, brain: brain)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        try await aHole(in: store)
+        // Nothing was asked of the lease by the refused append: the long way asks it, it answers
+        // primary, the brain hears, and the failure is the log's, with nothing failed for the person.
+        do {
+            _ = try await runner.run("hello", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("the turn was saved")
+        } catch TurnRunnerError.unsaved(TurnLogError.incompleteTranscript) {
+        }
+        #expect(brain.heard.map(\.nonce) == ["n1"])
+        #expect(await runner.standing == .mine)
+        #expect(await runner.hear("next", model: .sonnet, nonce: "n2", known: []))
+    }
+
+    @Test func aLogThatCannotBeReadOnALeaseAHubTookSinceIsNotHeardHere() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = LosesALeaseFetch(store)
+        let brain = ScriptedBrain(.success("never"))
+        brain.hears = true
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms(), standing: .elsewhere)
+        guard case .primary = try await lease.acquire() else { Issue.record("the lease should be claimed"); return }
+        let hub = PrimaryLease(database: store, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await hub.takeOver() else { Issue.record("hub should claim"); return }
+        #expect(await lease.isPrimary())
+        db.loseNextRead()
+        do {
+            _ = try await runner.run("hello", model: .sonnet, nonce: "n1", known: [])
+            Issue.record("the turn was saved")
+        } catch TurnRunnerError.notPrimary(.held(let by)) {
+            #expect(by.holder == DeviceID("hub"))
+        }
+        #expect(brain.heard.isEmpty)
+        #expect(await runner.standing == .elsewhere)
+        #expect(!(await runner.hear("next", model: .sonnet, nonce: "n2", known: [])))
+    }
+
+    @Test func aDisplacedPhoneWhoseLogCannotBeContinuedIsToldItIsNotPrimary() async throws {
+        let store = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.success("one"), .success("never"))
+        brain.hears = true
+        let (runner, _) = try await makeRunner(database: store, brain: brain, probe: AlwaysConfirms())
+        _ = try await runner.run("first", model: .sonnet, nonce: "n1", known: [])
+        let hub = PrimaryLease(database: store, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await hub.takeOver() else { Issue.record("hub should claim"); return }
+        try await aHole(in: store)
+        do {
+            _ = try await runner.run("second", model: .sonnet, nonce: "n2", known: [])
+            Issue.record("the turn was saved")
+        } catch TurnRunnerError.notPrimary(.held) {
+        }
+        #expect(await runner.standing == .elsewhere)
+        #expect(!(await runner.hear("next", model: .sonnet, nonce: "n3", known: [])))
+    }
+
+    @Test func aReplyThatComesToBeOwedWhileTheLogIsReadIsWrittenBeforeThePersonsTurn() async throws {
+        let store = InMemoryRecordDatabase()
+        let db = LosesALeaseFetch(store)
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let first = try await runner.run("first", model: .sonnet)
+        db.beforeRead = { brain.owes = OwedReply(parents: [first.assistant.ref], nonce: "owed-nonce", text: "owed") }
+        let steps = Steps()
+        _ = try await runner.run("second", model: .sonnet) { step in
+            if step == .takingLease { db.beforeRead = nil }
+            await steps.add(step)
+        }
+        #expect(await steps.all.prefix(2) == [.saving, .takingLease])
+        #expect(try await TurnLog(database: store).read().ordered.map(\.text) == ["first", "one", "owed", "second", "two"])
+    }
+
+    @Test func anOwedReplyIsSettledUnderALeaseTakenTheLongWay() async throws {
+        let db = RecordingDatabase(inner: InMemoryRecordDatabase())
+        let brain = ScriptedBrain(.success("one"), .success("two"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        let first = try await runner.run("first", model: .sonnet)
+        brain.owes = OwedReply(parents: [first.assistant.ref], nonce: "owed-nonce", text: "owed")
+        db.reset()
+        _ = try await runner.run("second", model: .sonnet)
+        #expect(db.leaseFetches == 1)
+        #expect(brain.owes == nil)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "one", "owed", "second", "two"])
+    }
+
+    @Test func aRetryOnAFreshLeaseRenewsItBeforeAnsweringTheTurnAlreadyInTheLog() async throws {
+        let db = RecordingDatabase(inner: InMemoryRecordDatabase())
+        let brain = ScriptedBrain(.failure(Refused()), .success("ok now"))
+        let (runner, _) = try await makeRunner(database: db, brain: brain)
+        await #expect(throws: TurnRunnerError.self) { try await runner.run("first", model: .sonnet, nonce: "n") }
+        db.reset()
+        let asked = SavedAtAsk()
+        brain.duringAnswer = { await asked.set(db.saved) }
+        let result = try await runner.run("first", model: .sonnet, nonce: "n")
+        #expect(result.reply.text == "ok now")
+        #expect(db.leaseFetches == 0)
+        #expect(await asked.saved == [[Lease.recordType]])
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first", "ok now"])
+    }
+
+    @Test func aRetryOnALeaseAnotherDeviceTookSinceIsNotAnsweredHere() async throws {
+        let db = InMemoryRecordDatabase()
+        let brain = ScriptedBrain(.failure(Refused()), .success("never"))
+        let (runner, lease) = try await makeRunner(database: db, brain: brain, probe: AlwaysConfirms())
+        await #expect(throws: TurnRunnerError.self) { try await runner.run("first", model: .sonnet, nonce: "n") }
+        let hub = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: NoSocketProbe(),
+                               sleep: { _ in try await Task.sleep(for: .seconds(3600)) })
+        guard case .primary = try await hub.acquire() else { Issue.record("hub should claim"); return }
+        #expect(await lease.isPrimary())
+        // The turn is in the log, so the retry saved nothing: the heartbeat is what finds the hub.
+        do {
+            _ = try await runner.run("first", model: .sonnet, nonce: "n")
+            Issue.record("the retry was answered")
+        } catch TurnRunnerError.notPrimary(.held(let by)) {
+            #expect(by.holder == DeviceID("hub"))
+        }
+        #expect(brain.requests.count == 1)
+        #expect(await runner.standing == .elsewhere)
+        #expect(try await TurnLog(database: db).read().ordered.map(\.text) == ["first"])
+    }
+
     @Test func notPrimaryMeansNoCallAndNoAppend() async throws {
         let db = InMemoryRecordDatabase()
         let other = PrimaryLease(database: db, device: DeviceID("hub"), endpoint: nil, probe: AlwaysConfirms(),
@@ -320,6 +642,11 @@ import TopoCoreTesting
         let wide = (1...500).map { TurnRef(device: DeviceID("device-\($0)"), sequence: Int64($0)) }
         #expect(TurnRunner.replyNonce(for: wide).count == "answer/".count + 64)
     }
+}
+
+actor SavedAtAsk {
+    private(set) var saved: [[String]] = []
+    func set(_ batches: [[String]]) { saved = batches }
 }
 
 extension TurnRunnerTests {

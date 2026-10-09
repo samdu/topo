@@ -2278,17 +2278,21 @@ private actor SavesRefused: RecordDatabase {
 
 extension GuestBridgeTests {
 
-    // Recipe 1, `.contended`: the lease is abandoned while acquire is stalled.
+    // Recipe 1, `.contended`: the lease is abandoned while acquire is stalled. The lease has
+    // lapsed here, so the turn takes it first and does not renew it with its save.
     func testContendedHandBackThenThePassAsksOnce() async throws {
         let db = Outage()
+        let clock = Ticks()
         let guest = ScriptedGuest(home: home, script: [.reply("Hi."), .reply("the phone's answer"), .reply("SECOND INPUT")])
         let defaults = makeDefaults()
         let (harness, _) = harness(db, guest, defaults: defaults)
-        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(), sleep: parked)
+        let lease = PrimaryLease(database: db, device: phone, endpoint: nil, probe: NoSocketProbe(),
+                                 now: { clock.wall }, monotonic: { clock.elapsed }, sleep: parked)
         harness.adopt(lease)
         await harness.send("hello")
         await harness.refresh()
         try await eventually("the standing kept") { defaults.string(forKey: "topo.harness.standing") == "mine" }
+        clock.advance(11)
         await db.stall(true)
         let nonce = harness.willSend("what time is it?")
         let sending = Task { await harness.retry() }
