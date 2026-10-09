@@ -4,7 +4,8 @@ import UniformTypeIdentifiers
 
 /// What another app handed the share sheet, read into one thing Topo takes: a file before an
 /// image before a link before text, and the first of whichever kind that is. Nothing shared is
-/// cut to fit: what is over a limit is refused, as is anything that is not one plain file. The providers are not the system's to hand between
+/// cut to fit or trimmed: what is over a limit is refused, as is anything that is not one plain
+/// file, and text is kept as the other app handed it. The providers are not the system's to hand between
 /// threads, so they are read from the main actor, and each answers on a queue of its own.
 @MainActor
 enum ShareIntake {
@@ -46,7 +47,8 @@ enum ShareIntake {
         guard let (provider, kind) = choice(among: providers) else { throw .nothing }
         switch kind {
         case .text:
-            guard let text = await string(from: provider)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { throw .nothing }
+            guard let text = await string(from: provider),
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw .nothing }
             guard text.utf8.count <= Share.textLimit else { throw .tooLong }
             return Item(kind: .text, text: text)
         case .link:

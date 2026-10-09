@@ -86,10 +86,13 @@ enum ShareRefusal: Error, Equatable {
 ///   (it does where the guest lives). The extension keeps nothing without it;
 /// - `<nonce>/.share.json`, one share's record, and beside it the image or file it names, which
 ///   is never hidden and so never the record's name;
-/// - `.<name>/`, a share being written or an attachment being read, which no reader lists.
+/// - `.<name>/`, a share being written or an attachment being read, which no reader lists;
+/// - `_lock`, held (`flock`) by whichever process is keeping a share or shutting the door.
 ///
 /// A share is written whole under a hidden name and renamed to its nonce, so the app never reads
-/// half of one. A sign-out takes the folder away, and every share carries the login it was made
+/// half of one. The door is read, the shares counted and the share renamed in under the lock, and
+/// the door is shut under it, so no sheet keeps a share across a sign-out and two sheets sending
+/// at once never hold more than `held`. A sign-out takes the folder away, and every share carries the login it was made
 /// under, so one that outlives its login by any path is never sent under another. The folder is
 /// left out of the phone's backups: a phone restored from one holds no login.
 struct ShareStore: Sendable {
@@ -136,7 +139,30 @@ struct ShareStore: Sendable {
 
     /// Signed out: nothing is taken, and nothing shared is kept.
     func close() {
+        let lock = lock()
+        defer { unlock(lock) }
         try? FileManager.default.removeItem(at: folder)
+    }
+
+    private var lockPath: String { folder.appendingPathComponent("_lock").path }
+
+    /// Takes the folder's lock, waiting for whichever process holds it; nil where there is no
+    /// folder, which is signed out. A lock taken on a folder a sign-out then removed is on a file
+    /// no longer there, and whoever took it finds no door.
+    private func lock() -> Int32? {
+        let descriptor = Darwin.open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
+        guard descriptor >= 0 else { return nil }
+        guard flock(descriptor, LOCK_EX) == 0 else {
+            Darwin.close(descriptor)
+            return nil
+        }
+        return descriptor
+    }
+
+    private func unlock(_ descriptor: Int32?) {
+        guard let descriptor else { return }
+        flock(descriptor, LOCK_UN)
+        Darwin.close(descriptor)
     }
 
     func door() -> Door? {
@@ -158,9 +184,11 @@ struct ShareStore: Sendable {
     }
 
     /// Keeps a share, moving `attachment` in beside its record under the name the share gives it.
-    /// Refused, with nothing kept, when signed out, when it is an image or a file and this is not
+    /// The whole of it is done holding the folder's lock. Refused, with nothing kept, when signed out, when it is an image or a file and this is not
     /// the guest's phone, when it is over a limit, or when `held` shares are waiting.
     func keep(_ share: Share, attachment: URL? = nil) throws(ShareRefusal) {
+        guard let lock = lock() else { throw .signedOut }
+        defer { unlock(lock) }
         guard let door = door(), door.login == share.login else { throw .signedOut }
         guard share.note.count <= Share.noteLimit, (share.text?.utf8.count ?? 0) <= Share.textLimit else { throw .tooLong }
         switch share.kind {

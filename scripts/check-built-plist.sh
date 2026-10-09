@@ -165,6 +165,28 @@ if [ "$point" != "com.apple.share-services" ]; then
     echo "$app does not embed PlugIns/TopoShare.appex as a share extension (${point:-no extension}); Topo would be in no share sheet" >&2
     status=1
 else
+    # A plist with no program beside it is an extension the system lists and cannot run.
+    program="$(plutil -extract CFBundleExecutable raw -o - -- "$share" 2>/dev/null || true)"
+    if [ -z "$program" ] || [ ! -x "$app/PlugIns/TopoShare.appex/$program" ]; then
+        echo "TopoShare.appex has no executable named by its CFBundleExecutable ('${program:-absent}'); the sheet would not open" >&2
+        status=1
+    fi
+    principal="$(plutil -extract NSExtension.NSExtensionPrincipalClass raw -o - -- "$share" 2>/dev/null || true)"
+    if [ -z "$principal" ]; then
+        echo "TopoShare.appex names no NSExtensionPrincipalClass; the sheet would have no view controller" >&2
+        status=1
+    fi
+    # Signed, it is read for the app group: without it the sheet finds no store and takes nothing.
+    if codesign -d "$app/PlugIns/TopoShare.appex" >/dev/null 2>&1; then
+        granted="$(mktemp)"
+        codesign -d --entitlements - --xml "$app/PlugIns/TopoShare.appex" > "$granted" 2>/dev/null || true
+        if ! /usr/libexec/PlistBuddy -c "Print :com.apple.security.application-groups" "$granted" 2>/dev/null \
+            | grep -qx '[[:space:]]*group\.zone\.hexagon\.topo'; then
+            echo "TopoShare.appex is signed without the group.zone.hexagon.topo app group; the sheet would say to sign in, always" >&2
+            status=1
+        fi
+        rm -f "$granted"
+    fi
     rule="NSExtension.NSExtensionAttributes.NSExtensionActivationRule"
     if [ "$(plutil -extract "$rule" raw -o - -- "$share" 2>/dev/null | sort | tr '\n' ' ')" != "NSExtensionActivationSupportsFileWithMaxCount NSExtensionActivationSupportsImageWithMaxCount NSExtensionActivationSupportsText NSExtensionActivationSupportsWebURLWithMaxCount " ]; then
         echo "TopoShare.appex's NSExtensionActivationRule is not the dictionary of the four things Topo takes" >&2
