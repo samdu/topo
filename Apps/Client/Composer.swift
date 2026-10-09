@@ -48,12 +48,48 @@ struct Composer: View {
     /// (`ComposerPlan.lines`), and the row is no taller than it whatever it holds. Nil where
     /// nothing measured it, which is the look's lines alone and a row as tall as what it holds.
     var room: CGFloat?
+    /// The models the chat offers and the one chosen, or nil where there is no choice to make.
+    var models: Models?
     @Environment(\.look) private var look
     /// How tall one line of the field's words is, measured off the line the row is laid out
     /// round: what turns the room into a number of lines.
     @State private var textLine: CGFloat?
     /// The field takes the keyboard while the keyboard is asked for, and lets it go with it.
     @FocusState private var writing: Bool
+
+    /// The model slider as the glass draws it: the stops, smallest model first, the one chosen,
+    /// and whether the slider is open, which the model's control in the bar says. A value the
+    /// chat makes and one thing it is told, so the glass knows no model by name.
+    struct Models {
+        var stops: [ChatBar.Model]
+        var chosen: String
+        var open = false
+        var choose: (String) -> Void = { _ in }
+
+        /// How much taller the slider's row makes the pane: the row, the room under it and the
+        /// room over it.
+        static func row(_ look: Look.Composer.Models) -> CGFloat { look.height + look.spacing + look.topInset }
+
+        /// Whether a slider's row `row` tall is drawn on a pane with `room` to grow in: always
+        /// where nothing measured the room, and otherwise where the room still holds a well
+        /// that can be pressed under it.
+        static func fits(row: CGFloat, in room: CGFloat?) -> Bool {
+            guard let room else { return true }
+            return room - row >= Look.Composer.Well.pressable
+        }
+    }
+
+    /// The slider's row is on the pane: open, and the pane has the room for it.
+    private var sliderShown: Bool {
+        guard let models, models.open else { return false }
+        return !draft.row || Models.fits(row: Models.row(look.composer.models), in: room)
+    }
+
+    /// The room the row under the slider has to grow in: the pane's, less the slider's row
+    /// while it is on the pane.
+    private var rowRoom: CGFloat? {
+        room.map { $0 - (sliderShown ? Models.row(look.composer.models) : 0) }
+    }
 
     /// What the microphone is doing, and which of the five the glass draws for it. The chat
     /// screen reads four facts off `VoiceInput` and one off `Speaker`, and this decides what they
@@ -131,20 +167,30 @@ struct Composer: View {
         // fall between them. The send is the row's and the way to the keyboard the resting
         // pane's, and each is there only in its own form, so neither is pressed or read in the
         // other.
-        ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry, most: tallest) {
-            micButton(geometry).layoutValue(key: ComposerPart.self, value: .well)
-            more.drawn(as: .more)
-            field(shown: row).drawn(as: .field)
-            line.layoutValue(key: ComposerPart.self, value: .line)
-            if row {
-                send.drawn(as: .send)
-            } else {
-                keyboard.drawn(as: .keyboard)
+        VStack(spacing: look.composer.models.spacing) {
+            // The model slider is a row of the pane's own over the one the microphone is in, so
+            // the pane is taller by it while it is open, in both forms.
+            if sliderShown, let models {
+                ModelSlider(models: models, ink: ink)
+                    .padding(.top, look.composer.models.topInset)
+                    .opacity(besideOpacity)
+                    .transition(.opacity)
             }
+            ComposerRow(row: row, composer: look.composer, draft: look.draft, geometry: geometry, most: tallest) {
+                micButton(geometry).layoutValue(key: ComposerPart.self, value: .well)
+                more.drawn(as: .more)
+                field(shown: row).drawn(as: .field)
+                line.layoutValue(key: ComposerPart.self, value: .line)
+                if row {
+                    send.drawn(as: .send)
+                } else {
+                    keyboard.drawn(as: .keyboard)
+                }
+            }
+            // A row held to the room is cut at its own edges: a mark or a line of type taller than
+            // the room is drawn inside the pane and over nothing above it.
+            .clipShape(RowCut(most: tallest))
         }
-        // A row held to the room is cut at its own edges: a mark or a line of type taller than
-        // the room is drawn inside the pane and over nothing above it.
-        .clipShape(RowCut(most: tallest))
         .anchorPreference(key: ComposerFrames.Pane.self, value: .bounds) { $0 }
         // The whole pane is off limits to Topo, at every presence.
         .mascotPane()
@@ -156,6 +202,7 @@ struct Composer: View {
         .padding(.bottom, foot)
         .animation(.easeInOut(duration: look.composer.duration), value: mic.appearance)
         .animation(.easeInOut(duration: look.composer.presenceDuration), value: presence)
+        .animation(.easeInOut(duration: look.composer.duration), value: sliderShown)
         .onAppear { writing = draft.typing }
         .onChange(of: draft.typing) { _, wanted in writing = wanted }
         // A turn on its way closes the field, which takes the keyboard with it. The keyboard is
@@ -265,7 +312,7 @@ struct Composer: View {
     /// The tallest the row is laid out: the room it has, less the room kept under the pane,
     /// and never less than the well can be pressed in. Nil at rest and with no room measured.
     private var tallest: CGFloat? {
-        guard draft.row, let room else { return nil }
+        guard draft.row, let room = rowRoom else { return nil }
         return max(room - foot, Look.Composer.Well.pressable)
     }
 
@@ -273,7 +320,7 @@ struct Composer: View {
     /// more of that room than leaves the well pressable.
     private var foot: CGFloat {
         let asked = look.composer.bottomPadding
-        guard draft.row, let room else { return asked }
+        guard draft.row, let room = rowRoom else { return asked }
         return min(asked, max(room - Look.Composer.Well.pressable, 0))
     }
 
@@ -282,7 +329,7 @@ struct Composer: View {
     /// of the well, the send's slot and the field's one line, and the room above and below.
     private var lines: Int {
         let most = max(look.draft.maximumLines, 1)
-        guard let room, let textLine else { return most }
+        guard let room = rowRoom, let textLine else { return most }
         let geometry = ComposerGeometry.of(look.composer, row: true)
         let band = max(geometry.well, look.draft.slot, textLine + 2 * look.draft.written.verticalPadding)
             + 2 * geometry.verticalInset
@@ -537,6 +584,84 @@ struct RowCut: Shape {
 
     /// How far past the row an unbounded clip reaches, which is further than anything is drawn.
     static let open: CGFloat = 10_000
+}
+
+/// The model slider: a line across the top of the pane with a stop for each model, smallest
+/// first, each model's name under its stop and a knob on the one chosen. A tap on a stop or its
+/// name chooses it, and so does a finger drawn along the line, at the stop it is nearest. The
+/// chosen stop reports where it is, which is where Topo sits (`mascotStop`).
+private struct ModelSlider: View {
+    let models: Composer.Models
+    let ink: Color
+    @Environment(\.look) private var look
+    /// How tall a name's one line is in the look's font at the text size in use, as laid out.
+    @State private var name: CGFloat = 0
+
+    var body: some View {
+        let slider = look.composer.models
+        let at = models.stops.firstIndex { $0.id == models.chosen }
+        GeometryReader { proxy in
+            // The knob and the gap under it as the names' line leaves them room, so the line
+            // the knob is on and the names are both inside the row, and an end stop no nearer
+            // the pane's end than half the knob, so the knob on it is too.
+            let (knob, gap) = ChatBar.Stops.fitted(knob: slider.knob, spacing: slider.labelSpacing,
+                                                   in: proxy.size.height, over: name)
+            let stops = ChatBar.Stops(count: models.stops.count, width: proxy.size.width, inset: max(slider.inset, knob / 2))
+            let line = knob / 2
+            let column = stops.column(least: knob)
+            ZStack(alignment: .topLeading) {
+                Capsule().fill(ink.opacity(slider.restOpacity))
+                    .frame(width: stops.span, height: slider.track)
+                    .offset(x: stops.inset, y: line - slider.track / 2)
+                ForEach(Array(models.stops.enumerated()), id: \.element.id) { index, model in
+                    let own = index == at
+                    Button { models.choose(model.id) } label: {
+                        VStack(spacing: gap) {
+                            // The knob stands on the chosen stop, so its own mark is not drawn.
+                            Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
+                                .frame(width: min(slider.stop, knob), height: min(slider.stop, knob))
+                                .frame(height: knob)
+                            Text(model.name).font(slider.labelFont).lineLimit(1).fixedSize(horizontal: false, vertical: true)
+                                .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
+                        }
+                        .frame(width: column, height: proxy.size.height, alignment: .top)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier(ChatBar.stop(model.id))
+                    .accessibilityLabel(model.name)
+                    .accessibilityAddTraits(own ? .isSelected : [])
+                    .mascotStop(own)
+                    .position(x: stops.x(of: index), y: proxy.size.height / 2)
+                }
+                if let at {
+                    Circle().fill(ink)
+                        .frame(width: knob, height: knob)
+                        .position(x: stops.x(of: at), y: line)
+                        .allowsHitTesting(false)
+                        .animation(.easeInOut(duration: look.composer.duration), value: at)
+                }
+            }
+            .contentShape(Rectangle())
+            // A name's line, measured and not drawn.
+            .background {
+                Text(models.stops.first?.name ?? "").font(slider.labelFont).lineLimit(1).fixedSize().hidden()
+                    .accessibilityHidden(true)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { name = $0 }
+            }
+            // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
+            .highPriorityGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
+                guard let index = stops.nearest(to: drag.location.x), index != at else { return }
+                models.choose(models.stops[index].id)
+            })
+        }
+        // Nothing of it is drawn outside its own row, whatever the look asks of what is inside.
+        .frame(height: slider.height)
+        .clipped()
+        .dynamicTypeSize(...ChatNotices.largestType)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(ChatBar.models)
+    }
 }
 
 /// Where the pane and the well are, as laid out, for whatever is drawn over the composer to read:

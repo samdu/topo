@@ -858,12 +858,9 @@ struct MascotOverChat: UIViewRepresentable {
 
 extension MascotScene.Value {
     /// The anchors resolved where he is drawn, or nil before the transcript has reported its frame.
-    /// `keyboardTop` is the keyboard's top edge in the global space, while it is up, and `stop`
-    /// the model slider's chosen stop there, while the slider is open: the bar it is in is not
-    /// in this view's tree, so it reports no anchor.
-    func field(in proxy: GeometryProxy, keyboardTop: CGFloat?, stop: CGRect? = nil) -> MascotField? {
+    /// `keyboardTop` is the keyboard's top edge in the global space, while it is up.
+    func field(in proxy: GeometryProxy, keyboardTop: CGFloat?) -> MascotField? {
         guard let visible else { return nil }
-        let origin = proxy.frame(in: .global).origin
         var keyboard: CGRect?
         if let keyboardTop {
             let top = keyboardTop - proxy.frame(in: .global).minY
@@ -872,7 +869,7 @@ extension MascotScene.Value {
         return MascotField(visible: proxy[visible], obstacles: obstacles.flatMap { proxy[$0] },
                            pane: pane.map { proxy[$0] }, well: well.map { proxy[$0] }, keyboard: keyboard,
                            beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) },
-                           stop: stop.map { $0.offsetBy(dx: -origin.x, dy: -origin.y) })
+                           stop: stop.map { proxy[$0] })
     }
 }
 
@@ -886,8 +883,6 @@ struct MascotLayer: View {
     /// A sheet is over the chat.
     var covered = false
     var keyboardTop: CGFloat?
-    /// The model slider's chosen stop in the global space, while the slider is open.
-    var stop: CGRect?
     /// The transcript has been read once. Until it has, the page is about to fill, and he is not
     /// drawn rather than placed into it.
     var ready = true
@@ -932,11 +927,11 @@ struct MascotLayer: View {
 
     var body: some View {
         GeometryReader { proxy in
-            let field = scene.field(in: proxy, keyboardTop: keyboardTop, stop: stop)
-            // Under the model slider while it is open, whatever the look's placement.
+            let field = scene.field(in: proxy, keyboardTop: keyboardTop)
+            // Over the model slider while it is open, whatever the look's placement.
             let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, perch: look.composer.perchInset,
                                                                    reduceMotion: reduceMotion),
-                                               under: field, swim: look.mascot.swimSpeed)
+                                               over: field, swim: look.mascot.swimSpeed)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,
                                interval: look.mascot.frameInterval, ready: ready,
@@ -988,12 +983,12 @@ extension View {
     /// told the facing each roost decides, for `Mascot.facing`, and `pin` the pin a drag let go of
     /// him at.
     func mascotRoams(_ state: MascotState?, opacity: Double = 1, covered: Bool = false, keyboardTop: CGFloat? = nil,
-                     stop: CGRect? = nil, ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil,
+                     ready: Bool = true, report: ((MascotRoam.Report) -> Void)? = nil,
                      face: ((MascotFacing) -> Void)? = nil, pin: ((CGPoint) -> Void)? = nil) -> some View {
         overlayPreferenceValue(MascotScene.self) { scene in
             if let state {
                 MascotLayer(state: state, scene: scene, opacity: opacity, covered: covered,
-                            keyboardTop: keyboardTop, stop: stop, ready: ready, report: report, face: face, pin: pin)
+                            keyboardTop: keyboardTop, ready: ready, report: report, face: face, pin: pin)
             }
         }
     }

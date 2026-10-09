@@ -1,8 +1,8 @@
 import XCTest
 
-/// The two controls at the leading edge of the chat's navigation bar, in the running chat: the
-/// model, which opens the model slider across the middle of the bar, and the mute, each standing
-/// apart. Read off the controls' own labels and values and, for the model, off the badge's debug
+/// The two controls in the chat's navigation bar, in the running chat: the mute at its leading
+/// edge and, at its trailing one beside the badge, the model, which opens the model slider
+/// across the top of the pane. Read off the controls' own labels and values and, for the model, off the badge's debug
 /// report (`DebugRun.ChatReport`), which carries the harness's own setting apart from the model
 /// a request carries for it, and where Topo is: a slider that changed what it says and left the
 /// harness alone is caught by the first, a choice that moved a debug build off its pin by the
@@ -33,22 +33,25 @@ final class BarControlsTests: XCTestCase {
         XCTAssertTrue(becomes(mute, "label == 'Mute replies'"), "a second press did not unmute: \(mute.label)")
     }
 
-    /// The model's control opens the slider in the bar; a stop pressed is the model chosen, said
+    /// The model's control opens the slider on the pane; a stop pressed is the model chosen, said
     /// by the control and set on the harness, a debug build still asks its pin after every
-    /// choice, and Topo comes to hang under that stop, under each in turn; shut, he leaves for
-    /// where his placement has him. The model and the mute stand apart, and neither is on the
-    /// glass.
-    func testTheSliderChoosesTheModelTheHarnessAsksAndTopoHangsUnderTheStopChosen() throws {
+    /// choice, and Topo comes to sit over that stop, over each in turn; shut, he leaves for
+    /// where his placement has him. The mute is at the bar's leading edge and the model at its
+    /// trailing one, short of the badge, and neither is on the glass.
+    func testTheSliderChoosesTheModelTheHarnessAsksAndTopoSitsOverTheStopChosen() throws {
         let app = ChatReading.launch(transcript: "empty", tuning: "")
         let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"], mic = ChatReading.microphone(app)
         XCTAssertTrue(model.waitForExistence(timeout: 60), "the bar has no model control")
         XCTAssertTrue(mic.waitForExistence(timeout: 10), "the chat screen")
+        let badge = app.buttons["topo-debug-chat"], middle = app.windows.firstMatch.frame.midX
+        XCTAssertTrue(badge.waitForExistence(timeout: 10), "the bar has no badge")
         for control in [model, mute] {
             XCTAssertLessThan(control.frame.maxY, mic.frame.minY, "\(control.identifier) is on the glass")
-            XCTAssertLessThan(control.frame.midX, app.windows.firstMatch.frame.midX, "\(control.identifier) is not at the bar's leading edge")
         }
-        XCTAssertLessThan(model.frame.maxX, mute.frame.minX, "the model at \(model.frame) and the mute at \(mute.frame) do not stand apart")
-        for old in ["composer-model", "composer-mute", "composer-models"] {
+        XCTAssertLessThan(mute.frame.midX, middle, "the mute at \(mute.frame) is not at the bar's leading edge")
+        XCTAssertGreaterThan(model.frame.midX, middle, "the model at \(model.frame) is not at the bar's trailing edge")
+        XCTAssertLessThanOrEqual(model.frame.maxX, badge.frame.minX + 0.5, "the model at \(model.frame) is over the badge at \(badge.frame)")
+        for old in ["composer-model", "composer-mute"] {
             XCTAssertFalse(app.descendants(matching: .any)[old].exists, "\(old) is still on the glass")
         }
         XCTAssertFalse(app.buttons["chat-model-opus"].exists, "the slider is open before it is asked for")
@@ -58,8 +61,8 @@ final class BarControlsTests: XCTestCase {
         for (alias, name) in [("opus", "Opus"), ("fable", "Fable"), ("sonnet", "Sonnet")] {
             let stop = app.buttons["chat-model-\(alias)"]
             XCTAssertTrue(stop.waitForExistence(timeout: 10), "the slider has no stop for \(alias)")
-            XCTAssertLessThan(abs(stop.frame.midY - model.frame.midY), model.frame.height, "\(alias)'s stop at \(stop.frame) is not in the bar")
-            XCTAssertGreaterThanOrEqual(stop.frame.minX, mute.frame.maxX - 0.5, "\(alias)'s stop at \(stop.frame) is over the mute at \(mute.frame)")
+            XCTAssertGreaterThan(stop.frame.minY, model.frame.maxY, "\(alias)'s stop at \(stop.frame) is in the bar")
+            XCTAssertLessThanOrEqual(stop.frame.maxY, mic.frame.minY + 0.5, "\(alias)'s stop at \(stop.frame) is not over the microphone at \(mic.frame)")
             stop.tap()
             XCTAssertTrue(becomes(model, "value == '\(name)'"), "\(alias) pressed, and the control says \(String(describing: model.value))")
             XCTAssertTrue(becomes(stop, "isSelected == true"), "\(alias) pressed, and its stop is not the one chosen")
@@ -68,19 +71,19 @@ final class BarControlsTests: XCTestCase {
             let chat = try XCTUnwrap(ChatReading.chat(app), "the chat reports nothing")
             XCTAssertEqual(chat.model, alias, "the slider says \(name) and the harness was set to \(chat.model ?? "nothing")")
             XCTAssertEqual(chat.effectiveModel, Self.pin, "choosing \(alias) moved a debug build off its pin")
-            let (_, topo) = try ChatReading.wait(app, "hanging under \(alias)'s stop") { _, topo in
+            let (_, topo) = try ChatReading.wait(app, "sitting over \(alias)'s stop") { _, topo in
                 guard topo.standing, let box = topo.box, let offset = ChatReading.offset(topo, mic: mic) else { return false }
                 return abs(box.midX + offset.dx - stop.frame.midX) < 2
             }
-            let box = try XCTUnwrap(topo.box), visible = try XCTUnwrap(topo.visibleRect)
-            XCTAssertGreaterThanOrEqual(box.minY, visible.minY, "\(alias): he is over the bar")
-            XCTAssertLessThan(box.minY, visible.minY + box.height / 2, "\(alias): he is not at the top of the transcript")
+            let box = try XCTUnwrap(topo.box), offset = try XCTUnwrap(ChatReading.offset(topo, mic: mic))
+            XCTAssertLessThan(box.minY + offset.dy, stop.frame.minY, "\(alias): he at \(box) is not above the stop at \(stop.frame)")
+            XCTAssertGreaterThan(box.maxY + offset.dy, stop.frame.minY - box.height / 2, "\(alias): he at \(box) is not on the pane's top edge by the stop at \(stop.frame)")
             ChatReading.attach(app, "slider-\(alias)", to: self)
         }
         model.tap()
         XCTAssertTrue(becomes(app.buttons["chat-model-opus"], "exists == false"), "the slider did not shut")
         XCTAssertTrue(becomes(model, "label == 'Choose the model'"), "the control still says the slider is open")
-        let (_, away) = try ChatReading.wait(app, "back where he stood with the slider shut") { _, topo in
+        let (_, away) = try ChatReading.wait(app, "back where he stood, \(home.frame), with the slider shut") { _, topo in
             topo.standing && ChatReading.near(topo.frame, home.frame)
         }
         XCTAssertEqual(away.placement, "roam", "the slider left him another placement")
@@ -116,7 +119,7 @@ final class BarControlsTests: XCTestCase {
         XCTAssertTrue(becomes(opus, "exists == false"), "the slider did not shut")
     }
 
-    /// What the look calls a model is what the bar calls it: the stop's name and the control's
+    /// What the look calls a model is what the slider and the bar call it: the stop's name and the control's
     /// value, for the one the look renames and no other, and the debug pin is no stop.
     func testTheBarCallsAModelWhatTheLookCallsIt() throws {
         let app = ChatReading.launch(transcript: "empty", tuning: "", look: #"{"mind": {"opus": "Opus 5.5"}}"#)
@@ -151,18 +154,19 @@ final class BarControlsTests: XCTestCase {
         XCTAssertTrue(becomes(model, "label == 'Choose the model'"), "the control still says the slider is open")
     }
 
-    /// At each end of what a document may ask of the bar — the largest font a document's size is
-    /// drawn at with the widest and tallest slider and the largest of everything in it, and the
-    /// smallest of each — the model and the mute are inside the navigation bar, in order, clear
-    /// of each other and of the badge, and the open slider is inside the bar between the mute and
-    /// the badge with every stop still chosen by a press. On the phone this suite
-    /// runs on, which is wider than the narrowest.
-    func testAtEachEndOfTheBarsRangesTheControlsAndTheSliderStayInTheBar() throws {
-        let largest = #"{"bar": {"font": {"size": 400}, "slider": {"width": 320, "height": 44, "inset": 80, "stop": 28, "knob": 28, "labelSpacing": 16, "labelFont": {"size": 400}}}}"#
-        let smallest = #"{"bar": {"font": {"size": 4}, "slider": {"width": 96, "height": 24, "inset": 8, "stop": 2, "knob": 2, "labelSpacing": 0, "labelFont": {"size": 4}}}}"#
+    /// At each end of what a document may ask of the bar and of the model slider — the largest
+    /// font a document's size is drawn at with the tallest slider and the largest of everything
+    /// in it, and the smallest of each — the mute and the model are inside the navigation bar,
+    /// clear of each other and of the badge, and the open slider is across the screen between
+    /// the bar and the microphone with every stop still chosen by a press. On the phone this
+    /// suite runs on, which is wider than the narrowest.
+    func testAtEachEndOfTheRangesTheControlsStayInTheBarAndTheSliderOnThePane() throws {
+        let largest = #"{"bar": {"font": {"size": 400}}, "composer": {"models": {"height": 96, "inset": 160, "spacing": 24, "topInset": 24, "stop": 44, "knob": 44, "labelSpacing": 16, "labelFont": {"size": 400}}}}"#
+        let smallest = #"{"bar": {"font": {"size": 4}}, "composer": {"models": {"height": 32, "inset": 16, "spacing": 0, "topInset": 0, "stop": 2, "knob": 2, "labelSpacing": 0, "labelFont": {"size": 4}}}}"#
         for (what, look) in [("largest", largest), ("smallest", smallest)] {
             let app = ChatReading.launch(transcript: "empty", tuning: "", look: look)
             let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"], badge = app.buttons["topo-debug-chat"]
+            let mic = ChatReading.microphone(app)
             XCTAssertTrue(model.waitForExistence(timeout: 60), "\(what): the bar has no model control")
             XCTAssertTrue(mute.exists && badge.waitForExistence(timeout: 10), "\(what): the bar is without its mute or its badge")
             let bar = app.navigationBars.firstMatch.frame.insetBy(dx: -0.5, dy: -0.5)
@@ -170,15 +174,16 @@ final class BarControlsTests: XCTestCase {
                 XCTAssertTrue(bar.contains(control.frame), "\(what): the \(name) at \(control.frame) is out of the bar at \(bar)")
                 XCTAssertGreaterThan(control.frame.width, 0, "\(what): the \(name) has no width")
             }
-            XCTAssertLessThanOrEqual(model.frame.maxX, mute.frame.minX + 0.5, "\(what): the model at \(model.frame) is over the mute at \(mute.frame)")
-            XCTAssertLessThanOrEqual(mute.frame.maxX, badge.frame.minX + 0.5, "\(what): the mute at \(mute.frame) is over the badge at \(badge.frame)")
+            XCTAssertLessThanOrEqual(mute.frame.maxX, model.frame.minX + 0.5, "\(what): the mute at \(mute.frame) is over the model at \(model.frame)")
+            XCTAssertLessThanOrEqual(model.frame.maxX, badge.frame.minX + 0.5, "\(what): the model at \(model.frame) is over the badge at \(badge.frame)")
             model.tap()
             let slider = app.descendants(matching: .any)["chat-models"]
             XCTAssertTrue(slider.waitForExistence(timeout: 10), "\(what): the slider did not open")
-            XCTAssertTrue(bar.contains(slider.frame), "\(what): the slider at \(slider.frame) is out of the bar at \(bar)")
-            XCTAssertGreaterThanOrEqual(slider.frame.minX, mute.frame.maxX - 0.5, "\(what): the slider at \(slider.frame) is over the mute at \(mute.frame)")
-            XCTAssertLessThanOrEqual(slider.frame.maxX, badge.frame.minX + 0.5, "\(what): the slider at \(slider.frame) is over the badge at \(badge.frame)")
-            ChatReading.attach(app, "bar-\(what)", to: self)
+            let screen = app.windows.firstMatch.frame.insetBy(dx: -0.5, dy: -0.5)
+            XCTAssertTrue(screen.contains(slider.frame), "\(what): the slider at \(slider.frame) is off the screen at \(screen)")
+            XCTAssertGreaterThanOrEqual(slider.frame.minY, bar.maxY - 1, "\(what): the slider at \(slider.frame) is in the bar at \(bar)")
+            XCTAssertLessThanOrEqual(slider.frame.maxY, mic.frame.minY + 0.5, "\(what): the slider at \(slider.frame) is over the microphone at \(mic.frame)")
+            ChatReading.attach(app, "slider-\(what)", to: self)
             for (alias, name) in [("fable", "Fable"), ("opus", "Opus"), ("sonnet", "Sonnet")] {
                 let stop = app.buttons["chat-model-\(alias)"]
                 XCTAssertTrue(stop.exists, "\(what): no stop for \(alias)")

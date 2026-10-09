@@ -180,10 +180,10 @@ struct ChatCanvas: View {
     var row: Row = .hidden
     /// Topo over the chat, standing where the fixtures leave him room; nil for none.
     var mascot: MascotState?
-    /// The models the bar's slider offers and the one chosen; none for a bar with no controls.
+    /// The models the slider offers and the one chosen; none for a bar with no controls.
     var models: [ChatBar.Model] = []
     var chosen = ""
-    /// The model slider is open across the middle of the bar.
+    /// The model slider is open across the top of the pane.
     var modelsOpen = false
     var readsAloud = true
 
@@ -201,15 +201,9 @@ struct ChatCanvas: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if !models.isEmpty {
-                        ToolbarItem(placement: .topBarLeading) {
-                            ChatBar.ModelButton(chosen: models.first { $0.id == chosen }?.name ?? "", open: modelsOpen)
-                        }
-                        if #available(iOS 26, *) {
-                            ToolbarSpacer(.fixed, placement: .topBarLeading)
-                        }
                         ToolbarItem(placement: .topBarLeading) { ChatBar.Mute(readsAloud: readsAloud) }
-                        if modelsOpen {
-                            ToolbarItem(placement: .principal) { ChatBar.Slider(models: models, chosen: chosen) }
+                        ToolbarItem(placement: .topBarTrailing) {
+                            ChatBar.ModelButton(chosen: models.first { $0.id == chosen }?.name ?? "", open: modelsOpen)
                         }
                     }
                     // The same bar the chat puts the badge in: from iOS 26 on it puts none of
@@ -221,7 +215,8 @@ struct ChatCanvas: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    Composer(draft: draft, mic: mic)
+                    Composer(draft: draft, mic: mic,
+                             models: models.isEmpty ? nil : Composer.Models(stops: models, chosen: chosen, open: modelsOpen))
                 }
                 .mascotRoams(mascot)
         }

@@ -200,8 +200,8 @@ final class Mascot {
     }
 
     /// The model chosen on the open model slider, which is the head he is drawn with while it is
-    /// open, whatever the harness asks and whatever a guest's turn reports of itself: he hangs
-    /// under the knob, and his head is the one it names. Nil with the slider shut.
+    /// open, whatever the harness asks and whatever a guest's turn reports of itself: he sits
+    /// over the knob, and his head is the one it names. Nil with the slider shut.
     var chosen: String?
 
     /// What he is drawn as: his state, wearing the slider's model while it is open.
