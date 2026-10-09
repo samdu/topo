@@ -57,12 +57,12 @@ judgement:
      `## check:` section per box, quoting the box and the head the build
      carried) holds enough `## result:` comments that pass: one, or the
      count the box asks for as `device(2):`, each from another respondent —
-     another author, or the same author on another device. A result is read
-     from the lines directly under a comment's first, and a status that is
-     not exactly `pass` is a fail. A fail at the PR's head, and passes on a
+     another author, or the same author on another device. A pass is read
+     from the lines directly under a comment's first, and anything else of
+     a respondent's that reads as a result for the check is a fail. A fail at the PR's head, and passes on a
      head that has moved since the build, tick nothing and are reported. The body is read again right before the write, one line of it
      changes, and a comment on the PR cites the results; `allowed_pr()` is
-     every `gh` call the step can make. It merges nothing: the box is what
+     every write the step can make. It merges nothing: the box is what
      automerge and step 1 were waiting on.
 
 What was last said of each PR and issue is kept as a fingerprint in the state
@@ -148,6 +148,9 @@ BUILD_TITLE = re.compile(r"build \d+ \([0-9a-f]{7,40}\)", re.I)
 DEVICE_BOX = re.compile(r"^([ \t]*[-*] )\[ \]( device(?:\((\d{1,3})\))?:)(.*)$", re.M)
 CHECK = re.compile(r"^## check:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*$", re.M)
 RESULT = re.compile(r"## result:[ \t]*([a-z0-9][a-z0-9-]*)[ \t]*")   # a comment's first line, whole
+# Anything else of a respondent's that starts a line like a result's heading: it is no pass, and holds the box it names.
+ALMOST = re.compile(r"^[^\w\n]*result\s*:\s*([a-z0-9][a-z0-9-]*)", re.M | re.I)
+LINE_ENDS = re.compile(r"\r\n|[\r\x0b\x0c\x85\u2028\u2029]")
 RESPONDENTS = ("OWNER", "MEMBER", "COLLABORATOR")   # whose comment on a build issue can be a result
 CLAUDE = os.environ.get("TOPO_JANITOR_CLAUDE", "claude")
 TRIAGE_MODEL = "sonnet"
@@ -565,31 +568,38 @@ def respondent(author, device):
 
 def build_results(comments):
     """The results on a build issue as {check: {respondent: (passed, url)}}, each
-    respondent's newest. A result is a comment by someone with write access
-    whose first line is `## result: name`, and it is read from the lines
-    directly under that one, up to the first blank line, and from nothing
-    after: what a comment pastes or quotes further down is no part of it. A
-    `status:` line there makes it a result; it passes only when every such
-    line says exactly `pass` and one `device:` line names the device, and
-    anything else a status line says is a fail. No status line, or a pass
-    naming no device, is no result and replaces none."""
+    respondent's newest. A pass is a comment by someone with write access
+    whose first line is `## result: name`, with, in the lines directly under
+    that one and before the first blank line, one `device:` line that names a
+    device and a `status:` line, every one of which says `pass`. Nothing
+    after that blank line is read: what a comment pastes or quotes further
+    down is no part of it. Every other comment of theirs with a line that
+    starts like a result's heading for a check — another status, no status,
+    no device, a heading that is not the first line or is spelt another way —
+    is a fail for each check it names so, by the device it names if it names
+    one: a result that cannot be read as a pass holds the box and is said,
+    and is never passed over."""
     out = {}
     for c in sorted(comments or [], key=lambda c: str(c.get("createdAt") or "")):
         author = (c.get("author") or {}).get("login")
         if not isinstance(author, str) or not author or c.get("authorAssociation") not in RESPONDENTS:
             continue
-        lines = [l.rstrip() for l in str(c.get("body") or "").replace("\r\n", "\n").lstrip("\n").split("\n")]
+        url = str(c.get("url") or "")
+        text = LINE_ENDS.sub("\n", str(c.get("body") or ""))
+        lines = [l.rstrip() for l in text.split("\n")]
         head = RESULT.fullmatch(lines[0])
-        if not head:
-            continue
-        own = lines[1:lines.index("", 1)] if "" in lines[1:] else lines[1:]
-        said = [l.split(":", 1)[1].strip() for l in own if l.casefold().startswith("status:")]
-        named = [l.split(":", 1)[1].strip() for l in own if l.casefold().startswith("device:")]
+        own = (lines[1:lines.index("", 1)] if "" in lines[1:] else lines[1:]) if head else []
+        said = [l.split(":", 1)[1].strip() for l in own if l.lower().startswith("status:")]
+        named = [l.split(":", 1)[1].strip() for l in own if l.lower().startswith("device:")]
         who = respondent(author, named[0] if len(named) == 1 else "")
-        passed = bool(said) and all(v.casefold() == "pass" for v in said)
-        if not said or (passed and not who[1]):
+        if said and who[1]:
+            mine = out.setdefault(head.group(1), {})
+            mine.pop((author, ""), None)   # what this author said before of no device, it says now of this one
+            mine[who] = (all(v.lower() == "pass" for v in said), url)
             continue
-        out.setdefault(head.group(1), {})[who] = (passed, str(c.get("url") or ""))
+        device = re.search(r"^[^\w\n]*device\s*:(.*)$", text, re.M | re.I)
+        for name in {m.group(1).lower() for m in ALMOST.finditer(text)}:
+            out.setdefault(name, {})[respondent(author, device.group(1) if device else "")] = (False, url)
     return out
 
 
@@ -626,8 +636,8 @@ def decide_ticks(build, comments, prs):
                                 text=f"{title}: device check {name} passed on {where} at {c['head'][:7]}, and the head is now {head[:7]}; "
                                      "the box is not ticked, since the build did not carry what is there now."))
         elif failed:
-            out.append(dict(want, kind="report", why="failed", key=f"{n}:device-failed:{name}:{len(failed)}:{head}",
-                            text=f"{title}: device check {name} failed on {where} ({len(failed)} failing, {len(passed)} passing); it holds the box."))
+            out.append(dict(want, kind="report", why="failed", key=f"{n}:device-failed:{build['number']}:{name}:{len(failed)}:{head}",
+                            text=f"{title}: device check {name} failed on {where} ({len(failed)} failing or not readable as a pass, {len(passed)} passing); it holds the box."))
         elif len(passed) >= need:
             who = "1 respondent" if len(passed) == 1 else f"{len(passed)} respondents"
             cited = "\n".join(f"- {url}" for url in passed)
@@ -1232,21 +1242,23 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
     if prs_ok and any(device_boxes(pr.get("body")) for pr in prs):
         try:
             builds = sh.builds()
-            state["fired"].pop("builds:read", None)
-            wants = []
+            wants, held = [], set()
             for build in builds:
                 number = build["number"]
-                theirs = {c["number"] for c in build_checks(build.get("body")).values()}
-                if not any(pr["number"] in theirs and device_boxes(pr.get("body")) for pr in prs):
+                checks = build_checks(build.get("body")).values()
+                if not any(pr["number"] in {c["number"] for c in checks} and device_boxes(pr.get("body")) for pr in prs):
                     continue
                 try:
                     comments = sh.build_comments(number)
-                    state["fired"].pop(f"build:{number}:read", None)
                     wants += [dict(w, build=build, comments=comments) for w in decide_ticks(build, comments, prs)]
+                    state["fired"].pop(f"build:{number}:read", None)
                 except BAD as ex:
+                    # Results that could not be read may hold a fail: every box
+                    # this issue names waits for a pass that reads them.
+                    held |= {(c["number"], c["box"]) for c in checks}
                     say(f"build:{number}:read", f"could not read the results on {LINK}#{number}: {type(ex).__name__}: {str(ex)[:200]}")
             # A fail at this head holds the box whichever build's issue it is on.
-            held = {(w["number"], w["box"]) for w in wants if w.get("why") == "failed"}
+            held |= {(w["number"], w["box"]) for w in wants if w.get("why") == "failed"}
             by_number = {pr["number"]: pr for pr in prs}
             for w in wants:
                 n, head = w["number"], w["head"]
@@ -1254,7 +1266,7 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
                     say(w["key"], w["text"])
                     continue
                 if (n, w["box"]) in held:
-                    quiet.append(f"#{n}: a box one build's results pass is held by another's fail")
+                    quiet.append(f"#{n}: a box one build's results pass is held by another's fail, or by results that could not be read")
                     continue
                 try:
                     # The description is read again right before it is
@@ -1283,10 +1295,11 @@ def run_pass(sh, state, now, checkout, persist=lambda: None, verbose=False, tria
             listed = {f"build:{b['number']}:read" for b in builds}
             state["fired"] = {k: v for k, v in state["fired"].items()
                               if not (k.startswith("build:") and k.endswith(":read")) or k in listed}
+            state["fired"].pop("builds:read", None)   # only a list read and parsed whole ends its failure
         except BAD as ex:
             say("builds:read", f"could not read the build issues of {LINK}: {type(ex).__name__}: {str(ex)[:200]}")
     elif prs_ok:
-        state["fired"].pop("builds:read", None)
+        state["fired"] = {k: v for k, v in state["fired"].items() if not (k.startswith("build") and k.endswith(":read"))}
 
     # 3: the install page.
     try:

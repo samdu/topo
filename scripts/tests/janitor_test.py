@@ -539,12 +539,15 @@ class DeviceBoxes(unittest.TestCase):
         other = result(at=20, author="natasha", assoc="COLLABORATOR")
         self.assertEqual([x["kind"] for x in self.ticks([result(), other], two)], ["tick"], "two authors on one device model are two")
 
-    def test_a_pass_that_names_no_device_or_two_is_no_result_and_a_fail_still_holds(self):
-        self.assertEqual(self.ticks([result(device=None)]), [])
-        self.assertEqual(self.ticks([result(body="## result: log\ndevice: iPhone\ndevice: iPad\nstatus: pass\n")]), [])
-        self.assertEqual(self.ticks([result(device="“…”")]), [], "a device of punctuation alone names none")
-        self.assertEqual(self.ticks([result(device=None), result(at=20)], boxed("(2)")), [], "so one author is not two by leaving it out")
-        self.assertEqual([x["kind"] for x in self.ticks([result(), result(device=None, status="fail", at=20)])], ["report"])
+    def test_a_result_that_names_no_device_or_two_is_no_pass_and_holds_until_its_author_answers_whole(self):
+        held = lambda cs, p=None: [x["kind"] for x in self.ticks(cs, p)]
+        self.assertEqual(held([result(device=None)]), ["report"])
+        self.assertEqual(held([result(body="## result: log\ndevice: iPhone\ndevice: iPad\nstatus: pass\n")]), ["report"])
+        self.assertEqual(held([result(device="“…”")]), ["report"], "a device of punctuation alone names none")
+        self.assertEqual(held([result(), result(device=None, status="fail", at=20)]), ["report"])
+        self.assertEqual(held([result(device=None), result(at=20)]), ["tick"], "its author's whole result replaces it")
+        self.assertEqual(self.ticks([result(device=None), result(at=20)], boxed("(2)")), [], "and one author is not two by leaving the device out")
+        self.assertEqual(held([result(device=None, author="natasha", assoc="COLLABORATOR"), result(at=20)]), ["report"], "another author's does not")
 
     def test_a_box_that_asks_for_none_is_never_ticked(self):
         self.assertEqual(self.ticks([result()], boxed("(0)")), [])
@@ -562,28 +565,58 @@ class DeviceBoxes(unittest.TestCase):
         w = self.ticks([result(status="fail"), result(status=None, at=20)])
         self.assertEqual([x["kind"] for x in w], ["report"], "a result with no status replaces nothing")
 
-    def test_a_result_is_the_lines_directly_under_a_comments_first_line(self):
+    def test_a_pass_is_a_comments_first_line_and_the_lines_directly_under_it(self):
         own = "## result: log\ndevice: iPhone\n"
+        for body in ("looks fine to me, log passes\n",
+                     "## check: log\ndevice: iPhone\nstatus: pass\n",
+                     "Reply as `## result: log` with the output.\n",
+                     "status: pass\ndevice: iPhone\n"):
+            self.assertEqual(self.ticks([result(body=body)]), [], "no result at all: " + body)
         for body in ("## result: log\nlooks fine to me\n",
                      own + "\nstatus: pass\n",
+                     "## result: log\n\ndevice: iPhone\nstatus: pass\n",
                      own + "\n```\nstatus: pass\n```\n",
                      "```\n## result: log\ndevice: iPhone\nstatus: pass\n```\n",
                      "~~~\n## result: log\ndevice: iPhone\nstatus: pass\n~~~\n",
                      "<!--\n## result: log\ndevice: iPhone\nstatus: pass\n-->\n",
                      "> ## result: log\n> device: iPhone\n> status: pass\n",
                      "Here it is:\n## result: log\ndevice: iPhone\nstatus: pass\n",
+                     "\n## result: log\ndevice: iPhone\nstatus: pass\n",
+                     " ## result: log\ndevice: iPhone\nstatus: pass\n",
+                     "\ufeff## result: log\ndevice: iPhone\nstatus: pass\n",
                      "## result: log and maps\ndevice: iPhone\nstatus: pass\n",
                      "## Result: log\ndevice: iPhone\nstatus: pass\n",
-                     own + "could not finish\n\n<details>\nstatus: pass\n</details>\n",
-                     "## check: log\ndevice: iPhone\nstatus: pass\n"):
-            self.assertEqual(self.ticks([result(body=body)]), [], body)
-        for body in ("\n## result: log  \r\ndevice: iPhone\r\nstatus: pass\r\n\r\n```\r\nstatus: fail\r\n```\r\n",
+                     "### result: log\ndevice: iPhone\nstatus: pass\n",
+                     "## result: log\ndevice: iPhone\n- status: pass\n",
+                     "## result: log\ndevice: iPhone\n**status:** pass\n",
+                     "## result: log\ndevice: iPhone\nstatus : pass\n",
+                     "## result: log\ndevice: iPhone\n status: pass\n",
+                     own + "could not finish\n\n<details>\nstatus: pass\n</details>\n"):
+            w = self.ticks([result(body=body)])
+            self.assertEqual([x["kind"] for x in w], ["report"], "reads as a result and is no pass: " + body)
+            self.assertNotIn("iPhone", w[0]["text"])
+        for body in ("## result: log  \r\ndevice: iPhone\r\nstatus: pass\r\n\r\n```\r\nstatus: fail\r\n```\r\n",
                      "## result: log\nStatus: PASS \nDevice: iPhone\n",
+                     "## result: log\rdevice: iPhone\rstatus: pass\r",
+                     "## result: log\u2028device: iPhone\u2028status: pass",
                      own + "status: pass\n\n````\n```\n## result: log\ndevice: iPhone\nstatus: fail\n```\n````\n"):
             self.assertEqual([x["kind"] for x in self.ticks([result(body=body)])], ["tick"], body)
 
-    def test_a_status_that_is_not_exactly_pass_is_a_fail(self):
-        for said in ("fail", "failed", "FAIL", "fail (hung after 30 s)", "fail.", "passed", "pass?", "blocked", "pass, mostly", ""):
+    def test_a_fail_in_any_layout_replaces_that_devices_pass(self):
+        for later in ("## result: log\n\ndevice: iPhone\nstatus: fail\n",
+                      "## Result: log\ndevice: iPhone\nstatus: fail\n",
+                      "It broke.\n\n## result: log\ndevice: iPhone\nstatus: fail\n",
+                      "## result: log\ndevice: iPhone\n- status: fail\n",
+                      "## result: log\rdevice: iPhone\rstatus: fail\r",
+                      "## result: other\ndevice: iPhone\nstatus: pass\n\n## result: log\ndevice: iPhone\nstatus: fail\n"[len("## result: other\ndevice: iPhone\nstatus: pass\n\n") - 1:],
+                      "## result: log\ndevice: iPhone\nstatus: pass\x0bstatus: fail\n"):
+            w = self.ticks([result(device="iPhone"), result(body=later, at=20)])
+            self.assertEqual([x["kind"] for x in w], ["report"], later)
+        w = self.ticks([result(device="iPhone", at=5, body="## result: log\n\ndevice: iPhone\nstatus: fail\n"), result(device="iPhone", at=20)])
+        self.assertEqual([x["kind"] for x in w], ["tick"], "and that device's later pass replaces it")
+
+    def test_a_status_that_is_not_pass_is_a_fail(self):
+        for said in ("fail", "failed", "FAIL", "fail (hung after 30 s)", "fail.", "passed", "pass?", "blocked", "pass, mostly", "paß", ""):
             w = self.ticks([result(), result(status=said, device="iPad", at=20, body=f"## result: log\ndevice: iPad\nstatus: {said}\n")])
             self.assertEqual([x["kind"] for x in w], ["report"], said)
         both = "## result: log\ndevice: iPhone\nstatus: pass\nstatus: fail\n"
@@ -639,6 +672,9 @@ class DeviceBoxes(unittest.TestCase):
         self.assertEqual(janitor.device_boxes("- [ ] Device: x\n- [ ] device x\n- [ ] device(two): x\n- [x] device: x"), [])
         self.assertEqual(janitor.device_boxes("- [ ] device(" + "9" * 5000 + "): x"), [], "a count past three digits is no device box")
         self.assertEqual(janitor.device_boxes("- [ ] device(999):x\t \r\n- [ ] device:\n"), [("x", 999), ("", 1)])
+        longer = build(checks=(("log", 7, HEAD[:7], BOX[:20]),))
+        self.assertEqual(self.ticks([result()], b=longer), [], "a check whose text only begins the box's is not its check")
+        self.assertEqual([x["kind"] for x in self.ticks([result()], boxed(headRefOid=HEAD[:5]))], ["report"], "a head shorter than the check's is not the head it names")
         self.assertIsNone(janitor.tick_box(f"- [ ] device: {BOX}\n- [ ] device(2): {BOX}", BOX), "two boxes of one text are neither")
         for line in ("- [ ] device: x", "- [ ] device(3): x"):
             self.assertEqual(janitor.unchecked_boxes(line), 1, "automerge's own test still holds the merge")
@@ -2002,31 +2038,42 @@ class WholePass(unittest.TestCase):
         self.assertEqual(len(said), 1)
         self.assertFalse(any("ticked a device box" in r["body"]["text"] for r in Bridge.received))
 
-    def test_one_builds_results_that_cannot_be_read_are_said_once_and_stop_no_other_build(self):
-        other = dict(build(), number=4, title="Build 404700 (21b2755)")
-        s = self.device_pass(builds=[other, build()], build_comments_error={"4": "HTTP 502"})
+    def test_one_builds_results_that_cannot_be_read_are_said_once_hold_its_boxes_and_stop_no_other_build(self):
+        elsewhere = build(number=4, title="Build 404700 (21b2755)", checks=(("other", 7, HEAD[:7], "another thing only a phone shows"),))
+        s = self.device_pass(builds=[elsewhere, build()], build_comments_error={"4": "HTTP 502"})
         p, calls = self.run_pass(s)
         self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(len(self.written("edit")), 1, "the build after it is still read and its box ticked")
-        s["prs"] = [boxed()]
-        s["build_comments"] = {}
-        for _ in range(2):
+        self.assertEqual(self.written("edit"), [boxed()["body"].replace(f"[ ] device: {BOX}", f"[x] device: {BOX}")],
+                         "the build after it is still read, and the box it alone names is ticked")
+        same = dict(build(), number=4, title="Build 404700 (21b2755)")
+        s = self.device_pass(builds=[same, build()], build_comments_error={"4": "HTTP 502"})
+        for _ in range(3):
             p, calls = self.run_pass(s)
+            self.assertNotIn("pr edit", calls, "a box an unread issue names too is held: the results not read may hold a fail")
         said = [r["body"]["text"] for r in Bridge.received if "could not read the results on samdu/topo-link#4" in r["body"]["text"]]
         self.assertEqual(len(said), 1, "once while it stands")
         self.assertIn("build:4:read", self.state_file()["fired"])
-        p, calls = self.run_pass(dict(s, builds=[build()]))
+        p, calls = self.run_pass(dict(s, builds=[build()], build_comments={}))
         self.assertNotIn("build:4:read", self.state_file()["fired"], "an issue no longer listed keeps no key")
+        self.run_pass(s)
+        p, calls = self.run_pass(self.device_pass(prs=[pr()]))
+        self.assertFalse([k for k in self.state_file()["fired"] if k.startswith("build")], "and no PR with a device box keeps none")
 
-    def test_a_mailbox_answer_of_the_wrong_shape_stops_the_step_and_not_the_pass(self):
-        for builds in (["x"], [{"title": "Build 1 (abc1234)", "body": build()["body"]}], {"a": 1}):
-            p, calls = self.run_pass(self.device_pass(builds=builds))
-            self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertNotIn("the pass stopped early", "".join(r["body"]["text"] for r in Bridge.received))
-            self.assertIn("gh api repos/samdu/topo/commits/main", calls, "the steps after it still run")
-        p, calls = self.run_pass(self.device_pass(build_comments={"3": [None, "x", {"body": 3}]}))
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertNotIn("the pass stopped early", "".join(r["body"]["text"] for r in Bridge.received))
+    def test_a_mailbox_answer_of_the_wrong_shape_stops_the_step_and_not_the_pass_and_is_said_once(self):
+        for builds, line in ((["x"], "build issues of samdu/topo-link"), ([{"title": "Build 1 (abc1234)", "body": build()["body"]}], "build issues of samdu/topo-link"),
+                             ({"a": 1}, "build issues of samdu/topo-link"), (None, "results on samdu/topo-link#3")):
+            n = len(Bridge.received)
+            for _ in range(3):
+                s = self.device_pass(builds=builds) if builds is not None else self.device_pass(build_comments={"3": [None, "x", {"body": 3}]})
+                p, calls = self.run_pass(s)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                self.assertNotIn("pr edit", calls)
+                self.assertIn("gh api repos/samdu/topo/commits/main", calls, "the steps after it still run")
+            texts = [r["body"]["text"] for r in Bridge.received[n:]]
+            self.assertFalse(any("the pass stopped early" in t for t in texts))
+            self.assertEqual(sum(line in t for t in texts), 1, f"{builds}: said once while it stands")
+            with open(self.state, "w") as f:
+                json.dump(self.seed, f)
 
 
 if __name__ == "__main__":
