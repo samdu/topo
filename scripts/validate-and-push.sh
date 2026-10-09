@@ -43,8 +43,8 @@
 #
 # A SIGKILL ends the script and not its suite, and the kernel drops the lock with the script.
 # So the suite's pid is on record beside the lock ($cache/suite), and a run that finds that
-# suite still going refuses to start beside it: two suites in the one checkout would each run
-# the other's commit.
+# suite still going refuses to start beside it: the one checkout would be moved to another
+# commit under the suite already running in it.
 set -euo pipefail
 
 cache="${TOPO_VALIDATE_CACHE:-$HOME/Library/Caches/topo-validate}"
@@ -181,7 +181,7 @@ if [ "${#chosen[@]}" -gt 0 ]; then
   # when each began, so the run in hand is never one of those removed, and before the suites,
   # so a run a signal ends is counted by the next. Only what is named as a run is touched.
   mkdir -p "$commit_logs"
-  ls -1 "$commit_logs" | { grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' || true; } | sort -r | tail -n "+$KEEP_RUNS" | while IFS= read -r old; do
+  ls -1 "$commit_logs" | { grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$' || true; } | sort -t- -k1,1r -k2,2nr | tail -n "+$KEEP_RUNS" | while IFS= read -r old; do
     rm -rf "${commit_logs:?}/$old"
   done
   logs="$commit_logs/$(date -u +%Y%m%dT%H%M%SZ)-$$"

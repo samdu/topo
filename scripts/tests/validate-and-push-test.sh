@@ -239,8 +239,8 @@ is "run again: the red run's result is kept" "$(cat "$TOPO_VALIDATE_LOGS/$sha/$r
 [ -f "$TOPO_VALIDATE_LOGS/$sha/$red_run/mac-suite.log" ] && ok "run again: the red run's log is kept" || fail "run again: the red run's mac-suite.log is gone"
 # What is not a run is left where it is, and earlier runs made to look newer than the one in
 # hand do not have it removed in their place.
-echo kept > "$TOPO_VALIDATE_LOGS/$sha/notes.txt"
 for _ in 1 2 3; do validate; done
+echo kept > "$TOPO_VALIDATE_LOGS/$sha/notes.txt"
 touch -t 203001010000 "$TOPO_VALIDATE_LOGS/$sha"/*Z-*
 FAKE_SUITES="others=failure" validate
 is "a sixth run, red: exits 1" "$status" 1
@@ -248,6 +248,21 @@ case "$out" in *"No such file"*) fail "a sixth run, red: its own logs were remov
 is "a sixth run: five kept" "$(runs)" 5
 [ ! -e "$TOPO_VALIDATE_LOGS/$sha/$red_run" ] && ok "a sixth run: the oldest is gone" || fail "a sixth run: the oldest run is still there"
 is "a sixth run: a file that is not a run is left" "$(cat "$TOPO_VALIDATE_LOGS/$sha/notes.txt" 2>/dev/null)" kept
+
+# Runs a signal ended are counted like any other: seven of them leave five.
+scratch signalled Packages/TopoLink/Package.swift
+git -C "$repo" push -q origin topic
+export FAKE_HOLD="$work/signalled/hold"
+for _ in 1 2 3 4 5 6 7; do
+  : > "$FAKE_HOLD"
+  (cd "$repo" && PATH="$work/bin:$PATH" FAKE_SUITES=held exec scripts/validate-and-push.sh --no-push) > "$work/signalled/out" 2>&1 &
+  held=$!
+  for _ in $(seq 300); do [ -s "$FAKE_HOLD" ] && break; perl -e 'select(undef,undef,undef,0.1)'; done
+  [ -s "$FAKE_HOLD" ] || fail "signalled runs: a run's suite never started"
+  kill -TERM "$held"; wait "$held" 2>/dev/null
+done
+unset FAKE_HOLD
+is "seven runs ended by a signal: five kept" "$(runs)" 5
 own="$(sed -n 's/^RED at .* Logs: \(.*\)\/mac-suite.log$/\1/p' <<<"$out")"
 is "a sixth run: the logs it names hold its own result" "$(cat "$own/suites.txt" 2>/dev/null)" "others=failure"
 
