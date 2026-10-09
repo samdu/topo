@@ -29,7 +29,7 @@ public struct ClaudeLauncher: ResidentLauncher {
                 + "It is yours to read and write: a note you keep there is what you remember between "
                 + "conversations, and it is synced to the person's other devices, where they read it in "
                 + "Obsidian. Link notes with relative paths inside the vault, never absolute ones. The "
-                + "hidden folders in it (.obsidian, .topo) are not yours to change."
+                + "hidden folder in it (.obsidian) is not yours to change."
         }
         return "Your memory, an Obsidian vault, cannot be reached on this phone right now. Nothing "
             + "written under \(memory) is kept, so if you are asked to remember something, say that "
