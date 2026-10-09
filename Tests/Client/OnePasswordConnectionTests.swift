@@ -327,6 +327,151 @@ final class SecretToolTests: XCTestCase {
                        ["read", "--no-newline", "--", "op://Homelab/Router/password"])
         XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Router/admin/password"])?.arguments.last,
                        "op://Homelab/Router/admin/password")
+        // A service account is refused an item without its vault, so `show` asks for none.
+        XCTAssertNil(SecretTool.parse(["show", "Hexagonzone Kubeconfig"]))
+        XCTAssertEqual(SecretTool.parse(["show", "i1", "Homelab"])?.arguments,
+                       ["item", "get", "--vault", "Homelab", "--format", "json", "--", "i1"])
+        // An item whose title starts with a dash is still an item: it follows `--`.
+        XCTAssertEqual(SecretTool.parse(["show", "--reveal", "Homelab"])?.arguments,
+                       ["item", "get", "--vault", "Homelab", "--format", "json", "--", "--reveal"])
+        XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Hexagonzone Kubeconfig"]),
+                       .file(vault: "Homelab", item: "Hexagonzone Kubeconfig"))
+        XCTAssertEqual(SecretTool.parse(["get", "op://Homelab/Hexagonzone Kubeconfig"])?.arguments,
+                       ["item", "get", "--vault", "Homelab", "--format", "json", "--", "Hexagonzone Kubeconfig"])
+        XCTAssertEqual(SecretTool.Call.read("op://v/i/f"), ["read", "--no-newline", "--", "op://v/i/f"])
+    }
+
+    /// `op item get --format json` as op 2.34 prints it for a Document and for a login, with a
+    /// value in every place one can be.
+    private let document = #"""
+    {"id": "6telhnrm", "title": "Hexagonzone Kubeconfig", "version": 2, "vault": {"id": "bayinlb3", "name": "Homelab"},
+     "category": "DOCUMENT", "created_at": "2026-04-04T23:23:20Z",
+     "fields": [{"id": "notesPlain", "type": "STRING", "purpose": "NOTES", "label": "notesPlain", "value": "NOTE-VALUE",
+                 "reference": "op://Homelab/Hexagonzone Kubeconfig/notesPlain"}],
+     "files": [{"id": "xwuczxfr", "name": "kubeconfig-fresh", "size": 2276,
+                "content_path": "/v1/vaults/bayinlb3/items/6telhnrm/files/xwuczxfr/content"}]}
+    """#
+    private let login = #"""
+    {"id": "i1", "title": "Router", "vault": {"id": "v1", "name": "Homelab"}, "category": "LOGIN",
+     "sections": [{"id": "s1", "label": "Admin"}],
+     "fields": [{"id": "username", "type": "STRING", "purpose": "USERNAME", "label": "username", "value": "USER-VALUE",
+                 "reference": "op://Homelab/Router/username"},
+                {"id": "password", "type": "CONCEALED", "purpose": "PASSWORD", "label": "password", "value": "PASS-VALUE",
+                 "password_details": {"strength": "FANTASTIC", "history": ["OLD-VALUE"]}, "reference": "op://Homelab/Router/password"},
+                {"id": "f3", "section": {"id": "s1", "label": "Admin"}, "type": "OTP", "label": "one-time\npassword", "value": "OTP-SEED",
+                 "totp": "123456", "reference": "op://Homelab/Router/Admin/one-time password"},
+                {"id": "f4", "type": "STRING", "label": "recovery key"}],
+     "urls": [{"label": "website", "primary": true, "href": "https://URL-VALUE.example"}],
+     "files": [{"id": "fa", "name": "a.pem", "size": 10}, {"id": "fb", "name": "b/c.pem", "size": 20, "section": {"id": "s1", "label": "Admin"}}]}
+    """#
+
+    /// #249: `show` names what an item holds — its fields and files, each with the reference
+    /// `get` takes — and no value of any of them.
+    func testShowNamesAnItemsFieldsAndFilesAndNoValue() async {
+        let (tool, op) = tool(OnePasswordExit(status: 0, output: document, errors: ""), OnePasswordExit(status: 0, output: login, errors: ""))
+        let shown = await tool.run(["show", "Hexagonzone Kubeconfig", "Homelab"])
+        XCTAssertEqual(shown, .ok("""
+        item | 6telhnrm | Hexagonzone Kubeconfig | DOCUMENT | Homelab
+        field | notesPlain | STRING | NOTES | op://Homelab/Hexagonzone Kubeconfig/notesPlain
+        file | kubeconfig-fresh | 2276 bytes | op://bayinlb3/6telhnrm/xwuczxfr
+
+        """))
+        let router = await tool.run(["show", "i1", "Homelab"])
+        XCTAssertEqual(router, .ok("""
+        item | i1 | Router | LOGIN | Homelab
+        field | username | STRING | USERNAME | op://Homelab/Router/username
+        field | password | CONCEALED | PASSWORD | op://Homelab/Router/password
+        field | one-time password | OTP | section Admin | op://Homelab/Router/Admin/one-time password
+        field | recovery key | STRING
+        file | a.pem | 10 bytes | op://v1/i1/fa
+        file | b/c.pem | 20 bytes | section Admin | op://v1/i1/fb
+
+        """))
+        for value in ["NOTE-VALUE", "USER-VALUE", "PASS-VALUE", "OLD-VALUE", "OTP-SEED", "123456", "URL-VALUE", "content_path", "/v1/vaults"] {
+            XCTAssertFalse((shown.text + router.text).contains(value), "show answered \(value)")
+        }
+        XCTAssertEqual(op.calls.map(\.arguments), [["item", "get", "--vault", "Homelab", "--format", "json", "--", "Hexagonzone Kubeconfig"],
+                                                   ["item", "get", "--vault", "Homelab", "--format", "json", "--", "i1"]])
+    }
+
+    func testShowOfSomethingThatIsNotAnItemIsSaid() async {
+        let (tool, _) = tool(OnePasswordExit(status: 0, output: "[]", errors: ""),
+                             OnePasswordExit(status: 1, output: "", errors: "[ERROR] \"Nope\" isn't an item\n"))
+        let unreadable = await tool.run(["show", "x", "Homelab"])
+        XCTAssertEqual(unreadable, .failed("op answered something unreadable\n"))
+        let refused = await tool.run(["show", "Nope", "Homelab"])
+        XCTAssertEqual(refused, .failed("op: [ERROR] \"Nope\" isn't an item\n"))
+    }
+
+    /// An item holding this connection's own token is refused whole, though `show` prints no value.
+    func testShowOfAnItemHoldingTheTokenIsRefused() async {
+        let holding = document.replacingOccurrences(of: "NOTE-VALUE", with: token)
+        let (tool, _) = tool(OnePasswordExit(status: 0, output: holding, errors: ""))
+        let reply = await tool.run(["show", "Hexagonzone Kubeconfig", "Homelab"])
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertFalse(reply.text.contains(token))
+        XCTAssertFalse(reply.text.contains("kubeconfig-fresh"))
+    }
+
+    /// #249: from `list` to a Document's file in two calls, neither a guess: `get op://VAULT/ITEM`
+    /// reads what the item holds and then its one file, by ids, exactly as `op` gave it.
+    func testGetOfAnItemWithOneFileIsThatFile() async {
+        let (tool, op) = tool(OnePasswordExit(status: 0, output: document, errors: ""),
+                              OnePasswordExit(status: 0, output: "apiVersion: v1\nkind: Config\n", errors: ""))
+        let reply = await tool.run(["get", "op://Homelab/Hexagonzone Kubeconfig"])
+        XCTAssertEqual(reply, .ok("apiVersion: v1\nkind: Config\n"))
+        XCTAssertEqual(op.calls.map(\.arguments), [["item", "get", "--vault", "Homelab", "--format", "json", "--", "Hexagonzone Kubeconfig"],
+                                                   ["read", "--no-newline", "--", "op://bayinlb3/6telhnrm/xwuczxfr"]])
+        XCTAssertEqual(op.calls.map(\.token), [token, token])
+    }
+
+    func testGetOfAnItemWithNoFileOrSeveralSaysWhichAndReadsNothing() async {
+        let none = document.replacingOccurrences(of: #""files""#, with: #""attachments""#)
+        let (tool, op) = tool(OnePasswordExit(status: 0, output: none, errors: ""), OnePasswordExit(status: 0, output: login, errors: ""),
+                              OnePasswordExit(status: 0, output: "{}", errors: ""))
+        let empty = await tool.run(["get", "op://Homelab/Hexagonzone Kubeconfig"])
+        XCTAssertEqual(empty, .failed("Hexagonzone Kubeconfig holds no file: topo secret show 'Hexagonzone Kubeconfig' 'Homelab' lists its fields\n"))
+        let several = await tool.run(["get", "op://Homelab/Router"])
+        XCTAssertEqual(several, .usage("""
+        Router holds 2 files; get one by its reference:
+        file | a.pem | 10 bytes | op://v1/i1/fa
+        file | b/c.pem | 20 bytes | section Admin | op://v1/i1/fb
+
+        """))
+        let unreadable = await tool.run(["get", "op://Homelab/Router"])
+        XCTAssertEqual(unreadable, .failed("op answered something unreadable\n"))
+        XCTAssertEqual(op.calls.count, 3, "no read followed an item with no one file")
+    }
+
+    /// The file's read is refused like any other: op's words, and the token never an answer.
+    func testTheFilesReadIsJudgedLikeAnyOther() async {
+        let (tool, _) = tool(OnePasswordExit(status: 0, output: document, errors: ""),
+                             OnePasswordExit(status: 1, output: "", errors: "[ERROR] no file\n"),
+                             OnePasswordExit(status: 0, output: document, errors: ""),
+                             OnePasswordExit(status: 0, output: "token: \(token)\n", errors: ""))
+        let refused = await tool.run(["get", "op://Homelab/Hexagonzone Kubeconfig"])
+        XCTAssertEqual(refused, .failed("op: [ERROR] no file\n"))
+        let holding = await tool.run(["get", "op://Homelab/Hexagonzone Kubeconfig"])
+        XCTAssertEqual(holding.status, ToolReply.failed)
+        XCTAssertFalse(holding.text.contains(token))
+    }
+
+    /// A sign-out while the item is being read ends the request before the file's read is made.
+    @MainActor func testASignOutBetweenTheItemAndItsFileReadsNoFile() async {
+        let op = HeldOnePassword()
+        op.answer(OnePasswordExit(status: 0, output: document, errors: ""))
+        op.answer(OnePasswordExit(status: 0, output: "apiVersion: v1\n", errors: ""))
+        op.hold()
+        let requests = SecretRequests()
+        let tool = SecretTool(store: InMemoryConnectionStore([.onePassword: Connection(token: token, account: "Homelab")]),
+                              onePassword: op, leftBehind: .isolated(), requests: requests)
+        let asking = Task { await tool.run(["get", "op://Homelab/Hexagonzone Kubeconfig"]) }
+        await op.reach()
+        requests.clearing {}
+        op.release()
+        let reply = await asking.value
+        XCTAssertEqual(reply, SecretRequests.stopped)
+        XCTAssertEqual(op.calls.count, 1, "the file was read after the clear")
     }
 
     /// While a clear the keychain refused at an earlier sign-out stands, `op` is not run with the
@@ -475,7 +620,9 @@ final class SecretToolTests: XCTestCase {
 
     func testAnythingElseIsUsage() {
         for arguments in [[], ["read", "op://a/b/c"], ["list", "--account", "x"], ["list", ""], ["list", "a", "b"],
-                          ["get"], ["get", "Homelab/Router/password"], ["get", "op://a/b"], ["get", "op://a//c"],
+                          ["get"], ["get", "Homelab/Router/password"], ["get", "op://a"], ["get", "op://a/"], ["get", "op://-a/b"],
+                          ["get", "op://a//c"], ["show"], ["show", ""], ["show", "a"], ["show", "a\nb"], ["show", "a", "--vault"], ["show", "a", ""],
+                          ["show", "a", "b", "c"],
                           ["get", "op://a/b/c/d/e"], ["get", "op://a/b/c\n"], ["get", "op://a/b/c", "--reveal"],
                           ["vaults", "x"], ["item", "delete", "x"], ["signin"]] {
             XCTAssertNil(SecretTool.parse(arguments), "\(arguments)")
