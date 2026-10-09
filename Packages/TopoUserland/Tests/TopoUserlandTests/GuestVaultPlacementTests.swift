@@ -19,11 +19,10 @@ final class GuestVaultPlacementTests: XCTestCase {
         hosts.forEach { try? fm.removeItem(at: $0) }
     }
 
-    private func vault() throws -> (host: URL, point: String) {
+    private func vault(at point: String = "/vault-\(UUID().uuidString.prefix(8))") throws -> (host: URL, point: String) {
         let host = fm.temporaryDirectory.appendingPathComponent("vault-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: host, withIntermediateDirectories: true)
         hosts.append(host)
-        let point = "/vault-\(UUID().uuidString.prefix(8))"
         try Guest.shared.mountVault(host, at: point)
         points.append(point)
         return (host, point)
@@ -75,6 +74,24 @@ final class GuestVaultPlacementTests: XCTestCase {
         let folder = host.appendingPathComponent("inbox/from files")
         XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("a report.txt"), encoding: .utf8), "the picked file\n")
         XCTAssertEqual(try hidden(in: folder), [], "the copy's hidden name was left")
+    }
+
+    /// The memory as the app lays it out: mounted at `ClaudeLauncher.vault` and linked from the
+    /// home. A placement that names no root goes to the mount, and the file is there by the home's
+    /// link; the link itself is no mount, so a placement told to go there does nothing.
+    func testAPlacementGoesToTheMemorysOwnMountAndNotByTheHomesLinkToIt() async throws {
+        let (host, _) = try vault(at: ClaudeLauncher.vault)
+        _ = try await Guest.shared.run("/bin/mkdir", ["-p", ClaudeLauncher.home])
+        try Guest.shared.link(ClaudeLauncher.vault, at: ClaudeLauncher.memory)
+        let picked = try await source("mine\n")
+        let outcome = try await VaultPlacement.place(picked, folder: "inbox", name: "file.md", by: soon)
+        XCTAssertEqual(outcome, .placed(bytes: 5))
+        XCTAssertEqual(try String(contentsOf: host.appendingPathComponent("inbox/file.md"), encoding: .utf8), "mine\n")
+        let read = try await Guest.shared.run("/bin/cat", ["\(ClaudeLauncher.memory)/inbox/file.md"])
+        XCTAssertEqual(read.output, "mine\n", read.errors)
+        let byLink = try await VaultPlacement.place(picked, at: ClaudeLauncher.memory, folder: "inbox", name: "other.md", by: soon)
+        XCTAssertEqual(byLink, .unmounted)
+        XCTAssertFalse(fm.fileExists(atPath: host.appendingPathComponent("inbox/other.md").path))
     }
 
     func testNothingAtTheNameIsWrittenOver() async throws {
@@ -161,13 +178,14 @@ final class GuestVaultPlacementTests: XCTestCase {
 
     /// A placement that was killed leaves its copy under the hidden name; a later one into that
     /// folder takes away an old one, and nothing else: not a fresh one, which may be another
-    /// placement's at work, and not a file of the person's with a name like it.
+    /// placement's at work, and not a file of the person's with a name like it, whatever its age.
     func testOnlyAnOldHiddenCopyIsTakenAway() async throws {
         let (host, point) = try vault()
         let folder = host.appendingPathComponent("inbox", isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let old = Date().addingTimeInterval(-3600)
-        for (name, date) in [(".topo-pick-41.part", old), (".topo-pick-42.part", Date()), (".topo-pick-list.md", old)] {
+        for (name, date) in [(".topo-pick-41.part", old), (".topo-pick-42.part", Date()), (".topo-pick-list.md", old),
+                             (".topo-pick-notes.part", old), (".topo-pick-4x.part", old), (".topo-pick-.part", old)] {
             let url = folder.appendingPathComponent(name)
             try Data("x".utf8).write(to: url)
             try fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
@@ -175,7 +193,7 @@ final class GuestVaultPlacementTests: XCTestCase {
         let picked = try await source("mine\n")
         let outcome = try await VaultPlacement.place(picked, at: point, folder: "inbox", name: "file.md", by: soon)
         XCTAssertEqual(outcome, .placed(bytes: 5))
-        XCTAssertEqual(try hidden(in: folder).sorted(), [".topo-pick-42.part", ".topo-pick-list.md"])
+        XCTAssertEqual(try hidden(in: folder).sorted(), [".topo-pick-.part", ".topo-pick-42.part", ".topo-pick-4x.part", ".topo-pick-list.md", ".topo-pick-notes.part"])
     }
 }
 

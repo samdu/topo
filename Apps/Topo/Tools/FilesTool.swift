@@ -275,7 +275,7 @@ struct GuestVaultDrop: VaultDrop {
         defer { HomeFile.remove(named: staged, in: Self.staging, under: home()) }
         try Task.checkCancellation()
         let source = ([ClaudeLauncher.home] + Self.staging + [staged]).joined(separator: "/")
-        switch try await VaultPlacement.place(source, at: ClaudeLauncher.memory, folder: folder, name: name, by: deadline) {
+        switch try await VaultPlacement.place(source, folder: folder, name: name, by: deadline) {
         case .placed(let bytes):
             guard bytes == data.count else { throw ToolFailure("the file's copy into the memory could not be confirmed") }
             return .placed

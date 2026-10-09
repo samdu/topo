@@ -18,6 +18,8 @@
 # The usage strings of the permissions the phone's tools ask for are read the same way: iOS ends
 # the process, uncatchably, when an app asks for Reminders, Calendars, Contacts, Location,
 # HomeKit or Photos with no string saying why, and nothing shows it until the first call that asks.
+# `PHPhotoLibraryPreventAutomaticLimitedAccessAlert` is read beside them: without it a limited
+# photo library puts the system's sheet for choosing more up at a tool's call.
 #
 # `NSLocalNetworkUsageDescription` is one of them: a control's request to a device on the home
 # network is what asks for local network access. `NSAllowsArbitraryLoads` under
@@ -102,6 +104,13 @@ for key in UIFileSharingEnabled LSSupportsOpeningDocumentsInPlace; do
         status=1
     fi
 done
+
+key=PHPhotoLibraryPreventAutomaticLimitedAccessAlert
+value="$(plutil -extract "$key" raw -o - -- "$plist" 2>/dev/null || true)"
+if [ "$value" != "true" ] && [ "$value" != "1" ]; then
+    echo "$app/Info.plist does not set $key ( ${value:-absent} ); a limited photo library would put the system's sheet up at a tool's call" >&2
+    status=1
+fi
 
 for key in NSRemindersFullAccessUsageDescription NSCalendarsFullAccessUsageDescription \
            NSContactsUsageDescription NSLocationWhenInUseUsageDescription NSHomeKitUsageDescription \

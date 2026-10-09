@@ -350,10 +350,15 @@ final class PhotosToolTests: XCTestCase {
         XCTAssertEqual(saved.status, ToolReply.ok, saved.text)
         let id = try XCTUnwrap(saved.text.split(separator: "\n").first?.dropFirst("saved: ".count)).description
 
-        for call in [["search", "--kind", "photo", "--favorites", "--from", "2001-01-01", "--to", "2099-01-01", "--limit", "3"],
-                     ["search", "--kind", "video"]] {
+        // The picture is a photo taken now and no favourite: each filter keeps it or leaves it out.
+        for (call, finds) in [(["search", "--kind", "photo", "--from", "2001-01-01", "--to", "2099-01-01", "--limit", "3"], true),
+                              (["search", "--kind", "photo", "--favorites", "--from", "2001-01-01", "--to", "2099-01-01"], false),
+                              (["search", "--to", "2001-01-01"], false),
+                              (["search", "--from", "2099-01-01"], false),
+                              (["search", "--kind", "video"], false)] {
             let reply = await tool.run(call)
             XCTAssertEqual(reply.status, ToolReply.ok, "\(call): \(reply.text)")
+            XCTAssertEqual(reply.text.contains("\(id) | "), finds, "\(call): \(reply.text)")
         }
         let newest = await tool.run(["search", "--kind", "photo", "--limit", "1"])
         XCTAssertTrue(newest.text.hasPrefix("\(id) | "), newest.text)
