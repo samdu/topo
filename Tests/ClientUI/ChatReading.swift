@@ -20,7 +20,7 @@ enum ChatReading {
         var opened: [String]?
         /// Whether the guest's home is mounted in this launch.
         var guestHome: Bool?
-        /// The model the bar's menu last set, by its alias, and the model a request carries for
+        /// The model the bar's slider last set, by its alias, and the model a request carries for
         /// it, which in a debug build is the pin.
         var model: String?
         var effectiveModel: String?

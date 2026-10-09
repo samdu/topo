@@ -93,6 +93,28 @@ final class StatusNoticeTests: XCTestCase {
 
     // MARK: -
 
+    /// The open model slider takes the middle of the bar from the notice and gives it back: with
+    /// a turn in flight saying where it is, the model's control opens the slider where the notice
+    /// was, with no notice drawn beside it, and shutting it draws the notice again, in the bar.
+    func testTheOpenSliderTakesTheNoticesPlaceAndGivesItBack() throws {
+        let app = launch("busy-long")
+        let notices = app.descendants(matching: .any).matching(identifier: "topo-notices").firstMatch
+        let model = app.buttons["chat-model"]
+        _ = try words(app, "busy-long")
+        let stood = notices.frame
+        model.tap()
+        let slider = app.descendants(matching: .any)["chat-models"]
+        XCTAssertTrue(slider.waitForExistence(timeout: 10), "the slider did not open over a notice")
+        XCTAssertFalse(notices.exists, "the notice is drawn with the slider open")
+        XCTAssertGreaterThanOrEqual(slider.frame.minX, app.buttons["chat-mute"].frame.maxX - 0.5, "the slider is over the mute")
+        XCTAssertLessThanOrEqual(slider.frame.maxX, app.buttons["topo-debug-chat"].frame.minX + 0.5, "the slider is over the badge")
+        attach(app, "slider-over-notice")
+        model.tap()
+        let back = try words(app, "busy-long, after the slider")
+        XCTAssertEqual(notices.frame.midY, stood.midY, accuracy: 1, "the notice came back somewhere else")
+        try holdInTheBar(app, back, "busy-long, after the slider")
+    }
+
     /// The least a notice is drawn at, as a share of its font (`look.transcript.noticeLeastScale`):
     /// between the bar's controls and the badge a notice that does not fit its two lines is
     /// drawn smaller before any of it is cut.

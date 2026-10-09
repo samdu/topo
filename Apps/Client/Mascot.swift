@@ -199,6 +199,19 @@ final class Mascot {
         state = MascotState(model: model)
     }
 
+    /// The model chosen on the open model slider, which is the head he is drawn with while it is
+    /// open, whatever the harness asks and whatever a guest's turn reports of itself: he hangs
+    /// under the knob, and his head is the one it names. Nil with the slider shut.
+    var chosen: String?
+
+    /// What he is drawn as: his state, wearing the slider's model while it is open.
+    var drawn: MascotState {
+        guard let chosen else { return state }
+        var drawn = state
+        drawn.model = chosen
+        return drawn
+    }
+
     /// The chat's harness: the model it asks, and the context of the last reply it got.
     func harness(model: String, tokens: Int?) {
         state = MascotMapping.harness(state, model: model, tokens: tokens)

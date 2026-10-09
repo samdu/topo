@@ -598,7 +598,9 @@ struct Look: Equatable, Sendable {
             var keyboard = "keyboard"
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"
+            /// The model's control, and the same control while the slider it opens is open.
             var models = "slider.horizontal.3"
+            var modelsOpen = "chevron.up"
         }
 
         /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
@@ -633,11 +635,11 @@ struct Look: Equatable, Sendable {
         }
     }
 
-    /// What each model the chat offers is called, by its family's alias: in the model's menu, and
+    /// What each model the chat offers is called, by its family's alias: under its stop of the model slider, and
     /// in the notice while a turn is asked of it. Words and not ids: which model an alias reaches is
     /// Claude Code's to say.
     struct Mind: Equatable, Sendable {
-        /// The longest a name may be, in characters: the notice and a menu's row hold a word.
+        /// The longest a name may be, in characters: the notice and a stop of the slider hold a word.
         static let longest = 24
 
         var sonnet = "Sonnet"
@@ -674,6 +676,10 @@ struct Look: Equatable, Sendable {
         /// How fast he goes from one roost to the next, in points a second on average, eased at
         /// both ends: a stroll, so as not to call attention to himself.
         var roamSpeed: CGFloat = 40
+        /// How fast he goes to the model slider when it opens, along it as the model changes and,
+        /// where the look places him, home when it shuts, in points a second: a swim, since he
+        /// was called and is not strolling.
+        var swimSpeed: CGFloat = 240
         /// How many times `roamSpeed` he goes while anything is over him — a turn, a line under
         /// the transcript, the keyboard — dropping back to the stroll the frame he is clear.
         var hurry: CGFloat = 10
@@ -775,9 +781,9 @@ struct Look: Equatable, Sendable {
 }
 
 extension Look {
-    /// The controls at the leading edge of the navigation bar, the model and the mute: drawn
-    /// plainly in Topo's colour, and not etched, since the bar is not the glass. Their marks are
-    /// `composer.flank`'s.
+    /// The controls at the leading edge of the navigation bar, the model and the mute, each an
+    /// item of the bar's own: drawn plainly in Topo's colour, and not etched, since the bar is
+    /// not the glass. Their marks are `composer.flank`'s.
     struct Bar: Equatable, Sendable {
         /// `look.json` sets it no larger than `largestFont`.
         var font: Font = .body
@@ -785,11 +791,35 @@ extension Look {
         /// the two controls beside the notice and the badge, so past this they would leave it.
         static let largestFont: Double = 22
         var ink = Theme.primary
-        /// Between one control and the next.
-        var spacing: CGFloat = 14
-        /// The most `spacing` a document sets, in points: on a 320-point screen controls further
-        /// apart than this leave the bar no room for its notice, which it then does not show.
-        static let widestSpacing: Double = 32
+        var slider = Slider()
+
+        /// The model slider: across the middle of the bar while the model's control has it open,
+        /// a stop for each model the chat offers, smallest at the leading end, with the model's
+        /// name under its stop and a knob on the one chosen. Topo hangs under the knob at the
+        /// top of the transcript, so the head he wears is under the model that gives it him.
+        struct Slider: Equatable, Sendable {
+            /// The most room it takes of the bar; it is as narrow as the bar leaves it, and
+            /// nothing of it is drawn outside its own frame.
+            var width: CGFloat = 200
+            /// Its own height, which the bar's holds.
+            var height: CGFloat = 36
+            /// From each of its ends to the first and last stop's centre, and never more than a
+            /// quarter of its width.
+            var inset: CGFloat = 26
+            /// The line the stops are on, a stop's mark on it and the knob.
+            var track: CGFloat = 3
+            var stop: CGFloat = 6
+            var knob: CGFloat = 14
+            /// The line and the stops not chosen, as a share of the bar's ink, and the names of
+            /// the models not chosen, which have to be read.
+            var restOpacity = 0.35
+            var restLabelOpacity = 0.7
+            /// A model's name under its stop. `look.json` sets it no larger than `largestLabel`.
+            var labelFont: Font = .caption2.weight(.semibold)
+            static let largestLabel: Double = 14
+            /// Between the line and the names.
+            var labelSpacing: CGFloat = 3
+        }
     }
 }
 

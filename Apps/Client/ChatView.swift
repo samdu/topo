@@ -20,7 +20,7 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
     @AppStorage(Mute.key) private var readAloud = true
-    /// The model chosen in the bar's menu, which is the head Topo wears between the guest's turns
+    /// The model chosen on the bar's slider, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
     /// The person's next turn: what is written, whether the keyboard is asked for, and the turn
@@ -43,6 +43,10 @@ struct ChatView: View {
     /// The bottom of the screen's safe area with no keyboard in it, which is what the keyboard's
     /// is measured against (`KeyboardInset`). Nil until it has been measured.
     @State private var restingBottomInset: CGFloat?
+    /// The model slider is open across the middle of the bar, and where its chosen stop is in the
+    /// global space, which is what Topo hangs under while it is.
+    @State private var modelsOpen = false
+    @State private var modelStop: CGRect?
     @State private var showSettings = false
     @State private var showDiagnostics = false
     /// The two edges the pane's presence is read from, in the chat's own space: where the
@@ -159,9 +163,9 @@ struct ChatView: View {
             .coordinateSpace(.named(Self.space))
             // Topo, over all of it, where the look places him: roaming where the turns, the lines
             // under them and the glass leave him room, on the glass, or at a pin.
-            .mascotRoams(mascot.state, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
+            .mascotRoams(mascot.drawn, opacity: micState.holding ? look.composer.flank.heldOpacity : 1,
                          covered: showSettings || showDiagnostics || showMemory, keyboardTop: keyboardTop,
-                         ready: transcriptRead, report: mascotReported,
+                         stop: modelsOpen ? modelStop : nil, ready: transcriptRead, report: mascotReported,
                          // The facing each roost decides, off the view update it arrives in.
                          face: { facing in Task { @MainActor in mascot.facing = facing } },
                          // A drag let go of him: this device keeps the pin, over the vault's look.
@@ -171,7 +175,7 @@ struct ChatView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 bar
-                notices
+                middle
                 // The jewel is the glass here, so from iOS 26 on the bar puts none of its own
                 // behind it. That is a shape the bar draws rather than a value the badge does,
                 // so it is an availability branch and not a `Look` field.
@@ -274,6 +278,15 @@ struct ChatView: View {
         .onChange(of: harnessFacts, initial: true) { _, facts in
             mascot.harness(model: facts.model, tokens: facts.context)
         }
+        // And under the open model slider, the model chosen there, which no turn's events change.
+        .onChange(of: sliderChoice, initial: true) { _, chosen in mascot.chosen = chosen }
+        // A failure is said in the middle of the bar, where the open slider is: it shuts.
+        .onChange(of: shownNotices.notice) { _, notice in
+            if case .trouble = notice {
+                modelsOpen = false
+                modelStop = nil
+            }
+        }
         // What the microphone has heard so far is written where its session is going: over the
         // draft for a turn that will be sent on the release, after what was written for one that
         // will not.
@@ -329,31 +342,58 @@ struct ChatView: View {
         .padding(.bottom, 8)
     }
 
-    /// The model and the mute, at the bar's leading edge (`ChatBar`). The menu sets the harness's
-    /// model, which is the setting and not what a debug build's pin makes of it. Muting ends
-    /// what is being read and what was waited for, as Stop does; a reply that lands muted is
-    /// read by nobody (`SpokenReply`).
-    private var bar: some ToolbarContent {
+    /// The model and the mute, at the bar's leading edge, each an item of its own (`ChatBar`), so
+    /// neither shares the other's glass. The model's control opens the slider and shuts it.
+    /// Muting ends what is being read and what was waited for, as Stop does; a reply that lands
+    /// muted is read by nobody (`SpokenReply`).
+    @ToolbarContentBuilder private var bar: some ToolbarContent {
         ToolbarItem(placement: .topBarLeading) {
-            ChatBar(models: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
-                    chosen: (ClaudeModel(setting: modelSetting) ?? .default).rawValue,
-                    choose: { alias in
-                        if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
-                    },
-                    readsAloud: readAloud,
-                    setReadsAloud: { on in
-                        readAloud = on
-                        SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
-                    })
+            ChatBar.ModelButton(chosen: harness.name(of: chosenModel), open: modelsOpen,
+                                setOpen: { open in
+                                    if !open { modelStop = nil }
+                                    modelsOpen = open
+                                })
+        }
+        // From iOS 26 on the bar draws neighbouring items on one piece of glass; the room
+        // between them is the bar's to give, so this is an availability branch and not a `Look`
+        // field.
+        if #available(iOS 26, *) {
+            ToolbarSpacer(.fixed, placement: .topBarLeading)
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            ChatBar.Mute(readsAloud: readAloud,
+                         setReadsAloud: { on in
+                             readAloud = on
+                             SpokenReply.muteChanged(readsAloud: on, speaker: speaker)
+                         })
         }
     }
 
-    /// What the chat says it is doing, in the navigation bar between the controls and the badge
-    /// (`ChatNotices`). The item is there only while there is something to say: an item the bar first laid out
-    /// empty is one it never draws, whatever it later holds.
-    @ToolbarContentBuilder private var notices: some ToolbarContent {
+    /// The model the setting names, which is what the slider's knob is on and not what a debug
+    /// build's pin makes of it.
+    private var chosenModel: ClaudeModel { ClaudeModel(setting: modelSetting) ?? .default }
+
+    /// The model chosen on the model slider while it is open, which is the head Topo wears under
+    /// it in every build and through a turn (`Mascot.chosen`); nil while it is shut.
+    private var sliderChoice: String? { modelsOpen ? chosenModel.rawValue : nil }
+
+    /// The middle of the bar, between the controls and the badge: the model slider while it is
+    /// open, and otherwise what the chat says it is doing (`ChatNotices`). The bar holds one of
+    /// them, and the slider is there only while somebody is choosing. A stop sets the harness's
+    /// model, which is the setting. An item is there only while there is something to draw: an
+    /// item the bar first laid out empty is one it never draws, whatever it later holds.
+    @ToolbarContentBuilder private var middle: some ToolbarContent {
         let said = shownNotices
-        if said.any {
+        if modelsOpen {
+            ToolbarItem(placement: .principal) {
+                ChatBar.Slider(models: ClaudeModel.allCases.map { .init(id: $0.rawValue, name: harness.name(of: $0)) },
+                               chosen: chosenModel.rawValue,
+                               choose: { alias in
+                                   if let model = ClaudeModel(setting: alias), model != harness.model { harness.model = model }
+                               },
+                               stop: { modelStop = $0 })
+            }
+        } else if said.any {
             ToolbarItem(placement: .principal) { ChatNotices(notices: said) }
         }
     }
@@ -526,6 +566,12 @@ struct ChatView: View {
                             // which is settled as the session begins and kept to its end: each
                             // press carries it by value, so a later session's is never this one's.
                             micPressed: { down, drawn in
+                                // A thumb on the microphone shuts the slider: Topo goes home, and
+                                // the bar's middle is the notices' again for the turn.
+                                if down {
+                                    modelsOpen = false
+                                    modelStop = nil
+                                }
                                 var going = dictation
                                 if Dictation.begins(down: down, drawn: drawn) {
                                     going = .beginning(row: draft.row, inFlight: draft.state == .inFlight, written: row.text)

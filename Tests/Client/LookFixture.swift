@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 216
+    static let fields = 227
 
     static let full = """
     {
@@ -165,7 +165,8 @@ enum LookFixture {
           "keyboard": "pencil",
           "speaking": "bell",
           "muted": "bell.slash",
-          "models": "gearshape"
+          "models": "gearshape",
+          "modelsOpen": "xmark"
         },
         "well": {
           "size": 96,
@@ -188,6 +189,7 @@ enum LookFixture {
         "scale": 2,
         "clearance": 12,
         "roamSpeed": 60,
+        "swimSpeed": 310,
         "roamSettle": 1.5,
         "hurry": 4,
         "frameInterval": 0.05,
@@ -206,7 +208,10 @@ enum LookFixture {
         }
       },
       "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" },
-      "bar": { "font": { "style": "caption", "weight": "heavy" }, "ink": ["#102030", "#D0E0F0"], "spacing": 3 }
+      "bar": { "font": { "style": "caption", "weight": "heavy" }, "ink": ["#102030", "#D0E0F0"],
+               "slider": { "width": 150, "height": 30, "inset": 20, "track": 2, "stop": 5, "knob": 12,
+                           "restOpacity": 0.5, "restLabelOpacity": 0.6,
+                           "labelFont": { "style": "caption", "weight": "bold" }, "labelSpacing": 4 } }
     }
     """
 
