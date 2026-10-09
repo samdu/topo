@@ -329,7 +329,7 @@ final class ShareTests: XCTestCase {
         try store.keep(kept, attachment: try attachment("IMG 1.jpg", data))
         let line = Line()
         await inbox(line).drain()
-        let folder = String(kept.nonce.prefix(8)).lowercased()
+        let folder = kept.nonce.lowercased()
         XCTAssertEqual(line.sent.first?.text,
                        "look\n\n[Shared with Topo from another app: an image, kept at /home/topo/shared/\(folder)/IMG 1.jpg (1000 bytes)]")
         XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent("shared/\(folder)/IMG 1.jpg")), data)
@@ -346,7 +346,7 @@ final class ShareTests: XCTestCase {
         await inbox(line).drain()
         XCTAssertEqual(line.sent.count, 1)
         XCTAssertTrue(line.sent[0].text.contains(try XCTUnwrap(first)))
-        let folder = home.appendingPathComponent("shared/\(kept.nonce.prefix(8).lowercased())")
+        let folder = home.appendingPathComponent("shared/\(kept.nonce.lowercased())")
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path), ["a.pdf"])
     }
 
@@ -390,5 +390,18 @@ final class ShareTests: XCTestCase {
         inbox.follow(from: .signedIn, to: .idle, guestIsHere: true)
         XCTAssertNil(store.door())
         XCTAssertEqual(store.shares(), [])
+
+        // A share that lands after the login ended, from a sheet still open, is not the next login's.
+        let late = share(.text, text: "late")
+        try FileManager.default.createDirectory(at: store.folder.appendingPathComponent(late.nonce), withIntermediateDirectories: true)
+        try JSONEncoder().encode(late).write(to: store.folder.appendingPathComponent(late.nonce).appendingPathComponent(ShareStore.record))
+        XCTAssertEqual(store.shares(), [late])
+        inbox.follow(from: .exchanging, to: .signedIn, guestIsHere: true)
+        XCTAssertEqual(store.shares(), [])
+        XCTAssertEqual(store.door(), ShareStore.Door(files: true))
+        // A launch already signed in keeps what was shared while the app was not running.
+        try store.keep(share(.text, text: "while away"))
+        inbox.follow(from: .signedIn, to: .signedIn, guestIsHere: true)
+        XCTAssertEqual(store.shares().count, 1)
     }
 }

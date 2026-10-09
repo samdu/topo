@@ -196,6 +196,8 @@ struct ShareStore: Sendable {
     }
 
     /// Takes away what a sheet that was killed left half made: a hidden folder older than `age`.
+    /// The folder is in the app group, which Topo's own two processes write and nothing else
+    /// does, so a hidden name here is one of theirs.
     func clearUnfinished(olderThan age: TimeInterval, now: Date = Date()) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         for name in names where name.hasPrefix(".") {

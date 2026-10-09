@@ -23,7 +23,7 @@ extension Harness: ShareLine {}
 /// comes to the front, which is when this drains. The turn's text is written here, never by the
 /// extension: the person's note as they wrote it, then what was shared under a line that says it
 /// was shared, so nothing another app handed over reads as the person's own words. An image or a
-/// file is put in the guest's home first (`HomeFile`), under `shared/<the nonce's first eight>/`,
+/// file is put in the guest's home first (`HomeFile`), under `shared/<the share's nonce>/`,
 /// and the turn names its path; a share whose file cannot be put there stays for the next drain.
 @MainActor
 final class ShareInbox {
@@ -45,9 +45,13 @@ final class ShareInbox {
 
     /// The login's phase or this phone's role moving: signed in, shares are taken, images and
     /// files where the guest lives; a login ending takes away what was shared and not yet sent.
-    /// Only a login ending does: a launch that finds no token takes nothing away.
+    /// Only a login ending does: a launch that finds no token takes nothing away. A login beginning
+    /// clears the folder before it opens it, so a share a sheet was still writing as the last
+    /// login ended is not there for this one; a launch already signed in is no beginning (`SignIn` reads the keychain as it is made, so that
+    /// launch's first phase is signed in).
     func follow(from was: SignIn.Phase, to phase: SignIn.Phase, guestIsHere: Bool) {
         if phase == .signedIn {
+            if was != .signedIn { store()?.close() }
             try? store()?.open(files: guestIsHere)
         } else if was == .signedIn {
             store()?.close()
@@ -81,7 +85,7 @@ final class ShareInbox {
     /// be put there. A file already at the name is the one an earlier drain put there.
     nonisolated static func place(_ share: Share, from store: ShareStore, under home: URL) async -> String? {
         guard let source = store.attachment(of: share), let name = share.file else { return nil }
-        let folders = [folder, String(share.nonce.prefix(8)).lowercased()]
+        let folders = [folder, share.nonce.lowercased()]
         let placed = await Task.detached(priority: .userInitiated) { () -> Bool in
             guard let data = try? Data(contentsOf: source, options: .mappedIfSafe), data.count <= Share.fileLimit else { return false }
             try? FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
