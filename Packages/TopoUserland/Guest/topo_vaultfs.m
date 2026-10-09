@@ -18,7 +18,10 @@
 //   - Every wait is bounded (`TOPO_ISH_VAULT_WAIT_SECONDS`, then `_EIO`) and ended by a SIGKILL to
 //     the waiting task (`_EINTR`), since a host semaphore is not something the kernel's signal
 //     wakes, and a task parked here would otherwise hold a teardown past its bound.
-//   - `.topo` at the mount's root is the mirror's own (its baseline) and is refused `_EACCES`.
+//   - `.topo` at the mount's root is the mirror's own (its baseline) and is hidden: a listing of
+//     the root leaves it out, anything that names it or a path under it is `_ENOENT`, a
+//     name made under it included, and anything that would make `.topo` itself is `_EACCES`. A listing that showed a name nothing
+//     could stat would fail every `ls` and `find` of a healthy vault.
 //   - The host follows no link: every call is made from the path's folder, opened from the root
 //     with `O_NOFOLLOW_ANY`, on a last name it does not follow either (`place_at`). The guest has
 //     resolved its own links before a path gets here, but a folder on the way can have become a
@@ -243,25 +246,62 @@ static int coordinated(NSURL *url, NSURL *other, bool writing, NSUInteger option
     return await_coordination(wait, coordinator);
 }
 
-// A change to `path`, made in its place under a coordinated write.
+// What a call that names the mirror's folder as something already there answers: there is no
+// such name.
+#define HIDDEN _ENOENT
+
+// What a call that would make `path`, one of the mirror's, answers: `_EACCES` for the folder's
+// own name, which is not the guest's to take, and `HIDDEN` for a name under it, whose folder is
+// not there.
+static int unmakeable(const char *path) {
+    while (path[0] == '/')
+        path++;
+    return strchr(path, '/') == NULL ? _EACCES : HIDDEN;
+}
+
+// A change to `path`, made in its place under a coordinated write. The mirror's folder is
+// answered for here as a name being made, which is what mkdir, symlink and mknod rely on; a
+// caller that names it as something there answers `HIDDEN` before it calls.
 static int coordinated_write(struct mount *mount, const char *path, NSUInteger options,
                              int (^body)(struct mount *at, const char *name)) {
     if (is_mirrors(path))
-        return _EACCES;
+        return unmakeable(path);
     return coordinated(url_in(mount, path), nil, true, options,
                        ^int(NSURL *url, TopoVaultWait *wait) { return in_place(mount, path, body); }, NULL);
 }
 
-// The fd ops are realfs's with the close replaced, so a held write lets go when its file closes.
+// The fd ops are realfs's with the close replaced, so a held write lets go when its file closes,
+// and the listing, which leaves the mirror's folder out.
 static struct fd_ops vault_fdops;
 static int vault_close(struct fd *fd);
+static int vault_readdir(struct fd *fd, struct dir_entry *entry);
 
 static void make_fdops(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         vault_fdops = realfs_fdops;
         vault_fdops.close = vault_close;
+        vault_fdops.readdir = vault_readdir;
     });
+}
+
+// Whether `fd` is the mount's root folder: the same file as the descriptor the mount holds. A
+// folder has one name, so the device and the inode say so exactly.
+static bool is_root(struct fd *fd) {
+    struct stat opened, root;
+    if (fd->mount == NULL || fstat(fd->real_fd, &opened) < 0 || fstat(fd->mount->root_fd, &root) < 0)
+        return false;
+    return opened.st_dev == root.st_dev && opened.st_ino == root.st_ino;
+}
+
+// realfs's listing, without the mirror's folder in the root's: `.topo` in any other folder is a
+// name like any other, as `is_mirrors` has it.
+static int vault_readdir(struct fd *fd, struct dir_entry *entry) {
+    for (;;) {
+        int err = realfs_readdir(fd, entry);
+        if (err != 1 || strcmp(entry->name, ".topo") != 0 || !is_root(fd))
+            return err;
+    }
 }
 
 static int vault_close(struct fd *fd) {
@@ -274,7 +314,7 @@ static int vault_close(struct fd *fd) {
     return err;
 }
 
-// The open of `path`'s last name in its place, with realfs's fd ops but for the close.
+// The open of `path`'s last name in its place, with the vault's fd ops.
 static struct fd *open_in_place(struct mount *mount, const char *path, int host_flags, int mode) {
     __block struct fd *fd = NULL;
     int err = in_place(mount, path, ^int(struct mount *at, const char *name) {
@@ -289,7 +329,7 @@ static struct fd *open_in_place(struct mount *mount, const char *path, int host_
 
 static struct fd *vault_open(struct mount *mount, const char *path, int flags, int mode) {
     if (is_mirrors(path))
-        return ERR_PTR(_EACCES);
+        return ERR_PTR(flags & O_CREAT_ ? unmakeable(path) : HIDDEN);
     make_fdops();
     // The guest followed the last name's link, if it was one, before the path got here: the
     // host follows none.
@@ -357,11 +397,15 @@ static int vault_umount(struct mount *mount) {
 }
 
 static int vault_unlink(struct mount *mount, const char *path) {
+    if (is_mirrors(path))
+        return HIDDEN;
     return coordinated_write(mount, path, NSFileCoordinatorWritingForDeleting,
                              ^(struct mount *at, const char *name) { return realfs_unlink(at, name); });
 }
 
 static int vault_rmdir(struct mount *mount, const char *path) {
+    if (is_mirrors(path))
+        return HIDDEN;
     return coordinated_write(mount, path, NSFileCoordinatorWritingForDeleting,
                              ^(struct mount *at, const char *name) { return realfs_rmdir(at, name); });
 }
@@ -379,8 +423,10 @@ static int vault_mknod(struct mount *mount, const char *path, mode_t_ mode, dev_
 }
 
 static int vault_link(struct mount *mount, const char *src, const char *dst) {
-    if (is_mirrors(src) || is_mirrors(dst))
-        return _EACCES;
+    if (is_mirrors(src))
+        return HIDDEN;
+    if (is_mirrors(dst))
+        return unmakeable(dst);
     return coordinated(url_in(mount, dst), nil, true, 0, ^int(NSURL *url, TopoVaultWait *wait) {
         return in_places(mount, src, dst, ^int(int from, const char *from_name, int to, const char *to_name) {
             return linkat(from, from_name, to, to_name, 0) < 0 ? errno_map() : 0;
@@ -389,8 +435,10 @@ static int vault_link(struct mount *mount, const char *src, const char *dst) {
 }
 
 static int vault_rename(struct mount *mount, const char *src, const char *dst) {
-    if (is_mirrors(src) || is_mirrors(dst))
-        return _EACCES;
+    if (is_mirrors(src))
+        return HIDDEN;
+    if (is_mirrors(dst))
+        return unmakeable(dst);
     NSURL *from = url_in(mount, src), *to = url_in(mount, dst);
     return coordinated(from, to, true, 0, ^int(NSURL *url, TopoVaultWait *wait) {
         return in_places(mount, src, dst, ^int(int from, const char *from_name, int to, const char *to_name) {
@@ -401,6 +449,8 @@ static int vault_rename(struct mount *mount, const char *src, const char *dst) {
 
 // realfs's setattr and utime follow a link in the last name; these follow none.
 static int vault_setattr(struct mount *mount, const char *path, struct attr attr) {
+    if (is_mirrors(path))
+        return HIDDEN;
     // A size is the file's content; a mode or an owner is not.
     NSUInteger options = attr.type == attr_size ? NSFileCoordinatorWritingForMerging
                                                 : NSFileCoordinatorWritingContentIndependentMetadataOnly;
@@ -434,13 +484,13 @@ static int vault_setattr(struct mount *mount, const char *path, struct attr attr
 
 static int vault_stat(struct mount *mount, const char *path, struct statbuf *stat) {
     if (is_mirrors(path))
-        return _EACCES;
+        return HIDDEN;
     return in_place(mount, path, ^int(struct mount *at, const char *name) { return realfs_stat(at, name, stat); });
 }
 
 static ssize_t vault_readlink(struct mount *mount, const char *path, char *buf, size_t size) {
     if (is_mirrors(path))
-        return _EACCES;
+        return HIDDEN;
     __block ssize_t length = 0;
     int err = in_place(mount, path, ^int(struct mount *at, const char *name) {
         length = realfs_readlink(at, name, buf, size);
@@ -451,7 +501,7 @@ static ssize_t vault_readlink(struct mount *mount, const char *path, char *buf, 
 
 static int vault_utime(struct mount *mount, const char *path, struct timespec atime, struct timespec mtime) {
     if (is_mirrors(path))
-        return _EACCES;
+        return HIDDEN;
     return in_place(mount, path, ^int(struct mount *at, const char *name) {
         struct timespec times[2] = {atime, mtime};
         return utimensat(at->root_fd, fix_path(name), times, AT_SYMLINK_NOFOLLOW) < 0 ? errno_map() : 0;
