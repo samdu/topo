@@ -599,8 +599,8 @@ struct Look: Equatable, Sendable {
             var speaking = "speaker.wave.2.fill"
             var muted = "speaker.slash.fill"
             /// The model's control, and the same control while the slider it opens is open.
-            var models = "slider.horizontal.3"
-            var modelsOpen = "chevron.up"
+            var models = "brain"
+            var modelsOpen = "brain.fill"
         }
 
         /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
@@ -781,7 +781,7 @@ struct Look: Equatable, Sendable {
 }
 
 extension Look {
-    /// The controls at the leading edge of the navigation bar, the model and the mute, each an
+    /// The controls at the leading edge of the navigation bar, the mute and the model, each an
     /// item of the bar's own: drawn plainly in Topo's colour, and not etched, since the bar is
     /// not the glass. Their marks are `composer.flank`'s.
     struct Bar: Equatable, Sendable {
@@ -793,16 +793,21 @@ extension Look {
         var ink = Theme.primary
         var slider = Slider()
 
-        /// The model slider: across the middle of the bar while the model's control has it open,
-        /// a stop for each model the chat offers, smallest at the leading end, with the model's
-        /// name under its stop and a knob on the one chosen. Topo hangs under the knob at the
-        /// top of the transcript, so the head he wears is under the model that gives it him.
+        /// The model slider: on a glass of its own that comes down from under the bar's leading
+        /// edge while the model's control has it open, a stop for each model the chat offers,
+        /// smallest at the leading end, with the model's name under its stop and a knob on the
+        /// one chosen. Topo hangs under the knob, over the top of the transcript, so the head he
+        /// wears is under the model that gives it him.
         struct Slider: Equatable, Sendable {
-            /// The most room it takes of the bar; it is as narrow as the bar leaves it, and
-            /// nothing of it is drawn outside its own frame.
-            var width: CGFloat = 200
-            /// Its own height, which the bar's holds.
+            /// The most room it takes of the screen's width; it is as narrow as the screen leaves
+            /// it, and nothing of it is drawn outside its own frame.
+            var width: CGFloat = 300
+            /// Its own height, inside its glass.
             var height: CGFloat = 36
+            /// Between it and the edge of its glass, on every side.
+            var padding: CGFloat = 12
+            /// Between the bar and its glass.
+            var drop: CGFloat = 6
             /// From each of its ends to the first and last stop's centre, and never more than a
             /// quarter of its width.
             var inset: CGFloat = 26

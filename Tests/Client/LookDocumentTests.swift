@@ -679,20 +679,22 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(small.look.bar.font, Font.system(size: 4))
         XCTAssertEqual(small.notes, [])
 
-        // The slider is read at each end of what the bar holds and no further, and a name under
+        // The slider is read at each end of its ranges and no further, and a name under
         // a stop no larger than the slider's own height leaves it.
-        let ends = LookDocument.read(#"{ "bar": { "slider": { "width": 320, "height": 44, "inset": 80, "stop": 28, "knob": 28, "labelSpacing": 16 } } }"#)
+        let ends = LookDocument.read(#"{ "bar": { "slider": { "width": 560, "height": 44, "padding": 24, "drop": 24, "inset": 80, "stop": 28, "knob": 28, "labelSpacing": 16 } } }"#)
         XCTAssertEqual(ends.notes, [])
         var widest = Look().bar.slider
-        (widest.width, widest.height, widest.inset, widest.stop, widest.knob, widest.labelSpacing) = (320, 44, 80, 28, 28, 16)
+        (widest.width, widest.height, widest.inset, widest.stop, widest.knob, widest.labelSpacing) = (560, 44, 80, 28, 28, 16)
+        (widest.padding, widest.drop) = (24, 24)
         XCTAssertEqual(ends.look.bar.slider, widest)
-        let least = LookDocument.read(#"{ "bar": { "slider": { "width": 96, "height": 24, "inset": 8, "stop": 2, "knob": 2, "labelSpacing": 0 } } }"#)
+        let least = LookDocument.read(#"{ "bar": { "slider": { "width": 96, "height": 24, "padding": 4, "drop": 0, "inset": 8, "stop": 2, "knob": 2, "labelSpacing": 0 } } }"#)
         XCTAssertEqual(least.notes, [])
         var fewest = Look().bar.slider
         (fewest.width, fewest.height, fewest.inset, fewest.stop, fewest.knob, fewest.labelSpacing) = (96, 24, 8, 2, 2, 0)
+        (fewest.padding, fewest.drop) = (4, 0)
         XCTAssertEqual(least.look.bar.slider, fewest)
         // Past either end, a field is refused alone and the look's own value stands.
-        for field in [#""width": 321"#, #""width": 95"#, #""height": 45"#, #""height": 23"#, #""inset": 81"#, #""inset": 7"#,
+        for field in [#""width": 561"#, #""width": 95"#, #""padding": 25"#, #""padding": 3"#, #""drop": 25"#, #""drop": -1"#, #""height": 45"#, #""height": 23"#, #""inset": 81"#, #""inset": 7"#,
                       #""stop": 29"#, #""stop": 1"#, #""knob": 29"#, #""knob": 1"#, #""labelSpacing": 17"#, #""labelSpacing": -1"#] {
             let past = LookDocument.read("{ \"bar\": { \"slider\": { \(field), \"track\": 2 } } }")
             var kept = Look().bar.slider

@@ -93,26 +93,22 @@ final class StatusNoticeTests: XCTestCase {
 
     // MARK: -
 
-    /// The open model slider takes the middle of the bar from the notice and gives it back: with
-    /// a turn in flight saying where it is, the model's control opens the slider where the notice
-    /// was, with no notice drawn beside it, and shutting it draws the notice again, in the bar.
-    func testTheOpenSliderTakesTheNoticesPlaceAndGivesItBack() throws {
+    /// The open model slider leaves the notice where it is: with a turn in flight saying where
+    /// it is, the model's control opens the slider under the bar and the notice is still drawn in
+    /// the bar, above it.
+    func testTheOpenSliderLeavesTheNoticeInTheBar() throws {
         let app = launch("busy-long")
-        let notices = app.descendants(matching: .any).matching(identifier: "topo-notices").firstMatch
         let model = app.buttons["chat-model"]
         _ = try words(app, "busy-long")
-        let stood = notices.frame
         model.tap()
         let slider = app.descendants(matching: .any)["chat-models"]
-        XCTAssertTrue(slider.waitForExistence(timeout: 10), "the slider did not open over a notice")
-        XCTAssertFalse(notices.exists, "the notice is drawn with the slider open")
-        XCTAssertGreaterThanOrEqual(slider.frame.minX, app.buttons["chat-mute"].frame.maxX - 0.5, "the slider is over the mute")
-        XCTAssertLessThanOrEqual(slider.frame.maxX, app.buttons["topo-debug-chat"].frame.minX + 0.5, "the slider is over the badge")
-        attach(app, "slider-over-notice")
-        model.tap()
-        let back = try words(app, "busy-long, after the slider")
-        XCTAssertEqual(notices.frame.midY, stood.midY, accuracy: 1, "the notice came back somewhere else")
-        try holdInTheBar(app, back, "busy-long, after the slider")
+        XCTAssertTrue(slider.waitForExistence(timeout: 10), "the slider did not open under a notice")
+        let said = try words(app, "busy-long, with the slider open")
+        try holdInTheBar(app, said, "busy-long, with the slider open")
+        for text in said {
+            XCTAssertLessThanOrEqual(text.frame.maxY, slider.frame.minY + 0.5, "\"\(text.label)\" at \(text.frame) is over the slider at \(slider.frame)")
+        }
+        attach(app, "slider-under-notice")
     }
 
     /// The least a notice is drawn at, as a share of its font (`look.transcript.noticeLeastScale`):
@@ -186,14 +182,14 @@ final class StatusNoticeTests: XCTestCase {
     }
 
     /// Every line of words level with the badge, wholly to its leading side and to the trailing
-    /// side of the model and the mute, which are in the bar with it, and above the transcript's
+    /// side of the mute and the model, which are in the bar with it, and above the transcript's
     /// frame as the chat reports it.
     private func holdInTheBar(_ app: XCUIApplication, _ texts: [XCUIElement], _ fixture: String) throws {
         let badge = app.buttons["topo-debug-chat"]
         XCTAssertTrue(badge.waitForExistence(timeout: 10), "\(fixture): no badge in the navigation bar")
         let model = app.buttons["chat-model"], mute = app.buttons["chat-mute"]
         XCTAssertTrue(model.exists && mute.exists, "\(fixture): the bar is without its model or its mute")
-        XCTAssertLessThanOrEqual(model.frame.maxX, mute.frame.minX + 0.5, "\(fixture): the model at \(model.frame) is over the mute at \(mute.frame)")
+        XCTAssertLessThanOrEqual(mute.frame.maxX, model.frame.minX + 0.5, "\(fixture): the mute at \(mute.frame) is over the model at \(model.frame)")
         let mic = ChatReading.microphone(app)
         XCTAssertTrue(mic.waitForExistence(timeout: 60), "\(fixture): the chat screen")
         let (_, topo) = try ChatReading.wait(app, "reporting the transcript's frame") { _, topo in
@@ -207,8 +203,8 @@ final class StatusNoticeTests: XCTestCase {
                                      "\(fixture): \"\(text.label)\" at \(frame) is not level with the badge at \(badge.frame)")
             XCTAssertLessThanOrEqual(frame.maxX, badge.frame.minX,
                                      "\(fixture): \"\(text.label)\" at \(frame) runs into the badge at \(badge.frame)")
-            XCTAssertGreaterThanOrEqual(frame.minX, mute.frame.maxX,
-                                        "\(fixture): \"\(text.label)\" at \(frame) runs under the mute at \(mute.frame)")
+            XCTAssertGreaterThanOrEqual(frame.minX, model.frame.maxX,
+                                        "\(fixture): \"\(text.label)\" at \(frame) runs under the model at \(model.frame)")
             XCTAssertLessThanOrEqual(frame.maxY, transcript.minY + 0.5,
                                      "\(fixture): \"\(text.label)\" at \(frame) reaches down over the transcript at \(transcript)")
         }
