@@ -4,7 +4,7 @@ import TopoUserland
 /// The memory's folder in the booted guest (`Guest.mountVault`): the guest reads and writes the
 /// host's files, every open of a regular file waits for a coordinated writer and a write holds its
 /// coordination until the file closes, a wait that cannot end is bounded and a SIGKILL ends it, a
-/// parked open stalls nothing else, the mirror's `.topo` is refused, and a mount is taken away
+/// parked open stalls nothing else, the mirror's `.topo` is hidden, and a mount is taken away
 /// only when nothing in the guest holds it.
 ///
 /// Coordination here is `NSFileCoordinator` in the test's own process, which is how the mirror and
@@ -219,11 +219,8 @@ final class GuestVaultMountTests: XCTestCase {
     /// The mirror's baseline is the heads the folder last saw; the guest can neither read nor
     /// change it, and emptying the vault from inside leaves it as it was.
     func testTheMirrorsOwnFolderIsNotTheGuests() async throws {
-        let (host, point) = try vault()
+        let (host, point, baseline) = try vaultWithBaseline()
         let own = host.appendingPathComponent(".topo", isDirectory: true)
-        try fm.createDirectory(at: own, withIntermediateDirectories: true)
-        let baseline = Data(#"{"version":1,"files":{},"heads":{}}"#.utf8)
-        try baseline.write(to: own.appendingPathComponent("mirror.json"))
 
         for command in [
             "cat \(point)/.topo/mirror.json",
@@ -232,16 +229,110 @@ final class GuestVaultMountTests: XCTestCase {
             "echo {} > \(point)/.topo/mirror.json",
             "mv \(point)/.topo \(point)/topo",
             "mv \(point)/note.md \(point)/.topo/note.md",
-            "rm -rf \(point)/.topo",
+            "rmdir \(point)/.topo",
+            "rm \(point)/.topo/mirror.json",
+            "mkdir \(point)/.topo",
+            "echo {} > \(point)/.topo",
+            "ln -s note.md \(point)/.topo",
+            "mv \(point)/note.md \(point)/.topo",
+            "chmod 777 \(point)/.topo",
+            "ln \(point)/note.md \(point)/.topo",
+            "ln \(point)/.topo/mirror.json \(point)/copy.json",
+            "mknod \(point)/.topo p",
+            "mkdir \(point)/.topo/made",
         ] {
             let attempt = try await sh(command)
             XCTAssertNotEqual(attempt.status, 0, "the guest reached the mirror's own folder: \(command)")
         }
+        // `rm -rf` of a name that is not there is no failure, here as anywhere.
+        let removed = try await sh("rm -rf \(point)/.topo")
+        XCTAssertEqual(removed.status, 0, removed.errors)
+        XCTAssertEqual(removed.errors, "")
         _ = try await sh("rm -rf \(point)/* \(point)/.[!.]*")
         XCTAssertEqual(try Data(contentsOf: own.appendingPathComponent("mirror.json")), baseline)
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: own.path), ["mirror.json"])
         XCTAssertFalse(fm.fileExists(atPath: host.appendingPathComponent("note.md").path),
                        "the rest of the vault was not the guest's to empty")
+    }
+
+    /// #246: the mirror's folder is hidden, not forbidden. A listing of a healthy vault exits 0
+    /// and does not name it, a path under it is no such file, and what would make the name is
+    /// refused; `.topo` anywhere but the root is a folder like any other.
+    func testTheMirrorsOwnFolderIsHiddenFromAListing() async throws {
+        let (host, point, baseline) = try vaultWithBaseline()
+        try fm.createDirectory(at: host.appendingPathComponent(".obsidian"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: host.appendingPathComponent("notes/.topo"), withIntermediateDirectories: true)
+        try Data("deep\n".utf8).write(to: host.appendingPathComponent("notes/.topo/kept.md"))
+
+        let listing = try await sh("ls -la \(point)")
+        XCTAssertEqual(listing.status, 0, listing.errors)
+        XCTAssertEqual(listing.errors, "")
+        XCTAssertFalse(listing.output.contains(".topo"), listing.output)
+        XCTAssertTrue(listing.output.contains(".obsidian") && listing.output.contains("note.md"), listing.output)
+
+        let found = try await sh("find \(point)")
+        XCTAssertEqual(found.status, 0, found.errors)
+        XCTAssertEqual(found.errors, "")
+        XCTAssertEqual(found.output.split(separator: "\n").map(String.init).sorted(), [point, "\(point)/.obsidian", "\(point)/note.md", "\(point)/notes", "\(point)/notes/.topo",
+                                      "\(point)/notes/.topo/kept.md"])
+        let used = try await sh("du -s \(point) > /dev/null")
+        XCTAssertEqual(used.status, 0, used.errors)
+        let deep = try await sh("cat \(point)/notes/.topo/kept.md && ls -a \(point)/notes")
+        XCTAssertEqual(deep.output, "deep\n.\n..\n.topo\n")
+
+        for command in ["cat \(point)/.topo/mirror.json", "ls \(point)/.topo", "stat \(point)/.topo", "rmdir \(point)/.topo",
+                        "echo x >> \(point)/.topo/mirror.json", "touch \(point)/.topo/x", "mkdir \(point)/.topo/made",
+                        "mv \(point)/.topo \(point)/topo", "ln \(point)/.topo/mirror.json \(point)/copy.json",
+                        "mv \(point)/note.md \(point)/.topo/note.md"] {
+            let absent = try await sh(command)
+            XCTAssertNotEqual(absent.status, 0, command)
+            // The shell's own word for `ENOENT` on a redirect is "nonexistent directory".
+            XCTAssertTrue(absent.errors.contains("No such file or directory") || absent.errors.contains("nonexistent directory"),
+                          "\(command): \(absent.errors)")
+        }
+        let present = try await sh("[ -e \(point)/.topo ] && echo there || echo absent")
+        XCTAssertEqual(present.output, "absent\n")
+        for command in ["mkdir \(point)/.topo", "echo {} > \(point)/.topo", "ln -s note.md \(point)/.topo",
+                        "ln \(point)/note.md \(point)/.topo", "mknod \(point)/.topo p", "mv \(point)/note.md \(point)/.topo"] {
+            let refused = try await sh(command)
+            XCTAssertNotEqual(refused.status, 0, command)
+            XCTAssertTrue(refused.errors.contains("Permission denied"), "\(command): \(refused.errors)")
+        }
+        XCTAssertEqual(try Data(contentsOf: host.appendingPathComponent(".topo/mirror.json")), baseline)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: host.appendingPathComponent(".topo").path), ["mirror.json"])
+        XCTAssertTrue(fm.fileExists(atPath: host.appendingPathComponent("note.md").path))
+    }
+
+    /// The calls BusyBox makes with no `stat` before them — unlink, readlink, utime — each answer
+    /// no such file for the mirror's folder and for a name under it.
+    func testACallMadeStraightAtTheMirrorsFolderFindsNoSuchFile() async throws {
+        let (host, point, baseline) = try vaultWithBaseline()
+        let own = host.appendingPathComponent(".topo", isDirectory: true)
+        let json = own.appendingPathComponent("mirror.json")
+        func facts(_ url: URL) throws -> [String] {
+            let attributes = try fm.attributesOfItem(atPath: url.path)
+            return ["\(attributes[.posixPermissions] ?? "")", "\(attributes[.modificationDate] ?? "")"]
+        }
+        let before = try (facts(own), facts(json))
+
+        for command in ["unlink \(point)/.topo", "unlink \(point)/.topo/mirror.json",
+                        "readlink -v \(point)/.topo", "readlink -v \(point)/.topo/mirror.json"] {
+            let absent = try await sh(command)
+            XCTAssertNotEqual(absent.status, 0, command)
+            XCTAssertTrue(absent.errors.contains("No such file or directory"), "\(command): \(absent.errors)")
+        }
+        // `touch -c` sets the times and forgives only no such file: any other answer it says.
+        let touched = try await sh("touch -c -d '2001-01-01 00:00:00' \(point)/.topo \(point)/.topo/mirror.json")
+        XCTAssertEqual(touched.status, 0, touched.errors)
+        XCTAssertEqual(touched.errors, "")
+        // The same on a name that is there moves its time, so the option is not what kept these.
+        let moved = try await sh("touch -c -d '2001-01-01 00:00:00' \(point)/note.md && stat -c %Y \(point)/note.md")
+        XCTAssertEqual(moved.output, "978307200\n", moved.errors)
+
+        XCTAssertEqual(try facts(own), before.0)
+        XCTAssertEqual(try facts(json), before.1)
+        XCTAssertEqual(try Data(contentsOf: json), baseline)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: own.path), ["mirror.json"])
     }
 
     /// A vault holding the mirror's baseline, as the mirror leaves it.
