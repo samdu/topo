@@ -81,7 +81,7 @@ final class LogToolTests: XCTestCase {
         XCTAssertLessThanOrEqual(reply.text.utf8.count, LogTool.budget)
         let written = reply.text.split(separator: "\n").map(String.init)
         let kept = written.count - 1
-        XCTAssertEqual(written.first, "… \(1000 - kept) earlier lines left out, cut at 24 KB; narrow with --since, --category or --grep")
+        XCTAssertEqual(written.first, "… \(1000 - kept) lines left out, cut at 24 KB; narrow with --since, --category or --grep")
         XCTAssertLessThanOrEqual(written[0].utf8.count + 1, LogTool.firstLineRoom)
         XCTAssertTrue(written.last?.contains("| line 999 ") ?? false, written.last ?? "")
         XCTAssertTrue(written[1].contains("| line \(1000 - kept) "), written[1])
@@ -98,11 +98,20 @@ final class LogToolTests: XCTestCase {
         XCTAssertFalse(whole.text.hasPrefix("…"))
     }
 
-    /// A line longer than the whole budget is left out and counted, never cut.
-    func testALineThatCannotFitIsLeftOut() {
+    /// A line longer than the whole budget is left out and counted, never cut, and the lines
+    /// either side of it are kept.
+    func testALineThatCannotFitIsLeftOutAlone() {
         let huge = String(repeating: "x", count: LogTool.budget)
-        XCTAssertEqual(LogTool.fit(["older", huge], none: "none"), "… 2 earlier lines left out, cut at 24 KB; narrow with --since, --category or --grep\n")
-        XCTAssertEqual(LogTool.fit([huge, "newest"], none: "none"), "… 1 earlier lines left out, cut at 24 KB; narrow with --since, --category or --grep\nnewest\n")
+        let cut = "… 1 lines left out, cut at 24 KB; narrow with --since, --category or --grep\n"
+        XCTAssertEqual(LogTool.fit(["older", huge], none: "none"), cut + "older\n")
+        XCTAssertEqual(LogTool.fit([huge, "newest"], none: "none"), cut + "newest\n")
+        XCTAssertEqual(LogTool.fit(["older", huge, "newest"], none: "none"), cut + "older\nnewest\n")
+        XCTAssertEqual(LogTool.fit([huge], none: "none"), cut)
+        // A line that fits alone and not beside the newer ones ends the answer there: what is
+        // kept is the newest run of lines, with no gap but a line that could never be answered.
+        let half = String(repeating: "y", count: (LogTool.budget - LogTool.firstLineRoom) / 2)
+        XCTAssertEqual(LogTool.fit(["oldest", half, half], none: "none"),
+                       "… 2 lines left out, cut at 24 KB; narrow with --since, --category or --grep\n" + half + "\n")
     }
 
     @MainActor func testTheToolIsInTheTableWithItsUsage() async {

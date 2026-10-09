@@ -44,7 +44,7 @@ struct LogTool: Tool {
     "proxy:" and "tools:". The lines are this launch's only, since the app reads
     them from its own process, and the widgets' and controls' are not among them: those run in
     processes of their own. An answer is at most 24 KB, the newest lines kept; a first line
-    starting "…" says how many earlier ones were left out.
+    starting "…" says how many were left out.
     """
 
     struct Call: Equatable {
@@ -100,19 +100,22 @@ struct LogTool: Tool {
     }
 
     /// The newest lines that fit the budget, whole and oldest first, under a first line counting
-    /// the earlier ones left out. A line too long to fit alone is left out and counted too.
+    /// the ones left out. A line too long to fit alone is left out and counted, and costs no
+    /// other line its place: the lines before it are kept as far as the budget goes.
     static func fit(_ lines: [String], none: String) -> String {
         guard !lines.isEmpty else { return none + "\n" }
+        let room = budget - firstLineRoom
         var kept: [String] = []
         var bytes = 0
         for line in lines.reversed() {
             let size = line.utf8.count + 1
-            guard bytes + size <= budget - firstLineRoom else { break }
+            if size > room { continue }
+            guard bytes + size <= room else { break }
             kept.append(line)
             bytes += size
         }
         let left = lines.count - kept.count
-        let first = left > 0 ? ["… \(left) earlier lines left out, cut at 24 KB; narrow with --since, --category or --grep"] : []
+        let first = left > 0 ? ["… \(left) lines left out, cut at 24 KB; narrow with --since, --category or --grep"] : []
         return (first + kept.reversed()).joined(separator: "\n") + "\n"
     }
 }
