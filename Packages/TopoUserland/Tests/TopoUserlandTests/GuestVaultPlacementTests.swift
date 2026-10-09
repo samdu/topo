@@ -4,7 +4,8 @@ import TopoUserland
 /// A file put in the memory's folder by the guest (`VaultPlacement.place`), through the vault's
 /// own filesystem and the guest's own BusyBox: it lands whole under its name, nothing at the name
 /// is written over, even a file that arrives there while the placement waits, nothing is done
-/// where no vault is mounted or after the deadline, and no hidden copy is left behind.
+/// where no vault is mounted or after the deadline, its own hidden copy is not left behind, and
+/// nothing else hidden is touched.
 final class GuestVaultPlacementTests: XCTestCase {
     private let fm = FileManager.default
     private var hosts: [URL] = []
@@ -176,24 +177,23 @@ final class GuestVaultPlacementTests: XCTestCase {
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: host.appendingPathComponent("inbox").path), [])
     }
 
-    /// A placement that was killed leaves its copy under the hidden name; a later one into that
-    /// folder takes away an old one, and nothing else: not a fresh one, which may be another
-    /// placement's at work, and not a file of the person's with a name like it, whatever its age.
-    func testOnlyAnOldHiddenCopyIsTakenAway() async throws {
+    /// Nothing hidden in the folder is a placement's to take away but the copy it made itself: a
+    /// name like its own, of any age, may be the person's file.
+    func testNoHiddenFileButItsOwnCopyIsTakenAway() async throws {
         let (host, point) = try vault()
         let folder = host.appendingPathComponent("inbox", isDirectory: true)
         try fm.createDirectory(at: folder, withIntermediateDirectories: true)
         let old = Date().addingTimeInterval(-3600)
-        for (name, date) in [(".topo-pick-41.part", old), (".topo-pick-42.part", Date()), (".topo-pick-list.md", old),
-                             (".topo-pick-notes.part", old), (".topo-pick-4x.part", old), (".topo-pick-.part", old)] {
+        let theirs = [".topo-pick-41.part", ".topo-pick-notes.part", ".topo-pick-list.md"]
+        for name in theirs {
             let url = folder.appendingPathComponent(name)
             try Data("x".utf8).write(to: url)
-            try fm.setAttributes([.modificationDate: date], ofItemAtPath: url.path)
+            try fm.setAttributes([.modificationDate: old], ofItemAtPath: url.path)
         }
         let picked = try await source("mine\n")
         let outcome = try await VaultPlacement.place(picked, at: point, folder: "inbox", name: "file.md", by: soon)
         XCTAssertEqual(outcome, .placed(bytes: 5))
-        XCTAssertEqual(try hidden(in: folder).sorted(), [".topo-pick-.part", ".topo-pick-42.part", ".topo-pick-4x.part", ".topo-pick-list.md", ".topo-pick-notes.part"])
+        XCTAssertEqual(try hidden(in: folder).sorted(), theirs.sorted())
     }
 }
 
