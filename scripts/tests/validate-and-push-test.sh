@@ -229,16 +229,27 @@ is "red suite: no rerun" "$(grep -c '^run rerun' "$GH_CALLS")" 0
 
 # A head run again after a red: each run has its own logs under the commit, and the red run's
 # are still there. Past five runs of a commit the oldest go.
-runs() { ls -1 "$TOPO_VALIDATE_LOGS/$sha" | wc -l | tr -d ' '; }
-red_run="$(ls -1 "$TOPO_VALIDATE_LOGS/$sha")"
+runs() { ls -1 "$TOPO_VALIDATE_LOGS/$sha" | grep -cE '^[0-9]{8}T[0-9]{6}Z-[0-9]+$'; }
+is "the red run: one run's logs under the commit" "$(runs)" 1
+red_run="$(ls -1 "$TOPO_VALIDATE_LOGS/$sha" | grep -E '^[0-9]{8}T[0-9]{6}Z-[0-9]+$')"
 validate
 is "run again: exits 0" "$status" 0
 is "run again: two runs' logs under the commit" "$(runs)" 2
 is "run again: the red run's result is kept" "$(cat "$TOPO_VALIDATE_LOGS/$sha/$red_run/suites.txt" 2>/dev/null)" "others=failure"
 [ -f "$TOPO_VALIDATE_LOGS/$sha/$red_run/mac-suite.log" ] && ok "run again: the red run's log is kept" || fail "run again: the red run's mac-suite.log is gone"
-for _ in 1 2 3 4 5; do validate; done
-is "seven runs of a commit: five kept" "$(runs)" 5
-[ ! -e "$TOPO_VALIDATE_LOGS/$sha/$red_run" ] && ok "seven runs of a commit: the oldest is gone" || fail "seven runs of a commit: the oldest run is still there"
+# What is not a run is left where it is, and earlier runs made to look newer than the one in
+# hand do not have it removed in their place.
+echo kept > "$TOPO_VALIDATE_LOGS/$sha/notes.txt"
+for _ in 1 2 3; do validate; done
+touch -t 203001010000 "$TOPO_VALIDATE_LOGS/$sha"/*Z-*
+FAKE_SUITES="others=failure" validate
+is "a sixth run, red: exits 1" "$status" 1
+case "$out" in *"No such file"*) fail "a sixth run, red: its own logs were removed: $out" ;; *) ok "a sixth run, red: its own logs are there to read" ;; esac
+is "a sixth run: five kept" "$(runs)" 5
+[ ! -e "$TOPO_VALIDATE_LOGS/$sha/$red_run" ] && ok "a sixth run: the oldest is gone" || fail "a sixth run: the oldest run is still there"
+is "a sixth run: a file that is not a run is left" "$(cat "$TOPO_VALIDATE_LOGS/$sha/notes.txt" 2>/dev/null)" kept
+own="$(sed -n 's/^RED at .* Logs: \(.*\)\/mac-suite.log$/\1/p' <<<"$out")"
+is "a sixth run: the logs it names hold its own result" "$(cat "$own/suites.txt" 2>/dev/null)" "others=failure"
 
 # Another validation holds the Mac: waited on, then given up on, with no suite run.
 scratch locked Apps/Client/SettingsView.swift
