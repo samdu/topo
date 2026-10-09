@@ -13,7 +13,13 @@ public enum Perf {
     /// while the phone sleeps.
     private static let file = OSAllocatedUnfairLock<FileHandle?>(initialState: nil)
 
+    /// Who else is given the name of every mark made in a task and the tasks it starts: a suite
+    /// reading the marks of the one turn it runs, which the file, the process's, cannot tell
+    /// from another test's.
+    @TaskLocal public static var observer: (@Sendable (String) -> Void)?
+
     public static func mark(_ name: String) {
+        observer?(name)
         let line = "mark t=\(Int64(Date().timeIntervalSince1970 * 1000)) \(name)"
         log.notice("\(line, privacy: .public)")
         file.withLock { $0?.write(Data((line + "\n").utf8)) }

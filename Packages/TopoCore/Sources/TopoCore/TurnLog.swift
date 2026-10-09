@@ -425,8 +425,9 @@ public actor TurnWriter {
     /// heartbeat of `lease`: nil, with nothing written, when the lease is not
     /// held. See `append(_:_:parents:at:nonce:renewing:)`.
     public func append(_ role: TurnRole, _ text: String, continuing transcript: Transcript, at: Date = Date(),
-                       nonce: String = UUID().uuidString, renewing lease: PrimaryLease) async throws -> Turn? {
-        let next = try await checkContinuable(transcript)
+                       nonce: String = UUID().uuidString, justRead: Bool = false,
+                       renewing lease: PrimaryLease) async throws -> Turn? {
+        let next = try await checkContinuable(transcript, justRead: justRead)
         return try await append(role, text, parents: transcript.heads, at: at, nonce: nonce, exact: next, renewing: lease)
     }
 

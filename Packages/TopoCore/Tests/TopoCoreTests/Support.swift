@@ -266,17 +266,35 @@ final class DropOnceDatabase: RecordDatabase, @unchecked Sendable {
 }
 
 /// A database whose link drops on request: the next save commits but
-/// reports a transport failure, or the next fetch fails outright.
+/// reports a transport failure, or fails the same way without reaching the
+/// store or reaching it only ahead of the save after it, or the next fetch
+/// fails outright.
 final class LossyLinkDatabase: RecordDatabase, @unchecked Sendable {
     let inner: InMemoryRecordDatabase
     private let lock = NSLock()
     private var dropSaveAck = false
     private var dropFetch = false
+    private var dropSave = false
     init(inner: InMemoryRecordDatabase) { self.inner = inner }
     func commitButDropNextSaveAck() { lock.withLock { dropSaveAck = true } }
+    func dropNextSaveUnsent() { lock.withLock { dropSave = true } }
+    private var lateNext = false
+    private var late: [Record]?
+    func landNextSaveLate() { lock.withLock { lateNext = true } }
     func dropNextFetch() { lock.withLock { dropFetch = true } }
     private struct Dropped: Error {}
     func save(_ records: [Record]) async throws -> [Record] {
+        let unsent = lock.withLock { () -> Bool in defer { dropSave = false }; return dropSave }
+        if unsent { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
+        let held = lock.withLock { () -> Bool in
+            defer { lateNext = false }
+            if lateNext { late = records }
+            return lateNext
+        }
+        if held { throw RecordDatabaseError.unavailable(underlying: Dropped()) }
+        if let landing = lock.withLock({ () -> [Record]? in defer { late = nil }; return late }) {
+            _ = try? await inner.save(landing)
+        }
         let out = try await inner.save(records)
         let drop = lock.withLock { () -> Bool in defer { dropSaveAck = false }; return dropSaveAck }
         if drop { throw RecordDatabaseError.unavailable(underlying: Dropped()) }

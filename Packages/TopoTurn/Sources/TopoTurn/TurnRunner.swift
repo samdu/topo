@@ -121,39 +121,63 @@ public actor TurnRunner {
         // With no read of the log to go on, the turn is asked once it is saved, as a turn in the
         // log is, and the brain is told everything the log holds that it has not seen.
         var hearing: Task<Bool, Never>? = hearsAhead && known != nil ? hearNow() : nil
-        await progress?(hearing == nil ? .takingLease : .heard)
+        // A lease fresh by this device's own clocks, with nothing owed to the log, is renewed
+        // with the person's save and not taken before it.
+        let fresh = await lease.isPrimary() ? await brain.owed() == nil : false
+        await progress?(hearing != nil ? .heard : fresh ? .saving : .takingLease)
         let before: Transcript, person: Turn
         let at = Date()
         do {
-            // The log is read while the lease is taken: the read asks nothing of the lease, and
-            // nothing is done with it unless this device holds it.
-            async let reading = log.read()
-            let outcome: LeaseOutcome
+            let renewed: (Transcript, Turn)?
             do {
-                outcome = try await acquire()
+                renewed = fresh ? try await savedWithRenewal(text, at: at, nonce: nonce) : nil
             } catch {
-                // The lease could not be asked, within its own bound: whoever held it is as far
-                // away as iCloud is, and the person is typing here, so the brain hears the words.
-                if hearing == nil, known != nil, !(error is CancellationError), !Task.isCancelled { hearing = hearNow() }
+                // The batch that carries the lease's renewal could not be sent or was not
+                // answered: the lease could not be asked, and the person is typing here, so the
+                // brain hears the words.
+                if !(error is CancellationError), !Task.isCancelled {
+                    away = true
+                    if hearing == nil, known != nil { hearing = hearNow() }
+                }
                 throw error
             }
-            Perf.mark("turn.lease.acquired")
-            guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
-            // A caller that stopped while the lease was asked — a sign-out — gives the brain nothing.
-            try Task.checkCancellation()
-            if hearing == nil {
-                if known != nil { hearing = hearNow() }
-                await progress?(.saving)
-            }
+            if let renewed {
+                (before, person) = renewed
+                // The lease answered, and this device holds it: the brain hears as it does
+                // once `acquire()` has answered primary. A caller that stopped gives it nothing.
+                if hearing == nil, known != nil, !Task.isCancelled { hearing = hearNow() }
+            } else {
+                if fresh, hearing == nil { await progress?(.takingLease) }
+                // The log is read while the lease is taken: the read asks nothing of the lease, and
+                // nothing is done with it unless this device holds it.
+                async let reading = log.read()
+                let outcome: LeaseOutcome
+                do {
+                    outcome = try await acquire()
+                } catch {
+                    // The lease could not be asked, within its own bound: whoever held it is as far
+                    // away as iCloud is, and the person is typing here, so the brain hears the words.
+                    if hearing == nil, known != nil, !(error is CancellationError), !Task.isCancelled { hearing = hearNow() }
+                    throw error
+                }
+                Perf.mark("turn.lease.acquired")
+                guard case .primary = outcome else { throw TurnRunnerError.notPrimary(outcome) }
+                // A caller that stopped while the lease was asked — a sign-out — gives the brain nothing.
+                try Task.checkCancellation()
+                if hearing == nil {
+                    if known != nil { hearing = hearNow() }
+                    await progress?(.saving)
+                }
 
-            var read = try await reading
-            // An owed reply moved the log; what the turn continues from is read again.
-            if try await settleOwed() != nil { read = try await log.read() }
-            Perf.mark("turn.log.read")
-            // A caller that stopped before the person's turn is in the log writes nothing at all.
-            try Task.checkCancellation()
-            person = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce, justRead: true)
-            before = read
+                var read = try await reading
+                // An owed reply moved the log; what the turn continues from is read again.
+                if try await settleOwed() != nil { read = try await log.read() }
+                Perf.mark("turn.log.read")
+                // A caller that stopped before the person's turn is in the log writes nothing at all.
+                try Task.checkCancellation()
+                person = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce, justRead: true)
+                before = read
+            }
         } catch {
             if case TurnRunnerError.notPrimary = error { throw error }
             guard !(error is CancellationError), await hearing?.value == true else { throw error }
@@ -212,6 +236,51 @@ public actor TurnRunner {
             else { Perf.mark("turn.reply.failed \(Self.kind(of: error))") }
             throw TurnRunnerError.replyFailed(person: person, underlying: error)
         }
+    }
+
+    /// The log as read and the person's turn appended to it in one atomic batch with the renewal
+    /// of the lease this device holds: the compare-and-set `acquire()` makes after its fetch, on
+    /// the version this device last wrote, with no fetch of the lease before it unless the lease
+    /// lapsed while the batch waited its turn, when the batch reads the record and claims it
+    /// afresh (`PrimaryLease.heartbeat(saving:)`). The lease bounds its requests, so the save is
+    /// given `LeaseTiming.patience`. Nil, with nothing written, when the turn is to take the
+    /// lease the long way: the batch was refused (`heartbeat(saving:)` says when), the brain
+    /// came to owe the log a reply while the log was read, the log could not be read or its
+    /// transcript not continued (the lease has been asked nothing, so the long way asks it, and
+    /// what it answers decides who hears and how the failure is told), or the turn was found
+    /// already in the log (a retry, which renewed nothing) and the lease's heartbeat, sent before
+    /// the turn is taken as this device's to answer, said it is not held. What throws from here
+    /// is the batch itself failing, or the caller cancelled.
+    private func savedWithRenewal(_ text: String, at: Date, nonce: String) async throws -> (Transcript, Turn)? {
+        let read: Transcript
+        do {
+            read = try await log.read()
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            return nil
+        }
+        // An owed reply is written before the person's turn, under a lease taken first.
+        guard await brain.owed() == nil else { return nil }
+        // A caller that stopped before the person's turn is in the log writes nothing at all.
+        try Task.checkCancellation()
+        let appended: Turn?
+        do {
+            appended = try await writer.append(.person, text, continuing: read, at: at, nonce: nonce,
+                                               justRead: true, renewing: lease)
+        } catch is TurnLogError {
+            // The log's own refusal, with the batch not applied: nothing was asked of the lease.
+            return nil
+        }
+        guard let person = appended else { return nil }
+        if person.at != at {
+            guard try await lease.heartbeat() else { return nil }
+        }
+        // A call to the lease got through, and this device holds it.
+        away = false
+        standing = .mine
+        Perf.mark("turn.lease.fresh")
+        return (read, person)
     }
 
     /// Starts the brain on the person's words, said under `nonce`, before their turn is in the
