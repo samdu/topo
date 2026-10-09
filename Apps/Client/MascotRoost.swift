@@ -1448,7 +1448,7 @@ struct MascotRoam: Equatable, Sendable {
     /// microphone's whatever is drawn over it. Under the model slider he is not to be had at all:
     /// a drop there would pin him where the slider put him.
     func grabbable(at point: CGPoint) -> Bool {
-        guard field?.stop == nil else { return false }
+        guard !settings.sliding else { return false }
         guard let picture, picture.contains(point) else { return false }
         if let well = field?.well, well.contains(point) { return false }
         return true

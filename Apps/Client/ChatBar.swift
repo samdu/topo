@@ -60,6 +60,16 @@ enum ChatBar {
             return Int((share * CGFloat(count - 1)).rounded())
         }
 
+        /// The knob and the gap under it that a slider `height` tall has room for over a name
+        /// `name` tall: the name's line is kept whole first, then the knob, then the gap, so no
+        /// knob or gap a look asks for puts a model's name out of the slider.
+        static func fitted(knob: CGFloat, spacing: CGFloat, in height: CGFloat, over name: CGFloat) -> (knob: CGFloat, spacing: CGFloat) {
+            let whole = { (value: CGFloat) in value.isFinite ? max(value, 0) : 0 }
+            let room = max(whole(height) - whole(name), 0)
+            let knob = min(whole(knob), room)
+            return (knob, min(whole(spacing), room - knob))
+        }
+
         /// Stop `index`'s column in the space `slider` is in, for a slider drawn there.
         func frame(of index: Int, in slider: CGRect, least: CGFloat) -> CGRect {
             let column = column(least: least)
@@ -126,15 +136,18 @@ enum ChatBar {
         /// The chosen stop's column in the global space, as laid out.
         var stop: (CGRect) -> Void = { _ in }
         @Environment(\.look) private var look
+        /// How tall a name's one line is in the look's font at the text size in use, as laid out.
+        @State private var name: CGFloat = 0
 
         var body: some View {
             let slider = look.bar.slider
             let ink = look.bar.ink
             let at = models.firstIndex { $0.id == chosen }
             GeometryReader { proxy in
-                // The knob no taller than the slider, so the line it is on is inside it, and an
-                // end stop no nearer the end than half the knob, so the knob on it is too.
-                let knob = min(slider.knob, proxy.size.height)
+                // The knob and the gap under it as the names' line leaves them room, so the line
+                // the knob is on and the names are both inside the slider, and an end stop no
+                // nearer the end than half the knob, so the knob on it is too.
+                let (knob, gap) = Stops.fitted(knob: slider.knob, spacing: slider.labelSpacing, in: proxy.size.height, over: name)
                 let stops = Stops(count: models.count, width: proxy.size.width, inset: max(slider.inset, knob / 2))
                 let line = knob / 2
                 let column = stops.column(least: knob)
@@ -145,12 +158,12 @@ enum ChatBar {
                     ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
                         let own = index == at
                         Button { choose(model.id) } label: {
-                            VStack(spacing: slider.labelSpacing) {
+                            VStack(spacing: gap) {
                                 // The knob stands on the chosen stop, so its own mark is not drawn.
                                 Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
                                     .frame(width: min(slider.stop, knob), height: min(slider.stop, knob))
                                     .frame(height: knob)
-                                Text(model.name).font(slider.labelFont).lineLimit(1)
+                                Text(model.name).font(slider.labelFont).lineLimit(1).fixedSize()
                                     .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
                             }
                             .frame(width: column, height: proxy.size.height, alignment: .top)
@@ -171,6 +184,12 @@ enum ChatBar {
                     }
                 }
                 .contentShape(Rectangle())
+                // A name's line, measured and not drawn.
+                .background {
+                    Text(models.first?.name ?? "").font(slider.labelFont).lineLimit(1).fixedSize().hidden()
+                        .accessibilityHidden(true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { name = $0 }
+                }
                 // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
                 .highPriorityGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
                     guard let index = stops.nearest(to: drag.location.x), index != at else { return }

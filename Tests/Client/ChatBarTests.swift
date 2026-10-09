@@ -203,6 +203,31 @@ final class ChatBarTests: XCTestCase {
         }
     }
 
+    /// A model's name is kept whole whatever knob and gap a look asks for: at every end of
+    /// `look.bar.slider`'s ranges together, the knob, the gap and the name's line fit the
+    /// slider's height, and a look they all fit as asked is drawn as asked.
+    func testTheNamesLineIsKeptBeforeTheKnobAndTheGap() {
+        for height in [24, 36, 44] as [CGFloat] {
+            for knob in [2, 14, 28] as [CGFloat] {
+                for spacing in [0, 3, 16] as [CGFloat] {
+                    for name in [5, 13, 17, 24] as [CGFloat] {
+                        let fit = ChatBar.Stops.fitted(knob: knob, spacing: spacing, in: height, over: name)
+                        let what = "height \(height), knob \(knob), spacing \(spacing), name \(name): \(fit)"
+                        XCTAssertLessThanOrEqual(fit.knob + fit.spacing + name, height, what)
+                        XCTAssertGreaterThanOrEqual(min(fit.knob, fit.spacing), 0, what)
+                        if knob + spacing + name <= height {
+                            XCTAssertEqual([fit.knob, fit.spacing], [knob, spacing], what)
+                        }
+                    }
+                }
+            }
+        }
+        let asked = ChatBar.Stops.fitted(knob: 28, spacing: 16, in: 44, over: 17)
+        XCTAssertEqual([asked.knob, asked.spacing], [27, 0], "the knob gives way after the gap")
+        let odd = ChatBar.Stops.fitted(knob: .nan, spacing: -.infinity, in: 36, over: 60)
+        XCTAssertEqual([odd.knob, odd.spacing], [0, 0])
+    }
+
     /// A Topo whose reach does not fit under the bar is not called there: at the largest scale a
     /// document sets, on this phone and with the keyboard up, the look's own settings stand.
     func testATopoTooLargeForTheRoomIsNotCalled() {
@@ -216,6 +241,20 @@ final class ChatBarTests: XCTestCase {
                 settings.reach = reach
                 XCTAssertEqual(MascotPerch.sliding(settings, under: field, swim: 240), settings)
             }
+        }
+        // Not called, he is still to be had by a finger while the slider is open, as one called
+        // is not: it is the pin that keeps him from a finger, not the open slider.
+        let open = Self.field(stop: 1)
+        for called in [false, true] {
+            let settings = called ? MascotPerch.sliding(Self.settings(), under: open, swim: 240) : Self.settings()
+            XCTAssertEqual(settings.sliding, called)
+            var roam = MascotRoam(settings, frame: Self.frame)
+            var time = 0.0
+            roam.observe(open, at: time)
+            run(&roam, time: &time)
+            let box = roam.picture
+            XCTAssertNotNil(box, "called \(called): nowhere")
+            XCTAssertEqual(box.map { roam.grabbable(at: CGPoint(x: $0.midX, y: $0.midY)) }, !called, "called \(called)")
         }
         // Where he fits, his reach is inside the room at every stop, the keyboard up too.
         for stop in 0..<3 {
