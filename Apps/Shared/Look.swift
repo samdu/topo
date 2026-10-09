@@ -109,7 +109,7 @@ struct Look: Equatable, Sendable {
         /// bar beside the badge, so a notice there never reaches down over the transcript.
         static let largestNotice: Double = 15
         /// The least a notice in the bar is drawn at, as a share of `noticeFont`: one whose words
-        /// do not fit its two lines between the bar's controls and the badge is drawn smaller,
+        /// do not fit its two lines between the mute and the model is drawn smaller,
         /// down to this, before any of it is cut.
         var noticeLeastScale: CGFloat = 0.65
         /// A turn's words.
@@ -613,7 +613,8 @@ struct Look: Equatable, Sendable {
         struct Models: Equatable, Sendable {
             /// From each end of the pane to the first and last stop's centre, and never more
             /// than a quarter of the pane's width: far enough in that Topo, at his own size, sits
-            /// over an end stop with his reach inside the screen.
+            /// over an end stop of the resting pane with his reach inside the screen. Over the
+            /// row, which is wider, his reach holds him in from an end stop.
             var inset: CGFloat = 40
             /// The row's own height, the room between it and the row under it, and the room
             /// above it, over the pane's own inset.

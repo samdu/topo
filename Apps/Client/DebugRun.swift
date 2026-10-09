@@ -472,7 +472,7 @@ extension DebugRun {
         /// Whether the guest's home is mounted: whether there is a guest for a reply's image
         /// to be read from in this launch.
         var guestHome = false
-        /// The model the bar's slider last set (`Harness.model`), by its alias: the setting, which
+        /// The model the model slider last set (`Harness.model`), by its alias: the setting, which
         /// no pin changes.
         var model: String?
         /// The model a request carries for that setting (`ClaudeModel.effective`), which in a

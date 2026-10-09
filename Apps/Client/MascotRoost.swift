@@ -968,7 +968,7 @@ struct MascotRoam: Equatable, Sendable {
         var home: CGPoint?
         var pace: CGFloat
         /// The keyboard was up when the way home began: it is a glide over the row as over the
-        /// resting pane, and the keyboard coming or going under it places him as ever.
+        /// resting pane, and the keyboard coming under it places him as ever.
         var keyboard = false
     }
     /// When the geometry last changed, and when the roam was last moved on.
@@ -1396,6 +1396,7 @@ struct MascotRoam: Equatable, Sendable {
     /// nowhere. With no place at all he stays where he is and the last decision stands. The decision is the roam's last, as any
     /// other is, and the settle after the next geometry change decides from where it left him.
     private mutating func visit(_ beside: MascotField.Beside) {
+        homeward = nil
         visited = beside.serial
         unsettled = false
         riding = false
@@ -1455,7 +1456,11 @@ struct MascotRoam: Equatable, Sendable {
         // On the short glass he is placed, glide or no: a glide there crosses the well and ends
         // under the keyboard's top edge on its way.
         let shortGlass = settings.placement == .glass && field.keyboard != nil
-        guard let from = position, arrival != .atOnce, !shortGlass else {
+        // Over the slider he is on the pane's top edge, as on the glass: the keyboard coming or
+        // going takes the pane and him with it, and a glide between the two would run under the
+        // keyboard and across the well.
+        let carried = settings.sliding && arrival == .keyboard
+        guard let from = position, arrival != .atOnce, !shortGlass, !carried else {
             position = to
             move = nil
             return
@@ -1573,6 +1578,7 @@ struct MascotRoam: Equatable, Sendable {
     /// go: nothing is pinned, and he goes back to where his policy puts him, with a glide at the
     /// stroll, or, roaming, to a roost decided from where the finger left him.
     mutating func cancelDrag() {
+        homeward = nil
         guard dragging else { return }
         dragging = false
         if settings.placement != .roam {

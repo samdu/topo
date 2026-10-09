@@ -121,7 +121,7 @@ final class ChatBarTests: XCTestCase {
     // MARK: Going there
 
     /// The slider opening is one glide from where he stands to over the chosen stop, at the
-    /// swim; a new stop is one more, along the top of the transcript; and the slider shutting is
+    /// swim; a new stop is one more, along the pane; and the slider shutting is
     /// a glide back to where his own placement has him, never a jump. With the keyboard up too.
     func testHeGlidesToTheSliderAlongItAndAway() throws {
         for placement in Look.Mascot.Placement.allCases {
@@ -269,6 +269,30 @@ final class ChatBarTests: XCTestCase {
         }
     }
 
+    /// The keyboard coming up or going down while the slider is open takes the pane and him with
+    /// it: he is put over the stop where the pane now is, and not glided there under the
+    /// keyboard and across the well.
+    func testTheKeyboardMovingUnderTheOpenSliderPlacesHim() throws {
+        for placement in Look.Mascot.Placement.allCases {
+            for stop in 0..<3 {
+                var time = 0.0
+                var roam = MascotRoam(Self.settings(placement), frame: Self.frame)
+                hand(&roam, Self.field(), placement, at: time)
+                run(&roam, time: &time)
+                hand(&roam, Self.field(stop: stop), placement, at: time)
+                run(&roam, time: &time)
+                for keyboard in [true, false] {
+                    let what = "\(placement), stop \(stop), keyboard \(keyboard)"
+                    let field = Self.field(stop: stop, keyboard: keyboard)
+                    hand(&roam, field, placement, at: time)
+                    XCTAssertNil(roam.move, "\(what): glided between the panes")
+                    XCTAssertEqual(roam.picture, MascotPerch.over(field, size: Self.size, reach: Self.reach), what)
+                    run(&roam, time: &time)
+                }
+            }
+        }
+    }
+
     /// The slider's row is on a pane with room to grow in only where that room still holds a well
     /// that can be pressed under it; a pane nothing measured has it.
     func testTheSlidersRowIsOnThePaneOnlyWhereTheWellStaysPressable() {
@@ -358,7 +382,7 @@ final class ChatBarTests: XCTestCase {
 
     // MARK: Names
 
-    /// What the bar's slider and the notice call a model is the look's name for it, and the family's
+    /// What the model slider and the notice call a model is the look's name for it, and the family's
     /// where the look names none; a document sets one name without touching the others, and one
     /// it refuses costs that name alone.
     func testAModelIsCalledWhatTheLookCallsIt() {

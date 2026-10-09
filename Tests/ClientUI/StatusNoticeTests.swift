@@ -94,7 +94,7 @@ final class StatusNoticeTests: XCTestCase {
     // MARK: -
 
     /// The least a notice is drawn at, as a share of its font (`look.transcript.noticeLeastScale`):
-    /// between the bar's controls and the badge a notice that does not fit its two lines is
+    /// between the mute and the model a notice that does not fit its two lines is
     /// drawn smaller before any of it is cut.
     private static let leastScale: CGFloat = 0.65
 

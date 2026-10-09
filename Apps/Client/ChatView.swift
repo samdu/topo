@@ -20,7 +20,7 @@ struct ChatView: View {
     @Environment(\.scenePhase) private var scenePhase
     @Environment(Mascot.self) private var mascot
     @AppStorage(Mute.key) private var readAloud = true
-    /// The model chosen on the bar's slider, which is the head Topo wears between the guest's turns
+    /// The model chosen on the model slider, which is the head Topo wears between the guest's turns
     /// (during one, the model the guest reports).
     @AppStorage(Harness.modelKey) private var modelSetting = ClaudeModel.default.rawValue
     /// The person's next turn: what is written, whether the keyboard is asked for, and the turn
@@ -43,8 +43,8 @@ struct ChatView: View {
     /// The bottom of the screen's safe area with no keyboard in it, which is what the keyboard's
     /// is measured against (`KeyboardInset`). Nil until it has been measured.
     @State private var restingBottomInset: CGFloat?
-    /// The model slider is open across the middle of the bar, and where its chosen stop is in the
-    /// global space, which is what Topo hangs under while it is.
+    /// The model slider is open across the top of the pane, which the model's control in the bar
+    /// says.
     @State private var modelsOpen = false
     @State private var showSettings = false
     @State private var showDiagnostics = false
@@ -749,7 +749,7 @@ struct ChatNotices: View {
                 HStack {
                     ProgressView()
                     // One text, so the turns behind wrap with the status and take no width of
-                    // their own beside it: between the bar's controls and the badge there is not
+                    // their own beside it: between the mute and the model there is not
                     // the room for the longest status in two lines and a count beside it.
                     if let queued {
                         Text("\(Text(where_)) \(Text(queued).foregroundStyle(look.transcript.caption))")
@@ -765,7 +765,7 @@ struct ChatNotices: View {
         }
         .font(look.transcript.noticeFont)
         .lineLimit(lineLimit)
-        // Between the bar's controls and the badge there is not the room for the longest notice
+        // Between the mute and the model there is not the room for the longest notice
         // at the largest font in two lines, so one that does not fit is drawn smaller before
         // any of it is cut.
         .minimumScaleFactor(look.transcript.noticeLeastScale)

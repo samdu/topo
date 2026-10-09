@@ -999,7 +999,8 @@ enum KeyboardInset {
 /// An open microphone is 1 whatever the geometry: the tinted pane is what says the microphone is
 /// open, and that must not depend on how much has been said. So is the keyboard: the pane is a
 /// row under it, and a pane that is not there cannot be seen to be.
-/// So is a pane Topo sits on (`holdsTopo`: the look's `glass` placement): a Topo on invisible
+/// So is a pane Topo sits on (`holdsTopo`: the look's `glass` placement, or the open model
+/// slider): a Topo on invisible
 /// glass is a Topo floating.
 enum PanePresence {
     /// `contentBottom` and `paneTop` are two edges in one space, positive down. A rise of nothing
