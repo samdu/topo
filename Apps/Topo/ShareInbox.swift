@@ -30,6 +30,9 @@ final class ShareInbox {
     let line: any ShareLine
     let store: @MainActor () -> ShareStore?
     let home: @Sendable () -> URL
+    /// Puts a share's file in the home (`place`); a suite hands one that lets a sign-out land
+    /// while it does.
+    let placing: @Sendable (Share, ShareStore, URL) async -> String?
 
     /// The home's folder shared images and files are kept under.
     nonisolated static let folder = "shared"
@@ -37,10 +40,12 @@ final class ShareInbox {
     static let unfinished: TimeInterval = 60 * 60
 
     init(line: any ShareLine, store: @escaping @MainActor () -> ShareStore? = { ShareStore.shared() },
-         home: @escaping @Sendable () -> URL = { GuestResident.homeDirectory }) {
+         home: @escaping @Sendable () -> URL = { GuestResident.homeDirectory },
+         placing: @escaping @Sendable (Share, ShareStore, URL) async -> String? = { await ShareInbox.place($0, from: $1, under: $2) }) {
         self.line = line
         self.store = store
         self.home = home
+        self.placing = placing
     }
 
     /// The login's phase or this phone's role moving: signed in, shares are taken, images and
@@ -58,27 +63,42 @@ final class ShareInbox {
         }
     }
 
-    /// Puts every share on the line and sends it.
+    /// Puts every share of this login on the line and sends it. The login is judged again after
+    /// every wait: a sign-out shuts the door before it forgets the harness (`SignOut`), so a
+    /// drain that waited across one puts nothing on the line after it, and takes back the file it
+    /// put in the home. A share made under another login is removed unsent.
     func drain() async {
-        guard let store = store(), store.door() != nil else { return }
+        guard let store = store(), let door = store.door() else { return }
         store.clearUnfinished(olderThan: Self.unfinished)
+        for share in store.shares() where share.login != door.login { store.remove(nonce: share.nonce) }
         guard !store.shares().isEmpty else { return }
         if !line.hasRead {
-            guard await line.refresh() else { return }
+            guard await line.refresh(), store.door() == door else { return }
         }
         var queued = false
-        for share in store.shares() {
+        for share in store.shares() where share.login == door.login {
             var path: String?
             if share.kind == .image || share.kind == .file {
-                guard let placed = await Self.place(share, from: store, under: home()) else { continue }
+                // Kept while the guest was here and not sent before it left: it waits for it.
+                guard door.files else { continue }
+                guard let placed = await placing(share, store, home()) else { continue }
+                guard store.door() == door else {
+                    Self.unplace(share, under: home())
+                    break
+                }
                 path = placed
             }
-            // A sign-out while the file was being placed took the share with it.
-            guard store.door() != nil, let text = Self.text(share, path: path), line.willSend(text, nonce: share.nonce) else { continue }
+            guard let text = Self.text(share, path: path), line.willSend(text, nonce: share.nonce) else { continue }
             store.remove(nonce: share.nonce)
             queued = true
         }
         if queued { await line.retry() }
+    }
+
+    /// Takes a share's file back out of the home.
+    nonisolated static func unplace(_ share: Share, under home: URL) {
+        guard let name = share.file else { return }
+        HomeFile.remove(named: name, in: [folder, share.nonce.lowercased()], under: home)
     }
 
     /// The share's image or file in the guest's home, and its path there; nil when it could not

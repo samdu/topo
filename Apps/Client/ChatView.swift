@@ -433,7 +433,7 @@ struct ChatView: View {
 
     /// The far end of a takeover, built here for the same reason as the way out below.
     private var takeover: Takeover {
-        Takeover(demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
+        Takeover(forgetShares: { ShareStore.shared()?.close() }, demoteHarness: { await harness.demote() }, acceptDemotion: { roleSelector.acceptDemotion() },
                  stopSpeaking: { speaker.stop() }, forgetMemory: { memory.forget() },
                  forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                  forgetConnections: { connections.forget() },
@@ -444,7 +444,7 @@ struct ChatView: View {
     /// handed to the settings sheet. The far end of a takeover, below, ends the same things by
     /// its own path, since a demotion writes what is waiting into the log first.
     private var signOut: SignOut {
-        SignOut(stopSpeaking: { speaker.stop() }, forgetHarness: { await harness.forget() },
+        SignOut(stopSpeaking: { speaker.stop() }, forgetShares: { ShareStore.shared()?.close() }, forgetHarness: { await harness.forget() },
                 forgetMemory: { memory.forget() }, forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
                 forgetConnections: { connections.forget() },
                 forgetLogin: { signIn.signOut(unfinished: connections.unforgotten) })

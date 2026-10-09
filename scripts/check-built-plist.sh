@@ -170,6 +170,11 @@ else
         echo "TopoShare.appex's NSExtensionActivationRule is not the dictionary of the four things Topo takes" >&2
         status=1
     fi
+    text="$(plutil -extract "$rule.NSExtensionActivationSupportsText" raw -o - -- "$share" 2>/dev/null || true)"
+    if [ "$text" != "true" ]; then
+        echo "TopoShare.appex's NSExtensionActivationSupportsText is '${text:-absent}', not true; Topo would not be offered text" >&2
+        status=1
+    fi
     for key in NSExtensionActivationSupportsFileWithMaxCount NSExtensionActivationSupportsImageWithMaxCount \
                NSExtensionActivationSupportsWebURLWithMaxCount; do
         count="$(plutil -extract "$rule.$key" raw -o - -- "$share" 2>/dev/null || true)"

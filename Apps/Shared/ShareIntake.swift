@@ -3,8 +3,8 @@ import Foundation
 import UniformTypeIdentifiers
 
 /// What another app handed the share sheet, read into one thing Topo takes: a file before an
-/// image before a link before text, and the first of whichever kind that is. Nothing is cut to
-/// fit: what is over a limit is refused. The providers are not the system's to hand between
+/// image before a link before text, and the first of whichever kind that is. Nothing shared is
+/// cut to fit: what is over a limit is refused, as is anything that is not one plain file. The providers are not the system's to hand between
 /// threads, so they are read from the main actor, and each answers on a queue of its own.
 @MainActor
 enum ShareIntake {
@@ -104,6 +104,9 @@ enum ShareIntake {
                     name = Share.name(named)
                 }
                 let copy = scratch.appendingPathComponent(name)
+                guard copy.deletingLastPathComponent().standardizedFileURL == scratch.standardizedFileURL else {
+                    return continuation.resume(returning: .failure(.failed))
+                }
                 do {
                     try FileManager.default.copyItem(at: url, to: copy)
                     continuation.resume(returning: .success(Item(kind: kind, file: copy, bytes: bytes)))

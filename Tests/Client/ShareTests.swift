@@ -1,6 +1,9 @@
 import Foundation
-import UniformTypeIdentifiers
 import TopoAuth
+import TopoCore
+import TopoCoreTesting
+import TopoTurn
+import UniformTypeIdentifiers
 import XCTest
 
 @testable import Topo
@@ -30,16 +33,16 @@ final class ShareTests: XCTestCase {
         var retries = 0
         var sent: [(text: String, nonce: String)] = []
         var takes = true
-        var onSend: () -> Void = {}
+        var onRefresh: () -> Void = {}
 
         func refresh() async -> Bool {
             refreshes += 1
+            onRefresh()
             if reads { hasRead = true }
             return reads
         }
 
         func willSend(_ text: String, nonce: String) -> Bool {
-            onSend()
             guard takes else { return false }
             if !sent.contains(where: { $0.nonce == nonce }) { sent.append((text, nonce)) }
             return true
@@ -55,7 +58,8 @@ final class ShareTests: XCTestCase {
 
     private func share(_ kind: Share.Kind, note: String = "", text: String? = nil, file: String? = nil, bytes: Int? = nil,
                        at time: Date = Date()) -> Share {
-        Share(nonce: UUID().uuidString, time: time, kind: kind, note: note, text: text, file: file, bytes: bytes)
+        Share(nonce: UUID().uuidString, login: store.door()?.login ?? "no login", time: time, kind: kind, note: note, text: text,
+              file: file, bytes: bytes)
     }
 
     /// A file of `bytes` in a scratch folder of the store's, as the intake leaves one.
@@ -76,6 +80,7 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(store.shares(), [])
 
         try store.open(files: true)
+        XCTAssertEqual(try store.folder.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
         let kept = share(.link, note: "read this", text: "https://example.com/a")
         try store.keep(kept)
         XCTAssertEqual(store.shares(), [kept])
@@ -101,6 +106,7 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(refusal { try store.keep(share(.text, text: long)) }, .tooLong)
         XCTAssertEqual(refusal { try store.keep(share(.text, note: String(repeating: "n", count: Share.noteLimit + 1), text: "t")) }, .tooLong)
         XCTAssertEqual(refusal { try store.keep(share(.text, text: "")) }, .nothing)
+        XCTAssertEqual(refusal { try store.keep(share(.text, text: " \n ")) }, .nothing)
         XCTAssertEqual(refusal { try store.keep(share(.link)) }, .nothing)
         XCTAssertEqual(refusal { try store.keep(share(.file, file: "a.pdf", bytes: 3)) }, .nothing)
         // A size that is not the file's, and a name that would be a path or hidden.
@@ -111,6 +117,13 @@ final class ShareTests: XCTestCase {
         var odd = share(.text, text: "t")
         odd.nonce = "../elsewhere"
         XCTAssertEqual(refusal { try store.keep(odd) }, .failed)
+        XCTAssertEqual(store.shares(), [])
+        // A folder is not a file, whatever size its entry has: what would be copied is its tree.
+        let tree = try store.scratch().appendingPathComponent("tree")
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 4096).write(to: tree.appendingPathComponent("inside"))
+        XCTAssertNil(ShareStore.size(of: tree))
+        XCTAssertEqual(refusal { try store.keep(share(.file, file: "tree", bytes: 64), attachment: tree) }, .nothing)
         XCTAssertEqual(store.shares(), [])
 
         let big = try attachment("big.bin", Data())
@@ -140,12 +153,19 @@ final class ShareTests: XCTestCase {
         try store.open(files: true)
         let fresh = try store.scratch(), old = try store.scratch()
         let half = store.folder.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: half, withIntermediateDirectories: true)
+        let oldHalf = store.folder.appendingPathComponent(UUID().uuidString)
+        for folder in [half, oldHalf] { try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true) }
         XCTAssertEqual(store.shares(), [], "a folder with no record was read as a share")
-        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: old.path)
+        let kept = share(.text, text: "an old share that reads")
+        try store.keep(kept)
+        for url in [old, oldHalf, store.folder.appendingPathComponent(kept.nonce)] {
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7200)], ofItemAtPath: url.path)
+        }
         store.clearUnfinished(olderThan: 3600)
         XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldHalf.path), "a share's folder with no record was left for good")
+        XCTAssertEqual(store.shares(), [kept], "a share that reads was taken away for its age")
         XCTAssertNotNil(store.door())
         // Only a scratch folder of the store's own is discarded.
         store.discard(root)
@@ -161,6 +181,16 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(Share.name(".."), "shared")
         XCTAssertEqual(Share.name(""), "shared")
         XCTAssertEqual(Share.name("a:b\u{7}c.txt"), "abc.txt")
+        // A slash joined to the character after it is one Character and still a slash on disk.
+        XCTAssertEqual(Share.name("x/\u{200D}../\u{200D}../planted.json"), "planted.json")
+        XCTAssertEqual(Share.name("/\u{200D}"), "shared")
+        XCTAssertEqual(Share.name("a]\u{2028}[b\nc.txt"), "abc.txt")
+        for hostile in ["x/\u{200D}../\u{200D}../planted.json", "/\u{200D}/\u{301}..", "..\u{200D}/..", "\u{FEFF}/a/\u{200B}/b"] {
+            let name = Share.name(hostile)
+            XCTAssertFalse(name.utf8.contains(UInt8(ascii: "/")), "\(name.debugDescription) is a path")
+            XCTAssertFalse(name.hasPrefix("."), "\(name.debugDescription) is hidden")
+            XCTAssertEqual(Share.name(name), name)
+        }
         let long = Share.name(String(repeating: "é", count: 300) + ".jpeg")
         XCTAssertLessThanOrEqual(long.utf8.count, Share.nameBytes)
         XCTAssertTrue(long.hasSuffix(".jpeg"))
@@ -233,6 +263,91 @@ final class ShareTests: XCTestCase {
             XCTAssertEqual(error as? ShareRefusal, .tooLarge)
         }
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path), ["Quarterly report.pdf"])
+    }
+
+    func testAFileNamedAsAPathIsCopiedInsideTheScratchFolderAndNowhereElse() async throws {
+        let source = root.appendingPathComponent("source.json")
+        try Data("{}".utf8).write(to: source)
+        let provider = try XCTUnwrap(NSItemProvider(contentsOf: source))
+        provider.suggestedName = "x/\u{200D}../\u{200D}../planted.json"
+        let scratch = try store.scratch()
+        let item = try await ShareIntake.item(from: [provider], into: scratch)
+        XCTAssertEqual(item.file?.deletingLastPathComponent().standardizedFileURL, scratch.standardizedFileURL)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: scratch.path), ["planted.json"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("planted.json").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: store.folder.appendingPathComponent("planted.json").path))
+    }
+
+    func testAFileNamedLikeTheRecordIsKeptAsItself() async throws {
+        try store.open(files: true)
+        let data = Data("fourteen bytes".utf8)
+        for name in ["share.json", Share.name(ShareStore.record)] {
+            let kept = share(.file, file: name, bytes: data.count)
+            try store.keep(kept, attachment: try attachment(name, data))
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(store.attachment(of: kept))), data, name)
+            XCTAssertTrue(store.shares().contains(kept), name)
+        }
+        let line = Line()
+        await inbox(line).drain()
+        XCTAssertEqual(line.sent.count, 2)
+        for sent in line.sent {
+            XCTAssertTrue(sent.text.hasSuffix("share.json (14 bytes)]"), sent.text)
+            XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent("shared/\(sent.nonce.lowercased())/share.json")), data)
+        }
+    }
+
+    // MARK: The sheet
+
+    func testOneSheetIsOneShareHoweverOftenItIsSent() async throws {
+        try store.open(files: true)
+        let model = ShareSheetModel(store: store)
+        await model.read([NSItemProvider(object: NSURL(string: "https://example.com/page")!)])
+        XCTAssertEqual(model.state, .ready(ShareIntake.Item(kind: .link, text: "https://example.com/page")))
+        model.note = "what is this"
+        XCTAssertTrue(model.keep())
+        XCTAssertFalse(model.keep(), "a second Send kept a second share")
+        XCTAssertEqual(model.state, .sent)
+        XCTAssertEqual(store.shares().map(\.note), ["what is this"])
+        XCTAssertEqual(store.shares().first?.login, store.door()?.login)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path).filter { $0.hasPrefix(".") }, [],
+                       "the sheet left its scratch folder")
+    }
+
+    func testANoteOverTheLimitIsNeitherSentNorCut() async throws {
+        try store.open(files: true)
+        let model = ShareSheetModel(store: store)
+        await model.read([NSItemProvider(object: "some words" as NSString)])
+        model.note = String(repeating: "n", count: Share.noteLimit + 1)
+        XCTAssertTrue(model.noteTooLong)
+        XCTAssertFalse(model.keep())
+        XCTAssertEqual(store.shares(), [])
+        model.note = String(repeating: "n", count: Share.noteLimit)
+        XCTAssertTrue(model.keep())
+        XCTAssertEqual(store.shares().first?.note.count, Share.noteLimit)
+    }
+
+    func testTheSheetRefusesSignedOutAndAFileWhereTheGuestIsNotAndLeavesNothing() async throws {
+        let signedOut = ShareSheetModel(store: store)
+        await signedOut.read([NSItemProvider(object: "some words" as NSString)])
+        XCTAssertEqual(signedOut.state, .refused(.signedOut))
+        XCTAssertFalse(signedOut.keep())
+
+        try store.open(files: false)
+        let source = root.appendingPathComponent("a.pdf")
+        try Data([1, 2, 3]).write(to: source)
+        let elsewhere = ShareSheetModel(store: store)
+        await elsewhere.read([try XCTUnwrap(NSItemProvider(contentsOf: source))])
+        XCTAssertEqual(elsewhere.state, .refused(.anotherPhone))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: store.folder.path), ["_open.json"])
+
+        // A sheet opened under one login keeps nothing under the next.
+        let model = ShareSheetModel(store: store)
+        await model.read([NSItemProvider(object: "some words" as NSString)])
+        store.close()
+        try store.open(files: true)
+        XCTAssertFalse(model.keep())
+        XCTAssertEqual(model.state, .refused(.signedOut))
+        XCTAssertEqual(store.shares(), [])
     }
 
     // MARK: The turn
@@ -365,43 +480,167 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(store.shares(), [stuck])
     }
 
-    func testASignOutWhileAFileIsBeingPlacedSendsNothingOfIt() async throws {
+    /// A sign-out shuts the door before it waits on the harness (`SignOut`). A drain that was
+    /// waiting on the log's read across it puts nothing on the line.
+    func testASignOutWhileTheLogIsBeingReadSendsNothing() async throws {
         try store.open(files: true)
-        let first = share(.text, text: "first", at: Date(timeIntervalSince1970: 100))
-        let second = share(.text, text: "second", at: Date(timeIntervalSince1970: 200))
-        try store.keep(first)
-        try store.keep(second)
+        try store.keep(share(.text, text: "words"))
         let line = Line()
+        line.hasRead = false
         let store = store
-        line.onSend = { store.close() }
+        line.onRefresh = { store.close() }
         await inbox(line).drain()
-        XCTAssertEqual(line.sent.map(\.nonce), [first.nonce], "a share was sent after the sign-out that took it")
+        XCTAssertTrue(line.sent.isEmpty, "a share was put on the line after the sign-out that took it")
+
+        // The same with the next login already begun by the time the read answers.
+        try store.open(files: true)
+        try store.keep(share(.text, text: "words"))
+        line.hasRead = false
+        line.onRefresh = { store.close(); try? store.open(files: true) }
+        await inbox(line).drain()
+        XCTAssertTrue(line.sent.isEmpty, "a share of the login that ended was sent under the next")
+    }
+
+    /// The same sign-out while a share's file is being put in the home: nothing is sent, and the
+    /// file is taken back out.
+    func testASignOutWhileAFileIsBeingPlacedSendsNothingAndLeavesNoFile() async throws {
+        try store.open(files: true)
+        let kept = share(.file, file: "a.pdf", bytes: 3)
+        try store.keep(kept, attachment: try attachment("a.pdf", Data([1, 2, 3])))
+        let line = Line()
+        let store = store, home = home
+        // The sign-out lands once the file is in the home and before the drain is back with it.
+        let inbox = ShareInbox(line: line, store: { store }, home: { home }) { share, store, home in
+            let placed = await ShareInbox.place(share, from: store, under: home)
+            XCTAssertNotNil(placed)
+            store.close()
+            return placed
+        }
+        await inbox.drain()
+        XCTAssertTrue(line.sent.isEmpty, "a share was sent after the sign-out that took it")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("shared/\(kept.nonce.lowercased())/a.pdf").path),
+                       "the file of a share that was never sent was left in the home")
+    }
+
+    /// The whole of it against the harness itself and the app's own sign-out: a share drained is
+    /// one entry on the line, and a sign-out with a share waiting leaves the line and the outbox
+    /// the next launch reads empty, whenever a drain runs.
+    func testAgainstTheHarnessAShareIsOneTurnAndASignOutLeavesNothingOfItOnTheLine() async throws {
+        let name = "topo.tests.shares.\(UUID().uuidString)"
+        addTeardownBlock { UserDefaults().removePersistentDomain(forName: name) }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        func launched() -> Harness {
+            Harness(database: InMemoryRecordDatabase(), tokens: FixedToken(), device: DeviceID("phone"),
+                    ensureZone: { throw Unexpected() }, defaults: defaults, brain: guestBrain(over: ScriptedTransport()),
+                    leaseSleep: parked, pause: { _ in throw CancellationError() })
+        }
+        let harness = launched()
+        let store = store, home = home
+        let inbox = ShareInbox(line: harness, store: { store }, home: { home })
+        try store.open(files: true)
+        let kept = share(.link, note: "read this", text: "https://example.com/a")
+        try store.keep(kept)
+        await inbox.drain()
+        await inbox.drain()
+        XCTAssertEqual(harness.owed.map(\.nonce), [kept.nonce])
+        XCTAssertEqual(harness.owed.first?.text, "read this\n\n[Shared with Topo from another app: a link]\nhttps://example.com/a")
+        XCTAssertEqual(store.shares(), [])
+
+        // A share waiting at the sign-out, with drains begun before it, during the harness's
+        // forgetting and after it.
+        let waiting = share(.file, file: "a.pdf", bytes: 3)
+        try store.keep(waiting, attachment: try attachment("a.pdf", Data([1, 2, 3])))
+        try store.keep(share(.text, text: "also waiting"))
+        var drains: [Task<Void, Never>] = []
+        let signOut = SignOut(stopSpeaking: {}, forgetShares: { store.close() },
+                              forgetHarness: {
+                                  drains.append(Task { await inbox.drain() })
+                                  await harness.forget()
+                                  drains.append(Task { await inbox.drain() })
+                              },
+                              forgetMemory: {}, forgetSurfaces: {}, forgetConnections: {}, forgetLogin: {})
+        drains.append(Task { await inbox.drain() })
+        await Task.yield()
+        await signOut.act()
+        await inbox.drain()
+        for drain in drains { await drain.value }
+        XCTAssertEqual(harness.owed.map(\.nonce), [], "a share reached the line across the sign-out")
+        XCTAssertEqual(launched().owed.map(\.nonce), [], "a share was left in the outbox for the next launch")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("shared/\(waiting.nonce.lowercased())/a.pdf").path))
+    }
+
+    func testAShareOfAnotherLoginIsRemovedUnsent() async throws {
+        try store.open(files: true)
+        var other = share(.text, text: "from the login before")
+        other.login = UUID().uuidString
+        let folder = store.folder.appendingPathComponent(other.nonce)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try JSONEncoder().encode(other).write(to: folder.appendingPathComponent(ShareStore.record))
+        XCTAssertEqual(store.shares(), [other])
+        XCTAssertEqual(refusal { try store.keep(other) }, .signedOut)
+        let line = Line()
+        await inbox(line).drain()
+        XCTAssertTrue(line.sent.isEmpty)
+        XCTAssertEqual(line.refreshes, 0)
+        XCTAssertEqual(store.shares(), [])
+    }
+
+    func testAFileSharedWhileTheGuestWasHereWaitsWhileItIsNot() async throws {
+        try store.open(files: true)
+        let kept = share(.file, file: "a.pdf", bytes: 3)
+        try store.keep(kept, attachment: try attachment("a.pdf", Data([1, 2, 3])))
+        try store.open(files: false)
+        let line = Line()
+        await inbox(line).drain()
+        XCTAssertTrue(line.sent.isEmpty)
+        XCTAssertEqual(store.shares(), [kept])
+        try store.open(files: true)
+        await inbox(line).drain()
+        XCTAssertEqual(line.sent.map(\.nonce), [kept.nonce])
     }
 
     func testTheDoorFollowsTheLoginAndOnlyALoginEndingTakesSharesAway() throws {
         let inbox = inbox(Line())
         inbox.follow(from: .idle, to: .signedIn, guestIsHere: false)
-        XCTAssertEqual(store.door(), ShareStore.Door(files: false))
+        let login = try XCTUnwrap(store.door()?.login)
+        XCTAssertEqual(store.door()?.files, false)
         inbox.follow(from: .signedIn, to: .signedIn, guestIsHere: true)
-        XCTAssertEqual(store.door(), ShareStore.Door(files: true))
+        XCTAssertEqual(store.door(), ShareStore.Door(files: true, login: login), "the role moving named a new login")
         try store.keep(share(.text, text: "words"))
         inbox.follow(from: .idle, to: .idle, guestIsHere: true)
         XCTAssertEqual(store.shares().count, 1, "a launch that found no login took a share away")
-        inbox.follow(from: .signedIn, to: .idle, guestIsHere: true)
+        inbox.follow(from: .signedIn, to: .failed("Signed out, but a token stayed"), guestIsHere: true)
         XCTAssertNil(store.door())
         XCTAssertEqual(store.shares(), [])
 
         // A share that lands after the login ended, from a sheet still open, is not the next login's.
-        let late = share(.text, text: "late")
+        var late = share(.text, text: "late")
+        late.login = login
         try FileManager.default.createDirectory(at: store.folder.appendingPathComponent(late.nonce), withIntermediateDirectories: true)
         try JSONEncoder().encode(late).write(to: store.folder.appendingPathComponent(late.nonce).appendingPathComponent(ShareStore.record))
         XCTAssertEqual(store.shares(), [late])
         inbox.follow(from: .exchanging, to: .signedIn, guestIsHere: true)
         XCTAssertEqual(store.shares(), [])
-        XCTAssertEqual(store.door(), ShareStore.Door(files: true))
+        XCTAssertEqual(store.door()?.files, true)
+        XCTAssertNotEqual(store.door()?.login, login, "the next login has the last one's name")
         // A launch already signed in keeps what was shared while the app was not running.
         try store.keep(share(.text, text: "while away"))
         inbox.follow(from: .signedIn, to: .signedIn, guestIsHere: true)
         XCTAssertEqual(store.shares().count, 1)
     }
 }
+
+private final class ScriptedTransport: Transport, @unchecked Sendable {
+    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        (Data("{}".utf8), HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!)
+    }
+}
+
+private struct FixedToken: TokenProvider {
+    func accessToken() async throws -> String { "tok" }
+}
+
+private struct Unexpected: Error {}
+
+/// A heartbeat loop that never beats inside a test: the lease is renewed by the turns themselves.
+private let parked: @Sendable (TimeInterval) async throws -> Void = { _ in try await Task.sleep(for: .seconds(3600)) }

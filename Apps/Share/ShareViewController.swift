@@ -33,65 +33,6 @@ final class ShareViewController: UIViewController {
     }
 }
 
-/// What the sheet shows and does: the thing shared once it is read, why it was refused if it
-/// was, and the note.
-@MainActor
-@Observable
-final class ShareSheetModel {
-    enum State: Equatable {
-        case reading
-        case ready(ShareIntake.Item)
-        case refused(ShareRefusal)
-    }
-
-    private(set) var state: State = .reading
-    var note = ""
-    private let store: ShareStore?
-    private var scratch: URL?
-
-    init(store: ShareStore? = ShareStore.shared()) {
-        self.store = store
-    }
-
-    func read(_ providers: [NSItemProvider]) async {
-        guard let store, let door = store.door() else { return state = .refused(.signedOut) }
-        guard let choice = ShareIntake.choice(among: providers) else { return state = .refused(.nothing) }
-        if choice.kind == .image || choice.kind == .file, !door.files { return state = .refused(.anotherPhone) }
-        do {
-            let scratch = try store.scratch()
-            self.scratch = scratch
-            state = .ready(try await ShareIntake.item(from: providers, into: scratch))
-        } catch let refusal as ShareRefusal {
-            discard()
-            state = .refused(refusal)
-        } catch {
-            discard()
-            state = .refused(.failed)
-        }
-    }
-
-    /// Keeps the share, and answers whether it was kept; a refusal is shown in its place.
-    func keep() -> Bool {
-        guard let store, case .ready(let item) = state else { return false }
-        let share = Share(nonce: UUID().uuidString, time: Date(), kind: item.kind, note: String(note.prefix(Share.noteLimit)),
-                          text: item.text, file: item.file?.lastPathComponent, bytes: item.bytes)
-        do {
-            try store.keep(share, attachment: item.file)
-        } catch {
-            discard()
-            state = .refused(error)
-            return false
-        }
-        discard()
-        return true
-    }
-
-    func discard() {
-        if let scratch { store?.discard(scratch) }
-        scratch = nil
-    }
-}
-
 struct ShareSheet: View {
     @Bindable var model: ShareSheetModel
     let cancel: () -> Void
@@ -106,11 +47,15 @@ struct ShareSheet: View {
                     ProgressView()
                 case .refused(let refusal):
                     Text(refusal.words)
+                case .sent:
+                    ProgressView()
                 case .ready(let item):
                     Section {
                         TextField("Say something about it", text: $model.note, axis: .vertical)
                             .lineLimit(3...8)
                             .focused($writing)
+                    } footer: {
+                        if model.noteTooLong { Text("That is a longer note than Topo takes (\(Share.noteLimit) characters).") }
                     }
                     Section {
                         Label(Self.words(for: item), systemImage: Self.symbol(for: item.kind))
@@ -125,7 +70,7 @@ struct ShareSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: cancel) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Send", action: send).disabled(!ready)
+                    Button("Send", action: send).disabled(!ready || model.noteTooLong)
                 }
             }
             .onChange(of: ready) { _, ready in writing = ready }

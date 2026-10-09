@@ -112,9 +112,17 @@ make_app "$work/share-predicate/Topo.app"
 plutil -replace "$rule" -string TRUEPREDICATE "$work/share-predicate/Topo.app/PlugIns/TopoShare.appex/Info.plist"
 make_app "$work/share-more/Topo.app"
 plutil -insert "$rule.NSExtensionActivationSupportsMovieWithMaxCount" -integer 1 "$work/share-more/Topo.app/PlugIns/TopoShare.appex/Info.plist"
-make_app "$work/share-many/Topo.app"
-plutil -replace "$rule.NSExtensionActivationSupportsImageWithMaxCount" -integer 10 "$work/share-many/Topo.app/PlugIns/TopoShare.appex/Info.plist"
-for case in share-predicate share-more share-many; do
+cases="share-predicate share-more share-no-text"
+make_app "$work/share-no-text/Topo.app"
+plutil -replace "$rule.NSExtensionActivationSupportsText" -bool NO "$work/share-no-text/Topo.app/PlugIns/TopoShare.appex/Info.plist"
+for thing in File Image WebURL; do
+    for count in 0 2 10; do
+        make_app "$work/share-$thing-$count/Topo.app"
+        plutil -replace "$rule.NSExtensionActivationSupports${thing}WithMaxCount" -integer "$count" "$work/share-$thing-$count/Topo.app/PlugIns/TopoShare.appex/Info.plist"
+        cases="$cases share-$thing-$count"
+    done
+done
+for case in $cases; do
     if errors="$("$check" "$work/$case/Topo.app" 2>&1 >/dev/null)"; then
         fail "a product whose share extension's rule is wrong ($case) passed"
     elif [[ "$errors" != *"TopoShare.appex"* ]]; then
@@ -203,4 +211,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex or TopoShare.appex fails, as does a share extension whose rule is a predicate, names a fifth thing or takes more than one; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex or TopoShare.appex fails, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"

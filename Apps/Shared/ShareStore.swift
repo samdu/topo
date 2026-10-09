@@ -12,6 +12,8 @@ struct Share: Codable, Equatable, Sendable {
     /// The nonce the share's turn goes under, minted by the extension, so a share drained twice
     /// is one turn.
     var nonce: String
+    /// The login it was shared under (`ShareStore.Door.login`): a share of any other is never sent.
+    var login: String
     var time: Date
     var kind: Kind
     /// What the person wrote in the sheet. Empty when they wrote nothing.
@@ -32,12 +34,18 @@ struct Share: Codable, Equatable, Sendable {
     static let nameBytes = 200
 
     /// The name a shared file is kept under: its own last component with nothing that would make
-    /// it a path or a hidden name, cut to `nameBytes` with its extension kept.
+    /// it a path, a hidden name or more than one line, cut to `nameBytes` with its extension kept.
+    /// It is judged a scalar at a time: a slash joined to the character after it is still a slash
+    /// to the filesystem.
     static func name(_ suggested: String) -> String {
-        var name = String(suggested.split(separator: "/", omittingEmptySubsequences: true).last ?? "")
-        name = String(name.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) && $0 != ":" })
+        let dropped = CharacterSet.controlCharacters.union(.newlines).union(.illegalCharacters)
+            .union(CharacterSet(charactersIn: ":[]\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}"))
+        let last = suggested.unicodeScalars.split(separator: "/", omittingEmptySubsequences: true).last.map(Array.init) ?? []
+        var kept = String.UnicodeScalarView()
+        kept.append(contentsOf: last.filter { !dropped.contains($0) && $0.properties.generalCategory != .format })
+        var name = String(kept)
         name = String(name.drop { $0 == "." || $0 == " " })
-        if name.isEmpty { name = "shared" }
+        if name.isEmpty || name.utf8.contains(UInt8(ascii: "/")) { name = "shared" }
         guard name.utf8.count > nameBytes else { return name }
         let whole = name as NSString
         var ending = whole.pathExtension.isEmpty ? "" : "." + whole.pathExtension
@@ -76,16 +84,19 @@ enum ShareRefusal: Error, Equatable {
 ///
 /// - `_open.json`, there while this phone is signed in, saying whether it takes images and files
 ///   (it does where the guest lives). The extension keeps nothing without it;
-/// - `<nonce>/share.json`, one share's record, and beside it the image or file it names;
+/// - `<nonce>/.share.json`, one share's record, and beside it the image or file it names, which
+///   is never hidden and so never the record's name;
 /// - `.<name>/`, a share being written or an attachment being read, which no reader lists.
 ///
 /// A share is written whole under a hidden name and renamed to its nonce, so the app never reads
-/// half of one. A sign-out takes the folder away: a share is never kept for the next login.
+/// half of one. A sign-out takes the folder away, and every share carries the login it was made
+/// under, so one that outlives its login by any path is never sent under another. The folder is
+/// left out of the phone's backups: a phone restored from one holds no login.
 struct ShareStore: Sendable {
     static let appGroup = "group.zone.hexagon.topo"
     /// The most shares held at once.
     static let held = 16
-    static let record = "share.json"
+    static let record = ".share.json"
 
     let folder: URL
 
@@ -103,16 +114,23 @@ struct ShareStore: Sendable {
     struct Door: Codable, Equatable, Sendable {
         /// Images and files, which need the guest's home to be on this phone.
         var files: Bool
+        /// This login, named afresh each time the door is opened from shut.
+        var login: String
     }
 
     private var doorURL: URL { folder.appendingPathComponent("_open.json") }
 
-    /// Signed in: shares are taken from now on.
+    /// Signed in: shares are taken from now on. A door already open keeps its login.
     func open(files: Bool) throws {
         try make(folder)
-        let door = try JSONEncoder().encode(Door(files: files))
-        if (try? Data(contentsOf: doorURL)) != door {
-            try door.write(to: doorURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var folder = folder
+        try? folder.setResourceValues(values)
+        let standing = door()
+        let door = Door(files: files, login: standing?.login ?? UUID().uuidString)
+        if door != standing {
+            try JSONEncoder().encode(door).write(to: doorURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
         }
     }
 
@@ -143,11 +161,12 @@ struct ShareStore: Sendable {
     /// Refused, with nothing kept, when signed out, when it is an image or a file and this is not
     /// the guest's phone, when it is over a limit, or when `held` shares are waiting.
     func keep(_ share: Share, attachment: URL? = nil) throws(ShareRefusal) {
-        guard let door = door() else { throw .signedOut }
+        guard let door = door(), door.login == share.login else { throw .signedOut }
         guard share.note.count <= Share.noteLimit, (share.text?.utf8.count ?? 0) <= Share.textLimit else { throw .tooLong }
         switch share.kind {
         case .text, .link:
-            guard attachment == nil, share.file == nil, share.text?.isEmpty == false else { throw .nothing }
+            guard attachment == nil, share.file == nil,
+                  share.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { throw .nothing }
         case .image, .file:
             guard door.files else { throw .anotherPhone }
             guard let attachment, let name = share.file, name == Share.name(name),
@@ -195,12 +214,13 @@ struct ShareStore: Sendable {
         try? FileManager.default.removeItem(at: folder.appendingPathComponent(nonce))
     }
 
-    /// Takes away what a sheet that was killed left half made: a hidden folder older than `age`.
-    /// The folder is in the app group, which Topo's own two processes write and nothing else
-    /// does, so a hidden name here is one of theirs.
+    /// Takes away what a sheet that was killed left half made, once it is older than `age`: a
+    /// hidden folder, and a share's folder whose record does not read. The folder is in the app
+    /// group, which only Topo's own processes write, so every name here is one of theirs.
     func clearUnfinished(olderThan age: TimeInterval, now: Date = Date()) {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
-        for name in names where name.hasPrefix(".") {
+        let read = Set(shares().map(\.nonce))
+        for name in names where name.hasPrefix(".") || (UUID(uuidString: name) != nil && !read.contains(name)) {
             let url = folder.appendingPathComponent(name)
             guard let made = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date,
                   now.timeIntervalSince(made) > age else { continue }
@@ -208,8 +228,12 @@ struct ShareStore: Sendable {
         }
     }
 
+    /// The size of a plain file; nil for a folder, a link or anything else, whose size on disk is
+    /// not what a copy of it would be.
     static func size(of file: URL) -> Int? {
-        ((try? FileManager.default.attributesOfItem(atPath: file.path))?[.size] as? NSNumber)?.intValue
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: file.path),
+              attributes[.type] as? FileAttributeType == .typeRegular else { return nil }
+        return (attributes[.size] as? NSNumber)?.intValue
     }
 
     private func make(_ directory: URL) throws {
