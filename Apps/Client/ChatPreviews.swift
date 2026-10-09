@@ -180,10 +180,10 @@ struct ChatCanvas: View {
     var row: Row = .hidden
     /// Topo over the chat, standing where the fixtures leave him room; nil for none.
     var mascot: MascotState?
-    /// The models the slider offers and the one chosen; none for a bar with no controls.
+    /// The models the bar's slider offers and the one chosen; none for a bar with no controls.
     var models: [ChatBar.Model] = []
     var chosen = ""
-    /// The model slider is open across the top of the pane.
+    /// The model slider is open under the bar.
     var modelsOpen = false
     var readsAloud = true
 
@@ -197,12 +197,18 @@ struct ChatCanvas: View {
                            replay: Replay(canSpeak: true),
                            actions: TurnActions(edit: { _ in }),
                            draft: draft)
+                .overlay(alignment: .topLeading) {
+                    if modelsOpen { ChatBar.Drop(models: models, chosen: chosen) }
+                }
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     if !models.isEmpty {
                         ToolbarItem(placement: .topBarLeading) { ChatBar.Mute(readsAloud: readsAloud) }
-                        ToolbarItem(placement: .topBarTrailing) {
+                        if #available(iOS 26, *) {
+                            ToolbarSpacer(.fixed, placement: .topBarLeading)
+                        }
+                        ToolbarItem(placement: .topBarLeading) {
                             ChatBar.ModelButton(chosen: models.first { $0.id == chosen }?.name ?? "", open: modelsOpen)
                         }
                     }
@@ -215,8 +221,7 @@ struct ChatCanvas: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    Composer(draft: draft, mic: mic,
-                             models: models.isEmpty ? nil : Composer.Models(stops: models, chosen: chosen, open: modelsOpen))
+                    Composer(draft: draft, mic: mic)
                 }
                 .mascotRoams(mascot)
         }

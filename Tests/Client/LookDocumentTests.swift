@@ -360,14 +360,15 @@ final class LookDocumentTests: XCTestCase {
         }
     }
 
-    /// A document written for the slider in the bar, the keyboard's second mark and the room
+    /// A document written for the slider on the glass, the keyboard's second mark and the room
     /// between the bar's controls still reads: the keys the look no longer has are passed over,
     /// whatever they hold, with no note, and every field beside them is taken.
     func testTheKeysThatWentRefuseNothing() {
         let reading = LookDocument.read("""
         { "composer": { "spacing": 31,
+                        "models": { "inset": 52, "height": 61, "stop": "not a number", "labelFont": 7 },
                         "flank": { "keyboardDown": "pencil.slash", "muted": "bell.slash" } },
-          "bar": { "spacing": "wide", "slider": { "width": 150, "height": 900, "stop": "not a number", "labelFont": 7 } },
+          "bar": { "spacing": "wide" },
           "mascot": { "roamSpeed": 60 } }
         """)
         XCTAssertEqual(reading.notes, [])
@@ -434,15 +435,15 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(try LookCensus.different(Look(), reading.look), ["draft.sendInk"])
     }
 
-    /// A value the bar, the model slider or the send cannot be drawn with is refused with a note, costs that field
+    /// A value the bar or the send cannot be drawn with is refused with a note, costs that field
     /// alone, and leaves the fields beside it taken.
     func testTheBarsFieldsAndTheSendsInkAreRefusedOneAtATime() throws {
         let refused: [(String, String, String)] = [
-            ("bar", ##""font": "enormous", "ink": "#123456""##, "bar.ink"),
-            ("bar", #""ink": 7, "font": "caption""#, "bar.font"),
-            ("composer", #""models": {"inset": -1}, "spacing": 31"#, "composer.spacing"),
-            ("composer", #""models": {"inset": "wide", "height": 900, "spacing": 25, "topInset": -1, "stop": 99, "knob": 0, "labelSpacing": 17, "restOpacity": 2, "track": true}, "spacing": 31"#, "composer.spacing"),
-            ("composer", #""models": {"labelFont": "largeTitle", "inset": 30}"#, "composer.models.inset"),
+            ("bar", #""font": "enormous", "slider": {"knob": 3}"#, "bar.slider.knob"),
+            ("bar", #""ink": 7, "slider": {"knob": 3}"#, "bar.slider.knob"),
+            ("bar", ##""slider": {"width": -1}, "ink": "#123456""##, "bar.ink"),
+            ("bar", ##""slider": {"width": "wide", "height": 900, "inset": 0, "stop": 99, "knob": 0, "labelSpacing": 17, "restOpacity": 2, "track": true}, "ink": "#123456""##, "bar.ink"),
+            ("bar", #""slider": {"labelFont": "largeTitle", "inset": 30}"#, "bar.slider.inset"),
             ("draft", #""sendInk": 7, "maximumLines": 3"#, "draft.maximumLines"),
             ("draft", #""sendInk": "puce-ish", "maximumLines": 3"#, "draft.maximumLines"),
         ]
@@ -453,33 +454,6 @@ final class LookDocumentTests: XCTestCase {
             XCTAssertEqual(try LookCensus.different(Look(), reading.look), [kept],
                            "\(fields): the refused field was taken, or took the one beside it down")
         }
-    }
-
-    /// The model slider's lengths are read at each end of their ranges, and one past either end
-    /// is refused alone with the field beside it still read; a name's font is drawn no larger
-    /// than `Look.Composer.Models.largestLabel`.
-    func testTheModelSlidersFieldsAreReadInTheirRanges() {
-        let ends = LookDocument.read(#"{ "composer": { "models": { "inset": 160, "height": 96, "spacing": 24, "topInset": 24, "stop": 44, "knob": 44, "labelSpacing": 16 } } }"#)
-        XCTAssertEqual(ends.notes, [])
-        var most = Look().composer.models
-        (most.inset, most.height, most.spacing, most.topInset, most.stop, most.knob, most.labelSpacing) = (160, 96, 24, 24, 44, 44, 16)
-        XCTAssertEqual(ends.look.composer.models, most)
-        let least = LookDocument.read(#"{ "composer": { "models": { "inset": 16, "height": 32, "spacing": 0, "topInset": 0, "stop": 2, "knob": 2, "labelSpacing": 0 } } }"#)
-        XCTAssertEqual(least.notes, [])
-        var fewest = Look().composer.models
-        (fewest.inset, fewest.height, fewest.spacing, fewest.topInset, fewest.stop, fewest.knob, fewest.labelSpacing) = (16, 32, 0, 0, 2, 2, 0)
-        XCTAssertEqual(least.look.composer.models, fewest)
-        for field in [#""inset": 161"#, #""inset": 15"#, #""height": 97"#, #""height": 31"#, #""spacing": 25"#, #""spacing": -1"#,
-                      #""topInset": 25"#, #""topInset": -1"#, #""stop": 45"#, #""stop": 1"#, #""knob": 45"#, #""knob": 1"#,
-                      #""labelSpacing": 17"#, #""labelSpacing": -1"#] {
-            let past = LookDocument.read("{ \"composer\": { \"models\": { \(field), \"track\": 2 } } }")
-            var kept = Look().composer.models
-            kept.track = 2
-            XCTAssertEqual(past.look.composer.models, kept, "\(field): a field past its range was taken, or took its neighbour down")
-            XCTAssertEqual(past.notes.count, 1, "\(field): \(past.notes)")
-        }
-        let named = LookDocument.read(#"{ "composer": { "models": { "labelFont": { "size": 400 } } } }"#)
-        XCTAssertEqual(named.look.composer.models.labelFont, Font.system(size: CGFloat(Look.Composer.Models.largestLabel)))
     }
 
     func testABooleanIsNotANumber() {
@@ -705,6 +679,31 @@ final class LookDocumentTests: XCTestCase {
         XCTAssertEqual(small.look.bar.font, Font.system(size: 4))
         XCTAssertEqual(small.notes, [])
 
+        // The slider is read at each end of its ranges and no further, and a name under
+        // a stop no larger than the slider's own height leaves it.
+        let ends = LookDocument.read(#"{ "bar": { "slider": { "width": 560, "height": 44, "padding": 24, "drop": 24, "inset": 80, "stop": 28, "knob": 28, "labelSpacing": 16 } } }"#)
+        XCTAssertEqual(ends.notes, [])
+        var widest = Look().bar.slider
+        (widest.width, widest.height, widest.inset, widest.stop, widest.knob, widest.labelSpacing) = (560, 44, 80, 28, 28, 16)
+        (widest.padding, widest.drop) = (24, 24)
+        XCTAssertEqual(ends.look.bar.slider, widest)
+        let least = LookDocument.read(#"{ "bar": { "slider": { "width": 96, "height": 24, "padding": 4, "drop": 0, "inset": 8, "stop": 2, "knob": 2, "labelSpacing": 0 } } }"#)
+        XCTAssertEqual(least.notes, [])
+        var fewest = Look().bar.slider
+        (fewest.width, fewest.height, fewest.inset, fewest.stop, fewest.knob, fewest.labelSpacing) = (96, 24, 8, 2, 2, 0)
+        (fewest.padding, fewest.drop) = (4, 0)
+        XCTAssertEqual(least.look.bar.slider, fewest)
+        // Past either end, a field is refused alone and the look's own value stands.
+        for field in [#""width": 561"#, #""width": 95"#, #""padding": 25"#, #""padding": 3"#, #""drop": 25"#, #""drop": -1"#, #""height": 45"#, #""height": 23"#, #""inset": 81"#, #""inset": 7"#,
+                      #""stop": 29"#, #""stop": 1"#, #""knob": 29"#, #""knob": 1"#, #""labelSpacing": 17"#, #""labelSpacing": -1"#] {
+            let past = LookDocument.read("{ \"bar\": { \"slider\": { \(field), \"track\": 2 } } }")
+            var kept = Look().bar.slider
+            kept.track = 2
+            XCTAssertEqual(past.look.bar.slider, kept, "\(field): a slider past the bar's is kept, and its neighbour read")
+            XCTAssertEqual(past.notes.count, 1, "\(field): \(past.notes)")
+        }
+        let named = LookDocument.read(#"{ "bar": { "slider": { "labelFont": { "size": 400 } } } }"#)
+        XCTAssertEqual(named.look.bar.slider.labelFont, Font.system(size: CGFloat(Look.Bar.Slider.largestLabel)))
         let title = LookDocument.read(#"{ "bar": { "font": "largeTitle" } }"#)
         XCTAssertEqual(title.look.bar.font, Look().bar.font)
         XCTAssertEqual(title.notes.count, 1, "\(title.notes)")

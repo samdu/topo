@@ -109,7 +109,7 @@ struct Look: Equatable, Sendable {
         /// bar beside the badge, so a notice there never reaches down over the transcript.
         static let largestNotice: Double = 15
         /// The least a notice in the bar is drawn at, as a share of `noticeFont`: one whose words
-        /// do not fit its two lines between the mute and the model is drawn smaller,
+        /// do not fit its two lines between the bar's controls and the badge is drawn smaller,
         /// down to this, before any of it is cut.
         var noticeLeastScale: CGFloat = 0.65
         /// A turn's words.
@@ -555,8 +555,6 @@ struct Look: Equatable, Sendable {
         var compactShare: CGFloat = 2.0 / 3
 
         var flank = Flank()
-        /// The slider the model's control in the bar opens: the models, smallest to largest.
-        var models = Models()
         var well = Well()
         var glyph = Glyph()
 
@@ -603,37 +601,6 @@ struct Look: Equatable, Sendable {
             /// The model's control, and the same control while the slider it opens is open.
             var models = "brain"
             var modelsOpen = "brain.fill"
-        }
-
-        /// The model slider: a row across the top of the pane while the model's control in the
-        /// bar has it open, a stop for each model the chat offers, smallest at the leading end,
-        /// with the model's name under its stop and a knob on the one chosen. Topo sits on the
-        /// pane's top edge over the knob, so the head he wears is over the model that gives it
-        /// him.
-        struct Models: Equatable, Sendable {
-            /// From each end of the pane to the first and last stop's centre, and never more
-            /// than a quarter of the pane's width: far enough in that Topo, at his own size, sits
-            /// over an end stop of the resting pane with his reach inside the screen. Over the
-            /// row, which is wider, his reach holds him in from an end stop.
-            var inset: CGFloat = 40
-            /// The row's own height, the room between it and the row under it, and the room
-            /// above it, over the pane's own inset.
-            var height: CGFloat = 44
-            var spacing: CGFloat = 2
-            var topInset: CGFloat = 4
-            /// The line the stops are on, a stop's mark on it and the knob.
-            var track: CGFloat = 3
-            var stop: CGFloat = 7
-            var knob: CGFloat = 18
-            /// The line and the stops not chosen, as a share of the flank's ink, and the names
-            /// of the models not chosen, which have to be read.
-            var restOpacity = 0.35
-            var restLabelOpacity = 0.7
-            /// A model's name under its stop. `look.json` sets it no larger than `largestLabel`.
-            var labelFont: Font = .caption2.weight(.semibold)
-            static let largestLabel: Double = 16
-            /// Between the line and the names.
-            var labelSpacing: CGFloat = 5
         }
 
         /// The bore the jewel is set into: a dark floor, a deep shadow thrown from the lip, the
@@ -814,9 +781,9 @@ struct Look: Equatable, Sendable {
 }
 
 extension Look {
-    /// The controls in the navigation bar, the mute at its leading edge and the model at its
-    /// trailing one: drawn plainly in Topo's colour, and not etched, since the bar is not the
-    /// glass. Their marks are `composer.flank`'s.
+    /// The controls at the leading edge of the navigation bar, the mute and the model, each an
+    /// item of the bar's own: drawn plainly in Topo's colour, and not etched, since the bar is
+    /// not the glass. Their marks are `composer.flank`'s.
     struct Bar: Equatable, Sendable {
         /// `look.json` sets it no larger than `largestFont`.
         var font: Font = .body
@@ -824,6 +791,40 @@ extension Look {
         /// the two controls beside the notice and the badge, so past this they would leave it.
         static let largestFont: Double = 22
         var ink = Theme.primary
+        var slider = Slider()
+
+        /// The model slider: on a glass of its own that comes down from under the bar's leading
+        /// edge while the model's control has it open, a stop for each model the chat offers,
+        /// smallest at the leading end, with the model's name under its stop and a knob on the
+        /// one chosen. Topo hangs under the knob, over the top of the transcript, so the head he
+        /// wears is under the model that gives it him.
+        struct Slider: Equatable, Sendable {
+            /// The most room it takes of the screen's width; it is as narrow as the screen leaves
+            /// it, and nothing of it is drawn outside its own frame.
+            var width: CGFloat = 300
+            /// Its own height, inside its glass.
+            var height: CGFloat = 36
+            /// Between it and the edge of its glass, on every side.
+            var padding: CGFloat = 12
+            /// Between the bar and its glass.
+            var drop: CGFloat = 6
+            /// From each of its ends to the first and last stop's centre, and never more than a
+            /// quarter of its width.
+            var inset: CGFloat = 26
+            /// The line the stops are on, a stop's mark on it and the knob.
+            var track: CGFloat = 3
+            var stop: CGFloat = 6
+            var knob: CGFloat = 14
+            /// The line and the stops not chosen, as a share of the bar's ink, and the names of
+            /// the models not chosen, which have to be read.
+            var restOpacity = 0.35
+            var restLabelOpacity = 0.7
+            /// A model's name under its stop. `look.json` sets it no larger than `largestLabel`.
+            var labelFont: Font = .caption2.weight(.semibold)
+            static let largestLabel: Double = 14
+            /// Between the line and the names.
+            var labelSpacing: CGFloat = 3
+        }
     }
 }
 

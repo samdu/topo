@@ -154,23 +154,21 @@ enum LookDocument {
         r.font("font", &value.font, largest: Look.Bar.largestFont)
         r.colour("ink", &value.ink)
         r.retired("spacing")
-        r.retired("slider")
+        r.object("slider") { slider(&value.slider, $0) }
     }
 
-    /// The pane holds the row whatever these are: the stops stand inside the pane's width
-    /// (`ChatBar.Stops`), and a name's line is kept before the knob and the gap under it
-    /// (`ChatBar.Stops.fitted`).
-    private static func models(_ value: inout Look.Composer.Models, _ r: Reader) {
-        r.bounded("inset", &value.inset, in: 16...160)
-        r.bounded("height", &value.height, in: 32...96)
-        r.bounded("spacing", &value.spacing, in: 0...24)
-        r.bounded("topInset", &value.topInset, in: 0...24)
+    private static func slider(_ value: inout Look.Bar.Slider, _ r: Reader) {
+        r.bounded("width", &value.width, in: 96...560)
+        r.bounded("height", &value.height, in: 24...44)
+        r.bounded("padding", &value.padding, in: 4...24)
+        r.bounded("drop", &value.drop, in: 0...24)
+        r.bounded("inset", &value.inset, in: 8...80)
         r.outline("track", &value.track)
-        r.bounded("stop", &value.stop, in: 2...44)
-        r.bounded("knob", &value.knob, in: 2...44)
+        r.bounded("stop", &value.stop, in: 2...28)
+        r.bounded("knob", &value.knob, in: 2...28)
         r.alpha("restOpacity", &value.restOpacity)
         r.alpha("restLabelOpacity", &value.restLabelOpacity)
-        r.font("labelFont", &value.labelFont, largest: Look.Composer.Models.largestLabel)
+        r.font("labelFont", &value.labelFont, largest: Look.Bar.Slider.largestLabel)
         r.bounded("labelSpacing", &value.labelSpacing, in: 0...16)
     }
 
@@ -317,7 +315,7 @@ enum LookDocument {
         r.seconds("presenceDuration", &value.presenceDuration)
         r.compactShare("compactShare", &value.compactShare)
         r.object("flank") { flank(&value.flank, $0) }
-        r.object("models") { models(&value.models, $0) }
+        r.retired("models")
         r.object("well") { well(&value.well, $0) }
         r.object("glyph") { glyph(&value.glyph, $0) }
         r.object("openJewel") { jewel(&value.openJewel, $0) }

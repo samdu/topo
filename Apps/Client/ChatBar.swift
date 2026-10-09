@@ -1,10 +1,10 @@
 #if os(iOS)
 import SwiftUI
 
-/// The chat's controls in its navigation bar: the mute at its leading edge, and at its trailing
-/// one the model, a control that opens the model slider on the pane and shuts it again. They are
-/// the bar's and not the glass's, so they are drawn plainly in `Look.Bar` and are there whatever
-/// the pane under the transcript is doing.
+/// The chat's controls in its navigation bar: the mute, and the model, a control that opens the
+/// model slider on a glass under the bar and shuts it again. They are the bar's and not the
+/// glass's, so they are drawn plainly in `Look.Bar` and are there whatever the pane under the
+/// transcript is doing, and each is an item of the bar's own, standing apart from the other.
 enum ChatBar {
     /// A model the chat offers: its alias, which is what `choose` is handed, and what the look
     /// calls it.
@@ -20,8 +20,9 @@ enum ChatBar {
     static func stop(_ alias: String) -> String { "chat-model-\(alias)" }
     static let mute = "chat-mute"
 
-    /// Where the model slider's stops are along it: what the slider is laid out by and what a
-    /// finger on the line is judged by, so the two cannot disagree.
+    /// Where the slider's stops are along it: what the slider is laid out by, what a finger on
+    /// the line is judged by, and what Topo is put under (`MascotPerch.under`), so the three
+    /// cannot disagree.
     struct Stops: Equatable, Sendable {
         var count: Int
         /// The slider's own width, and from each of its ends to the first and last stop's centre.
@@ -69,6 +70,43 @@ enum ChatBar {
             return (knob, min(whole(spacing), room - knob))
         }
 
+        /// Stop `index`'s column in the space `slider` is in, for a slider drawn there.
+        func frame(of index: Int, in slider: CGRect, least: CGFloat) -> CGRect {
+            let column = column(least: least)
+            return CGRect(x: slider.minX + x(of: index) - column / 2, y: slider.minY, width: column, height: slider.height)
+        }
+    }
+
+    /// The model slider on its glass, which comes down from under the bar's leading edge, where
+    /// its control is, over the top of what the bar is over.
+    struct Drop: View {
+        var models: [Model]
+        var chosen: String
+        var choose: (String) -> Void = { _ in }
+        /// The chosen stop's column in the global space, down to the foot of the glass.
+        var stop: (CGRect) -> Void = { _ in }
+        @Environment(\.look) private var look
+        /// From the screen's side to the glass, which is where the bar puts its first item.
+        static let margin: CGFloat = 16
+
+        var body: some View {
+            let slider = look.bar.slider
+            Slider(models: models, chosen: chosen, choose: choose,
+                   stop: { stop($0.inset(by: UIEdgeInsets(top: 0, left: 0, bottom: -slider.padding, right: 0))) })
+                .padding(slider.padding)
+                .background {
+                    // The bar's own glass from iOS 26 on, which is a shape the system draws and
+                    // not a `Look` field, and a material before it.
+                    if #available(iOS 26, *) {
+                        Color.clear.glassEffect(.regular, in: Capsule())
+                    } else {
+                        Capsule().fill(.ultraThinMaterial)
+                    }
+                }
+                .padding(.top, slider.drop)
+                .padding(.horizontal, Self.margin)
+                .transition(.move(edge: .top).combined(with: .opacity))
+        }
     }
 
     /// The model's control: it opens the slider and shuts it again, and says the model chosen as
@@ -115,6 +153,102 @@ enum ChatBar {
             .accessibilityLabel(readsAloud ? "Mute replies" : "Read replies aloud")
             .barControl(look.bar)
         }
+    }
+
+    /// The model slider: a line with a stop for each model, smallest first, each model's name
+    /// under its stop and a knob on the one chosen. A tap on a stop or its name chooses it, and
+    /// so does a finger drawn along the line, at the stop it is nearest. It reports where its
+    /// chosen stop is on the screen, which is what Topo comes to hang under.
+    struct Slider: View {
+        /// Smallest first.
+        var models: [Model]
+        /// The alias of the one chosen.
+        var chosen: String
+        var choose: (String) -> Void = { _ in }
+        /// The chosen stop's column in the global space, as laid out.
+        var stop: (CGRect) -> Void = { _ in }
+        @Environment(\.look) private var look
+        /// How tall a name's one line is in the look's font at the text size in use, as laid out.
+        @State private var name: CGFloat = 0
+
+        var body: some View {
+            let slider = look.bar.slider
+            let ink = look.bar.ink
+            let at = models.firstIndex { $0.id == chosen }
+            GeometryReader { proxy in
+                // The knob and the gap under it as the names' line leaves them room, so the line
+                // the knob is on and the names are both inside the slider, and an end stop no
+                // nearer the end than half the knob, so the knob on it is too.
+                let (knob, gap) = Stops.fitted(knob: slider.knob, spacing: slider.labelSpacing, in: proxy.size.height, over: name)
+                let stops = Stops(count: models.count, width: proxy.size.width, inset: max(slider.inset, knob / 2))
+                let line = knob / 2
+                let column = stops.column(least: knob)
+                ZStack(alignment: .topLeading) {
+                    Capsule().fill(ink.opacity(slider.restOpacity))
+                        .frame(width: stops.span, height: slider.track)
+                        .offset(x: stops.inset, y: line - slider.track / 2)
+                    ForEach(Array(models.enumerated()), id: \.element.id) { index, model in
+                        let own = index == at
+                        Button { choose(model.id) } label: {
+                            VStack(spacing: gap) {
+                                // The knob stands on the chosen stop, so its own mark is not drawn.
+                                Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
+                                    .frame(width: min(slider.stop, knob), height: min(slider.stop, knob))
+                                    .frame(height: knob)
+                                Text(model.name).font(slider.labelFont).lineLimit(1).fixedSize(horizontal: false, vertical: true)
+                                    .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
+                            }
+                            .frame(width: column, height: proxy.size.height, alignment: .top)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier(ChatBar.stop(model.id))
+                        .accessibilityLabel(model.name)
+                        .accessibilityAddTraits(own ? .isSelected : [])
+                        .position(x: stops.x(of: index), y: proxy.size.height / 2)
+                    }
+                    if let at {
+                        Circle().fill(ink)
+                            .frame(width: knob, height: knob)
+                            .position(x: stops.x(of: at), y: line)
+                            .allowsHitTesting(false)
+                            .animation(.easeInOut(duration: look.composer.duration), value: at)
+                    }
+                }
+                .contentShape(Rectangle())
+                // A name's line, measured and not drawn.
+                .background {
+                    Text(models.first?.name ?? "").font(slider.labelFont).lineLimit(1).fixedSize().hidden()
+                        .accessibilityHidden(true)
+                        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { name = $0 }
+                }
+                // A finger drawn along the line chooses the stop it is nearest; a tap is the stop's own.
+                .highPriorityGesture(DragGesture(minimumDistance: knob / 2).onChanged { drag in
+                    guard let index = stops.nearest(to: drag.location.x), index != at else { return }
+                    choose(models[index].id)
+                })
+                // To the eighth of a point, so a layout pass that moves nothing reports nothing new.
+                .onChange(of: at.map { stops.frame(of: $0, in: proxy.frame(in: .global), least: knob).eighths }, initial: true) { _, frame in
+                    if let frame { stop(frame) }
+                }
+            }
+            // The look's width, and as narrow as the screen leaves it: nothing of it is drawn
+            // outside its own frame, whatever the look asks of what is inside.
+            .frame(minWidth: 0, idealWidth: slider.width, maxWidth: slider.width)
+            .frame(height: slider.height)
+            .clipped()
+            .dynamicTypeSize(...ChatNotices.largestType)
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier(ChatBar.models)
+        }
+    }
+}
+
+private extension CGRect {
+    /// This frame with each of its numbers at the nearest eighth of a point.
+    var eighths: CGRect {
+        let near = { (value: CGFloat) in (value * 8).rounded() / 8 }
+        return CGRect(x: near(minX), y: near(minY), width: near(width), height: near(height))
     }
 }
 
