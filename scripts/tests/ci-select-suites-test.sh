@@ -5,11 +5,11 @@
 # first match wins, so a rule deleted, added or moved in the workflow fails here rather than
 # silently changing what runs. Then each rule is exercised with a path under it, and the cases
 # that matter by name — a documentation change runs nothing, a hub, watch, TV, Womble, TopoLink
-# or janitor change runs `others` alone, a change to the app, a package the app links, the tests, the
+# janitor or push-script change runs `others` alone, a change to the app, a package the app links, the tests, the
 # project, a guest patch, the workflow or its scripts runs all three, a path no rule names runs all
 # three — and every way the inputs can be missing runs all three or fails, never fewer. Then it
 # runs the select step itself out of the workflow on a pull_request event in scratch repositories,
-# a diff producer that fails among them, and on the other events.
+# a diff producer that fails among them.
 #
 #   scripts/tests/ci-select-suites-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/ci-select-suites-test.sh
@@ -31,7 +31,6 @@ rules="$(ruby -ryaml -e '
 # tested.
 expected=(
   '.github/workflows/pr-validate.yaml all'
-  '.github/actions/* all'
   '.github/* none'
   'Apps/TopoHub/* others'
   'Apps/TopoTV/* others'
@@ -52,6 +51,8 @@ expected=(
   '.gitignore none'
   'scripts/janitor.py others'
   'scripts/tests/janitor* others'
+  'scripts/validate-and-push.sh others'
+  'scripts/tests/validate-and-push-test.sh others'
 )
 
 failures=0
@@ -105,6 +106,7 @@ selects false false true "TopoLink" $'Packages/TopoLink/Sources/TopoLink/Probe.s
 selects false false true "the hub, the watch and the TV" $'Apps/TopoHub/HubApp.swift\nApps/TopoWatch/WatchApp.swift\nApps/TopoTV/TVApp.swift\n'
 selects false false true "the watch's widgets and its suite" $'Apps/TopoWatchWidgets/Info.plist\nApps/TopoWatch/WatchSurfaces.swift\nTests/Watch/WatchCueTests.swift\n'
 selects false false true "the janitor and its test" $'scripts/janitor.py\nscripts/tests/janitor_test.py\nscripts/tests/janitor-test.sh\ndocs/janitor.md\n'
+selects false false true "the push script and its test" $'scripts/validate-and-push.sh\nscripts/tests/validate-and-push-test.sh\n'
 selects false false true "Womble, its README and its web page included" $'Womble/Sources/App/AppDelegate.swift\nWomble/README.md\nWomble/Web/index.html\n'
 
 # Everything: the app, what it links, the tests, the project, and the CI itself.
@@ -125,7 +127,7 @@ selects true true true "a guest patch" $'patches/ish/0004-guest-mount-real-refus
 selects true true true "the bundled licences" $'THIRD-PARTY\nLICENSE\n'
 selects true true true "the icon the targets bundle" $'Design/topo-mark.svg\n'
 selects true true true "this workflow" $'.github/workflows/pr-validate.yaml\n'
-selects true true true "the prepare action" $'.github/actions/prepare/action.yml\n'
+selects true true true "the Mac suites' script" $'scripts/mac-suite.sh\n'
 selects true true true "a CI script" $'scripts/ci-select-suites.sh\n'
 selects true true true "a script's test" $'scripts/tests/suite-gate-test.sh\n'
 selects true true true "a build script" $'scripts/build-ish.sh\n'
@@ -165,7 +167,7 @@ trap 'rm -rf "$scratch"' EXIT
 run_step() {
   local name="$1" repo="$2" want="$3" match="$4" out status got reason
   : > "$scratch/output"
-  out="$(cd "$repo" && EVENT="${STEP_EVENT:-pull_request}" SUITE_RULES="$rules" \
+  out="$(cd "$repo" && SUITE_RULES="$rules" \
     RUNNER_TEMP="$scratch" GITHUB_OUTPUT="$scratch/output" GITHUB_STEP_SUMMARY="$scratch/summary" \
     bash -eo pipefail -c "$step_run" 2>&1)" && status=0 || status=$?
   got="$(sed -n 's/^topo_unit=//p' "$scratch/output") $(sed -n 's/^topo_ui=//p' "$scratch/output") $(sed -n 's/^others=//p' "$scratch/output")"
@@ -212,8 +214,6 @@ git -C "$scratch/rename" mv Apps/Client/Ear.swift docs/Ear.swift
 git -C "$scratch/rename" -c user.name=t -c user.email=t@t commit -qm rename
 run_step "an app file renamed into docs" "$scratch/rename" "true true true" "Apps/Client/Ear.swift"
 
-STEP_EVENT=schedule run_step "the nightly" "$scratch/docs" "true true true" "outside a pull request (schedule)"
-STEP_EVENT=workflow_dispatch run_step "a dispatch" "$scratch/docs" "true true true" "outside a pull request (workflow_dispatch)"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

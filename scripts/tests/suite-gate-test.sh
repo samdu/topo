@@ -1,29 +1,28 @@
 #!/usr/bin/env bash
-# Holds .github/workflows/pr-validate.yaml's gate against the job list this test pins by name —
-# the suite jobs select, topo_unit, topo_ui and others, and the gate and review jobs — rather than
-# one discovered from the file: the workflow has exactly those jobs; `test` needs and reads in its
-# SUITE_RESULTS exactly the suite jobs; `codex` needs and spells out
-# `needs.<job>.result == 'success'` for exactly the fast jobs (select, topo_unit, others) and
-# `codex_wait`, never `topo_ui` or `test`, so the review runs beside the UI tests; `codex_wait`
-# needs the fast jobs and `review_cap` and runs only on its `false`, for the cap and for `draft`,
-# which `review_cap` reads from the API and no job takes from the event; and `reviewer_ran` and
-# `review_gate` need exactly the suite jobs, `test` and the review jobs before them, with
-# reviewer_ran's SUITE_RESULTS naming exactly the suite jobs and `test`. The three selectable
-# jobs (topo_unit, topo_ui, others) each need select and run only on its `true` for them; `test`
-# and reviewer_ran read select's three outputs in SELECTED; and `codex` and `codex_wait` open with
-# `!cancelled()` and take a fast job's `skipped` only beside select's `false` for it. Then
-# it runs the two snippets that read those results — `test`'s `Require every suite job passed` and
-# reviewer_ran's `Assert a verdict was produced and delivered` — with each job's result set in turn
-# to every value other than `success` (failure, cancelled, skipped, and empty for `test`), and holds
-# that each goes red naming the job, and that both pass only when every job succeeded or was
-# skipped with select's `false` for it: a skip beside `true`, an empty output or no output at all
-# (select failed), and a failure beside `false`, each stay red. reviewer_ran passes on the review
-# cap whatever the suite did, since `test` holds a red suite and review_gate the cap, fails on a
-# draft first, and fails naming review_cap when the count itself failed. That is the
-# snippets' reading of a result string, not a cancelled run: a run that is cancelled skips `test`
-# (`!cancelled()`) and concludes cancelled, and automerge merges only on the latest pull_request
-# run concluding `completed success` (.github/workflows/automerge.yaml). So a suite job added without being wired into the gate, or a gate snippet
-# that reads one job fewer, turns this red.
+# Holds .github/workflows/pr-validate.yaml's gate against the job list this test pins by name
+# rather than one discovered from the file: the workflow has exactly `select`, `test` and the
+# review jobs, every one on ubuntu-latest, and is started by a pull_request alone. `test` needs
+# `select`, may read commit statuses and nothing else, and reads the PR's head commit, select's
+# result, its three suite outputs and its lane; `codex_wait` and `codex` need `select` and `test`
+# and spell out `needs.<job>.result == 'success'` for both, so a suite that did not pass on the
+# Mac spends no reviewer round; `codex_wait` runs only on review_cap's `false`, for the cap and
+# for `draft`, which `review_cap` reads from the API and no job takes from the event; and
+# `reviewer_ran` and `review_gate` need `select`, `test` and the review jobs before them.
+#
+# Then it runs `test`'s step against a fake `gh` that answers the head's combined status: green
+# only when every suite select said `true` for has a `success` status under `local/<suite>`, and
+# `local/real_ear` beside `topo_ui` on any lane but `fast`; red at once on a `failure` or
+# `error`; red after its wait on a status that is missing or `pending`, or a read that fails; a
+# suite select said `false` for needs none; an output that is neither, a select that did not
+# pass and a head that is not a commit are red without a read; and the status is asked of the
+# head it was given, never another commit. And reviewer_ran's `Assert a verdict was produced and
+# delivered`, with `select` and `test` each set in turn to every value other than `success`:
+# each goes red naming the job. reviewer_ran passes on the review cap whatever `test` did, since
+# `test` holds a red suite and review_gate the cap, fails on a draft first, and fails naming
+# review_cap when the count itself failed. That is the snippets' reading of a result string, not
+# a cancelled run: a run that is cancelled skips `test` (`!cancelled()`) and concludes cancelled,
+# and automerge merges only on the latest pull_request run concluding `completed success`
+# (.github/workflows/automerge.yaml).
 #
 #   scripts/tests/suite-gate-test.sh
 #   WORKFLOW=/path/to/other/pr-validate.yaml scripts/tests/suite-gate-test.sh
@@ -39,18 +38,17 @@ trap 'rm -rf "$work"' EXIT
 failures=0
 fail() { echo "FAIL $*"; failures=$((failures + 1)); }
 
-# The structural checks, and the two snippets written out for the runs below.
+# The structural checks, and the snippets written out for the runs below.
 ruby -ryaml - "$workflow" "$work" <<'RUBY' || failures=$((failures + 1))
 path, work = ARGV
-jobs = YAML.load_file(path).fetch("jobs")
-# The jobs by name, written out here rather than discovered, so a suite job deleted from the
-# workflow is a difference and not a job that silently stops being checked.
-suite = %w[select topo_unit topo_ui others]
-review = %w[test review_cap codex_wait codex post_feedback reviewer_ran review_gate]
-# What the reviewer waits on: the suite less the UI tests, which it runs beside.
-fast = suite - %w[topo_ui]
-# The jobs select may leave out.
-selectable = suite - %w[select]
+workflow = YAML.load_file(path)
+jobs = workflow.fetch("jobs")
+# The jobs by name, written out here rather than discovered, so a job deleted from the workflow
+# is a difference and not a job that silently stops being checked.
+suite = %w[select test]
+review = %w[review_cap codex_wait codex post_feedback reviewer_ran review_gate]
+# The suites select chooses among, which run on the Mac and reach `test` as statuses.
+selectable = %w[topo_unit topo_ui others]
 bad = 0
 check = lambda do |ok, msg|
   if ok then puts "ok   #{msg}" else puts "FAIL #{msg}"; bad += 1 end
@@ -68,9 +66,29 @@ names_in = lambda do |results|
 end
 
 check.(jobs.keys.sort == (suite + review).sort, "the workflow's jobs are exactly #{(suite + review).join(', ')} (it has #{jobs.keys.join(', ')})")
-check.(needs.("test").sort == suite.sort, "test needs exactly the suite jobs (#{needs.('test').join(', ')})")
-check.(needs.("codex").sort == (fast + %w[codex_wait]).sort, "codex needs exactly the fast jobs #{fast.join(', ')} and codex_wait (#{needs.('codex').join(', ')})")
-check.(needs.("codex_wait").sort == (fast + %w[review_cap]).sort, "codex_wait needs exactly the fast jobs #{fast.join(', ')} and review_cap (#{needs.('codex_wait').join(', ')})")
+# A macOS runner bills at ten times a Linux one: no job here is on one, and nothing but a
+# pull_request starts a run.
+hosts = jobs.map { |name, j| [name, j["runs-on"]] }.reject { |_, on| on == "ubuntu-latest" }
+check.(hosts.empty?, "every job runs on ubuntu-latest#{hosts.empty? ? '' : " (not: #{hosts.map { |n, on| "#{n} on #{on}" }.join(', ')})"}")
+triggers = workflow.fetch(true) { workflow.fetch("on") }
+check.(triggers.keys == %w[pull_request], "only a pull_request starts a run (#{triggers.keys.join(', ')})")
+conc = workflow.fetch("concurrency")
+check.(conc["cancel-in-progress"] == true && conc["group"] == "pr-validate-${{ github.event.pull_request.number }}", "one run per PR, a superseded one cancelled (#{conc.inspect})")
+
+check.(needs.("test") == %w[select], "test needs select (#{needs.('test').join(', ')})")
+check.(jobs.fetch("test")["if"] == "${{ !cancelled() }}", "test runs unless the run is cancelled, a failed select included")
+check.(jobs.fetch("test")["permissions"] == { "statuses" => "read" }, "test may read commit statuses and nothing else (#{jobs.fetch('test')['permissions'].inspect})")
+gate = step.("test", "Require every suite passed on the Mac")
+genv = gate.fetch("env")
+check.(genv["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}", "test reads the PR's head commit, never the merge commit (#{genv['HEAD_SHA']})")
+check.(genv["SELECT_RESULT"] == "${{ needs.select.result }}", "test reads select's result")
+check.(genv["LANE"] == "${{ needs.select.outputs.lane }}", "test reads select's lane")
+check.(genv.fetch("SELECTED", "").split.join(" ") == selectable.map { |j| "#{j}=${{ needs.select.outputs.#{j} }}" }.join(" "), "test's SELECTED reads select's output for exactly #{selectable.join(', ')}")
+check.(jobs.fetch("select").fetch("outputs").values_at(*selectable) == selectable.map { |j| "${{ steps.suites.outputs.#{j} }}" }, "select outputs each suite from its suites step")
+check.(jobs.fetch("select").fetch("outputs")["lane"] == "${{ steps.lane.outputs.lane }}", "select outputs the lane from its lane step")
+
+check.(needs.("codex").sort == (suite + %w[codex_wait]).sort, "codex needs exactly #{suite.join(', ')} and codex_wait (#{needs.('codex').join(', ')})")
+check.(needs.("codex_wait").sort == (suite + %w[review_cap]).sort, "codex_wait needs exactly #{suite.join(', ')} and review_cap (#{needs.('codex_wait').join(', ')})")
 %w[reviewer_ran review_gate].each do |job|
   capped = jobs.fetch(job).fetch("steps").map { |s| s.dig("env", "CAPPED") }.compact
   check.(capped == ["${{ needs.review_cap.outputs.capped == 'true' || needs.post_feedback.outputs.capped == 'true' }}"], "#{job} reads the cap from review_cap and from post_feedback's recount (#{capped.inspect})")
@@ -85,57 +103,26 @@ check.(cap.fetch("steps").first["id"] == "draft" && cap.fetch("steps").first.fet
 check.(cap.fetch("steps").drop(1).all? { |s| s["if"] == "steps.draft.outputs.draft == 'false'" }, "review_cap counts nothing on a draft")
 check.(jobs.fetch("codex_wait").fetch("if").include?("needs.review_cap.outputs.draft == 'false' &&"), "codex_wait runs only on review_cap's draft false")
 check.(jobs.fetch("codex").fetch("if").include?("needs.codex_wait.result == 'success' &&"), "codex runs only behind codex_wait, which holds a draft")
-# post_feedback sits behind suite jobs select may skip, so it cannot rest on the implicit success().
-check.(jobs.fetch("post_feedback").fetch("if").start_with?("${{ !cancelled() && ") && jobs.fetch("post_feedback").fetch("if").include?("needs.codex.outputs.has_verdict == 'true'"), "post_feedback posts whenever codex gave a verdict, a skipped suite job upstream or not")
+check.(jobs.fetch("post_feedback").fetch("if").start_with?("${{ !cancelled() && ") && jobs.fetch("post_feedback").fetch("if").include?("needs.codex.outputs.has_verdict == 'true'"), "post_feedback posts whenever codex gave a verdict")
 payload = jobs.select { |_, j| [j["if"], *Array(j["steps"]).flat_map { |s| [s["if"], *(s["env"] || {}).values] }].compact.any? { |v| v.to_s.include?("pull_request.draft") } }.keys
 check.(payload == %w[reviewer_ran], "only reviewer_ran reads the event's draft, as the fallback for a fork (#{payload.join(', ')})")
 check.(step.("reviewer_ran", "Assert a verdict was produced and delivered").fetch("env")["IS_DRAFT"] == "${{ needs.review_cap.result == 'skipped' && github.event.pull_request.draft || needs.review_cap.outputs.draft }}", "reviewer_ran reads review_cap's draft, and the event's only where review_cap was skipped")
-check.(needs.("reviewer_ran").sort == (suite + %w[test review_cap codex post_feedback]).sort, "reviewer_ran needs exactly the suite jobs, test, review_cap, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
-check.(needs.("review_gate").sort == (suite + %w[reviewer_ran test review_cap codex post_feedback]).sort, "review_gate needs exactly the suite jobs, reviewer_ran, test, review_cap, codex and post_feedback (#{needs.('review_gate').join(', ')})")
+check.(needs.("reviewer_ran").sort == (suite + %w[review_cap codex post_feedback]).sort, "reviewer_ran needs exactly #{suite.join(', ')}, review_cap, codex and post_feedback (#{needs.('reviewer_ran').join(', ')})")
+check.(needs.("review_gate").sort == (suite + %w[reviewer_ran review_cap codex post_feedback]).sort, "review_gate needs exactly #{suite.join(', ')}, reviewer_ran, review_cap, codex and post_feedback (#{needs.('review_gate').join(', ')})")
 
-selectable.each do |job|
-  check.(needs.(job) == %w[select], "#{job} needs select (#{needs.(job).join(', ')})")
-  check.(jobs.fetch(job)["if"] == "needs.select.outputs.#{job} == 'true'", "#{job} runs only on select's true for it (#{jobs.fetch(job)['if'].inspect})")
-end
-check.(jobs.fetch("select").fetch("outputs").values_at(*selectable) == selectable.map { |j| "${{ steps.suites.outputs.#{j} }}" }, "select outputs each selectable job from its suites step")
-# SELECTED is `job=${{ needs.select.outputs.job }}` for exactly the selectable jobs.
-selected_ok = lambda do |job, name|
-  sel = step.(job, name).fetch("env").fetch("SELECTED", "")
-  want = selectable.map { |j| "#{j}=${{ needs.select.outputs.#{j} }}" }
-  check.(sel.split.join(" ") == want.join(" "), "#{job}'s SELECTED reads select's output for exactly #{selectable.join(', ')} (#{sel.strip})")
-end
-selected_ok.("test", "Require every suite job passed")
-selected_ok.("reviewer_ran", "Assert a verdict was produced and delivered")
-%w[codex codex_wait].each do |job|
+# The reviewer waits on a green `test`, spelled out: `!cancelled()` stands in for the implicit
+# success(), so a result left unread would let a red suite spend a round.
+{ "codex" => suite + %w[codex_wait], "codex_wait" => suite }.each do |job, waits|
   cif = jobs.fetch(job).fetch("if")
-  (fast - %w[select]).each do |f|
-    alt = "(needs.#{f}.result == 'success' || (needs.#{f}.result == 'skipped' && needs.select.outputs.#{f} == 'false'))"
-    check.(cif.include?(alt), "#{job}'s if takes #{f} skipped only beside select's false for it")
-  end
-  check.(cif.scan(/'skipped'/).size == (fast - %w[select]).size, "#{job}'s if reads skipped for nothing else")
-  # Without a status function the implicit success() skips the job beside a skipped prerequisite.
-  check.(cif.start_with?("!cancelled() &&"), "#{job}'s if opens with !cancelled(), so a skipped fast job does not skip it")
-end
-
-gate = step.("test", "Require every suite job passed")
-pairs = names_in.(gate.fetch("env").fetch("SUITE_RESULTS"))
-check.(pairs.map(&:first).sort == suite.sort, "test's SUITE_RESULTS names exactly the suite jobs")
-pairs.each { |job, read| check.(job == read, "test's SUITE_RESULTS reads #{job} from its own result") }
-
-cif = jobs.fetch("codex").fetch("if")
-read = cif.scan(/needs\.(\w+)\.result == 'success'/).flatten
-check.(read.sort == (fast + %w[codex_wait]).sort, "codex's if reads exactly the fast jobs and codex_wait (#{read.join(', ')})")
-(fast + %w[codex_wait]).each do |job|
-  check.(cif.include?("needs.#{job}.result == 'success'"), "codex's if spells out needs.#{job}.result == 'success'")
-end
-(suite + ["test"]).each do |job|
-  check.(needs.("reviewer_ran").include?(job), "reviewer_ran needs #{job}")
-  check.(needs.("review_gate").include?(job), "review_gate needs #{job}")
+  read = cif.scan(/needs\.(\w+)\.result == 'success'/).flatten
+  check.(read.sort == waits.sort, "#{job}'s if reads exactly #{waits.join(', ')} as success (#{read.join(', ')})")
+  check.(!cif.include?("'skipped'"), "#{job}'s if takes no skipped job for a pass")
+  check.(cif.start_with?("!cancelled() &&"), "#{job}'s if opens with !cancelled()")
 end
 
 ran = step.("reviewer_ran", "Assert a verdict was produced and delivered")
 rpairs = names_in.(ran.fetch("env").fetch("SUITE_RESULTS"))
-check.(rpairs.map(&:first).sort == (suite + ["test"]).sort, "reviewer_ran's SUITE_RESULTS names the suite jobs and test")
+check.(rpairs.map(&:first).sort == suite.sort, "reviewer_ran's SUITE_RESULTS names exactly #{suite.join(', ')}")
 rpairs.each { |job, read| check.(job == read, "reviewer_ran's SUITE_RESULTS reads #{job} from its own result") }
 
 File.write(File.join(work, "gate.sh"), gate.fetch("run"))
@@ -147,14 +134,17 @@ exit(bad.zero? ? 0 : 1)
 RUBY
 
 [ -s "$work/gate.sh" ] && [ -s "$work/ran.sh" ] || { echo "the snippets were not extracted" >&2; exit 2; }
+# The step's wait between reads, cut to a second, so a case that waits when it should not is a
+# failure in seconds.
+grep -q 'sleep 15$' "$work/gate.sh" || { echo "test's step no longer sleeps 15 between reads" >&2; exit 2; }
+sed -e 's/sleep 15$/sleep 1/' "$work/gate.sh" > "$work/gate-quick.sh" && mv "$work/gate-quick.sh" "$work/gate.sh"
 suite=()
 while IFS= read -r job; do suite+=("$job"); done < "$work/suite.txt"
 
-# results <failed job> <result> [extra job] — the SUITE_RESULTS string with one job set to <result>.
+# results <failed job> <result> — the SUITE_RESULTS string with one job set to <result>.
 results() {
   local bad="$1" result="$2" out="" job
-  shift 2
-  for job in "${suite[@]}" "$@"; do
+  for job in "${suite[@]}"; do
     if [ "$job" = "$bad" ]; then out="$out $job=$result"; else out="$out $job=success"; fi
   done
   echo "${out# }"
@@ -170,49 +160,119 @@ expect() {
   echo "ok   $name"
 }
 
-# Every suite selected unless a case says otherwise.
-export SELECTED="topo_unit=true topo_ui=true others=true" SUITES_REASON="the reason"
-SUITE_RESULTS="$(results none success)" expect pass "test: every suite job succeeded" "" "$work/gate.sh"
-for job in "${suite[@]}"; do
-  for result in failure cancelled skipped ""; do
-    SUITE_RESULTS="$(results "$job" "$result")" \
-      expect fail "test: $job result=${result:-empty}" "$job did not pass" "$work/gate.sh"
+# `test`'s step. The fake gh answers one call, the combined status of the head it is given, with
+# FAKE_STATUSES as `context state` lines, and logs every call; anything else is exit 64.
+mkdir -p "$work/gh"
+cat > "$work/gh/gh" <<'GH'
+#!/usr/bin/env bash
+echo "$*" >> "$GH_CALLS"
+[ "$1 $2" = "api repos/samdu/topo/commits/$FAKE_HEAD/status?per_page=100" ] || { echo "unexpected: $*" >&2; exit 64; }
+[ "${FAKE_STATUSES-}" != fail ] || exit 1
+printf '%s' "${FAKE_STATUSES-}"
+GH
+chmod +x "$work/gh/gh"
+head_sha=0123456789abcdef0123456789abcdef01234567
+all=$'local/topo_unit success\nlocal/topo_ui success\nlocal/others success\n'
+# gate <want> <case> <match> — STATUS_WAIT is 0 unless a case sets it: one read, then the verdict.
+gate() {
+  : > "$work/gh.calls"
+  PATH="$work/gh:$PATH" GH_CALLS="$work/gh.calls" GITHUB_REPOSITORY=samdu/topo GH_TOKEN=x \
+    FAKE_HEAD="${FAKE_HEAD:-$head_sha}" HEAD_SHA="${HEAD_SHA-$head_sha}" SELECT_RESULT="${SELECT_RESULT-success}" \
+    SELECTED="${SELECTED-topo_unit=true topo_ui=true others=true}" LANE="${LANE-fast}" SUITES_REASON="the reason" \
+    STATUS_WAIT="${STATUS_WAIT:-0}" expect "$1" "test: $2" "$3" "$work/gate.sh"
+}
+unread() {  # the case before it made no call at all
+  [ ! -s "$work/gh.calls" ] && echo "ok   test: $1 reads no status" || fail "test: $1 read a status: $(cat "$work/gh.calls")"
+}
+
+FAKE_STATUSES="$all" gate pass "every suite's status is success" "local/others: success on $head_sha"
+for context in local/topo_unit local/topo_ui local/others; do
+  for state in failure error; do
+    FAKE_STATUSES="${all/$context success/$context $state}" STATUS_WAIT=4 \
+      gate fail "$context is $state, red at once" "did not pass on the Mac.* $context ($state)"
+    [ "$(wc -l < "$work/gh.calls")" -eq 1 ] && echo "ok   test: $context $state is not waited on" || fail "test: $context $state was read $(wc -l < "$work/gh.calls") times"
+  done
+  FAKE_STATUSES="${all/$context success/$context pending}" gate fail "$context is pending past the wait" "No passing status.* $context (pending)"
+  FAKE_STATUSES="${all/$context success$'\n'/}" gate fail "$context has no status" "No passing status.* $context (no status)"
+  # A status for another suite, or one whose name only begins the same, is not this suite's.
+  FAKE_STATUSES="${all/$context success/${context}_old success}" gate fail "$context is not answered by ${context}_old" "$context (no status)"
+done
+FAKE_STATUSES="" gate fail "no status at all" "Run scripts/validate-and-push.sh"
+FAKE_STATUSES=fail gate fail "a read that fails" "No passing status"
+# The newest status of a context is the first the API lists; a later line is not read over it.
+FAKE_STATUSES=$'local/topo_unit failure\nlocal/topo_unit success\nlocal/topo_ui success\nlocal/others success\n' \
+  gate fail "the first status of a context is the one read" "local/topo_unit (failure)"
+
+# The real ear: required beside topo_ui on any lane but fast.
+for lane in full "" Fast; do
+  LANE="$lane" FAKE_STATUSES="$all" gate fail "lane '${lane:-empty}' without the real ear's status" "local/real_ear (no status)"
+  LANE="$lane" FAKE_STATUSES="${all}local/real_ear success"$'\n' gate pass "lane '${lane:-empty}' with the real ear's status" "local/real_ear: success"
+done
+LANE=full SELECTED="topo_unit=false topo_ui=false others=true" FAKE_STATUSES=$'local/others success\n' \
+  gate pass "the full lane with topo_ui left out needs no real ear" ""
+
+# Left out by select: no status is needed for it, and a status that is there and red is not read.
+for suite_name in topo_unit topo_ui others; do
+  off="topo_unit=true topo_ui=true others=true"; off="${off/$suite_name=true/$suite_name=false}"
+  SELECTED="$off" FAKE_STATUSES="${all/local\/$suite_name success$'\n'/}" gate pass "$suite_name left out by select needs no status" "$suite_name: not needed by this PR's paths (the reason)"
+  for sel in "${off/$suite_name=false/$suite_name=}" "${off/$suite_name=false/}" "${off/$suite_name=false/$suite_name=False}"; do
+    SELECTED="$sel" FAKE_STATUSES="$all" gate fail "$suite_name with SELECTED='$sel'" "neither true nor false for $suite_name"
+    unread "$suite_name with SELECTED='$sel'"
   done
 done
+SELECTED="topo_unit=false topo_ui=false others=false" FAKE_STATUSES=fail gate pass "every suite left out, as for a documentation change" "No suite is needed"
+unread "every suite left out"
+
+for result in failure cancelled skipped ""; do
+  SELECT_RESULT="$result" FAKE_STATUSES="$all" gate fail "select result=${result:-empty}" "select did not pass"
+  unread "select result=${result:-empty}"
+done
+for sha in "" "refs/pull/7/merge" "0123 4567"; do
+  HEAD_SHA="$sha" FAKE_STATUSES="$all" gate fail "a head of '${sha:-nothing}'" "No PR head commit"
+  unread "a head of '${sha:-nothing}'"
+done
+# The statuses are asked of the head it was given: another commit's are an unexpected call.
+FAKE_HEAD=ffffffffffffffffffffffffffffffffffffffff FAKE_STATUSES="$all" gate fail "another commit's statuses are not this head's" "No passing status"
+# A status that lands while it waits is read: the second read answers.
+cat > "$work/gh/gh" <<'GH'
+#!/usr/bin/env bash
+echo "$*" >> "$GH_CALLS"
+[ "$(wc -l < "$GH_CALLS")" -ge 2 ] && printf '%s' "$FAKE_STATUSES"
+exit 0
+GH
+FAKE_STATUSES="$all" STATUS_WAIT=60 gate pass "a status posted while it waits" "local/topo_unit: success"
+[ "$(wc -l < "$work/gh.calls")" -eq 2 ] && echo "ok   test: it read twice" || fail "test: it read $(wc -l < "$work/gh.calls") times"
 
 export IS_DRAFT=false CAP_RESULT=success CAPPED=false CODEX_RESULT=success FEEDBACK_RESULT=success
-SUITE_RESULTS="$(results none success test)" expect pass "reviewer_ran: every suite job succeeded" "" "$work/ran.sh"
-for job in "${suite[@]}" test; do
+SUITE_RESULTS="$(results none success)" expect pass "reviewer_ran: select and test succeeded" "The reviewer ran" "$work/ran.sh"
+for job in "${suite[@]}"; do
   for result in failure cancelled skipped; do
-    SUITE_RESULTS="$(results "$job" "$result" test)" \
+    SUITE_RESULTS="$(results "$job" "$result")" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped \
       expect fail "reviewer_ran: $job result=$result" "the suite did not pass.* $job ($result)" "$work/ran.sh"
   done
-done
-# A red suite says whether a verdict was posted anyway: topo_ui runs beside the reviewer.
-SUITE_RESULTS="$(results topo_ui failure test)" \
-  expect fail "reviewer_ran: red suite, verdict posted" "its verdict is posted on the PR" "$work/ran.sh"
-for feedback in skipped failure cancelled; do
-  SUITE_RESULTS="$(results topo_ui failure test)" FEEDBACK_RESULT="$feedback" \
-    expect fail "reviewer_ran: red suite, post_feedback $feedback" "no review verdict was posted.*post_feedback: $feedback" "$work/ran.sh"
 done
 
 # The review cap: reviewer_ran passes, beside a red suite too, since `test` holds that; a draft is
 # still a draft; a count that failed is no verdict, named as review_cap's.
-CAPPED=true SUITE_RESULTS="$(results none success test)" \
+CAPPED=true SUITE_RESULTS="$(results none success)" \
   expect pass "reviewer_ran: review cap reached" "review cap is reached" "$work/ran.sh"
-CAPPED=true CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results topo_ui failure test)" \
+CAPPED=true CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results test failure)" \
   expect pass "reviewer_ran: review cap reached beside a red suite" "review cap is reached" "$work/ran.sh"
-IS_DRAFT=true CAPPED=true SUITE_RESULTS="$(results none success test)" \
+IS_DRAFT=true CAPPED=true SUITE_RESULTS="$(results none success)" \
   expect fail "reviewer_ran: a capped draft is a draft" "this PR is a draft" "$work/ran.sh"
 for cap in failure cancelled; do
-  CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success test)" \
+  CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success)" \
     expect fail "reviewer_ran: review_cap $cap" "(review_cap: $cap)" "$work/ran.sh"
   # A review_cap that failed did not read the draft state: whatever IS_DRAFT holds, it is said as
   # the failed read it is, never as a draft.
   for draft in true ""; do
-    IS_DRAFT="$draft" CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success test)" \
+    IS_DRAFT="$draft" CAP_RESULT="$cap" CAPPED="" CODEX_RESULT=skipped FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success)" \
       expect fail "reviewer_ran: review_cap $cap beside IS_DRAFT=${draft:-empty} is the failed read" "could not be read.*(review_cap: $cap)" "$work/ran.sh"
   done
+done
+for codex in failure cancelled skipped; do
+  CODEX_RESULT="$codex" FEEDBACK_RESULT=skipped SUITE_RESULTS="$(results none success)" \
+    expect fail "reviewer_ran: codex $codex beside a green suite" "the reviewer job did not complete (result: $codex)" "$work/ran.sh"
 done
 
 # review_cap's draft step writes what the API said, the event having said `true`, and fails on
@@ -238,39 +298,6 @@ for said in "" null "true false" fail; do
   if [ "$status" != 0 ] && [ -z "$out" ]; then echo "ok   review_cap: an API answer of '${said:-nothing}' fails the step and writes no output"
   else fail "review_cap: an API answer of '${said:-nothing}' exited $status and wrote '$out'"; fi
 done
-
-# Left out by select: a skip beside `false` passes both snippets, and nothing else does.
-for job in topo_unit topo_ui others; do
-  off="${SELECTED/$job=true/$job=false}"
-  SELECTED="$off" SUITE_RESULTS="$(results "$job" skipped)" \
-    expect pass "test: $job skipped beside select's false" "$job: skipped by selection (the reason)" "$work/gate.sh"
-  SELECTED="$off" SUITE_RESULTS="$(results "$job" skipped test)" \
-    expect pass "reviewer_ran: $job skipped beside select's false" "The reviewer ran" "$work/ran.sh"
-  for result in failure cancelled ""; do
-    SELECTED="$off" SUITE_RESULTS="$(results "$job" "$result")" \
-      expect fail "test: $job result=${result:-empty} beside select's false" "$job did not pass" "$work/gate.sh"
-  done
-  SELECTED="$off" SUITE_RESULTS="$(results "$job" failure test)" \
-    expect fail "reviewer_ran: $job failure beside select's false" "the suite did not pass.* $job (failure)" "$work/ran.sh"
-  for sel in "${SELECTED/$job=true/$job=}" "" "${SELECTED/$job=true/$job=False}"; do
-    SELECTED="$sel" SUITE_RESULTS="$(results "$job" skipped)" \
-      expect fail "test: $job skipped with SELECTED='$sel'" "$job did not pass" "$work/gate.sh"
-    SELECTED="$sel" SUITE_RESULTS="$(results "$job" skipped test)" \
-      expect fail "reviewer_ran: $job skipped with SELECTED='$sel'" "the suite did not pass.* $job (skipped)" "$work/ran.sh"
-  done
-done
-# Every suite left out, as for a documentation change: both pass.
-SELECTED="topo_unit=false topo_ui=false others=false" \
-  SUITE_RESULTS="select=success topo_unit=skipped topo_ui=skipped others=skipped" \
-  expect pass "test: every suite skipped beside select's false" "" "$work/gate.sh"
-SELECTED="topo_unit=false topo_ui=false others=false" \
-  SUITE_RESULTS="select=success topo_unit=skipped topo_ui=skipped others=skipped test=success" \
-  expect pass "reviewer_ran: every suite skipped beside select's false" "" "$work/ran.sh"
-# select's own skip is never read as a selection, whatever SELECTED says.
-SELECTED="select=false topo_unit=false topo_ui=false others=false" SUITE_RESULTS="$(results select skipped test)" \
-  expect fail "reviewer_ran: select skipped" "the suite did not pass.* select (skipped)" "$work/ran.sh"
-SELECTED="select=false topo_unit=false topo_ui=false others=false" SUITE_RESULTS="$(results select skipped)" \
-  expect fail "test: select skipped" "select did not pass" "$work/gate.sh"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

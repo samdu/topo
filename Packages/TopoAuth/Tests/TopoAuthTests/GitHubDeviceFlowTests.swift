@@ -173,10 +173,14 @@ extension Stubbed {
 
         @Test func loginNamesTheUser() async throws {
             StubURLProtocol.reset()
-            StubURLProtocol.requestResponder = { _, _ in (200, #"{"login":"samdu","id":1}"#) }
+            // Answered by its own request and no other: a poll the test before cancelled can still
+            // reach the stub after this one's, and `lastRequest` would then be that poll.
+            StubURLProtocol.requestResponder = { request, _ in
+                guard request.url?.absoluteString == "https://api.github.com/user",
+                      request.value(forHTTPHeaderField: "Authorization") == "Bearer gho_x" else { return (404, #"{"message":"Not Found"}"#) }
+                return (200, #"{"login":"samdu","id":1}"#)
+            }
             #expect(try await flow().login(token: "gho_x") == "samdu")
-            #expect(StubURLProtocol.lastRequest?.url?.absoluteString == "https://api.github.com/user")
-            #expect(StubURLProtocol.lastRequest?.value(forHTTPHeaderField: "Authorization") == "Bearer gho_x")
         }
 
         @Test func loginRefusedSaysSo() async throws {

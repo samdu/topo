@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# The microphone test's input-capable lane on a hosted macOS runner: BlackHole (a virtual
-# loopback device; CI tooling, never bundled) as the default input and output, and the test
-# fixture playing into it for the rest of the job, which is what the simulator's microphone
-# hears. It installs a driver and changes the Mac's default audio devices: the CI runner's, and
-# buddybox's for `scripts/simulator-run.sh --talk`, which stops it after the run.
+# The microphone test's input-capable lane: BlackHole (a virtual loopback device; test tooling,
+# never bundled) as the default input and output, and the test fixture playing into it until
+# `stop`, which is what the simulator's microphone hears. It installs a driver and changes the
+# Mac's default audio devices: buddybox's, for the `topo_ui` suite (scripts/mac-suite.sh) and
+# for `scripts/simulator-run.sh --talk`, each of which stops it after its run.
 #
 #   scripts/ci-audio-lane.sh start [fixture]  # install, pin, and start the supervised feeder
 #                                             # (default Tests/Fixtures/purple-elephants.wav);
