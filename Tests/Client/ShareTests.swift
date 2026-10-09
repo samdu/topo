@@ -42,7 +42,11 @@ final class ShareTests: XCTestCase {
             return reads
         }
 
-        func willSend(_ text: String, nonce: String) -> Bool {
+        var logged: Set<String> = []
+        func said(_ nonce: String) -> Bool { logged.contains(nonce) }
+
+        func willSend(_ text: String, nonce: String, whole: Bool) -> Bool {
+            XCTAssertTrue(whole, "a share was put on the line to be trimmed")
             guard takes else { return false }
             if !sent.contains(where: { $0.nonce == nonce }) { sent.append((text, nonce)) }
             return true
@@ -565,26 +569,51 @@ final class ShareTests: XCTestCase {
                        "the file of a share that was never sent was left in the home")
     }
 
-    /// A file an earlier drain put in the home may be named by a turn already in the log, so a
-    /// drain that finds it there and then meets a sign-out leaves it.
-    func testASignOutLeavesAFileAnEarlierDrainPlaced() async throws {
+    /// A drain killed after it placed a file leaves the file for the next to find. A sign-out
+    /// that lands while that one waits takes the file away with the share, unless the killed
+    /// drain's turn is in the log, naming it.
+    func testASignOutTakesAFileAKilledDrainPlacedUnlessATurnInTheLogNamesIt() async throws {
+        for logged in [false, true] {
+            try store.open(files: true)
+            let kept = share(.file, file: "a.pdf", bytes: 3)
+            try store.keep(kept, attachment: try attachment("a.pdf", Data([1, 2, 3])))
+            let earlier = await ShareInbox.place(kept, from: store, under: home)
+            XCTAssertEqual(earlier?.made, true)
+            let line = Line()
+            if logged { line.logged = [kept.nonce] }
+            let store = store, home = home
+            let inbox = ShareInbox(line: line, store: { store }, home: { home }) { share, store, home in
+                let placed = await ShareInbox.place(share, from: store, under: home)
+                XCTAssertEqual(placed?.made, false)
+                store.close()
+                return placed
+            }
+            await inbox.drain()
+            XCTAssertTrue(line.sent.isEmpty)
+            XCTAssertEqual(FileManager.default.fileExists(atPath: home.appendingPathComponent("shared/\(kept.nonce.lowercased())/a.pdf").path), logged,
+                           logged ? "a file a turn in the log names was taken out of the home" : "the file of a share never sent was left in the home")
+        }
+    }
+
+    /// A phone that stops being the guest's while a file is being placed keeps the share and the
+    /// file, for when it is the guest's again.
+    func testAPhoneThatStopsBeingTheGuestsKeepsTheShareAndItsFile() async throws {
         try store.open(files: true)
         let kept = share(.file, file: "a.pdf", bytes: 3)
         try store.keep(kept, attachment: try attachment("a.pdf", Data([1, 2, 3])))
-        let earlier = await ShareInbox.place(kept, from: store, under: home)
-        XCTAssertEqual(earlier?.made, true)
         let line = Line()
         let store = store, home = home
         let inbox = ShareInbox(line: line, store: { store }, home: { home }) { share, store, home in
             let placed = await ShareInbox.place(share, from: store, under: home)
-            XCTAssertEqual(placed?.made, false)
-            store.close()
+            try? store.open(files: false)
             return placed
         }
         await inbox.drain()
         XCTAssertTrue(line.sent.isEmpty)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: home.appendingPathComponent("shared/\(kept.nonce.lowercased())/a.pdf").path),
-                      "a file an earlier drain's turn may name was taken out of the home")
+        XCTAssertEqual(store.shares(), [kept])
+        try store.open(files: true)
+        await self.inbox(line).drain()
+        XCTAssertEqual(line.sent.map(\.nonce), [kept.nonce])
     }
 
     /// The scene coming forward and the log's first read both ask for a drain: the second waits
@@ -635,12 +664,18 @@ final class ShareTests: XCTestCase {
         let store = store, home = home
         let inbox = ShareInbox(line: harness, store: { store }, home: { home })
         try store.open(files: true)
-        let kept = share(.link, note: "read this", text: "https://example.com/a")
+        let kept = share(.link, note: "  read this  ", text: "https://example.com/a")
         try store.keep(kept)
         await inbox.drain()
         await inbox.drain()
         XCTAssertEqual(harness.owed.map(\.nonce), [kept.nonce])
-        XCTAssertEqual(harness.owed.first?.text, "read this\n\n[Shared with Topo from another app: a link]\nhttps://example.com/a")
+        XCTAssertEqual(harness.owed.first?.text, "  read this  \n\n[Shared with Topo from another app: a link]\nhttps://example.com/a",
+                       "the note did not reach the line as it was written")
+        let words = share(.text, text: "  some words\n")
+        try store.keep(words)
+        await inbox.drain()
+        XCTAssertEqual(harness.owed.last?.text, "[Shared with Topo from another app: text]\n  some words\n",
+                       "shared text did not reach the line whole")
         XCTAssertEqual(store.shares(), [])
 
         // A share waiting at the sign-out, with drains begun before it, during the harness's

@@ -7,7 +7,8 @@ import TopoUserland
 protocol ShareLine: AnyObject {
     var hasRead: Bool { get }
     func refresh() async -> Bool
-    func willSend(_ text: String, nonce: String) -> Bool
+    func willSend(_ text: String, nonce: String, whole: Bool) -> Bool
+    func said(_ nonce: String) -> Bool
     func retry() async
 }
 
@@ -38,7 +39,7 @@ final class ShareInbox {
     private var asked = false
 
     /// A share's file in the home: its path in the guest, and whether this placement made it. One
-    /// found already there is an earlier drain's, whose turn may be in the log naming it.
+    /// found already there is an earlier drain's.
     struct Placed: Equatable, Sendable {
         var path: String
         var made: Bool
@@ -76,8 +77,7 @@ final class ShareInbox {
     /// Puts every share of this login on the line and sends it. The login is judged again after
     /// every wait: a sign-out shuts the door before it forgets the harness (`SignOut`), so a
     /// drain that waited across one puts nothing on the line after it, and takes back the file it
-    /// put in the home; a file an earlier drain put there is left, since that drain's turn may
-    /// name it. A share made under another login is removed unsent. Drains do not overlap: the
+    /// put in the home, unless a turn in the log already names it. A share made under another login is removed unsent. Drains do not overlap: the
     /// scene coming forward and the log's first read both ask for one, and two at once would
     /// each hold the same share across a wait.
     func drain() async {
@@ -105,14 +105,20 @@ final class ShareInbox {
             if share.kind == .image || share.kind == .file {
                 // Kept while the guest was here and not sent before it left: it waits for it.
                 guard door.files else { continue }
+                // A file found already there was placed by a drain that was killed. A turn names
+                // it for good only if that turn is in the log: one still on the line goes with
+                // the login.
+                let named = line.said(share.nonce)
                 guard let placed = await placing(share, store, home()) else { continue }
                 guard store.door() == door else {
-                    if placed.made { Self.unplace(share, under: home()) }
+                    // The login ended: the file goes with the share. A phone that only stopped
+                    // being the guest's keeps both for when it is again.
+                    if store.door()?.login != door.login, !named { Self.unplace(share, under: home()) }
                     break
                 }
                 path = placed.path
             }
-            guard let text = Self.text(share, path: path), line.willSend(text, nonce: share.nonce) else { continue }
+            guard let text = Self.text(share, path: path), line.willSend(text, nonce: share.nonce, whole: true) else { continue }
             store.remove(nonce: share.nonce)
             queued = true
         }
@@ -139,8 +145,7 @@ final class ShareInbox {
     }
 
     /// The turn a share is: the person's note, then what was shared under a line saying so, each
-    /// as it was kept. Only the turn's own two ends are trimmed, by the line, as every turn's are
-    /// (`Harness.willSend`): white space before the note and after the last of what was shared. A
+    /// as it was kept, and put on the line whole (`Harness.willSend(_:nonce:whole:)`). A
     /// note of nothing but white space is no note. Nil for a share that holds nothing to say.
     nonisolated static func text(_ share: Share, path: String?) -> String? {
         let shared: String
