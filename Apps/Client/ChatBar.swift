@@ -163,7 +163,7 @@ enum ChatBar {
                                 Circle().fill(own ? Color.clear : ink.opacity(slider.restOpacity))
                                     .frame(width: min(slider.stop, knob), height: min(slider.stop, knob))
                                     .frame(height: knob)
-                                Text(model.name).font(slider.labelFont).lineLimit(1).fixedSize()
+                                Text(model.name).font(slider.labelFont).lineLimit(1).fixedSize(horizontal: false, vertical: true)
                                     .foregroundStyle(own ? ink : ink.opacity(slider.restLabelOpacity))
                             }
                             .frame(width: column, height: proxy.size.height, alignment: .top)
