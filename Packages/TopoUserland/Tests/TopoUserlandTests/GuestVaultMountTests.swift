@@ -244,7 +244,11 @@ final class GuestVaultMountTests: XCTestCase {
             let attempt = try await sh(command)
             XCTAssertNotEqual(attempt.status, 0, "the guest reached the mirror's own folder: \(command)")
         }
-        _ = try await sh("rm -rf \(point)/.topo; rm -rf \(point)/* \(point)/.[!.]*")
+        // `rm -rf` of a name that is not there is no failure, here as anywhere.
+        let removed = try await sh("rm -rf \(point)/.topo")
+        XCTAssertEqual(removed.status, 0, removed.errors)
+        XCTAssertEqual(removed.errors, "")
+        _ = try await sh("rm -rf \(point)/* \(point)/.[!.]*")
         XCTAssertEqual(try Data(contentsOf: own.appendingPathComponent("mirror.json")), baseline)
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: own.path), ["mirror.json"])
         XCTAssertFalse(fm.fileExists(atPath: host.appendingPathComponent("note.md").path),
@@ -297,6 +301,38 @@ final class GuestVaultMountTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: host.appendingPathComponent(".topo/mirror.json")), baseline)
         XCTAssertEqual(try fm.contentsOfDirectory(atPath: host.appendingPathComponent(".topo").path), ["mirror.json"])
         XCTAssertTrue(fm.fileExists(atPath: host.appendingPathComponent("note.md").path))
+    }
+
+    /// The calls BusyBox makes with no `stat` before them — unlink, readlink, utime — each answer
+    /// no such file for the mirror's folder and for a name under it.
+    func testACallMadeStraightAtTheMirrorsFolderFindsNoSuchFile() async throws {
+        let (host, point, baseline) = try vaultWithBaseline()
+        let own = host.appendingPathComponent(".topo", isDirectory: true)
+        let json = own.appendingPathComponent("mirror.json")
+        func facts(_ url: URL) throws -> [String] {
+            let attributes = try fm.attributesOfItem(atPath: url.path)
+            return ["\(attributes[.posixPermissions] ?? "")", "\(attributes[.modificationDate] ?? "")"]
+        }
+        let before = try (facts(own), facts(json))
+
+        for command in ["unlink \(point)/.topo", "unlink \(point)/.topo/mirror.json",
+                        "readlink -v \(point)/.topo", "readlink -v \(point)/.topo/mirror.json"] {
+            let absent = try await sh(command)
+            XCTAssertNotEqual(absent.status, 0, command)
+            XCTAssertTrue(absent.errors.contains("No such file or directory"), "\(command): \(absent.errors)")
+        }
+        // `touch -c` sets the times and forgives only no such file: any other answer it says.
+        let touched = try await sh("touch -c -d '2001-01-01 00:00:00' \(point)/.topo \(point)/.topo/mirror.json")
+        XCTAssertEqual(touched.status, 0, touched.errors)
+        XCTAssertEqual(touched.errors, "")
+        // The same on a name that is there moves its time, so the option is not what kept these.
+        let moved = try await sh("touch -c -d '2001-01-01 00:00:00' \(point)/note.md && stat -c %Y \(point)/note.md")
+        XCTAssertEqual(moved.output, "978307200\n", moved.errors)
+
+        XCTAssertEqual(try facts(own), before.0)
+        XCTAssertEqual(try facts(json), before.1)
+        XCTAssertEqual(try Data(contentsOf: json), baseline)
+        XCTAssertEqual(try fm.contentsOfDirectory(atPath: own.path), ["mirror.json"])
     }
 
     /// A vault holding the mirror's baseline, as the mirror leaves it.
