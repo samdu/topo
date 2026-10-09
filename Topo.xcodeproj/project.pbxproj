@@ -428,6 +428,7 @@
 		E596F876098F2B54AB0DD7C6 /* GuestSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C4CE4B0D0C15774A8A60784 /* GuestSessionTests.swift */; };
 		E6389B2B3C4E2A4B98D31F2D /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		E72AC5641EFE61743159DCD5 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 5A4E38620A9CC6B4ED612A12 /* TopoAuth */; };
+		E74B5BFCCCF6035CB958DA74 /* GuestVaultPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3680453F6CED48EEEE93F27C /* GuestVaultPlacementTests.swift */; };
 		E80B5826F6CF3D408D7D7B05 /* systemMedium.json in Resources */ = {isa = PBXBuildFile; fileRef = 40B37AD5D7C8EE55A947EE6E /* systemMedium.json */; };
 		E816EA6D1AF56F9EE47927CE /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
 		E81D3B01992F870C1F684790 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
@@ -602,6 +603,7 @@
 		333D38923B458890391C4F4C /* MascotView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MascotView.swift; sourceTree = "<group>"; };
 		34907CBDA60D55F46C514383 /* systemSmall-light.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "systemSmall-light.png"; sourceTree = "<group>"; };
 		34ADA43B0BBA13AF3327AD59 /* MemoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MemoryView.swift; sourceTree = "<group>"; };
+		3680453F6CED48EEEE93F27C /* GuestVaultPlacementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestVaultPlacementTests.swift; sourceTree = "<group>"; };
 		37C72071D6B88AB32EF3BBFD /* TuningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TuningTests.swift; sourceTree = "<group>"; };
 		37FFE301CDB57C54D6E76A8E /* WidgetToolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetToolTests.swift; sourceTree = "<group>"; };
 		38D69076CBD5D984124A297F /* SecretTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecretTool.swift; sourceTree = "<group>"; };
@@ -1056,6 +1058,7 @@
 				C451F4F8393DE072AF04D71A /* GuestToolScriptTests.swift */,
 				E02DA47DC194D97FD7BEA9DD /* GuestTranscriptTests.swift */,
 				055408BFEC002888603D7515 /* GuestVaultMountTests.swift */,
+				3680453F6CED48EEEE93F27C /* GuestVaultPlacementTests.swift */,
 				F0282172ECF3161683779EE2 /* GuestZoneTests.swift */,
 				F04D099F38FADE29E35DE3E1 /* OnePasswordInstallerTests.swift */,
 				DD966E9BCBE6057DEC5075E1 /* OnePasswordRunTests.swift */,
@@ -2106,6 +2109,7 @@
 				5640F3967B126752EA8C3B2F /* GuestToolScriptTests.swift in Sources */,
 				07D89D4E0E7AFEE4977C1496 /* GuestTranscriptTests.swift in Sources */,
 				C7B7F92C7AAC8A7B931060AF /* GuestVaultMountTests.swift in Sources */,
+				E74B5BFCCCF6035CB958DA74 /* GuestVaultPlacementTests.swift in Sources */,
 				8BFACA8AF2DA41DC0EAB795B /* GuestZoneTests.swift in Sources */,
 				CE9B9F042A2ACA8F8F2DCC65 /* OnePasswordInstallerTests.swift in Sources */,
 				9E6150DB3D65DA733D3F3422 /* OnePasswordRunTests.swift in Sources */,

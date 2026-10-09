@@ -44,7 +44,7 @@ private final class Library: PhotoLibrary, @unchecked Sendable {
     var added: [Data] { lock.withLock { _added } }
 
     func limited() async -> Bool { isLimited }
-    func albums() async throws -> [PhotoAlbum] { albumList }
+    func albums(limit: Int) async throws -> [PhotoAlbum] { Array(albumList.prefix(limit + 1)) }
     func search(_ query: PhotoQuery) async throws -> [PhotoRecord] {
         lock.withLock { _queries.append(query) }
         return Array(records.prefix(query.limit + 1))
@@ -213,6 +213,10 @@ final class PhotosToolTests: XCTestCase {
         XCTAssertEqual(video, .ok("exported: /home/topo/photos/VID.jpg (a video: this is a still of it)\n"))
         let missing = await tool(library).run(["export", "GONE/L0/001"])
         XCTAssertEqual(missing, .failed("topo: no photo with the id GONE/L0/001\n"))
+        // A library limited to chosen photos says so, since the photo may be one that was not chosen.
+        library.isLimited = true
+        let unchosen = await tool(library).run(["export", "GONE/L0/001"])
+        XCTAssertEqual(unchosen, .failed("topo: no photo with the id GONE/L0/001 among the photos the person chose for Topo; access is limited to those\n"))
         for id in ["../../etc", "/", "..", "é"] {
             let reply = await tool(library).run(["export", id])
             XCTAssertEqual(reply.status, ToolReply.usage, "\(id): \(reply.text)")
@@ -246,6 +250,41 @@ final class PhotosToolTests: XCTestCase {
         XCTAssertEqual(try HomeFile.create(Data("new".utf8), named: "b.jpg", in: ["made", "deeper"], under: home), .created)
         HomeFile.remove(named: "b.jpg", in: ["made", "deeper"], under: home)
         XCTAssertFalse(FileManager.default.fileExists(atPath: home.appendingPathComponent("made/deeper/b.jpg").path))
+    }
+
+    /// The name is one name: one with a path in it is refused, and walks nowhere.
+    func testHomeFileTakesNoPathForAName() throws {
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("photos-outside-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("photos"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: home.appendingPathComponent("photos/esc"), withDestinationURL: outside)
+        for name in ["esc/leak", "../leak", "..", ""] {
+            XCTAssertThrowsError(try HomeFile.create(Data("new".utf8), named: name, in: ["photos"], under: home), name)
+        }
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: outside.path), [])
+    }
+
+    /// A file is whole under its name or not there: nothing of the write is left beside it.
+    func testHomeFileLeavesOnlyTheFileItMade() throws {
+        XCTAssertEqual(try HomeFile.create(Data("one".utf8), named: "a.jpg", in: ["photos"], under: home), .created)
+        XCTAssertEqual(try HomeFile.create(Data("two".utf8), named: "a.jpg", in: ["photos"], under: home), .exists)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("photos").path), ["a.jpg"])
+        XCTAssertEqual(try Data(contentsOf: home.appendingPathComponent("photos/a.jpg")), Data("one".utf8))
+    }
+
+    func testHomeFileClearsOnlyOldFilesInTheFolderItIsGiven() throws {
+        let folder = home.appendingPathComponent(".topo/picked", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("kept-folder"), withIntermediateDirectories: true)
+        let old = Date().addingTimeInterval(-3600)
+        for (name, date) in [("old", old), ("new", Date())] {
+            try Data("x".utf8).write(to: folder.appendingPathComponent(name))
+            try FileManager.default.setAttributes([.modificationDate: date], ofItemAtPath: folder.appendingPathComponent(name).path)
+        }
+        try FileManager.default.setAttributes([.modificationDate: old], ofItemAtPath: folder.appendingPathComponent("kept-folder").path)
+        HomeFile.clear([".topo", "picked"], under: home, olderThan: 600)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted(), ["kept-folder", "new"])
+        HomeFile.clear(["nowhere"], under: home, olderThan: 600)
     }
 
     // MARK: Save
@@ -288,39 +327,62 @@ final class PhotosToolTests: XCTestCase {
         XCTAssertEqual(small.size.width * small.scale, 400)
     }
 
-    /// PhotoKit itself takes every fetch the tool makes: a predicate it does not know is an
-    /// exception, not an error, so each is sent to the simulator's own library, which is only read.
-    /// Access is granted as for the contacts (`xcrun simctl privacy <udid> grant photos zone.hexagon.topo`).
-    func testPhotoKitTakesEveryFetchTheToolMakes() async throws {
+    /// PhotoKit itself takes each call the tool makes: a predicate it does not know is an
+    /// exception, not an error, so each is sent to the simulator's own library. A picture is added
+    /// first, so there is one to find in an album and to export; nothing there is changed or removed.
+    func testPhotoKitTakesTheToolsCalls() async throws {
         // A grant reads as not determined until the library is asked, and asking answers at once
         // with no prompt; with no grant the prompt stays up, so the ask is bounded. simctl's own
         // grant is leave to add only on iOS 26: the PR check marks it full access (pr-validate.yaml).
         let status = await PhoneTool.within(.seconds(5)) { await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
-        XCTAssertEqual(status, .authorized,
-                       "grant the simulator's photos access first: xcrun simctl privacy <udid> grant photos zone.hexagon.topo")
+        XCTAssertEqual(status, .authorized, "the simulator has not given Topo full access to its photos, as pr-validate.yaml does")
         guard status == .authorized else { return }
         let home = home!
-        let tool = PhotosTool(library: PhotoKitLibrary(), authorizer: PhotosAuthorizer(), broker: PermissionBroker(), home: { home })
-        let albums = await tool.run(["albums"])
-        XCTAssertEqual(albums.status, ToolReply.ok, albums.text)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let picture = UIGraphicsImageRenderer(size: CGSize(width: 64, height: 48), format: format).pngData { context in
+            UIColor.systemTeal.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 64, height: 48))
+        }
+        let tool = PhotosTool(library: PhotoKitLibrary(), authorizer: PhotosAuthorizer(), broker: PermissionBroker(),
+                              home: { home }, read: { _ in picture })
+        let saved = await tool.run(["save", "picture.png"])
+        XCTAssertEqual(saved.status, ToolReply.ok, saved.text)
+        let id = try XCTUnwrap(saved.text.split(separator: "\n").first?.dropFirst("saved: ".count)).description
+
         for call in [["search", "--kind", "photo", "--favorites", "--from", "2001-01-01", "--to", "2099-01-01", "--limit", "3"],
-                     ["search", "--kind", "video"], ["search", "--limit", "1"]] {
+                     ["search", "--kind", "video"]] {
             let reply = await tool.run(call)
             XCTAssertEqual(reply.status, ToolReply.ok, "\(call): \(reply.text)")
         }
+        let newest = await tool.run(["search", "--kind", "photo", "--limit", "1"])
+        XCTAssertTrue(newest.text.hasPrefix("\(id) | "), newest.text)
+        XCTAssertTrue(newest.text.contains(" | photo | 64×48"), newest.text)
+
+        // The picture is in the album of everything, which is the first one listed that holds it.
+        let albums = await tool.run(["albums"])
+        XCTAssertEqual(albums.status, ToolReply.ok, albums.text)
+        var within: [String] = []
+        for line in albums.text.split(separator: "\n") {
+            let album = try XCTUnwrap(line.components(separatedBy: " | ").first)
+            let reply = await tool.run(["search", "--album", album, "--kind", "photo", "--from", "2001-01-01", "--limit", "1"])
+            XCTAssertEqual(reply.status, ToolReply.ok, "\(line): \(reply.text)")
+            if reply.text.hasPrefix("\(id) | ") { within.append(album) }
+        }
+        XCTAssertFalse(within.isEmpty, "no album's search found the picture: \(albums.text)")
         let unknown = await tool.run(["search", "--album", "no-such-album"])
         XCTAssertEqual(unknown, .failed("topo: no album with the id no-such-album\n"))
-        let gone = await tool.run(["export", "00000000-0000-0000-0000-000000000000/L0/001"])
-        XCTAssertEqual(gone.status, ToolReply.failed, gone.text)
 
-        // Whatever photo the simulator's library holds is exported; an empty library has none to try.
-        let newest = await tool.run(["search", "--kind", "photo", "--limit", "1"])
-        guard let id = newest.text.split(separator: "\n").first?.components(separatedBy: " | ").first, id.contains("/") else { return }
+        let gone = await tool.run(["export", "00000000-0000-0000-0000-000000000000/L0/001"])
+        XCTAssertEqual(gone, .failed("topo: no photo with the id 00000000-0000-0000-0000-000000000000/L0/001\n"))
         let exported = await tool.run(["export", id])
         XCTAssertEqual(exported.status, ToolReply.ok, exported.text)
         let name = try PhotosTool.fileName(for: id)
         let image = try XCTUnwrap(UIImage(data: try Data(contentsOf: home.appendingPathComponent("photos/\(name)"))))
-        XCTAssertLessThanOrEqual(max(image.size.width, image.size.height) * image.scale, CGFloat(PhotosTool.longSide))
+        XCTAssertEqual(image.size.width * image.scale, 64)
+        XCTAssertEqual(image.size.height * image.scale, 48)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent("photos").path), [name],
+                       "the export left more than the picture under its name")
     }
 }
 

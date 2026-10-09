@@ -22,8 +22,9 @@ protocol FilePicker: Sendable {
 
 /// Where a picked file is put: the memory's folder as the guest reaches it.
 protocol VaultDrop: Sendable {
-    /// Puts `data` at `folder`/`name` in the memory, where nothing is yet.
-    func drop(_ data: Data, named name: String, into folder: String) async throws -> VaultDropOutcome
+    /// Puts `data` at `folder`/`name` in the memory, where nothing is yet, and gives it its name
+    /// no later than one wait of the vault's after `deadline`.
+    func drop(_ data: Data, named name: String, into folder: String, by deadline: Date) async throws -> VaultDropOutcome
 }
 
 enum VaultDropOutcome: Sendable, Equatable {
@@ -32,6 +33,8 @@ enum VaultDropOutcome: Sendable, Equatable {
     case exists
     /// The memory's folder is not mounted in the guest.
     case unmounted
+    /// The copy was not done by the deadline; nothing was given the name.
+    case late
 }
 
 /// `topo files pick`: the person chooses a file from Files, iCloud Drive or another app's
@@ -44,9 +47,15 @@ struct FilesTool: Tool {
     static let inbox = "inbox"
     /// The most bytes a picked file may be.
     static let bytes = 20 * 1024 * 1024
-    /// The most bytes a picked file that is text may be: the mirror carries a text file to the
-    /// store whole, as one note, and a note is one record's field.
+    /// The most bytes a picked file that is text may be, which is this tool's own line: the mirror
+    /// carries a text file to the store whole, as one note, in one field of one record.
     static let textBytes = 256 * 1024
+    /// The most bytes a picked file's name may be.
+    static let nameBytes = 200
+    /// How long after the call began a pick may still be given its name in the memory: that and
+    /// one wait of the vault's (`Guest.vaultWait`) end inside the tool service's bound, so a call
+    /// answered as timed out puts nothing there afterwards.
+    static let placeBy: TimeInterval = 65
 
     let name = "files"
     let summary = "ask the person to pick a file on the phone, and put a copy of it in the memory"
@@ -58,6 +67,7 @@ struct FilesTool: Tool {
     """ }
 
     func run(_ arguments: [String]) async -> ToolReply {
+        let deadline = Date().addingTimeInterval(Self.placeBy)
         let folder: String
         do {
             folder = try parse(arguments)
@@ -97,7 +107,7 @@ struct FilesTool: Tool {
         }
         let path = "\(ClaudeLauncher.memory)/\(folder)/\(name)"
         do {
-            switch try await drop.drop(data, named: name, into: folder) {
+            switch try await drop.drop(data, named: name, into: folder, by: deadline) {
             case .placed:
                 let kept = isText ? "" : "It is not text, so the memory's sync does not carry it to the person's other devices: it is in this memory folder alone.\n"
                 return .ok("picked: \(path) (\(data.count) bytes)\n\(kept)")
@@ -105,6 +115,8 @@ struct FilesTool: Tool {
                 return refused("\(path) is already there, so nothing was written; pass --into another folder, or move that file first")
             case .unmounted:
                 return .failed("topo: the memory's folder is not reachable from here, so there is nowhere to put the file; nothing was kept\n")
+            case .late:
+                return .failed("topo: the file was picked too late in the call to be copied into the memory, so nothing was kept; run it again\n")
             }
         } catch let failure as ToolFailure {
             return ToolReply(status: failure.status, text: "topo: \(failure.text)\n")
@@ -144,9 +156,12 @@ struct FilesTool: Tool {
     static func fileName(_ picked: String) -> String {
         var name = String(String.UnicodeScalarView(picked.unicodeScalars.filter { !unprintable($0) && $0 != "/" }))
         name = String(name.drop { $0 == "." || $0 == " " })
-        if name.utf8.count > 200 {
+        if name.utf8.count > nameBytes {
             let ending = (name as NSString).pathExtension
-            name = String(name.prefix(100)) + (ending.isEmpty || ending.count > 16 ? "" : "." + ending)
+            let kept = ending.isEmpty || ending.utf8.count > 16 ? "" : "." + ending
+            var stem = String(name.dropLast(kept.count))
+            while stem.utf8.count + kept.utf8.count > nameBytes { stem.removeLast() }
+            name = stem + kept
         }
         return name.isEmpty ? "file" : name
     }
@@ -164,71 +179,80 @@ struct FilesTool: Tool {
 final class DocumentPicker: NSObject, FilePicker, UIDocumentPickerDelegate {
     /// How long the person has to choose: under the tool service's own bound, with room left for
     /// the copy into the memory.
-    static let bound: Duration = .seconds(60)
+    nonisolated static let bound: Duration = .seconds(60)
 
-    private var waiting: CheckedContinuation<FilePick, Never>?
-    private weak var shown: UIDocumentPickerViewController?
+    /// The call a picker is up for, and the picker, held here until that call is answered: the
+    /// bound and the cancellation name the call, so neither answers a later one, and neither
+    /// depends on the picker still being on the screen.
+    private var waiting: (call: UUID, continuation: CheckedContinuation<FilePick, Never>)?
+    private var shown: UIDocumentPickerViewController?
 
     nonisolated func pick() async -> FilePick {
-        await withTaskCancellationHandler {
-            await present()
+        let call = UUID()
+        return await withTaskCancellationHandler {
+            await present(call)
         } onCancel: {
-            Task { @MainActor in self.finish(.cancelled) }
+            Task { @MainActor in self.finish(.cancelled, call: call) }
         }
     }
 
-    private func present() async -> FilePick {
+    private func present(_ call: UUID) async -> FilePick {
         guard waiting == nil else { return .unavailable("a file picker is already up on the phone") }
         guard !Task.isCancelled else { return .cancelled }
         guard UIApplication.shared.applicationState == .active, let presenter = Self.presenter() else {
-            return .unavailable("the Topo app is not on the screen, so no picker can be shown; ask the person to open Topo")
+            return .unavailable("the Topo app is not on the screen, or is between two screens, so no picker can be shown; ask the person to open Topo, then run it again")
         }
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.item], asCopy: true)
         picker.allowsMultipleSelection = false
         picker.delegate = self
         shown = picker
         return await withCheckedContinuation { continuation in
-            waiting = continuation
+            waiting = (call, continuation)
             presenter.present(picker, animated: true)
-            Task { [weak picker] in
+            Task {
                 try? await Task.sleep(for: Self.bound)
-                // Only the picker this bound was set for: a later call's is another.
-                if let picker, self.shown === picker { self.finish(.unanswered) }
+                self.finish(.unanswered, call: call)
             }
         }
     }
 
-    /// The view controller on top of the app's key window, which is what can present.
+    /// The view controller on top of the app's key window, which is what can present; nil while
+    /// the one on top is on its way off the screen, when nothing can.
     private static func presenter() -> UIViewController? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard var top = scenes.first(where: { $0.activationState == .foregroundActive })?.keyWindow?.rootViewController else {
             return nil
         }
-        while let next = top.presentedViewController, !next.isBeingDismissed { top = next }
-        return top
+        while let next = top.presentedViewController { top = next }
+        return top.isBeingDismissed ? nil : top
     }
 
-    private func finish(_ pick: FilePick) {
-        guard let waiting else { return }
+    private func finish(_ pick: FilePick, call: UUID) {
+        guard let waiting, waiting.call == call else { return }
         self.waiting = nil
         if let shown, shown.presentingViewController != nil { shown.dismiss(animated: true) }
         shown = nil
-        waiting.resume(returning: pick)
+        waiting.continuation.resume(returning: pick)
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard controller === shown else { return }
-        finish(urls.first.map(FilePick.picked) ?? .cancelled)
+        // A choice that lands after its call was answered is of no use to anyone: its copy goes.
+        guard controller === shown, let call = waiting?.call, let url = urls.first else {
+            urls.forEach { try? FileManager.default.removeItem(at: $0) }
+            if controller === shown, let call = waiting?.call { finish(.cancelled, call: call) }
+            return
+        }
+        finish(.picked(url), call: call)
     }
 
     func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        guard controller === shown else { return }
-        finish(.cancelled)
+        guard controller === shown, let call = waiting?.call else { return }
+        finish(.cancelled, call: call)
     }
 }
 
 /// A picked file carried into the memory by the guest itself: the app writes it into the guest's
-/// home, and a short program in the guest copies it from there into the memory's folder. So the
+/// home, and the guest copies it from there into the memory's folder (`VaultPlacement`). So the
 /// folder has no writer but the vault's own filesystem, with its coordination, its bound and its
 /// refusal of `.topo`, and a pick lands in the folder the guest's mount is on.
 struct GuestVaultDrop: VaultDrop {
@@ -238,27 +262,12 @@ struct GuestVaultDrop: VaultDrop {
 
     /// Where a pick waits in the home for the guest to copy it: the app's own folder there.
     static let staging = [".topo", "picked"]
-    /// The longest the guest's copy may take, in seconds.
-    static let copySeconds = 20
+    /// A pick left waiting by a call the app was killed under is taken away once it is this old.
+    static let stale: TimeInterval = 10 * 60
 
-    /// Copies `$1` to `$2/$3/$4` under a hidden name the mirror does not read, and gives it its
-    /// name only where nothing has one (`mv -n`), so a copy cut short leaves no half a file under
-    /// the name, and nothing there is written over. A hidden name left by a pick that was ended
-    /// is taken away first. Prints the size of what landed.
-    static let script = #"""
-    root="$2"; dir="$2/$3"; dst="$dir/$4"; tmp="$dir/.topo-pick-$$"
-    [ -d "$root" ] || exit 20
-    mkdir -p -- "$dir" || exit 21
-    rm -f -- "$dir"/.topo-pick-*
-    [ -e "$dst" ] || [ -L "$dst" ] && exit 17
-    timeout -s KILL "$5" cp -- "$1" "$tmp" || { rm -f -- "$tmp"; exit 22; }
-    mv -n -- "$tmp" "$dst"
-    if [ -e "$tmp" ]; then rm -f -- "$tmp"; exit 17; fi
-    wc -c < "$dst"
-    """#
-
-    func drop(_ data: Data, named name: String, into folder: String) async throws -> VaultDropOutcome {
+    func drop(_ data: Data, named name: String, into folder: String, by deadline: Date) async throws -> VaultDropOutcome {
         guard Guest.shared.kernels > 0, await mounted() else { return .unmounted }
+        HomeFile.clear(Self.staging, under: home(), olderThan: Self.stale)
         let staged = UUID().uuidString
         guard try HomeFile.create(data, named: staged, in: Self.staging, under: home()) == .created else {
             throw ToolFailure("the picked file could not be handed to the guest")
@@ -266,19 +275,15 @@ struct GuestVaultDrop: VaultDrop {
         defer { HomeFile.remove(named: staged, in: Self.staging, under: home()) }
         try Task.checkCancellation()
         let source = ([ClaudeLauncher.home] + Self.staging + [staged]).joined(separator: "/")
-        let ran = try await Guest.shared.run("/bin/sh", ["-c", Self.script, "sh", source, ClaudeLauncher.memory, folder, name,
-                                                        String(Self.copySeconds)])
-        switch ran.status {
-        case 0:
-            // The size is read back, since a program that hung can answer 0 with nothing said.
-            guard Int(ran.output.trimmingCharacters(in: .whitespacesAndNewlines)) == data.count else {
-                throw ToolFailure("the file's copy into the memory could not be confirmed")
-            }
+        switch try await VaultPlacement.place(source, at: ClaudeLauncher.memory, folder: folder, name: name, by: deadline) {
+        case .placed(let bytes):
+            guard bytes == data.count else { throw ToolFailure("the file's copy into the memory could not be confirmed") }
             return .placed
-        case 17: return .exists
-        case 20: return .unmounted
-        case 21: throw ToolFailure("the folder \(folder) could not be made in the memory")
-        default: throw ToolFailure("the file could not be copied into the memory (the copy has \(Self.copySeconds) s)")
+        case .exists: return .exists
+        case .unmounted: return .unmounted
+        case .late: return .late
+        case .noFolder: throw ToolFailure("the folder \(folder) could not be made in the memory")
+        case .failed: throw ToolFailure("the file could not be copied into the memory (the copy has \(VaultPlacement.copySeconds) s)")
         }
     }
 }

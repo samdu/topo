@@ -44,7 +44,8 @@ struct PhotoQuery: Sendable, Equatable {
 protocol PhotoLibrary: Sendable {
     /// Whether the person let Topo see only the photos they chose.
     func limited() async -> Bool
-    func albums() async throws -> [PhotoAlbum]
+    /// At most `limit + 1`, so one more than asked says there are more.
+    func albums(limit: Int) async throws -> [PhotoAlbum]
     /// Newest first, at most `query.limit + 1`, so one more than asked says there are more.
     func search(_ query: PhotoQuery) async throws -> [PhotoRecord]
     /// One asset as a JPEG at most `longSide` pixels on its long side (a video's first frame), and
@@ -107,11 +108,11 @@ struct PhotosTool: Tool {
         await PhoneTool.run(authorizer, broker: broker, usage: usage, parse: { try parse(arguments) }) { call in
             switch call {
             case .albums:
-                let albums = try await library.albums()
+                let albums = try await library.albums(limit: Self.albumsShown)
                 var lines = albums.prefix(Self.albumsShown).map { album in
                     PhoneTool.line([album.id, album.title, "\(album.count) item\(album.count == 1 ? "" : "s")"])
                 }
-                if albums.count > Self.albumsShown { lines.append("… and \(albums.count - Self.albumsShown) more albums") }
+                if albums.count > Self.albumsShown { lines.append("… and more albums") }
                 return .ok(await limitedNote() + PhoneTool.lines(lines, none: "no albums"))
             case let .search(query):
                 let found = try await library.search(query)
@@ -148,7 +149,8 @@ struct PhotosTool: Tool {
     private func export(_ id: String) async throws -> ToolReply {
         let file = try Self.fileName(for: id)
         guard let found = try await library.still(id: id, longSide: Self.longSide) else {
-            throw ToolFailure("no photo with the id \(id)")
+            let limited = await library.limited() ? " among the photos the person chose for Topo; access is limited to those" : ""
+            throw ToolFailure("no photo with the id \(id)\(limited)")
         }
         try Task.checkCancellation()
         let path = "\(Self.guestHome)/\(Self.folder)/\(file)"
@@ -255,14 +257,20 @@ final class PhotoKitLibrary: PhotoLibrary, Sendable {
         PHPhotoLibrary.authorizationStatus(for: .readWrite) == .limited
     }
 
-    func albums() async throws -> [PhotoAlbum] {
+    /// The most collections of one type that are looked at for a list of albums.
+    static let collectionsRead = 300
+
+    func albums(limit: Int) async throws -> [PhotoAlbum] {
         try await confined.run { _, cancellation in
             var albums: [PhotoAlbum] = []
             for type in [PHAssetCollectionType.smartAlbum, .album] {
-                let collections = PHAssetCollection.fetchAssetCollections(with: type, subtype: .any, options: nil)
-                for index in 0..<collections.count {
+                let options = PHFetchOptions()
+                options.fetchLimit = Self.collectionsRead
+                let collections = PHAssetCollection.fetchAssetCollections(with: type, subtype: .any, options: options)
+                for index in 0..<collections.count where albums.count <= limit {
                     try cancellation.check()
                     let collection = collections.object(at: index)
+                    // A count of the album's photos, which reads none of them.
                     let count = PHAsset.fetchAssets(in: collection, options: nil).count
                     // The system's own albums are all listed by PhotoKit, most of them empty.
                     if type == .smartAlbum, count == 0 { continue }
@@ -320,10 +328,13 @@ final class PhotoKitLibrary: PhotoLibrary, Sendable {
                     let started = PHImageManager.default().requestImage(
                         for: asset, targetSize: CGSize(width: side, height: side), contentMode: .aspectFit, options: options
                     ) { image, _ in
-                        guard let image, let jpeg = Self.jpeg(image, longSide: longSide) else {
-                            return request.finish(.failure(ToolFailure("the photo could not be read from the library")))
+                        // PhotoKit answers on the main thread; the picture is encoded off it.
+                        self.confined.async { _ in
+                            guard let image, let jpeg = Self.jpeg(image, longSide: longSide) else {
+                                return request.finish(.failure(ToolFailure("the photo could not be read from the library")))
+                            }
+                            request.finish(.success((record, jpeg)))
                         }
-                        request.finish(.success((record, jpeg)))
                     }
                     request.started(started)
                 }

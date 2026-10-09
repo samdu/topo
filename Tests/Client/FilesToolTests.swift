@@ -1,6 +1,7 @@
 import Foundation
 import TopoTools
 import XCTest
+import TopoUserland
 
 @testable import Topo
 
@@ -24,8 +25,10 @@ private final class Drop: VaultDrop, @unchecked Sendable {
     }
 
     let dropped = LockedBox<[Dropped]>([])
+    let deadlines = LockedBox<[Date]>([])
     var outcome = VaultDropOutcome.placed
-    func drop(_ data: Data, named name: String, into folder: String) async throws -> VaultDropOutcome {
+    func drop(_ data: Data, named name: String, into folder: String, by deadline: Date) async throws -> VaultDropOutcome {
+        deadlines.with { $0.append(deadline) }
         dropped.with { $0.append(Dropped(data: data, name: name, folder: folder)) }
         return outcome
     }
@@ -165,17 +168,30 @@ final class FilesToolTests: XCTestCase {
         XCTAssertEqual(FilesTool.fileName("..."), "file")
         XCTAssertEqual(FilesTool.fileName(""), "file")
         let long = FilesTool.fileName(String(repeating: "x", count: 400) + ".pdf")
-        XCTAssertEqual(long, String(repeating: "x", count: 100) + ".pdf")
+        XCTAssertEqual(long, String(repeating: "x", count: 196) + ".pdf")
+        // A name is cut by its bytes, which is what a filesystem counts, and keeps one ending.
+        let wide = FilesTool.fileName(String(repeating: "字", count: 70) + ".pdf")
+        XCTAssertEqual(wide, String(repeating: "字", count: 65) + ".pdf")
+        XCTAssertLessThanOrEqual(FilesTool.fileName(String(repeating: "👨‍👩‍👧", count: 120)).utf8.count, FilesTool.nameBytes)
         XCTAssertEqual(FilesTool.folder("notes//papers/"), "notes/papers")
         XCTAssertNil(FilesTool.folder("/notes"))
         XCTAssertNil(FilesTool.folder(".."))
     }
 
-    /// The program the guest runs to carry a pick in names its scratch so the mirror reads none of
-    /// it, and gives the file its name only where nothing has one.
-    func testTheDropsScriptNamesAHiddenScratchAndNeverWritesOver() {
-        XCTAssertTrue(GuestVaultDrop.script.contains(#"tmp="$dir/.topo-pick-$$""#))
-        XCTAssertTrue(GuestVaultDrop.script.contains(#"mv -n -- "$tmp" "$dst""#))
-        XCTAssertFalse(GuestVaultDrop.script.contains("cp -f"))
+    /// A pick is given its name in the memory only while one wait of the vault's still ends inside
+    /// the tool service's bound, and one that is too late for that is said to be, with nothing kept.
+    func testAPickIsPlacedOnlyInsideTheServicesBound() async throws {
+        let file = scratch.appendingPathComponent("late.bin")
+        try Data([0xff, 0xfe, 0x00]).write(to: file)
+        let drop = Drop()
+        drop.outcome = .late
+        let began = Date()
+        let reply = await FilesTool(picker: Picker { .picked(file) }, drop: drop).run(["pick"])
+        XCTAssertEqual(reply.status, ToolReply.failed)
+        XCTAssertTrue(reply.text.contains("too late in the call"), reply.text)
+        let deadline = try XCTUnwrap(drop.deadlines.with { $0.first })
+        XCTAssertLessThanOrEqual(deadline.timeIntervalSince(began) + Double(Guest.vaultWait / .seconds(1)), 90 - 4,
+                                 "a placement that waits its whole bound would end after the service answered")
+        XCTAssertGreaterThan(deadline.timeIntervalSince(began), Double(DocumentPicker.bound / .seconds(1)))
     }
 }
