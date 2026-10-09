@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Chooses which of the PR check's three macOS suite jobs — `topo_unit`, `topo_ui` and `others` —
-# a change needs, from the paths it touches. A job left out is skipped by its `if:` and the gate
-# reads that skip as a pass only because this said `false` for it.
+# Chooses which of the PR check's three Mac suites — `topo_unit`, `topo_ui` and `others`
+# (scripts/mac-suite.sh) — a change needs, from the paths it touches. A suite left out is not run
+# by scripts/validate-and-push.sh, and the `test` job asks for no status for it only because
+# this said `false` for it.
 #
 #   SUITE_RULES="$rules" scripts/ci-select-suites.sh --git HEAD^1 HEAD
 #   git diff --name-only HEAD^1 HEAD | SUITE_RULES="$rules" scripts/ci-select-suites.sh
@@ -12,7 +13,7 @@
 # unknown, which selects every suite and says why. Without it, the paths come on stdin.
 #
 # SUITE_RULES is the rule list, one rule per line: a bash glob (`*` crosses `/`) and then the
-# suites a path matching it needs — job names, `all` or `none`. Blank lines and lines starting
+# suites a path matching it needs — suite names, `all` or `none`. Blank lines and lines starting
 # with `#` are ignored. A path takes the first rule it matches, and a path no rule matches needs
 # every suite, so a new directory runs everything until a rule says otherwise. The list lives in
 # .github/workflows/pr-validate.yaml, on the step that calls this, and
