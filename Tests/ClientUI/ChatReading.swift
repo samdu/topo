@@ -20,6 +20,10 @@ enum ChatReading {
         var opened: [String]?
         /// Whether the guest's home is mounted in this launch.
         var guestHome: Bool?
+        /// The model the bar's menu last set, by its alias, and the model a request carries for
+        /// it, which in a debug build is the pin.
+        var model: String?
+        var effectiveModel: String?
     }
 
     struct Topo: Decodable, CustomStringConvertible {
@@ -200,26 +204,52 @@ enum ChatReading {
         return poll(app, timeout: timeout, seen: &seen, wanted)
     }
 
-    /// Raises the keyboard with the flank that raises it, a simulator's late account alert taking
-    /// the first tap at most twice.
+    /// The field in the glass. A vertically growing `TextField` is a text view to XCUITest, and a
+    /// one-line one is a text field, so both are asked for by the label the pane gives it. It is
+    /// one view in both of the pane's forms, and the system's text view stays in the accessibility
+    /// tree whatever is drawn of it, so it exists at rest too: `fieldShown` says whether the pane
+    /// is the row it is drawn in.
+    static func field(_ app: XCUIApplication) -> XCUIElement {
+        app.descendants(matching: .any).matching(NSPredicate(format: "label == 'What to say'")).firstMatch
+    }
+
+    /// Whether the pane is the row the field is drawn in: the send beside it is there, and the
+    /// way to the keyboard, which the row has no place for, is not.
+    static func fieldShown(_ app: XCUIApplication) -> Bool {
+        field(app).exists && app.buttons["Send"].exists && !app.buttons["Type instead"].exists
+    }
+
+    /// Raises the keyboard with the mark on the resting pane that raises it, a simulator's late
+    /// account alert taking the first tap at most twice.
     static func raiseKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let flank = app.buttons["Type instead"]
-        XCTAssertTrue(flank.waitForExistence(timeout: 10), "the keyboard flank", file: file, line: line)
+        let mark = app.buttons["Type instead"]
+        XCTAssertTrue(mark.waitForExistence(timeout: 10), "the way to the keyboard", file: file, line: line)
         for _ in 0..<3 where !app.keyboards.element.exists {
-            flank.tap()
+            mark.tap()
             if app.keyboards.element.waitForExistence(timeout: 5) { break }
             dismissAccountAlert()
         }
-        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the flank raised no keyboard", file: file, line: line)
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: 10), "the mark raised no keyboard", file: file, line: line)
     }
 
+    /// A point in the transcript's own empty space: in the margin beside the turns, which no turn
+    /// of any transcript is drawn in, a little under the navigation bar.
+    static func emptySpace(_ app: XCUIApplication) -> XCUICoordinate {
+        app.windows.firstMatch.coordinate(withNormalizedOffset: .zero).withOffset(CGVector(dx: 5, dy: 180))
+    }
+
+    /// Lowers the keyboard as a person does, with a tap on the transcript's empty space.
     static func lowerKeyboard(_ app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
-        let flank = app.buttons["Hide the keyboard"]
-        XCTAssertTrue(flank.waitForExistence(timeout: 10), "the flank that lowers the keyboard", file: file, line: line)
-        flank.tap()
-        let deadline = Date().addingTimeInterval(10)
+        XCTAssertTrue(app.keyboards.element.exists, "no keyboard to lower", file: file, line: line)
+        emptySpace(app).tap()
+        XCTAssertTrue(keyboardGone(app), "the keyboard did not go", file: file, line: line)
+    }
+
+    /// Waits, bounded, for the keyboard to be off the screen.
+    static func keyboardGone(_ app: XCUIApplication, timeout: TimeInterval = 10) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
         while app.keyboards.element.exists, Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.2)) }
-        XCTAssertFalse(app.keyboards.element.exists, "the keyboard did not go", file: file, line: line)
+        return !app.keyboards.element.exists
     }
 
     static func attach(_ app: XCUIApplication, _ name: String, to test: XCTestCase) {

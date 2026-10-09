@@ -121,6 +121,30 @@ read_outputs() {
   exec 3<&-
 }
 
+# No verdict is never a pass: with the reviewer job anything but success, review_gate is red
+# whatever reviewer_ran concluded, since it is the check branch protection reads. A passing
+# verdict the job uploaded before it failed opens nothing either.
+no_verdict() {
+  local codex precheck uploaded has file
+  for codex in failure cancelled skipped ""; do
+    for precheck in failure success skipped; do
+      for uploaded in none passing; do
+        has="" file="$work/absent.json"
+        [ "$uploaded" = none ] || { has=true; file="$work/passing-scoped.json"; }
+        if PRECHECK_RESULT="$precheck" CODEX_RESULT="$codex" HAS_VERDICT="$has" VERDICT_FILE="$file" CAPPED=false \
+             GITHUB_OUTPUT="$work/no-verdict.gate-output" bash "$work/gate.sh" > "$work/no-verdict.gate.log" 2>&1; then
+          fail "no verdict (codex ${codex:-empty}, reviewer_ran $precheck, uploaded $uploaded): the gate passed"
+        elif ! grep -q '^state=block$' "$work/no-verdict.gate-output"; then
+          fail "no verdict (codex ${codex:-empty}, reviewer_ran $precheck, uploaded $uploaded): the gate did not record block"
+        else
+          echo "ok   no verdict (codex ${codex:-empty}, reviewer_ran $precheck, uploaded $uploaded) holds the gate red"
+        fi
+        : > "$work/no-verdict.gate-output"
+      done
+    done
+  done
+}
+
 # gate <case> <has_verdict> <verdict file> <expected: pass|block> [summary] — runs the gate
 # snippet as review_gate does after a successful reviewer job, leaving its state in $gate_state,
 # and holds the recorded summary to the fifth argument when one is given.
@@ -231,6 +255,7 @@ gate no-file true "$work/absent/verdict.json" block
 gate empty-file true "$work/empty.json" block
 # has_verdict false: the gate downloads nothing and fails closed, as an empty output does.
 gate no-flag false "$work/blocking/verdict.json" block
+no_verdict
 # The review cap: no verdict, and the gate holds the merge with the cap as its reason rather than
 # passing or reading as a missing verdict. A passing verdict beside it does not open the gate.
 CAPPED=true gate review-cap false "$work/absent/verdict.json" block \

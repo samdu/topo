@@ -32,4 +32,4 @@ An iCloud Drive home has files whose bytes are not on the phone, so each pass as
 
 Sign-out drops the bookmark and takes away the folder in this app's container; a vault the person keeps in their own iCloud Drive is theirs and is left where it is.
 
-The chat shows one card above the composer offering the move, once, when the vault holds more than a handful and the home is still local; Not now is for good, in defaults.
+The chat shows one card above the composer offering the move, once, when the vault holds more than a handful and the home is still local, and only while the keyboard is down (`ChatColumn`); Not now is for good, in defaults.

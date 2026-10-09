@@ -12,7 +12,7 @@ enum LookFixture {
     /// three fields of the look and not one, since the badge's slab and the composer's open one
     /// are stones of their own. It is the count the reader answers with, so a compound — a
     /// shadow, a size, a font — is one.
-    static let fields = 219
+    static let fields = 216
 
     static let full = """
     {
@@ -26,6 +26,7 @@ enum LookFixture {
         "bodyFont": { "style": "largeTitle", "weight": "black" },
         "labelFont": { "style": "title", "weight": "light" },
         "noticeFont": { "size": 14, "weight": "heavy" },
+        "noticeLeastScale": 0.9,
         "text": ["#101010", "#F0F0F0"],
         "caption": ["#202020", "#E0E0E0"],
         "trouble": ["#303030", "#D0D0D0"]
@@ -111,6 +112,8 @@ enum LookFixture {
         "minimumWidth": 90,
         "spacing": 17,
         "slot": 48,
+        "maximumLines": 3,
+        "sendSymbol": "arrow.up",
         "sendFont": { "style": "footnote", "weight": "thin" },
         "sendInk": ["#AA00AA", "#00AAAA"],
         "sendRestingOpacity": 0.8
@@ -131,11 +134,14 @@ enum LookFixture {
       "settings": { "tint": ["#336699", "#99CCFF"], "codeFont": { "style": "largeTitle", "weight": "black" } },
       "composer": {
         "widthFraction": 0.55,
+        "typingWidthFraction": 0.7,
         "bottomPadding": 22,
         "horizontalInset": 30,
         "verticalInset": 14,
         "cornerRadius": 10,
         "spacing": 6,
+        "jewelInset": 41,
+        "perchInset": 63,
         "surface": "flat",
         "tint": ["#B3002D", "#FF6680"],
         "tintOpacity": 0.95,
@@ -154,25 +160,12 @@ enum LookFixture {
           "etchLight": { "color": "#AABBCCDD", "radius": 3, "x": 1, "y": 2 },
           "etchShade": { "color": "#DDCCBBAA", "radius": 2, "x": -1, "y": -3 },
           "heldOpacity": 0.85,
+          "slot": 31,
+          "more": "plus.circle",
           "keyboard": "pencil",
-          "keyboardDown": "pencil.slash",
           "speaking": "bell",
           "muted": "bell.slash",
-          "models": "gearshape",
-          "modelsOpen": "xmark"
-        },
-        "models": {
-          "inset": 52,
-          "height": 61,
-          "spacing": 9,
-          "topInset": 7,
-          "track": 5,
-          "stop": 11,
-          "knob": 27,
-          "restOpacity": 0.6,
-          "restLabelOpacity": 0.9,
-          "labelFont": { "style": "footnote", "weight": "light" },
-          "labelSpacing": 13
+          "models": "gearshape"
         },
         "well": {
           "size": 96,
@@ -195,7 +188,6 @@ enum LookFixture {
         "scale": 2,
         "clearance": 12,
         "roamSpeed": 60,
-        "swimSpeed": 310,
         "roamSettle": 1.5,
         "hurry": 4,
         "frameInterval": 0.05,
@@ -213,7 +205,8 @@ enum LookFixture {
           "hairline": 0.25
         }
       },
-      "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" }
+      "mind": { "sonnet": "Small", "opus": "Medium", "fable": "Large" },
+      "bar": { "font": { "style": "caption", "weight": "heavy" }, "ink": ["#102030", "#D0E0F0"], "spacing": 3 }
     }
     """
 

@@ -48,6 +48,32 @@ final class NextTurnTests: XCTestCase {
         XCTAssertEqual(turns, ["call Helen"], "the log took a second turn")
     }
 
+    /// A press over a turn on its way is a spoken turn, and until its release sends something
+    /// the row is still that turn's: what is heard meanwhile is not written over it, and a
+    /// release that heard nothing does not blank it. A free row takes the caption and gives it
+    /// up again.
+    func testACaptionAndASilentReleaseLeaveATurnOnItsWayInTheRow() async throws {
+        let db = InMemoryRecordDatabase()
+        let offline = harness(db, defaults: makeDefaults(), transport: ScriptedTransport(), ensureZone: { throw Unexpected() })
+        await offline.refresh()
+        let row = NextTurn()
+        XCTAssertTrue(row.caption("call"))
+        XCTAssertEqual(row.text, "call")
+        row.endCaption()
+        XCTAssertEqual(row.text, "", "a silent release left its caption in a free row")
+
+        row.text = "call Helen"
+        row.send(via: offline)
+        XCTAssertTrue(row.sending(in: offline))
+        XCTAssertFalse(row.caption("and"), "a caption was written over a turn on its way")
+        XCTAssertEqual(row.text, "call Helen")
+        row.endCaption()
+        XCTAssertEqual(row.text, "call Helen", "a release that heard nothing blanked the turn on its way")
+        XCTAssertNil(row.send(heard: "  ", via: offline), "nothing heard was sent")
+        XCTAssertEqual(row.text, "call Helen")
+        XCTAssertEqual(offline.waiting, ["call Helen"])
+    }
+
     /// The same offer with nothing on its way is the whole point of Edit, so the refusal above
     /// has to be the turn in flight and not the offer being gone.
     func testALandedTurnsWordsComeBackIntoAFreeRow() async throws {

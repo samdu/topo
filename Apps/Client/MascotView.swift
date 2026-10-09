@@ -452,12 +452,13 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     private func glassStage(_ roam: MascotRoam) -> (UIView, CGRect)? {
         guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
               let view = glass?.view, view.window != nil, view.window === window,
-              let rect = MascotPerch.glassStage(field, size: roam.settings.size) else { return nil }
+              let rect = MascotPerch.glassStage(field, size: roam.settings.size, inset: roam.settings.perch,
+                                                reach: roam.settings.reach) else { return nil }
         return (view, rect)
     }
 
     /// What he is drawn inside with no glass stage to stand in: on the glass, standing there and
-    /// not in a finger, the trailing flank, so no pose is drawn over the microphone; the whole canvas
+    /// not in a finger, what is above the pane, so no pose is drawn on it; the whole canvas
     /// otherwise.
     private func clip(_ roam: MascotRoam) -> CGRect? {
         guard case .glass = roam.roost, !roam.walking, !roam.dragging, let field = roam.field,
@@ -466,7 +467,7 @@ final class MascotCanvas: UIView, UIGestureRecognizerDelegate {
     }
 
     /// Where the picture is drawn, in the canvas, as the layers have it: the whole picture, less
-    /// what every clipping layer it is inside cuts off — on the glass, the flank.
+    /// what every clipping layer it is inside cuts off — on the glass, what is on the pane.
     var shownFrame: CGRect {
         var shown = drawnFrame
         var parent = sprite.superlayer
@@ -805,7 +806,7 @@ final class MascotGlassPort {
 }
 
 /// The stage he stands in on the glass: a view SwiftUI frames at `MascotPerch.glassStage` from the
-/// pane's own anchor, inside a clip of the flank, so both are animated in the same transaction as
+/// pane's own anchor, inside a clip of what is above the pane, so both are animated in the same transaction as
 /// the pane — the keyboard's — and he, filling it, with them.
 struct MascotGlassStage: UIViewRepresentable {
     let port: MascotGlassPort
@@ -867,8 +868,7 @@ extension MascotScene.Value {
         }
         return MascotField(visible: proxy[visible], obstacles: obstacles.flatMap { proxy[$0] },
                            pane: pane.map { proxy[$0] }, well: well.map { proxy[$0] }, keyboard: keyboard,
-                           beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) },
-                           stop: stop.map { proxy[$0] })
+                           beside: beside.map { MascotField.Beside(frame: proxy[$0.frame], serial: $0.serial) })
     }
 }
 
@@ -877,7 +877,7 @@ extension MascotScene.Value {
 struct MascotLayer: View {
     let state: MascotState
     let scene: MascotScene.Value
-    /// How opaque he is drawn: the microphone's hold fades him with the glass's flanks.
+    /// How opaque he is drawn: the microphone's hold fades him with what is beside it on the glass.
     var opacity = 1.0
     /// A sheet is over the chat.
     var covered = false
@@ -927,9 +927,7 @@ struct MascotLayer: View {
     var body: some View {
         GeometryReader { proxy in
             let field = scene.field(in: proxy, keyboardTop: keyboardTop)
-            // Over the model slider while it is open, whatever the look's placement.
-            let settings = MascotPerch.sliding(MascotRoam.Settings(look.mascot, reduceMotion: reduceMotion),
-                                               over: field, swim: look.mascot.swimSpeed)
+            let settings = MascotRoam.Settings(look.mascot, perch: look.composer.perchInset, reduceMotion: reduceMotion)
             ZStack(alignment: .topLeading) {
                 MascotOverChat(input: state.input, field: field, settings: settings,
                                interval: look.mascot.frameInterval, ready: ready,
@@ -946,9 +944,10 @@ struct MascotLayer: View {
                 // On the glass, the stage is framed from the pane as laid out now, so SwiftUI
                 // draws it wherever it draws the pane, in the same transaction.
                 if settings.placement == .glass, let field,
-                   let stage = MascotPerch.glassStage(field, size: settings.size),
+                   let stage = MascotPerch.glassStage(field, size: settings.size, inset: settings.perch,
+                                                      reach: settings.reach),
                    let slot = MascotPerch.glassSlot(field) {
-                    // The flank clips from the top of his picture to the pane's foot.
+                    // Clipped from the top of his picture to the pane's top edge.
                     let clip = CGRect(x: slot.minX, y: min(stage.minY, slot.maxY), width: slot.width,
                                       height: max(slot.maxY - stage.minY, 0))
                     ZStack(alignment: .topLeading) {

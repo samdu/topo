@@ -5,7 +5,7 @@ import Foundation
 /// newer model is a newer Claude Code (the guest's pin, `scripts/model-manifest.sh`) and no change
 /// here. Sonnet is the default; the others are a setting. Haiku is not offered — it is what `pinned`
 /// forces a debug build onto, so it is a case without being a choice, named by its dated id because
-/// that is what the proxy writes at the wire (`APIProxy.pinnedModel`), and `allCases` (the model slider)
+/// that is what the proxy writes at the wire (`APIProxy.pinnedModel`), and `allCases` (the model menu)
 /// is written out rather than synthesised to keep it that way.
 public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     case sonnet
@@ -35,7 +35,7 @@ public enum ClaudeModel: String, CaseIterable, Sendable, Codable, Identifiable {
     /// `swift test` all are, and such a build is signed into a real Claude subscription — Sam's,
     /// through the seeded setup token — so a stray turn spends his account. Pinning the cheapest
     /// model makes the cost of an accidental turn a rounding error rather than a judgement call.
-    /// Only a release build lets the slider choose.
+    /// Only a release build lets the menu choose.
     public static let pinned: ClaudeModel? = {
         #if DEBUG
         .haiku

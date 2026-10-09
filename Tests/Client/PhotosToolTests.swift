@@ -333,9 +333,9 @@ final class PhotosToolTests: XCTestCase {
     func testPhotoKitTakesTheToolsCalls() async throws {
         // A grant reads as not determined until the library is asked, and asking answers at once
         // with no prompt; with no grant the prompt stays up, so the ask is bounded. simctl's own
-        // grant is leave to add only on iOS 26: the PR check marks it full access (pr-validate.yaml).
+        // grant is leave to add only on iOS 26: the suite marks it full access (scripts/mac-suite.sh).
         let status = await PhoneTool.within(.seconds(5)) { await PHPhotoLibrary.requestAuthorization(for: .readWrite) }
-        XCTAssertEqual(status, .authorized, "the simulator has not given Topo full access to its photos, as pr-validate.yaml does")
+        XCTAssertEqual(status, .authorized, "the simulator has not given Topo full access to its photos, as scripts/mac-suite.sh does")
         guard status == .authorized else { return }
         let home = home!
         let format = UIGraphicsImageRendererFormat()

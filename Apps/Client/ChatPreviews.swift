@@ -176,15 +176,18 @@ struct ChatCanvas: View {
     /// scrolled transcript a problem rather than a detail — see `PreviewTurns.fitting`.
     var notice: String?
     var mic: Composer.MicState = .init()
-    /// What the row at the end of the transcript is doing.
+    /// What the person's next turn is doing, and so which form the pane is in.
     var row: Row = .hidden
     /// Topo over the chat, standing where the fixtures leave him room; nil for none.
     var mascot: MascotState?
-    /// The model slider on the glass; nil for a glass with no model control.
-    var models: Composer.Models?
+    /// The models the bar's menu offers and the one chosen; none for a bar with no controls.
+    var models: [ChatBar.Model] = []
+    var chosen = ""
     var readsAloud = true
 
-    enum Row: String, CaseIterable { case hidden, writing, inFlight }
+    /// Nothing; a caption with the keyboard down, in the row at the end of the transcript; the
+    /// same words in the glass's field, the pane a row; and a turn on its way.
+    enum Row: String, CaseIterable { case hidden, writing, typing, inFlight }
 
     var body: some View {
         NavigationStack {
@@ -195,6 +198,11 @@ struct ChatCanvas: View {
                 .navigationTitle("")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
+                    if !models.isEmpty {
+                        ToolbarItem(placement: .topBarLeading) {
+                            ChatBar(models: models, chosen: chosen, readsAloud: readsAloud)
+                        }
+                    }
                     // The same bar the chat puts the badge in: from iOS 26 on it puts none of
                     // its own glass behind the jewel, which is the whole of the control.
                     if #available(iOS 26, *) {
@@ -204,7 +212,7 @@ struct ChatCanvas: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    Composer(typing: .constant(false), mic: mic, readsAloud: readsAloud, models: models)
+                    Composer(draft: draft, mic: mic)
                 }
                 .mascotRoams(mascot)
         }
@@ -214,14 +222,12 @@ struct ChatCanvas: View {
         ToolbarItem(placement: .topBarTrailing) { TopoBadge() }
     }
 
-    /// The row is drawn from what it is handed, so a state of it is a value here rather than a
-    /// screen something has to type into. The keyboard is never asked for: a row with words in it
-    /// is shown whether or not anything is focused, which is what a caption from the microphone
-    /// looks like.
-    private var draft: Draft? {
-        guard row != .hidden else { return nil }
-        return Draft(text: .constant("Remind me to pick up Daphne's food on the way home"),
-                     typing: .constant(false), sending: row == .inFlight, edit: {})
+    /// The draft is drawn from what it is handed, so a state of it is a value here rather than
+    /// a screen something has to type into. The keyboard is never asked for: nothing is focused
+    /// on a canvas, and which place draws the words is the form the draft says the pane is in.
+    private var draft: Draft {
+        Draft(text: .constant(row == .hidden ? "" : "Remind me to pick up Daphne's food on the way home"),
+              typing: .constant(false), sending: row == .inFlight, row: row == .typing, edit: {})
     }
 }
 #endif

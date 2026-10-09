@@ -210,6 +210,7 @@ public enum GuestTools {
     - Dates are ISO 8601 in the phone's time zone: 2026-09-27, 2026-09-27T14:30. Work out the date yourself from what the person said.
     - An option's value never starts with `--`; write one that does as `--notes=--like-this`.
     - Nothing here deletes anything. `topo reminders done` is the one change to something that already exists.
+    - `topo reminders` lists what has a due date, soonest first, and counts the rest; `topo reminders --all` lists every one, and `--list NAME` one list whole.
     - `topo photos search` finds photos by album, date and kind, never by what they show: to see one, `topo photos export ID` and read the file it names as an image. `topo photos save PATH` adds a picture you made to the person's library.
     - `topo files pick` puts the phone's file picker in front of the person, so say what you are asking for first; the file they choose lands in `memory/inbox`.
     - `topo home` lists the home with every accessory's id; `topo home get ID` says what each of its characteristics takes before you `topo home set` one. Set only what the person asked for, one accessory at a time.
