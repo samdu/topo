@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import TopoAuth
 import TopoCore
 import TopoProxy
@@ -337,12 +338,35 @@ struct ResidentConversation: GuestConversation {
 }
 
 extension GuestResident {
-    /// Where the session's and the proxy's lines go: printed in a debug build, where a simulator
-    /// run reads them, and nowhere in a release one.
+    /// Where the session's, the proxy's and the tool service's lines go, and each way out's
+    /// outcome: the unified log, under the category `topo log --category resident` reads, the
+    /// proxy's starting `proxy:` and the tool service's `tools:`, and printed in a debug build,
+    /// where a simulator run reads them.
     nonisolated static let log: @Sendable (String) -> Void = { line in
+        let line = redacted(line)
+        Logger(subsystem: "zone.hexagon.topo", category: "resident").info("\(line, privacy: .public)")
         #if DEBUG
         DebugRun.say("guest: \(line)")
         #endif
+    }
+
+    /// `text` with every credential a line of the guest's could hold hidden: an `sk-ant-` key, a `Bearer`
+    /// value, the guest's token variable and the tool service's, a GitHub token and a 1Password
+    /// service-account token. Every line the resident logs goes
+    /// through this, since `topo log` answers what the app logged.
+    nonisolated static func redacted(_ text: String) -> String {
+        var shown = text
+        for (pattern, replacement) in [
+            (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
+            (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
+            (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
+            (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
+            (#"\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"#, "$1[redacted]"),
+            (#"\bops_[A-Za-z0-9_\-.=]+"#, "ops_[redacted]"),
+        ] {
+            shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+        }
+        return shown
     }
 }
 
@@ -464,24 +488,9 @@ extension DebugRun {
         return "tool result: \(tool): \(isError ? "error" : "ok"): \(shown)"
     }
 
-    /// `text` with every credential a debug run could print hidden: an `sk-ant-` key, a `Bearer`
-    /// value, the guest's token variable and the tool service's, a GitHub token and a 1Password
-    /// service-account token. Everything the guest writes goes
-    /// through this before it is printed.
-    static func redacted(_ text: String) -> String {
-        var shown = text
-        for (pattern, replacement) in [
-            (#"sk-ant-[A-Za-z0-9_\-]+"#, "sk-ant-[redacted]"),
-            (#"(?i)bearer\s+\S+"#, "Bearer [redacted]"),
-            (#"(CLAUDE_CODE_OAUTH_TOKEN=)\S+"#, "$1[redacted]"),
-            (#"(\#(ToolService.tokenVariable)=)\S+"#, "$1[redacted]"),
-            (#"\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]+"#, "$1[redacted]"),
-            (#"\bops_[A-Za-z0-9_\-.=]+"#, "ops_[redacted]"),
-        ] {
-            shown = shown.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
-        }
-        return shown
-    }
+    /// `GuestResident.redacted`, which everything the guest writes goes through before it is
+    /// printed.
+    static func redacted(_ text: String) -> String { GuestResident.redacted(text) }
 
     /// Waits until the app is in the foreground and the resident process is up.
     @MainActor
