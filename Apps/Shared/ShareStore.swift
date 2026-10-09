@@ -86,8 +86,11 @@ enum ShareRefusal: Error, Equatable {
 ///   (it does where the guest lives). The extension keeps nothing without it;
 /// - `<nonce>/.share.json`, one share's record, and beside it the image or file it names, which
 ///   is never hidden and so never the record's name;
-/// - `.<name>/`, a share being written or an attachment being read, which no reader lists;
-/// - `_lock`, held (`flock`) by whichever process is keeping a share or shutting the door.
+/// - `.<name>/`, a share being written or an attachment being read, which no reader lists.
+///
+/// Beside the folder is `Shares.lock`, held (`flock`) by whichever process is keeping a share or
+/// shutting the door. It is outside the folder because a sign-out removes the folder: a lock
+/// inside it would be a new file, and so a second lock, to whoever came next.
 ///
 /// A share is written whole under a hidden name and renamed to its nonce, so the app never reads
 /// half of one. The door is read, the shares counted and the share renamed in under the lock, and
@@ -144,11 +147,10 @@ struct ShareStore: Sendable {
         try? FileManager.default.removeItem(at: folder)
     }
 
-    private var lockPath: String { folder.appendingPathComponent("_lock").path }
+    private var lockPath: String { folder.path + ".lock" }
 
-    /// Takes the folder's lock, waiting for whichever process holds it; nil where there is no
-    /// folder, which is signed out. A lock taken on a folder a sign-out then removed is on a file
-    /// no longer there, and whoever took it finds no door.
+    /// Takes the folder's lock, waiting for whichever process holds it; nil where it cannot be
+    /// taken.
     private func lock() -> Int32? {
         let descriptor = Darwin.open(lockPath, O_CREAT | O_RDWR | O_CLOEXEC, 0o600)
         guard descriptor >= 0 else { return nil }
@@ -187,7 +189,7 @@ struct ShareStore: Sendable {
     /// The whole of it is done holding the folder's lock. Refused, with nothing kept, when signed out, when it is an image or a file and this is not
     /// the guest's phone, when it is over a limit, or when `held` shares are waiting.
     func keep(_ share: Share, attachment: URL? = nil) throws(ShareRefusal) {
-        guard let lock = lock() else { throw .signedOut }
+        guard let lock = lock() else { throw .failed }
         defer { unlock(lock) }
         guard let door = door(), door.login == share.login else { throw .signedOut }
         guard share.note.count <= Share.noteLimit, (share.text?.utf8.count ?? 0) <= Share.textLimit else { throw .tooLong }
