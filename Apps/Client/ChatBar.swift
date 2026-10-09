@@ -1,8 +1,8 @@
 #if os(iOS)
 import SwiftUI
 
-/// The chat's controls in its navigation bar: the model, a control that opens the model slider
-/// across the middle of the bar and shuts it again, and the mute. They are the bar's and not the
+/// The chat's controls in its navigation bar: the mute, and the model, a control that opens the
+/// model slider on a glass under the bar and shuts it again. They are the bar's and not the
 /// glass's, so they are drawn plainly in `Look.Bar` and are there whatever the pane under the
 /// transcript is doing, and each is an item of the bar's own, standing apart from the other.
 enum ChatBar {
@@ -74,6 +74,38 @@ enum ChatBar {
         func frame(of index: Int, in slider: CGRect, least: CGFloat) -> CGRect {
             let column = column(least: least)
             return CGRect(x: slider.minX + x(of: index) - column / 2, y: slider.minY, width: column, height: slider.height)
+        }
+    }
+
+    /// The model slider on its glass, which comes down from under the bar's leading edge, where
+    /// its control is, over the top of what the bar is over.
+    struct Drop: View {
+        var models: [Model]
+        var chosen: String
+        var choose: (String) -> Void = { _ in }
+        /// The chosen stop's column in the global space, down to the foot of the glass.
+        var stop: (CGRect) -> Void = { _ in }
+        @Environment(\.look) private var look
+        /// From the screen's side to the glass, which is where the bar puts its first item.
+        static let margin: CGFloat = 16
+
+        var body: some View {
+            let slider = look.bar.slider
+            Slider(models: models, chosen: chosen, choose: choose,
+                   stop: { stop($0.inset(by: UIEdgeInsets(top: 0, left: 0, bottom: -slider.padding, right: 0))) })
+                .padding(slider.padding)
+                .background {
+                    // The bar's own glass from iOS 26 on, which is a shape the system draws and
+                    // not a `Look` field, and a material before it.
+                    if #available(iOS 26, *) {
+                        Color.clear.glassEffect(.regular, in: Capsule())
+                    } else {
+                        Capsule().fill(.ultraThinMaterial)
+                    }
+                }
+                .padding(.top, slider.drop)
+                .padding(.horizontal, Self.margin)
+                .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
 
@@ -200,9 +232,8 @@ enum ChatBar {
                     if let frame { stop(frame) }
                 }
             }
-            // The look's width where the bar asks what it would take, which the bar does first,
-            // and as narrow as the bar then leaves it: nothing of it is drawn outside its own
-            // frame, whatever the look asks of what is inside.
+            // The look's width, and as narrow as the screen leaves it: nothing of it is drawn
+            // outside its own frame, whatever the look asks of what is inside.
             .frame(minWidth: 0, idealWidth: slider.width, maxWidth: slider.width)
             .frame(height: slider.height)
             .clipped()

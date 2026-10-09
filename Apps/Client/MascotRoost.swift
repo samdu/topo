@@ -198,9 +198,9 @@ struct MascotField: Equatable, Sendable, Codable {
     /// The code block the voice has reached, which he stands beside (`MascotRoost.beside`); nil
     /// while none is.
     var beside: Beside?
-    /// The model slider's chosen stop in the navigation bar, while he is called to it: he is put
-    /// under it, at the top of the transcript (`MascotPerch.under`). Above `visible`, since the
-    /// bar is.
+    /// The model slider's chosen stop, down to the foot of the glass it is on, while he is called
+    /// to it: he is put under it (`MascotPerch.under`). Over the top of `visible`, where the
+    /// glass comes down to from the bar.
     var stop: CGRect?
 
     /// A code block's frame, and the serial of the cue that reached it: a new serial is a new
@@ -706,19 +706,20 @@ enum MascotPerch {
         glass(field, size: size, inset: inset, reach: reach).map(MascotSprite.drawn(around:))
     }
 
-    /// His box under the model slider's chosen stop: at the top of the transcript, as near the
-    /// bar as his reach lets him, and his body's axis under the stop's middle, so the head he
-    /// wears is under the model that gives it him. Moved in only as far as keeps his reach
-    /// inside the transcript's width, so the screen's edge holds him at an end stop. Nil with no
-    /// stop, and where his reach does not fit the room between the bar and the pane or the
-    /// keyboard (`MascotField.room`): he is not called to where he would be drawn past the
-    /// screen's edge or onto the glass.
+    /// His box under the model slider's chosen stop: as near under the slider's glass as his
+    /// reach lets him, no higher than the top of the transcript, and his body's axis under the
+    /// stop's middle, so the head he wears is under the model that gives it him. Moved in only
+    /// as far as keeps his reach inside the transcript's width, so the screen's edge holds him at
+    /// an end stop. Nil with no stop, and where his reach does not fit the room between the
+    /// slider's glass and the pane or the keyboard (`MascotField.room`): he is not called to
+    /// where he would be drawn past the screen's edge, over the slider or onto the glass.
     static func under(_ field: MascotField, size: CGSize, reach: MascotSprite.Reach = .none) -> CGRect? {
         guard let stop = field.stop, size.width > 0, size.height > 0 else { return nil }
         let room = field.room(reach)
-        guard room.width >= size.width, room.height >= size.height else { return nil }
+        let top = max(room.minY, stop.maxY + max(reach.top, 0))
+        guard room.width >= size.width, room.maxY - top >= size.height else { return nil }
         return CGRect(x: inside(stop.midX - size.width / 2, from: room.minX, to: room.maxX - size.width),
-                      y: room.minY, width: size.width, height: size.height)
+                      y: top, width: size.width, height: size.height)
     }
 
     /// The settings he is placed by while the model slider calls him: pinned under its chosen

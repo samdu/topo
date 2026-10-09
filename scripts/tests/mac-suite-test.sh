@@ -69,6 +69,8 @@ esac'
 fake "$work/bin/xcodegen" 'case "$1" in --version) echo "Version: 2.46.0" ;; esac'
 fake "$work/bin/swift" '[ "${HOLD_AT-}" != swift ] || [ "$1" != test ] || { '"$hold"'; }; exit 0'
 fake "$work/bin/sw_vers" 'exit 0'
+# The simulator's own record of the photos grant: the row as the suite leaves it, or as simctl does.
+fake "$work/bin/sqlite3" 'case "$2" in select*) echo "${PHOTOS_GRANT:-2|2}" ;; esac'
 fake "$work/bin/nm" 'for s in ish_mem_refresh_hook ish_dns_sentinel_port topo_ish_set_dns_port; do echo "0 T _$s"; done'
 fake "$work/bin/xcrun" '
 case "$1 $2" in
@@ -120,6 +122,12 @@ UI_TEST=1 suite ui-red topo_ui others
 is "red UI run: exits 1" "$status" 1
 is "red UI run: topo_ui failed, others ran and passed" "$(results)" "topo_ui=failure others=success "
 is "red UI run: the lane is stopped" "$(calls 'ci-audio-lane.sh stop')" 1
+
+# A photos grant that is not full access would put a prompt up under the tests: no test runs.
+PHOTOS_GRANT="2|1" suite photos-grant topo_unit
+is "photos grant not full access: exits 1" "$status" 1
+is "photos grant not full access: topo_unit is a failure" "$(results)" "topo_unit=failure "
+is "photos grant not full access: no test ran" "$(calls 'xcodebuild test-without-building')" 0
 
 # A toolchain off its pin: no suite runs, and each one asked for is a failure.
 FAKE_XCODE=99.0 suite off-pin topo_unit others

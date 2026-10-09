@@ -197,16 +197,27 @@ suite_topo_unit() {
       -project Topo.xcodeproj -scheme Topo \
       -destination "platform=iOS Simulator,id=$udid" || return 1
 
-    # PhoneToolsTests runs the phone tools against the simulator's own EventKit and Contacts
-    # stores, which answer only with access granted. Granted here, not by a prompt, since
-    # nobody is there to answer one.
-    say "Boot the simulator and grant calendar, reminders and contacts access"
+    # PhoneToolsTests and PhotosToolTests run the phone tools against the simulator's own
+    # EventKit, Contacts and Photos stores, which answer only with access granted. Granted here,
+    # not by a prompt, since nobody is there to answer one.
+    say "Boot the simulator and grant calendar, reminders, contacts and photos access"
     xcrun simctl boot "$udid" || return 1
     xcrun simctl bootstatus "$udid" -b >/dev/null || return 1
     local service
-    for service in calendar reminders contacts; do
+    for service in calendar reminders contacts photos; do
       xcrun simctl privacy "$udid" grant "$service" zone.hexagon.topo || return 1
     done
+    # simctl writes the photos grant at the first version of the permission, which iOS 26 reads
+    # as leave to add only, so a read of the library would put the prompt up. The row is marked
+    # full access where the simulator keeps it, with the simulator down so nothing holds the old
+    # row.
+    local tcc="$HOME/Library/Developer/CoreSimulator/Devices/$udid/data/Library/TCC/TCC.db"
+    xcrun simctl shutdown "$udid" || return 1
+    sqlite3 "$tcc" "update access set auth_version=2 where client='zone.hexagon.topo' and service='kTCCServicePhotos'" || return 1
+    [ "$(sqlite3 "$tcc" "select auth_value, auth_version from access where client='zone.hexagon.topo' and service='kTCCServicePhotos'")" = "2|2" ] \
+      || { echo "the simulator's photos grant is not full access" >&2; return 1; }
+    xcrun simctl boot "$udid" || return 1
+    xcrun simctl bootstatus "$udid" -b >/dev/null || return 1
 
     # The cooperative pool pinned to one thread in the test runner, as for the package suites:
     # the guest's pipes and waits block, and a block that lands on the pool hangs here rather
