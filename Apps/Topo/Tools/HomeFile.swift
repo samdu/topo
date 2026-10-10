@@ -13,8 +13,9 @@ enum HomeFile {
 
     /// Writes `data` at `folders`/`name` under `home`, making the folders that are not there. It is
     /// written under a hidden name and given its own with a hard link, so the name never holds
-    /// half a file, and the link is made only where nothing is.
-    static func create(_ data: Data, named name: String, in folders: [String], under home: URL) throws -> Outcome {
+    /// half a file, and the link is made only where nothing is. A `locked` file is given complete
+    /// protection before a byte of it is written, so it cannot be read while the phone is locked.
+    static func create(_ data: Data, named name: String, in folders: [String], under home: URL, locked: Bool = false) throws -> Outcome {
         guard plain(name) else { throw ToolFailure("\(name) is not a file's name") }
         let folder = try open(folders, under: home, making: true)
         defer { close(folder) }
@@ -24,6 +25,11 @@ enum HomeFile {
             throw ToolFailure("\(name) could not be made in the guest's home: \(String(cString: strerror(errno)))")
         }
         defer { _ = unlinkat(folder, part, 0) }
+        guard !locked || lock(file) else {
+            let failure = errno
+            close(file)
+            throw ToolFailure("\(name) could not be protected in the guest's home: \(String(cString: strerror(failure)))")
+        }
         let wrote = data.withUnsafeBytes { buffer -> Bool in
             var written = 0
             while written < buffer.count {
@@ -72,6 +78,15 @@ enum HomeFile {
             stale.append(name)
         }
         for name in stale { _ = unlinkat(dirfd(stream), name, 0) }
+    }
+
+    /// The protection class of an open file: 1 is complete protection, 0 a volume that keeps none.
+    static func protection(of file: Int32) -> Int32 {
+        fcntl(file, F_GETPROTECTIONCLASS)
+    }
+
+    private static func lock(_ file: Int32) -> Bool {
+        fcntl(file, F_SETPROTECTIONCLASS, 1) == 0
     }
 
     /// One name, and no path: nothing here walks further than the folders it was given.

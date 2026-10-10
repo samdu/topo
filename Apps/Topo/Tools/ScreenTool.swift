@@ -30,7 +30,7 @@ struct ScreenTool: Tool {
     /// A name for one `look`, which its copies carry.
     var mark: @Sendable () -> String = { String(UUID().uuidString.prefix(8)).lowercased() }
     /// Writes one copy beneath the home, which a suite has fail.
-    var create: @Sendable (Data, String, URL) throws -> HomeFile.Outcome = { try HomeFile.create($0, named: $1, in: [ScreenTool.folder], under: $2) }
+    var create: @Sendable (Data, String, URL) throws -> HomeFile.Outcome = { try HomeFile.create($0, named: $1, in: [ScreenTool.folder], under: $2, locked: true) }
 
     static let guestHome = ClaudeLauncher.home
     /// The folder under the home a still is copied into.
@@ -123,11 +123,13 @@ struct ScreenTool: Tool {
                         throw ToolFailure(live == nil ? Self.notShared : "the screen is being shared and no still is kept yet; look again in a moment")
                     }
                     Self.sweep(under: home, olderThan: lasts)
-                    // Set before a copy is made, so the copies of a look that fails partway go at
-                    // their time too. A second past, since a file's time is kept in whole seconds.
-                    Task.detached(priority: .utility) {
-                        try? await Task.sleep(for: .seconds(lasts + 1))
-                        Self.sweep(under: home, olderThan: lasts)
+                    // Set as the look ends, however it ends: after the last copy it made, and for
+                    // one that fails partway too. A second past, since a file's time is kept in whole seconds.
+                    defer {
+                        Task.detached(priority: .utility) {
+                            try? await Task.sleep(for: .seconds(lasts + 1))
+                            Self.sweep(under: home, olderThan: lasts)
+                        }
                     }
                     var lines = [Self.status(live: live, stills: stills, now: now)]
                     for still in stills.suffix(last) {

@@ -578,6 +578,40 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(copies, [], "the copy of a look that failed partway outlasted its time")
     }
 
+    func testACopyMadeSlowlyStillGoesAtItsTime() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        try store.keep(jpeg, at: began.addingTimeInterval(2), under: door)
+        let store = store, home = home
+        let made = Made()
+        let slow = ScreenTool(store: { store }, home: { home }, now: { began }, lasts: 1, mark: { "slow" }, create: { data, name, home in
+            if made.next() == 2 { Thread.sleep(forTimeInterval: 2.5) }
+            return try HomeFile.create(data, named: name, in: [ScreenTool.folder], under: home)
+        })
+        let reply = await slow.run(["look", "--last", "2"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        XCTAssertEqual(copies.count, 2)
+        let clock = ContinuousClock(), deadline = clock.now + .seconds(10)
+        while !copies.isEmpty, clock.now < deadline { try await Task.sleep(for: .milliseconds(100)) }
+        XCTAssertEqual(copies, [], "a copy made after the look had run a while outlasted its time")
+    }
+
+    func testACopyCannotBeReadWhileThePhoneIsLocked() async throws {
+        try store.open()
+        let began = Date(timeIntervalSince1970: 1_760_000_000)
+        let door = try store.begin(at: began)
+        try store.keep(jpeg, at: began, under: door)
+        let reply = await tool(now: began, mark: "kept").run(["look"])
+        XCTAssertEqual(reply.status, ToolReply.ok, reply.text)
+        let copy = home.appendingPathComponent("screen/\(ScreenTool.name(of: began, look: "kept"))")
+        let file = open(copy.path, O_RDONLY)
+        XCTAssertGreaterThanOrEqual(file, 0)
+        defer { close(file) }
+        XCTAssertEqual(HomeFile.protection(of: file), 1, "a copy of the screen is not under complete protection")
+    }
+
     private final class Made: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
