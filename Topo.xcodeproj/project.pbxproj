@@ -13,6 +13,7 @@
 		0191301E9A1967BD9E5C39F4 /* SurfacesModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43A0C4760183B6FC2D9902EC /* SurfacesModel.swift */; };
 		019AC760BD4DB0EE1173579B /* GuestSimdTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C82FD5CC34A6B13672E27749 /* GuestSimdTests.swift */; };
 		01A3FB8103104009A919E80D /* FirstRunView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 004642A0824EA785157BF757 /* FirstRunView.swift */; };
+		02DA0AFA59BA220F3523C0D7 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
 		036B6CB589587A4D2BC8FF69 /* WidgetToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37FFE301CDB57C54D6E76A8E /* WidgetToolTests.swift */; };
 		043CB3EA336E028A4CEDCD7F /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
 		046F0F4E477130E71E66A3B9 /* GuestResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49BBD13C41FB226A52106EDB /* GuestResolverTests.swift */; };
@@ -38,6 +39,7 @@
 		10356762FE3EC781DA7DB5B8 /* SurfaceTokens.swift in Sources */ = {isa = PBXBuildFile; fileRef = B59D8288DCDF5BE095E92256 /* SurfaceTokens.swift */; };
 		10D6FD035A102C6FBE532658 /* MarkdownTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 999383D4C5743811758B9CEF /* MarkdownTests.swift */; };
 		1116DAB18DB4D2364E776127 /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDAC8EACAE809E951210532 /* Fixture.swift */; };
+		111725BB3766B410D0622B4A /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
 		11453C1BBB8DB9F0C2F9EFC5 /* Markdown.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FC9FFAAA4BD7ABBD9C126D5 /* Markdown.swift */; };
 		11D057838D1F49A3F245770E /* TopoWidgetUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E1559ACE3C45245A9A17244 /* TopoWidgetUITests.swift */; };
 		11DB03A3B196E498EE9229BF /* topo-mark.svg in Resources */ = {isa = PBXBuildFile; fileRef = DA2F71250BCF75762D3A1DB2 /* topo-mark.svg */; };
@@ -77,6 +79,7 @@
 		27485C4D8AD306F226B648E3 /* ControlDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE2D998B2B0A1A14F93BC1BD /* ControlDocument.swift */; };
 		2908E979E18FAFFBCBBA3F5C /* Voice.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45A790C5DC880D6BBF044F6A /* Voice.swift */; };
 		29A3D120B4B66455DFDF5E21 /* NotePush.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A4CB88ED3E53A495B415761 /* NotePush.swift */; };
+		29B1D434AFCACA9C63845CBE /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
 		29CE04221F7F2D4969FBB10B /* WidgetDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6C4EDDFD07AEF6F17C9FFDB /* WidgetDocumentTests.swift */; };
 		2A8B0CBB3C5F5C7737F9B998 /* Look.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDFFC96EAC6EF5E8DE9E7F2B /* Look.swift */; };
 		2ACBB6933AA487E81FDF802B /* systemMedium.json in Resources */ = {isa = PBXBuildFile; fileRef = 40B37AD5D7C8EE55A947EE6E /* systemMedium.json */; };
@@ -142,6 +145,7 @@
 		46554CCDE1895C6F185EAA3F /* LogTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 78251DBFCA77E7486D47E3C0 /* LogTool.swift */; };
 		46900B879C0B64EE7C9F2995 /* ControlDefaults.swift in Sources */ = {isa = PBXBuildFile; fileRef = C7BD599AC4315251579CE778 /* ControlDefaults.swift */; };
 		46E8500C0C4AD6DBF1BCCCEA /* MascotView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 333D38923B458890391C4F4C /* MascotView.swift */; };
+		46F15F45B54F7E85122E8F16 /* ShareInbox.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99BDC10D89B3058B7BEDD787 /* ShareInbox.swift */; };
 		473D96F72E5B9C40C4975D6A /* Mascot.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3F572EF397E4BF9E7FF6685 /* Mascot.swift */; };
 		47A5DAA62699857838E4805C /* TopoCloudKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94DA9AB030655FE57E305922 /* TopoCloudKit.swift */; };
 		47B64CB701BC71C72DE180DC /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8BC4617024AD72D114DF8C7 /* ChatView.swift */; };
@@ -159,6 +163,7 @@
 		522009A0F2242A782A610600 /* Composer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A383104A833CDB1DFF33D305 /* Composer.swift */; };
 		525CF069E985418F523B38D8 /* GuestProcessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ADD47684E7A549D7237FC46F /* GuestProcessTests.swift */; };
 		5266073D3EDF719493DE1B17 /* LookDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */; };
+		52E7F94C1E26D5AD0B6CA111 /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		540B63D1F31F1F2BCA246DBF /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A03D6163E6AC87912A0A8E /* SettingsView.swift */; };
 		5580D93D5A0D00C7C1E8A95C /* SpokenTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9217F79B47B4554A5839E32D /* SpokenTurnTests.swift */; };
 		55E52A029FCDDC4ACE968116 /* SettledSpeechTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */; };
@@ -183,6 +188,7 @@
 		5CB7BFF3728369F54465A139 /* DebugRun.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E7E379AAFA416610DDB0D94 /* DebugRun.swift */; };
 		5D1CA22207CAE02C962F417D /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F176612C66B66529BC2738F9 /* RootView.swift */; };
 		5E1111510510B24B236906B5 /* Harness.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A03F8DA19F37B857BA8F079 /* Harness.swift */; };
+		5E44A45639FF7DC5F752FBB1 /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		5EE7759BD3F6736F8E5DD61C /* TopoUserland in Frameworks */ = {isa = PBXBuildFile; productRef = C397A5056727C7C66CD989BC /* TopoUserland */; };
 		5FAB5887BA7AFAB2F6B79F92 /* Memory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AECABE45D12B711410A2ED /* Memory.swift */; };
 		615E59F985CDA51D5372AD55 /* SurfaceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */; };
@@ -194,6 +200,7 @@
 		6740826216EF8BDEAE176765 /* UserlandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4449A2BC546425D8D0480134 /* UserlandTests.swift */; };
 		68EFF6B437CBB2B98EF9D3D7 /* systemSmall.json in Resources */ = {isa = PBXBuildFile; fileRef = C404AE7F18179442D89B4B50 /* systemSmall.json */; };
 		690E3C8230E79A06E5491FBC /* VocabularyView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 255D132EA660241074B17048 /* VocabularyView.swift */; };
+		691690ECA1BE1528C4C384F0 /* ShareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768E276CB343CAEE40B2CB79 /* ShareTests.swift */; };
 		69BD32B50A6166158C051F6B /* MemoryMoveDuringTurnTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B32DA01FEA350247ACEF3A0E /* MemoryMoveDuringTurnTests.swift */; };
 		6AD7AE1415AF556F2AF3D0A9 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
 		6BA81614A5DAA60FB08C276F /* ClaudeCodeGuestTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */; };
@@ -201,11 +208,13 @@
 		6C7A3B17FB92BD050F173310 /* ControlTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667A80E4EEE18FB3F1494035 /* ControlTool.swift */; };
 		6C7A5F804812209A36A4D554 /* MascotStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E99C1823AE0D4FCE76F86A8D /* MascotStateTests.swift */; };
 		6CB93F2B85FB4DF31A6B5CB2 /* ChatBarTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120004CDCCF5376B2A39259D /* ChatBarTests.swift */; };
+		6D3436BF48054477B5A79F04 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
 		6D6F51A6884E7842339B80AC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 48222C6D17C3B1F1B8A40DB9 /* Assets.xcassets */; };
 		6DDF523A0250D4A9CC22C13C /* DiagnosticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1E8609DA501D2B619A3B4BB /* DiagnosticsView.swift */; };
 		6E0DC95021FF1C7341AACD80 /* MapsTool.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF31113B87FCBEE95414EAD2 /* MapsTool.swift */; };
 		6EF0576A04E62FEF82FF89AE /* WatchSurfaceSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 649A32DB00E91758914258B0 /* WatchSurfaceSyncTests.swift */; };
 		6FB46136563FED2942CB8295 /* VaultDownloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E270E681606D89AAEA041E6 /* VaultDownloads.swift */; };
+		6FFC2A606C2D11468B8EFD30 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
 		72726826FE4958249B7EFF62 /* Acknowledgements.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08530B711B0437DD2DF5B7A2 /* Acknowledgements.swift */; };
 		72E4311E57C1FD9BEEB7F524 /* GuestCodeWriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22285419A6D3B8D4C91D153 /* GuestCodeWriteTests.swift */; };
 		7352D3C41BCCE85957B9C667 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
@@ -213,12 +222,14 @@
 		73BD2BFD4C40E7CBC67D0EE3 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
 		73C32173CE9A5C77C5FD3E1D /* systemLarge-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 241574A16DDE36FEEFD20034 /* systemLarge-dark.png */; };
 		73E254E137E14567F45A6FE9 /* MascotCrossingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9595FA9BE88E06B2220A262C /* MascotCrossingTests.swift */; };
+		7590F007267E6B8508C3369A /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		75EA79F9C8359D549B93F57A /* ReadAloudTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12A0F094716A2E2BD27D9B63 /* ReadAloudTests.swift */; };
 		76BB1BDBDC4DD21349653397 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 7C22D3C31068651AA320F6FC /* TopoAuth */; };
 		77A29B88FC68D9D49064F311 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		77FDCE98AD16BCCC80402CFB /* FilesToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F92C3924A4E1B68FF0B08C77 /* FilesToolTests.swift */; };
 		788F2C849A097A30DF3EE412 /* SurfaceReloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */; };
 		78B8B19F7D872F0863967C2A /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
+		78BC1C3075EF38B6E9CC6AD9 /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
 		7A231408E588FE5240F9F73C /* TopoCoreTesting in Frameworks */ = {isa = PBXBuildFile; productRef = F9D7AD526ACC2402D7AF1440 /* TopoCoreTesting */; };
 		7A8B1ADFEA35183A04493998 /* WidgetDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */; };
 		7B6542E14EB920F1A6FABB7D /* TopoPlacementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B01F4EC6C7A53BD55284ACA /* TopoPlacementTests.swift */; };
@@ -281,6 +292,7 @@
 		92D72F78C88069649826EF12 /* ChatPreviews.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA5AD67E0C708EB43AEB33FA /* ChatPreviews.swift */; };
 		933C2ACA157E32F124280DD4 /* systemMedium-light.png in Resources */ = {isa = PBXBuildFile; fileRef = C07F833992D5F5D8B519F030 /* systemMedium-light.png */; };
 		94D83519EBC7B8248FD554A4 /* WebAuth.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C73B06423A3D15D5A7B7093 /* WebAuth.swift */; };
+		94E7F21D7F91F1130C440025 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
 		957A7AE2CED3B6AE5733BC09 /* Dictation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18DEE83593874ABE4660BB2D /* Dictation.swift */; };
 		96EB4D095C0F58026CD0017E /* TuningSliderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD430A125344B175B015CE22 /* TuningSliderTests.swift */; };
 		97D07427DA98C956921275FD /* ModelHousekeeping.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */; };
@@ -304,6 +316,7 @@
 		A114674D0988C85DD51AB003 /* VaultHome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82E8447D928AACA5D0B36ABD /* VaultHome.swift */; };
 		A2097BCC74498B3C1244E579 /* Memory.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41AECABE45D12B711410A2ED /* Memory.swift */; };
 		A2A14D2B8C4B246D6F1E5C84 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
+		A2FE003CFDB9B9AF382AF48C /* ShareStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */; };
 		A33C3E450A7C3038FD1D550C /* OnePasswordConnectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D42B9802439D5A1AD7033D4 /* OnePasswordConnectionTests.swift */; };
 		A399F66B2B5BFE21E44EE31E /* VocabularyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BEB509FF72F2C94E9C647FE8 /* VocabularyTests.swift */; };
 		A3D661B5CE177C2B33F05C6F /* SignInView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A64DF85F65D65AA39B2128BD /* SignInView.swift */; };
@@ -324,6 +337,7 @@
 		A976187A8375E84B67FD0E1E /* StopWhileSpeakingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B88BFBBC5F6FD505DCD58B15 /* StopWhileSpeakingTests.swift */; };
 		A9A69DD1D01C6C803CF034C8 /* DictationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4768AAF3DF2F75692350C8E5 /* DictationTests.swift */; };
 		AA7F5D313A7849E42719ECF1 /* WidgetSnapshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0218040D6E213DF4C1424647 /* WidgetSnapshotTests.swift */; };
+		AA9FF5984687F3FC10F4F1AE /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
 		AAD79C12FB21E5A6F8BDAC84 /* PlacesDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = 639E8B56AE56DB4807D9EFA0 /* PlacesDocument.swift */; };
 		AAE4C1BAB7A289077470D9BC /* DeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46425616D224D5EDABBDE93E /* DeviceIdentity.swift */; };
 		AB0C7C4754391EDC4D4A7E0B /* THIRD-PARTY in Resources */ = {isa = PBXBuildFile; fileRef = 2FD4079560A6CA3A8CDC3922 /* THIRD-PARTY */; };
@@ -334,6 +348,7 @@
 		ADECDDCBA226E9262EE67313 /* TurnPushTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E657338C47DD5C2996280F04 /* TurnPushTests.swift */; };
 		AE9F04E40A3D14A888B3CD36 /* GuestConcurrencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */; };
 		AEDBC2E2814F7E6370987732 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */; };
+		AF153118B3D9751510FD7D20 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6095AF743ED350A7E5D6403E /* ShareViewController.swift */; };
 		AF4F131F2EC3C983BC0BFBB0 /* RoleSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */; };
 		AF9538434E62AF312A23A63D /* MascotRoost.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6904A480352F2D00E38BFD6F /* MascotRoost.swift */; };
 		B00ABBD6436E3FC4EBE99846 /* PhoneToolsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DFD4F34ACF1BC2A1F5010F79 /* PhoneToolsTests.swift */; };
@@ -354,6 +369,7 @@
 		B6D3FC3FD33A20C4A5EB3000 /* Fixture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2DDAC8EACAE809E951210532 /* Fixture.swift */; };
 		B6EB863461AE1EBFC5045887 /* TopoHubApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 654D33CC62A8C821EACD662C /* TopoHubApp.swift */; };
 		B726E5CF08D5C371DF03508F /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B5D9DE746B7D268AD71B7A2 /* Theme.swift */; };
+		B839DC2559DE51402EA939CE /* TopoShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 763F7701774B073308C078FE /* TopoShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		B85F465A6134FCAAB2335DBF /* AcknowledgementsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F04F34134797AF495560EC43 /* AcknowledgementsTests.swift */; };
 		B992585D5C4DDF8B56FBF510 /* PerfRunTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEDD5FD329B5A00DAD3FC0A8 /* PerfRunTests.swift */; };
 		B9EBA98B256F61BC975CEB51 /* TopoAuth in Frameworks */ = {isa = PBXBuildFile; productRef = 45B7067577746DC49D3FFD8F /* TopoAuth */; };
@@ -389,6 +405,8 @@
 		C9EBB675F20EA85264A72BA6 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
 		C9F4D88AD27E53ACDC93FD70 /* crossing-down.json in Resources */ = {isa = PBXBuildFile; fileRef = AA05A8C67947D4E32E7EF7D8 /* crossing-down.json */; };
 		CAC4FF7C1FD4AFE398708CA8 /* TopoWatchApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 681C38D7D6494813315D4051 /* TopoWatchApp.swift */; };
+		CB251D087025D034F6E50CB4 /* ShareSheetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */; };
+		CB39D4212AA7C90899CB9D17 /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		CB4FFF7B9F25ABCA043E5E35 /* systemMedium-dark.png in Resources */ = {isa = PBXBuildFile; fileRef = 12EC0E03337F0E06A56F49CE /* systemMedium-dark.png */; };
 		CB95DF525A42DFB75D528726 /* PrimaryReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2923018D4BA8C9B4E08EF81E /* PrimaryReader.swift */; };
 		CBF883802BF44C4DE1D6B5C9 /* ConnectedGlyph.swift in Sources */ = {isa = PBXBuildFile; fileRef = E50B079C5145D2763C1CD2C4 /* ConnectedGlyph.swift */; };
@@ -475,6 +493,7 @@
 		F7A2D32DD219158416C6EA76 /* systemSmall-light.png in Resources */ = {isa = PBXBuildFile; fileRef = 34907CBDA60D55F46C514383 /* systemSmall-light.png */; };
 		F9E31DDC84CCFFF526FA5044 /* TopoCore in Frameworks */ = {isa = PBXBuildFile; productRef = 783E689C1554D54D945E0F11 /* TopoCore */; };
 		FB2A7CDECF4A7336695E92D1 /* TopoProxy in Frameworks */ = {isa = PBXBuildFile; productRef = 1E0520175AF5BA83DF7E9611 /* TopoProxy */; };
+		FB33D9C39D7E7024A557760D /* ShareIntake.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40819CF6083939579F503702 /* ShareIntake.swift */; };
 		FBA9410F54F2A098BAF3B9C6 /* VaultMount.swift in Sources */ = {isa = PBXBuildFile; fileRef = C6BCB70D375EC37F314FCB10 /* VaultMount.swift */; };
 		FCE1E23F472309853AA683D3 /* LookToolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2C039ECC1C92B7FF7EE214C /* LookToolTests.swift */; };
 		FD227E41ADC64C3B6686ED56 /* WidgetIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE5605E998B30A3C3841A2D /* WidgetIntents.swift */; };
@@ -505,6 +524,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 680EFF1EDB72CEF48AF35623;
 			remoteInfo = Topo;
+		};
+		A172886681594AA13FE6AF11 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D0F36D56CEAC1B1B3ADE9F39 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 5760BF7990C33BF366C97454;
+			remoteInfo = TopoShare;
 		};
 		BCF05E9E6282658F6C4E1C34 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -548,6 +574,7 @@
 			dstSubfolderSpec = 13;
 			files = (
 				A68A33D087A975DCF766B663 /* TopoWidgets.appex in Embed Foundation Extensions */,
+				B839DC2559DE51402EA939CE /* TopoShare.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -577,6 +604,7 @@
 		0E7E379AAFA416610DDB0D94 /* DebugRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugRun.swift; sourceTree = "<group>"; };
 		0EE26BC3B71DBCF5F73F6B15 /* ComposerGeometryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComposerGeometryTests.swift; sourceTree = "<group>"; };
 		0EF1677D8D77561257325F30 /* VaultMountTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMountTests.swift; sourceTree = "<group>"; };
+		0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareStore.swift; sourceTree = "<group>"; };
 		10C7E3FD777A713DA6298113 /* WatchRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRootView.swift; sourceTree = "<group>"; };
 		113D98B6C9B7D11FC75CFB06 /* RoleSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleSelector.swift; sourceTree = "<group>"; };
 		117E875DA4060ECD83F0D66E /* ReplyLinkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReplyLinkTests.swift; sourceTree = "<group>"; };
@@ -634,6 +662,7 @@
 		3EC5770ED2DCA16F30AA7C93 /* crossing-up.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "crossing-up.json"; sourceTree = "<group>"; };
 		402DC40974C6C4DAF1B6B93F /* ChatBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatBar.swift; sourceTree = "<group>"; };
 		402EB6E7D75092F33B78F15B /* GuestBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestBridge.swift; sourceTree = "<group>"; };
+		40819CF6083939579F503702 /* ShareIntake.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareIntake.swift; sourceTree = "<group>"; };
 		40B37AD5D7C8EE55A947EE6E /* systemMedium.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = systemMedium.json; sourceTree = "<group>"; };
 		4194F7FA1505EC3F8CCC30FE /* WidgetActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetActionTests.swift; sourceTree = "<group>"; };
 		41AECABE45D12B711410A2ED /* Memory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Memory.swift; sourceTree = "<group>"; };
@@ -671,6 +700,7 @@
 		5DFEE87C83140B72FFF19B07 /* GuestConcurrencyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestConcurrencyTests.swift; sourceTree = "<group>"; };
 		5E1ECA1CA202B0630425E63E /* ClaudeCodeGuestTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClaudeCodeGuestTests.swift; sourceTree = "<group>"; };
 		5FA3798B7F6069020E5A4DA0 /* womble.js */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = womble.js; sourceTree = "<group>"; };
+		6095AF743ED350A7E5D6403E /* ShareViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareViewController.swift; sourceTree = "<group>"; };
 		61347EF6C39384F9F6DE0233 /* PressRefusalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PressRefusalTests.swift; sourceTree = "<group>"; };
 		621361E24A923844780887AC /* ControlCueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlCueTests.swift; sourceTree = "<group>"; };
 		627B4F992CADC996107E080C /* accessoryInline-dark.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "accessoryInline-dark.png"; sourceTree = "<group>"; };
@@ -679,6 +709,7 @@
 		639E8B56AE56DB4807D9EFA0 /* PlacesDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacesDocument.swift; sourceTree = "<group>"; };
 		649A32DB00E91758914258B0 /* WatchSurfaceSyncTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchSurfaceSyncTests.swift; sourceTree = "<group>"; };
 		654D33CC62A8C821EACD662C /* TopoHubApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoHubApp.swift; sourceTree = "<group>"; };
+		6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareSheetModel.swift; sourceTree = "<group>"; };
 		667A80E4EEE18FB3F1494035 /* ControlTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlTool.swift; sourceTree = "<group>"; };
 		680EA7BD55CA0D2F27D81FE8 /* BadgeRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BadgeRenderTests.swift; sourceTree = "<group>"; };
 		681C38D7D6494813315D4051 /* TopoWatchApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoWatchApp.swift; sourceTree = "<group>"; };
@@ -692,8 +723,10 @@
 		730E0D422A46A7274090EFB6 /* TopoMascot */ = {isa = PBXFileReference; lastKnownFileType = folder; name = TopoMascot; path = Packages/TopoMascot; sourceTree = SOURCE_ROOT; };
 		738BC8AD7B6AE57B9135A057 /* TopoWatchWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = TopoWatchWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettledSpeechTests.swift; sourceTree = "<group>"; };
+		763F7701774B073308C078FE /* TopoShare.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = TopoShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		766030764883BAAC87FAA3B1 /* ChatNoticesRenderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatNoticesRenderTests.swift; sourceTree = "<group>"; };
 		768BACE57BCD2C4AE873EF38 /* TopoAppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopoAppDelegate.swift; sourceTree = "<group>"; };
+		768E276CB343CAEE40B2CB79 /* ShareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareTests.swift; sourceTree = "<group>"; };
 		771746CA069BC2B3B60EC32C /* GuestClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestClock.swift; sourceTree = "<group>"; };
 		78251DBFCA77E7486D47E3C0 /* LogTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogTool.swift; sourceTree = "<group>"; };
 		7966985B692A382AB52DFE1A /* GuestPidfdTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestPidfdTests.swift; sourceTree = "<group>"; };
@@ -712,6 +745,7 @@
 		84E8FFDC241EE10C721569CE /* LocationTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocationTool.swift; sourceTree = "<group>"; };
 		8754F62EDF1AAB55C1C79A7C /* ModelHousekeeping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHousekeeping.swift; sourceTree = "<group>"; };
 		8809A0CAEB64B3D22525D3DD /* HubModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HubModel.swift; sourceTree = "<group>"; };
+		88366A5528950D08825392C7 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		88A745D155637B885D24CB95 /* WatchRelevance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchRelevance.swift; sourceTree = "<group>"; };
 		8A1FE1CCC9C16699EF5A84D4 /* GuestBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuestBridgeTests.swift; sourceTree = "<group>"; };
 		8A748EFA767D96A544B2291F /* ModelHousekeepingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHousekeepingTests.swift; sourceTree = "<group>"; };
@@ -731,6 +765,7 @@
 		98D3BE114E74EF949FD68B7B /* AudioLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioLog.swift; sourceTree = "<group>"; };
 		99296C045628A368812315E3 /* Topo.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Topo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		999383D4C5743811758B9CEF /* MarkdownTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownTests.swift; sourceTree = "<group>"; };
+		99BDC10D89B3058B7BEDD787 /* ShareInbox.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShareInbox.swift; sourceTree = "<group>"; };
 		9A03F8DA19F37B857BA8F079 /* Harness.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Harness.swift; sourceTree = "<group>"; };
 		9B7CF6CF5796598AF8B0437D /* WidgetDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WidgetDocument.swift; sourceTree = "<group>"; };
 		9BFD3E05B6F844512DA16A9C /* ControlActionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlActionTests.swift; sourceTree = "<group>"; };
@@ -788,6 +823,7 @@
 		CA6630E76EBC7CE89C1289F2 /* TopoUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = TopoUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScriptedGuest.swift; sourceTree = "<group>"; };
 		CCC0910114D0F4D264253EC5 /* VaultMigration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VaultMigration.swift; sourceTree = "<group>"; };
+		CD7A7985993EF4E2E3C9EE78 /* TopoShare.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = TopoShare.entitlements; sourceTree = "<group>"; };
 		CEDD5FD329B5A00DAD3FC0A8 /* PerfRunTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PerfRunTests.swift; sourceTree = "<group>"; };
 		CF31113B87FCBEE95414EAD2 /* MapsTool.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapsTool.swift; sourceTree = "<group>"; };
 		CF519B4570159A5CED371583 /* Speakable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Speakable.swift; sourceTree = "<group>"; };
@@ -1000,6 +1036,7 @@
 				7A4CB88ED3E53A495B415761 /* NotePush.swift */,
 				D5D8E5964C0B2E93432931EE /* OnePassword.swift */,
 				9821C547C8C88D0A2C6D265A /* PerfRun.swift */,
+				99BDC10D89B3058B7BEDD787 /* ShareInbox.swift */,
 				DC423A457469BC5C6773CC35 /* SurfaceReloader.swift */,
 				26FA6A851F3358ECA0C9494C /* SurfaceSync.swift */,
 				E4E0F75855123C685AAD8ED1 /* TopoApp.swift */,
@@ -1117,6 +1154,16 @@
 			path = TopoHub;
 			sourceTree = "<group>";
 		};
+		53F95A6FB2FF4B8212765434 /* Share */ = {
+			isa = PBXGroup;
+			children = (
+				88366A5528950D08825392C7 /* Info.plist */,
+				6095AF743ED350A7E5D6403E /* ShareViewController.swift */,
+				CD7A7985993EF4E2E3C9EE78 /* TopoShare.entitlements */,
+			);
+			path = Share;
+			sourceTree = "<group>";
+		};
 		55452FFA3CFFCD17323E6A45 /* Traces */ = {
 			isa = PBXGroup;
 			children = (
@@ -1228,6 +1275,7 @@
 			isa = PBXGroup;
 			children = (
 				6976DDF79BD9F5C0FAA9367F /* Client */,
+				53F95A6FB2FF4B8212765434 /* Share */,
 				E32304158FD48D2CF4B54D0C /* Shared */,
 				1EEF1582D416825D6A84D402 /* Topo */,
 				4CEDD8C22659478DFEB61B72 /* TopoHub */,
@@ -1325,6 +1373,7 @@
 				D946D8851F96D23296B16179 /* RoleSelectorTests.swift */,
 				CA7E96952FD3E879CF1A9500 /* ScriptedGuest.swift */,
 				75C7F85A9F199E9F8BCB4EC1 /* SettledSpeechTests.swift */,
+				768E276CB343CAEE40B2CB79 /* ShareTests.swift */,
 				1AF008F3C113182739CEB6D7 /* SignOutTests.swift */,
 				DE6988A9926AEFE077104598 /* SpeakableTests.swift */,
 				3900902B180055DC8BBE866B /* SpokenReplyTests.swift */,
@@ -1440,6 +1489,9 @@
 				2B5ACB9C8CE65EA4689A78C9 /* LookDocument.swift */,
 				26DAE21B1BCF69DF2BABEEFB /* OctopusMark.swift */,
 				C7C2958D09B9089742987F04 /* PrivacyInfo.xcprivacy */,
+				40819CF6083939579F503702 /* ShareIntake.swift */,
+				6631EE45BF498BF29CE5CE56 /* ShareSheetModel.swift */,
+				0F4DF7D7567E50E64E3AD2DA /* ShareStore.swift */,
 				7A5054B6ADCFC7118E2C6A1E /* SurfaceStore.swift */,
 				6B5D9DE746B7D268AD71B7A2 /* Theme.swift */,
 				94DA9AB030655FE57E305922 /* TopoCloudKit.swift */,
@@ -1455,6 +1507,7 @@
 			children = (
 				99296C045628A368812315E3 /* Topo.app */,
 				BE9C965D7E36544A4F9526C9 /* TopoHub.app */,
+				763F7701774B073308C078FE /* TopoShare.appex */,
 				017C0E3316F8178AF19904AE /* TopoTalkTests.xctest */,
 				8D1F9ED3E5644D6B2C499B31 /* TopoTests.xctest */,
 				FF1945CD92E7D90DE491BDDB /* TopoTV.app */,
@@ -1556,6 +1609,23 @@
 			productReference = BE9C965D7E36544A4F9526C9 /* TopoHub.app */;
 			productType = "com.apple.product-type.application";
 		};
+		5760BF7990C33BF366C97454 /* TopoShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 1820A1BE7E1016390279EA8C /* Build configuration list for PBXNativeTarget "TopoShare" */;
+			buildPhases = (
+				CE32137D725A1D0E4FB04D3D /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = TopoShare;
+			packageProductDependencies = (
+			);
+			productName = TopoShare;
+			productReference = 763F7701774B073308C078FE /* TopoShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		680EFF1EDB72CEF48AF35623 /* Topo */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DCD9C6FE649B4A9E482232BA /* Build configuration list for PBXNativeTarget "Topo" */;
@@ -1569,6 +1639,7 @@
 			);
 			dependencies = (
 				25B37B6FCCF924BB029EA42A /* PBXTargetDependency */,
+				C1FBC839329BDDA5027FF677 /* PBXTargetDependency */,
 			);
 			name = Topo;
 			packageProductDependencies = (
@@ -1766,6 +1837,10 @@
 						DevelopmentTeam = 4A5NSJ6Y3G;
 						ProvisioningStyle = Automatic;
 					};
+					5760BF7990C33BF366C97454 = {
+						DevelopmentTeam = 4A5NSJ6Y3G;
+						ProvisioningStyle = Automatic;
+					};
 					680EFF1EDB72CEF48AF35623 = {
 						DevelopmentTeam = 4A5NSJ6Y3G;
 						ProvisioningStyle = Automatic;
@@ -1832,6 +1907,7 @@
 			targets = (
 				680EFF1EDB72CEF48AF35623 /* Topo */,
 				AB11F4F52A86D37D276CD32B /* TopoWidgets */,
+				5760BF7990C33BF366C97454 /* TopoShare */,
 				BC7B46B5E49B19EC709BF659 /* TopoWatch */,
 				CB04899C4FEF5F8EAF759063 /* TopoWatchWidgets */,
 				049EE2E9B85175130291BAC4 /* TopoWatchTests */,
@@ -2047,6 +2123,9 @@
 				AF4F131F2EC3C983BC0BFBB0 /* RoleSelector.swift in Sources */,
 				C98F73E1BE6A55B941965C68 /* RootView.swift in Sources */,
 				9A80EB5F9761BF3F2287D2D8 /* SettingsView.swift in Sources */,
+				52E7F94C1E26D5AD0B6CA111 /* ShareIntake.swift in Sources */,
+				94E7F21D7F91F1130C440025 /* ShareSheetModel.swift in Sources */,
+				A2FE003CFDB9B9AF382AF48C /* ShareStore.swift in Sources */,
 				A3D661B5CE177C2B33F05C6F /* SignInView.swift in Sources */,
 				C692650BD02929FBC5ED0563 /* Speakable.swift in Sources */,
 				E30E7C412A24F8AE71546315 /* Speaker.swift in Sources */,
@@ -2108,6 +2187,9 @@
 				3535E85112598C5CFC84FDF5 /* LookDocument.swift in Sources */,
 				3BB50E214E3CCDE7B541504F /* OctopusMark.swift in Sources */,
 				D671E7599D8A068B094ADFD9 /* QRImage.swift in Sources */,
+				7590F007267E6B8508C3369A /* ShareIntake.swift in Sources */,
+				111725BB3766B410D0622B4A /* ShareSheetModel.swift in Sources */,
+				78BC1C3075EF38B6E9CC6AD9 /* ShareStore.swift in Sources */,
 				4DCA8DB14D90096B931F7E08 /* SurfacePages.swift in Sources */,
 				5C3D41F423BAB30C7913C372 /* SurfaceStore.swift in Sources */,
 				10356762FE3EC781DA7DB5B8 /* SurfaceTokens.swift in Sources */,
@@ -2205,6 +2287,9 @@
 				30DF481D4769365D1072FE1B /* RoleSelector.swift in Sources */,
 				5D1CA22207CAE02C962F417D /* RootView.swift in Sources */,
 				7FADAD58D7CA76687790DE19 /* SettingsView.swift in Sources */,
+				5E44A45639FF7DC5F752FBB1 /* ShareIntake.swift in Sources */,
+				CB251D087025D034F6E50CB4 /* ShareSheetModel.swift in Sources */,
+				6D3436BF48054477B5A79F04 /* ShareStore.swift in Sources */,
 				843B8C0DD0B51288A54C3D7D /* SignInView.swift in Sources */,
 				A80108F5A130859F4C15CA59 /* Speakable.swift in Sources */,
 				1D73AAE6A762D9EB73E58C16 /* Speaker.swift in Sources */,
@@ -2296,6 +2381,7 @@
 				442FA90D2E8730F35CE134EB /* RoleSelectorTests.swift in Sources */,
 				FDDAC9AC6854A658AF14E67C /* ScriptedGuest.swift in Sources */,
 				55E52A029FCDDC4ACE968116 /* SettledSpeechTests.swift in Sources */,
+				691690ECA1BE1528C4C384F0 /* ShareTests.swift in Sources */,
 				2DEF9C81428F08E13848D373 /* SignOutTests.swift in Sources */,
 				E842D90B19FB83DA9860E903 /* SpeakableTests.swift in Sources */,
 				451D5461A5BC39C82450FAB4 /* SpokenReplyTests.swift in Sources */,
@@ -2320,6 +2406,17 @@
 				AA7F5D313A7849E42719ECF1 /* WidgetSnapshotTests.swift in Sources */,
 				DD907806586C00822627ED3D /* WidgetStoreTests.swift in Sources */,
 				036B6CB589587A4D2BC8FF69 /* WidgetToolTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CE32137D725A1D0E4FB04D3D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				FB33D9C39D7E7024A557760D /* ShareIntake.swift in Sources */,
+				6FFC2A606C2D11468B8EFD30 /* ShareSheetModel.swift in Sources */,
+				29B1D434AFCACA9C63845CBE /* ShareStore.swift in Sources */,
+				AF153118B3D9751510FD7D20 /* ShareViewController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2411,6 +2508,10 @@
 				1BEC39172B57A4B26C11F530 /* RootView.swift in Sources */,
 				F1573B90E421C2BA529308C9 /* SecretTool.swift in Sources */,
 				540B63D1F31F1F2BCA246DBF /* SettingsView.swift in Sources */,
+				46F15F45B54F7E85122E8F16 /* ShareInbox.swift in Sources */,
+				CB39D4212AA7C90899CB9D17 /* ShareIntake.swift in Sources */,
+				AA9FF5984687F3FC10F4F1AE /* ShareSheetModel.swift in Sources */,
+				02DA0AFA59BA220F3523C0D7 /* ShareStore.swift in Sources */,
 				3AB76B17D38DAEF86B69A9F8 /* SignInView.swift in Sources */,
 				4D8CA320675F3FC531E9132D /* Speakable.swift in Sources */,
 				898DCC65F9AF024811776C52 /* Speaker.swift in Sources */,
@@ -2475,6 +2576,11 @@
 			target = 680EFF1EDB72CEF48AF35623 /* Topo */;
 			targetProxy = 7D52E906266CE8CF4AC6570D /* PBXContainerItemProxy */;
 		};
+		C1FBC839329BDDA5027FF677 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 5760BF7990C33BF366C97454 /* TopoShare */;
+			targetProxy = A172886681594AA13FE6AF11 /* PBXContainerItemProxy */;
+		};
 		EE9AAA23FD351E1A37D3AE06 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = CB04899C4FEF5F8EAF759063 /* TopoWatchWidgets */;
@@ -2483,6 +2589,24 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		139237F68999637692332A0D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/Share/TopoShare.entitlements;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				INFOPLIST_FILE = Apps/Share/Info.plist;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = zone.hexagon.topo.share;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
 		2DDEFDA0D25BEAEF3AFC2FF3 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -2751,6 +2875,24 @@
 				TARGETED_DEVICE_FAMILY = 4;
 			};
 			name = Debug;
+		};
+		874C5EA01E6E31FF5DED9DB3 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/Share/TopoShare.entitlements;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				INFOPLIST_FILE = Apps/Share/Info.plist;
+				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = zone.hexagon.topo.share;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
 		};
 		93ED69C9A44C6929FD0ECAC8 /* Release */ = {
 			isa = XCBuildConfiguration;
@@ -3065,6 +3207,15 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		1820A1BE7E1016390279EA8C /* Build configuration list for PBXNativeTarget "TopoShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				139237F68999637692332A0D /* Debug */,
+				874C5EA01E6E31FF5DED9DB3 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		1BAA7256E1546C0A7152C8A9 /* Build configuration list for PBXNativeTarget "TopoTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

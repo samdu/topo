@@ -29,7 +29,8 @@ struct RootView: View {
             // launch leaves an outbox on disk) puts what was waiting into the log as a limb's
             // turns and drops the login.
             ViewerRootView().task {
-                await ViewerArrival(holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
+                await ViewerArrival(forgetShares: { ShareStore.shared()?.close() },
+                                    holdsLogin: { signIn.phase == .signedIn || harness.hasWaiting },
                                     demoteHarness: { await harness.demote() },
                                     forgetMemory: { memory.forget() },
                                     forgetSurfaces: { SurfaceReloader.shared.forget(SurfaceStore.shared()) },
