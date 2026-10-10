@@ -15,7 +15,7 @@ struct ScreenShareSection: View {
                     .accessibilityIdentifier("settings-screen-share")
             }
         } footer: {
-            Text("While you share it, Topo keeps stills of your screen on this phone to look at when you ask. You start it and stop it, and the stills go when you sign out.")
+            Text("While you share it, Topo keeps stills of your screen on this phone to look at when you ask. You start it and stop it, and the stills go when you sign out or make another device Topo's.")
         }
     }
 }

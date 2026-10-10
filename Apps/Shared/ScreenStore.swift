@@ -22,11 +22,12 @@ enum ScreenRefusal: Error, Equatable {
 ///   a frame;
 /// - `<login>-<milliseconds>.jpg`, one still, named for the login it was kept under and when.
 ///
-/// Only the app makes the folder, and a sign-out removes it, so the extension never brings it
-/// back: a still written after the folder went fails, and one written under a login that has
-/// since ended carries that login's name and is no still of the next. At most `ring` are held,
-/// the oldest going first. The stills are the person's whole screen, so they are readable only
-/// while the phone is unlocked and are left out of its backups.
+/// Only the app makes the folder, and a sign-out removes it, the door first, so the extension
+/// never brings it back: a still written after the folder went fails, one that lands as the door
+/// goes is taken away by whichever of the two sees the other last, and one written under a login
+/// that has since ended carries that login's name and is no still of the next. At most `ring`
+/// are held, the oldest going first. The stills are the person's whole screen, so they are
+/// readable only while the phone is unlocked and are left out of its backups.
 struct ScreenStore: Sendable {
     static let appGroup = "group.zone.hexagon.topo"
     /// The most stills held.
@@ -84,9 +85,21 @@ struct ScreenStore: Sendable {
     }
 
     /// Signed out, or no longer the guest's phone: no still is kept, and none stays.
+    ///
+    /// The door goes first: a still the extension links after that finds no door when it looks
+    /// again and takes itself away, and one linked before is in the folder this removes. A still
+    /// landing while the folder is being emptied leaves it not empty, so the removal is tried
+    /// again.
     func close() {
-        try? FileManager.default.removeItem(at: folder)
+        try? FileManager.default.removeItem(at: doorURL)
+        for _ in 0..<Self.closes {
+            try? FileManager.default.removeItem(at: folder)
+            guard FileManager.default.fileExists(atPath: folder.path) else { return }
+        }
     }
+
+    /// How many times a removal that a landing still got in the way of is tried.
+    static let closes = 3
 
     /// Follows the login and the role: open while this phone is signed in and the guest's, shut
     /// otherwise, a launch that finds either gone included.
@@ -156,20 +169,34 @@ struct ScreenStore: Sendable {
         return self.door() == door
     }
 
-    /// Keeps one still. Refused where the door is no longer the one the broadcast began under. A
-    /// write that fails with the door still there is the phone locked, and that frame is dropped.
-    func keep(_ jpeg: Data, at time: Date, under door: Door) throws(ScreenRefusal) {
+    /// Keeps one still, answering whether it was kept. Refused where the door is no longer the
+    /// one the broadcast began under. A write that fails with the door still there is the phone
+    /// locked, and that frame is dropped.
+    ///
+    /// The still is written in the folder under a hidden name and renamed to its own, so no
+    /// reader sees half a picture, no copy of it is anywhere else, and the folder is never made.
+    /// The door is read again once the still has its name: a sign-out between the first reading
+    /// and the rename would otherwise leave a still nothing takes away.
+    @discardableResult
+    func keep(_ jpeg: Data, at time: Date, under door: Door) throws(ScreenRefusal) -> Bool {
         guard self.door() == door else { throw .signedOut }
+        let part = folder.appendingPathComponent(".\(UUID().uuidString).part")
+        let still = folder.appendingPathComponent(Self.name(login: door.login, at: time))
         do {
-            // Atomic, so no reader sees half a picture, and never making the folder.
-            try jpeg.write(to: folder.appendingPathComponent(Self.name(login: door.login, at: time)),
-                           options: [.atomic, .completeFileProtection])
+            try jpeg.write(to: part, options: .completeFileProtection)
+            try FileManager.default.moveItem(at: part, to: still)
         } catch {
+            try? FileManager.default.removeItem(at: part)
             guard self.door() == door else { throw .signedOut }
-            return
+            return false
+        }
+        guard self.door() == door else {
+            try? FileManager.default.removeItem(at: still)
+            throw .signedOut
         }
         let held = stills(of: door)
         for still in held.dropLast(Self.ring) { try? FileManager.default.removeItem(at: still.url) }
+        return true
     }
 
     /// The broadcast ended: it is no longer live. Its stills stay for the mind to look at.

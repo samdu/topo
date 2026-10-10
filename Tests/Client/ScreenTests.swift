@@ -32,7 +32,7 @@ final class ScreenTests: XCTestCase {
 
     // MARK: The store
 
-    func testNothingIsKeptWithoutADoorAndTheExtensionNeverMakesTheFolder() throws {
+    func testNothingIsKeptWithoutADoor() throws {
         XCTAssertEqual(refusal { _ = try store.begin() }, .signedOut)
         let door = ScreenStore.Door(login: "a login")
         XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(), under: door) }, .signedOut)
@@ -131,6 +131,33 @@ final class ScreenTests: XCTestCase {
         }
     }
 
+    /// The sign-out that lands between the extension's reading of the door and its still: the
+    /// door goes first, so the still that finds none on looking again takes itself away.
+    func testAStillLandingAsTheDoorGoesDoesNotStay() throws {
+        try store.open()
+        let door = try store.begin()
+        XCTAssertTrue(try store.keep(jpeg, at: Date(timeIntervalSince1970: 1), under: door))
+        try FileManager.default.removeItem(at: store.folder.appendingPathComponent("_open.json"))
+        XCTAssertEqual(refusal { try store.keep(jpeg, at: Date(timeIntervalSince1970: 2), under: door) }, .signedOut)
+        // The same with the door gone only after the still had its name.
+        try FileManager.default.createDirectory(at: store.folder.appendingPathComponent(ScreenStore.name(login: door.login, at: Date(timeIntervalSince1970: 3))), withIntermediateDirectories: false)
+        try JSONEncoder().encode(door).write(to: store.folder.appendingPathComponent("_open.json"))
+        XCTAssertFalse(try store.keep(jpeg, at: Date(timeIntervalSince1970: 3), under: door), "a still that could not take its name was counted as kept")
+        let names = try FileManager.default.contentsOfDirectory(atPath: store.folder.path)
+        XCTAssertEqual(names.filter { $0.hasSuffix(".part") }, [], "a still that was not kept left its bytes behind")
+        store.close()
+        XCTAssertFalse(folderExists)
+    }
+
+    func testAKeptStillLeavesNothingButItself() throws {
+        try store.open()
+        let door = try store.begin()
+        XCTAssertTrue(try store.keep(jpeg, at: Date(), under: door))
+        let names = try FileManager.default.contentsOfDirectory(atPath: store.folder.path).sorted()
+        XCTAssertEqual(names.count, 3, "\(names)")
+        XCTAssertEqual(names.filter { $0.hasSuffix(".jpg") }.count, 1)
+    }
+
     // MARK: The sampler
 
     /// A BGRA frame of one grey, with a patch of another where asked.
@@ -165,32 +192,54 @@ final class ScreenTests: XCTestCase {
         return CGSize(width: image.width, height: image.height)
     }
 
+    /// Takes the frame and counts it kept, as the extension does once its still is on disk.
+    private func keep(_ frame: CVPixelBuffer, in sampler: inout ScreenSampler, at time: Date) -> Data? {
+        guard let taken = sampler.take(frame, at: time) else { return nil }
+        sampler.kept(taken, at: time)
+        return taken.jpeg
+    }
+
     func testAStillIsKeptOnlyWhenTheScreenChangedAndNoSoonerThanTheInterval() throws {
         var sampler = ScreenSampler()
         let start = Date(timeIntervalSince1970: 1_000_000)
         let plain = try frame()
-        let first = try XCTUnwrap(sampler.take(plain, at: start))
+        let first = try XCTUnwrap(keep(plain, in: &sampler, at: start))
         XCTAssertEqual(try size(of: first), CGSize(width: 400, height: 800))
         // One typed character's worth: a 10 by 16 patch.
         let typed = try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16))
-        XCTAssertNil(sampler.take(typed, at: start.addingTimeInterval(ScreenSampler.interval - 0.1)), "a still was kept inside the interval")
-        XCTAssertNil(sampler.take(plain, at: start.addingTimeInterval(10)), "a screen that had not changed was kept again")
-        XCTAssertNil(sampler.take(try frame(), at: start.addingTimeInterval(20)))
-        XCTAssertNotNil(sampler.take(typed, at: start.addingTimeInterval(30)), "a changed screen was not kept")
-        XCTAssertNil(sampler.take(typed, at: start.addingTimeInterval(40)))
+        XCTAssertTrue(sampler.early(at: start.addingTimeInterval(ScreenSampler.interval - 0.1)))
+        XCTAssertNil(keep(typed, in: &sampler, at: start.addingTimeInterval(ScreenSampler.interval - 0.1)), "a still was kept inside the interval")
+        XCTAssertFalse(sampler.early(at: start.addingTimeInterval(ScreenSampler.interval)))
+        XCTAssertNil(keep(plain, in: &sampler, at: start.addingTimeInterval(10)), "a screen that had not changed was kept again")
+        XCTAssertNil(keep(try frame(), in: &sampler, at: start.addingTimeInterval(20)))
+        XCTAssertNotNil(keep(typed, in: &sampler, at: start.addingTimeInterval(30)), "a changed screen was not kept")
+        XCTAssertNil(keep(typed, in: &sampler, at: start.addingTimeInterval(40)))
         // The interval counts from the last kept, not the last seen.
-        XCTAssertNotNil(sampler.take(plain, at: start.addingTimeInterval(30 + ScreenSampler.interval)))
+        XCTAssertNotNil(keep(plain, in: &sampler, at: start.addingTimeInterval(30 + ScreenSampler.interval)))
+    }
+
+    /// A frame whose write was dropped (the phone locked) is no still, so the same screen offered
+    /// again is taken again, and at once.
+    func testAFrameThatWasNotKeptIsTakenAgain() throws {
+        var sampler = ScreenSampler()
+        let start = Date(timeIntervalSince1970: 1_000_000)
+        XCTAssertNotNil(keep(try frame(), in: &sampler, at: start))
+        let typed = try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16))
+        XCTAssertNotNil(sampler.take(typed, at: start.addingTimeInterval(10)))
+        XCTAssertFalse(sampler.early(at: start.addingTimeInterval(10.1)))
+        XCTAssertNotNil(keep(typed, in: &sampler, at: start.addingTimeInterval(10.1)), "a frame dropped at the write was never offered a second time")
+        XCTAssertNil(keep(typed, in: &sampler, at: start.addingTimeInterval(20)))
     }
 
     func testAStillIsNoLargerThanItsLongSideAndTurnedAsTheScreenWasHeld() throws {
-        var sampler = ScreenSampler()
+        let sampler = ScreenSampler()
         let large = try frame(width: 1200, height: 2600)
-        let still = try size(of: try XCTUnwrap(sampler.take(large, at: Date(timeIntervalSince1970: 0))))
+        let still = try size(of: try XCTUnwrap(sampler.take(large, at: Date(timeIntervalSince1970: 0))).jpeg)
         XCTAssertEqual(max(still.width, still.height), ScreenSampler.longSide, accuracy: 1)
         XCTAssertEqual(still.width / still.height, 1200.0 / 2600.0, accuracy: 0.01)
 
-        var turned = ScreenSampler()
-        let sideways = try size(of: try XCTUnwrap(turned.take(try frame(), orientation: .right, at: Date(timeIntervalSince1970: 0))))
+        let turned = ScreenSampler()
+        let sideways = try size(of: try XCTUnwrap(turned.take(try frame(), orientation: .right, at: Date(timeIntervalSince1970: 0))).jpeg)
         XCTAssertEqual(sideways, CGSize(width: 800, height: 400))
     }
 
@@ -202,7 +251,7 @@ final class ScreenTests: XCTestCase {
             let typed = try XCTUnwrap(ScreenSampler.mark(of: try frame(patch: CGRect(x: 120, y: 300, width: 10, height: 16), format: format)))
             XCTAssertTrue(ScreenSampler.changed(from: plain, to: typed))
             XCTAssertFalse(ScreenSampler.changed(from: plain, to: plain))
-            var sampler = ScreenSampler()
+            let sampler = ScreenSampler()
             XCTAssertNotNil(sampler.take(try frame(format: format), at: Date(timeIntervalSince1970: 0)))
         }
         XCTAssertNil(ScreenSampler.mark(of: try frame(format: kCVPixelFormatType_32ARGB)))
@@ -249,7 +298,7 @@ final class ScreenTests: XCTestCase {
         XCTAssertTrue(status.text.contains("0 stills"), status.text)
     }
 
-    func testLookCopiesTheNewestStillsIntoTheHomeAndRemovesNone() async throws {
+    func testLookCopiesTheNewestStillsIntoTheHomeAndTheCopiesGoWithTheLogin() async throws {
         try store.open()
         let began = Date(timeIntervalSince1970: 1_760_000_000)
         let door = try store.begin(at: began)
@@ -281,9 +330,24 @@ final class ScreenTests: XCTestCase {
         XCTAssertEqual(after.status, ToolReply.ok)
         XCTAssertTrue(after.text.hasPrefix("not sharing now; the stills are from the last share"), after.text)
 
-        store.close()
+        // A copy lasts ten minutes: a look after that takes it away and makes the one asked for.
+        let copies = home.appendingPathComponent("screen")
+        let old = copies.appendingPathComponent(ScreenTool.name(of: began))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: old.path) == false)
+        _ = await tool(now: now).run(["look", "--last", "4"])
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-ScreenTool.copiesLast - 60)], ofItemAtPath: old.path)
+        _ = await tool(now: now).run(["look"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: old.path), "a copy outlasted its ten minutes")
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: copies.path).count, 3)
+
+        // Signed out, or no longer the guest's phone: the stills and every copy go.
+        ScreenTool.follow(owner: false, store: store, home: home)
+        XCTAssertFalse(folderExists)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: copies.path), [], "a copy of the person's screen outlived the login")
         let gone = await tool(now: now).run(["look"])
         XCTAssertEqual(gone.status, ToolReply.failed)
+        ScreenTool.follow(owner: true, store: store, home: home)
+        XCTAssertNotNil(store.door())
     }
 
     func testLookWritesOverNothingOfTheGuests() async throws {

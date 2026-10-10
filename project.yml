@@ -196,7 +196,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: zone.hexagon.topo.widgets
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: false
         "EXCLUDED_ARCHS[sdk=iphonesimulator*]": x86_64
-  # Topo's screen share (docs/guest.md, *The screen*): a ReplayKit broadcast upload extension the
+  # Topo's screen share (docs/guest.md, `topo screen`): a ReplayKit broadcast upload extension the
   # person starts from the system's sheet. It keeps stills of the screen in the app group for
   # `topo screen` and nothing else; it holds the app group and reaches no network.
   TopoBroadcast:

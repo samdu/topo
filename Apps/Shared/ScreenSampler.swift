@@ -11,6 +11,9 @@ import ImageIO
 ///
 /// A frame is judged by its brightness averaged over a grid of cells, which a typed character or
 /// a moved cursor changes and the sensor noise of nothing does, since a screen has none.
+///
+/// A frame taken is not yet a still: `kept` is told once it is on disk, so a frame whose write
+/// was dropped is taken again the next time it is offered.
 struct ScreenSampler {
     /// The least time between two stills.
     static let interval: TimeInterval = 1.5
@@ -26,9 +29,21 @@ struct ScreenSampler {
     private var mark: [Double]?
     private let context = CIContext(options: [.cacheIntermediates: false])
 
+    /// A frame to keep: its JPEG, and what `kept` is handed once it is kept.
+    struct Taken {
+        var jpeg: Data
+        fileprivate var mark: [Double]?
+    }
+
+    /// Whether a frame offered at `now` is inside the interval since the last still, and so not
+    /// judged at all.
+    func early(at now: Date) -> Bool {
+        last.map { now.timeIntervalSince($0) < Self.interval } ?? false
+    }
+
     /// The frame as a JPEG if it is one to keep, turned the way the screen was held.
-    mutating func take(_ frame: CVPixelBuffer, orientation: CGImagePropertyOrientation = .up, at now: Date) -> Data? {
-        if let last, now.timeIntervalSince(last) < Self.interval { return nil }
+    func take(_ frame: CVPixelBuffer, orientation: CGImagePropertyOrientation = .up, at now: Date) -> Taken? {
+        if early(at: now) { return nil }
         let seen = Self.mark(of: frame)
         // A frame in a format this cannot judge is kept on the interval alone.
         if let seen, let mark, !Self.changed(from: mark, to: seen) { return nil }
@@ -39,9 +54,13 @@ struct ScreenSampler {
               let jpeg = context.jpegRepresentation(of: image, colorSpace: space, options: [
                   CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): Self.quality
               ]) else { return nil }
+        return Taken(jpeg: jpeg, mark: seen)
+    }
+
+    /// That frame is a still now: the next is judged against it, and no sooner than `interval`.
+    mutating func kept(_ taken: Taken, at now: Date) {
         last = now
-        mark = seen
-        return jpeg
+        mark = taken.mark
     }
 
     static func changed(from old: [Double], to new: [Double]) -> Bool {

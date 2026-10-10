@@ -219,7 +219,7 @@ struct TopoApp: App {
                 if owner { SurfaceSync.shared.sweep() }
                 // A screen share is taken only where the guest lives, and its stills go with
                 // the login or the role.
-                ScreenStore.shared()?.follow(owner: owner)
+                ScreenTool.follow(owner: owner, store: ScreenStore.shared(), home: GuestResident.homeDirectory)
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 audio.warmRecord(phase == .active)
