@@ -8,11 +8,18 @@ import TopoCore
 /// No primary exists, so become primary and show sign-in; one exists, so become a viewer and show
 /// the connected-to line and the transcript. The lease record is the evidence: it exists once any
 /// device has been primary, whether or not it is fresh right now (a phone in a pocket stops
-/// heartbeating). A device that holds the lease itself, or already holds a Claude login, is
-/// primary whatever the record says. With no record, the device stakes the first claim with a
-/// create-only save, which exactly one of any number of devices launching together wins; the
-/// rest become viewers. Until the record can be read the role is undecided and nothing is
-/// claimed, so a second device never takes primary from a first it could not see.
+/// heartbeating). A device that holds the lease itself is primary. With no record, the device
+/// stakes the first claim with a create-only save, which exactly one of any number of devices
+/// launching together wins; the rest become viewers. Until the record can be read the role is
+/// undecided and nothing is claimed, so a second device never takes primary from a first it
+/// could not see.
+///
+/// A Claude login found at first launch is one the keychain kept across a delete of the app,
+/// and the device's name did not come with it. It makes the device primary where the record
+/// names no other device or cannot be read. Where the record names another device, a phone, a
+/// pad or a hub, this one is a viewer, whose login the viewer screen drops: a login is not
+/// what hands primary over, the viewer's menu is. A reinstalled phone and a second device
+/// carrying an old login look the same in the records, so neither is taken for the primary.
 @MainActor
 @Observable
 final class RoleSelector {
@@ -64,10 +71,7 @@ final class RoleSelector {
             keep(.viewer)
             return
         }
-        if isSignedIn() {
-            keep(.primary)
-            return
-        }
+        let signedIn = isSignedIn()
         do {
             let record: Record?
             do {
@@ -77,14 +81,24 @@ final class RoleSelector {
                 record = nil
             }
             guard let record else {
+                if signedIn {
+                    keep(.primary)
+                    return
+                }
                 try await ensureZone()
                 keep(try await stake() ? .primary : .viewer)
                 return
             }
-            let lease = Lease(record: record)
-            keep(lease?.holder == device ? .primary : .viewer)
+            let holder = Lease(record: record)?.holder
+            // A login decides only where the record names nobody.
+            keep(holder == device || (signedIn && holder == nil) ? .primary : .viewer)
         } catch {
-            trouble = TranscriptStore.message(for: error)
+            // With a login and no record to read, the login is the evidence there is.
+            if signedIn {
+                keep(.primary)
+            } else {
+                trouble = TranscriptStore.message(for: error)
+            }
         }
     }
 
