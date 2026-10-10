@@ -773,6 +773,30 @@ final class ShareTests: XCTestCase {
         XCTAssertEqual(drains, 3, "a refused intent drained")
     }
 
+    /// The wait against the inbox itself: a background intent returns once the line has its turn
+    /// in the log, not before it and not after the reply.
+    func testABackgroundIntentReturnsWhenItsTurnIsInTheLog() async throws {
+        try store.open(files: false)
+        let store = store
+        let line = Line()
+        let inbox = inbox(line)
+        let clock = ContinuousClock()
+        // The turn is saved a while into the send, and the reply takes far longer than the intent has.
+        line.onRetry = {
+            try? await Task.sleep(for: .milliseconds(500))
+            line.logged = Set(line.sent.map(\.nonce))
+            try? await Task.sleep(for: .seconds(30))
+        }
+        let began = clock.now
+        try await ShortcutIntents.send(.prompt, "later", waits: true, in: store, drain: { await inbox.drain() },
+                                       landed: { line.said($0) }, bound: .seconds(10))
+        let waited = clock.now - began
+        XCTAssertGreaterThanOrEqual(waited, .milliseconds(500), "the intent returned before its turn was in the log")
+        XCTAssertLessThan(waited, .seconds(5), "the intent waited on the reply")
+        XCTAssertEqual(line.sent.map(\.text), ["[Sent to Topo by a Shortcut]\nlater"])
+        XCTAssertEqual(line.logged, Set(line.sent.map(\.nonce)))
+    }
+
     /// A reply being made does not hold a share kept meanwhile off the line.
     func testAShareKeptWhileTheLineIsBeingSentIsOnTheLineAtOnce() async throws {
         try store.open(files: false)
