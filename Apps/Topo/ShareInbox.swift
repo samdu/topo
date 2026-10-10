@@ -16,12 +16,13 @@ extension Harness: ShareLine {}
 
 /// What the person shared from another app's share sheet (`ShareStore`, written by the share
 /// extension), made into turns: each share is put on the harness's line under the nonce the
-/// extension minted, and nothing for a nonce already there, so a drain run twice (before a
+/// extension or the intent minted, and nothing for a nonce already there, so a drain run twice (before a
 /// removal, after a crash) is one turn. A harness that has not read the log reads it first, since
 /// before it the harness cannot know what the log holds.
 ///
 /// The extension cannot bring Topo forward, so a share waits in the app group until the app next
-/// comes to the front, which is when this drains. The turn's text is written here, never by the
+/// drains: when it comes to the front, when the harness first reads the log, and when a
+/// Shortcut's intent runs. The turn's text is written here, never by the
 /// extension: the person's note and then what was shared under a line that says it was shared,
 /// each as it was kept, so nothing another app handed over reads as the person's own words. An image or a
 /// file is put in the guest's home first (`HomeFile`), under `shared/<the share's nonce>/`,
@@ -79,25 +80,30 @@ final class ShareInbox {
     /// drain that waited across one puts nothing on the line after it, and takes back the file it
     /// put in the home, unless a turn in the log already names it. A share made under another login is removed unsent. Drains do not overlap: the
     /// scene coming forward and the log's first read both ask for one, and two at once would
-    /// each hold the same share across a wait.
+    /// each hold the same share across a wait. The line is sent once the shares are on it and
+    /// outside that turn-taking, since sending it waits on the reply: a share kept while one
+    /// reply is being made is on the line at once, not after it.
     func drain() async {
         asked = true
         guard !draining else { return }
         draining = true
-        defer { draining = false }
+        var queued = false
         while asked {
             asked = false
-            await drainOnce()
+            if await drainOnce() { queued = true }
         }
+        draining = false
+        if queued { await line.retry() }
     }
 
-    private func drainOnce() async {
-        guard let store = store(), let door = store.door() else { return }
+    /// Answers whether it put anything on the line.
+    private func drainOnce() async -> Bool {
+        guard let store = store(), let door = store.door() else { return false }
         store.clearUnfinished(olderThan: Self.unfinished)
         for share in store.shares() where share.login != door.login { store.remove(nonce: share.nonce) }
-        guard !store.shares().isEmpty else { return }
+        guard !store.shares().isEmpty else { return false }
         if !line.hasRead {
-            guard await line.refresh(), store.door() == door else { return }
+            guard await line.refresh(), store.door() == door else { return false }
         }
         var queued = false
         for share in store.shares() where share.login == door.login {
@@ -127,7 +133,7 @@ final class ShareInbox {
             store.remove(nonce: share.nonce)
             queued = true
         }
-        if queued { await line.retry() }
+        return queued
     }
 
     /// Takes a share's file back out of the home.
@@ -163,7 +169,8 @@ final class ShareInbox {
             shared = "[Shared with Topo from another app: a link]\n\(link)"
         case .prompt:
             guard let text = share.text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            shared = "[Sent to Topo by a Shortcut]\n\(text)"
+            // No note goes ahead of the line that says a Shortcut sent it.
+            return "[Sent to Topo by a Shortcut]\n\(text)"
         case .task:
             // The app's own words, so nothing marks them.
             return share.text.flatMap(QuickTask.init(rawValue:))?.words

@@ -5,6 +5,9 @@ import Foundation
 /// Topo a turn and none of which waits for the reply, since a reply is the guest's work of
 /// minutes and an intent has seconds.
 ///
+/// Each asks for the phone to be unlocked (`authenticationPolicy`): a prompt is words from
+/// whoever holds the phone, and a turn is something the mind acts on.
+///
 /// - **Ask Topo** takes a prompt and brings Topo forward, where the answer is read.
 /// - **Follow up with Topo** takes a prompt and leaves Topo where it is: the turn goes on the
 ///   conversation in the background.
@@ -22,10 +25,13 @@ enum ShortcutIntents {
     /// Puts what is kept on the line, set by `TopoApp` at launch, which the system finishes
     /// before an intent it launched the app for runs.
     @MainActor static var drain: (@MainActor () async -> Void)?
+    /// Whether the turn under a nonce is in the log, set beside `drain`.
+    @MainActor static var landed: (@MainActor (String) -> Bool)?
 
-    /// How long a background intent waits on its drain: a read and a write of the log, inside
-    /// the time the system gives an intent.
-    static let drainBound: Duration = .seconds(20)
+    /// How long a background intent waits for its turn to reach the log: a read and a write of
+    /// the log, inside the time the system gives an intent.
+    static let bound: Duration = .seconds(20)
+    static let glance: Duration = .milliseconds(100)
 
     /// Keeps a turn for the drain, and answers what was kept. Refused where the phone is signed
     /// out, the prompt is empty or over the limit, or as many shares as the store holds wait.
@@ -37,19 +43,30 @@ enum ShortcutIntents {
         return share
     }
 
-    /// Keeps the turn and drains. A background intent waits on the drain, up to `drainBound`,
-    /// so the turn is in the log before the system suspends the app again; one that brings Topo
-    /// forward returns at once, and the drain runs on in front.
+    /// Keeps the turn and starts a drain, which runs on whatever this does. A background intent
+    /// then waits until its turn is in the log, or `bound` has passed, so the turn is saved
+    /// before the system suspends the app again; it never waits on the drain itself, whose end
+    /// is the reply's. One that brings Topo forward returns at once. What is kept is sent when
+    /// Topo next drains, whether or not the wait saw it land.
     @MainActor
-    static func send(_ kind: Share.Kind, _ text: String, waits: Bool) async throws {
+    static func send(_ kind: Share.Kind, _ text: String, waits: Bool, in store: ShareStore? = ShareStore.shared(),
+                     drain: (@MainActor () async -> Void)? = ShortcutIntents.drain,
+                     landed: (@MainActor (String) -> Bool)? = ShortcutIntents.landed,
+                     bound: Duration = ShortcutIntents.bound) async throws(ShortcutRefusal) {
+        let kept: Share
         do {
-            _ = try keep(kind, text, in: ShareStore.shared())
+            kept = try keep(kind, text, in: store)
         } catch {
             throw ShortcutRefusal(refusal: error)
         }
         guard let drain else { return }
-        let draining = Task { await drain() }
-        if waits { await WidgetTaps.wait(for: draining, atMost: drainBound) }
+        Task { await drain() }
+        guard waits, let landed else { return }
+        let clock = ContinuousClock()
+        let deadline = clock.now + bound
+        while !landed(kept.nonce), clock.now < deadline {
+            try? await Task.sleep(for: glance)
+        }
     }
 }
 
@@ -72,6 +89,7 @@ struct AskTopoIntent: AppIntent {
     static let title: LocalizedStringResource = "Ask Topo"
     static let description = IntentDescription("Opens Topo and sends it what you ask. The answer is in the conversation.")
     static let openAppWhenRun = true
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     @Parameter(title: "Prompt", requestValueDialog: "What do you want to ask Topo?")
     var prompt: String
@@ -91,6 +109,7 @@ struct FollowUpIntent: AppIntent {
     static let title: LocalizedStringResource = "Follow up with Topo"
     static let description = IntentDescription("Sends Topo something more in the conversation, without opening it. The answer is there when you next open Topo.")
     static let openAppWhenRun = false
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     @Parameter(title: "Prompt", requestValueDialog: "What do you want to tell Topo?")
     var prompt: String
@@ -102,7 +121,7 @@ struct FollowUpIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         try await ShortcutIntents.send(.prompt, prompt, waits: true)
-        return .result(dialog: "Sent. Topo's answer will be in the conversation.")
+        return .result(dialog: "Topo has it. The answer will be in the conversation.")
     }
 }
 
@@ -110,6 +129,7 @@ struct QuickTaskIntent: AppIntent {
     static let title: LocalizedStringResource = "Topo quick task"
     static let description = IntentDescription("Asks Topo for one of its usual tasks, without opening it. The answer is there when you next open Topo.")
     static let openAppWhenRun = false
+    static let authenticationPolicy: IntentAuthenticationPolicy = .requiresAuthentication
 
     @Parameter(title: "Task")
     var task: QuickTask
@@ -121,7 +141,7 @@ struct QuickTaskIntent: AppIntent {
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         try await ShortcutIntents.send(.task, task.rawValue, waits: true)
-        return .result(dialog: "Asked. Topo's answer will be in the conversation.")
+        return .result(dialog: "Topo has it. The answer will be in the conversation.")
     }
 }
 

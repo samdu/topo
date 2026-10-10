@@ -105,6 +105,7 @@ struct TopoApp: App {
         let shares = ShareInbox(line: harness)
         _shares = State(initialValue: shares)
         ShortcutIntents.drain = { await shares.drain() }
+        ShortcutIntents.landed = { [weak harness] in harness?.said($0) ?? false }
         WidgetIntents.handler = WidgetTaps(cues: widgetCues, actions: WidgetActions(table: widgetTable))
         // Made now, so a sign-out before any slot is written still takes the records with it.
         _ = SurfaceSync.shared

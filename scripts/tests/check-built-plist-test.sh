@@ -43,7 +43,7 @@ make_app() {
     plutil -insert CFBundleIdentifier -string zone.hexagon.topo.share "$app/PlugIns/TopoShare.appex/Info.plist"
     plutil -insert NSExtension -json '{"NSExtensionPointIdentifier":"com.apple.share-services","NSExtensionPrincipalClass":"TopoShare.ShareViewController","NSExtensionAttributes":{"NSExtensionActivationRule":{"NSExtensionActivationSupportsText":true,"NSExtensionActivationSupportsWebURLWithMaxCount":1,"NSExtensionActivationSupportsImageWithMaxCount":1,"NSExtensionActivationSupportsFileWithMaxCount":1}}}' "$app/PlugIns/TopoShare.appex/Info.plist"
     mkdir -p "$app/Metadata.appintents"
-    printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent"},"FollowUpIntent":{"identifier":"FollowUpIntent"},"QuickTaskIntent":{"identifier":"QuickTaskIntent"}},"autoShortcuts":[{},{},{}]}' \
+    printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent","openAppWhenRun":true,"authenticationPolicy":1},"FollowUpIntent":{"identifier":"FollowUpIntent","openAppWhenRun":false,"authenticationPolicy":1},"QuickTaskIntent":{"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":1}},"autoShortcuts":[{"actionIdentifier":"AskTopoIntent"},{"actionIdentifier":"FollowUpIntent"},{"actionIdentifier":"QuickTaskIntent"}]}' \
         > "$app/Metadata.appintents/extract.actionsdata"
     printf '                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007\n' > "$app/LICENSE"
 }
@@ -143,17 +143,27 @@ for case in $cases; do
     fi
 done
 
-# The Shortcuts actions: metadata the build did not make, one that leaves an action out, and one
-# with an App Shortcut short.
+# The Shortcuts actions: metadata the build did not make, one that leaves an action out, one whose
+# Ask does not open Topo or whose Follow up does, one that runs on a locked phone, and App
+# Shortcuts that are short or name one action twice.
 make_app "$work/no-intents/Topo.app"
 rm -r "$work/no-intents/Topo.app/Metadata.appintents"
-make_app "$work/intent-short/Topo.app"
-printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent"},"QuickTaskIntent":{"identifier":"QuickTaskIntent"}},"autoShortcuts":[{},{},{}]}' \
-    > "$work/intent-short/Topo.app/Metadata.appintents/extract.actionsdata"
-make_app "$work/shortcut-short/Topo.app"
-printf '%s' '{"actions":{"AskTopoIntent":{"identifier":"AskTopoIntent"},"FollowUpIntent":{"identifier":"FollowUpIntent"},"QuickTaskIntent":{"identifier":"QuickTaskIntent"}},"autoShortcuts":[{},{}]}' \
-    > "$work/shortcut-short/Topo.app/Metadata.appintents/extract.actionsdata"
-for case in no-intents intent-short shortcut-short; do
+intents() {
+    local name="$1" from="$2" to="$3"
+    make_app "$work/$name/Topo.app"
+    sed -i '' "s|$from|$to|" "$work/$name/Topo.app/Metadata.appintents/extract.actionsdata"
+    cmp -s "$work/whole/Topo.app/Metadata.appintents/extract.actionsdata" "$work/$name/Topo.app/Metadata.appintents/extract.actionsdata" \
+        && fail "the case $name changed nothing"
+    cases="$cases $name"
+}
+cases="no-intents"
+intents intent-short '"FollowUpIntent":{[^}]*},' ''
+intents ask-stays '"identifier":"AskTopoIntent","openAppWhenRun":true' '"identifier":"AskTopoIntent","openAppWhenRun":false'
+intents follow-up-opens '"identifier":"FollowUpIntent","openAppWhenRun":false' '"identifier":"FollowUpIntent","openAppWhenRun":true'
+intents task-locked '"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":1' '"identifier":"QuickTaskIntent","openAppWhenRun":false,"authenticationPolicy":0'
+intents shortcut-short ',{"actionIdentifier":"QuickTaskIntent"}' ''
+intents shortcut-twice '{"actionIdentifier":"FollowUpIntent"}' '{"actionIdentifier":"AskTopoIntent"}'
+for case in $cases; do
     if errors="$("$check" "$work/$case/Topo.app" 2>&1 >/dev/null)"; then
         fail "a product whose App Intents metadata is wrong ($case) passed"
     elif [[ "$errors" != *"App Intents metadata"* ]]; then
@@ -259,4 +269,4 @@ if [ "$failures" -gt 0 ]; then
     exit 1
 fi
 
-echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex or TopoShare.appex fails, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions or holds fewer than three App Shortcuts fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"
+echo "check-built-plist.sh: a whole product passes; each of the tools' usage strings missing, empty or only whitespace fails; a product without the topo URL scheme, NSAllowsArbitraryLoads, TopoWidgets.appex or TopoShare.appex fails, as does a share extension whose rule is a predicate, names a fifth thing, does not take text or takes none or more than one of a thing, has no program or no principal class, or is signed without the app group; a product whose App Intents metadata is missing, leaves out one of the three Shortcuts actions, has Ask not opening Topo or Follow up opening it, lets one run on a locked phone, or does not offer exactly one App Shortcut for each fails; a product signed without the HomeKit entitlement fails, and an unsigned one says its entitlements were not read; a watch product without TopoWatchWidgets.appex as a WidgetKit extension, the remote-notification background mode or the topo URL scheme, fails"

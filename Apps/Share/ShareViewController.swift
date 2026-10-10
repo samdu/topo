@@ -3,7 +3,7 @@ import UIKit
 
 /// Topo in another app's share sheet. It reads the one thing shared (`ShareIntake`), shows what
 /// it is with a field for the person to say something about it, and on Send keeps it in the app
-/// group (`ShareStore`) for the app to make a turn of when it next comes to the front. It sends
+/// group (`ShareStore`) for the app to make a turn of when it next drains them, which is when it next comes to the front if nothing else asks sooner. It sends
 /// nothing itself, reaches no network, and cannot bring Topo forward.
 final class ShareViewController: UIViewController {
     private let model = ShareSheetModel()

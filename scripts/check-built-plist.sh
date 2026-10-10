@@ -210,15 +210,31 @@ fi
 # The Shortcuts actions, which reach the Shortcuts app only through the metadata the build
 # extracts: an intent the extraction skipped compiles and is offered nowhere.
 actions="$app/Metadata.appintents/extract.actionsdata"
-for intent in AskTopoIntent FollowUpIntent QuickTaskIntent; do
+# Each action by name, whether it brings Topo forward, and that it asks for an unlocked phone
+# (authenticationPolicy 1): a prompt is words from whoever holds the phone.
+for action in AskTopoIntent:true FollowUpIntent:false QuickTaskIntent:false; do
+    intent="${action%%:*}"
+    opens="${action##*:}"
     if [ "$(plutil -extract "actions.$intent.identifier" raw -o - -- "$actions" 2>/dev/null || true)" != "$intent" ]; then
         echo "$app's App Intents metadata does not name $intent; Shortcuts would not offer it" >&2
         status=1
+        continue
+    fi
+    got="$(plutil -extract "actions.$intent.openAppWhenRun" raw -o - -- "$actions" 2>/dev/null || true)"
+    if [ "$got" != "$opens" ]; then
+        echo "$app's App Intents metadata has $intent's openAppWhenRun as '${got:-absent}', not $opens" >&2
+        status=1
+    fi
+    policy="$(plutil -extract "actions.$intent.authenticationPolicy" raw -o - -- "$actions" 2>/dev/null || true)"
+    if [ "$policy" != "1" ]; then
+        echo "$app's App Intents metadata has $intent's authenticationPolicy as '${policy:-absent}', not 1 (requires authentication); it would run on a locked phone" >&2
+        status=1
     fi
 done
-shortcuts="$(plutil -extract autoShortcuts raw -o - -- "$actions" 2>/dev/null || true)"
-if [ "$shortcuts" != "3" ]; then
-    echo "$app's App Intents metadata holds '${shortcuts:-no}' App Shortcuts, not the three Topo offers" >&2
+# One App Shortcut for each, and no two for one action.
+offered="$(plutil -extract autoShortcuts json -o - -- "$actions" 2>/dev/null | tr ',{}' '\n\n\n' | sed -n 's/.*"actionIdentifier":"\([A-Za-z]*\)".*/\1/p' | sort | tr '\n' ' ')"
+if [ "$offered" != "AskTopoIntent FollowUpIntent QuickTaskIntent " ]; then
+    echo "$app's App Intents metadata offers '${offered:-no}' as App Shortcuts, not one for each of the three actions" >&2
     status=1
 fi
 

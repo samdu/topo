@@ -14,7 +14,7 @@ struct Share: Codable, Equatable, Sendable {
         case task
     }
 
-    /// The nonce the share's turn goes under, minted by the extension, so a share drained twice
+    /// The nonce the share's turn goes under, minted by the extension or the intent that kept it, so a share drained twice
     /// is one turn.
     var nonce: String
     /// The login it was shared under (`ShareStore.Door.login`): a share of any other is never sent.
@@ -99,7 +99,7 @@ enum ShareRefusal: Error, Equatable {
 }
 
 /// What the person has shared and the app has not yet put on the line: the `Shares` folder in the
-/// app group, which the share extension writes and the app reads and empties.
+/// app group, which the share extension and the app's Shortcuts intents write and the app reads and empties.
 ///
 /// - `_open.json`, there while this phone is signed in, saying whether it takes images and files
 ///   (it does where the guest lives). The extension keeps nothing without it;
@@ -213,7 +213,11 @@ struct ShareStore: Sendable {
         guard let door = door(), door.login == share.login else { throw .signedOut }
         guard share.note.count <= Share.noteLimit, (share.text?.utf8.count ?? 0) <= Share.textLimit else { throw .tooLong }
         switch share.kind {
-        case .text, .link, .prompt:
+        case .prompt:
+            // A Shortcut has no note: nothing goes ahead of the line that says a Shortcut sent it.
+            guard attachment == nil, share.file == nil, share.note.isEmpty,
+                  share.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { throw .nothing }
+        case .text, .link:
             guard attachment == nil, share.file == nil,
                   share.text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false else { throw .nothing }
         case .task:
