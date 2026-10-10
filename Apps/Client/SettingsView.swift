@@ -63,6 +63,10 @@ struct SignOut {
     /// The reply in the ear goes with the login: one still being read would otherwise carry on,
     /// holding the process open.
     var stopSpeaking: @MainActor () -> Void
+    /// What was shared from another app and not yet sent, and the door a share comes in by. Before
+    /// the harness, which is waited for: a share put on the line while it forgets would be a turn
+    /// of the login that just ended, kept in the outbox for the next.
+    var forgetShares: @MainActor () -> Void
     /// The transcript, the outbox and the spoken marks, the turn and the pass in flight, and what
     /// the guest kept of the conversation. Awaited, so the guest's session and the bridge's ledger
     /// are gone before the login is.
@@ -81,6 +85,7 @@ struct SignOut {
 
     @MainActor func act() async {
         stopSpeaking()
+        forgetShares()
         await forgetHarness()
         forgetMemory()
         forgetSurfaces()
@@ -94,6 +99,8 @@ struct SignOut {
 ///
 /// No step has a default, so a caller that leaves one out does not compile.
 struct Takeover {
+    /// What was shared and not yet sent goes, and its door shuts, before anything is waited for.
+    var forgetShares: @MainActor () -> Void
     /// What was waiting goes into the log first, while the chat and its task still stand.
     var demoteHarness: @MainActor () async -> Void
     /// Then the role flips.
@@ -110,6 +117,7 @@ struct Takeover {
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        forgetShares()
         await demoteHarness()
         acceptDemotion()
         stopSpeaking()
@@ -126,6 +134,7 @@ struct Takeover {
 /// connection's token go whether or not there was a login, since the app group and the keychain
 /// item are their own and outlive one.
 struct ViewerArrival {
+    var forgetShares: @MainActor () -> Void
     var holdsLogin: @MainActor () -> Bool
     var demoteHarness: @MainActor () async -> Void
     var forgetMemory: @MainActor () -> Void
@@ -134,6 +143,7 @@ struct ViewerArrival {
     var forgetLogin: @MainActor () -> Void
 
     @MainActor func act() async {
+        forgetShares()
         let held = holdsLogin()
         if held {
             await demoteHarness()
