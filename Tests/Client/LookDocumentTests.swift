@@ -37,7 +37,18 @@ final class LookDocumentTests: XCTestCase {
                              "the walk found too few fields to be walking the whole look")
     }
 
-    // MARK: No file, and files that are not one
+    /// The button a screen share is started from stays a size a finger takes.
+    func testTheBroadcastButtonStaysInReach() {
+        for side in [44.0, 88] {
+            XCTAssertEqual(LookDocument.read(#"{"settings": {"broadcastButton": \#(side)}}"#).look.settings.broadcastButton, side)
+        }
+        for side in ["43", "89", "0", "-1", "\"big\"", "null"] {
+            let read = LookDocument.read(##"{"settings": {"broadcastButton": \##(side), "tint": ["#336699", "#99CCFF"]}}"##)
+            XCTAssertEqual(read.look.settings.broadcastButton, Look().settings.broadcastButton, side)
+            XCTAssertNotEqual(read.look.settings.tint, Look().settings.tint, "the good field was taken down with \(side)")
+        }
+    }
+
 
     func testAnAbsentFileIsTheCompiledLook() {
         let reading = LookDocument.read(nil)
